@@ -1,0 +1,1201 @@
+//! Recording cardboard the reader has just acquired straight into the deck that wanted it — and
+//! taking the matching line off their shopping list in the same press.
+//!
+//! A deck lists four Lightning Bolt and the editor draws `0/4`. The reader has the four in their
+//! hand: they bought them this morning, and until this module existed telling the app so was
+//! *Add to collection*, then find the deck, then file the copies into its group, then open the
+//! wishlist and take the wish down. This is the one press
+//! ([issue #350](https://github.com/Msgaihede/mtg-grimoire/issues/350)): [`quick_add`] records
+//! the copies **in the deck's own group** and, when it is handed a wish, decrements it.
+//!
+//! ```text
+//!          collection_to_deck                 deck_to_collection
+//! binder / another deck ─────────▶ deck group ─────────────────▶ Recently removed
+//!                                     ▲   ▲
+//!         deck_pull_from_collection ───┘   └─── deck_quick_add_to_collection
+//!         (moves cardboard that exists)         (records cardboard that did not)
+//! ```
+//!
+//! # This is the fourth crossing of the deck boundary and the first that *creates* copies
+//!
+//! [`crate::collection_alloc`] holds two of the others and [`crate::deck_pull`] the third, and
+//! every one of them **moves** a `collection_entries` row from one folder to another. This one
+//! writes a row that was not there. Three consequences, and each of them is a rule somewhere
+//! else in the tree:
+//!
+//! * The command takes [`crate::collection_source::with_write_owned`] like its three neighbours,
+//!   but for a stronger reason than theirs: the facet index's `owned` dimension counts **rows**,
+//!   and the three movers can at most fold one away. This one makes one.
+//! * TypeScript's invalidation set is `OWNED_WRITE_KEYS` rather than the narrower
+//!   `["collection"]` the movers share — a card that was owned nowhere is now owned somewhere,
+//!   so every count on every page is stale.
+//! * [`crate::collection_alloc::NOT_IN_DECK`] is the fence that keeps issue #358's invariant
+//!   true: *every copy in a deck's group is backed by a row in that deck's list*. A write that
+//!   could file into a group without one would be inventing custody for a card the deck does not
+//!   play, which is precisely what that issue closed on the filing side.
+//!
+//! # Why it is not `collection_add` with a folder argument
+//!
+//! [`crate::collection::add_entry`] **refuses** a `deck` folder outright
+//! ([`crate::collection_folders::FOLDER_NOT_YOURS`]) and must go on refusing: filing into a group
+//! asserts *this deck holds these copies*, and only a write that can answer for the `deck_cards`
+//! row behind them may say that. [`crate::collection::add_entry_filed`] is the `pub(crate)` door
+//! that takes the fence as a parameter and [`crate::collection::DECK_WRITE_FOLDERS`] is the
+//! widened set; the deck importer was its first caller and this is its second — and the set was
+//! called `IMPORT_FOLDERS` until this module made a second press pass it. What each answers for is
+//! the same shape: the importer writes the deck's list in the same press, and this one checks
+//! that the list already says so.
+//!
+//! # Two wish reads: one narrow, for a press that guesses; one wide, for a press that asks
+//!
+//! [`wishes`] is the wishlist's own printing-and-finish match with the any-printing arm
+//! dropped — `w.card_id = :cardId AND (w.preferred_finish IS NULL OR w.preferred_finish =
+//! :finish)`. It is what the deck-wide batch ([`crate::deck_missing`]) reads, and it has to be
+//! that narrow: the batch clears a lone matching wish **without asking**, and a guess is only
+//! safe where the wish names exactly the cardboard just recorded.
+//!
+//! [`card_wishes`] is the per-card menu's read since
+//! [issue #511](https://github.com/Msgaihede/mtg-grimoire/issues/511): **every** wish for the
+//! card — another printing, another finish, or any printing at all — because that press always
+//! opens a picker now and the reader chooses which line the copies came off. Whether an M10
+//! purchase settles a wish for the Alpha printing is the reader's call, and a narrow read hid the
+//! line they meant; the picker shows each row's printing, finish and folder so the choice is
+//! made with the facts on screen. [`quick_add`]'s own re-check is widened to match: a named wish
+//! must be for the same *card*, and printing and finish are no longer refused.
+//!
+//! [`quick_add`] still takes at most one `wish_id`, because a press that cleared three wishes at
+//! once would be a write nobody could review before it happened. Whether to ask is TypeScript's
+//! decision; this module answers the *facts* — which wishes match, in an order it argues for.
+
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
+use serde_json::json;
+
+/// What [`quick_add`] says when the wish it was pointed at is not there any more.
+///
+/// The dialog's answer is a round trip old, so the wish is re-read **inside** the transaction —
+/// [`crate::deck_pull::from_collection`]'s discipline, which re-plans rather than trusting the
+/// picks it was handed. Distinct from [`WISH_WRONG_CARD`] because "somebody deleted it" and
+/// "that is not this card" are two different things to tell a stale dialog, and one sentence
+/// covering both tells it nothing it can act on.
+pub const WISH_GONE: &str = "That wishlist line is not there any more.";
+
+/// What [`quick_add`] says when the wish it was pointed at no longer matches this press.
+///
+/// The same predicate [`wishes`] offered by, asked again: a wish edited to name another printing
+/// or another finish between the read and the press is not the wish the reader ticked. Refused
+/// rather than silently skipped — the whole point of the second row on the menu is that both
+/// halves happen, and a cheerful outcome with `wish_copies: 0` is how a caller goes on believing
+/// the shopping list was tidied.
+pub const WISH_WRONG_CARD: &str = "That wishlist line is not for this card.";
+
+/// What is actually sleeved up — `DECK_VARIANTS[0]`, and the only list this write answers about.
+/// A plan holds no cards ([`crate::collection_alloc::THEORY_HOLDS_NOTHING`]), so a deck that has
+/// only *thought about* a card is refused here by [`crate::deck::plays_card`] and not by a fence
+/// of its own — see [`quick_add`].
+const LIVE: &str = crate::schema::DECK_VARIANTS[0];
+
+/// One wishlist line the copies about to be recorded could take down.
+///
+/// The hand-written mirror of `DeckQuickAddWish` in `src/lib/ipc.ts`, field for field.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickAddWish {
+    /// The `wishlist_entries` row — what a [`quick_add`] `wish_id` points at, and the only field
+    /// the write reads back.
+    pub id: i64,
+    /// Copies the wish still asks for. The write takes `min(recorded, this)`, so a wish for one
+    /// copy survives a four-copy press with nothing left and is deleted.
+    pub quantity: i64,
+    /// Where the wish is filed, or `None` at the root.
+    pub folder_id: Option<i64>,
+    /// What to call that place, or `None` at the root — **which the UI words, not this crate**.
+    /// The wishlist page says `Wishlist` for `folder_id IS NULL`; a sentence belongs on the page
+    /// that shows it, and [`crate::deck_pull::PullCandidate::folder_name`] makes the same call
+    /// one table over.
+    pub folder_name: Option<String>,
+    /// The printing the wish names, or `None` for a wish that takes **any** printing of the card.
+    /// [`card_wishes`] offers both kinds, so the picker has to be able to say which is which.
+    pub card_id: Option<String>,
+    /// The wish's stored name — the one name a wish always has, orphan or any-printing alike.
+    pub name: String,
+    /// The printing's set code as the wish stored it, `None` on an any-printing wish.
+    pub set_code: Option<String>,
+    /// The printing's collector number as the wish stored it, `None` on an any-printing wish.
+    pub collector_number: Option<String>,
+    /// The finish the wish asks for in the **wishlist's** spelling (`nonfoil`/`foil`/`etched`),
+    /// or `None` for a wish that takes any finish.
+    pub preferred_finish: Option<String>,
+}
+
+/// What one quick add recorded.
+///
+/// Three numbers rather than a row, because the caller re-reads the deck afterwards anyway and
+/// what a sentence quotes is *"4 copies recorded, 1 wish cleared"*.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QuickAddOutcome {
+    /// Copies recorded — the quantity asked for, which is exactly what landed because a press
+    /// that could not record all of them records none.
+    pub copies: i64,
+    /// The `collection_entries` row the copies are in **after the grain fold**, which is not
+    /// necessarily a new row: a second press on the same line raises the row the first one made.
+    /// The caller's glow lands here.
+    pub entry_id: i64,
+    /// Copies taken off the wish — `min(copies, the wish's quantity)`, and `0` when no wish was
+    /// named. **Copies and not wishes**: a wishlist row holding four is four copies of wanting,
+    /// so a press that takes one of them down has cleared one wish and left three standing.
+    pub wish_copies: i64,
+}
+
+/// Every wish these copies could take down, best first.
+///
+/// **The predicate is the wishlist's own printing-and-finish match with the any-printing arm
+/// dropped**, and the module header argues the narrowing. What is worth repeating at the SQL is
+/// the shape: `preferred_finish IS NULL` comes **first** in the disjunction because that is the
+/// commonest wish there is and the one an equality alone would silently drop — `NULL = 'nonfoil'`
+/// is NULL rather than false, so a bare `=` would answer the empty list for most of a reader's
+/// wishlist with no error and nothing in `error_log`.
+///
+/// # The order is [`crate::deck_pull::PullCandidate`]'s, borrowed rather than re-decided
+///
+/// The **root** first: a wish nobody has filed is a wish moving it disturbs no decision of. Then
+/// the reader's own folders in the `sort_order` they arranged them in, because a named folder is
+/// a decision somebody made on purpose. The tiebreak is `w.id`, oldest first — a primary key, so
+/// the walk is **total** with no further term.
+///
+/// `(w.folder_id IS NOT NULL)` is `0` at the root and `1` everywhere else, which is that
+/// two-way sort written as the expression SQLite can index-scan rather than as a `CASE` with one
+/// arm. `f.sort_order` is NULL for a root row and SQLite sorts NULLs first, which is the same
+/// answer and costs no `coalesce`.
+///
+/// **This is a pre-pick and not a decision.** Every match is returned and the *page* chooses:
+/// one is taken with no dialog, several open a picker. An empty vector is the ordinary answer —
+/// a reader who never wished for the card is not an error.
+const WISH_SQL: &str = "WHERE w.card_id = ?1
+        AND (w.preferred_finish IS NULL OR w.preferred_finish = ?2)
+        -- A managed wishlist's wish is its deck's, rewritten by `crate::managed_wishlist` when
+        -- the card reaches the deck; taking it down by hand is a write the guard refuses.
+        AND f.managed_deck_id IS NULL
+      ORDER BY (w.folder_id IS NOT NULL), f.sort_order, w.id";
+
+/// Every wish for **the card** — any printing, any finish — best first. The per-card menu's
+/// read since [issue #511](https://github.com/Msgaihede/mtg-grimoire/issues/511).
+///
+/// [`WISH_SQL`] narrows on the printing because the deck-wide batch ([`crate::deck_missing`])
+/// clears a wish **without asking**, and a guess is only safe where the wish names the exact
+/// cardboard. The per-card press always asks: the reader is shown every line on their list for
+/// this card — each with its printing, finish and folder — and picks the one the copies came off.
+/// A reader who bought M10 Bolts against a wish for the Alpha printing is the one person who
+/// knows whether that wish is settled, so the list offers it and the reader decides.
+///
+/// **The match is the oracle card, with the printing as the fallback** — `w.card_id = ?1`, or the
+/// wish's `oracle_id` equal to the pressed printing's — which is [`crate::deck::PLAYED_KEY`]'s
+/// shape: an orphaned printing still finds the wishes naming it by id.
+///
+/// **The order puts the exact match first**, so the pre-pick is the wish the narrow read would
+/// have chosen: the pressed printing, then a finish the copies satisfy, then [`WISH_SQL`]'s own
+/// root-then-folders ranking, then the row id — a primary key, so the walk is total.
+const CARD_WISH_SQL: &str = "WHERE (w.card_id = ?1
+         OR (w.oracle_id IS NOT NULL
+             AND w.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?1)))
+        -- Never a managed wishlist's wish — [`WISH_SQL`]'s reason.
+        AND f.managed_deck_id IS NULL
+      ORDER BY (w.card_id IS NULL OR w.card_id <> ?1),
+               (w.preferred_finish IS NOT NULL AND w.preferred_finish <> ?2),
+               (w.folder_id IS NOT NULL), f.sort_order, w.id";
+
+/// The `SELECT` both reads share, with the `WHERE … ORDER BY` left for each to supply — one
+/// column list, so the positional read in [`run_wishes`] cannot come to disagree with either.
+fn wish_select(tail: &str) -> String {
+    format!(
+        "SELECT w.id, w.quantity, w.folder_id, f.name,
+                w.card_id, w.name, w.set_code, w.collector_number, w.preferred_finish
+           FROM wishlist_entries w
+           LEFT JOIN wishlist_folders f ON f.id = w.folder_id
+          {tail}"
+    )
+}
+
+/// Run one of the two wish reads for a printing and finish.
+///
+/// The finish arrives in the **deck row's** spelling, where `None` is the regular copy, and is
+/// translated through [`crate::deck::entry_finish_for`] into the word the wishlist stores — the
+/// finish the row *plays*, so a NULL on a printing sold only in foil matches the foil wishes the
+/// copies can fill (2026-09-27), where it matched `nonfoil`. An unknown finish is refused there
+/// rather than matching nothing here.
+fn run_wishes(
+    conn: &Connection,
+    tail: &str,
+    card_id: &str,
+    finish: Option<&str>,
+) -> Result<Vec<QuickAddWish>, String> {
+    let finish = crate::deck::entry_finish_for(conn, card_id, finish)?;
+    let mut stmt = conn
+        .prepare(&wish_select(tail))
+        .map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map(params![card_id, finish], |r| {
+            Ok(QuickAddWish {
+                id: r.get(0)?,
+                quantity: r.get(1)?,
+                folder_id: r.get(2)?,
+                folder_name: r.get(3)?,
+                card_id: r.get(4)?,
+                name: r.get(5)?,
+                set_code: r.get(6)?,
+                collector_number: r.get(7)?,
+                preferred_finish: r.get(8)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// The wishes this exact printing and finish would fill — [`WISH_SQL`]. The deck-wide batch's
+/// read, which acts on a lone match without asking.
+pub fn wishes(
+    conn: &Connection,
+    card_id: &str,
+    finish: Option<&str>,
+) -> Result<Vec<QuickAddWish>, String> {
+    run_wishes(conn, WISH_SQL, card_id, finish)
+}
+
+/// Every wish for this printing's card, whatever printing or finish it names —
+/// [`CARD_WISH_SQL`]. The per-card menu's read, behind a picker that always asks.
+pub fn card_wishes(
+    conn: &Connection,
+    card_id: &str,
+    finish: Option<&str>,
+) -> Result<Vec<QuickAddWish>, String> {
+    run_wishes(conn, CARD_WISH_SQL, card_id, finish)
+}
+
+/// Record copies straight into this deck's group, and take a named wish down with them.
+///
+/// # The order of the seven steps *is* the rule
+///
+/// [`crate::collection_alloc::collection_to_deck`]'s discipline, and every step is placed for a
+/// reason a test pins:
+///
+/// 1. **A quantity of zero or less is refused before the transaction opens** —
+///    [`crate::collection::ZERO_ADD`], the crate's one sentence for it, reused rather than
+///    respelled. Adding no copies is a no-op dressed as a write.
+/// 2. **[`crate::deck::touch_deck`] first inside it**, which doubles as the deck fence: a stale
+///    editor's dead deck id hears [`crate::deck::GONE`] and not [`crate::collection_alloc::
+///    NOT_IN_DECK`], because "that deck is gone" and "that deck does not play this" are
+///    different things to be told. A quick add *is* a change to the deck — what it holds moved —
+///    so the stamp is owed on its own account. **The virtual fence rides immediately behind it**
+///    — [`crate::deck::VIRTUAL_HOLDS_NOTHING`], issue #401 — and is a rider rather than an
+///    eighth step, because it is not part of this press: it asks whether the press applies to
+///    this deck at all, where the seven are the press. Behind the stamp for the stamp's own
+///    reason, one sentence up: a dead deck id must hear [`crate::deck::GONE`], not something
+///    about virtual decks.
+/// 3. **[`crate::deck::plays_card`]**, else [`crate::collection_alloc::NOT_IN_DECK`]. That
+///    function reads the **live** list only, and there is deliberately no theory fence of its
+///    own here: a card the deck merely *plans* is refused by this one check, with the sentence
+///    that names the mistake. Spelling [`crate::collection_alloc::THEORY_HOLDS_NOTHING`] beside
+///    it would be a second rule to keep in step for a case the first already covers. **The
+///    virtual fence is not that kind of duplicate and is owed on its own**: `plays_card` would
+///    accept a virtual deck's live row perfectly happily — the list is real, it is the cardboard
+///    that does not exist — so nothing here covers it and a refusal about the *deck* cannot be
+///    reached from a question about the *card*.
+/// 4. **[`crate::deck::deck_group`]**, else [`crate::collection_alloc::NO_DECK_GROUP`]. There is
+///    one group per deck since schema v25, so `None` is a database somebody has edited by hand —
+///    and filing at the root instead would record copies no deck claims.
+/// 5. **[`record_copies`]**, which is this module's one spelling of the `EntryInput` a
+///    deck-boundary *create* files — shared with [`crate::deck_missing::to_collection`], the
+///    deck-wide form of this press, so a column added to that struct cannot come to mean two
+///    things in two modules. Every claim about what it writes and what it deliberately leaves
+///    unsaid is on that function.
+/// 6. **The wish, re-read inside the transaction.** See [`WISH_GONE`] and [`WISH_WRONG_CARD`].
+///    `take = min(quantity, wish.quantity)`; taking the lot deletes the row, because
+///    `wishlist_entries.quantity` is `CHECK (quantity > 0)` and a wish for none of something is
+///    not a wish.
+/// 7. **One [`crate::deck_audit`] row.**
+///
+/// One transaction, for the reason every fold in this crate is one: mid-press the copies are
+/// recorded *and* the wish is down, or neither is. A refusal at step 6 rolls the copies back —
+/// the reader asked for both halves and gets neither, which is the only answer a half-failure
+/// can honestly give.
+///
+/// # The history row is a `move`, and `AUDIT_KINDS` stays at nine
+///
+/// `deck_audit.kind`'s CHECK cannot be altered — SQLite has no `ALTER … CHECK` — so a tenth word
+/// would rebuild every reader's whole deck history for a spelling.
+/// [`crate::import::commit_import`] met this first, [`crate::deck_undo`] and
+/// [`crate::deck_pull`] met it again, and this is the fourth reuse: an existing kind with a
+/// payload key nothing else writes, so `auditText.ts` recognises it without guessing.
+///
+/// `{"quickAdd": {"copies": N, "wishes": M}}`, where **`M` is [`QuickAddOutcome::wish_copies`] —
+/// copies off the wish, not a count of wish rows**, of which there is at most one.
+///
+/// **`delta` is 0 and it is honest.** `delta` is what the history drawer's day header adds up,
+/// and it adds up changes to *the list*. The list gained nothing: the deck asked for four copies
+/// before the press and asks for four after it. The card is `None` for
+/// [`crate::deck_pull::from_collection`]'s reason — a `move` row naming a card renders as
+/// *"Moved a card"*, a sentence about a change to a list this press did not make.
+///
+/// # There is deliberately no undo step
+///
+/// [`crate::collection_alloc::collection_to_deck`]'s argument, and it is sharper here.
+/// [`crate::deck_undo`] restores rows of `deck_cards` and touches no collection table at all, so
+/// the only half of this press it could express is the half that does not exist — this write
+/// changes **no** `deck_cards` row. A step carrying nothing is not a step. The way back is the
+/// collection editor: the copies are a row the reader can see, in a folder named after the deck.
+pub fn quick_add(
+    conn: &Connection,
+    deck_id: i64,
+    card_id: &str,
+    finish: Option<&str>,
+    condition: Option<&str>,
+    quantity: i64,
+    wish_id: Option<i64>,
+) -> Result<QuickAddOutcome, String> {
+    // Before the transaction opens, not inside it: a refusal that has already begun a write is a
+    // rollback the reader pays for. `collection_to_deck` and `commit_import` both open this way.
+    if quantity <= 0 {
+        return Err(crate::collection::ZERO_ADD.to_owned());
+    }
+    // The deck's spelling into the collection's, once, and read by both halves below — the
+    // `collection_entries.finish` this writes and the `wishlist_entries.preferred_finish` the
+    // wish is re-checked against are the same vocabulary, and a second translation is a second
+    // thing to drift. **The finish the row plays**, [`crate::deck::entry_finish_for`]: the menu
+    // sends the deck card's own NULL, and on a printing sold only in foil that is the foil — this
+    // recorded a `nonfoil` copy of a card nobody sells until 2026-09-27. Read on `conn` before the
+    // transaction opens, like the quantity check above it: the printing is not this write's.
+    let finish = crate::deck::entry_finish_for(conn, card_id, finish)?;
+
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    crate::deck::touch_deck(&tx, deck_id)?;
+    // Step 2's rider: a virtual deck keeps no cardboard, so there is nothing for this press to
+    // record and no group of the deck's to record it into. Ahead of `plays_card`, which cannot
+    // stand in for it — a virtual deck's live list plays its cards perfectly well; what it has
+    // none of is copies.
+    if crate::deck::is_virtual(&tx, deck_id)? {
+        return Err(crate::deck::VIRTUAL_HOLDS_NOTHING.to_owned());
+    }
+    if !crate::deck::plays_card(&tx, deck_id, card_id)? {
+        return Err(crate::collection_alloc::NOT_IN_DECK.to_owned());
+    }
+    let group = crate::deck::deck_group(&tx, deck_id)?
+        .ok_or_else(|| crate::collection_alloc::NO_DECK_GROUP.to_owned())?;
+
+    let change = record_copies(&tx, group, card_id, &finish, condition, quantity)?;
+
+    let wish_copies = match wish_id {
+        None => 0,
+        Some(wish_id) => take_wish(&tx, wish_id, card_id, quantity)?,
+    };
+
+    // Inside the transaction, [`crate::deck_audit`]'s first rule: a history row for a write that
+    // rolled back is worse than no row at all. The id `record` answers is discarded, which is
+    // the call shape of every site that files no reversal.
+    crate::deck_audit::record(
+        &tx,
+        deck_id,
+        LIVE,
+        crate::deck_audit::MOVE,
+        None,
+        &json!({ "quickAdd": { "copies": quantity, "wishes": wish_copies } }),
+        0,
+    )?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(QuickAddOutcome {
+        copies: quantity,
+        entry_id: change.id,
+        wish_copies,
+    })
+}
+
+/// File copies into a deck's group — the one spelling of the [`crate::collection::EntryInput`] a
+/// deck-boundary *create* uses.
+///
+/// Written once because it is written twice: [`quick_add`]'s step 5 and
+/// [`crate::deck_missing::to_collection`]'s step 6 are the same eight lines, and this module owns
+/// the idea because it made the first of them. **It is deliberately this small.** The two presses'
+/// *fences* differ — one asks [`crate::deck::plays_card`], the other re-plans inside its own
+/// transaction, which is strictly stronger — and their wish halves differ, one named and one
+/// chosen; hoisting either would be one rule kept in two places rather than one.
+///
+/// **`..Default::default()` rather than explicit empties**, so a column added to `EntryInput`
+/// later does not need a line here to keep meaning "the reader did not say": a menu press and a
+/// batch record *copies*, and a purchase price or an acquisition source either of them invented
+/// would be provenance nobody entered.
+///
+/// The grain fold is [`crate::collection::add_entry_filed`]'s: the folder is `COLLECTION_GRAIN`'s
+/// eleventh term, so a second press on the same line raises the row already in the group rather
+/// than making a second one, and the copies of one printing in one group are one row by
+/// construction.
+///
+/// The finish arrives already translated into the **collection's** spelling — the caller has run
+/// [`crate::deck::entry_finish_for`] — because both callers need that word for their wishlist half
+/// too and a second translation is a second thing to drift.
+///
+/// `condition` is an [`Option`] and stays one: `collection::valid_condition` already turns an
+/// absent grade into [`crate::collection::DEFAULT_CONDITION`], so a caller that was never told one
+/// passes `None` and spells no constant of its own. A grade named at a call site would be a second
+/// place to keep in step with a default that has moved once already (schema v35).
+pub(crate) fn record_copies(
+    tx: &Connection,
+    group: i64,
+    card_id: &str,
+    finish: &str,
+    condition: Option<&str>,
+    quantity: i64,
+) -> Result<crate::collection::EntryChange, String> {
+    let input = crate::collection::EntryInput {
+        card_id: card_id.to_owned(),
+        finish: finish.to_owned(),
+        condition: condition.map(str::to_owned),
+        quantity,
+        folder_id: Some(group),
+        ..Default::default()
+    };
+    crate::collection::add_entry_filed(tx, &input, crate::collection::DECK_WRITE_FOLDERS)
+}
+
+/// Re-check one wish against the press and take copies off it. Answers what it took.
+///
+/// **Read back in three columns rather than asked as a `WHERE`**, because a single statement that
+/// matched nothing could only say *"no such wish"* — and "somebody deleted it" ([`WISH_GONE`])
+/// and "it is not for this card any more" ([`WISH_WRONG_CARD`]) are the two different things a
+/// stale dialog needs told apart. The predicate re-applied here is [`WISH_SQL`]'s, term for term.
+///
+/// `card_id` is `Option<String>` on the table — NULL is the any-printing wish — and an equality
+/// against `Some(card_id)` refuses it, which is the same narrowing [`wishes`] makes by writing
+/// `w.card_id = ?1` rather than a `coalesce`.
+fn take_wish(tx: &Connection, wish_id: i64, card_id: &str, quantity: i64) -> Result<i64, String> {
+    // [`CARD_WISH_SQL`]'s test asked of one row: the wish names this printing, or its oracle card
+    // is this printing's. Printing and finish are the reader's call now, so neither is checked.
+    let row: Option<(bool, i64)> = tx
+        .query_row(
+            "SELECT w.card_id IS ?2
+                    OR (w.oracle_id IS NOT NULL
+                        AND w.oracle_id = (SELECT oracle_id FROM cards WHERE id = ?2)),
+                    w.quantity
+               FROM wishlist_entries w WHERE w.id = ?1",
+            params![wish_id, card_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let (same_card, held) = row.ok_or_else(|| WISH_GONE.to_owned())?;
+    if !same_card {
+        return Err(WISH_WRONG_CARD.to_owned());
+    }
+    let take = quantity.min(held);
+    // `quantity > 0` is a table CHECK, so a wish taken down to nothing has to go rather than sit
+    // at zero — `crate::collection::set_quantity`'s rule one table over, where a stepped-out row
+    // is deleted for the same reason.
+    if take >= held {
+        tx.execute(
+            "DELETE FROM wishlist_entries WHERE id = ?1",
+            params![wish_id],
+        )
+    } else {
+        tx.execute(
+            "UPDATE wishlist_entries SET quantity = quantity - ?2, updated_at = unixepoch()
+              WHERE id = ?1",
+            params![wish_id, take],
+        )
+    }
+    .map_err(|e| e.to_string())?;
+    Ok(take)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::schema::fixtures::{deck as seed_deck, seed_card};
+    use serde_json::Value;
+
+    /// `FINISHES[0]`, the collection's word for a plain copy. The module itself no longer spells
+    /// it: [`crate::deck::entry_finish_for`] is the translation.
+    const NONFOIL: &str = crate::schema::FINISHES[0];
+
+    /// **`foreign_keys` is ON**, as [`crate::db::open`] sets it for every connection the app
+    /// hands out — [`crate::deck_pull`]'s suite opens the same way and for the same reason:
+    /// `collection_entries.folder_id` SET NULLs and `collection_folders.deck_id` CASCADEs, and
+    /// both are per-connection settings.
+    fn open() -> Connection {
+        let conn = crate::schema::memory_pair();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn
+    }
+
+    /// A deck, its group and one active `main` category.
+    fn deck_with_group(conn: &Connection, name: &str) -> (i64, i64) {
+        let deck = seed_deck(conn, name);
+        conn.execute(
+            "INSERT INTO collection_folders
+                 (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (NULL, ?1, 'deck', ?2, 0, unixepoch(), unixepoch())",
+            params![name, deck],
+        )
+        .unwrap();
+        let category = crate::schema::fixtures::category(conn, deck, "main", "Main deck");
+        (deck, category)
+    }
+
+    /// One printing, one deck with its group, one category.
+    fn fixture() -> (Connection, i64, i64) {
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        let (deck, category) = deck_with_group(&conn, "Deck A");
+        (conn, deck, category)
+    }
+
+    /// A deck row written straight into the table, so a list can want a card no folder holds —
+    /// and so the setup writes no history of its own for the audit cases to trip over.
+    fn add_deck_card(
+        conn: &Connection,
+        deck: i64,
+        category: i64,
+        card_id: &str,
+        quantity: i64,
+        finish: Option<&str>,
+        variant: &str,
+    ) -> i64 {
+        conn.query_row(
+            "INSERT INTO deck_cards
+                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                  name, finish, quantity, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, 'lea', '161', 'en', 'Lightning Bolt', ?5, ?6,
+                     unixepoch(), unixepoch())
+             RETURNING id",
+            params![deck, category, variant, card_id, finish, quantity],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The ordinary case: a live line of four.
+    fn live_card(conn: &Connection, deck: i64, category: i64, card_id: &str, quantity: i64) {
+        add_deck_card(conn, deck, category, card_id, quantity, None, LIVE);
+    }
+
+    /// A folder the reader made and named, on the **wishlist** side.
+    fn wish_folder(conn: &Connection, name: &str, sort_order: i64) -> i64 {
+        conn.query_row(
+            "INSERT INTO wishlist_folders (parent_id, name, sort_order, created_at, updated_at)
+             VALUES (NULL, ?1, ?2, unixepoch(), unixepoch())
+             RETURNING id",
+            params![name, sort_order],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// One wish, at whatever grain the case needs. `card_id` is `Option` because the
+    /// any-printing wish — the row this module must **not** offer — is the one with NULL there.
+    fn seed_wish(
+        conn: &Connection,
+        card_id: Option<&str>,
+        finish: Option<&str>,
+        quantity: i64,
+        folder: Option<i64>,
+    ) -> i64 {
+        conn.query_row(
+            "INSERT INTO wishlist_entries
+                 (oracle_id, card_id, set_code, collector_number, lang, name, quantity,
+                  preferred_finish, folder_id, created_at, updated_at)
+             VALUES ('o-bolt', ?1, 'lea', '161', 'en', 'Lightning Bolt', ?2, ?3, ?4,
+                     unixepoch(), unixepoch())
+             RETURNING id",
+            params![card_id, quantity, finish, folder],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Copies of a printing sitting in a deck's group.
+    fn group_copies(conn: &Connection, deck: i64, card_id: &str) -> i64 {
+        let group = crate::deck::deck_group(conn, deck).unwrap();
+        conn.query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries
+              WHERE card_id = ?1 AND folder_id = ?2",
+            params![card_id, group],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// Every `collection_entries` row there is, however filed.
+    fn entry_count(conn: &Connection) -> i64 {
+        conn.query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// The live list's own quantity for a printing — the number a quick add must never touch.
+    fn listed(conn: &Connection, deck: i64, card_id: &str) -> i64 {
+        conn.query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM deck_cards
+              WHERE deck_id = ?1 AND card_id = ?2 AND variant = 'live'",
+            params![deck, card_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// What one wish holds, or `None` once it has been taken down to nothing.
+    fn wish_quantity(conn: &Connection, wish: i64) -> Option<i64> {
+        conn.query_row(
+            "SELECT quantity FROM wishlist_entries WHERE id = ?1",
+            params![wish],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    /// This deck's history, oldest first — kind, card name, payload, delta.
+    fn history(conn: &Connection, deck: i64) -> Vec<(String, Option<String>, Value, i64)> {
+        let mut rows: Vec<_> = crate::deck_audit::list(conn, deck, 500)
+            .unwrap()
+            .into_iter()
+            .map(|e| {
+                (
+                    e.kind,
+                    e.card_name,
+                    serde_json::from_str(&e.payload).expect("a payload is JSON"),
+                    e.delta,
+                )
+            })
+            .collect();
+        rows.reverse();
+        rows
+    }
+
+    /// A second printing of the **same** oracle card — [`seed_card`] derives one per printing
+    /// (`'o-' || id`), so "a Bolt is a Bolt" is a question only two rows sharing an oracle id
+    /// can ask.
+    fn seed_reprint(conn: &Connection, id: &str, of: &str) {
+        seed_card(conn, id, "m10", "146");
+        conn.execute(
+            "UPDATE cards SET oracle_id = (SELECT oracle_id FROM cards WHERE id = ?2)
+              WHERE id = ?1",
+            params![id, of],
+        )
+        .unwrap();
+    }
+
+    // ---- the write ----------------------------------------------------------------
+
+    #[test]
+    fn the_copies_land_in_the_group_and_nowhere_else() {
+        // The case the whole feature turns on: the list wants four, the reader has just bought
+        // four, and one press records them where the deck can see them. The **list** is
+        // untouched — a quick add says what the reader owns, never what the deck plays.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+
+        let out = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, None).unwrap();
+
+        assert_eq!(out.copies, 4);
+        assert_eq!(out.wish_copies, 0, "no wish was named");
+        assert_eq!(group_copies(&conn, deck, "bolt"), 4);
+        assert_eq!(entry_count(&conn), 1, "one row, and it is in the group");
+        assert_eq!(listed(&conn, deck, "bolt"), 4, "the list is not a target");
+        let row: (String, String, Option<i64>) = conn
+            .query_row(
+                "SELECT finish, condition, folder_id FROM collection_entries WHERE id = ?1",
+                params![out.entry_id],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            row.0, NONFOIL,
+            "a deck row's `None` is the collection's word"
+        );
+        assert_eq!(row.1, "NM");
+        assert_eq!(row.2, crate::deck::deck_group(&conn, deck).unwrap());
+    }
+
+    /// **A deck row's `None` on a printing sold only in foil is the foil** (issue #563's
+    /// follow-up). The menu sends the deck card's own finish, which is NULL wherever the add named
+    /// none; translated to `nonfoil`, the press recorded a copy nobody sells, beside a line the
+    /// rest of the editor draws as foil. And the wish read answers the foil the copies are: a
+    /// wish pinned to the foil is offered, where the `nonfoil` read never matched it.
+    #[test]
+    fn an_unsaid_row_of_a_foil_only_printing_records_foil_copies() {
+        let (conn, deck, cat) = fixture();
+        conn.execute(
+            "UPDATE cards SET finishes = '[\"foil\"]' WHERE id = 'bolt'",
+            [],
+        )
+        .unwrap();
+        live_card(&conn, deck, cat, "bolt", 1);
+        let wish = seed_wish(&conn, Some("bolt"), Some("foil"), 1, None);
+
+        let offered: Vec<i64> = wishes(&conn, "bolt", None)
+            .unwrap()
+            .into_iter()
+            .map(|w| w.id)
+            .collect();
+        assert_eq!(
+            offered,
+            vec![wish],
+            "the foil wish is the one these copies fill"
+        );
+
+        let out = quick_add(&conn, deck, "bolt", None, None, 1, Some(wish)).unwrap();
+        let finish: String = conn
+            .query_row(
+                "SELECT finish FROM collection_entries WHERE id = ?1",
+                params![out.entry_id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(finish, "foil");
+        assert_eq!(wish_quantity(&conn, wish), None, "and the wish is down");
+        let owned: i64 = crate::deck::get_deck(&conn, deck, LIVE, Default::default())
+            .unwrap()
+            .unwrap()
+            .cards
+            .iter()
+            .map(|c| c.owned_quantity)
+            .sum();
+        assert_eq!(owned, 1, "the deck counts what it just recorded");
+    }
+
+    #[test]
+    fn a_second_press_folds_on_the_grain_rather_than_making_a_second_row() {
+        // The folder is `COLLECTION_GRAIN`'s eleventh term, so two presses on one line land on
+        // one row — `add_entry_filed`'s fold, which this module does not respell.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+
+        let first = quick_add(&conn, deck, "bolt", None, Some("NM"), 1, None).unwrap();
+        let second = quick_add(&conn, deck, "bolt", None, Some("NM"), 3, None).unwrap();
+
+        assert_eq!(second.entry_id, first.entry_id, "the same row, raised");
+        assert_eq!(second.copies, 3, "what this press recorded, not the total");
+        assert_eq!(entry_count(&conn), 1);
+        assert_eq!(group_copies(&conn, deck, "bolt"), 4);
+    }
+
+    #[test]
+    fn a_deck_that_does_not_play_the_card_is_refused_and_nothing_is_left_behind() {
+        // Issue #358's invariant from the creating side: every copy in a deck's group is backed
+        // by a row in that deck's list. A press that filed one without would be inventing
+        // custody for a card the deck does not play.
+        let (conn, deck, cat) = fixture();
+        seed_card(&conn, "shock", "m10", "155");
+        live_card(&conn, deck, cat, "bolt", 4);
+
+        let err = quick_add(&conn, deck, "shock", None, Some("NM"), 4, None).unwrap_err();
+
+        assert_eq!(err, crate::collection_alloc::NOT_IN_DECK);
+        assert_eq!(entry_count(&conn), 0, "a refused press records nothing");
+        assert!(history(&conn, deck).is_empty(), "and writes no history");
+    }
+
+    #[test]
+    fn another_printing_of_a_card_the_deck_plays_is_accepted() {
+        // `plays_card` matches on `PLAYED_KEY` — the oracle card with the printing as the
+        // fallback — so a deck listing the Alpha Bolt takes the M10 copies the reader bought.
+        // The fence is about the *card*, never about the printing.
+        let (conn, deck, cat) = fixture();
+        seed_reprint(&conn, "bolt-m10", "bolt");
+        live_card(&conn, deck, cat, "bolt", 4);
+
+        let out = quick_add(&conn, deck, "bolt-m10", None, Some("NM"), 4, None).unwrap();
+
+        assert_eq!(out.copies, 4);
+        assert_eq!(group_copies(&conn, deck, "bolt-m10"), 4);
+    }
+
+    #[test]
+    fn a_theory_only_card_is_refused_by_the_same_fence() {
+        // A plan holds no cards. `plays_card` reads the **live** list only, so a card the deck
+        // has merely thought about is refused here with no theory fence of its own — see
+        // `quick_add`'s doc, where the absence is stated rather than left to be noticed.
+        let (conn, deck, cat) = fixture();
+        add_deck_card(&conn, deck, cat, "bolt", 4, None, "theory");
+
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, None).unwrap_err();
+
+        assert_eq!(err, crate::collection_alloc::NOT_IN_DECK);
+        assert_eq!(entry_count(&conn), 0);
+    }
+
+    /// Turn a deck into one the reader tracks without owning — `decks.virtual_only`, schema v40.
+    ///
+    /// An `UPDATE` rather than a parameter on [`deck_with_group`], so a case that wants one says
+    /// so on its own line and every other case in this file is untouched.
+    fn make_virtual(conn: &Connection, deck: i64) {
+        conn.execute(
+            "UPDATE decks SET virtual_only = 1 WHERE id = ?1",
+            params![deck],
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_virtual_deck_records_no_copies() {
+        // **`plays_card` cannot stand in for this fence, which is why it is its own.** The live
+        // list plays the card perfectly well — the setup is the ordinary accepted press, one line
+        // of four — and what does not exist is the cardboard. So the refusal has to be about the
+        // deck, and it fires before the card is asked about at all.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+        make_virtual(&conn, deck);
+
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, None).unwrap_err();
+
+        assert_eq!(err, crate::deck::VIRTUAL_HOLDS_NOTHING);
+        assert_eq!(entry_count(&conn), 0, "nothing was recorded");
+        assert_eq!(group_copies(&conn, deck, "bolt"), 0);
+    }
+
+    #[test]
+    fn a_gone_deck_hears_that_it_is_gone_and_not_that_it_plays_nothing() {
+        // `touch_deck` before `plays_card`, and the order is the whole of this test: an id with
+        // no deck behind it would otherwise be a deck that plays nothing, which tells a stale
+        // editor to add the card rather than to close the window.
+        let (conn, _deck, _cat) = fixture();
+
+        let err = quick_add(&conn, 4040, "bolt", None, Some("NM"), 4, None).unwrap_err();
+
+        assert_eq!(err, crate::deck::GONE);
+        assert_eq!(entry_count(&conn), 0);
+    }
+
+    #[test]
+    fn zero_copies_are_refused_in_the_crates_own_words() {
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+
+        assert_eq!(
+            quick_add(&conn, deck, "bolt", None, Some("NM"), 0, None).unwrap_err(),
+            crate::collection::ZERO_ADD
+        );
+        assert_eq!(
+            quick_add(&conn, deck, "bolt", None, Some("NM"), -2, None).unwrap_err(),
+            crate::collection::ZERO_ADD
+        );
+        assert_eq!(entry_count(&conn), 0);
+    }
+
+    #[test]
+    fn a_deck_with_no_group_is_refused_rather_than_filed_at_the_root() {
+        // One group per deck since v25, so `None` is a hand-edited database — and copies at the
+        // root would be copies no deck claims, which is the state the fence above exists for.
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        let deck = seed_deck(&conn, "No group");
+        let cat = crate::schema::fixtures::category(&conn, deck, "main", "Main deck");
+        live_card(&conn, deck, cat, "bolt", 4);
+
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, None).unwrap_err();
+
+        assert_eq!(err, crate::collection_alloc::NO_DECK_GROUP);
+        assert_eq!(entry_count(&conn), 0);
+    }
+
+    #[test]
+    fn the_audit_row_is_a_move_with_no_card_and_a_delta_of_zero() {
+        // `AUDIT_KINDS` stays at nine; the payload key is what tells this apart. `delta` is 0
+        // because the deck's *list* gained nothing, and the card is `None` because a `move` row
+        // naming one renders as "Moved a card" — a sentence about a change this press did not
+        // make.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+        let wish = seed_wish(&conn, Some("bolt"), None, 1, None);
+
+        quick_add(&conn, deck, "bolt", None, Some("NM"), 4, Some(wish)).unwrap();
+
+        let rows = history(&conn, deck);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].0, crate::deck_audit::MOVE);
+        assert_eq!(rows[0].1, None, "a batch names no one card");
+        assert_eq!(
+            rows[0].2,
+            json!({ "quickAdd": { "copies": 4, "wishes": 1 } })
+        );
+        assert_eq!(rows[0].3, 0);
+    }
+
+    // ---- the wishlist half --------------------------------------------------------
+
+    #[test]
+    fn a_named_wish_is_decremented_and_deleted_at_zero() {
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+        let wish = seed_wish(&conn, Some("bolt"), None, 4, None);
+
+        let first = quick_add(&conn, deck, "bolt", None, Some("NM"), 1, Some(wish)).unwrap();
+        assert_eq!(first.wish_copies, 1);
+        assert_eq!(wish_quantity(&conn, wish), Some(3), "three still wanted");
+
+        let rest = quick_add(&conn, deck, "bolt", None, Some("NM"), 3, Some(wish)).unwrap();
+        assert_eq!(rest.wish_copies, 3);
+        assert_eq!(
+            wish_quantity(&conn, wish),
+            None,
+            "`quantity > 0` is a CHECK, so a wish for none of something has to go"
+        );
+    }
+
+    #[test]
+    fn a_press_bigger_than_the_wish_takes_only_what_the_wish_asked_for() {
+        // `min(quantity, wish.quantity)`: recording four copies against a wish for one clears
+        // one wish, not four, and `wish_copies` is what the sentence quotes.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+        let wish = seed_wish(&conn, Some("bolt"), None, 1, None);
+
+        let out = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, Some(wish)).unwrap();
+
+        assert_eq!(out.copies, 4);
+        assert_eq!(out.wish_copies, 1);
+        assert_eq!(wish_quantity(&conn, wish), None);
+    }
+
+    #[test]
+    fn a_wish_that_has_gone_refuses_the_whole_press() {
+        // The dialog's answer is a round trip old, so the wish is re-read inside the
+        // transaction — and a refusal there rolls the copies back. The reader asked for both
+        // halves and gets neither, which is the only answer a half-failure can honestly give.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, Some(909)).unwrap_err();
+
+        assert_eq!(err, WISH_GONE);
+        assert_eq!(entry_count(&conn), 0, "no copies were recorded");
+        assert!(history(&conn, deck).is_empty());
+    }
+
+    #[test]
+    fn a_wish_for_another_printing_of_the_card_is_the_readers_to_take() {
+        // Issue #511: the picker offers every line for the card, so the write takes the one the
+        // reader picked — an M10 wish settled by Alpha copies is their call, not a refusal.
+        let (conn, deck, cat) = fixture();
+        seed_reprint(&conn, "bolt-m10", "bolt");
+        live_card(&conn, deck, cat, "bolt", 4);
+        let other = seed_wish(&conn, Some("bolt-m10"), None, 4, None);
+
+        let out = quick_add(&conn, deck, "bolt", None, Some("NM"), 3, Some(other)).unwrap();
+
+        assert_eq!(out.wish_copies, 3);
+        assert_eq!(wish_quantity(&conn, other), Some(1));
+        assert_eq!(
+            group_copies(&conn, deck, "bolt"),
+            3,
+            "the copies are the pressed printing"
+        );
+    }
+
+    #[test]
+    fn a_wish_for_another_finish_or_any_printing_is_taken_too() {
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+        let foil = seed_wish(&conn, Some("bolt"), Some("foil"), 1, None);
+        // `seed_wish` writes `o-bolt`, which is the oracle id `seed_card` derives for `bolt`.
+        let any = seed_wish(&conn, None, None, 2, None);
+
+        quick_add(&conn, deck, "bolt", None, Some("NM"), 1, Some(foil)).unwrap();
+        quick_add(&conn, deck, "bolt", None, Some("NM"), 2, Some(any)).unwrap();
+
+        assert_eq!(wish_quantity(&conn, foil), None);
+        assert_eq!(wish_quantity(&conn, any), None);
+    }
+
+    #[test]
+    fn a_wish_for_another_card_refuses_the_whole_press() {
+        // The fence that stays: a wish is taken only for the card the copies are.
+        let (conn, deck, cat) = fixture();
+        seed_card(&conn, "shock", "m10", "155");
+        live_card(&conn, deck, cat, "bolt", 4);
+        let shock = conn
+            .query_row(
+                "INSERT INTO wishlist_entries
+                     (oracle_id, card_id, set_code, collector_number, lang, name, quantity,
+                      created_at, updated_at)
+                 VALUES ('o-shock', 'shock', 'm10', '155', 'en', 'Shock', 4,
+                         unixepoch(), unixepoch())
+                 RETURNING id",
+                [],
+                |r| r.get::<_, i64>(0),
+            )
+            .unwrap();
+
+        let err = quick_add(&conn, deck, "bolt", None, Some("NM"), 4, Some(shock)).unwrap_err();
+
+        assert_eq!(err, WISH_WRONG_CARD);
+        assert_eq!(entry_count(&conn), 0, "no copies were recorded");
+        assert_eq!(wish_quantity(&conn, shock), Some(4), "and the wish stands");
+    }
+
+    // ---- the read -----------------------------------------------------------------
+
+    #[test]
+    fn a_wish_naming_no_finish_matches_and_a_foil_one_does_not() {
+        // The list itself says "a wish that names no finish takes any of them", so a NULL
+        // `preferred_finish` matches — excluding it would refuse the commonest wish there is.
+        // The foil row is the other half of the same rule.
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        let any = seed_wish(&conn, Some("bolt"), None, 2, None);
+        let nonfoil = seed_wish(&conn, Some("bolt"), Some("nonfoil"), 1, None);
+        seed_wish(&conn, Some("bolt"), Some("foil"), 1, None);
+
+        let rows = wishes(&conn, "bolt", None).unwrap();
+
+        let ids: Vec<i64> = rows.iter().map(|w| w.id).collect();
+        assert_eq!(ids, vec![any, nonfoil]);
+        assert_eq!(rows[0].quantity, 2);
+    }
+
+    #[test]
+    fn a_foil_press_finds_the_foil_wish_and_not_the_nonfoil_one() {
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        let any = seed_wish(&conn, Some("bolt"), None, 1, None);
+        seed_wish(&conn, Some("bolt"), Some("nonfoil"), 1, None);
+        let foil = seed_wish(&conn, Some("bolt"), Some("foil"), 1, None);
+
+        let ids: Vec<i64> = wishes(&conn, "bolt", Some("foil"))
+            .unwrap()
+            .iter()
+            .map(|w| w.id)
+            .collect();
+
+        assert_eq!(ids, vec![any, foil]);
+    }
+
+    #[test]
+    fn an_any_printing_wish_is_not_offered() {
+        // `w.card_id = ?1` is that match with the any-printing arm dropped, and
+        // the drop is the decision: nothing comes off a shopping list that is not the piece of
+        // cardboard the reader just recorded.
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        seed_wish(&conn, None, None, 4, None);
+        let printing = seed_wish(&conn, Some("bolt"), None, 1, None);
+
+        let ids: Vec<i64> = wishes(&conn, "bolt", None)
+            .unwrap()
+            .iter()
+            .map(|w| w.id)
+            .collect();
+
+        assert_eq!(ids, vec![printing]);
+    }
+
+    #[test]
+    fn the_root_comes_first_then_the_readers_folders_in_their_own_order() {
+        // `deck_pull::PullCandidate`'s ranking borrowed rather than re-decided: rank by how
+        // little of the reader's filing the answer disturbs. The tiebreak is the row id, oldest
+        // first, which is a primary key and so makes the walk total.
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        // **The two folders are made in the opposite order to the one they sort in, and the
+        // three wishes in a third order again.** That is the whole setup: the expected answer
+        // must not be reachable by `w.id` alone in either direction, nor by dropping
+        // `f.sort_order` and leaving the folder-first term. Seeded 1-2-3 as
+        // `in_later`, `at_root`, `in_soon`, the answer is 2-3-1 and no simpler order says so.
+        let second = wish_folder(&conn, "Later", 2);
+        let first = wish_folder(&conn, "Soon", 1);
+        let in_later = seed_wish(&conn, Some("bolt"), None, 1, Some(second));
+        let at_root = seed_wish(&conn, Some("bolt"), None, 1, None);
+        let in_soon = seed_wish(&conn, Some("bolt"), None, 1, Some(first));
+
+        let rows = wishes(&conn, "bolt", None).unwrap();
+
+        assert_eq!(
+            rows.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![at_root, in_soon, in_later]
+        );
+        assert_eq!(rows[0].folder_id, None);
+        assert_eq!(rows[0].folder_name, None, "the root is the UI's word");
+        assert_eq!(rows[1].folder_name.as_deref(), Some("Soon"));
+        assert_eq!(rows[2].folder_name.as_deref(), Some("Later"));
+    }
+
+    #[test]
+    fn two_wishes_in_one_folder_come_out_oldest_first() {
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        let folder = wish_folder(&conn, "Soon", 1);
+        // Two rows of one printing in one folder need a grain term apart to exist at all —
+        // `WISHLIST_GRAIN`'s third is the finish, and both of these match a nonfoil press.
+        let older = seed_wish(&conn, Some("bolt"), None, 1, Some(folder));
+        let newer = seed_wish(&conn, Some("bolt"), Some("nonfoil"), 1, Some(folder));
+
+        let ids: Vec<i64> = wishes(&conn, "bolt", None)
+            .unwrap()
+            .iter()
+            .map(|w| w.id)
+            .collect();
+
+        assert_eq!(ids, vec![older, newer]);
+    }
+
+    #[test]
+    fn the_card_read_offers_every_printing_and_finish_with_the_exact_match_first() {
+        // Issue #511: the per-card picker lists every line for the card. The exact printing and
+        // finish lead, so the pre-pick is what the narrow read would have chosen; the rest follow
+        // in the folder ranking. Another card's wish is never offered.
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        seed_reprint(&conn, "bolt-m10", "bolt");
+        seed_card(&conn, "shock", "m10", "155");
+        let folder = wish_folder(&conn, "Soon", 1);
+        let reprint = seed_wish(&conn, Some("bolt-m10"), None, 1, None);
+        let any = seed_wish(&conn, None, None, 1, Some(folder));
+        let foil = seed_wish(&conn, Some("bolt"), Some("foil"), 1, None);
+        let exact = seed_wish(&conn, Some("bolt"), None, 1, Some(folder));
+        conn.execute(
+            "INSERT INTO wishlist_entries
+                 (oracle_id, card_id, name, quantity, created_at, updated_at)
+             VALUES ('o-shock', 'shock', 'Shock', 1, unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+
+        let rows = card_wishes(&conn, "bolt", None).unwrap();
+
+        assert_eq!(
+            rows.iter().map(|w| w.id).collect::<Vec<_>>(),
+            vec![exact, foil, reprint, any]
+        );
+        assert_eq!(rows[0].card_id.as_deref(), Some("bolt"));
+        assert_eq!(rows[0].folder_name.as_deref(), Some("Soon"));
+        assert_eq!(rows[1].preferred_finish.as_deref(), Some("foil"));
+        assert_eq!(rows[3].card_id, None, "the any-printing wish says so");
+        assert_eq!(rows[3].name, "Lightning Bolt");
+        // The narrow read is untouched: the batch still sees only the exact line.
+        assert_eq!(
+            wishes(&conn, "bolt", None)
+                .unwrap()
+                .iter()
+                .map(|w| w.id)
+                .collect::<Vec<_>>(),
+            vec![exact]
+        );
+    }
+
+    #[test]
+    fn a_card_nobody_wished_for_answers_the_empty_list() {
+        let conn = open();
+        seed_card(&conn, "bolt", "lea", "161");
+        assert!(wishes(&conn, "bolt", None).unwrap().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_finish_is_refused_by_both_halves() {
+        // `normalise_finish` is the one fence, so a bad word is a sentence rather than a read
+        // that quietly matches nothing.
+        let (conn, deck, cat) = fixture();
+        live_card(&conn, deck, cat, "bolt", 4);
+
+        assert!(wishes(&conn, "bolt", Some("holo")).is_err());
+        assert!(quick_add(&conn, deck, "bolt", Some("holo"), Some("NM"), 1, None).is_err());
+        assert_eq!(entry_count(&conn), 0);
+    }
+}

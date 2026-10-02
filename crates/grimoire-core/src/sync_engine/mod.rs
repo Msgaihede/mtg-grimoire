@@ -10,6 +10,8 @@
 //! which re-exports these three beside them: `apply` re-homes rows through the folder modules,
 //! and the envelope and the client wait for the roster in `sync_pair::identity`.
 
+pub mod apply;
+pub mod baseline;
 pub mod capture;
 pub mod hlc;
 pub mod merge;

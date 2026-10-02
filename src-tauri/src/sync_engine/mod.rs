@@ -20,8 +20,8 @@
 //! [`hlc`], [`merge`] and [`capture`] are `grimoire-core`'s, re-exported here beside the layers
 //! that have not moved yet.
 
-pub mod apply;
-pub mod baseline;
+pub use grimoire_core::sync_engine::apply;
+pub use grimoire_core::sync_engine::baseline;
 pub use grimoire_core::sync_engine::capture;
 /// The three of `capture`'s tests that drive `reconcile` and the launch, which are still here.
 #[cfg(test)]

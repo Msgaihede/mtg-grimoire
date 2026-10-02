@@ -1,0 +1,3276 @@
+//! Collection folders: the binder's own filing cabinet, one table over from the wishlist's.
+//!
+//! A port of [`crate::wishlist_folders`], which is itself [`crate::deck_meta`]'s folder half —
+//! pure functions over a `Connection`, testable without a Tauri app, wrapped in `async`
+//! commands that run on the blocking pool. Writes take `AppState.db` and answer
+//! [`crate::db::BUSY`] rather than waiting; the two reads take `db_read` like every read in the
+//! app.
+//!
+//! **A folder is a filing decision the reader makes about copies they own**, not a tag, not a
+//! condition and not a second collection. A row is in exactly one place, the same way a deck is
+//! in exactly one folder, and `NULL` **is** the root: nothing has to be created for the
+//! collection to work, and a reader who never makes a folder sees the table they saw before
+//! schema v24.
+//!
+//! Two cascade rules, and they pull in opposite directions on purpose (schema v24):
+//!
+//! * `collection_folders.parent_id` is `ON DELETE CASCADE` **onto its own table**, so deleting a
+//!   cabinet takes the drawers inside it in one press.
+//! * `collection_entries.folder_id` is `ON DELETE SET NULL`, so the same press leaves the
+//!   *cards* standing at the root. A folder is where a card was kept; the card is the reader's
+//!   property, and no filing decision may throw one away. **That one is a backstop and not the
+//!   mechanism**: `folder_id` is the eleventh term of [`crate::schema::COLLECTION_GRAIN`], so
+//!   [`delete_folder`] re-files the sub-tree by hand, with the merge, before the row goes — see
+//!   there for the two collisions the cascade on its own answered with
+//!   `UNIQUE constraint failed`.
+//!
+//! # What this cabinet has that the wishlist's does not
+//!
+//! **A folder here can belong to the app rather than to the reader.** `collection_folders.kind`
+//! is one of [`crate::schema::COLLECTION_FOLDER_KINDS`]: `user` is a folder the reader made and
+//! named, `deck` is the one folder that stands for a deck and carries `deck_id`, and `removed`
+//! is the single folder cards go to when they leave the collection without leaving the
+//! database. Nothing in *this* module makes either of the latter two — that is the next PR's —
+//! but every write here already refuses to touch one, in words, through [`FOLDER_NOT_YOURS`].
+//! A fence written after the thing it fences is a fence somebody has to remember to add.
+//!
+//! **One write here is about the `removed` folder rather than fenced from it**: [`clear_removed`]
+//! empties the holding area (issue #506). It names no folder id — there is exactly one such
+//! folder — and it is the only press in this cabinet that deletes cards, because what sits in
+//! that folder has already left the collection.
+//!
+//! **Nothing here writes history.** `deck_meta::delete_folder` is the one folder write in that
+//! module that records an audit row, because `decks` has a `deck_audit` to file it under. The
+//! collection has no audit log at all, so the asymmetry is the schema's rather than a gap left
+//! open here.
+//!
+//! **[`folder_summary`] names `collection_entries` in its own `FROM`**, which
+//! [`crate::collection_source`]'s module doc lists as something only three statements in the
+//! crate do. It is a fourth, for the same reason [`crate::collection`]'s `from_sql` is one: it
+//! reads the entries as its rows rather than asking a question about them, and there is no
+//! fragment there that aggregates. That doc is worth a line the day this file lands.
+
+use crate::collection::{EntryChange, ENTRY_FINISH, GONE};
+// The two sentences this module refuses with, taken from the module it is a port of rather
+// than re-spelled. A reader who has met "That folder is not there any more." in the deck
+// gallery and on the wishlist must meet the same sentence here: it is the same fact about the
+// same kind of thing, and `deck_meta::CATEGORY_WRONG_DECK`'s doc is the standing rule — a
+// second copy of a refusal is a second thing to drift.
+use crate::deck_meta::{FOLDER_CYCLE, FOLDER_GONE};
+use crate::sorting::Marketplace;
+use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
+use std::collections::HashMap;
+
+/// What every write here says about a folder that is the **app's** rather than the reader's —
+/// the one folder standing for a deck, or the single `removed` folder.
+///
+/// Local rather than borrowed, because it is a fact this cabinet has and the other two do not:
+/// `deck_folders` and `wishlist_folders` carry no `kind` column at all, so there is no sentence
+/// in either module to reach for.
+///
+/// **Said in words rather than left to the schema, and the schema could not say it anyway.**
+/// `collection_folders` CHECKs that a `deck` folder names a deck and that the kind is one of
+/// three; nothing in the DDL says who may *edit* a row, and a CHECK that could would fire as
+/// `CHECK constraint failed: collection_folders`, which names the table and not the mistake.
+pub const FOLDER_NOT_YOURS: &str = "That folder is the app's own and is not yours to change.";
+
+/// What [`delete_folder`] says about a drawer the reader has **set aside** — locked by its own
+/// flag, or by any folder above it.
+///
+/// **A sentence rather than a CHECK, and rather than a constraint failure**, which is
+/// [`FOLDER_NOT_YOURS`]' reasoning one column over: nothing in the DDL knows what a lock is
+/// *for*, and a `CHECK` that could refuse this would reach the reader as
+/// `CHECK constraint failed: collection_folders` — the table's name, not the drawer they meant
+/// to keep.
+///
+/// **Only the delete says it.** Rename and move disturb no card, so a locked folder answers both
+/// exactly as an unlocked one does; deleting re-files the whole sub-tree to the root
+/// ([`delete_folder`]), which is precisely the filing a lock is protecting. It refuses on the
+/// **effective** lock — [`effectively_locked`] — because a subfolder inside a locked parent
+/// scatters cards on the same press.
+///
+/// **The menu greys the row with this reason before the press can happen**, so this is the fence
+/// and not the teaching: a control whose only outcome is a sentence explaining that it does not
+/// work is `PinnedFolders.tsx`'s own complaint, and a refusal nobody can reach is still what a
+/// second caller meets.
+pub const FOLDER_IS_LOCKED: &str = "That folder is locked. Unlock it before deleting it.";
+
+/// What [`delete_folder`] says about an unlocked folder with a **locked folder somewhere inside
+/// it** — [`FOLDER_IS_LOCKED`]'s refusal, read downward.
+///
+/// Deleting re-files the whole sub-tree to the root, so deleting `Binder` scatters the copies in
+/// a locked `Binder/Graded` exactly as deleting `Graded` would — back among the ones the app
+/// offers a deck, which is the one thing the lock exists to prevent. A sentence of its own
+/// because [`FOLDER_IS_LOCKED`]'s "unlock it" would send the reader to the folder they pressed,
+/// which carries no lock at all.
+pub const FOLDER_HOLDS_LOCKED: &str =
+    "A folder inside that one is locked. Unlock it before deleting this one.";
+
+/// What [`set_entry_folder`] says about the row it was **given**, when that row is sitting in a
+/// deck's group.
+///
+/// **A sibling of [`FOLDER_NOT_YOURS`] rather than a reuse of it, and the difference is which
+/// noun the sentence is about.** That one is about the *destination* — the reader tried to
+/// change a folder the app owns. This one is about the *source*, and the reader is not changing
+/// anything about the folder: they are taking a card out of it. "That folder is not yours to
+/// change" over a drag of a card the reader plainly owns names the wrong thing, and a refusal
+/// that names the wrong thing is worse than a generic one.
+///
+/// **It says what to do instead, because there is something to do.** Cutting the card from the
+/// deck is the sanctioned route out of a group — it is
+/// [`crate::collection_alloc::deck_to_collection`], it decrements the list in the same
+/// transaction, and it lands the copies in `Recently removed`, where this command can then move
+/// them wherever the reader likes. A silent drag would be a second route with none of that: the
+/// deck would go on listing a card whose copies have walked off.
+pub const ENTRY_IN_A_DECK: &str =
+    "Those copies are in a deck. Cut the card from the deck to get them back.";
+
+/// The kind a folder the reader made and named carries — [`crate::schema::COLLECTION_FOLDER_KINDS`]
+/// `[0]`, which is what every write in this module demands and what [`create_folder`] writes.
+///
+/// `pub(crate)` for one reader outside the module: `collection::folder_named`, the fence on the
+/// `folder_id` an *add* names. That write is not this module's, but the question it asks is —
+/// and answering it with a second `"user"` literal is how the two would come to disagree the day
+/// a fourth kind exists.
+pub(crate) const USER_KIND: &str = "user";
+
+/// And the kind that stands for a deck — [`crate::schema::COLLECTION_FOLDER_KINDS`]`[1]`, by
+/// index rather than by spelling so the word here and the word the CHECK allows cannot drift.
+///
+/// Read by exactly one thing in this module, [`set_entry_folder`]'s source fence, which is the
+/// one place a folder's kind decides something about the row *in* it rather than about the
+/// folder itself.
+const DECK_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[1];
+
+/// And the holding area's — [`crate::schema::COLLECTION_FOLDER_KINDS`]`[2]`, by index for
+/// [`DECK_KIND`]'s reason.
+///
+/// Read by exactly one thing in this module, [`clear_removed`], which is the one write here that
+/// finds a folder by its kind rather than by the id a caller named: there is exactly one
+/// `removed` folder per database, so the kind *is* its name.
+const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
+
+/// How far [`move_folder`]'s cycle walk will climb before it calls the chain a cycle.
+///
+/// [`crate::deck_meta`]'s `MAX_FOLDER_DEPTH`, which is private there, kept at the same number
+/// for the same reason: deep enough that no filing anyone does by hand reaches it. See
+/// [`move_folder`] for what the budget is actually guarding against, which is not depth.
+const MAX_FOLDER_DEPTH: usize = 64;
+
+/// One folder. Flat rows; the tree is the reader's to build from `parent_id`, the way
+/// `collection_folders` itself has no notion of depth. `src/lib/folderTree.ts` is the reader.
+///
+/// `kind` and `deck_id` are on the wire because the **page** has to draw a deck's folder and the
+/// removed-cards folder differently from a binder the reader named — and because a row it may
+/// not rename is a row whose menu should say so before the refusal does.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionFolder {
+    pub id: i64,
+    pub parent_id: Option<i64>,
+    pub name: String,
+    pub kind: String,
+    pub deck_id: Option<i64>,
+    pub sort_order: i64,
+    /// Whether the reader has set this drawer aside — schema v33's
+    /// `locked INTEGER NOT NULL DEFAULT 0`, where any non-zero is locked.
+    ///
+    /// **This folder's own flag, and never the inherited one.** A folder inside a locked folder
+    /// is locked ([`LOCKED_FOLDER_IDS`]), but storing that here would be a second copy of a fact
+    /// the parent already holds, and the two disagree the first time a folder is moved. Every
+    /// refusal in this module asks [`effectively_locked`]; the page walks ancestry for the same
+    /// answer in `src/lib/folderTree.ts`.
+    ///
+    /// **A `bool` where [`EntryGrain`]'s four booleans are `i64`**, and the difference is what
+    /// the value is for: those are read to be handed straight back to a probe, and this one is
+    /// *interpreted* — see [`folder_row`] for what a hand-edited `2` means here.
+    pub locked: bool,
+    /// The row's cross-device name — `collection_folders.sync_uid`, schema v29's column.
+    ///
+    /// **On the wire because a *share* names a folder by it and cannot name it by anything
+    /// else.** `share::commands::share_create` takes a `folder_uid`, and
+    /// `share::commands::ShareRow` answers one, because a published share is a cross-device
+    /// artifact: the link outlives the device that made it, the group's other devices publish
+    /// updates to it, and `collection_folders.id` is a rowid that names a row in a database
+    /// nobody else has seen. So the page needs the uid twice — once to say *this drawer*, and
+    /// again to match a `ShareRow` back to a folder for the shared badge — and a DTO that put
+    /// uids on one side of that pair and not the other would be inconsistent rather than
+    /// principled.
+    ///
+    /// **`Option`, because the column is nullable and no fence makes it otherwise.**
+    /// `capture::install`'s insert trigger mints one and `schema::mint_missing_uids` sweeps the
+    /// rows that predate it, so in practice every folder has one — but "in practice" is not what
+    /// a type says, and a `String` here would be this struct promising something the DDL does
+    /// not. A `null` reaching the page is a folder that cannot be shared *yet*, which is a state
+    /// to draw rather than an error to raise.
+    pub sync_uid: Option<String>,
+}
+
+/// What one folder tile is drawn from — the two numbers, per folder, in one round trip.
+///
+/// **Direct per folder, never recursive**, and that is the load-bearing decision. The tree
+/// builder on the TypeScript side (`src/lib/folderTree.ts`) already sums a node's children for
+/// the deck gallery and the wishlist, and does it here for the same reason: SQL that walked the
+/// tree would be a second implementation of arithmetic that is already written, tested and drawn
+/// from, and two implementations of one figure disagree the first time either changes.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionFolderSummary {
+    pub folder_id: i64,
+    /// **Copies** filed directly in this folder, not rows — `sum(quantity)`, which is
+    /// [`crate::collection::CollectionSummary::total_cards`]' arithmetic and its reason: an entry
+    /// is one printing at one grain and holds however many copies of it the reader owns, so a
+    /// tile counting rows would say `1` over a drawer holding a playset. A row at **zero** no
+    /// longer makes the same point twice — since schema v24 the stepper deletes it
+    /// ([`crate::collection::set_quantity`]) and only an edit through
+    /// [`crate::collection::update_entry`] leaves one standing — and it is still copies rather
+    /// than rows that a reader is being shown. The tree sums it across children; SQL does not.
+    pub cards: i64,
+    /// What those copies are worth at the named marketplace, `sum(quantity * unit_price)` over
+    /// [`crate::sorting::price_expr`] — the collection header's own expression, so a tile and
+    /// the header can never quote one folder at two prices.
+    ///
+    /// **`None` rather than `0.0` when the marketplace prices nothing in the folder**, which is
+    /// where this parts company with the header's `coalesce(…, 0.0)`. A tile is a small number
+    /// beside a name and has no room for the header's "n unpriced" note, so a folder of cards
+    /// the feed has never heard of would otherwise read as a folder worth nothing. `None` draws
+    /// an em dash, which is this app's answer for a price it does not have.
+    pub value: Option<f64>,
+}
+
+/// A name good enough for a folder — trimmed, non-empty. [`crate::wishlist_folders`]'s
+/// `valid_name`, which is private there, in the one shape this module needs it: a blank string
+/// would end up on a tile no one can read, and the refusal is the same sentence the gallery and
+/// the wishlist give.
+fn valid_name(name: &str) -> Result<&str, String> {
+    let name = name.trim();
+    (!name.is_empty())
+        .then_some(name)
+        .ok_or_else(|| "A folder needs a name.".to_owned())
+}
+
+fn folder_row(r: &rusqlite::Row<'_>) -> rusqlite::Result<CollectionFolder> {
+    Ok(CollectionFolder {
+        id: r.get(0)?,
+        parent_id: r.get(1)?,
+        name: r.get(2)?,
+        kind: r.get(3)?,
+        deck_id: r.get(4)?,
+        sort_order: r.get(5)?,
+        // Read as `i64` and compared, rather than left to rusqlite's `bool`: the column is
+        // `INTEGER` with no CHECK, so a hand-edited database can hold a 2 — and a 2 is locked,
+        // which is the only reading of a non-zero that is not a refusal.
+        locked: r.get::<_, i64>(6)? != 0,
+        sync_uid: r.get(7)?,
+    })
+}
+
+fn read_folder(conn: &Connection, id: i64) -> Result<Option<CollectionFolder>, String> {
+    conn.query_row(
+        "SELECT id, parent_id, name, kind, deck_id, sort_order, locked, sync_uid
+           FROM collection_folders WHERE id = ?1",
+        params![id],
+        folder_row,
+    )
+    .optional()
+    .map_err(|e| e.to_string())
+}
+
+/// The folder `id` names, refused in words unless it is one the **reader** owns.
+///
+/// One helper for both halves of every write, because the two questions are always asked
+/// together and always in this order: a folder that is not there cannot be the app's, and an id
+/// nothing answers to is [`FOLDER_GONE`] whichever side of a move it was on.
+///
+/// **Every fence in this module is a statement of its own rather than a constraint failure**,
+/// which is [`crate::deck::set_folder`]'s reasoning twice over. `collection_entries.folder_id`
+/// and `collection_folders.parent_id` are real foreign keys between user tables, so a write
+/// naming a folder that is gone *does* fail — with `FOREIGN KEY constraint failed`, a sentence
+/// about a constraint, and only while `PRAGMA foreign_keys` happens to be on, which is a
+/// per-connection setting. Nothing in the DDL refuses the *kind* at all.
+fn user_folder(conn: &Connection, id: i64) -> Result<CollectionFolder, String> {
+    let folder = read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())?;
+    if folder.kind != USER_KIND {
+        return Err(FOLDER_NOT_YOURS.to_owned());
+    }
+    Ok(folder)
+}
+
+/// Every folder there is, flat, `ORDER BY sort_order, id`. No scoping of any kind — a folder
+/// belongs to no card, it files them — and **no filtering by kind**: a deck's folder and the
+/// removed-cards folder are places cards are, so a page that could not see them would draw a
+/// tree the collection does not have.
+pub fn list_folders(conn: &Connection) -> Result<Vec<CollectionFolder>, String> {
+    let mut stmt = conn
+        .prepare(
+            "SELECT id, parent_id, name, kind, deck_id, sort_order, locked, sync_uid
+               FROM collection_folders ORDER BY sort_order, id",
+        )
+        .map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([], folder_row).map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+/// Make a new folder under `parentId` (root, if `None`). No uniqueness rule on the name —
+/// `collection_folders` carries no grain constant and no unique index on `(parent_id, name)`, so
+/// two sibling folders may share one, exactly as two sibling `deck_folders` may.
+///
+/// **The new folder is always a `user` one, and the kind is written rather than defaulted.**
+/// The column's `DEFAULT 'user'` would do it; `deck_categories.origin`'s rule is that each
+/// writer spells its own answer, because a default is a decision nobody can see at the call
+/// site. Nothing in this PR creates a `deck` or a `removed` folder.
+///
+/// **The parent is fenced in words**, [`user_folder`]'s two refusals: a parent that is gone is
+/// [`FOLDER_GONE`], and nothing may be filed *inside* a folder the app owns — a drawer in the
+/// removed-cards folder is a place the app would have to have an opinion about, and it has
+/// none. (`wishlist_folders::create_folder` leant on its foreign key here and was left with that
+/// hole, on the argument that fixing one side of a ported pair is a difference somebody later
+/// reads as intentional. **It was closed on 2026-09-09** — issue #437 gave the wishlist a
+/// `New folder…` panel that offers the whole tree as parents, which turned "the caller passes a
+/// parent that has just been deleted" from a shape nothing reached into an ordinary race — so
+/// the ported pair agrees again and that side answers [`FOLDER_GONE`] through its own
+/// `require_folder`. **What is still asymmetric is this side's _second_ refusal**, and it has no
+/// counterpart over there because the wishlist holds no folders the app owns. This side needs
+/// the row anyway, for the kind.)
+///
+/// **The `id` is SQLite's and is never supplied.** `INTEGER PRIMARY KEY` is what makes
+/// [`crate::schema::COLLECTION_GRAIN`]'s eleventh term — `coalesce(folder_id, 0)` — safe, and
+/// the guarantee is narrower than it looks: SQLite never *auto-assigns* rowid 0, but it will
+/// happily store an explicit one. A folder numbered 0 would be indistinguishable from the root
+/// on the grain, so every card in it would collide with the reader's unfiled copies of the same
+/// printing. Letting the database assign is the whole of the fence.
+///
+/// **The new folder goes after the last folder the *reader* made, and the app's own are not
+/// counted.** `Recently removed` is a root sibling at `sort_order` 0, so a bare
+/// `max(sort_order) + 1` over every sibling would start the reader's very first folder at 1 and
+/// leave the holding area sorting ahead of everything they ever name — an ordering nobody chose.
+/// The UI draws the app's folders in a pinned section of their own, so their numbers have no
+/// business in the reader's sequence, and the `kind` fence is what keeps the two apart.
+pub fn create_folder(
+    conn: &Connection,
+    parent_id: Option<i64>,
+    name: &str,
+) -> Result<CollectionFolder, String> {
+    let name = valid_name(name)?;
+    if let Some(parent) = parent_id {
+        user_folder(conn, parent)?;
+    }
+    // The insert and its feed row in one savepoint (issue #550): the command opens no
+    // transaction, so a feed insert that failed after an autocommitted insert answered an error
+    // over a folder that was there, and a second press made it twice. It nests, so a caller's
+    // own transaction still owns the write.
+    crate::db::in_savepoint(conn, "collection_folder_create", || {
+        // `IS`, not `=`: `parent_id` is nullable (root), and `=` never matches a bound NULL. And
+        // `kind = 'user'`, so the two folders the app owns are not part of the reader's counting —
+        // see the paragraph above.
+        let next_order: i64 = conn
+            .query_row(
+                "SELECT coalesce(max(sort_order), -1) + 1 FROM collection_folders
+                  WHERE parent_id IS ?1 AND kind = ?2",
+                params![parent_id, USER_KIND],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        let id: i64 = conn
+            .query_row(
+                "INSERT INTO collection_folders
+                    (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+                 VALUES (?1, ?2, ?3, NULL, ?4, unixepoch(), unixepoch())
+                 RETURNING id",
+                params![parent_id, name, USER_KIND, next_order],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())?;
+        record_folder(conn, "create", name, None)?;
+        read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    })
+}
+
+/// One `folder` line in the feed, for the three acts that change what drawers exist.
+///
+/// **`card_id` and `card_name` are `None` and `delta` is `0`**: a folder is not a card and no
+/// copies came or went, so a day's `+7 / −6` roll-up must not move for one. `action` is the key
+/// `activityText.ts` switches on and `from` is the previous name, which only a rename carries.
+///
+/// **`move_folder`, `reorder_folders` and `set_folder_locked` deliberately do not call this.**
+/// They rearrange a cabinet rather than change what is in it, and a feed that reported every
+/// drag of a drawer would bury the card lines the page exists to show — the plan's payload table
+/// names exactly these three actions.
+fn record_folder(
+    conn: &Connection,
+    action: &str,
+    name: &str,
+    previous: Option<&str>,
+) -> Result<(), String> {
+    crate::activity::record(
+        conn,
+        crate::activity::COLLECTION,
+        crate::activity::FOLDER,
+        None,
+        None,
+        &serde_json::json!({ "action": action, "name": name, "from": previous }),
+        0,
+    )
+    .map_err(|e| e.to_string())
+}
+
+/// Rename a folder the reader made. A deck's folder is named after its deck and the
+/// removed-cards folder after what it is for, so neither is [`FOLDER_NOT_YOURS`] by accident.
+pub fn rename_folder(conn: &Connection, id: i64, name: &str) -> Result<CollectionFolder, String> {
+    let name = valid_name(name)?;
+    // The update and its feed row in one savepoint (issue #550), `create_folder`'s reason.
+    crate::db::in_savepoint(conn, "collection_folder_rename", || {
+        // The fence already reads the row, so the previous name costs nothing — and it has to be
+        // taken from here rather than after the `UPDATE`, which is what makes the line say what the
+        // drawer used to be called.
+        let before = user_folder(conn, id)?;
+        conn.execute(
+            "UPDATE collection_folders SET name = ?2, updated_at = unixepoch() WHERE id = ?1",
+            params![id, name],
+        )
+        .map_err(|e| e.to_string())?;
+        record_folder(conn, "rename", name, Some(&before.name))?;
+        read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+    })
+}
+
+/// Set a folder aside, or bring it back — [`rename_folder`]'s shape over one other scalar.
+///
+/// **[`user_folder`] first, like every other folder write here.** A deck's group and
+/// `Recently removed` refuse with [`FOLDER_NOT_YOURS`]: a lock says *the reader has set this
+/// drawer aside*, and neither of those two is theirs to set aside — the group belongs beside its
+/// deck and the holding area is where cards wait to be filed, which is the opposite of a drawer
+/// nobody is offering from.
+///
+/// **The folder's own flag only.** Nothing is written to the children — a folder inside a locked
+/// folder is locked by [`LOCKED_FOLDER_IDS`] rather than by a row of its own, and a write that
+/// stamped the sub-tree would be a second copy of the parent's fact, wrong the first time either
+/// end moves. Unlocking is therefore not always visible: a child of a locked parent whose own
+/// flag is cleared is still locked, which is why the menu greys that row rather than reporting a
+/// success the badge contradicts.
+///
+/// **`bool` at the boundary, `INTEGER` in the table** — rusqlite binds it as 0 or 1, so this
+/// write can never be the source of the hand-edited 2 [`folder_row`] reads for.
+///
+/// **Writes no [`crate::activity`] row** — see [`record_folder`]: a lock changes what the app
+/// offers from a drawer, not what drawers exist or what is in them.
+pub fn set_folder_locked(
+    conn: &Connection,
+    id: i64,
+    locked: bool,
+) -> Result<CollectionFolder, String> {
+    user_folder(conn, id)?;
+    conn.execute(
+        "UPDATE collection_folders SET locked = ?2, updated_at = unixepoch() WHERE id = ?1",
+        params![id, locked],
+    )
+    .map_err(|e| e.to_string())?;
+    read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// Every folder that is locked, its own flag or an ancestor's — a **self-contained `SELECT`**,
+/// so it drops straight into an `IN (…)` and binds nothing.
+///
+/// **Spelled once, here, because [`crate::collection`] and [`crate::deck_theory`] are the other
+/// readers** and a second copy in either is how the deck builder's Collection Search tab and the
+/// spare count would come to disagree about which drawers are set aside. `collection::scope` pushes it as
+/// `(e.folder_id IS NULL OR e.folder_id NOT IN (…))` and `deck_theory`'s `OWNED_SPARE_SQL` adds
+/// the same arm beside its deck one — both in this exact shape, which is why this is the whole
+/// statement rather than a bare `WITH` clause somebody has to finish. Do not tidy a copy of it
+/// into either module.
+///
+/// **`UNION` and never `UNION ALL`**, [`delete_folder`]'s reason for the same word: the
+/// duplicate-row check is what makes a `parent_id` cycle — a hand-edited database, a restored
+/// backup, the loop [`move_folder`] refuses to write — converge instead of running forever.
+///
+/// `locked <> 0` rather than `locked = 1`, [`folder_row`]'s reading of the same column: any
+/// non-zero is locked.
+pub const LOCKED_FOLDER_IDS: &str = "WITH RECURSIVE locked_folders(id) AS (
+             SELECT id FROM collection_folders WHERE locked <> 0
+             UNION
+             SELECT f.id FROM collection_folders f
+               JOIN locked_folders l ON f.parent_id = l.id
+         )
+         SELECT id FROM locked_folders";
+
+/// Is that one folder locked — its own flag, or anything above it?
+///
+/// [`LOCKED_FOLDER_IDS`] in the same `?1 IN (…)` shape the three query modules use, rather than a
+/// Rust walk up `parent_id`: one statement, one answer, and the fence a press meets is then
+/// literally the same SQL as the term that drops the folder's copies out of a list.
+///
+/// `pub(crate)` for the same readers the fragment has — [`crate::collection`]'s `scope`,
+/// [`crate::deck_theory`]'s `OWNED_SPARE_SQL` and [`crate::collection_source`]'s
+/// `Availability::and_arm`. An id nothing answers to is `false`,
+/// which is what makes [`delete_folder`]'s "an id that is not there is a success" survive the
+/// check being the first thing it does.
+pub fn effectively_locked(conn: &Connection, id: i64) -> Result<bool, String> {
+    conn.query_row(
+        &format!("SELECT ?1 IN ({LOCKED_FOLDER_IDS})"),
+        params![id],
+        |r| r.get::<_, i64>(0),
+    )
+    .map(|found| found != 0)
+    .map_err(|e| e.to_string())
+}
+
+/// The cycle walk itself, in one place because [`move_folder`] and [`reorder_folders`] both owe
+/// it and a refusal written twice is a refusal that comes to disagree with itself. `start` is an
+/// id rather than an `Option`, because the root is nobody's descendant and a move there has
+/// nothing to climb. [`move_folder`] is where the reasoning is written down — what the walk
+/// guards, and why the hop budget is not about depth.
+///
+/// **No `kind` question here**, because the walk climbs *through* rows rather than acting on
+/// them: whether a folder may be touched is [`user_folder`]'s, asked of the ends before this is
+/// ever called.
+fn refuse_cycle(conn: &Connection, id: i64, start: i64) -> Result<(), String> {
+    let mut cursor = Some(start);
+    let mut hops = 0usize;
+    while let Some(candidate) = cursor {
+        if candidate == id {
+            return Err(FOLDER_CYCLE.to_owned());
+        }
+        hops += 1;
+        if hops > MAX_FOLDER_DEPTH {
+            return Err(FOLDER_CYCLE.to_owned());
+        }
+        cursor = conn
+            .query_row(
+                "SELECT parent_id FROM collection_folders WHERE id = ?1",
+                params![candidate],
+                |r| r.get::<_, Option<i64>>(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+            .flatten();
+    }
+    Ok(())
+}
+
+/// Move a folder under a new parent (root, if `None`). **Refuses a cycle**: walks `parent_id`
+/// upward from the *proposed* parent, and if that walk ever meets `id` — immediately, if
+/// `parentId` names `id` itself — refuses rather than writing a loop `parent_id`'s own
+/// `ON DELETE CASCADE` would otherwise walk forever the day one of them is deleted.
+///
+/// **Both ends are fenced in words before anything is walked**, and the order differs from
+/// `wishlist_folders::move_folder`'s on purpose: that one checks the destination first and lets
+/// a subject that is gone fall out of `changed == 0`, which cannot answer [`FOLDER_NOT_YOURS`]
+/// because it never reads the row. Here the subject is read first — a folder the app owns is
+/// refused whether or not the parent it was aimed at exists — and the destination second, where
+/// [`user_folder`] refuses filing a drawer inside the app's own cabinet as well as a parent that
+/// is not there. The cycle walk cannot stand in for either check: `optional()?.flatten()` folds
+/// "no such folder" and "that folder is at the root" into one `None`, so the climb ends on the
+/// first hop and an id nothing answers to would sail through.
+///
+/// **The walk has a hop budget, and the budget is not about depth.** This walk is what *keeps*
+/// the tree acyclic, so it cannot assume it already is — a `parent_id` cycle that arrived some
+/// other way (a hand-edited database, a restored backup) would send the `candidate == id` arm
+/// past every folder in the loop for ever, because none of them is the folder being moved. The
+/// visited chain is bounded instead of remembered, which is [`crate::deck_meta`]'s answer and
+/// costs no allocation. It matters here as much as it does there: this runs inside
+/// `spawn_blocking` **while holding the app-wide write lock**, so an unbounded climb would not
+/// hang this one command — it would deadlock every write in the app for the life of the
+/// process. Exceeding the budget is answered as a cycle, which is the only thing a chain that
+/// long can be.
+///
+/// **Writes no [`crate::activity`] row** — see [`record_folder`]: re-parenting a drawer changes
+/// no card and no folder's existence.
+pub fn move_folder(
+    conn: &Connection,
+    id: i64,
+    parent_id: Option<i64>,
+) -> Result<CollectionFolder, String> {
+    user_folder(conn, id)?;
+    if let Some(start) = parent_id {
+        user_folder(conn, start)?;
+        refuse_cycle(conn, id, start)?;
+    }
+    conn.execute(
+        "UPDATE collection_folders SET parent_id = ?2, updated_at = unixepoch() WHERE id = ?1",
+        params![id, parent_id],
+    )
+    .map_err(|e| e.to_string())?;
+    read_folder(conn, id)?.ok_or_else(|| FOLDER_GONE.to_owned())
+}
+
+/// File a whole row of siblings at once: every `id` in `ids` gets `parent_id` as its parent and
+/// its **position in the slice** as its `sort_order`. `ids` is that parent's complete child list
+/// in the order the reader just dropped it into; `None` is the root, as everywhere in this
+/// module.
+///
+/// **One command doing both jobs, deliberately.** A drag re-parents and positions in one
+/// gesture, and the two as separate writes are a moment when the folder is under its new parent
+/// at its old number — a state the reader can see and nobody chose. One transaction is what
+/// makes that moment unreachable.
+///
+/// **Nothing writes `sort_order` from a position anywhere else.** [`create_folder`] hands out
+/// `max + 1` over the reader's own folders and [`move_folder`] leaves the column alone, so a
+/// folder's number was whatever it was given at birth until this landed.
+///
+/// **Every folder named is the reader's, on both sides**, [`user_folder`] rather than a second
+/// spelling of [`FOLDER_NOT_YOURS`] — the destination once, then every id. This is the one of
+/// the three cabinets that can be asked to move a folder the *app* owns: a deck group belongs
+/// beside its deck and `Recently removed` is the app's own drawer, and neither has a position
+/// the reader chose. `deck_folders` and `wishlist_folders` carry no `kind` column at all, so
+/// their `reorder_folders` has no such fence to make — the asymmetry is the schema's rather
+/// than an omission there.
+///
+/// **`user_folder` is also what answers a stale id**: it reads the row, so [`FOLDER_GONE`]
+/// falls out of the same call, which is [`move_folder`]'s answer to the same mistake and the
+/// reason there is no `changed == 0` check below.
+///
+/// **A cycle is refused before anything is written**, [`refuse_cycle`] rather than a second copy
+/// of the walk: an id that *is* `parent_id`, or an ancestor of it, is exactly as fatal here as
+/// it is in [`move_folder`], because it is the same `ON DELETE CASCADE` onto the same table that
+/// would then walk forever.
+///
+/// **Nothing here touches a card.** `folder_id` is the eleventh term of
+/// [`crate::schema::COLLECTION_GRAIN`], which is why [`delete_folder`] has to re-file by hand —
+/// but this write moves no entry between folders, only folders between folders, so no grain
+/// moves and there is nothing to merge.
+///
+/// **And so it writes no [`crate::activity`] row either** — see [`record_folder`]. This is the
+/// clearest case of the three: a drag over a tree can renumber every sibling in it, and a feed
+/// line per folder moved would be the whole day's page.
+pub fn reorder_folders(
+    conn: &Connection,
+    parent_id: Option<i64>,
+    ids: &[i64],
+) -> Result<Vec<CollectionFolder>, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    if let Some(start) = parent_id {
+        user_folder(&tx, start)?;
+    }
+    for id in ids {
+        user_folder(&tx, *id)?;
+        if let Some(start) = parent_id {
+            refuse_cycle(&tx, *id, start)?;
+        }
+    }
+    for (order, id) in ids.iter().enumerate() {
+        tx.execute(
+            "UPDATE collection_folders
+                SET parent_id = ?2, sort_order = ?3, updated_at = unixepoch()
+              WHERE id = ?1",
+            params![id, parent_id, order as i64],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    list_folders(conn)
+}
+
+/// The folder `?1` and every folder beneath it, as a `WITH` clause naming `doomed(id)` — what
+/// [`delete_folder`] re-files, and what it asks [`FOLDER_HOLDS_LOCKED`]'s question of. Spelled
+/// once so the refusal and the re-filing are about the same folders.
+///
+/// **`UNION` and never `UNION ALL`**, [`LOCKED_FOLDER_IDS`]' reason: a `parent_id` cycle that
+/// arrived some other way converges instead of looping.
+const DOOMED_FOLDERS: &str = "WITH RECURSIVE doomed(id) AS (
+             SELECT ?1
+             UNION
+             SELECT f.id FROM collection_folders f JOIN doomed d ON f.parent_id = d.id
+         )";
+
+/// Delete a folder. **Does not delete the cards in it** — they surface at the root, filed
+/// nowhere, still exactly as they were. Sub-folders go with it. Like
+/// [`crate::deck_meta::delete_folder`] and [`crate::deck::delete_deck`], an id that resolves to
+/// nothing is a success: the caller wanted that folder gone, and it is gone. A folder the **app**
+/// owns is one id that is not — [`FOLDER_NOT_YOURS`], because a deck's folder disappears
+/// when its deck does and the removed-cards folder is the app's own drawer.
+///
+/// **And a folder the reader has set aside is the other** — [`FOLDER_IS_LOCKED`], on the
+/// *effective* lock, checked before anything below happens, and [`FOLDER_HOLDS_LOCKED`] when the
+/// lock is on a folder anywhere beneath this one instead. Everything this function does after
+/// that is the un-filing described here, which is what a lock exists to prevent: rename and move
+/// disturb no card and are allowed on a locked folder for exactly that reason.
+///
+/// # Why the un-filing is written out and not left to the cascade
+///
+/// `collection_entries.folder_id` is `ON DELETE SET NULL` (schema v24), and for one press it
+/// looks like the whole answer: one `DELETE`, every card in the sub-tree re-filed at the root.
+/// It is not, because **that cascade rewrites the eleventh term of
+/// [`crate::schema::COLLECTION_GRAIN`]** on every one of those rows, and a write that changes an
+/// entry's grain has to say what it will land on. Every other write in the crate does —
+/// [`crate::collection::add_entry`] through `ON CONFLICT`, [`set_entry_folder`] through the merge
+/// below, `reconcile::fold_into_existing` through its own — and leaving this one to
+/// `idx_collection_grain` reaches the reader as `UNIQUE constraint failed`, with the folder still
+/// standing and nothing moved, in two shapes:
+///
+/// * a card in the sub-tree and an **unfiled** row for the same printing at the same grain,
+///   which is the state every writer that cannot name a folder produces — a quick add from the
+///   search, an import, the reconciler's fold.
+/// * **two sub-tree rows colliding with each other**, needing no root row at all: `Binder/A` and
+///   `Binder/B` each holding the same printing land on one grain the moment both reach the root.
+///
+/// So the sub-tree's entries are collected and re-filed one at a time through [`refile_entry`],
+/// with [`set_entry_folder`]'s merge rule and not a second copy of it, **before** the folder row
+/// goes. By the time the `DELETE` runs every card beneath it is already at the root, so the
+/// `SET NULL` has nothing left to rewrite and nothing left to collide on. One at a time is what
+/// answers the second shape as well as the first: the first row to reach the root becomes the
+/// row the next one merges into.
+///
+/// `parent_id`'s `ON DELETE CASCADE` onto its own table is still the DDL's work and still done
+/// by one statement — a folder inside a deleted folder has nowhere else to be, and no grain is
+/// involved. **It therefore still depends on `PRAGMA foreign_keys` being ON**, which is
+/// per-connection. [`crate::db::open`] sets it for every connection the app hands out, so the
+/// app path is covered; a test that opens its own connection has to say so itself, and the
+/// `open()` helper below does.
+///
+/// One transaction throughout: mid-delete the cards are all re-filed and the folder is gone, or
+/// none of it happened.
+pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
+    // **Before anything else, including the transaction**: this press re-files the whole
+    // sub-tree to the root, which is exactly the filing a lock is protecting, so a locked
+    // folder is refused in words ([`FOLDER_IS_LOCKED`]) rather than allowed to scatter cards.
+    // The **effective** lock, because a subfolder inside a locked parent scatters them the same
+    // way — and `effectively_locked` answers `false` for an id nothing answers to, so the
+    // "a folder that is not there is a success" rule below is untouched.
+    if effectively_locked(conn, id)? {
+        return Err(FOLDER_IS_LOCKED.to_owned());
+    }
+    // **And downward** ([`FOLDER_HOLDS_LOCKED`]): every folder beneath this one is re-filed by
+    // the same press, so a locked one anywhere in [`DOOMED_FOLDERS`] is scattered as surely as
+    // this one would be. Asked of the same sub-tree the re-filing below walks, so the two cannot
+    // disagree about which folders the press reaches.
+    let holds_lock: bool = conn
+        .query_row(
+            &format!(
+                "{DOOMED_FOLDERS}
+                 SELECT EXISTS (SELECT 1 FROM doomed WHERE id IN ({LOCKED_FOLDER_IDS}))"
+            ),
+            params![id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    if holds_lock {
+        return Err(FOLDER_HOLDS_LOCKED.to_owned());
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // Not [`user_folder`]: an id that is not there is a **success** here, so the two halves of
+    // that helper come apart. Only a folder that exists and is the app's is refused.
+    //
+    // The name is kept for the feed row at the bottom, and `None` is what makes an id nobody
+    // answers to record nothing: a delete that found no folder deleted no folder.
+    let deleted = read_folder(&tx, id)?;
+    if let Some(folder) = &deleted {
+        if folder.kind != USER_KIND {
+            return Err(FOLDER_NOT_YOURS.to_owned());
+        }
+    }
+    // The sub-tree, in the database rather than in a Rust walk, because the cascade this stands
+    // in front of is itself recursive and the two must agree about which folders are doomed —
+    // **including any the app owns**, which is why nothing here filters on `kind`: the CASCADE
+    // does not, so a walk that did would leave those folders' cards to `SET NULL` and the very
+    // collision this function exists to answer.
+    // **`UNION` and never `UNION ALL`**: a `parent_id` cycle that arrived some other way — a
+    // hand-edited database, a restored backup — is what [`move_folder`]'s hop budget exists for,
+    // and here the duplicate-row check is what makes the same corruption converge instead of
+    // looping. `ORDER BY e.id` so the row a merge folds into is decided by the table and not by
+    // the planner.
+    let filed: Vec<i64> = {
+        let mut stmt = tx
+            .prepare(&format!(
+                "{DOOMED_FOLDERS}
+                 SELECT e.id FROM collection_entries e
+                  WHERE e.folder_id IN (SELECT id FROM doomed)
+                  ORDER BY e.id"
+            ))
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map(params![id], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|e| e.to_string())?
+    };
+    // A merge only ever deletes the row it was *given*, so no id in this list can go before its
+    // turn and [`refile_entry`]'s [`GONE`] is unreachable from here. It is propagated rather
+    // than skipped anyway: if it ever did fire, something is deleting entries underneath this
+    // transaction, and rolling the whole press back is the only honest answer to that.
+    for entry in filed {
+        refile_entry(&tx, entry, None)?;
+    }
+    tx.execute("DELETE FROM collection_folders WHERE id = ?1", params![id])
+        .map_err(|e| e.to_string())?;
+    // **One line for the press, not one per card it re-filed.** The re-filing above is a
+    // consequence of this delete — [`refile_entry`] records nothing — so a folder holding four
+    // hundred cards is still one sentence in the feed.
+    if let Some(folder) = deleted {
+        record_folder(&tx, "delete", &folder.name, None)?;
+    }
+    tx.commit().map_err(|e| e.to_string())
+}
+
+/// Empty `Recently removed` — delete every entry filed in the single `removed` folder — and
+/// answer how many **entries** went (issue #506).
+///
+/// **The one write in this module that throws the reader's cards away, and the folder is why it
+/// may.** Every other press here is a filing decision, and the module doc's rule is that no
+/// filing decision may lose a card: [`delete_folder`] re-files a whole sub-tree to the root
+/// rather than let one go. The holding area is the exception by construction. What lands there
+/// has already left the collection — cut from a deck
+/// ([`crate::collection_alloc::deck_to_collection`]), or orphaned by a deck's delete — and the
+/// folder is the app keeping the cardboard's record until the reader decides. This press is that
+/// decision, made once for the whole pile, where [`crate::collection::remove_entry`] makes it
+/// one row at a time.
+///
+/// **Nothing else is touched.** Not the root, not a folder the reader made, not a deck's group,
+/// and never `deck_cards`: the copies in `Recently removed` already belong to no deck, which is
+/// the whole of what being there means. The folder itself stays — it is the app's, schema v25
+/// made it, and [`crate::reset::clear_collection`] is the only press that ever rebuilds it.
+///
+/// **Found by kind, and a database without one is refused with
+/// [`crate::collection_alloc::NO_REMOVED_FOLDER`]** — the sentence the deck side already says
+/// about the same missing row. Schema v25 files one into every database and a partial unique
+/// index makes a second impossible, so this is a hand-edited database; answering `0` over it
+/// would say the pile had been emptied when there was never a pile to empty.
+///
+/// **Rows, not copies, is the answer**, the unit [`crate::reset::clear_collection`] answers in
+/// and the wishlist drawer's `clear_folder` too — and the feed's `cards` key carries the same number, while
+/// its signed `delta` is the copies, read inside the transaction before the `DELETE` takes them.
+/// One [`crate::activity`] `clear` row when anything went, naming the folder as it is called at
+/// the press; none when nothing did, [`delete_folder`]'s "a delete that found nothing deleted
+/// nothing" one step over. **One row for the press rather than one per entry** — the feed's bulk
+/// rule, which is exactly why this is one statement and not a loop over [`crate::collection::remove_entry`].
+///
+/// **Sync sees every row, and nothing here has to arrange that.** `collection_entries`' capture
+/// trigger is `AFTER DELETE … FOR EACH ROW` (`sync_engine::capture`), which is SQLite's only kind,
+/// so a `DELETE … WHERE folder_id = ?1` writes one tombstone per row exactly as
+/// [`crate::collection::remove_entry`]'s single delete writes one. The `WHERE` matters for the
+/// other listener too: an unconditional `DELETE` can take SQLite's truncate optimisation and fire
+/// no update hook at all (`src-tauri/CLAUDE.md`), and this statement is never unconditional.
+pub fn clear_removed(conn: &Connection) -> Result<i64, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    // The folder and its name — the name for the feed row, and the refusal before anything is
+    // read or written.
+    let (folder_id, name): (i64, String) = tx
+        .query_row(
+            "SELECT id, name FROM collection_folders WHERE kind = ?1",
+            params![REMOVED_KIND],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| crate::collection_alloc::NO_REMOVED_FOLDER.to_owned())?;
+    // The copies, before the `DELETE` takes them: it answers **rows**, and the feed's signed
+    // `delta` is copies — [`crate::reset::clear_collection`]'s reason, one folder rather than the
+    // whole binder.
+    let copies: i64 = tx
+        .query_row(
+            "SELECT coalesce(sum(quantity), 0) FROM collection_entries WHERE folder_id = ?1",
+            params![folder_id],
+            |r| r.get(0),
+        )
+        .map_err(|e| e.to_string())?;
+    let entries = tx
+        .execute(
+            "DELETE FROM collection_entries WHERE folder_id = ?1",
+            params![folder_id],
+        )
+        .map_err(|e| e.to_string())? as i64;
+    if entries > 0 {
+        // [`crate::reset::clear_collection`]'s kind and `cards` key, plus `folder` — the
+        // wishlist drawer clear's shape (`wishlist_folders::record_clear`), which is what tells
+        // one folder emptied apart from the whole binder wiped. `activityText.ts` draws it as
+        // the `in` clause.
+        crate::activity::record(
+            &tx,
+            crate::activity::COLLECTION,
+            crate::activity::CLEAR,
+            None,
+            None,
+            &serde_json::json!({ "cards": entries, "folder": name }),
+            -copies,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(entries)
+}
+
+/// Move one entry into a folder, or — with `None` — back to the **root of the collection**.
+///
+/// `None` is a real destination rather than an omission, [`crate::deck::set_folder`]'s point one
+/// table over: the root is where every card starts and is the only place an unfiled row can be,
+/// so there is nothing else `None` could mean here.
+///
+/// **A command of its own, because filing is not adding.** `folder_id` is the eleventh term of
+/// [`crate::schema::COLLECTION_GRAIN`] (schema v24), which is what makes "Add to \<binder\>" an
+/// *add*: the same printing filed in two places is two rows, so an add can never silently move a
+/// row the reader filed last week. The cost of that guarantee is exactly this command — moving
+/// between folders has to be something the reader says out loud.
+///
+/// **The destination is fenced in words, and the kind half of that fence is this cabinet's
+/// own**: nothing may be filed into a `deck` folder or the `removed` one by hand. Those two say
+/// something the app is responsible for — that a deck holds these copies, that these copies have
+/// left the collection — and a reader dragging a card into one would be asserting it without any
+/// of the writes that make it true. [`refile_entry`] carries no such fence, which is what lets
+/// [`crate::collection_alloc`]'s two writes and [`crate::deck::delete_deck`] file into exactly
+/// those folders.
+///
+/// **The _source_ is fenced too, and only for `deck`** ([`ENTRY_IN_A_DECK`]). Filing a copy
+/// *out* of a deck's group by hand breaks the same invariant from the other end: the deck would
+/// go on listing a card whose copies have walked off, which is exactly what a category cascade
+/// used to do. The sanctioned way out of a group is to cut the card from the deck, which is
+/// [`crate::collection_alloc::deck_to_collection`] — it decrements the list in the same
+/// transaction and files the copies into `Recently removed`, where this command can then move
+/// them anywhere.
+///
+/// `removed` is deliberately **not** fenced as a source. Taking a card out of the holding area
+/// and filing it in a binder is the reader tidying up, and it is what that folder is for; the
+/// fence is against copies leaving a deck without the deck being told, not against copies moving
+/// at all.
+///
+/// **Two things must not gain this fence**, and both would break the feature outright:
+/// [`refile_entry`], which is the shared primitive every write out of a group calls, and
+/// `deck_to_collection`, which is the one that is *supposed* to do this. The distinction is not
+/// the table, it is who is asking: this command is the reader's own filing gesture, and a silent
+/// drag must not be a second, unrecorded route out of a deck.
+pub fn set_entry_folder(
+    conn: &Connection,
+    id: i64,
+    folder_id: Option<i64>,
+) -> Result<EntryChange, String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let destination = destination_name(&tx, folder_id)?;
+    let (change, facts) = file_by_hand(&tx, id, folder_id)?;
+    // **`delta` is 0**: a move changes no count, and a day roll-up that added a move would
+    // double every card that only ever changed drawer.
+    if let Some(facts) = facts {
+        crate::activity::record(
+            &tx,
+            crate::activity::COLLECTION,
+            crate::activity::MOVE,
+            facts.card_id.as_deref(),
+            facts.card_name.as_deref(),
+            &serde_json::json!({ "from": facts.folder, "to": destination }),
+            0,
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(change)
+}
+
+/// The destination of a filing by hand, fenced — `None` for the root, the folder's **name**
+/// otherwise, because that is the `to` end of the feed line and cannot be looked up afterwards on
+/// the folding path. [`user_folder`] is the fence: [`FOLDER_GONE`] or [`FOLDER_NOT_YOURS`].
+///
+/// `None` is the **root** and not an absence — `activityText.ts` reads a present-but-null `to` as
+/// the cabinet's own name and a missing key as "we do not know", so both ends of a move are always
+/// written.
+fn destination_name(tx: &Connection, folder_id: Option<i64>) -> Result<Option<String>, String> {
+    // **A locked folder gains nothing here, on either side, and that is the requirement rather
+    // than an omission.** Issue #365 asks that copies can always be moved into and out of a folder
+    // that is set aside: a lock is about what the app *offers* — a search result, an availability
+    // figure — and never about what the reader can reach. The refusal that looks missing would
+    // make a locked drawer a place cards cannot leave, which is a lock on the reader rather than
+    // on the app. The warning is the page's, and it is a confirmation on a *drag* (a rectangle a
+    // pointer lands on by accident) rather than on a menu pick the reader just named. Nothing
+    // about the destination's lock is asked below, and nothing about the source's is either.
+    folder_id
+        .map(|folder| user_folder(tx, folder).map(|f| f.name))
+        .transpose()
+}
+
+/// One entry filed by the reader's own hand, inside the caller's transaction and **recording
+/// nothing** — [`set_entry_folder`]'s body, split out so [`set_entries_folder`] runs the same
+/// rules per entry and writes one feed row for the press. The destination is the caller's to
+/// fence, once ([`destination_name`]); this owns the **source** fence and the refile.
+///
+/// Answers the change and the entry's facts, read before the move — the row may be folded into
+/// another and stop existing, and its folder is the very thing about to change. `None` facts are
+/// an entry that is not there, and [`refile_entry`]'s [`GONE`] has already refused it.
+fn file_by_hand(
+    tx: &Connection,
+    id: i64,
+    folder_id: Option<i64>,
+) -> Result<(EntryChange, Option<crate::collection::EntryFacts>), String> {
+    let facts = crate::collection::entry_facts(tx, id)?;
+    // `optional()`, and a `None` falls through on purpose: it is the root, an entry that is not
+    // there, or a folder that has gone between two reads. The first is the ordinary case and the
+    // other two are [`refile_entry`]'s [`GONE`] to answer — a second sentence for a missing row
+    // would be this command disagreeing with the one it delegates to.
+    let source_kind: Option<String> = tx
+        .query_row(
+            "SELECT f.kind FROM collection_entries e
+               JOIN collection_folders f ON f.id = e.folder_id
+              WHERE e.id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    if source_kind.as_deref() == Some(DECK_KIND) {
+        return Err(ENTRY_IN_A_DECK.to_owned());
+    }
+    let change = refile_entry(tx, id, folder_id)?;
+    Ok((change, facts))
+}
+
+/// What `Move to` over several entries did (issue #555).
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BulkMoveOutcome {
+    /// One per id, **in the order they were sent** — each says where that entry's copies ended
+    /// up, which after a merge is a different row's id, with that row's quantity once the whole
+    /// press has landed.
+    pub changes: Vec<EntryChange>,
+    /// See [`crate::collection::ImportCommitOutcome::undo_id`].
+    pub undo_id: Option<u64>,
+}
+
+/// File several entries into one folder — or the root — in **one transaction with one feed row**
+/// (issue #555), where the page used to call [`set_entry_folder`] once per selected row.
+///
+/// **[`set_entry_folder`]'s rules per entry, and all-or-nothing across them**: the destination
+/// fence once, then each entry through [`file_by_hand`] — the source fence ([`ENTRY_IN_A_DECK`]),
+/// [`GONE`] for an id that is not there, and the merge onto a row that already holds the grain in
+/// the destination. **Any refusal rolls the whole press back and answers that refusal's
+/// sentence**, so a move never lands half-filed: a selection holding one copy in a deck's group
+/// moves nothing, and says why.
+///
+/// **One entry records exactly [`set_entry_folder`]'s line** — the card, `{from, to}` — because a
+/// one-row selection is the same event as a drag. Several are one line about no one card:
+/// `{"entries": n, "to": <destination name or null for the root>}`, `to` being the key the
+/// single line already carries, so `activityText.ts` words both ends from one field. `delta` is 0
+/// either way — a move changes no count.
+///
+/// It answers an undo ticket captured over the ids **and every other row of their cards**, read
+/// before the first move: a merge target is a row of the same card the selection did not name,
+/// and the undo has to put its quantity back too.
+pub fn set_entries_folder(
+    conn: &Connection,
+    ids: &[i64],
+    folder_id: Option<i64>,
+) -> Result<BulkMoveOutcome, String> {
+    let distinct = crate::collection::distinct_ids(ids);
+    if distinct.is_empty() {
+        return Ok(BulkMoveOutcome {
+            changes: Vec::new(),
+            undo_id: None,
+        });
+    }
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let destination = destination_name(&tx, folder_id)?;
+    let listed = crate::bulk_undo::json_list(&distinct);
+    // The cards as a literal list read now, not as a subquery the capture re-runs: once an id has
+    // folded away, a subquery over the ids would no longer find its card, and the row it folded
+    // into would drop out of the after-image.
+    let cards: Vec<String> = tx
+        .prepare(
+            "SELECT DISTINCT card_id FROM collection_entries
+              WHERE id IN (SELECT value FROM json_each(?1))",
+        )
+        .and_then(|mut stmt| {
+            stmt.query_map(params![listed], |r| r.get(0))?
+                .collect::<rusqlite::Result<_>>()
+        })
+        .map_err(|e| e.to_string())?;
+    let capture = crate::bulk_undo::Capture::begin(
+        &tx,
+        crate::bulk_undo::Table::Collection,
+        "id IN (SELECT value FROM json_each(?1)) OR card_id IN (SELECT value FROM json_each(?2))",
+        vec![listed.clone(), crate::bulk_undo::json_list(&cards)],
+    )?;
+
+    let mut landed: HashMap<i64, EntryChange> = HashMap::new();
+    let mut first = None;
+    for &id in &distinct {
+        let (change, facts) = file_by_hand(&tx, id, folder_id)?;
+        if first.is_none() {
+            first = facts;
+        }
+        landed.insert(id, change);
+    }
+    // A later entry can fold into the row an earlier one landed on, so each change is read back
+    // once the whole press is in rather than trusted from the moment it was made.
+    for change in landed.values_mut() {
+        if let Some(now) = tx
+            .query_row(
+                "SELECT quantity FROM collection_entries WHERE id = ?1",
+                params![change.id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?
+        {
+            change.quantity = now;
+        }
+    }
+
+    let feed = match (distinct.len(), first) {
+        (1, Some(facts)) => crate::bulk_undo::Feed {
+            kind: crate::activity::MOVE,
+            card_id: facts.card_id,
+            card_name: facts.card_name,
+            payload: serde_json::json!({ "from": facts.folder, "to": destination }),
+            delta: 0,
+        },
+        (entries, _) => crate::bulk_undo::Feed {
+            kind: crate::activity::MOVE,
+            card_id: None,
+            card_name: None,
+            payload: serde_json::json!({ "entries": entries, "to": destination }),
+            delta: 0,
+        },
+    };
+    feed.record(&tx, crate::bulk_undo::Table::Collection)?;
+    let changes = capture.finish(&tx)?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(BulkMoveOutcome {
+        changes: ids
+            .iter()
+            .filter_map(|id| landed.get(id).cloned())
+            .collect(),
+        undo_id: crate::bulk_undo::register(changes, feed),
+    })
+}
+
+/// The ten grain columns [`refile_entry`] does **not** touch, plus the quantity the merge moves.
+///
+/// A struct where `wishlist_folders::refile_wish` uses a tuple, and only because the wishlist's
+/// grain is four terms and this one is eleven: a `(String, String, String, String, i64, i64,
+/// i64, i64, Option<String>, Option<String>, i64)` in a `let` binding is a shape nobody can
+/// check against the `SELECT` above it by eye, which is the one thing this read has to get right.
+///
+/// The four booleans are read as `i64` rather than `bool`. They are `INTEGER NOT NULL DEFAULT 0`
+/// with no CHECK, so a hand-edited database can hold a 2 — and the point of this struct is to
+/// hand the same value back to the probe, not to interpret it.
+struct EntryGrain {
+    card_id: String,
+    finish: String,
+    condition: String,
+    lang: String,
+    altered: i64,
+    signed: i64,
+    proxy: i64,
+    misprint: i64,
+    serial_number: Option<String>,
+    grading: Option<String>,
+    quantity: i64,
+}
+
+/// The filing write itself, with no fence and no transaction of its own: move entry `id` onto
+/// `folder_id`, folding it into whatever already holds that grain.
+///
+/// **Factored out because [`delete_folder`] needs the very same rule**, and the collection's
+/// merge had already been written twice in this crate before it did — a third copy in the
+/// un-filing path is how they would come to disagree about what a duplicate row is. It takes a
+/// `&Connection` rather than a `&Transaction` so either caller's `unchecked_transaction` handle
+/// fits, and it commits nothing: whoever opened the transaction owns it, which is what lets the
+/// delete run this once per entry in a sub-tree and still be one press.
+///
+/// **`pub(crate)` because the deck-driven writes are the next PR's caller.** They file into the
+/// two folders [`set_entry_folder`] refuses, which is exactly the difference between the
+/// command's fence and this function's absence of one.
+///
+/// [`set_entry_folder`] is where the rule is argued; the paragraph above it is the one to read.
+///
+/// **It records no [`crate::activity`] row**, which is the same split as the fence: every one of
+/// its callers is either the press that records itself ([`set_entry_folder`]'s `move`,
+/// [`delete_folder`]'s one `folder` line) or a deck-boundary write that logs a `deck_audit` row
+/// instead ([`take_copies`], `collection_alloc`'s pair, `deck::delete_deck`) — and one event is
+/// one line.
+pub(crate) fn refile_entry(
+    tx: &Connection,
+    id: i64,
+    folder_id: Option<i64>,
+) -> Result<EntryChange, String> {
+    // Read before anything is decided, because "is that entry still there?" is answered by the
+    // same statement — an `UPDATE` that changed no rows cannot tell a missing row apart from a
+    // grain collision, and the two want opposite answers.
+    let source = tx
+        .query_row(
+            "SELECT card_id, finish, condition, lang, altered, signed, proxy, misprint,
+                    serial_number, grading, quantity
+               FROM collection_entries WHERE id = ?1",
+            params![id],
+            |r| {
+                Ok(EntryGrain {
+                    card_id: r.get(0)?,
+                    finish: r.get(1)?,
+                    condition: r.get(2)?,
+                    lang: r.get(3)?,
+                    altered: r.get(4)?,
+                    signed: r.get(5)?,
+                    proxy: r.get(6)?,
+                    misprint: r.get(7)?,
+                    serial_number: r.get(8)?,
+                    grading: r.get(9)?,
+                    quantity: r.get(10)?,
+                })
+            },
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| GONE.to_owned())?;
+
+    // The grain the write is *about to land on*, spelled out rather than interpolated from
+    // [`crate::schema::COLLECTION_GRAIN`] for the reason `reconcile::collision_target` gives:
+    // that constant is a list of expressions over **one row**, and this compares the same list
+    // against eleven bound values.
+    //
+    // **Every term is here, and the eleventh is the one that matters.** A fold that matched on
+    // ten of them would merge this row into a row *in another folder* — copies leaving the
+    // binder the reader put them in, silently, on a press that was supposed to move them
+    // somewhere else. That is not hypothetical: `reconcile::collision_target` shipped with ten
+    // for exactly as long as v24 took to widen the grain, and folded across folders until it
+    // was corrected in this same release. **So the rule is: every writer that probes for a
+    // collided collection row spells all eleven terms**, and each one is pinned by a test of
+    // its own — `a_refile_matching_ten_of_the_eleven_terms_does_not_merge` here, and
+    // `reconcile::tests::a_repointed_entry_folds_only_onto_an_entry_in_its_own_folder` there.
+    //
+    // At most one row can match, because these eleven terms *are* `idx_collection_grain`.
+    let target: Option<(i64, i64)> = tx
+        .query_row(
+            "SELECT id, quantity FROM collection_entries
+              WHERE id <> ?1
+                AND card_id = ?2
+                AND finish = ?3
+                AND condition = ?4
+                AND lang = ?5
+                AND altered = ?6
+                AND signed = ?7
+                AND proxy = ?8
+                AND misprint = ?9
+                AND coalesce(serial_number,'') = coalesce(?10,'')
+                AND coalesce(grading,'') = coalesce(?11,'')
+                AND coalesce(folder_id,0) = coalesce(?12,0)",
+            params![
+                id,
+                source.card_id,
+                source.finish,
+                source.condition,
+                source.lang,
+                source.altered,
+                source.signed,
+                source.proxy,
+                source.misprint,
+                source.serial_number,
+                source.grading,
+                folder_id
+            ],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+
+    if let Some((target, held)) = target {
+        merge_entry(tx, target, id)?;
+        return Ok(EntryChange {
+            id: target,
+            quantity: held + source.quantity,
+            removed: false,
+        });
+    }
+
+    // NULL is a value here rather than an omission, for the reason
+    // [`crate::collection::update_entry`]'s `coalesce(?n, column)` convention gives: "leave it"
+    // is what that spelling means everywhere else in the crate, and using it here would make
+    // "back to the root" unexpressible — which is half of what this function is for.
+    tx.execute(
+        "UPDATE collection_entries SET folder_id = ?2, updated_at = unixepoch() WHERE id = ?1",
+        params![id, folder_id],
+    )
+    .map_err(|e| e.to_string())?;
+    Ok(EntryChange {
+        id,
+        quantity: source.quantity,
+        removed: false,
+    })
+}
+
+/// Move exactly `quantity` copies of entry `id` into `dest`, answering the id of the row they
+/// landed in — [`refile_entry`] where only *part* of a row is going.
+///
+/// **The split is forward and the source row is the half that travels**, which is what lets the
+/// merge stay [`refile_entry`]'s:
+///
+/// 1. the source is stepped down to exactly the copies that are moving;
+/// 2. `refile_entry` files that row into `dest`, folding it into whatever holds the grain there;
+/// 3. the remainder is re-inserted into the folder the source has just left.
+///
+/// Step 3 is what forces this order. `idx_collection_grain` is unique on eleven terms including
+/// `coalesce(folder_id, 0)`, so a remainder row written *before* the move would collide with the
+/// source itself — the one row in that folder holding the grain. Once the source has gone the
+/// slot is free, and it is free whether the file was an `UPDATE` or a fold that deleted it.
+///
+/// **The remainder is copied off the row the copies landed in**, and where that was a fold it is
+/// the survivor's story rather than the source's. The eleven grain terms are identical by
+/// construction — a fold happens only on an exact grain match — and
+/// [`crate::collection::fold_entry`] has already coalesced the source's money columns into the
+/// survivor wherever the survivor had none. What can differ is `tags`, `notes` and
+/// `condition_original`, which that fold leaves the survivor's for its own stated reason.
+///
+/// `tradelist_quantity` is split rather than duplicated: the copies that move take
+/// `min(tradelist, quantity)` and the remainder keeps the rest, so the two halves sum to what
+/// the one row held. Duplicating it would put a card on the trade list twice by moving it.
+///
+/// **This is the crate's one copy of that rule, and there were two.**
+/// [`crate::collection_alloc`] wrote it first for the deck boundary's two commands, as a private
+/// `move_copies`; the category writes then needed the same split and could not reach a private
+/// item, so it was spelled again here. Two implementations of one rule disagree the first time
+/// either changes, and this rule moves the reader's cards — so the twin was deleted at fan-in and
+/// both of those commands call this. It belongs here, beside the merge it is built on and the
+/// fence-free refile it extends.
+///
+/// **Records no [`crate::activity`] row**: both callers are deck-boundary writes that record a
+/// `deck_audit` row for the same press, and one event is one line.
+pub(crate) fn take_copies(
+    tx: &Connection,
+    id: i64,
+    quantity: i64,
+    dest: Option<i64>,
+) -> Result<i64, String> {
+    let (folder_id, held, tradelist): (Option<i64>, i64, i64) = tx
+        .query_row(
+            "SELECT folder_id, quantity, tradelist_quantity FROM collection_entries WHERE id = ?1",
+            params![id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| GONE.to_owned())?;
+    if quantity > held {
+        return Err(crate::collection_alloc::NOT_THAT_MANY.to_owned());
+    }
+    let remainder = held - quantity;
+    let moved_trade = tradelist.min(quantity);
+    let kept_trade = tradelist - moved_trade;
+
+    if remainder > 0 {
+        tx.execute(
+            "UPDATE collection_entries
+                SET quantity = ?2, tradelist_quantity = ?3, updated_at = unixepoch()
+              WHERE id = ?1",
+            params![id, quantity, moved_trade],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+
+    let landed = refile_entry(tx, id, dest)?.id;
+
+    if remainder > 0 {
+        tx.execute(
+            "INSERT INTO collection_entries
+                 (card_id, set_code, collector_number, lang, finish, condition,
+                  condition_original, quantity, tradelist_quantity, purchase_price,
+                  purchase_currency, acquired_at, acquisition_source, serial_number,
+                  altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                  folder_id, created_at, updated_at)
+             SELECT card_id, set_code, collector_number, lang, finish, condition,
+                    condition_original, ?2, ?3, purchase_price,
+                    purchase_currency, acquired_at, acquisition_source, serial_number,
+                    altered, signed, proxy, misprint, grading, tags, notes, needs_review,
+                    ?4, created_at, unixepoch()
+               FROM collection_entries WHERE id = ?1",
+            params![landed, remainder, kept_trade, folder_id],
+        )
+        .map_err(|e| e.to_string())?;
+    }
+    Ok(landed)
+}
+
+/// Fold `source` into `target` and delete it — this module's name for
+/// [`crate::collection::fold_entry`], which is the crate's **one** answer to "one collection row
+/// becomes another" and where every rule about what moves is argued.
+///
+/// **It was a second copy of those statements until fan-in.** Two implementations of one rule
+/// disagree the first time either changes, and what this one decides is what a reader keeps: the
+/// quantities that add, and the five receipt columns the survivor takes only where it has none.
+/// That is not a rule to hold in two places.
+///
+/// **It is _two_ statements, and this crate says two.** One `UPDATE` that sums the source into
+/// the survivor and one `DELETE` that removes the source. Reading the source is not a third: it
+/// rides in the `UPDATE`'s own `FROM (SELECT … WHERE id = ?2)` subquery. It stood at **five**
+/// while `deck_allocations.collection_entry_id` was an `ON DELETE CASCADE` pointed at
+/// `collection_entries` — three of them kept a built deck's claims alive across a merge — and
+/// schema v25 took the table and those three with it. *"Read the source, sum into the survivor,
+/// delete the source"* is the same code in three **steps**, which is a true sentence about a
+/// two-statement function and the other number a reader will meet. Say two; see
+/// [collection-folders.md](../../docs/reference/collection-folders.md).
+///
+/// The wrapper stays because this module's callers are `Result<_, String>` throughout while
+/// `fold_entry` answers `rusqlite::Result` for the reconciler's sake — one `map_err` here rather
+/// than one per call site, and one name for the folder tree's own vocabulary.
+///
+/// **Records no [`crate::activity`] row**, [`crate::collection::fold_entry`]'s rule: a fold is a
+/// consequence of the filing above it, and the press that caused it is already one line.
+fn merge_entry(tx: &Connection, target: i64, source: i64) -> Result<(), String> {
+    crate::collection::fold_entry(tx, target, source).map_err(|e| e.to_string())
+}
+
+/// The two numbers each folder tile draws, one row per folder that holds at least one entry.
+///
+/// **Every figure is [`crate::collection`]'s own arithmetic rather than a second spelling of
+/// it.** The unit price is [`crate::sorting::price_expr`] over
+/// [`crate::collection::ENTRY_FINISH`] — the entry's own finish, which is why the table is
+/// aliased `e` and `cards` is aliased `c`: both aliases are part of that constant's contract.
+/// A folder's subtotal and the page header's total have to be one piece of arithmetic; two
+/// implementations of one figure disagree the first time either changes.
+///
+/// The join is `collection::from_sql`'s, verbatim in shape and a `LEFT JOIN` for its reason: an
+/// entry whose printing is gone is exactly what the denormalised columns exist for, and an inner
+/// join would drop those rows out of the tile that most needs them. It is spelled out here
+/// rather than shared because that function is private to its module.
+///
+/// **`WHERE folder_id IS NOT NULL`**: the root is not a folder and has no tile to draw. What is
+/// at the root is what the unfiltered table already shows.
+///
+/// **An empty folder produces no row at all**, which is the shape rule a caller has to know: a
+/// page cannot build its tree from this command. [`list_folders`] is the census, and this is a
+/// lookup layered onto it.
+pub fn folder_summary(
+    conn: &Connection,
+    marketplace: Marketplace,
+) -> Result<Vec<CollectionFolderSummary>, String> {
+    let sql = format!(
+        "SELECT e.folder_id,
+                coalesce(sum(e.quantity), 0) AS cards,
+                sum(e.quantity * {price}) AS value
+           FROM collection_entries e
+           LEFT JOIN cards c ON c.id = e.card_id
+          WHERE e.folder_id IS NOT NULL
+          GROUP BY e.folder_id
+          ORDER BY e.folder_id",
+        price = crate::sorting::price_expr(marketplace, ENTRY_FINISH)
+    );
+    let mut stmt = conn.prepare(&sql).map_err(|e| e.to_string())?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(CollectionFolderSummary {
+                folder_id: r.get(0)?,
+                cards: r.get(1)?,
+                value: r.get(2)?,
+            })
+        })
+        .map_err(|e| e.to_string())?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// **`foreign_keys` is ON, and here that is not ceremony**: the two cascade rules
+    /// [`delete_folder`] leans on are per-connection settings, and an in-memory connection
+    /// starts with them off. Without this line the delete tests would report a folder deleted
+    /// and its sub-tree left standing — a green suite over a broken feature.
+    /// [`crate::db::open`] sets the same pragma for every connection the app hands out.
+    fn open() -> Connection {
+        let conn = crate::schema::memory_pair();
+        conn.pragma_update(None, "foreign_keys", "ON").unwrap();
+        conn
+    }
+
+    /// The marketplace the price tests read through. TCGplayer, because it is the one whose
+    /// prices live in `cards.prices` as `$.usd` and [`priced_card`] writes that key.
+    const ANY_MARKET: Marketplace = Marketplace::Tcgplayer;
+
+    /// A `cards` row carrying a nonfoil `usd` price — [`crate::schema::tests::seed_card`] sets
+    /// no `prices`, and the summary tests need printings that have one.
+    fn priced_card(conn: &Connection, id: &str, usd: &str) {
+        conn.execute(
+            "INSERT INTO cards (id, oracle_id, name, set_code, collector_number, lang, layout,
+                                prices, raw)
+             VALUES (?1, 'o1', 'Lightning Bolt', 'lea', '161', 'en', 'normal', ?2, '{}')",
+            params![id, format!(r#"{{"usd":"{usd}"}}"#)],
+        )
+        .unwrap();
+    }
+
+    /// One owned row, written straight into the table: [`crate::collection::add_entry`] is the
+    /// command that makes one, and these tests need nothing from it but a row to file. Every
+    /// column outside `card_id` and `folder_id` is held constant, so those two **are** the
+    /// grain as far as this suite is concerned.
+    fn insert_entry(
+        conn: &Connection,
+        card_id: &str,
+        folder_id: Option<i64>,
+        quantity: i64,
+    ) -> i64 {
+        conn.query_row(
+            "INSERT INTO collection_entries
+                (card_id, set_code, collector_number, lang, finish, condition, quantity,
+                 folder_id, created_at, updated_at)
+             VALUES (?1, 'lea', '161', 'en', 'nonfoil', 'NM', ?2, ?3, unixepoch(), unixepoch())
+             RETURNING id",
+            params![card_id, quantity, folder_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// A folder the **app** owns. `deck` needs a deck to name: `collection_folders` CHECKs
+    /// `(kind = 'deck') = (deck_id IS NOT NULL)`, so the two cannot be seeded apart — and
+    /// nothing in *this* module makes either kind, which is what the fences below are about.
+    ///
+    /// **`removed` is found rather than made**, because schema v25 files it into every database
+    /// and the partial unique index on `kind` makes a second one impossible. A helper that
+    /// inserted would fail with `UNIQUE constraint failed: collection_folders.kind`, which is
+    /// the migration working: there is exactly one holding area per database, by construction.
+    fn insert_system_folder(conn: &Connection, kind: &str, name: &str) -> i64 {
+        if kind == "removed" {
+            return removed_folder(conn);
+        }
+        let deck_id: Option<i64> = (kind == "deck").then(|| {
+            conn.query_row(
+                "INSERT INTO decks (name, created_at, updated_at)
+                 VALUES ('A deck', unixepoch(), unixepoch()) RETURNING id",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+        });
+        conn.query_row(
+            "INSERT INTO collection_folders
+                (parent_id, name, kind, deck_id, sort_order, created_at, updated_at)
+             VALUES (NULL, ?1, ?2, ?3, 0, unixepoch(), unixepoch())
+             RETURNING id",
+            params![name, kind, deck_id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The one holding area schema v25 files into every database — the app's own row, and the
+    /// reason every count and every `sort_order` below starts one higher than it reads.
+    fn removed_folder(conn: &Connection) -> i64 {
+        conn.query_row(
+            "SELECT id FROM collection_folders WHERE kind = 'removed'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// The folders **the reader made**, in [`list_folders`]' order. What almost every assertion
+    /// below is actually about: `list_folders` answers the app's rows too, deliberately, and a
+    /// test that counted the whole list would be measuring the migration rather than the press
+    /// it just made.
+    fn user_folders(conn: &Connection) -> Vec<CollectionFolder> {
+        list_folders(conn)
+            .unwrap()
+            .into_iter()
+            .filter(|f| f.kind == "user")
+            .collect()
+    }
+
+    /// Where an entry is filed, straight from the column.
+    fn folder_of(conn: &Connection, id: i64) -> Option<i64> {
+        conn.query_row(
+            "SELECT folder_id FROM collection_entries WHERE id = ?1",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn create_folder_puts_a_folder_at_the_root_and_inside_another() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let trades = create_folder(&conn, None, "Trades").unwrap();
+        let rares = create_folder(&conn, Some(binder.id), "Rares").unwrap();
+        let lands = create_folder(&conn, Some(binder.id), "Lands").unwrap();
+
+        assert_eq!(binder.parent_id, None, "None is the root");
+        assert_eq!(rares.parent_id, Some(binder.id), "and it round-trips");
+        assert_eq!(
+            read_folder(&conn, rares.id).unwrap().unwrap().parent_id,
+            Some(binder.id),
+            "from the table, not just from the answer"
+        );
+
+        // The kind is written, not defaulted, and a folder the reader made is never a deck's.
+        assert_eq!((binder.kind.as_str(), binder.deck_id), ("user", None));
+
+        // `max + 1` **among siblings**, which is why the first child starts at 0 again rather
+        // than continuing the root's numbering. The root's own numbering starts at 0 too, even
+        // though schema v25's holding area is a root sibling sitting at slot 0: the `max` is
+        // taken over `kind = 'user'` alone, so the app's folders are not in the reader's
+        // sequence at all. `a_folder_the_app_owns_is_not_part_of_the_readers_numbering` is what
+        // that fence is about.
+        assert_eq!((binder.sort_order, trades.sort_order), (0, 1));
+        assert_eq!((rares.sort_order, lands.sort_order), (0, 1));
+
+        // Never an explicit id: `COLLECTION_GRAIN`'s `coalesce(folder_id, 0)` is only safe while
+        // no folder can be 0, and SQLite guarantees that only for ids it assigns itself.
+        assert!(binder.id > 0, "SQLite assigned it, and never 0");
+    }
+
+    /// **The app's own folders are not part of the reader's numbering, and nobody chose the
+    /// ordering that says they are.** `Recently removed` is a root sibling at `sort_order` 0 and
+    /// every deck's group is another, so a bare `max(sort_order) + 1` over all siblings started
+    /// the reader's *first* folder at 1 and left the holding area — and, on a database with
+    /// decks, every group — sorting ahead of everything they ever name. The UI draws the app's
+    /// folders in a pinned section of their own, so their numbers have no business here.
+    ///
+    /// Seeded with **two** app folders rather than one, and the group is given a high
+    /// `sort_order` deliberately: a fence written as `kind <> 'removed'` would pass with only
+    /// the holding area in the table, and a fence that merely skipped slot 0 would pass with
+    /// both at 0.
+    #[test]
+    fn a_folder_the_app_owns_is_not_part_of_the_readers_numbering() {
+        let conn = open();
+        let group = insert_system_folder(&conn, "deck", "Burn");
+        conn.execute(
+            "UPDATE collection_folders SET sort_order = 9 WHERE id = ?1",
+            params![group],
+        )
+        .unwrap();
+        // And the holding area is already there, at 0, from the migration.
+        assert_eq!(
+            create_folder(&conn, None, "Binder").unwrap().sort_order,
+            0,
+            "the reader's first folder is their first folder"
+        );
+        assert_eq!(create_folder(&conn, None, "Trades").unwrap().sort_order, 1);
+    }
+
+    #[test]
+    fn create_folder_refuses_a_blank_name() {
+        let conn = open();
+        let err = create_folder(&conn, None, "   ").unwrap_err();
+        assert_eq!(
+            err, "A folder needs a name.",
+            "the refusal names the problem"
+        );
+        assert!(
+            user_folders(&conn).is_empty(),
+            "and the refused create wrote nothing"
+        );
+    }
+
+    /// Both halves of the parent fence: an id nothing answers to, and a folder the app owns.
+    ///
+    /// **The first half was this cabinet's alone until 2026-09-09** —
+    /// `wishlist_folders::create_folder` left it to its foreign key — and is shared now that the
+    /// ported side has closed it. The second is still this cabinet's alone, and always will be:
+    /// the wishlist has no folders the app owns for a create to be refused over.
+    #[test]
+    fn create_folder_refuses_a_parent_that_is_gone_or_the_apps() {
+        let conn = open();
+        assert_eq!(
+            create_folder(&conn, Some(404), "Rares").unwrap_err(),
+            FOLDER_GONE
+        );
+        let sys = insert_system_folder(&conn, "removed", "Recently removed");
+        assert_eq!(
+            create_folder(&conn, Some(sys), "Rares").unwrap_err(),
+            FOLDER_NOT_YOURS
+        );
+        assert!(
+            user_folders(&conn).is_empty(),
+            "neither refused create wrote a folder"
+        );
+    }
+
+    #[test]
+    fn rename_folder_writes_the_new_name() {
+        let conn = open();
+        let folder = create_folder(&conn, None, "Binder").unwrap();
+
+        let returned = rename_folder(&conn, folder.id, "  Trade binder  ").unwrap();
+        assert_eq!(returned.name, "Trade binder", "trimmed, like the create");
+        let stored: String = conn
+            .query_row(
+                "SELECT name FROM collection_folders WHERE id = ?1",
+                params![folder.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "Trade binder");
+
+        let err = rename_folder(&conn, folder.id, " ").unwrap_err();
+        assert_eq!(err, "A folder needs a name.");
+        assert_eq!(
+            rename_folder(&conn, 404, "Anything").unwrap_err(),
+            FOLDER_GONE
+        );
+        let unchanged: String = conn
+            .query_row(
+                "SELECT name FROM collection_folders WHERE id = ?1",
+                params![folder.id],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            unchanged, "Trade binder",
+            "the refused rename wrote nothing"
+        );
+    }
+
+    #[test]
+    fn move_folder_moves_to_a_new_parent_and_then_back_to_root() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let rares = create_folder(&conn, None, "Rares").unwrap();
+
+        let moved = move_folder(&conn, rares.id, Some(binder.id)).unwrap();
+        assert_eq!(moved.parent_id, Some(binder.id));
+
+        // `None` is a destination, not an omission — the root is a real place.
+        let home = move_folder(&conn, rares.id, None).unwrap();
+        assert_eq!(home.parent_id, None);
+        assert_eq!(
+            read_folder(&conn, rares.id).unwrap().unwrap().parent_id,
+            None
+        );
+    }
+
+    /// The required case, and the shape the wishlist's own cycle test does not cover: `B` is
+    /// already inside `A`, so the walk from the *proposed* parent meets `id` on its second hop
+    /// rather than its first.
+    #[test]
+    fn a_move_that_would_write_a_loop_is_refused_in_words() {
+        let conn = open();
+        let a = create_folder(&conn, None, "A").unwrap();
+        let b = create_folder(&conn, Some(a.id), "B").unwrap();
+        let err = move_folder(&conn, a.id, Some(b.id)).unwrap_err();
+        assert_eq!(err, FOLDER_CYCLE);
+    }
+
+    #[test]
+    fn move_folder_refuses_moving_a_folder_into_itself_directly() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let err = move_folder(&conn, binder.id, Some(binder.id)).unwrap_err();
+        assert_eq!(err, FOLDER_CYCLE);
+    }
+
+    /// The destination, which the cycle walk cannot check and does not.
+    /// `optional()?.flatten()` folds "no such folder" into the same `None` as "that folder is at
+    /// the root", so the climb ends on the first hop and an id nothing answers to would sail
+    /// through to the `UPDATE` — which refuses it as `FOREIGN KEY constraint failed`, a sentence
+    /// about a constraint, and only while `PRAGMA foreign_keys` is on.
+    #[test]
+    fn move_folder_refuses_a_parent_that_is_not_there() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let rares = create_folder(&conn, Some(binder.id), "Rares").unwrap();
+
+        let err = move_folder(&conn, rares.id, Some(404)).unwrap_err();
+
+        assert_eq!(err, FOLDER_GONE);
+        assert_eq!(
+            read_folder(&conn, rares.id).unwrap().unwrap().parent_id,
+            Some(binder.id),
+            "and the refused move wrote nothing"
+        );
+        // `None` is the root and is always a destination -- the one parent there is no row to
+        // look up, so the fence must not reach it.
+        move_folder(&conn, rares.id, None).unwrap();
+        assert_eq!(
+            read_folder(&conn, rares.id).unwrap().unwrap().parent_id,
+            None
+        );
+    }
+
+    /// The walk that *keeps* the tree acyclic cannot assume it is, and this is the case that
+    /// proves the hop budget rather than the `candidate == id` arm: a cycle written straight
+    /// into the table, between two folders neither of which is the one being moved. The walk
+    /// from the proposed parent therefore never meets `id` and would climb for ever — inside
+    /// `spawn_blocking`, holding the app-wide write lock, so it is every write in the app that
+    /// stops rather than this one command.
+    #[test]
+    fn move_folder_gives_up_on_a_cycle_it_did_not_write() {
+        let conn = open();
+        let a = create_folder(&conn, None, "A").unwrap();
+        let b = create_folder(&conn, Some(a.id), "B").unwrap();
+        let moving = create_folder(&conn, None, "C").unwrap();
+        // Corruption this module cannot produce: a hand-edited database, a restored backup.
+        conn.execute(
+            "UPDATE collection_folders SET parent_id = ?2 WHERE id = ?1",
+            params![a.id, b.id],
+        )
+        .unwrap();
+
+        let err = move_folder(&conn, moving.id, Some(a.id)).unwrap_err();
+
+        assert_eq!(err, FOLDER_CYCLE, "a sentence, not a hang");
+        assert_eq!(
+            read_folder(&conn, moving.id).unwrap().unwrap().parent_id,
+            None,
+            "and the refused move wrote nothing"
+        );
+    }
+
+    #[test]
+    fn list_folders_reads_the_tree_shape_and_order() {
+        let conn = open();
+        let a = create_folder(&conn, None, "A").unwrap();
+        let b = create_folder(&conn, None, "B").unwrap();
+        let child = create_folder(&conn, Some(a.id), "A's drawer").unwrap();
+        // `B` reordered ahead of `A`, so the order proves `sort_order` rather than the ids
+        // happening to agree with it — and `A` put back to 0 so it **ties with its own child**,
+        // which is what makes the second key mean something. Both are written by hand rather
+        // than left to `create_folder`'s `max + 1`: schema v25's holding area is a root sibling
+        // and already holds slot 0, so the reader's first folder starts at 1 and the tie this
+        // test is named for would never occur.
+        conn.execute(
+            "UPDATE collection_folders SET sort_order = -1 WHERE id = ?1",
+            params![b.id],
+        )
+        .unwrap();
+        conn.execute(
+            "UPDATE collection_folders SET sort_order = 0 WHERE id = ?1",
+            params![a.id],
+        )
+        .unwrap();
+
+        // The reader's own, because `list_folders` answers the app's holding area too and this
+        // test is about the order of the folders somebody made.
+        let rows = user_folders(&conn);
+
+        let order: Vec<i64> = rows.iter().map(|f| f.id).collect();
+        assert_eq!(
+            order,
+            vec![b.id, a.id, child.id],
+            "sort_order first, then id -- `A` and its child tie at 0"
+        );
+        // Flat rows: the nesting is a column, and building the tree is the reader's job.
+        assert_eq!(rows[2].parent_id, Some(a.id));
+        assert_eq!(rows[1].parent_id, None);
+    }
+
+    /// A deck's folder and the removed-cards folder are on the census like any other — a page
+    /// that could not see them would draw a tree the collection does not have.
+    #[test]
+    fn list_folders_answers_the_folders_the_app_owns_too() {
+        let conn = open();
+        create_folder(&conn, None, "Binder").unwrap();
+        insert_system_folder(&conn, "removed", "Recently removed");
+        let deck_folder = insert_system_folder(&conn, "deck", "Mono red");
+
+        // **Sorted, because this test is about which rows list and not about their order** —
+        // `list_folders_reads_the_tree_shape_and_order` owns that question, and the seeded deck
+        // group is written straight into the table at `sort_order` 0 rather than through the
+        // command, so its position here would be an artefact of the fixture.
+        let mut kinds: Vec<String> = list_folders(&conn)
+            .unwrap()
+            .iter()
+            .map(|f| f.kind.clone())
+            .collect();
+        kinds.sort();
+        assert_eq!(kinds, vec!["deck", "removed", "user"]);
+        assert!(
+            list_folders(&conn)
+                .unwrap()
+                .iter()
+                .any(|f| f.id == deck_folder && f.deck_id.is_some()),
+            "a deck's folder carries the deck it stands for"
+        );
+    }
+
+    /// The folder's cross-device name reaches the page, and both arms of it do.
+    ///
+    /// **This is the whole of what [`crate::share::commands::share_create`] can address a folder
+    /// by.** A share is a cross-device artifact — the link outlives this machine and another
+    /// device in the group publishes updates to it — so `collection_folders.id`, a rowid nobody
+    /// else has ever seen, cannot be the name. Drop `sync_uid` from either `SELECT` and this is
+    /// what says so; the page's own half is `ipc.test.ts`'s `CollectionFolder` mirror row.
+    ///
+    /// **Both arms, because the column is nullable and the type says so.** A capture trigger
+    /// mints a uid on insert and `mint_missing_uids` sweeps the rows that predate it, so a real
+    /// database has one everywhere — but [`crate::schema::memory_pair`] installs no triggers,
+    /// which makes this fixture exactly the *unset* population a `String` here would have been
+    /// lying to. The uid is written by hand for that reason rather than as a shortcut.
+    #[test]
+    fn a_folder_carries_the_uid_a_share_would_name_it_by() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Trade binder").unwrap();
+
+        assert_eq!(
+            read_folder(&conn, binder.id).unwrap().unwrap().sync_uid,
+            None,
+            "no trigger here, so a fresh row has no uid yet -- a state, not an error"
+        );
+
+        conn.execute(
+            "UPDATE collection_folders SET sync_uid = ?2 WHERE id = ?1",
+            params![binder.id, "uid-a"],
+        )
+        .unwrap();
+
+        // Both reads, because they are two `SELECT`s over one `folder_row` and only one of them
+        // is the census: the page builds its tree from `list_folders`, and every folder *write*
+        // answers through `read_folder`.
+        assert_eq!(
+            read_folder(&conn, binder.id).unwrap().unwrap().sync_uid,
+            Some("uid-a".to_owned())
+        );
+        assert_eq!(
+            list_folders(&conn)
+                .unwrap()
+                .into_iter()
+                .find(|f| f.id == binder.id)
+                .unwrap()
+                .sync_uid,
+            Some("uid-a".to_owned()),
+            "the census carries it too, which is the read the page draws from"
+        );
+    }
+
+    #[test]
+    fn delete_folder_keeps_its_cards_and_cascades_its_subfolders() {
+        let conn = open();
+        let binder = open_binder(&conn);
+        let rares = create_folder(&conn, Some(binder), "Rares").unwrap().id;
+        let elsewhere = create_folder(&conn, None, "Trades").unwrap().id;
+        let top = insert_entry(&conn, "bolt", Some(binder), 2);
+        let deep = insert_entry(&conn, "bear", Some(rares), 1);
+        let untouched = insert_entry(&conn, "forest", Some(elsewhere), 4);
+
+        delete_folder(&conn, binder).unwrap();
+
+        let left: Vec<i64> = user_folders(&conn).iter().map(|f| f.id).collect();
+        assert_eq!(left, vec![elsewhere], "the sub-folder cascaded with it");
+        // The cards are the reader's property and no filing decision throws one away.
+        assert_eq!(folder_of(&conn, top), None, "surfaced at the root");
+        assert_eq!(folder_of(&conn, deep), None, "and so did the sub-folder's");
+        assert_eq!(folder_of(&conn, untouched), Some(elsewhere));
+        let entries: i64 = conn
+            .query_row("SELECT count(*) FROM collection_entries", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(entries, 3, "all three rows are still in the collection");
+    }
+
+    /// One folder, so the tests that only need somewhere to file read as one line.
+    fn open_binder(conn: &Connection) -> i64 {
+        create_folder(conn, None, "Binder").unwrap().id
+    }
+
+    /// **Two rows in the doomed sub-tree that collide WITH EACH OTHER at the root**, needing no
+    /// unfiled row at all: `Outer` and `Outer/Inner` each holding the same printing land on one
+    /// grain the moment both reach the root. One at a time through [`refile_entry`] is what
+    /// makes them merge instead of raising `UNIQUE constraint failed: index
+    /// 'idx_collection_grain'` — the first to arrive becomes the row the second folds into, and
+    /// `ORDER BY e.id` is what makes which one that is a fact about the table rather than about
+    /// the planner.
+    #[test]
+    fn deleting_a_folder_refiles_its_cards_to_the_root_one_at_a_time() {
+        let conn = open();
+        let outer = create_folder(&conn, None, "Outer").unwrap();
+        let inner = create_folder(&conn, Some(outer.id), "Inner").unwrap();
+        insert_entry(&conn, "bolt", Some(outer.id), 1);
+        insert_entry(&conn, "bolt", Some(inner.id), 1);
+        delete_folder(&conn, outer.id).unwrap();
+        let (rows, qty): (i64, i64) = conn
+            .query_row(
+                "SELECT count(*), coalesce(sum(quantity), 0) FROM collection_entries
+                  WHERE card_id = 'bolt' AND folder_id IS NULL",
+                [],
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(rows, 1, "two collided into one row");
+        assert_eq!(qty, 2, "holding both lots of copies");
+        assert!(
+            user_folders(&conn).is_empty(),
+            "and the folder really went -- the collision used to leave it standing"
+        );
+    }
+
+    /// The other shape: a filed row and an **unfiled** one for the same printing, which is what
+    /// every writer that cannot name a folder produces — a quick add from the search, an import,
+    /// the reconciler's fold. The notes are asserted here rather than in a test of their own
+    /// because they are what proves the merge is [`crate::collection::add_entry`]'s rule and not
+    /// a second one: `coalesce` keeps the survivor's and falls back to the folded row's.
+    #[test]
+    fn delete_folder_merges_a_filed_card_into_the_unfiled_row_for_the_same_printing() {
+        let conn = open();
+        let binder = open_binder(&conn);
+        let root = insert_entry(&conn, "bolt", None, 1);
+        let filed = insert_entry(&conn, "bolt", Some(binder), 2);
+        conn.execute(
+            "UPDATE collection_entries SET notes = 'bought at the prerelease' WHERE id = ?1",
+            params![filed],
+        )
+        .unwrap();
+
+        delete_folder(&conn, binder).unwrap();
+
+        let rows: Vec<(i64, Option<i64>, i64, Option<String>)> = conn
+            .prepare("SELECT id, folder_id, quantity, notes FROM collection_entries ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert_eq!(
+            rows,
+            vec![(root, None, 3, Some("bought at the prerelease".to_owned()))],
+            "one row at the root for all three copies, wearing the folded row's note"
+        );
+    }
+
+    #[test]
+    fn delete_folder_is_a_success_for_an_id_that_is_not_there() {
+        let conn = open();
+        assert_eq!(delete_folder(&conn, 404), Ok(()));
+    }
+
+    // -- the lock (issue #365) ----------------------------------------------------------------
+
+    /// **The inheritance, and that it is computed rather than stored.** A reader locks a drawer
+    /// and gets the drawer, including whatever they have nested inside it — so
+    /// [`effectively_locked`] answers for the whole sub-tree while only the folder the press
+    /// named carries the flag. Both halves are asserted, because a write that stamped the
+    /// children would pass the first half and be a second copy of a fact the parent already
+    /// holds: the two disagree the first time either end is moved.
+    #[test]
+    fn locking_a_folder_locks_the_folders_inside_it() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let rares = create_folder(&conn, Some(binder.id), "Rares").unwrap().id;
+        let deep = create_folder(&conn, Some(rares), "Duals").unwrap().id;
+        let elsewhere = create_folder(&conn, None, "Trades").unwrap().id;
+
+        assert!(
+            !binder.locked,
+            "a new folder is a folder nobody has set aside"
+        );
+
+        let locked = set_folder_locked(&conn, binder.id, true).unwrap();
+
+        assert!(
+            locked.locked,
+            "the answer is the re-read row, not the request"
+        );
+        for (id, what) in [
+            (binder.id, "the folder itself"),
+            (rares, "its drawer"),
+            (deep, "and the drawer inside that"),
+        ] {
+            assert!(
+                effectively_locked(&conn, id).unwrap(),
+                "{what} is inside the lock"
+            );
+        }
+        assert!(
+            !effectively_locked(&conn, elsewhere).unwrap(),
+            "a folder outside the sub-tree is not"
+        );
+
+        // Only the folder the press named carries the column.
+        assert_eq!(
+            (
+                read_folder(&conn, rares).unwrap().unwrap().locked,
+                read_folder(&conn, deep).unwrap().unwrap().locked,
+            ),
+            (false, false),
+            "the inheritance is computed, never written down"
+        );
+        // And the census carries the flag out to the page, which walks the same ancestry.
+        let listed: Vec<(i64, bool)> = list_folders(&conn)
+            .unwrap()
+            .iter()
+            .map(|f| (f.id, f.locked))
+            .collect();
+        assert!(listed.contains(&(binder.id, true)));
+        assert!(listed.contains(&(rares, false)));
+
+        // One press back, and the sub-tree comes with it.
+        assert!(!set_folder_locked(&conn, binder.id, false).unwrap().locked);
+        assert!(!effectively_locked(&conn, deep).unwrap());
+    }
+
+    /// The column is `INTEGER` with no CHECK, so a hand-edited database can hold a 2 — and a 2
+    /// is locked, which is the only reading of a non-zero that is not a refusal. Both readers
+    /// have to agree about it: [`folder_row`]'s `i64` compare for the badge, and
+    /// [`LOCKED_FOLDER_IDS`]' `locked <> 0` for every fence and every query term.
+    #[test]
+    fn a_lock_flag_that_is_not_one_is_still_a_lock() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap().id;
+        let inner = create_folder(&conn, Some(binder), "Rares").unwrap().id;
+        conn.execute(
+            "UPDATE collection_folders SET locked = 2 WHERE id = ?1",
+            params![binder],
+        )
+        .unwrap();
+
+        assert!(read_folder(&conn, binder).unwrap().unwrap().locked);
+        assert!(effectively_locked(&conn, binder).unwrap());
+        assert!(
+            effectively_locked(&conn, inner).unwrap(),
+            "and it is inherited like any other lock"
+        );
+        assert_eq!(delete_folder(&conn, binder).unwrap_err(), FOLDER_IS_LOCKED);
+    }
+
+    /// **Deleting is the one folder write a lock refuses**, because it re-files the whole
+    /// sub-tree to the root — precisely the filing the lock was protecting. The cards and the
+    /// folder are both asserted untouched, and the unlock-then-delete at the end is what proves
+    /// the refusal is the *lock's* rather than something else about the folder.
+    #[test]
+    fn a_locked_folder_refuses_to_be_deleted() {
+        let conn = open();
+        let case = create_folder(&conn, None, "Display case").unwrap().id;
+        let card = insert_entry(&conn, "bolt", Some(case), 2);
+        set_folder_locked(&conn, case, true).unwrap();
+
+        assert_eq!(delete_folder(&conn, case).unwrap_err(), FOLDER_IS_LOCKED);
+
+        assert_eq!(
+            user_folders(&conn).iter().map(|f| f.id).collect::<Vec<_>>(),
+            vec![case],
+            "the folder is still standing"
+        );
+        assert_eq!(
+            folder_of(&conn, card),
+            Some(case),
+            "and no card was scattered to the root"
+        );
+
+        set_folder_locked(&conn, case, false).unwrap();
+        delete_folder(&conn, case).unwrap();
+        assert_eq!(
+            folder_of(&conn, card),
+            None,
+            "unlocked, the press goes through"
+        );
+    }
+
+    /// The same refusal one level down, and the case a check on the folder's **own** flag alone
+    /// would sail straight through: `Rares` carries no lock, `Display case` above it does — and
+    /// deleting `Rares` scatters its cards to the root just as surely.
+    #[test]
+    fn a_folder_inside_a_locked_one_refuses_to_be_deleted_too() {
+        let conn = open();
+        let case = create_folder(&conn, None, "Display case").unwrap().id;
+        let rares = create_folder(&conn, Some(case), "Rares").unwrap().id;
+        let card = insert_entry(&conn, "bolt", Some(rares), 1);
+        set_folder_locked(&conn, case, true).unwrap();
+
+        assert!(
+            !read_folder(&conn, rares).unwrap().unwrap().locked,
+            "its own flag is clear -- the lock is the parent's"
+        );
+        assert_eq!(delete_folder(&conn, rares).unwrap_err(), FOLDER_IS_LOCKED);
+        assert_eq!(folder_of(&conn, card), Some(rares), "and it wrote nothing");
+    }
+
+    /// **And the same refusal read downward**: the delete re-files every folder beneath the one
+    /// pressed, so a locked folder *inside* it is scattered by the press just as surely as a
+    /// locked one above it. The lock sits two levels down, so a check of the direct children
+    /// alone would miss it; `Vault` is locked elsewhere in the cabinet and must not block
+    /// anything, which is what the delete at the end proves once `PSA` is unlocked.
+    #[test]
+    fn a_folder_holding_a_locked_one_refuses_to_be_deleted() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap().id;
+        let graded = create_folder(&conn, Some(binder), "Graded").unwrap().id;
+        let psa = create_folder(&conn, Some(graded), "PSA").unwrap().id;
+        let vault = create_folder(&conn, None, "Vault").unwrap().id;
+        let loose = insert_entry(&conn, "bolt", Some(binder), 1);
+        let slabbed = insert_entry(&conn, "sol", Some(psa), 1);
+        set_folder_locked(&conn, psa, true).unwrap();
+        set_folder_locked(&conn, vault, true).unwrap();
+
+        for pressed in [binder, graded] {
+            assert!(!effectively_locked(&conn, pressed).unwrap());
+            assert_eq!(
+                delete_folder(&conn, pressed).unwrap_err(),
+                FOLDER_HOLDS_LOCKED
+            );
+        }
+        assert_eq!(
+            user_folders(&conn).len(),
+            4,
+            "every folder is still standing"
+        );
+        assert_eq!(
+            folder_of(&conn, slabbed),
+            Some(psa),
+            "the set-aside copy stayed put"
+        );
+        assert_eq!(
+            folder_of(&conn, loose),
+            Some(binder),
+            "and so did everything else"
+        );
+
+        set_folder_locked(&conn, psa, false).unwrap();
+        delete_folder(&conn, binder).unwrap();
+        assert_eq!(
+            folder_of(&conn, slabbed),
+            None,
+            "unlocked, the press goes through"
+        );
+    }
+
+    /// **Rename and move disturb no card, so neither is refused** — a locked folder is still the
+    /// reader's own drawer, and this is the whole difference between #365's word and
+    /// `PinnedFolders.tsx`'s. Both writes that move a folder are asserted, the drag's
+    /// [`reorder_folders`] included, and the lock survives each of them: a folder that quietly
+    /// came unlocked by being renamed would be the worst of both.
+    #[test]
+    fn a_locked_folder_can_still_be_renamed_and_moved() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap().id;
+        let case = create_folder(&conn, None, "Display case").unwrap().id;
+        set_folder_locked(&conn, case, true).unwrap();
+
+        let renamed = rename_folder(&conn, case, "The glass case").unwrap();
+        assert_eq!(renamed.name, "The glass case");
+        assert!(renamed.locked, "and it is still set aside");
+
+        let moved = move_folder(&conn, case, Some(shelf)).unwrap();
+        assert_eq!((moved.parent_id, moved.locked), (Some(shelf), true));
+
+        let rows = reorder_folders(&conn, None, &[case]).unwrap();
+        assert!(
+            rows.iter()
+                .any(|f| f.id == case && f.parent_id.is_none() && f.locked),
+            "and through the drag's own write too"
+        );
+        assert!(effectively_locked(&conn, case).unwrap());
+    }
+
+    /// **The issue's own requirement, and the reason [`set_entry_folder`] gained nothing.** A
+    /// lock is about what the app *offers* — a search result, an availability figure — and never
+    /// about what the reader can reach, so copies move into and out of a locked drawer exactly
+    /// as they move anywhere else. Both directions, plus a subfolder locked by its parent, which
+    /// is where a fence written on the effective lock would bite hardest.
+    #[test]
+    fn a_card_can_still_be_filed_into_and_out_of_a_locked_folder() {
+        let conn = open();
+        let case = create_folder(&conn, None, "Display case").unwrap().id;
+        let shelf = create_folder(&conn, Some(case), "Top shelf").unwrap().id;
+        set_folder_locked(&conn, case, true).unwrap();
+        let id = insert_entry(&conn, "bolt", None, 2);
+
+        let moved = set_entry_folder(&conn, id, Some(case)).unwrap();
+        assert_eq!((moved.id, moved.quantity), (id, 2));
+        assert_eq!(folder_of(&conn, id), Some(case), "in");
+
+        set_entry_folder(&conn, id, Some(shelf)).unwrap();
+        assert_eq!(
+            folder_of(&conn, id),
+            Some(shelf),
+            "and on into a subfolder locked by its parent"
+        );
+
+        set_entry_folder(&conn, id, None).unwrap();
+        assert_eq!(folder_of(&conn, id), None, "and out again, to the root");
+    }
+
+    /// Every folder write in this module fences on the kind first, and this one is no
+    /// different: a deck's group belongs beside its deck and `Recently removed` is where cards
+    /// wait to be filed, which is the opposite of a drawer nobody is offering from. Both kinds,
+    /// because a fence written for one of them has never met the other — and the stale id, which
+    /// [`user_folder`] answers out of the same read.
+    #[test]
+    fn collection_folder_set_locked_refuses_a_folder_the_app_owns() {
+        let conn = open();
+        for kind in ["deck", "removed"] {
+            let theirs = insert_system_folder(&conn, kind, "The app's");
+            assert_eq!(
+                set_folder_locked(&conn, theirs, true).unwrap_err(),
+                FOLDER_NOT_YOURS,
+                "a {kind} folder"
+            );
+            assert!(
+                !read_folder(&conn, theirs).unwrap().unwrap().locked,
+                "and the refused write wrote nothing to a {kind} folder"
+            );
+        }
+        assert_eq!(
+            set_folder_locked(&conn, 404, true).unwrap_err(),
+            FOLDER_GONE
+        );
+    }
+
+    /// **`UNION` and never `UNION ALL`** in [`LOCKED_FOLDER_IDS`], which is what makes the walk
+    /// converge over a `parent_id` cycle — the loop [`move_folder`] refuses to write and a
+    /// hand-edited database or a restored backup can still hold. `UNION ALL` here is not a wrong
+    /// answer, it is a statement that never returns, inside `spawn_blocking` and holding the
+    /// app-wide write lock.
+    #[test]
+    fn a_cycle_in_the_table_does_not_hang_the_locked_walk() {
+        let conn = open();
+        let a = create_folder(&conn, None, "A").unwrap().id;
+        let b = create_folder(&conn, Some(a), "B").unwrap().id;
+        set_folder_locked(&conn, a, true).unwrap();
+        // Corruption this module cannot produce.
+        conn.execute(
+            "UPDATE collection_folders SET parent_id = ?2 WHERE id = ?1",
+            params![a, b],
+        )
+        .unwrap();
+
+        assert!(
+            effectively_locked(&conn, b).unwrap(),
+            "an answer, not a hang"
+        );
+        assert_eq!(delete_folder(&conn, b).unwrap_err(), FOLDER_IS_LOCKED);
+    }
+
+    #[test]
+    fn a_refile_onto_a_taken_grain_merges_and_answers_the_destination() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let root = insert_entry(&conn, "bolt", None, 3);
+        let filed = insert_entry(&conn, "bolt", Some(binder.id), 2);
+        let change = refile_entry(&conn, root, Some(binder.id)).unwrap();
+        assert_eq!(
+            change.id, filed,
+            "the answer names the DESTINATION, not the id handed in"
+        );
+        assert_eq!(change.quantity, 5, "the quantities sum");
+        assert!(!change.removed, "the cards are emphatically still owned");
+        let rows: i64 = conn
+            .query_row(
+                "SELECT count(*) FROM collection_entries WHERE card_id = 'bolt'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(rows, 1, "the source row is gone");
+    }
+
+    /// **The eleventh term, on its own.** Every other column is identical between these two
+    /// rows, so a probe spelling only the ten terms `COLLECTION_GRAIN` had before v24 would find
+    /// the row in `Sold` and fold this one into it — copies leaving the reader's collection on a
+    /// press that was supposed to file them in `Binder`.
+    #[test]
+    fn a_refile_matching_ten_of_the_eleven_terms_does_not_merge() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let sold = create_folder(&conn, None, "Sold").unwrap();
+        let root = insert_entry(&conn, "bolt", None, 3);
+        let elsewhere = insert_entry(&conn, "bolt", Some(sold.id), 2);
+
+        let change = refile_entry(&conn, root, Some(binder.id)).unwrap();
+
+        assert_eq!(
+            change.id, root,
+            "nothing was folded, so nothing was renamed"
+        );
+        assert_eq!(change.quantity, 3, "and no quantity moved");
+        assert_eq!(folder_of(&conn, root), Some(binder.id));
+        assert_eq!(
+            folder_of(&conn, elsewhere),
+            Some(sold.id),
+            "the row in the other folder is untouched"
+        );
+    }
+
+    /// An `UPDATE` changing 0 rows cannot tell a missing row from a collision, which is why the
+    /// grain read comes first and answers this.
+    #[test]
+    fn a_refile_of_an_entry_that_is_not_there_says_so() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        assert_eq!(refile_entry(&conn, 404, Some(binder.id)).unwrap_err(), GONE);
+        assert_eq!(set_entry_folder(&conn, 404, None).unwrap_err(), GONE);
+    }
+
+    #[test]
+    fn set_entry_folder_moves_a_card_and_back_to_the_root() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let id = insert_entry(&conn, "bolt", None, 2);
+
+        let moved = set_entry_folder(&conn, id, Some(binder.id)).unwrap();
+        assert_eq!((moved.id, moved.quantity, moved.removed), (id, 2, false));
+        assert_eq!(folder_of(&conn, id), Some(binder.id));
+
+        // `None` is the root and is a real destination.
+        let home = set_entry_folder(&conn, id, None).unwrap();
+        assert_eq!((home.id, home.quantity, home.removed), (id, 2, false));
+        assert_eq!(folder_of(&conn, id), None);
+    }
+
+    /// A folder id nothing answers to is refused in words rather than left to the foreign key,
+    /// which would name the table and not the mistake — [`crate::deck::set_folder`]'s fence.
+    #[test]
+    fn set_entry_folder_refuses_a_folder_that_is_not_there() {
+        let conn = open();
+        let id = insert_entry(&conn, "bolt", None, 2);
+        let err = set_entry_folder(&conn, id, Some(404)).unwrap_err();
+        assert_eq!(err, FOLDER_GONE);
+        assert_eq!(folder_of(&conn, id), None, "and it wrote nothing");
+    }
+
+    #[test]
+    fn a_deck_or_removed_folder_refuses_to_be_renamed_moved_or_deleted_by_hand() {
+        let conn = open();
+        let sys = insert_system_folder(&conn, "removed", "Recently removed");
+        assert_eq!(
+            rename_folder(&conn, sys, "Junk").unwrap_err(),
+            FOLDER_NOT_YOURS
+        );
+        assert_eq!(move_folder(&conn, sys, None).unwrap_err(), FOLDER_NOT_YOURS);
+        assert_eq!(delete_folder(&conn, sys).unwrap_err(), FOLDER_NOT_YOURS);
+    }
+
+    /// The same three refusals for the other kind, plus the fourth site: nothing may be filed
+    /// **into** a folder the app owns, by hand. A card dragged into a deck's folder would assert
+    /// that the deck holds those copies without any of the writes that make it true.
+    #[test]
+    fn nothing_can_be_filed_into_a_folder_the_app_owns() {
+        let conn = open();
+        let sys = insert_system_folder(&conn, "deck", "Mono red");
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let id = insert_entry(&conn, "bolt", None, 2);
+
+        assert_eq!(
+            rename_folder(&conn, sys, "Junk").unwrap_err(),
+            FOLDER_NOT_YOURS
+        );
+        assert_eq!(
+            move_folder(&conn, binder.id, Some(sys)).unwrap_err(),
+            FOLDER_NOT_YOURS,
+            "no drawer inside the app's own cabinet"
+        );
+        assert_eq!(
+            set_entry_folder(&conn, id, Some(sys)).unwrap_err(),
+            FOLDER_NOT_YOURS
+        );
+        assert_eq!(folder_of(&conn, id), None, "and the refusal wrote nothing");
+
+        // The fence is the *command's*, not the write's: the deck-driven writes the next PR adds
+        // reach the same folder through `refile_entry` and are not refused.
+        refile_entry(&conn, id, Some(sys)).unwrap();
+        assert_eq!(folder_of(&conn, id), Some(sys));
+    }
+
+    /// **The fence has a second end, and it took longer to notice.** Nothing may be filed
+    /// *into* a deck's group by hand — the test above — and nothing may be filed *out* of one
+    /// either. A copy walking out of a group leaves the deck listing a card whose copies are
+    /// gone, which is the very invariant a category cascade used to break from the other
+    /// direction. The frontend refuses the drag today; a command is one careless caller away
+    /// from being the only guard left.
+    ///
+    /// **The refusal names the source, not the folder** ([`ENTRY_IN_A_DECK`]): the reader is not
+    /// changing anything about the folder, they are taking a card out of it, and
+    /// [`FOLDER_NOT_YOURS`] over that press would name the wrong thing.
+    ///
+    /// Three things this must **not** fence, each asserted because getting any of them wrong
+    /// breaks the feature rather than a test: the root, `Recently removed` — taking a card out
+    /// of the holding area and filing it in a binder is what that folder is *for* — and
+    /// [`refile_entry`], the shared primitive every sanctioned way out of a group goes through.
+    #[test]
+    fn a_card_cannot_be_filed_out_of_a_deck_by_hand() {
+        let conn = open();
+        let group = insert_system_folder(&conn, "deck", "Mono red");
+        let removed = insert_system_folder(&conn, "removed", "Recently removed");
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let id = insert_entry(&conn, "bolt", Some(group), 2);
+
+        assert_eq!(
+            set_entry_folder(&conn, id, Some(binder.id)).unwrap_err(),
+            ENTRY_IN_A_DECK
+        );
+        // The root is not a way around it: `None` is a destination like any other here.
+        assert_eq!(
+            set_entry_folder(&conn, id, None).unwrap_err(),
+            ENTRY_IN_A_DECK
+        );
+        assert_eq!(
+            folder_of(&conn, id),
+            Some(group),
+            "and neither wrote anything"
+        );
+
+        // The sanctioned way out — the primitive `deck_to_collection` and `delete_deck` call,
+        // which carries no fence and must never grow one.
+        refile_entry(&conn, id, Some(removed)).unwrap();
+        assert_eq!(folder_of(&conn, id), Some(removed));
+
+        // And out of the holding area by hand, which is the reader tidying up rather than a
+        // deck losing custody of anything.
+        set_entry_folder(&conn, id, Some(binder.id)).unwrap();
+        assert_eq!(folder_of(&conn, id), Some(binder.id));
+    }
+
+    #[test]
+    fn folder_summary_counts_only_what_is_filed_directly_in_each_folder() {
+        let conn = open();
+        priced_card(&conn, "bolt-lea", "5.00");
+        priced_card(&conn, "bear-lea", "0.25");
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let rares = create_folder(&conn, Some(binder.id), "Rares").unwrap();
+        insert_entry(&conn, "bolt-lea", Some(binder.id), 3);
+        insert_entry(&conn, "bear-lea", Some(rares.id), 4);
+        insert_entry(&conn, "bolt-lea", None, 9);
+
+        let rows = folder_summary(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(rows.len(), 2, "the root is not a folder and draws no tile");
+        let (top, inner) = (&rows[0], &rows[1]);
+        assert_eq!(top.folder_id, binder.id);
+        assert_eq!(
+            top.cards, 3,
+            "copies, and the sub-folder's are the sub-folder's"
+        );
+        assert!(
+            (top.value.unwrap() - 15.0).abs() < 1e-9,
+            "3 x $5.00, got {:?}",
+            top.value
+        );
+
+        assert_eq!(inner.folder_id, rares.id);
+        assert_eq!(inner.cards, 4);
+        assert!((inner.value.unwrap() - 1.0).abs() < 1e-9, "4 x $0.25");
+    }
+
+    /// Two things one fixture answers: a folder the marketplace can price nothing in has **no
+    /// value at all** rather than a value of zero, and a folder it can price only half of
+    /// answers for that half. A tile has no room for the header's "n unpriced" note, so
+    /// `Some(0.0)` there would read as a folder worth nothing.
+    #[test]
+    fn folder_summary_leaves_an_unpriced_folder_without_a_value() {
+        let conn = open();
+        priced_card(&conn, "bolt-lea", "5.00");
+        let mixed = create_folder(&conn, None, "Mixed").unwrap();
+        let unknown = create_folder(&conn, None, "Unknown").unwrap();
+        insert_entry(&conn, "bolt-lea", Some(mixed.id), 2);
+        // A card id no printing answers to: the LEFT JOIN finds nothing, so there is no price.
+        insert_entry(&conn, "ghost", Some(mixed.id), 7);
+        insert_entry(&conn, "ghost", Some(unknown.id), 4);
+
+        let rows = folder_summary(&conn, ANY_MARKET).unwrap();
+
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].cards, 9, "an unpriced card is still a card in here");
+        assert!(
+            (rows[0].value.unwrap() - 10.0).abs() < 1e-9,
+            "only the priced copies are in the value, got {:?}",
+            rows[0].value
+        );
+        assert_eq!(rows[1].cards, 4);
+        assert_eq!(rows[1].value, None, "an em dash, never $0.00");
+    }
+
+    /// An empty folder produces no row at all, which is the shape rule that makes
+    /// [`list_folders`] the census and this a lookup layered onto it.
+    #[test]
+    fn folder_summary_says_nothing_at_all_about_an_empty_folder() {
+        let conn = open();
+        create_folder(&conn, None, "Empty").unwrap();
+        assert!(folder_summary(&conn, ANY_MARKET).unwrap().is_empty());
+    }
+
+    /// Every marketplace's price SQL prepares, over a folder that has a row to answer with.
+    ///
+    /// [`folder_summary`] builds its SQL with `format!`, and [`crate::sorting::price_expr`]
+    /// emits a **structurally different** expression per marketplace: a `json_extract` for
+    /// TCGplayer, a nested `CASE` for Cardmarket (which has no `eur_etched` key to quote), and
+    /// a correlated subquery over `marketplace_prices` referencing `c.id` and the finish for the
+    /// two feed-backed ones. A wrong alias in any of those is a run-time `prepare` failure
+    /// rather than a compile error.
+    ///
+    /// **Enumerated through [`crate::marketplace::MARKETPLACE_IDS`] rather than hand-listed**,
+    /// so a marketplace this test has never seen cannot be added.
+    #[test]
+    fn folder_summary_prepares_at_every_marketplace() {
+        let conn = open();
+        priced_card(&conn, "bolt-lea", "5.00");
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        insert_entry(&conn, "bolt-lea", Some(binder.id), 3);
+
+        for id in crate::marketplace::MARKETPLACE_IDS {
+            let rows = folder_summary(&conn, Marketplace::from_id(id))
+                .unwrap_or_else(|e| panic!("{id} could not be summed: {e}"));
+            // Not merely `is_ok`: an empty answer passes that and proves nothing about the SQL
+            // having run over a row. `cards` carries no price, so it is the same figure
+            // whichever marketplace was asked.
+            assert_eq!((rows.len(), rows[0].cards), (1, 3), "at {id}");
+        }
+    }
+
+    // -- collection_folder_reorder ------------------------------------------------------------
+
+    /// Where a folder ended up, out of the answer [`reorder_folders`] gives — which is a fresh
+    /// [`list_folders`] over the table, so this is the stored row and not a returned copy of the
+    /// request.
+    fn placed(rows: &[CollectionFolder], id: i64) -> (Option<i64>, i64) {
+        let row = rows
+            .iter()
+            .find(|r| r.id == id)
+            .expect("list_folders answers every folder there is");
+        (row.parent_id, row.sort_order)
+    }
+
+    /// The whole of what makes this one command rather than two: a drag that re-parents *and*
+    /// positions. Both halves are asserted for every id, so writing only the order or only the
+    /// parent fails.
+    #[test]
+    fn collection_folder_reorder_writes_the_parent_and_the_position_together() {
+        let conn = open();
+        let rares = create_folder(&conn, None, "Rares").unwrap();
+        let bulk = create_folder(&conn, None, "Bulk").unwrap();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let top = create_folder(&conn, Some(shelf.id), "Top row").unwrap();
+
+        let rows = reorder_folders(&conn, Some(shelf.id), &[bulk.id, top.id, rares.id]).unwrap();
+
+        assert_eq!(placed(&rows, bulk.id), (Some(shelf.id), 0));
+        assert_eq!(placed(&rows, top.id), (Some(shelf.id), 1));
+        assert_eq!(placed(&rows, rares.id), (Some(shelf.id), 2));
+        assert_eq!(
+            placed(&rows, shelf.id),
+            (None, 2),
+            "a folder nobody named is left where it was"
+        );
+        assert!(
+            rows.iter().any(|r| r.id == removed_folder(&conn)),
+            "and the answer is the whole cabinet, the app's own drawer included"
+        );
+    }
+
+    /// Root is `None` and is a destination like any other — the one that cannot cycle.
+    #[test]
+    fn collection_folder_reorder_files_to_the_root() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let top = create_folder(&conn, Some(shelf.id), "Top row").unwrap();
+
+        let rows = reorder_folders(&conn, None, &[top.id, shelf.id]).unwrap();
+
+        assert_eq!(placed(&rows, top.id), (None, 0));
+        assert_eq!(placed(&rows, shelf.id), (None, 1));
+    }
+
+    /// `parent_id` CASCADEs onto this same table, so a loop written here is [`move_folder`]'s
+    /// disaster exactly — and the fences run before the first `UPDATE`, which is what the
+    /// untouched sibling proves.
+    #[test]
+    fn collection_folder_reorder_refuses_a_cycle_and_writes_nothing() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let top = create_folder(&conn, Some(shelf.id), "Top row").unwrap();
+        let left = create_folder(&conn, Some(top.id), "Left half").unwrap();
+        let bulk = create_folder(&conn, None, "Bulk").unwrap();
+
+        let err = reorder_folders(&conn, Some(left.id), &[bulk.id, shelf.id]).unwrap_err();
+
+        assert_eq!(err, FOLDER_CYCLE);
+        let unchanged = read_folder(&conn, bulk.id).unwrap().unwrap();
+        assert_eq!(
+            (unchanged.parent_id, unchanged.sort_order),
+            (None, 1),
+            "the id ahead of the offender in the list must not have been written"
+        );
+    }
+
+    #[test]
+    fn collection_folder_reorder_refuses_filing_a_folder_inside_itself() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let err = reorder_folders(&conn, Some(shelf.id), &[shelf.id]).unwrap_err();
+        assert_eq!(err, FOLDER_CYCLE);
+    }
+
+    /// The fence this cabinet has and the other two cannot: a deck's group and
+    /// `Recently removed` are the app's, and neither has a position the reader chose. Both kinds,
+    /// because a fence written for one of them is a fence that has never met the other.
+    #[test]
+    fn collection_folder_reorder_refuses_a_folder_the_app_owns() {
+        let conn = open();
+        let bulk = create_folder(&conn, None, "Bulk").unwrap();
+
+        for kind in ["deck", "removed"] {
+            let theirs = insert_system_folder(&conn, kind, "The app's");
+            let err = reorder_folders(&conn, None, &[bulk.id, theirs]).unwrap_err();
+            assert_eq!(err, FOLDER_NOT_YOURS, "a {kind} folder among the ids");
+            assert_eq!(
+                read_folder(&conn, bulk.id).unwrap().unwrap().sort_order,
+                0,
+                "and the reader's folder is left alone"
+            );
+        }
+    }
+
+    /// The same fence read from the other end — [`move_folder`]'s pair of `user_folder` calls,
+    /// and the reason a drag cannot file a binder inside `Recently removed`.
+    #[test]
+    fn collection_folder_reorder_refuses_a_destination_the_app_owns() {
+        let conn = open();
+        let bulk = create_folder(&conn, None, "Bulk").unwrap();
+
+        for kind in ["deck", "removed"] {
+            let theirs = insert_system_folder(&conn, kind, "The app's");
+            let err = reorder_folders(&conn, Some(theirs), &[bulk.id]).unwrap_err();
+            assert_eq!(err, FOLDER_NOT_YOURS, "a {kind} folder as the destination");
+            assert_eq!(
+                read_folder(&conn, bulk.id).unwrap().unwrap().parent_id,
+                None
+            );
+        }
+    }
+
+    /// [`user_folder`] reads the row, so a stale id answers the same sentence [`move_folder`]
+    /// gives it.
+    #[test]
+    fn collection_folder_reorder_refuses_an_id_that_is_gone_and_writes_nothing() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let bulk = create_folder(&conn, None, "Bulk").unwrap();
+
+        let err = reorder_folders(&conn, None, &[bulk.id, 999_999, shelf.id]).unwrap_err();
+
+        assert_eq!(err, FOLDER_GONE);
+        assert_eq!(
+            read_folder(&conn, bulk.id).unwrap().unwrap().sort_order,
+            1,
+            "nothing may be written when one of the ids is not there"
+        );
+    }
+
+    #[test]
+    fn collection_folder_reorder_refuses_a_destination_that_is_gone() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let err = reorder_folders(&conn, Some(999_999), &[shelf.id]).unwrap_err();
+        assert_eq!(err, FOLDER_GONE);
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * The activity feed — this cabinet's four recording sites, the three arrangement writes
+     * that deliberately record nothing, and the spec's first rule.
+     * ---------------------------------------------------------------------------------- */
+
+    /// The whole feed, newest first.
+    fn feed(conn: &Connection) -> Vec<crate::activity::ActivityEntry> {
+        crate::activity::recent(conn, crate::activity::MAX_LIMIT).unwrap()
+    }
+
+    fn payload(entry: &crate::activity::ActivityEntry) -> serde_json::Value {
+        serde_json::from_str(&entry.payload).unwrap()
+    }
+
+    #[test]
+    fn making_a_folder_records_one_activity_row() {
+        let conn = open();
+        create_folder(&conn, None, "Binder A").unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].scope, crate::activity::COLLECTION);
+        assert_eq!(rows[0].kind, crate::activity::FOLDER);
+        assert_eq!(rows[0].delta, 0, "a folder is not copies");
+        assert_eq!(rows[0].card_id, None);
+        assert_eq!(payload(&rows[0])["action"], "create");
+        assert_eq!(payload(&rows[0])["name"], "Binder A");
+    }
+
+    /// A rename names **both** ends, which is the whole of what the line is for.
+    #[test]
+    fn renaming_a_folder_records_the_name_it_had() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        rename_folder(&conn, shelf.id, "Trade box").unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(payload(&rows[0])["action"], "rename");
+        assert_eq!(payload(&rows[0])["from"], "Shelf");
+        assert_eq!(payload(&rows[0])["name"], "Trade box");
+    }
+
+    /// **One line for the press**, however many cards the delete had to re-file.
+    #[test]
+    fn deleting_a_folder_holding_cards_records_one_row() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        for card in ["bolt", "sol", "path"] {
+            priced_card(&conn, card, "1.00");
+            insert_entry(&conn, card, Some(shelf.id), 4);
+        }
+        delete_folder(&conn, shelf.id).unwrap();
+
+        let folder_rows: Vec<_> = feed(&conn)
+            .into_iter()
+            .filter(|r| r.kind == crate::activity::FOLDER)
+            .collect();
+        assert_eq!(folder_rows.len(), 2, "the create and the delete");
+        assert_eq!(payload(&folder_rows[0])["action"], "delete");
+        assert_eq!(payload(&folder_rows[0])["name"], "Shelf");
+        assert!(
+            feed(&conn)
+                .iter()
+                .all(|r| r.kind == crate::activity::FOLDER),
+            "the three re-filings are consequences and record nothing of their own"
+        );
+    }
+
+    /// Deleting nothing records nothing — this command has never refused a stale id.
+    #[test]
+    fn deleting_a_folder_that_is_not_there_records_nothing() {
+        let conn = open();
+        delete_folder(&conn, 999_999).unwrap();
+        assert!(feed(&conn).is_empty());
+    }
+
+    /// A move names both ends by name, and `null` is the root rather than a missing key —
+    /// `activityText.ts` tells the two apart and draws the cabinet's own name for the first.
+    #[test]
+    fn filing_a_card_records_both_ends_of_the_move() {
+        let conn = open();
+        priced_card(&conn, "bolt", "1.00");
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let entry = insert_entry(&conn, "bolt", None, 2);
+        set_entry_folder(&conn, entry, Some(shelf.id)).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::MOVE);
+        assert_eq!(rows[0].delta, 0, "a move changes no count");
+        assert_eq!(rows[0].card_id.as_deref(), Some("bolt"));
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(payload(&rows[0])["from"], serde_json::Value::Null);
+        assert_eq!(payload(&rows[0])["to"], "Shelf");
+
+        // …and back out again, which is the other direction of the same claim.
+        set_entry_folder(&conn, entry, None).unwrap();
+        let rows = feed(&conn);
+        assert_eq!(payload(&rows[0])["from"], "Shelf");
+        assert_eq!(payload(&rows[0])["to"], serde_json::Value::Null);
+        assert!(
+            payload(&rows[0]).get("to").is_some(),
+            "the key is present and null — a missing one would read as \"we do not know\""
+        );
+    }
+
+    /// Rearranging the cabinet is not a change to what is in it.
+    #[test]
+    fn moving_locking_and_reordering_folders_record_nothing() {
+        let conn = open();
+        let a = create_folder(&conn, None, "A").unwrap();
+        let b = create_folder(&conn, None, "B").unwrap();
+        let before = feed(&conn).len();
+        assert_eq!(before, 2, "the two creates, and this is the baseline");
+
+        move_folder(&conn, b.id, Some(a.id)).unwrap();
+        set_folder_locked(&conn, a.id, true).unwrap();
+        reorder_folders(&conn, Some(a.id), &[b.id]).unwrap();
+
+        assert_eq!(
+            feed(&conn).len(),
+            before,
+            "three arrangement writes and not one line between them"
+        );
+    }
+
+    /// **The spec's first rule.** A change that already writes a `deck_audit` row writes no
+    /// `activity` row — one event, one line — and `activity_recent` reads the deck side out of
+    /// that table, so the press is still in the feed exactly once.
+    #[test]
+    fn a_move_across_the_deck_boundary_records_no_activity_row() {
+        let conn = open();
+        crate::schema::fixtures::seed_card(&conn, "bolt", "lea", "161");
+        let deck = crate::schema::fixtures::deck(&conn, "Burn");
+        let category = crate::schema::fixtures::category(&conn, deck, "main", "Main deck");
+        let group = insert_system_folder(&conn, "deck", "Burn");
+        conn.execute(
+            "UPDATE collection_folders SET deck_id = ?2 WHERE id = ?1",
+            params![group, deck],
+        )
+        .unwrap();
+        // The deck has to already play the card: `collection_to_deck` refuses a filing into a
+        // list that does not list it.
+        conn.execute(
+            "INSERT INTO deck_cards
+                 (deck_id, category_id, variant, card_id, set_code, collector_number, lang,
+                  name, quantity, created_at, updated_at)
+             VALUES (?1, ?2, 'live', 'bolt', 'lea', '161', 'en', 'Lightning Bolt', 4,
+                     unixepoch(), unixepoch())",
+            params![deck, category],
+        )
+        .unwrap();
+        let entry = insert_entry(&conn, "bolt", None, 4);
+
+        crate::collection_alloc::collection_to_deck(
+            &conn,
+            entry,
+            deck,
+            crate::collection_alloc::Pile::Id(category),
+            2,
+        )
+        .unwrap();
+
+        let rows = feed(&conn);
+        assert!(
+            rows.iter().all(|r| r.scope == crate::activity::SCOPE_DECK),
+            "every line the press wrote came out of `deck_audit`, not out of `activity`"
+        );
+        assert!(
+            !rows.is_empty(),
+            "and the press really is in the feed — an assertion over an empty list is vacuous"
+        );
+        assert_eq!(
+            conn.query_row("SELECT count(*) FROM activity", [], |r| r.get::<_, i64>(0))
+                .unwrap(),
+            0,
+            "the collection log itself is untouched"
+        );
+    }
+
+    /* ----------------------------------------------------------------------------------
+     * clear_removed (issue #506) — emptying the holding area, and only the holding area.
+     * ---------------------------------------------------------------------------------- */
+
+    /// Every entry still in the table, as `(id, folder_id, quantity)` in id order.
+    fn entries(conn: &Connection) -> Vec<(i64, Option<i64>, i64)> {
+        conn.prepare("SELECT id, folder_id, quantity FROM collection_entries ORDER BY id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    /// **Only the pile goes.** A root row, a row in a drawer the reader made and a row in a
+    /// deck's group each hold a printing the pile holds too — the same `card_id` on four grains,
+    /// so a `DELETE` that matched on the card rather than the folder would take all four and a
+    /// test seeding four different cards could never see it.
+    #[test]
+    fn clear_removed_empties_the_holding_area_and_nothing_else() {
+        let conn = open();
+        let removed = removed_folder(&conn);
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let group = insert_system_folder(&conn, "deck", "Burn");
+        let root = insert_entry(&conn, "bolt", None, 1);
+        let filed = insert_entry(&conn, "bolt", Some(shelf.id), 2);
+        let in_deck = insert_entry(&conn, "bolt", Some(group), 3);
+        insert_entry(&conn, "bolt", Some(removed), 4);
+        insert_entry(&conn, "sol", Some(removed), 1);
+
+        assert_eq!(
+            clear_removed(&conn),
+            Ok(2),
+            "two entries, not five copies — the answer is rows"
+        );
+        assert_eq!(
+            entries(&conn),
+            vec![
+                (root, None, 1),
+                (filed, Some(shelf.id), 2),
+                (in_deck, Some(group), 3)
+            ],
+            "the root, the reader's drawer and the deck's group are exactly as they were"
+        );
+        assert_eq!(
+            removed_folder(&conn),
+            removed,
+            "the folder is the app's and stays — only what was in it goes"
+        );
+    }
+
+    /// One `clear` line for the press, carrying the row count, the folder's name and — in
+    /// `delta` — the copies, which differ from the rows by every playset in the pile.
+    #[test]
+    fn clearing_the_holding_area_records_one_row_with_the_copies_as_its_delta() {
+        let conn = open();
+        let removed = removed_folder(&conn);
+        insert_entry(&conn, "bolt", Some(removed), 4);
+        insert_entry(&conn, "sol", Some(removed), 1);
+        insert_entry(&conn, "path", None, 7);
+
+        clear_removed(&conn).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), 1, "one line for the press, not one per entry");
+        assert_eq!(rows[0].scope, crate::activity::COLLECTION);
+        assert_eq!(rows[0].kind, crate::activity::CLEAR);
+        assert_eq!(
+            rows[0].delta, -5,
+            "the copies in the pile, negative; the root's seven are not in it"
+        );
+        assert_eq!(rows[0].card_id, None);
+        assert_eq!(payload(&rows[0])["cards"], 2);
+        assert_eq!(payload(&rows[0])["folder"], "Recently removed");
+    }
+
+    /// An empty pile is a success that changed nothing, so it records nothing.
+    #[test]
+    fn clearing_an_empty_holding_area_answers_zero_and_records_nothing() {
+        let conn = open();
+        insert_entry(&conn, "bolt", None, 1);
+
+        assert_eq!(clear_removed(&conn), Ok(0));
+        assert!(feed(&conn).is_empty());
+        assert_eq!(entries(&conn).len(), 1, "the root row is untouched");
+    }
+
+    /// A database with no holding area is refused in the deck side's own words — the only way to
+    /// get one is a hand edit, and `0 cleared` over it would claim a pile that never existed.
+    #[test]
+    fn clear_removed_refuses_a_database_with_no_holding_area() {
+        let conn = open();
+        conn.execute("DELETE FROM collection_folders WHERE kind = 'removed'", [])
+            .unwrap();
+        insert_entry(&conn, "bolt", None, 1);
+
+        assert_eq!(
+            clear_removed(&conn),
+            Err(crate::collection_alloc::NO_REMOVED_FOLDER.to_owned())
+        );
+        assert_eq!(entries(&conn).len(), 1);
+        assert!(feed(&conn).is_empty(), "a refusal writes nothing");
+    }
+
+    /// **One tombstone per entry, the single delete's own shape.** `collection::remove_entry`
+    /// propagates through `collection_entries`' `AFTER DELETE` capture trigger and nothing else,
+    /// so the bulk statement must reach the same trigger once per row — which SQLite's
+    /// row-level triggers do, and which this pins so that a later rewrite (a truncate, a
+    /// `WITHOUT ROWID` shadow, an apply-guarded path) cannot quietly leave the other devices
+    /// holding cards this one threw away.
+    #[test]
+    fn clearing_the_holding_area_writes_one_sync_tombstone_per_entry() {
+        let conn = open();
+        crate::sync_engine::capture::install(&conn).unwrap();
+        // A device with no group records nothing, `capture`'s own tests' fixture.
+        conn.execute_batch(
+            "INSERT INTO sync_identity (id, device_id, secret_key, public_key, name, created_at)
+             VALUES (1, 'dev-a', x'00', x'01', 'A', 0);
+             INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+             VALUES (1, 'g', 0, x'02', 0);",
+        )
+        .unwrap();
+        let removed = removed_folder(&conn);
+        insert_entry(&conn, "bolt", Some(removed), 4);
+        insert_entry(&conn, "sol", Some(removed), 1);
+        insert_entry(&conn, "path", None, 2);
+        let uids: Vec<String> = conn
+            .prepare(
+                "SELECT sync_uid FROM collection_entries WHERE folder_id = ?1 ORDER BY sync_uid",
+            )
+            .unwrap()
+            .query_map(params![removed], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(uids.len(), 2, "the insert trigger minted a uid for each");
+        conn.execute("DELETE FROM sync_ops", []).unwrap();
+
+        clear_removed(&conn).unwrap();
+
+        let tombstones: Vec<String> = conn
+            .prepare(
+                "SELECT uid FROM sync_ops
+                  WHERE tbl = 'collection_entries' AND kind = 'del' ORDER BY uid",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            tombstones, uids,
+            "one tombstone per cleared entry, and no other"
+        );
+    }
+
+    /* ---------------------------------------------------------------------------------- *
+     * Issue #550: a folder write and its feed line are one savepoint.
+     * ---------------------------------------------------------------------------------- */
+
+    /// Make every `activity` insert fail, as a full disk or a locked table would — a temp
+    /// trigger, so it lives on this connection only and [`allow_activity`] takes it away.
+    fn refuse_activity(conn: &Connection) {
+        conn.execute_batch(
+            "CREATE TEMP TRIGGER refuse_activity BEFORE INSERT ON main.activity
+             BEGIN SELECT RAISE(ABORT, 'the feed is full'); END;",
+        )
+        .unwrap();
+    }
+
+    fn allow_activity(conn: &Connection) {
+        conn.execute_batch("DROP TRIGGER temp.refuse_activity")
+            .unwrap();
+    }
+
+    fn user_folder_names(conn: &Connection) -> Vec<String> {
+        conn.prepare("SELECT name FROM collection_folders WHERE kind = 'user' ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_new_folder_back_with_it() {
+        let conn = open();
+        refuse_activity(&conn);
+        assert!(create_folder(&conn, None, "Binder A").is_err());
+        assert!(
+            user_folder_names(&conn).is_empty(),
+            "no folder without its line"
+        );
+
+        allow_activity(&conn);
+        create_folder(&conn, None, "Binder A").unwrap();
+        assert_eq!(
+            user_folder_names(&conn),
+            ["Binder A"],
+            "and the retry makes one, not two"
+        );
+    }
+
+    #[test]
+    fn a_failed_activity_row_takes_the_rename_back_with_it() {
+        let conn = open();
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        refuse_activity(&conn);
+        assert!(rename_folder(&conn, shelf.id, "Trade box").is_err());
+        assert_eq!(user_folder_names(&conn), ["Shelf"]);
+        assert_eq!(feed(&conn).len(), 1, "the create's line, and no rename's");
+    }
+
+    // -----------------------------------------------------------------------------------
+    // `set_entries_folder` — `Move to` over several entries (issue #555)
+    // -----------------------------------------------------------------------------------
+
+    fn exists(conn: &Connection, id: i64) -> bool {
+        conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM collection_entries WHERE id = ?1)",
+            params![id],
+            |r| r.get(0),
+        )
+        .unwrap()
+    }
+
+    /// **Several entries move in one press with one feed line**, each by `set_entry_folder`'s
+    /// rule: `a` meets a row of its grain in the binder and folds into it, `b` simply moves. The
+    /// changes come back one per id, in order, each naming where its copies ended up.
+    #[test]
+    fn moving_several_entries_merges_onto_the_destination_and_records_one_row() {
+        let conn = open();
+        priced_card(&conn, "bolt", "1.00");
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let held = insert_entry(&conn, "bolt", Some(binder.id), 2);
+        let a = insert_entry(&conn, "bolt", None, 1);
+        let b = insert_entry(&conn, "other", None, 4);
+        let history = feed(&conn).len();
+
+        let out = set_entries_folder(&conn, &[a, b, a], Some(binder.id)).unwrap();
+
+        let landed: Vec<(i64, i64)> = out.changes.iter().map(|c| (c.id, c.quantity)).collect();
+        assert_eq!(
+            landed,
+            vec![(held, 3), (b, 4), (held, 3)],
+            "one change per id sent, a repeat answered like the first"
+        );
+        assert!(!exists(&conn, a), "a folded into the binder's row");
+        assert_eq!(folder_of(&conn, b), Some(binder.id));
+        assert!(out.undo_id.is_some());
+
+        let rows = feed(&conn);
+        assert_eq!(rows.len(), history + 1, "one line for the press");
+        assert_eq!(rows[0].kind, crate::activity::MOVE);
+        assert_eq!((rows[0].card_id.as_deref(), rows[0].delta), (None, 0));
+        assert_eq!(
+            payload(&rows[0]),
+            serde_json::json!({ "entries": 2, "to": "Binder" })
+        );
+
+        // …and back to the root, whose name on the line is a present null.
+        set_entries_folder(&conn, &[held, b], None).unwrap();
+        assert_eq!(
+            payload(&feed(&conn)[0]),
+            serde_json::json!({ "entries": 2, "to": null })
+        );
+    }
+
+    /// A one-row selection is the same event as a drag, and reads as one.
+    #[test]
+    fn moving_one_entry_through_the_bulk_door_records_the_single_move_line() {
+        let conn = open();
+        priced_card(&conn, "bolt", "1.00");
+        let shelf = create_folder(&conn, None, "Shelf").unwrap();
+        let entry = insert_entry(&conn, "bolt", None, 2);
+
+        set_entries_folder(&conn, &[entry], Some(shelf.id)).unwrap();
+
+        let rows = feed(&conn);
+        assert_eq!(rows[0].kind, crate::activity::MOVE);
+        assert_eq!(rows[0].card_name.as_deref(), Some("Lightning Bolt"));
+        assert_eq!(
+            payload(&rows[0]),
+            serde_json::json!({ "from": null, "to": "Shelf" })
+        );
+    }
+
+    /// **One refusal takes the whole press back and answers its own sentence** — a copy in a
+    /// deck's group, a destination the app owns, an entry that is gone, a feed row that fails —
+    /// and a rolled-back move leaves no ticket.
+    #[test]
+    fn one_refused_entry_or_destination_rolls_the_whole_move_back() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        let group = insert_system_folder(&conn, "deck", "Mono red");
+        let loose = insert_entry(&conn, "bolt", None, 1);
+        let in_deck = insert_entry(&conn, "other", Some(group), 1);
+        let before = crate::bulk_undo::table_image(&conn, "collection_entries");
+        let history = feed(&conn).len();
+
+        assert_eq!(
+            set_entries_folder(&conn, &[loose, in_deck], Some(binder.id)).unwrap_err(),
+            ENTRY_IN_A_DECK
+        );
+        assert_eq!(
+            set_entries_folder(&conn, &[loose], Some(group)).unwrap_err(),
+            FOLDER_NOT_YOURS
+        );
+        assert_eq!(
+            set_entries_folder(&conn, &[loose, 404], Some(binder.id)).unwrap_err(),
+            GONE
+        );
+        refuse_activity(&conn);
+        assert!(set_entries_folder(&conn, &[loose], Some(binder.id)).is_err());
+        allow_activity(&conn);
+
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            before,
+            "the loose copy never left the root"
+        );
+        assert_eq!(feed(&conn).len(), history);
+        assert_eq!(crate::bulk_undo::tickets_held(), 0);
+    }
+
+    /// **A bulk move's undo puts back the exact rows, the merge included** — the survivor's
+    /// quantity and the note it took from the source, and the source itself under its own id.
+    #[test]
+    fn a_bulk_move_can_be_undone_merge_and_all() {
+        let conn = open();
+        let binder = create_folder(&conn, None, "Binder").unwrap();
+        insert_entry(&conn, "bolt", Some(binder.id), 2);
+        let a = insert_entry(&conn, "bolt", None, 1);
+        let b = insert_entry(&conn, "other", None, 4);
+        conn.execute(
+            "UPDATE collection_entries SET notes = 'loose' WHERE id = ?1",
+            params![a],
+        )
+        .unwrap();
+        let found = crate::bulk_undo::table_image(&conn, "collection_entries");
+
+        let out = set_entries_folder(&conn, &[a, b], Some(binder.id)).unwrap();
+        let undone = crate::bulk_undo::undo(&conn, out.undo_id.unwrap()).unwrap();
+
+        assert_eq!(
+            (undone.scope, undone.restored),
+            ("collection", 3),
+            "the survivor restored, the source re-inserted, the other moved back"
+        );
+        assert_eq!(
+            crate::bulk_undo::table_image(&conn, "collection_entries"),
+            found
+        );
+        let line = &feed(&conn)[0];
+        assert_eq!((line.kind.as_str(), line.delta), (crate::activity::MOVE, 0));
+        assert_eq!(
+            payload(line),
+            serde_json::json!({ "entries": 2, "to": "Binder", "undo": true })
+        );
+    }
+}

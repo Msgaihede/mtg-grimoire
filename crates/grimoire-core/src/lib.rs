@@ -33,16 +33,38 @@
 //! does not resolve yet.** They are left spelled as they were: every one names a module that
 //! arrives in a later step, at which point the link is right again without an edit.
 
+pub mod activity;
 /// **The `app_meta` key–value store.** One table and two functions, which view-state modules
 /// across the app keep a setting in.
 pub mod app_meta;
+pub mod bulk_undo;
+pub mod card;
 /// **One Scryfall card object as the `cards` row it becomes**, and `raw`'s gzip.
 pub mod card_row;
 pub mod cardtypes;
+pub mod collection;
+pub mod collection_alloc;
+pub mod collection_folders;
+pub mod collection_source;
 /// **The connections**: the pair `user.db` + `corpus.db`, the pragmas each file needs, and the
 /// two ways of asking for the write connection — a bounded ask that answers `BUSY`, and a
 /// background batch that stands aside for one.
 pub mod db;
+pub mod deck;
+pub mod deck_audit;
+pub mod deck_completion;
+pub mod deck_meta;
+pub mod deck_missing;
+pub mod deck_notes;
+pub mod deck_pull;
+pub mod deck_query;
+pub mod deck_quick_add;
+pub mod deck_theory;
+pub mod deck_todos;
+pub mod deck_tokens;
+pub mod deck_undo;
+pub mod deckpane;
+pub mod decksort;
 /// **The error log**: what failed, when, how often. The Scryfall classifier, `kind_of`, is
 /// still `src-tauri`'s.
 pub mod errors;
@@ -54,33 +76,58 @@ pub mod events;
 pub mod feed;
 /// **The card filters every list shares**, as SQL: `push_card_filters` and the FTS match.
 pub mod filters;
+pub mod home;
 /// **The one update hook on the write connection, and who it tells.** SQLite allows one per
 /// connection, so this crate owns the installer and a host registers observers.
 pub mod hooks;
 /// **The resolution rule under the image cache.** Two columns of `cards`, the precedence
 /// between them and one predicate over a string.
 pub mod image_uri;
+pub mod import;
 /// **The facet index's bitset.** The index itself still lives in `src-tauri`.
 pub mod index;
 pub mod legalities;
+pub mod listview;
+pub mod maintenance;
+pub mod managed_wishlist;
+pub mod markcolors;
+pub mod marketplace;
+pub mod nav;
+pub mod new_printings;
 /// **The one place this crate knows which machine it is on.**
 pub mod platform;
+pub mod price_history;
+pub mod recent_cards;
+pub mod reset;
 /// **Every table, both ladders and the staging swaps.** `bring_to_head` is the half of a launch
 /// that may stop it; the half that is logged and left owing is the host's until step 4.
 pub mod schema;
 /// **Where a test puts a real file.** Test builds, and other crates' through `testing`.
 #[cfg(any(test, feature = "testing"))]
 pub mod scratch;
+pub mod search;
+pub mod searchopen;
+pub mod set_completion;
+pub mod shelffolds;
 pub mod slug;
 /// **The sort vocabulary and every price expression.**
 pub mod sorting;
+pub mod stackhide;
+pub mod startview;
 /// **What every host holds while it runs**: the connections, the data directory, the cross-file
 /// fence and the event sink. The half of the desktop's `AppState` with no reason to know about
 /// a window — as far as the extraction has got.
 pub mod state;
+pub mod sticky_notes;
 /// **The sync engine's pure half** — the hybrid logical clock and the merge rules.
 pub mod sync_engine;
 /// **The `sync_meta` key–value store**, carved out of `src-tauri`'s `sync`.
 pub mod sync_meta;
 /// **Pairing's pure half** — the cryptography and the invite.
 pub mod sync_pair;
+pub mod upcoming_sets;
+pub mod value_history;
+pub mod wishlist;
+pub mod wishlist_folders;
+pub mod wishlist_optimize;
+pub mod zoom;
