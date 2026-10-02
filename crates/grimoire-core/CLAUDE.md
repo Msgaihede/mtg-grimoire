@@ -12,10 +12,12 @@ ladders, `sync_meta`, `filters`, `sorting`, `card_row`, `image_uri`, `errors`, `
 `sync_engine::capture`; the state a host holds over it — `state`, `hooks` and `events`; and the
 **domain** — the decks, the collection, the wishlist, the search, the card pane, the view-state
 modules, `maintenance`, and the sync engine's `apply` and `baseline`: forty-nine modules, moved in
-one pass by `scripts/core-step-4.mjs`. **What is not here reaches a network, a filesystem or the
-relay**: `scryfall`, `ingest`, the three feeds (`combos`, `marketplace_feed`, `tags/`), `images`,
-`index/`'s facets and lifecycle, `reconcile`, `sync` (the card sync), the sync client and pairing,
-`share/` and the scanner. Every rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a
+one pass by `scripts/core-step-4.mjs`. **The I/O step is arriving in three parts and the first is
+here**: `platform`'s request, timer and files, and the three modules that were their first
+callers — `scryfall`, `ingest` and `reconcile`. **What is not here yet**: `sync` (the card sync
+that drives those three), `index/`'s facets and lifecycle, the three feeds (`combos`,
+`marketplace_feed`, `tags/`), `images`, the sync client and pairing, `share/` and the scanner.
+Every rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a
 module binds that module wherever it lives — moving a file changes which crate compiles it and
 nothing about what it must do. **That file's database and deck rules are this crate's now**: a
 schema rung, a grain, a capture spec, a deck write is edited here.
@@ -41,22 +43,29 @@ over there is this crate's item unless that file defines one.
   2026-10-02: 245 of `generate_handler!`'s 257 entries are a path through a module and none had to change. The folder
   can be a rename later, with the command table.
 
-## Four rules, and what goes red for each
+## Five rules, and what goes red for each
 
 | Rule | Held by |
 | --- | --- |
 | **No `tauri` dependency** — not the crate, not its build script's, not a plugin, not `wry` or `tao`, not under another name | `platform::fence`, which reads `Cargo.toml` |
 | **`cfg(target_…)`, `cfg(windows)` and `cfg(unix)` appear only under `src/platform/`** | `platform::fence`, which reads every source file |
 | **Nothing outside `src/platform/` names `SystemTime`, `UNIX_EPOCH` or `std::time::Instant`** — reading any of them panics on `wasm32-unknown-unknown`, at run time, in a build that compiled clean | The same sweep |
+| **Nothing the crate ships names `reqwest`, `tokio`, `std::fs` or `std::thread` outside `src/platform/`** (since the I/O step) — a request, a timer, a file and a thread each have one implementation per kind of host there | The same file, a second sweep: shipped code only |
 | **It compiles for `x86_64-pc-windows-msvc`, `aarch64-linux-android` and `wasm32-unknown-unknown`** | CI: the `core` job for the last two, the `rust` job for the desktop, where the tests run |
 
 - **The fence reads code lines and skips comment lines**, so prose may name what it refuses. A
   line is a comment only when it *starts* with `//`: a trailing comment and a `/* … */` block
   are read as code.
-- **It sweeps test code too.** A test never compiles for a browser, but the sweep does not
-  parse `#[cfg(test)]`, so a clock read in a test is refused like any other. Take the time from
-  `platform::clock` — `Tick::now()` and `elapsed()` are what a test that times something uses,
-  as `db`'s do — or from SQLite.
+- **It sweeps test code too, for a target and a clock.** A test never compiles for a browser,
+  but the sweep does not parse `#[cfg(test)]`, so a clock read in a test is refused like any
+  other. Take the time from `platform::clock` — `Tick::now()` and `elapsed()` are what a test
+  that times something uses, as `db`'s and `scryfall`'s do — or from SQLite.
+- **The I/O rule reads shipped code only**: above a file's first column-0 `#[cfg(test)]`, and
+  not at all in a file its parent declares behind a test gate (`scratch.rs`,
+  `sync_engine/apply/tests.rs` — derived, and pinned by name). A test of a download writes a file,
+  a test of a lock starts a thread, and `#[tokio::test]` is how an async test runs. So **tests and
+  fixtures go at the foot of the file and nothing that ships goes below them** — code under that
+  line is not read.
 - **It is a text sweep, and three things pass it**: a clock reached through a re-export or
   another crate's `now()`, a gate inside a macro this crate does not define, and a host that
   arrives as somebody else's dependency. The first two fail the `core` job or a browser; the
@@ -73,19 +82,29 @@ over there is this crate's item unless that file defines one.
 | `platform::clock::now_ms`, `now_secs` | `SystemTime` | `Date.now()` |
 | `platform::clock::Tick` — `now()`, `elapsed()`, for how long a wait has run | `Instant` | `Date.now()`, never negative |
 | `platform::pause(Duration) -> bool` — stand aside for another thread | `thread::sleep`, `true` | **`false`, at once**: a Worker has no other thread to wait for |
+| `platform::timer::sleep`, `timeout` — a wait a future awaits, and a deadline on one | `tokio::time` | a `Promise` around the global `setTimeout` |
+| `platform::http` — `Client`, `Request`, `Response`, `Body`, `Error` | `reqwest` over rustls, with a connect bound and a per-read bound | `reqwest` over `fetch`: **no timeouts to set**, and `is_connect()` is always `false` |
+| `platform::files` — `open`, `write`, `remove`, `create_dir_all`, `entries`, `is_file`, `exists`; and `files::aio` for an `async fn` | `std::fs`; `tokio::fs` | **refused**, `ErrorKind::Unsupported`; the two questions answer `false` |
 
-`db::lock_for` and `db::lock_background` are why the last two exist. **A wait that polls is a wait
-that cannot succeed in a browser**, so `lock_for` gives up on its first contended attempt there
-and its caller answers `db::BUSY`. Neither browser arm has ever run — the crate compiles for
+`db::lock_for` and `db::lock_background` are why `Tick` and `pause` exist. **A wait that polls is
+a wait that cannot succeed in a browser**, so `lock_for` gives up on its first contended attempt
+there and its caller answers `db::BUSY`. **No browser arm has ever run** — the crate compiles for
 `wasm32` and nothing instantiates it.
 
-HTTP, files, a sleep a future awaits and background work are named in `platform/mod.rs` with the
-step that brings each — an interface is written with its first caller, not ahead of it.
-(Background work was the state step's row and had no caller there: nothing in `state`, `hooks` or
-`events` spawns anything. It is the I/O step's.)
-**`schema` names `std::fs` directly** (the corpus it replaces, the backup before a climb, the
-damage mark): that compiles for a browser and fails there when called, and waits for the I/O
-step.
+- **`http` is the wire and nothing above it.** Pacing, retry, the 429 lockout and the size checks
+  are rules about Scryfall or about a feed, and live with the client that owns them
+  (`scryfall::Client::api_send`). **`GET` is the only verb**, because it is the only one with a
+  caller here; the sync client's `POST` arrives with it.
+- **A status is a `u16`, a header is `Option<&str>`, a chunk is `bytes::Bytes`.** No `reqwest`
+  type crosses out of the module, which is what lets the fence refuse the name everywhere else.
+- **`timer`'s native arm needs a tokio runtime on the current task** — every host's async code
+  runs on one — and panics outside it, as `tokio::time::sleep` always has.
+- **`files` refuses in a browser rather than pretending.** The database there is OPFS behind
+  SQLite's own VFS, and a download with no temp file is a different shape that the web host
+  decides (spec §6). Until then a download that cannot be written is a failed sync with its
+  reason in `error_log`, and `schema`'s backup before a climb is logged and skipped.
+- **An interface grows with a caller, not ahead of one.** A rename and a modified time are the
+  image cache's; background work is the facet index's and the card sync's. Both arrive with them.
 
 **Most of the engine never asks for the time.** The domain modules use SQLite's `unixepoch()`
 and `date('now')` inside the statement that needs them, which is the same on every host.
@@ -101,8 +120,8 @@ mutex. So there is no `State` whose cross-file fence is not riding.
   app's connection** — `State::new` has. SQLite keeps one update hook, one commit hook and one
   rollback hook per connection, and a second install **replaces** the first without a word:
   `hooks::tests::a_second_install_replaces_the_first`. Whatever needs to hear about a write is a
-  `WriteObserver` in the list `State::new` is given. (Two of `src-tauri`'s tests put a raw hook
-  on a bare connection of their own — `reconcile` and `tags` — and the desktop's
+  `WriteObserver` in the list `State::new` is given. (Two tests put a raw hook on a bare
+  connection of their own — `reconcile`'s here and `tags`' in `src-tauri` — and the desktop's
   `watch::install_hook` pair is `#[cfg(test)]`, so none of it can reach the app's.)
 - **The fence is ahead of every observer, on both hooks.** On the commit hook that is pinned —
   `the_fence_has_settled_by_the_time_an_observer_hears_the_commit` — and on the update hook it
@@ -135,10 +154,10 @@ mutex. So there is no `State` whose cross-file fence is not riding.
 
 | Field | Its type | Comes here with |
 | --- | --- | --- |
-| `syncing` | `AtomicBool`, `run_sync`'s flag | step 5 |
-| `client` | `scryfall::Client` | step 5 |
-| `images` | `images::Cache` | step 5 |
-| `index` | `index::lifecycle::IndexSlot` | step 5 |
+| `syncing` | `AtomicBool`, `run_sync`'s flag | step 5, with `run_sync` |
+| `client` | `scryfall::Client` — the type is here; the field waits for the code that reads it | step 5, with `run_sync` |
+| `images` | `images::Cache` | step 5, with the image cache |
+| `index` | `index::lifecycle::IndexSlot` | step 5, with the index's lifecycle |
 | `pairing` | `sync_pair::pairing::Pending` | step 6 |
 | `mirror`, `mirror_status`, `changes` | the mirror's and the other windows' | never: the desktop's |
 
@@ -209,6 +228,14 @@ settle would have been a second definition of a user-facing write.
     applied to a list of modules: what stays, what moves, the imports each half still needs, the
     visibilities `src-tauri` still reaches, the fixtures. `--dry` prints the decisions without
     writing. The next step's script is that one with another list.
+15. **A module that reaches a network, a disk or a thread is rewritten onto `platform` as it
+    moves** — `reqwest` onto `platform::http`, `tokio::time` onto `platform::timer`, `std::fs`
+    and `tokio::fs` onto `platform::files`, a clock onto `platform::clock`. The fence refuses
+    all of them in shipped code, so the move does not compile into a green suite until it is
+    done. **Its tests move as they are**: a test may write a file with `std::fs` and run under
+    `#[tokio::test]`. What a test may not do is read `Instant` or `SystemTime` — `Tick`.
+    **Nothing the request sends may change**: the URL, each header, the pacing, the retries and
+    the timeouts are checked against the module's own mock-server tests, which move unedited.
 
 ## What a moved module left in `src-tauri`
 
@@ -221,8 +248,7 @@ src-tauri/src/<module>/mod.rs` counts them:
 | --- | --- | --- | --- |
 | `schema` (`src/schema/mod.rs`) | `prepare_data_dir` — `split::convert`, then `schema::replace_unreadable_corpus` here | `split`, which only the desktop has | never: `split` stays |
 | `schema` | 8 of its tests | `split`, through that function or a converted fixture; one, `tags::query` | never, and step 5 |
-| `sync_engine::capture` | 2 of its tests, in `sync_engine/capture_tests.rs` | `reconcile` | step 5 |
-| `errors` (`src/errors/mod.rs`) | `kind_of` and its test | `scryfall::ScryfallError` | step 5 |
+| `ingest` (`src/ingest/mod.rs`) | 1 of its tests | `split::convert`, which builds that test's database | never: `split` stays |
 | `deck` | `bracket_reads`, `DeckBracketRead`, their two SQL constants and 5 tests | `combos::match_combos` — `combos` is a feed | step 5 |
 | `reset` | `clear_cache`, what only it calls, and 8 tests | `images::Cache`, the three feeds' `any_refresh_running` | step 5 |
 | `collection_source` | `with_write_owned` | `index::lifecycle::invalidate_owned` | step 5 |
@@ -235,7 +261,9 @@ src-tauri/src/<module>/mod.rs` counts them:
 `apply` takes `&[scryfall::Migration]`), `tags/` (`query` and `muted` take `tags::Dataset`, which
 sits in the fetch engine) and `deck::bracket_reads`. The alternative was to hoist those three
 small pieces into this crate ahead of their modules; Markus declined, as he had for the sync
-client's cursor keys in step 2. They arrive with the I/O step.
+client's cursor keys in step 2. **`reconcile` arrived with `scryfall`**, in the I/O step's first
+part, and with it what the same rule had kept back: `errors::kind_of`, and `capture`'s two
+tests that drive the reconciler. `tags/` and `bracket_reads` arrive with the feeds.
 
 **`schema::prepare_database` is the launch**: `bring_to_head`, then the logged passes — the FTS
 rebuild an interrupted compaction owes, the staging table a killed ingest left, the trims, the
@@ -252,6 +280,17 @@ is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain c
 
 ## The manifest
 
+- **The package version is the app's, and it is not decoration.** `scryfall::USER_AGENT` is
+  `concat!("MTGGrimoire/", env!("CARGO_PKG_VERSION"), …)`, `env!` reads the package that compiles
+  it, and every client in the app — Scryfall's, the feeds', the relay's, the updater's — sends
+  that string. release-please bumps this manifest and its `Cargo.lock` entry with `src-tauri`'s
+  (`release-please-config.json`'s `extra-files`), and `src-tauri`'s
+  `the_core_wears_the_apps_version` goes red if the two part. **Never set it back to `0.0.0`.**
+- **`reqwest` is one line for every target**, the same line as `src-tauri`'s: `rustls-tls` names
+  nothing on wasm, where `reqwest` is `fetch`. **No `gzip` feature, ever** — Scryfall's bulk data
+  is a real `.gz` file, and transparent decompression corrupts the download.
+- **`tokio` is in the native table only**, with the features this crate's own source names.
+  `tokio::fs` does not compile for a browser, and a Worker has no tokio runtime.
 - **`rusqlite` is two lines**: `bundled` plus `hooks` everywhere but WASM, and `hooks` alone
   there. ⚠️ **Never `default-features = false` on the WASM line** — the backend that makes
   SQLite build for a browser is in rusqlite's default set, and switching it off fails with
@@ -288,6 +327,7 @@ The crate is a member of the workspace at the repository root, so it shares `Car
 | --- | --- |
 | `cargo test -p grimoire-core` | This crate's tests alone, natively |
 | `cargo test -p grimoire-core schema::` | The schema's — `cargo test -p mtg-grimoire schema::` runs only the 8 that stayed |
+| `cargo test -p grimoire-core scryfall::` | The client's, against a local mock server — never Scryfall |
 | `cargo test -p grimoire-core deck::` | A domain module's — the same, for any of the forty-nine; `-p mtg-grimoire deck::` runs only the 5 that stayed |
 | `npm run verify` | Both members: `fmt --check`, `clippy -D warnings`, `cargo test --workspace` |
 | `cargo build --lib -p grimoire-core --target wasm32-unknown-unknown` | The WASM compile. Needs clang 18 or newer for SQLite's C |

@@ -224,6 +224,22 @@ Three things round one measured that this layer inherits rather than rediscovers
 - **The streaming framers already exist.** `feed::frame` frames by brace depth and refuses past
   8 MiB; the 610 MB combo document peaks at 2.01 MB through it.
 
+**Built 2026-10-02 for three of the four, and three things differ from the table above.**
+
+- **`Http` is `reqwest` on both arms**, not `reqwest` and a hand-written `fetch`: its wasm
+  backend is `fetch`, so `platform::http` is one implementation and the arms differ in three
+  lines — a browser has no connect or per-read timeout to set, and cannot say a connection never
+  came up. Markus chose it over arms that refuse until phase 5. **Pacing, resume and retry are
+  not in it**: they are rules about Scryfall and stay in `scryfall::Client`.
+- **`Fs` refuses in a browser; it is not OPFS.** The database's OPFS is SQLite's own VFS, and
+  the only other files the engine keeps are a download's temp file and the schema's backups —
+  neither of which a browser wants in that shape. What a download looks like there is §6's.
+- **`sleep` is two things.** `platform::pause` parks a thread (the storage step, for
+  `db::lock_for`); `platform::timer` is the wait a future awaits, and a deadline on one.
+
+`spawn` arrives with its first caller, in the I/O step's second part.
+[The step's plan](../plans/2026-10-02-light-app-core-step-5-io.md) has each reason.
+
 ### 2.6 State, events and the one update hook
 
 - **`AppState` splits.** `core::State` holds what every host needs. The desktop wraps it with its
@@ -319,6 +335,13 @@ Each step is its own PR. **The light UI waits for none of them** (§9).
    [The step's plan](../plans/2026-10-02-light-app-core-step-4-domain.md) has the table.
 5. **I/O** — `scryfall`, `ingest`, `run_sync` behind a progress sink, the three feeds,
    `index/lifecycle`, `images`.
+   **Three pull requests, because this is the first step that edits what it moves** (Markus,
+   2026-10-02): `platform`'s request, timer and files with `scryfall`, `ingest` and `reconcile`
+   over them; then the state, the facet index and `run_sync`; then the feeds and the image
+   cache. **The first is built**: the three modules, `errors::kind_of` and `capture`'s two
+   reconcile tests are the core's, `schema`'s file calls go through `platform::files`, and the
+   fence refuses `reqwest`, `tokio`, `std::fs` and `std::thread` anywhere else the crate ships.
+   [The step's plan](../plans/2026-10-02-light-app-core-step-5-io.md) has the decisions.
 6. **The sync client, entitlement and pairing** — see below. `sync_pair/identity` and
    `sync_engine/wire` arrive here rather than in step 2.
 7. **The scanner's session glue.**

@@ -273,7 +273,9 @@ rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grim
 this section is what each step built and measured. **Nothing here runs on a phone or in a
 browser yet**: what exists is a crate the desktop links, compiled for two more targets. Four
 steps of seven have landed — the leaves, the storage layer, the state a host holds over it, and
-the domain: the decks, the collection, the wishlist and the search.
+the domain: the decks, the collection, the wishlist and the search — and the first of the fifth
+step's three parts: a request, a timer and a file under `platform/`, and the Scryfall client,
+the ingest and the reconciler over them.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -942,3 +944,139 @@ answering, not a timing.
   handed the connection — but nothing checks it. Phase 5's.
 - `scripts/coverage-rust.mjs` was not run, and neither was the card-scanner suite locally:
   nothing under `crates/card-scanner` changed, and CI's `rust` job runs it.
+
+### 6.5 Step 5, first part — `platform`'s request, timer and files, and the Scryfall client over them (2026-10-02)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-5-io.md). Everything below was
+measured that day on Windows 11, debug builds, on the branch's own tree over `main` at `52c9513a`.
+
+**This is the first step that changes code rather than moving it**, which is why it is three
+pull requests where step 4 was one script. The engine's remaining modules each reach a network or
+a disk, and a browser has neither a socket nor a filesystem — so before a module can move, what
+it calls has to exist twice. Markus took three decisions first: `reqwest` on both arms, three
+parts, and auto-merge with auto-fix on each.
+
+**Three interfaces joined the clock and the pause under `crates/grimoire-core/src/platform/`:**
+
+| | Native | Browser | Lines |
+| --- | --- | --- | --- |
+| `http` — `Client`, `Request`, `Response`, `Body`, `Error` | `reqwest` over rustls, a connect bound and a per-read bound | `reqwest` over `fetch`: no timeouts to set, `is_connect()` always `false` | 178 |
+| `timer` — `sleep`, `timeout` | `tokio::time` | a `Promise` around the global `setTimeout` | 106 |
+| `files` — seven plain functions, and `files::aio` for an `async fn` | `std::fs`; `tokio::fs` | refused: `ErrorKind::Unsupported` | 367 |
+
+`http` is one implementation with three lines that differ, because `reqwest`'s own wasm backend
+*is* `fetch`. It carries `GET` and nothing else — the first `POST` is the sync client's. `files`
+refuses in a browser rather than pretending: the database there is OPFS behind SQLite's VFS, and
+a download with no temp file is a shape the web host decides.
+
+**Three modules moved onto them, and two leftovers came home.**
+
+| | Lines | Tests | What changed in it |
+| --- | --- | --- | --- |
+| `scryfall` | 1 823 | 29 | every `reqwest`, `tokio` and `std::fs` call, the pacing gate, both clock reads |
+| `ingest` | 1 134 | 14, and 1 that stays | one line: the file is opened through `platform::files` |
+| `reconcile` | 2 061 | 29 | nothing but a test's import |
+| `errors::kind_of` | — | 1 | nothing; `src-tauri/src/errors/mod.rs` is gone |
+| `capture`'s two reconcile tests | — | 2 | nothing; `capture_tests.rs` is gone |
+
+`crates/grimoire-core/src` went from 144 519 lines to 150 538 and `src-tauri/src` from 77 880 to
+72 769. `schema`'s eleven file calls — the corpus it replaces, the backup before a climb, the
+damage mark — go through `platform::files` too, so nothing the crate ships names `std::fs`.
+
+**Four things that are not a move:**
+
+- **The pacing gate lost its runtime.** It was `tokio::sync::Mutex<tokio::time::Instant>` and
+  slept *until* the stored instant. It is `futures_util::lock::Mutex<(Tick, Duration)>` — when
+  the last request claimed its slot, and the gap its endpoint asks for — and sleeps for what is
+  left of that gap. The lock is still held across the sleep, which is what makes concurrent
+  callers a queue. `requests_are_paced_to_the_published_rate` moved unedited but for its clock.
+- **The engine's version became the app's.** `USER_AGENT` is built from
+  `env!("CARGO_PKG_VERSION")`, which reads the package that compiles it — moved as it stood,
+  every request the app makes would have announced `MTGGrimoire/0.0.0`. The core's manifest
+  carries 0.39.0, release-please bumps both, and `desktop.rs`'s
+  `the_core_wears_the_apps_version` goes red if they part. The router sends
+  `release-please-config.json` to `rust` and `frontend`, since a Rust test reads it now.
+- **The tag datasets' names changed hands.** `scryfall::BULK_ORACLE_TAGS` aliased
+  `tags::oracle::BULK_NAME`; `tags` is still the desktop's, so the string lives in `scryfall`
+  and `tags` aliases it. One definition either way.
+- **The fence has a fifth rule**: `reqwest`, `tokio`, `std::fs` and `std::thread` are refused
+  outside `src/platform/` in what the crate ships. It reads above a file's first column-0
+  `#[cfg(test)]` only — a test of a download has to write a file — and derives the two files
+  that are tests throughout from the gate on their `mod` line.
+
+**What was checked.**
+
+| | |
+| --- | --- |
+| `#[test]` and `#[tokio::test]` attributes | 3 382 before, 3 390 after: 75 moved from `src-tauri` to the core, 8 are new (2 files, 2 timer, 3 fence, 1 version) |
+| `cargo test --workspace` | core 2 314 passed and 2 ignored; desktop 1 070 passed and 4 ignored |
+| `cargo clippy --workspace --all-targets -- -D warnings`; `cargo check -p mtg-grimoire --locked` | clean |
+| `cargo build` and `clippy --lib -p grimoire-core --target wasm32-unknown-unknown` | clean — after clippy refused `drop(file)` on a writer that is a unit struct in a browser (`drop_non_drop`), which no desktop build can see. Hence `Writer::close` |
+| `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` | `default`, and no `testing` |
+| `Cargo.lock` | 653 packages before and after: seven new edges from `grimoire-core`, no new crate |
+| `npm run build`, `npm run lint`, `npm run test:run` | clean; 459 files, 12 905 tests |
+
+**An existing database, upgraded by `main`'s binary and by this branch's.** Two byte copies of
+the main checkout's dev data (user schema v46, 4 645 rows, corpus schema 6), one launched under
+each binary with no dev server behind it, each left running twenty seconds:
+
+| | `main` | This branch |
+| --- | --- | --- |
+| `user_version` reached | 59, after 1 319 ms | 59, after 1 158 ms |
+| Schema objects, tables, rows | 148, 33, 5 209 | 148, 33, 5 209 |
+| `foreign_key_check`, `integrity_check` | 0, `ok` | 0, `ok` |
+| `backups/user.v46.db` — written by `schema`'s moved file calls | 2 007 040 bytes | **byte-identical** |
+| The four files each launch downloaded | 78 689 871, 5 977 157, 12 973 147 and 28 824 447 bytes | **byte-identical, all four** |
+
+30 of the 33 tables are identical row for row. The other three differ in what two honest
+launches always differ in: `app_meta.update_last_check_at` and `mirror_installation` (a clock and
+a random name), and the `unixepoch()` stamps on three rows the token conversion writes.
+
+**A real card sync, interrupted and resumed.** The branch's binary over a copy with `corpus.db`
+deleted — the documented way to force a resync:
+
+| | |
+| --- | --- |
+| Run 1, stopped 1 135 ms in | a partial of 15 149 632 bytes, and beside it an origin record naming `default-cards-20261002090546.jsonl.gz` |
+| Run 2 | the file never measured below 15 149 632, grew to 78 689 871, and its record was gone 1 342 ms after launch — a `Range` resume through `files::aio::Writer::append`, not a restart |
+| The ingest over the spliced file | 118 467 cards, 0 skipped, 93 s after launch. A gzip member checks its own CRC, so a wrong splice fails here |
+| The rest of the sync | 1 053 sets, 2 806 migration rows applied by `reconcile`, no row flagged for review, no new `error_log` row |
+
+**Then the window**, `tauri dev` over that copy, driven over CDP:
+
+| | |
+| --- | --- |
+| `startup_status`; `sync_status` | `ready`; 118 467 cards, no error |
+| Four forced `sync_run`s back to back | each `updated: false` — the conditional check through the core's client and its gate; `last_check_at` advanced |
+| The feeds, which share Scryfall's client for their check and download | Oracle tags 4 560 over 235 017 taggings; art tags 11 611 over 492 668; 111 410 combos |
+| Search, pressed | "118,467 cards", 30 of 30 images loaded from `mtgimg://`, none broken |
+| The image cache | 211 files, 15.5 MB, from empty — each a `fetch_image` under `timer::timeout` |
+| `error_log`; the app's stderr | the two rows it arrived with; nothing |
+
+**Open after this part:**
+
+- **No browser arm has run.** `http`, `timer` and `files` compile for `wasm32` and are linted
+  there; the first thing to call one is phase 5's Worker.
+- **`futures_util`'s mutex is not FIFO-fair** where tokio's was. The gate promises spacing, not
+  order, and one request is in flight at a time in this app — but a caller that needed the order
+  would not get it.
+- **A download in a browser is unanswered.** `Client::download` writes a temp file and
+  `ingest_gz` reads one; `StreamIngest` already takes chunks, so the web host can feed it a body
+  directly. That is its decision.
+- **The fence's fifth rule does not read below a file's tests.** Code there that is not a test
+  would be missed; every file keeps its tests and fixtures at the foot and nothing else.
+- **`sync::run_sync`, which drives all three moved modules, is still the desktop's**, as are the
+  facet index's lifecycle, the feeds and the image cache — the step's second and third parts.
+  `State` gains no field here: `scryfall::Client` is the core's type, held by `AppState`.
+- **`npm run test:coverage:rust` ran for the first time since it was rewritten for two workspace
+  members**, and works: one `cargo llvm-cov --workspace` run, 93.77% of 105 876 lines with the
+  test modules in and **82.20% of 31 399 shipped lines** with them out. The moved client scores
+  96.36% of its 357 shipped lines, `ingest` 97.86%, `reconcile` 90.35%, `platform::files` 97.17%
+  and `platform::http` 76.92%: the twelve lines it misses are `Error`'s three predicates, which run
+  only when a request fails in transit — and no test makes one do that, before the move or
+  after. Every `<module>/mod.rs` of command wrappers reads 0%: a wrapper needs a window. **README.md and [test-coverage.md](test-coverage.md) still quote 77.45% of
+  7 503 lines**, a run from before most of the app existed; neither was edited here. The run
+  installed rustup's `llvm-tools-preview` component for the pinned toolchain, which the script
+  needs and this machine did not have.
+- The card-scanner suite was not run locally: nothing under `crates/card-scanner` changed, and
+  CI's `rust` job runs it.

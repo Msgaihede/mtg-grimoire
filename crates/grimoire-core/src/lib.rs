@@ -1,7 +1,7 @@
 //! MTG Grimoire's engine, with no window.
 //!
 //! Three hosts link this crate — the desktop app in `src-tauri`, an Android shell and a WASM
-//! build running in a Worker — and it knows about none of them. Four rules hold that, and each
+//! build running in a Worker — and it knows about none of them. Five rules hold that, and each
 //! has something that goes red when it is broken:
 //!
 //! * **No `tauri`.** A window, a webview and a command attribute are a host's.
@@ -12,6 +12,9 @@
 //! * **Nothing outside [`platform`] reads the wall clock.** `SystemTime::now()` and
 //!   `Instant::now()` both panic on `wasm32-unknown-unknown` — at run time, on a build that
 //!   compiled clean.
+//! * **Nothing this crate ships names `reqwest`, `tokio`, `std::fs` or `std::thread` outside
+//!   [`platform`].** A request, a timer, a file and a thread each have one implementation per
+//!   kind of host there, and all four compile on a desktop wherever they are written.
 //! * **CI compiles it for all three targets** on every pull request that can have broken it —
 //!   the `core` job for `wasm32-unknown-unknown` and `aarch64-linux-android`, the `rust` job for
 //!   the desktop, where the tests run.

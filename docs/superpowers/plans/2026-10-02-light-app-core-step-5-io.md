@@ -127,16 +127,16 @@ Pacing, retry, the 429 lockout and the size checks stay in `scryfall::Client` �
 
 - [x] `cargo fmt -p mtg-grimoire -p grimoire-core`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo check -p mtg-grimoire --locked`.
 - [x] The wasm build and its clippy. (It found one thing the desktop cannot: `drop(file)` on a writer that is a unit struct in a browser — `clippy::drop_non_drop`. Hence `Writer::close`.)
-- [ ] `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints no `testing`.
-- [ ] `cargo test --workspace`, in the foreground, once.
-- [ ] `npm run build`, `npm run lint`, `npm run test:run`.
-- [ ] An existing database upgraded by `main`'s binary and by this branch's, compared row for row.
-- [ ] `tauri dev` (the `app` lock): a real card sync against Scryfall — the check, the download with its progress, the ingest, the migration log — and an image fetch.
+- [x] `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints no `testing`.
+- [x] `cargo test --workspace`, in the foreground, once.
+- [x] `npm run build`, `npm run lint`, `npm run test:run`.
+- [x] An existing database upgraded by `main`'s binary and by this branch's, compared row for row.
+- [x] `tauri dev` (the `app` lock): a real card sync against Scryfall — the check, the download with its progress, the ingest, the migration log — and an image fetch.
 - [ ] A fresh reviewer over the diff.
 
 ### Task 6 — the record, and ship
 
-- [ ] `docs/reference/light-app.md` §6.5; `crates/grimoire-core/CLAUDE.md`; `src-tauri/CLAUDE.md`; the spec's §2.5 and §2.8 notes.
+- [x] `docs/reference/light-app.md` §6.5; `crates/grimoire-core/CLAUDE.md`; `src-tauri/CLAUDE.md`; the spec's §2.5 and §2.8 notes.
 - [ ] The pull request, linked to #761, auto-merge and auto-fix armed; the issue updated.
 
 ---
