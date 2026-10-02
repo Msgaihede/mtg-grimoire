@@ -212,6 +212,11 @@ mod tests {
     /// The desktop's shape, on real files — two in-memory connections are two databases. The
     /// reads go through the second connection, which sees what the first committed and cannot
     /// write.
+    ///
+    /// **And the hooks are on the first.** With two connections in hand there is a wrong one to
+    /// install them on, and a state hooked on its read connection would look healthy for ever:
+    /// the fence never trips, no observer hears a write, and nothing errors. So the observer and
+    /// the fence are asserted here as well as on the one-connection shape.
     #[test]
     fn a_host_with_two_reads_through_the_second_which_cannot_write() {
         let dir = crate::scratch::path("state-two-connections");
@@ -219,16 +224,45 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let write = db::open_write(&dir).unwrap();
         write
-            .execute_batch("CREATE TABLE main.notes (body TEXT NOT NULL)")
+            .execute_batch(&format!(
+                "CREATE TABLE main.notes (body TEXT NOT NULL);
+                 CREATE TABLE {}.prices (amount INTEGER NOT NULL);",
+                db::CORPUS
+            ))
             .unwrap();
         let read = db::open_read(&dir).unwrap();
-        let state = State::new(write, Some(read), dir, crate::events::silent(), Vec::new());
+        let counter = Arc::new(Counter::default());
+        let state = State::new(
+            write,
+            Some(read),
+            dir,
+            crate::events::silent(),
+            vec![counter.clone()],
+        );
         assert!(!std::ptr::eq(state.reader(), &state.db));
 
         state
             .lock_db()
             .execute("INSERT INTO notes (body) VALUES ('committed')", [])
             .unwrap();
+        assert_eq!(counter.rows.load(Ordering::Relaxed), 1);
+        assert_eq!(counter.commits.load(Ordering::Relaxed), 1);
+        assert!(!state.fence.tripped(), "one file, so far");
+        state
+            .lock_db()
+            .execute_batch(
+                "BEGIN;
+                 INSERT INTO notes (body) VALUES ('and a second file');
+                 INSERT INTO prices (amount) VALUES (1);
+                 COMMIT;
+                 DELETE FROM notes WHERE body = 'and a second file';",
+            )
+            .unwrap();
+        assert!(
+            state.fence.tripped(),
+            "the fence rides the connection that writes"
+        );
+
         let reader = state.lock_db_read();
         let body: String = reader
             .query_row("SELECT body FROM notes", [], |r| r.get(0))

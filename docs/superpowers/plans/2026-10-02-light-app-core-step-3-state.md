@@ -53,7 +53,7 @@ So the core's hook carries the one thing the core itself reads — the fence —
 
 ### One connection in a Worker — Markus, 2026-10-02
 
-Issue #761 gave this step the question. Spec §6 measured the answer's premise: `opfs-sahpool` permits one connection and no WAL. So `State` holds the write connection and an **optional** read one, and `State::reader()` answers the read connection where the host has one and the write connection where it does not. `lock_db_read` keeps its name and all 112 of its callers. The one-connection shape is tested natively; nothing runs it in a browser until phase 5.
+Issue #761 gave this step the question. Spec §6 measured the answer's premise: `opfs-sahpool` permits one connection and no WAL. So `State` holds the write connection and an **optional** read one, and `State::reader()` answers the read connection where the host has one and the write connection where it does not. `lock_db_read` keeps its name and all 111 of its callers. The one-connection shape is tested natively; nothing runs it in a browser until phase 5.
 
 ### The hook is installed when the state is built
 
@@ -61,7 +61,7 @@ Issue #761 gave this step the question. Spec §6 measured the answer's premise: 
 
 ### `AppState` derefs to the core's `State`
 
-`AppState` appears 480 times in 73 files; `state.db` 164 times in 38. `impl Deref<Target = State> for AppState` keeps every one of them compiling unedited, and lets a function that takes `&State` be handed an `Arc<AppState>`. The alternative is a `state.core.db` edit at every site and in every open branch.
+`AppState` appears 480 times in 73 files; `state.db` 79 times in 16. (This said 164 in 38 until the review: that pattern also counted `user.db`, `corpus.db` and `mtg.db`.) `impl Deref<Target = State> for AppState` keeps every one of them compiling unedited, and lets a function that takes `&State` be handed an `Arc<AppState>`. The alternative is a `state.core.db` edit at every site and in every open branch.
 
 **Edited call sites, all of them:** the nine places that build an `AppState` (`desktop::init_state` and eight test fixtures), and the five that pass `&state.db_read` as a mutex (`images.rs` ×4, `sync_engine/live.rs` ×1), which become `state.reader()`.
 
@@ -116,7 +116,8 @@ pub fn install(
 
 - [x] `install`: update hook — `fence.note(db)`, then each observer's `row` in order; commit hook — `fence.settle()` and its sentence, then each observer's `committed` in order, answering `false`; rollback hook — `fence.clear()`. The three hooks' docs move here from `mirror::watch` where they are about the hook rather than about a rider
 - [x] Tests, with a recording observer: the fence trips on a transaction that writes both files; a rolled-back one is not charged to the next commit; an observer hears each row with its schema and table; it hears a commit and not a rollback; observers are told in the order given; a `WITHOUT ROWID` write reaches `committed` and never `row`; a second `install` replaces the first. **As built, one more**: a bare `DELETE` on a table nothing points at is heard as a commit only — the hook's second blind spot, pinned beside the first
-- [x] `#[ignore]`d measurement, timed through `platform::clock::Tick`: one `UPDATE` over 100 000 rows with no observer and with three that each do one atomic add — run in release, `cargo test -p grimoire-core --release -- --ignored --nocapture what_three_observers`. **+2.9 to +4.1 ns per row**, five runs
+- [x] `#[ignore]`d measurement, timed through `platform::clock::Tick`: one `UPDATE` over 100 000 rows with no observer and with three that each do one atomic add — run in release, `cargo test -p grimoire-core --release -- --ignored --nocapture what_three_observers`. **+2.9 to +4.4 ns per row**, six runs
+- [x] **After review**: the fence has settled by the time an observer hears the commit — moving the observers ahead of it failed no test
 
 ### Task 2 — `events` and `state`
 
@@ -158,7 +159,8 @@ impl State {
 }
 ```
 
-- [x] `events.rs` and its tests: a `camelCase` struct reaches a recording sink as the JSON the page reads; a payload that will not serialise is dropped; the silent sink takes anything
+- [x] `events.rs` and its tests: a `camelCase` struct reaches a recording sink as the JSON the page reads; a payload that will not serialise is dropped. (A third, that the silent sink takes anything, asserted nothing and went after review.)
+- [x] **After review**: the two-connection test asserts the observer and the fence too. Both hook tests built their state with one connection, so installing the hooks on the *read* connection passed all of them — on the desktop that is a mirror, a change mask and a sync wake that never hear anything
 - [x] `state.rs`: `new` installs the hooks, then wraps the connections
 - [x] Tests: a state's own write connection trips its own fence; observers given to `new` hear a write made through `lock_db`; a state with one connection reads through the one it writes with (`reader()` is `&db`, and a row written is read back); a state with two reads through the second, which cannot write
 - [x] `lib.rs`: the three modules in the map, and the crate doc's "what is here"
@@ -173,7 +175,7 @@ impl State {
 
 - [x] `sync.rs`: the struct, the `Deref`, `lock_db` and `lock_db_read` as one-line delegates to the core's. `with_write` and its two siblings untouched
 - [x] `impl WriteObserver for Mask` (`row`: `surface_of`, then `mark`), `for Changes` (`row`: `mark`; `committed`: ring when pending), and `WriteWake(Arc<Notify>)` (`committed`: `notify_one`), each carrying the comment that argued it inside the hook
-- [x] `mirror::watch::observers` — wake, change mask, mirror mask: the order that keeps both hooks' call order — and `install_hook_with_changes` as `hooks::install(conn, fence, observers(…))`. `install_hook` and its 24 call sites unedited
+- [x] `mirror::watch::observers` — wake, change mask, mirror mask: the order that keeps both hooks' call order — and `install_hook_with_changes` as `hooks::install(conn, fence, observers(…))`. Of `install_hook`'s 24 call sites, the desktop's and seven fixtures' became `State::new`; the 16 left are tests on a bare connection. **After review, both functions are `#[cfg(test)]`**: called on the app's connection, either would replace the hooks `State::new` installed
 - [x] `desktop.rs`: `WindowEvents(AppHandle)` as the sink; `init_state(app, writes)` mints the installation name, then builds the `State`; `start` loses the install block and keeps the two spawns
 - [x] The five `&state.db_read` become `state.reader()`
 - [x] The eight fixtures build a `State` where they built four fields and called `install_hook`. Seven hand it `observers(…)` with the state's own change mask, where the hook used to get a throwaway; `watch`'s `state_at` never hooked its connection and passes none
@@ -183,8 +185,8 @@ impl State {
 - [x] `crates/grimoire-core/CLAUDE.md`: what is here now, the three modules, how a host builds a `State`, what `AppState` still holds and the step each field leaves in
 - [x] `docs/reference/light-app.md` §6.3: what was built, what waits and why, the hook measured, what is open
 - [x] The spec's §2.6 and §2.8, dated; `platform/mod.rs`'s table
-- [x] Every sentence elsewhere this makes false: `src-tauri/CLAUDE.md` (where the hook is installed and by whom, `ensure_installation`'s place), `text-mirror.md`, `multi-window.md`, `sync.md`
-- [ ] Issue #761: step 3 ticked with what it built; step 4 gains `with_write`; steps 5 and 6 gain the fields; the one-connection item settled; phase 5 gains what that shape leaves open
+- [x] Every sentence elsewhere this makes false: `src-tauri/CLAUDE.md` (where the hook is installed and by whom, `ensure_installation`'s place, the fence's hook), `text-mirror.md`, `multi-window.md` — `sync.md` was read and needed nothing — and, after review, the doc comments in both crates that still described the mirror's hook as the installer
+- [x] Issue #761: step 3 described, its box left for the merge to tick with what it built; step 4 gains `with_write`; steps 5 and 6 gain the fields; the one-connection item settled; phase 5 gains what that shape leaves open
 
 ### Task 5 — verify and ship
 
@@ -195,7 +197,7 @@ impl State {
 - [x] `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core`: no `testing`
 - [x] The hook measurement, release
 - [x] **The live pass**, `tauri dev` over a copy of the main checkout's data: the app starts and searches; a deck edit reaches the mirrored file; a second window refreshes after a write in the first. [light-app.md](../../reference/light-app.md) §6.3 has every figure. **Not driven: live sync's wake** — the copy is in no group, so nothing waits on it
-- [ ] A fresh reviewer over the branch
+- [x] A fresh reviewer over the branch — no behavioural defect; one test gap and a list of stale sentences and two wrong counts, all closed above
 - [ ] PR linked to #761, auto-merge armed; `ci-ok` green, including `core` on both targets
 
 ## What step 4 inherits

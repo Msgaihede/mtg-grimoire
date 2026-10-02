@@ -219,8 +219,9 @@ feature.
   Scryfall's, but `reconcile::apply` writes it in the same transaction as the folds it records,
   and SQLite makes **no** atomicity guarantee across attached databases in WAL mode. Corpus-side,
   a crash between the two commits would leave a quantity doubled and nothing to say it had been.
-  `db::CrossFileFence` rides in the mirror's update hook (SQLite allows one per connection) and
-  `sync::with_write` reads it in a debug build; its blind spot is `WITHOUT ROWID` tables, which
+  `db::CrossFileFence` rides the write connection's one update hook (SQLite allows one per
+  connection; the core's `hooks::install` puts it there, ahead of the mirror and every other
+  observer) and `sync::with_write` reads it in a debug build; its blind spot is `WITHOUT ROWID` tables, which
   the hook does not fire for at all.
 - **A new migration step goes at the _bottom_ of the ladder, and takes the
   `CARDS_INDEXES` replay from the step below it.** `migrate` reads `user_version` **once**
@@ -1452,7 +1453,9 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   table, and the commit hook rings its `Notify` only when a bit is set. `changes.rs` and
   [multi-window.md](../docs/reference/multi-window.md) carry the emitter.
   `watch::install_hook` and `install_hook_with_changes` are the core's installer on a bare
-  connection, for a test; the first delegates with a throwaway `Changes`.
+  connection and exist in test builds only (`#[cfg(test)]`) — called on the app's connection,
+  either would replace the hooks `State::new` installed; the first delegates with a throwaway
+  `Changes`.
   ⚠️ **And the hook has two blind spots, each of which a command has to cover by hand.**
   **`WITHOUT ROWID` tables never fire it at all** — `muted_tags`, `sync_devices`, `sync_state` and
   `device_names` are marked by the commands a reader's press reaches

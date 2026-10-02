@@ -9,8 +9,9 @@
 //!   **The hook itself is `grimoire-core`'s** ([`grimoire_core::hooks`]): SQLite allows one
 //!   update hook per connection, so the core owns the installer and everything that needs to
 //!   hear about a row registers with it. The desktop registers three — [`observers`] is the
-//!   list — and [`install_hook`] is that installer under the name this module's tests and
-//!   every fixture have always called it by.
+//!   list, and `State::new` is handed it for the app's write connection. `install_hook` is the
+//!   same installer on a bare connection, under the name this module's tests have always
+//!   called it by; it exists in test builds only.
 //! * [`surface_of`] turns that table name into the surfaces it could have changed, or into
 //!   `None` for the great majority of tables that change nothing a reader's files show.
 //! * [`spawn`] starts the thread that watches the mask, waits for the writing to stop, and
@@ -95,9 +96,9 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// schema 27 a write arrives as `("main", "decks")` or `("corpus", "cards")`, and taking only
 /// the table is correct because a table name is unique across the two files by
 /// [`crate::schema::TABLES`] — which `every_table_is_on_exactly_one_side` is what keeps
-/// true. The schema name is not wasted: [`install_hook`] passes it to
-/// [`crate::db::CrossFileFence`], which rides in this same callback because SQLite allows one
-/// update hook per connection.
+/// true. The schema name is not wasted: the installer passes it to
+/// [`crate::db::CrossFileFence`], which rides in the same callback ahead of every observer,
+/// because SQLite allows one update hook per connection.
 pub fn surface_of(table: &str) -> Option<Dirty> {
     match table {
         // **`deck_tokens` is an over-approximation and joins them anyway** (user schema v37).
@@ -295,6 +296,11 @@ pub fn observers(
 /// **This is [`install_hook_with_changes`] with a window mask nobody reads.** Every caller is
 /// a test with a bare connection in hand, and none of them has a use for the cross-window
 /// refresh. The app's own write connection is hooked by `State::new`, with [`observers`].
+///
+/// **Test builds only, and that is a fence.** Called on the app's write connection, this would
+/// replace the hooks `State::new` installed — with a fence nobody reads and without whichever
+/// observers the caller left out — and nothing would say so.
+#[cfg(test)]
 pub fn install_hook(
     conn: &Connection,
     mask: Arc<Mask>,
@@ -315,7 +321,8 @@ pub fn install_hook(
 /// **One installer and never a second, for the fence's reason**: SQLite allows one update hook
 /// and one commit hook per connection, so a hook installed on its own would silently take the
 /// mirror's, the fence's and live sync's off. The installer is the core's; this is it, handed
-/// the desktop's [`observers`].
+/// the desktop's [`observers`]. Test builds only, for [`install_hook`]'s reason.
+#[cfg(test)]
 pub fn install_hook_with_changes(
     conn: &Connection,
     mask: Arc<Mask>,
@@ -453,8 +460,8 @@ fn watch(state: &AppState) {
     // the last session was closing. `Dirty::ALL`, because the mask cannot describe what
     // happened while the process was not running.
     //
-    // **The mask is taken first, and the order is the point.** `install_hook` runs before this
-    // thread starts, so anything written between the two is already marked — and a full render
+    // **The mask is taken first, and the order is the point.** The hook goes on as the state is
+    // built, before this thread starts, so anything written between the two is already marked — and a full render
     // covers it, so leaving it marked would buy nothing and cost a second full render two and a
     // quarter seconds later. Taken *before* rather than after because a write that lands while
     // the pass is running must stay marked: it may not be in the rows this pass read.
@@ -793,7 +800,7 @@ mod tests {
 
     /// The other windows' half of the hook, end to end: a user write through the hooked
     /// connection sets its table's bit **and** the commit rings — through
-    /// [`install_hook_with_changes`], which is the one the app's startup takes.
+    /// [`install_hook_with_changes`], which installs the list the app's startup hands `State::new`.
     #[test]
     fn a_user_write_through_the_hooked_connection_marks_the_window_mask_and_rings() {
         let conn = migrated_memory_db();
@@ -1340,7 +1347,7 @@ mod tests {
         conn.execute("DELETE FROM wishlist_folders", []).unwrap();
         assert!(
             mask.take().is_some_and(|d| d.wishlist),
-            "a bare DELETE FROM must still mark — see `install_hook`"
+            "a bare DELETE FROM must still mark — see `impl WriteObserver for Mask`"
         );
     }
 

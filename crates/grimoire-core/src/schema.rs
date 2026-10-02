@@ -816,7 +816,7 @@ pub const TABLES: &[(&str, Side)] = &[
     // *why* somebody might be about to throw the corpus away.
     ("error_log", Side::User),
     // A decision a person made about a tag. `WITHOUT ROWID`, so the update hook cannot see it
-    // — see `crate::mirror::watch::install_hook`.
+    // — see `crate::hooks`, which pins that blind spot.
     ("muted_tags", Side::User),
     // Each day's price for each printing the reader owns (user schema v45), the Price movers
     // widget's history. Scryfall's and the feeds' rows, but no feed can produce a *past* price

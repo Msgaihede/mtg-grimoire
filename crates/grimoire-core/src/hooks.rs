@@ -280,6 +280,38 @@ mod tests {
         );
     }
 
+    /// Asks the fence what it knows at the moment it hears a commit.
+    struct AsksTheFence {
+        fence: Arc<CrossFileFence>,
+        saw_it_tripped: std::sync::atomic::AtomicBool,
+    }
+
+    impl WriteObserver for AsksTheFence {
+        fn committed(&self) {
+            self.saw_it_tripped
+                .store(self.fence.tripped(), Ordering::Relaxed);
+        }
+    }
+
+    /// **The fence is ahead of every observer on the commit hook**, so an observer that asks it
+    /// about the commit it has just heard gets that commit's answer rather than the one before.
+    /// None of the desktop's three asks today; the order is the installer's promise all the same.
+    #[test]
+    fn the_fence_has_settled_by_the_time_an_observer_hears_the_commit() {
+        let conn = crate::schema::memory_pair();
+        let fence = Arc::new(CrossFileFence::new());
+        let asking = Arc::new(AsksTheFence {
+            fence: fence.clone(),
+            saw_it_tripped: std::sync::atomic::AtomicBool::new(false),
+        });
+        install(&conn, fence, vec![asking.clone()]);
+
+        conn.execute_batch(&format!("BEGIN; {A_DECK}; {A_SET}; COMMIT;"))
+            .unwrap();
+
+        assert!(asking.saw_it_tripped.load(Ordering::Relaxed));
+    }
+
     /// **The update hook's first blind spot, pinned where the hook is installed.** A write to a
     /// `WITHOUT ROWID` table is a commit nobody heard a row of — which is why an observer that
     /// must not miss a write listens for the commit, and why a host marks such a table by hand.

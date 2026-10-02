@@ -108,13 +108,4 @@ mod tests {
         emit(&sink, "nothing", &unkeyable);
         assert!(sink.0.lock().unwrap().is_empty());
     }
-
-    #[test]
-    fn the_silent_sink_takes_anything() {
-        emit(
-            &*silent(),
-            "sync:applied",
-            &serde_json::json!({ "rows": 3 }),
-        );
-    }
 }

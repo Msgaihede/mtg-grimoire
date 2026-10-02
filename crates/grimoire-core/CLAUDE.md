@@ -72,11 +72,16 @@ and `date('now')` inside the statement that needs them, which is the same on eve
 brought to head, installs the hooks on the write connection, and only then puts it behind its
 mutex. So there is no `State` whose cross-file fence is not riding.
 
-- **Nothing installs a hook but `hooks::install`, and a host never calls it for its app's
-  connection** — `State::new` has. SQLite keeps one update hook, one commit hook and one
+- **No shipped code installs a hook but `hooks::install`, and a host never calls it for its
+  app's connection** — `State::new` has. SQLite keeps one update hook, one commit hook and one
   rollback hook per connection, and a second install **replaces** the first without a word:
   `hooks::tests::a_second_install_replaces_the_first`. Whatever needs to hear about a write is a
-  `WriteObserver` in the list `State::new` is given.
+  `WriteObserver` in the list `State::new` is given. (Two of `src-tauri`'s tests put a raw hook
+  on a bare connection of their own — `reconcile` and `tags` — and the desktop's
+  `watch::install_hook` pair is `#[cfg(test)]`, so none of it can reach the app's.)
+- **The fence is ahead of every observer, on both hooks.** On the commit hook that is pinned —
+  `the_fence_has_settled_by_the_time_an_observer_hears_the_commit` — and on the update hook it
+  is not, because the bits a row leaves are private and no observer can ask for them.
 - **An observer runs inside SQLite's callback**, on the writer's thread with the write
   connection's mutex held: an atomic, a lookup in a list built beforehand, a notify that cannot
   block. Never a lock another thread holds for long, never a call back into the database.

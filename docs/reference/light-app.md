@@ -597,12 +597,17 @@ the fence's assertion, so a split would leave the core a write with no managed-w
   mask, mirror mask. A row is heard by the change mask and then the mirror's; a commit by the wake
   and then the change mask's bell. `hooks`' tests pin that list order is call order.
 - `mirror::watch::install_hook` and `install_hook_with_changes` are that installer under their
-  old names. Their 24 call sites — 15 of them `watch`'s own tests — are unedited.
+  old names, on a bare connection, **and exist in test builds only now** — called on the app's
+  write connection, either would replace the hooks `State::new` installed. Of their 24 call
+  sites, the desktop's and seven fixtures' became `State::new`; the 16 left — 15 of `watch`'s
+  own tests and one of `changes`' — assert what they asserted.
+- **The fence is ahead of every observer.** Pinned on the commit hook; on the update hook the
+  bits a row leaves are private, so no observer can ask and no test can tell.
 - The hook's two blind spots are pinned where it is installed now: a `WITHOUT ROWID` write and a
   bare `DELETE` on a table nothing points at each reach `committed` and never `row`.
 
 **`AppState` wraps the core's `State` and derefs to it.** `AppState` is named 480 times in 73
-files and `state.db` 164 times in 38; none was edited. What was: the nine places that build one
+files and `state.db` 79 times in 16 (`git grep` at `2531db8a`); none was edited. What was: the nine places that build one
 (`desktop::init_state` and eight test fixtures), and the five that passed `&state.db_read` as a
 mutex, which ask `state.reader()`.
 
@@ -616,22 +621,26 @@ which mints the mirror's name ahead of the hook on purpose — and it moved with
 **One connection in a Worker is the shape, and `State` allows it.** Issue #761 gave this step
 the question; spec §6 had measured that `opfs-sahpool` permits one connection. `State`'s read
 connection is optional, and `reader()` answers the write connection where there is no other.
-`lock_db_read` keeps its 112 callers. Tested natively both ways; **no browser has run it**.
+`lock_db_read` keeps its 111 callers. Tested natively both ways — and the two-connection test
+asserts the hooks are on the connection that *writes*, since with two in hand there is a wrong
+one, and a state hooked on its reader looks healthy for ever. **No browser has run either.**
 
 **No test was lost.** `#[test]` and `#[tokio::test]` attributes: 3 366 before, 3 382 after —
 2 810 in `src-tauri`, unchanged, and 556 → 572 in the core. The sixteen are this step's own:
-eight of the installer's and its measurement, three of the sink's, four of the state's.
-`cargo test --workspace`: `src-tauri` 2 806 passed and 4 ignored, as before.
+nine of the installer's and its measurement, two of the sink's, four of the state's.
+`cargo test --workspace`: `src-tauri` 2 806 passed and 4 ignored, as before. A reviewer ran
+sixteen mutations of the three new files against them; the two that survived are closed — the
+hooks installed on the read connection, and an observer told ahead of the fence on a commit.
 
 **What the observer list costs per row** — the one thing the installer added to a hook that
 called its riders directly. A **release** build of the core alone, one `UPDATE` over 100 000
-rows, the best of nine rounds, five runs:
+rows, the best of nine rounds, six runs:
 
 | | ns per row |
 | --- | --- |
 | No observer | 72.9 – 74.0 |
-| Three observers, each one atomic add | 76.9 – 77.6 |
-| The difference | **+2.9 to +4.1** |
+| Three observers, each one atomic add | 76.9 – 77.9 |
+| The difference | **+2.9 to +4.4** |
 
 About 0.4 ms per hundred thousand rows, against an ingest measured in tens of seconds. It is an
 upper bound on the list: the three riders did their atomic work before this too.
@@ -670,6 +679,13 @@ the copy is in no sync group, so live sync stays off, and what holds the wake is
   is a lock taken twice. The desktop's two connections never notice; phase 5 has to look.
 - **`State::new` takes connections that are already at head.** A host-neutral "open the data
   folder" needs the launch's logged passes, which are `src-tauri`'s until step 4.
-- **The eight fixtures now hook the state's own change mask**, where they used to hand the hook
-  a throwaway. Nothing reads it there; it is what the app does.
+- **Seven of the eight fixtures now hook the state's own change mask**, where they used to hand
+  the hook a throwaway (`watch`'s `state_at` never hooked its connection and passes no
+  observers). Nothing reads it there; it is what the app does.
+- **`init_state`'s wiring is proven by the live pass and by nothing else.** It builds the mask
+  and the change mask, hands clones to `observers(…)` and moves them into `AppState`; given a
+  different `Arc`, both suites would still pass. No test reads a fixture's `state.mirror` or
+  `state.changes` after a hooked write.
+- **`EventSink` and `WriteObserver` are `Send + Sync`**, so a browser's sink cannot hold a
+  `JsValue`. Phase 5 meets that first.
 - `scripts/coverage-rust.mjs` was not run, and neither was the card-scanner suite locally.
