@@ -7,7 +7,7 @@ import {
   type CSSProperties,
   type RefObject,
 } from "react";
-import { ArrowUp, ChevronDown, ChevronRight, Plus } from "lucide-react";
+import { ArrowUp, ChevronDown, ChevronRight, LayoutGrid, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -172,6 +172,22 @@ const HEADING_BUTTON = cn(
 const CREDIT = "Card images © Wizards of the Coast · Data © Scryfall";
 
 /**
+ * What the wall is called while its `View all` toggle is on — every deck the reader has, from
+ * every folder, on one wall with no cabinet drawn over it (issue #750).
+ *
+ * **Never {@link ROOT_LABEL}, and the collision is the reason this is a constant at all.** `All
+ * decks` is the tree's root row and names the *top level*: the decks filed nowhere and the folders
+ * beside them. That row counts every deck there is, but pressing it has always shown one level of
+ * the cabinet, which is the gap the toggle closes. Heading the flat wall `All decks` as well would
+ * give two different walls one name while the reader can see the tree row that names the other.
+ */
+const EVERY_DECK_LABEL = "Every deck";
+
+/** The toggle's accessible name: its visible `View all` plus the noun that says what of — the
+ *  words begin the name, as WCAG 2.5.3 asks. */
+const VIEW_ALL_NAME = "View all decks";
+
+/**
  * The two ids the filter row's controls are addressed by, spelled once.
  *
  * **A fixed stem rather than `FilterBar`'s `idStem` prop, and the difference is how many of each
@@ -218,8 +234,12 @@ function sortDirectionName(desc: boolean): string {
  *
  * Two columns: the folders on the left, and on the right the one folder the reader is standing
  * in — its sub-folders as dashed cards, then its decks as the art they were built around. The
- * gallery's whole story is still the covers, so the chrome is a heading, a count, four controls
- * and one credit line.
+ * gallery's whole story is still the covers, so the chrome is a heading, a count, a row of
+ * controls and one credit line.
+ *
+ * **Or every deck at once**: the heading row's `View all` toggle lays a flat wall over the drawer
+ * — every live deck from every folder, no folder cards — and pressing it again goes back to the
+ * drawer underneath (issue #750, {@link EVERY_DECK_LABEL}).
  */
 export function DecksPage() {
   const decks = useDecks();
@@ -321,7 +341,34 @@ export function DecksPage() {
   /** Which drawer is open. `null` is the top level, which is also where every deck is drawn
    *  when the folder list could not be read. */
   const [selectedFolderId, setSelectedFolderId] = useState<number | null>(null);
+  /**
+   * Whether the wall is the **flat** one — every deck, no folders — that the heading row's
+   * `View all` toggle draws (issue #750).
+   *
+   * **A view laid over the drawer rather than a drawer of its own**: `selectedFolderId` is left
+   * exactly where it was underneath, so pressing the toggle off walks the reader back into the
+   * folder they were standing in. Every way of *choosing* a folder — a tree row, a folder made or
+   * a folder asked to be deleted — turns it off first, because each of those is the reader going
+   * back into the cabinet.
+   *
+   * In the app store rather than `useState` — `deckWallFlat` in `src/lib/store.ts` says why it has
+   * to survive this component.
+   */
+  const flat = useAppStore((s) => s.deckWallFlat);
+  const setFlat = useAppStore((s) => s.setDeckWallFlat);
+  /** Leave the flat view and stand in a folder — the one spelling every route into the cabinet
+   *  takes, so none of them can forget the first half. */
+  const openFolder = useCallback(
+    (id: number | null) => {
+      setFlat(false);
+      setSelectedFolderId(id);
+    },
+    [setFlat],
+  );
   const newDeckRef = useRef<HTMLButtonElement>(null);
+  /** The `View all` toggle — where Escape hands the caret when it leaves the flat view, since a
+   *  keypress has no element of its own and this is the control that turned the view on. */
+  const viewAllRef = useRef<HTMLButtonElement>(null);
   const wallRef = useRef<HTMLElement>(null);
   /**
    * The scroller the tiles are drawn in — the right-hand column, and the element the zoom
@@ -479,15 +526,25 @@ export function DecksPage() {
   );
   /** The selection as the wall can honour it: the number above, or the root. */
   const folderView = openNode?.folder.id ?? null;
-  const childFolders = openNode === null ? nodes : openNode.children;
+  /**
+   * The level a new deck or folder defaults to — the drawer the reader is standing in, and **the
+   * top level on the flat wall**, which stands in no drawer at all. The folder still selected
+   * underneath is hidden there, so filing into it would put the new thing somewhere nothing on
+   * screen says the reader is.
+   */
+  const level = flat ? null : folderView;
+  /** No folder cards on the flat wall: the cabinet is exactly what it leaves out. */
+  const childFolders = flat ? [] : openNode === null ? nodes : openNode.children;
 
+  // The flat wall is every deck, filed or not — so `here` is the whole of `live`, and every reader
+  // downstream (the count, the format chips, the filter, the empty sentences) follows for free.
   const here = useMemo(
-    () => live.filter((d) => folderOf(d) === folderView),
-    [live, folderOf, folderView],
+    () => (flat ? live : live.filter((d) => folderOf(d) === folderView)),
+    [flat, live, folderOf, folderView],
   );
   const archivedHere = useMemo(
-    () => archived.filter((d) => folderOf(d) === folderView),
-    [archived, folderOf, folderView],
+    () => (flat ? archived : archived.filter((d) => folderOf(d) === folderView)),
+    [flat, archived, folderOf, folderView],
   );
 
   /**
@@ -702,7 +759,33 @@ export function DecksPage() {
     refocusFolderRef.current = openNode.folder.id;
     setSelectedFolderId(openNode.folder.parentId);
   }, [openNode]);
-  useDismissOnEscape({ layer: "navigation", onDismiss: upOneFolder, enabled: openNode !== null });
+  // `!flat`: the flat wall stands in no folder, so walking "up" from the one hidden under it is not
+  // a move the reader can see — see {@link leaveFlat} for why this is switched off rather than
+  // left to be outranked.
+  useDismissOnEscape({
+    layer: "navigation",
+    onDismiss: upOneFolder,
+    enabled: !flat && openNode !== null,
+  });
+
+  /**
+   * **…and on the flat wall the floor is leaving it**, back to the drawer still selected under it.
+   *
+   * The flat wall is a place the reader went, so "back" is out of it — and only out of it: the
+   * folder underneath is not also walked up, which is what the `!flat` on the rung above is for.
+   * **Switched off rather than outranked, and that is not belt-and-braces**: two `"navigation"`
+   * rungs of one rank are ordered by registration, newest on top, and coming back from an editor
+   * this rung registers at mount while the folder rung's `openNode` resolves only once the
+   * folders have loaded — so a folder rung left enabled would land on top and take the press. The
+   * page's suite has the case, and it goes red without the guard.
+   *
+   * The caret goes to the toggle — the control that turned the view on, and still mounted.
+   */
+  const leaveFlat = useCallback(() => {
+    setFlat(false);
+    viewAllRef.current?.focus();
+  }, [setFlat]);
+  useDismissOnEscape({ layer: "navigation", onDismiss: leaveFlat, enabled: flat });
 
   const openCreate = useCallback(() => {
     // A refusal from the last attempt is not news about this one.
@@ -727,8 +810,11 @@ export function DecksPage() {
     // answer to a stale id is to *derive* it away rather than write it back. `folderView` is
     // that resolved answer, so the deck is made where the reader can **see** they are — the top
     // level in that case, which is where the wall already put them.
-    setPanel({ kind: "createDeck", folderId: folderView });
-  }, [decks.create, folderView]);
+    //
+    // **`level`, which is `folderView` everywhere but the flat wall** (issue #750): that wall
+    // stands in no drawer, so the default is the top level rather than a folder it is hiding.
+    setPanel({ kind: "createDeck", folderId: level });
+  }, [decks.create, level]);
 
   // `null` is a real answer for the opener and not a missing argument: a layer raised from a
   // context menu has no trigger of its own on screen, and the menu hands the caret back to
@@ -893,8 +979,9 @@ export function DecksPage() {
           {
             onSuccess: (folder) => {
               // Made in order to put something in it: the new drawer is the one the reader is
-              // standing in when the field closes.
-              setSelectedFolderId(folder.id);
+              // standing in when the field closes — out of the flat wall if that is where the
+              // field was opened, since a drawer nobody can see is not one to stand in.
+              openFolder(folder.id);
               dismiss();
             },
           },
@@ -903,7 +990,7 @@ export function DecksPage() {
         folders.rename.mutate({ id: panel.folderId, name }, { onSuccess: dismiss });
       }
     },
-    [panel, folders.create, folders.rename, dismiss],
+    [panel, folders.create, folders.rename, dismiss, openFolder],
   );
 
   const fileDeck = useCallback(
@@ -964,14 +1051,16 @@ export function DecksPage() {
    * tree would take them too.
    */
   const up = useMemo(() => {
-    if (openNode === null) return null;
+    // The flat wall is not a level of the cabinet, so there is nowhere *up* from it to go — the
+    // way out is the toggle that turned it on (and Escape, see {@link leaveFlat}).
+    if (flat || openNode === null) return null;
     const id = levels.parent.get(openNode.folder.id) ?? null;
     const label =
       id === null
         ? ROOT_LABEL
         : (flattenFolders(nodes).find((n) => n.folder.id === id)?.folder.name ?? ROOT_LABEL);
     return { id, label };
-  }, [openNode, levels, nodes]);
+  }, [flat, openNode, levels, nodes]);
 
   /**
    * What a folder drop **means**: the level it lands in, and that level's ids in their new order —
@@ -1130,12 +1219,15 @@ export function DecksPage() {
       // happened to be standing in. It is also the honest order for a question about what is
       // *inside* something: the wall behind the sentence is then the thing the sentence is
       // about. The confirm's own Cancel and Escape leave the selection where this put it.
+      // **`openFolder`, so a tree row's `Delete…` pressed on the flat wall leaves it first**: the
+      // question is anchored to the heading row's `Folder` control, which is drawn only while a
+      // folder is open and the flat view is off — without this there is no button to hang it on.
       askDelete: (folder) => {
-        setSelectedFolderId(folder.id);
+        openFolder(folder.id);
         open({ kind: "deleteFolder" }, menuOpenerRef.current);
       },
     }),
-    [decks.create, folders.create, open, moveFolder],
+    [decks.create, folders.create, open, moveFolder, openFolder],
   );
 
   /**
@@ -1281,7 +1373,7 @@ export function DecksPage() {
     [formatSpecFor, floorByDeck],
   );
 
-  const heading = openNode === null ? ROOT_LABEL : openNode.folder.name;
+  const heading = flat ? EVERY_DECK_LABEL : openNode === null ? ROOT_LABEL : openNode.folder.name;
   /**
    * What the line under the heading counts — **the drawer, and the filter's share of it.**
    *
@@ -1337,6 +1429,7 @@ export function DecksPage() {
   const emptyFolder =
     !status &&
     decks.decks.length > 0 &&
+    !flat &&
     openNode !== null &&
     childFolders.length === 0 &&
     here.length === 0;
@@ -1377,8 +1470,11 @@ export function DecksPage() {
           onCollapse={setCollapsed}
           nodes={nodes}
           totalDecks={live.length}
-          selectedId={folderView}
-          onSelect={setSelectedFolderId}
+          // `undefined` on the flat wall — no row is the level on screen, because no level is.
+          selectedId={flat ? undefined : folderView}
+          // A row picked from the flat wall is the reader going back into the cabinet, so it
+          // leaves the flat view on its way into that folder.
+          onSelect={openFolder}
           drag={drag}
           canDropIn={canFile}
           onDropIn={fileDeck}
@@ -1409,6 +1505,49 @@ export function DecksPage() {
             <span className="font-mono text-[0.7rem] tabular-nums text-dim">{counts}</span>
 
             <div className="ml-auto flex items-center gap-2">
+              {/* **`View all` — every deck on one wall, with the folders left out** (issue #750).
+
+                  The tree's `All decks` row counts every deck the reader has and shows one level
+                  of the cabinet, so a reader who files everything had no way to see their decks
+                  side by side. This is that way: a toggle, `aria-pressed`, whose pressed state
+                  draws {@link EVERY_DECK_LABEL}'s wall — every live deck, filed or not, under the
+                  same filter, sort and Archived disclosure as any drawer.
+
+                  **Here, and not in the filter row**: that row is drawn only over a wall with
+                  decks on it, and the reader this is for is standing at a root whose decks are
+                  all in folders, where that row does not exist. It is also navigation rather than
+                  a narrowing — it decides which wall is on screen, as the tree does — so it sits
+                  with the row's other controls about the level, first among them.
+
+                  The glyph and the accent edge carry the pressed state the way the filter row's
+                  chips do (`filterChipState`), so "on" reads as the same mark it reads as one row
+                  down. The visible word is short because this column is ~548px at the app's
+                  1024px floor; the name says the rest.
+
+                  **Drawn only where there is a cabinet to leave out**: with no folders the top
+                  level already *is* every deck, and a toggle whose only effect is the heading's
+                  wording is the format chips' lone-chip problem — a control with no outcome worth
+                  having. It stays while it is on, whatever the folder count, so a reader who
+                  deletes their last folder from the flat wall is not left in a view with its
+                  switch gone. */}
+              {(folders.folders.length > 0 || flat) && (
+                <button
+                  ref={viewAllRef}
+                  type="button"
+                  aria-pressed={flat}
+                  aria-label={VIEW_ALL_NAME}
+                  onClick={() => setFlat(!flat)}
+                  className={cn(
+                    HEADING_BUTTON,
+                    "inline-flex items-center gap-1.5",
+                    flat && "border-accent text-accent hover:text-accent",
+                  )}
+                >
+                  <LayoutGrid className="size-3.5" aria-hidden="true" />
+                  View all
+                </button>
+              )}
+
               {/* **One control for every verb, where there were three.**
 
                   `Rename folder…`, `Move folder…` and `Delete folder…` each stood here as a
@@ -1422,16 +1561,20 @@ export function DecksPage() {
 
                   **It also halves the row.** Six buttons stood here at the widest — the three
                   verbs, `New folder`, `Import deck`, `New deck` — beside a heading and a count,
-                  in a column that is ~548px at the app's own 1024px floor. Four do now, and
-                  that is the same argument {@link DeckFilterRow} makes about why the filter
-                  gets a row of its own: this column has no width to spend saying anything
-                  twice.
+                  in a column that is ~548px at the app's own 1024px floor. Four did after
+                  that, and five with `View all` (issue #750) — the same argument
+                  {@link DeckFilterRow} makes about why the filter gets a row of its own: this
+                  column has no width to spend saying anything twice.
 
                   The caret glyph is the affordance rather than an ellipsis, and that is a
                   distinction the three removed buttons drew for themselves — their ellipsis
                   meant "this opens something that asks you a question", which is true of a
-                  rename field and a delete confirmation and false of a menu. */}
-              {openNode !== null && (
+                  rename field and a delete confirmation and false of a menu.
+
+                  **Not on the flat wall**: it is about the folder the reader is standing in, and
+                  that wall stands in none — the folder selected underneath is hidden, and a menu
+                  renaming or deleting something off screen is a control about nothing visible. */}
+              {!flat && openNode !== null && (
                 <div className="relative">
                   {/* **`aria-haspopup="menu"` and no `aria-expanded`** — the ruling the deleted
                       `WishFolderCard` made first and a shelf heading's `⋯` (`ShelfHeading`)
@@ -1516,7 +1659,8 @@ export function DecksPage() {
                 type="button"
                 onClick={(e) => {
                   folders.create.reset();
-                  open({ kind: "newFolder", parentId: folderView }, e.currentTarget);
+                  // `level`: the top level on the flat wall, the open drawer everywhere else.
+                  open({ kind: "newFolder", parentId: level }, e.currentTarget);
                 }}
                 className={HEADING_BUTTON}
               >
@@ -1579,10 +1723,11 @@ export function DecksPage() {
 
           {/* **A row of its own, beneath the heading rather than inside it.**
 
-              The row above already carries a heading, a count and four controls — `Folder`, New
-              folder, Import deck and New deck, where it was six until the three folder verbs
-              became that one menu. Five more in it wrap badly at the app's 1024px floor, where
-              this column is ~548px wide, and a heading that shares a line with a text box has
+              The row above already carries a heading, a count and up to five controls — `View
+              all`, `Folder`, New folder, Import deck and New deck, where it was six until the
+              three folder verbs became that one menu and `View all` joined (issue #750). Five
+              more in it wrap badly at the app's 1024px floor, where this column is ~548px wide,
+              and a heading that shares a line with a text box has
               stopped being a heading. The collapse changes neither of those, so this row stays
               where it is; it is also what the app does everywhere else, since `FilterBar` is a
               row on all five surfaces that draw it.
@@ -1637,6 +1782,7 @@ export function DecksPage() {
               no level above for a way *out* to point at. It stays a sentence. */}
           {!status &&
             decks.decks.length > 0 &&
+            !flat &&
             openNode === null &&
             childFolders.length === 0 &&
             here.length === 0 && (
@@ -1843,9 +1989,10 @@ export function DecksPage() {
             </ul>
           )}
 
+          {/* The flat wall is not a folder, so its version of the sentence does not say one. */}
           {!status && here.length === 0 && archivedHere.length > 0 && (
             <p className="py-8 text-center text-sm text-dim">
-              All decks in this folder are archived.
+              {flat ? "All your decks are archived." : "All decks in this folder are archived."}
             </p>
           )}
 

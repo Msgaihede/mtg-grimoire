@@ -339,6 +339,21 @@ interface AppState {
    */
   scannerFolds: Record<ScannerPanelId, boolean>;
   setScannerFold: (id: ScannerPanelId, open: boolean) => void;
+  /**
+   * Whether the deck gallery is showing **every deck at once, with no folders** — its `View all`
+   * toggle (issue #750) — rather than one drawer of the folder tree.
+   *
+   * **In the store, not in the view, and `scannerFolds`' reason is the whole of it.** `App.tsx`
+   * swaps `DecksPage` out for the editor, so a `useState` there is gone the moment a reader opens
+   * a deck — and the flat wall they opened it *from* would be a folder again on the way back. The
+   * open drawer can stay the page's own because it is re-derived on return (the deck's own
+   * folder); a flat wall has nothing to be re-derived from.
+   *
+   * Session state like everything here: no `app_meta` row and no persist middleware, so every
+   * launch opens on the folders.
+   */
+  deckWallFlat: boolean;
+  setDeckWallFlat: (flat: boolean) => void;
   searchView: SearchView;
   setSearchView: (view: SearchView) => void;
   /** How the collection is laid out. Separate from `searchView` on purpose — the search is
@@ -1366,6 +1381,10 @@ export const useAppStore = create<AppState>((set) => ({
     tiers: false,
   },
   setScannerFold: (id, open) => set((s) => ({ scannerFolds: { ...s.scannerFolds, [id]: open } })),
+  // The folders on launch: the cabinet is how the reader filed their decks, and the flat wall is
+  // a press away rather than a place the app opens on.
+  deckWallFlat: false,
+  setDeckWallFlat: (deckWallFlat) => set({ deckWallFlat }),
   // Art by default: this is a card app, and the table is the view you switch to when you
   // are comparing prices rather than looking at cards.
   //

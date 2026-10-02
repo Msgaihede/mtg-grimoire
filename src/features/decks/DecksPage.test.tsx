@@ -413,6 +413,9 @@ beforeEach(() => {
     openDeckId: null,
     returnToDeckId: null,
     cardZoom: { ...DEFAULT_SECTION_ZOOMS },
+    // The `View all` wall is session state in the store, so a case that pressed it would leave
+    // every later case in the file looking at every deck at once.
+    deckWallFlat: false,
   });
 });
 
@@ -3431,6 +3434,209 @@ describe("the folder row's menu", () => {
     window.removeEventListener("keydown", listen);
 
     expect(heard).toEqual([false]);
+  });
+});
+
+/**
+ * The `View all` wall (issue #750): every deck the reader has on one wall, with the folders left
+ * out — because the tree's `All decks` row counts every deck and shows one level of the cabinet,
+ * and a reader who files everything had no way to see their decks side by side.
+ */
+describe("the View all wall", () => {
+  const viewAll = () => screen.getByRole("button", { name: "View all decks" });
+
+  it("draws every deck from every folder, and no folder at all, while it is pressed", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+
+    await userEvent.click(viewAll());
+
+    expect(viewAll()).toHaveAttribute("aria-pressed", "true");
+    // Never `All decks`: that is the tree's root row, which names the top level.
+    expect(screen.getByRole("heading", { name: "Every deck" })).toBeInTheDocument();
+    expect(screen.getByText("3 decks")).toBeInTheDocument();
+    const wall = screen.getByRole("list", { name: "Your decks" });
+    // One at the top level, one a folder down, one two folders down.
+    for (const name of ["Burn", "Sunday draft", "Kenrith Two-Drops"]) {
+      expect(
+        within(wall).getByRole("button", { name: new RegExp(`^${name}`) }),
+      ).toBeInTheDocument();
+    }
+    expect(within(wall).queryByRole("button", { name: / folder, \d+ decks?$/ })).toBeNull();
+    expect(within(wall).queryByRole("button", { name: /^Up one level/ })).toBeNull();
+    // No tree row is the level on screen, because no level is — marking `All decks` would claim
+    // the top level beside a wall that shows every deck there is.
+    const tree = screen.getByRole("navigation", { name: "Folders" });
+    expect(tree.querySelectorAll("[aria-current]")).toHaveLength(0);
+  });
+
+  it("goes back to the folder underneath when it is pressed again", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(viewAll());
+
+    expect(screen.getByRole("heading", { name: "Every deck" })).toBeInTheDocument();
+    // The folder menu is about the folder the reader stands in, and the flat wall stands in none.
+    expect(screen.queryByRole("button", { name: "Folder actions" })).not.toBeInTheDocument();
+
+    await userEvent.click(viewAll());
+
+    expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
+    expect(await tileFor("Sunday draft")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Burn/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Folder actions" })).toBeInTheDocument();
+  });
+
+  it("leaves the flat wall for whichever row is picked in the tree", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+    await userEvent.click(viewAll());
+    await userEvent.click(screen.getByRole("button", { name: "Legends, 1 deck" }));
+
+    expect(screen.getByRole("heading", { name: "Legends" })).toBeInTheDocument();
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+    expect(useAppStore.getState().deckWallFlat).toBe(false);
+
+    // The root row too — it is the top level, which is a level of the cabinet.
+    await userEvent.click(viewAll());
+    await userEvent.click(screen.getByRole("button", { name: "All decks, 3 decks" }));
+
+    expect(screen.getByRole("heading", { name: "All decks" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "All decks, 3 decks" })).toHaveAttribute(
+      "aria-current",
+      "true",
+    );
+  });
+
+  /** One press, one rung: Escape leaves the flat wall and does not also walk the folder under it
+   *  up a level, and the caret lands on the toggle that turned the view on. */
+  it("leaves the flat wall on Escape, and only the flat wall", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Legends, 1 deck" }));
+    await userEvent.click(viewAll());
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.getByRole("heading", { name: "Legends" })).toBeInTheDocument();
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+    expect(viewAll()).toHaveFocus();
+  });
+
+  /**
+   * `App.tsx` swaps this page out for the editor, so the flat wall lives in the store — or a
+   * reader who opened a deck from it would come back to a folder. On the flat wall the returning
+   * deck's tile is on screen wherever it is filed, so the caret still has somewhere to land.
+   */
+  it("is still the flat wall when the gallery comes back from an editor", async () => {
+    withFolders();
+    useAppStore.setState({ deckWallFlat: true, returnToDeckId: KENRITH.id });
+
+    wrap(<DecksPage />);
+
+    await waitFor(async () => expect(await tileFor("Kenrith Two-Drops")).toHaveFocus());
+    expect(screen.getByRole("heading", { name: "Every deck" })).toBeInTheDocument();
+    expect(await tileFor("Burn")).toBeInTheDocument();
+  });
+
+  /**
+   * **The case that needs the folder rung switched off on the flat wall, not merely outranked.**
+   *
+   * Two `"navigation"` rungs of one rank are ordered by registration, newest on top. Coming back
+   * from an editor, the flat wall's rung registers at mount and the open folder — the returning
+   * deck's own, Legends — resolves only once the folders have loaded, so a folder rung left
+   * enabled under the flat wall would register *after* it and take the press: Escape would walk
+   * the hidden folder up a level and leave the reader on the flat wall. Measured by removing the
+   * `!flat` guard: this case goes red and the one above it does not.
+   */
+  it("leaves the flat wall on Escape after coming back from an editor, too", async () => {
+    withFolders();
+    useAppStore.setState({ deckWallFlat: true, returnToDeckId: KENRITH.id });
+
+    wrap(<DecksPage />);
+    await waitFor(async () => expect(await tileFor("Kenrith Two-Drops")).toHaveFocus());
+
+    await userEvent.keyboard("{Escape}");
+
+    expect(screen.getByRole("heading", { name: "Legends" })).toBeInTheDocument();
+    expect(viewAll()).toHaveFocus();
+  });
+
+  it("narrows, counts and files away the flat wall like any drawer", async () => {
+    deckFolderList.mockResolvedValue([EDH, LEGENDS]);
+    deckList.mockResolvedValue([
+      BURN,
+      { ...DRAFT, folderId: 1 },
+      KENRITH,
+      { ...FILED, folderId: 2 },
+    ]);
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+    // At the top level the filed deck two folders down is nobody's to show.
+    expect(screen.queryByRole("button", { name: /archived/i })).not.toBeInTheDocument();
+
+    await userEvent.click(viewAll());
+    const box = screen.getByLabelText("Filter decks by name");
+    await userEvent.type(box, "ken");
+
+    expect(screen.getByText("1 of 3 decks")).toBeInTheDocument();
+    expect(await tileFor("Kenrith Two-Drops")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Burn/ })).not.toBeInTheDocument();
+
+    await userEvent.clear(box);
+    await userEvent.click(screen.getByRole("button", { name: /archived/i }));
+
+    expect(await tileFor("Old Standard")).toBeInTheDocument();
+  });
+
+  it("makes a new deck at the top level, whatever folder is selected underneath", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(viewAll());
+    await userEvent.click(screen.getByRole("button", { name: "New deck" }));
+    await userEvent.type(await screen.findByLabelText("Name"), "Aristocrats");
+
+    expect(screen.getByRole("button", { name: "Folder" })).toHaveTextContent("Top level");
+  });
+
+  it("makes a new folder at the top level, and stands in it once it is made", async () => {
+    withFolders();
+    const ideas: DeckFolder = { id: 3, parentId: null, name: "Ideas", sortOrder: 1 };
+    deckFolderCreate.mockResolvedValue(ideas);
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(viewAll());
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+    deckFolderList.mockResolvedValue([EDH, LEGENDS, ideas]);
+    expect(await screen.findByLabelText("New folder name")).toHaveFocus();
+    await userEvent.keyboard("Ideas");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    expect(deckFolderCreate).toHaveBeenCalledWith(null, "Ideas");
+    expect(await screen.findByRole("heading", { name: "Ideas" })).toBeInTheDocument();
+    expect(viewAll()).toHaveAttribute("aria-pressed", "false");
+  });
+
+  /** With no folders the top level already is every deck, so a toggle there would change only
+   *  the heading's wording. */
+  it("draws no toggle where there are no folders to leave out", async () => {
+    wrap(<DecksPage />);
+
+    await tileFor("Burn");
+
+    expect(screen.queryByRole("button", { name: "View all decks" })).not.toBeInTheDocument();
   });
 });
 
