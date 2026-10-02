@@ -514,7 +514,11 @@ mod tests {
         // and nothing that ships was taken for one.
         assert_eq!(
             tests,
-            ["src/scratch.rs", "src/sync_engine/apply/tests.rs"],
+            [
+                "src/scratch.rs",
+                "src/sync/run_tests.rs",
+                "src/sync_engine/apply/tests.rs"
+            ],
             "a module declared behind a test gate"
         );
 

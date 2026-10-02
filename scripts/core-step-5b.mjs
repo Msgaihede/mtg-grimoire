@@ -16,17 +16,28 @@
 //   module calls, and `status` — it reads the image cache, which moves in the step's third
 //   part — as `src-tauri/src/sync/mod.rs` under `pub use grimoire_core::sync::*;`.
 // * `src-tauri/src/index/{mod,facets,lifecycle}.rs` → `crates/grimoire-core/src/index/`. The one
-//   command, `facet_cards`, stays as `src-tauri/src/index/facets/mod.rs`, and the fixture that
-//   builds a whole `AppState` stays in `src-tauri/src/index/mod.rs`.
+//   command, `facet_cards`, stays as `src-tauri/src/index/facets/mod.rs`. The fixture that built
+//   a whole `AppState` has a core twin over a `State`, and every test that called it moved, so
+//   the desktop's copy goes rather than staying with nothing to call it.
 // * `collection_source::with_write_owned` goes home, and its remainder file with it.
 //
 // It writes nothing outside those files. `State`'s new fields, the desktop's `init_state` and the
 // observers are edited by hand in the same commit: they are a handful of sites, not a move.
 //
 // Run it on a tree where those four files are still in `src-tauri`; on one where they have
-// moved it says so and does nothing.
+// moved it says so and does nothing. **It touches no git state**: every decision is made and
+// every replacement checked before the first byte is written, and then it writes files and
+// removes files. A rename is what git infers from the contents at commit time.
 import { execFileSync } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  rmdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { dirname, join } from "node:path";
 import { inner, split } from "./lib/rs-items.mjs";
 
@@ -87,7 +98,10 @@ const SYNC_STAYS = new Set([
 ]);
 /** One that is neither: the mirror hears of a swap through `State::corpus_replaced` now. */
 const SYNC_GONE = new Set(["note_mirror_after_swap"]);
-/** Tests that stay: each builds an `AppState` on a file `split` converted, or asks `status`. */
+/**
+ * Test items that stay — five tests and the helper they share: each builds an `AppState` on a
+ * file `split` converted, or asks `status`.
+ */
 const SYNC_TESTS_STAY = new Set([
   "file_state",
   "status_answers_real_numbers_while_the_write_connection_is_held",
@@ -439,7 +453,11 @@ const SYNC_TESTS_STAY = new Set([
       .join("")
       .replace(/^\n+/, "") +
     body.tail +
-    "}\n";
+    "}\n" +
+    // Declared here, written by hand: `sync/run_tests.rs` is a whole run against a mock
+    // Scryfall, which the module could not have while a run took a window.
+    "\n/// A whole sync, driven against a mock Scryfall. Its own file: `sync/run_tests.rs`.\n" +
+    "#[cfg(test)]\nmod run_tests;\n";
 
   const coreText =
     header +
@@ -466,6 +484,12 @@ use std::sync::Arc;
     writeUse.text + "\n/// Current sync state for the UI.",
   );
   desk = swaps(desk, [
+    [
+      `/// Everything a command or a background sync needs. Managed by Tauri as
+/// \`Arc<AppState>\` so a spawned sync can own a handle of its own.`,
+      `/// Everything a command needs. Managed by Tauri as \`Arc<AppState>\`, so a command's blocking
+/// task can own a handle of its own; a sync owns one on the core inside it, \`state.core\`.`,
+    ],
     [
       `/// **Not everything below is the desktop's for good.** The two mirror fields and the change
 /// mask are; the rest are every host's, and wait here for the type each one holds to move —
@@ -601,8 +625,8 @@ pub(crate) fn lock_db(state: &State) -> MutexGuard<'_, Connection> {
 //! * [\`status\`], which reads the image cache's failure count beside five \`sync_meta\` rows. It
 //!   goes home with the cache.
 //!
-//! And six tests: each asks [\`status\`], or drives \`with_write\` over an [\`AppState\`] built on a
-//! file \`split\` converted.
+//! And five tests, with the \`file_state\` they share: each asks [\`status\`], or drives
+//! \`with_write\` over an [\`AppState\`] built on a file \`split\` converted.
 
 pub use grimoire_core::sync::*;
 
@@ -627,7 +651,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 // index/
 // ══════════════════════════════════════════════════════════════════════════════════════════
 
-/** The fixture that stays: it builds the desktop's whole `AppState`, on a file `split` converted. */
+/** The fixture that is rewritten rather than moved: it built the desktop's whole `AppState`. */
 const INDEX_FIXTURE_STAYS = "state_with_seeded_cards";
 
 {
@@ -739,10 +763,10 @@ ${command.text.replace(/\n+$/, "\n")}`,
     /// count here would be zero.
     ///
     /// The pair is built at head, as [\`crate::schema::memory_pair\`] builds its two, rather than
-    /// converted from a single file: that conversion is the desktop's, and its own copy of this
-    /// fixture — over an \`AppState\` — is in \`src-tauri\`'s \`index\`. No capture triggers and no
-    /// launch passes, for the reason that copy gives: twenty fixtures never asked for sync's op
-    /// log.
+    /// converted from a single file and then migrated, which is what this fixture did while it
+    /// lived in \`src-tauri\`: that conversion is the desktop's. The two shapes are held equal by
+    /// \`schema\`'s own tests of the ladder against the head DDL. No capture triggers and no
+    /// launch passes: twenty fixtures never asked for sync's op log.
     ///
     /// The directory is [\`crate::scratch::path\`]'s, private to the calling test and to this
     /// \`cargo test\` process, so \`name\` only labels it.
@@ -775,9 +799,9 @@ ${command.text.replace(/\n+$/, "\n")}`,
 /// \`lea\`, 1 in \`rav\`, 3 paper) are properties of *these four rows*, so the two files must
 /// read the same ones or the assertions stop meaning what they say.
 ///
-/// **At the foot of the file, and behind \`testing\`**: \`src-tauri\`'s tests seed the same four
-/// rows through it, and everything below a file's \`mod tests\` is test code to the fence and
-/// to the coverage script alike.
+/// **At the foot of the file, and behind \`testing\`**: everything below a file's \`mod tests\`
+/// is test code to the fence and to the coverage script alike, and another crate's tests can
+/// reach these through the feature.
 #[cfg(any(test, feature = "testing"))]
 pub mod fixtures {
 ` +
@@ -796,7 +820,13 @@ pub mod fixtures {
       .filter((it) => it !== fixtures && it !== modTests)
       .map((it) => it.text)
       .join("");
-  modCore = swaps(modCore, [["pub use grimoire_core::index::bitset;\n", "pub mod bitset;\n"]]);
+  modCore = swaps(modCore, [
+    ["pub use grimoire_core::index::bitset;\n", "pub mod bitset;\n"],
+    [
+      "    /// `AppState.db_read` for it would stall every search behind it at launch, which is the",
+      "    /// the state's read connection for it would stall every search behind it at launch, which is the",
+    ],
+  ]);
   const modTestsText = swaps(modTests.text, [
     [
       "        let t = std::time::Instant::now();",
@@ -808,72 +838,29 @@ pub mod fixtures {
     modCore.replace(/\n+$/, "\n") + modTestsText.replace(/\n+$/, "\n") + "\n" + fxCore,
   );
 
+  // The desktop's file: the re-export and the one module that holds a command. Its fixture is
+  // not written back — nothing here calls it once the tests that did have moved.
   put(
     join(DESK, "index/mod.rs"),
-    `//! **The facet index is \`grimoire-core\`'s, re-exported here beside what names the desktop.**
+    `//! **The facet index is \`grimoire-core\`'s, re-exported here beside its one command.**
 //!
 //! \`CardIndex\`, its facets and its lifecycle are in \`crates/grimoire-core/src/index/\` since the
 //! extraction's I/O step, and a path through this module reaches that crate's item unless this
-//! file defines it. It defines two things: [\`facets\`], which is the core's module of that name
-//! plus the \`facet_cards\` command, and — in test builds — the one fixture that builds the
-//! desktop's whole \`AppState\`.
+//! file defines it. It defines one thing: [\`facets\`], which is the core's module of that name
+//! plus the \`facet_cards\` command.
+//!
+//! **No test of the index is here.** Every one moved with the code, onto a fixture the core
+//! builds at head; the fixture this file had — an \`AppState\` over a file \`split\` converted —
+//! went when its last caller did.
 
 pub use grimoire_core::index::*;
 
 pub mod facets;
-
-/// The core's four seeded printings, and this crate's own state over them.
-///
-/// \`pub\`, in a test build only: the glob above carries the core's \`fixtures\` out of this module
-/// publicly, and a private module of the same name over a public re-export is what
-/// \`hidden_glob_reexports\` warns about.
-#[cfg(test)]
-pub mod fixtures {
-    pub use grimoire_core::index::fixtures::*;
-
-${swaps(stays.text.replace(/^\n+/, ""), [
-  [
-    `        std::sync::Arc::new(crate::sync::AppState {
-            core: grimoire_core::state::State::new(
-                conn,
-                Some(read),
-                dir.clone(),
-                grimoire_core::events::silent(),
-                crate::mirror::watch::observers(
-                    mirror.clone(),
-                    changes.clone(),
-                    Default::default(),
-                ),
-            ),
-            syncing: std::sync::atomic::AtomicBool::new(false),
-            // Never called: nothing in the lifecycle reaches the network or an image.
-            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
-            images: crate::images::Cache::new(dir.join("images")),
-            index: std::sync::RwLock::default(),
-`,
-    `        std::sync::Arc::new(crate::sync::AppState {
-            core: std::sync::Arc::new(grimoire_core::state::State::new(
-                conn,
-                Some(read),
-                dir.clone(),
-                grimoire_core::events::silent(),
-                crate::mirror::watch::observers(
-                    mirror.clone(),
-                    changes.clone(),
-                    Default::default(),
-                ),
-                // Never called: nothing in the lifecycle reaches the network or an image.
-                crate::scryfall::Client::new("http://127.0.0.1:1".into()),
-            )),
-            images: crate::images::Cache::new(dir.join("images")),
-`,
-  ],
-]).replace("    pub(crate) fn state_with_seeded_cards(", "    pub fn state_with_seeded_cards(")}}
 `,
   );
   console.log(
     `index: lifecycle whole; facets all but \`facet_cards\`; mod.rs with ${fx.items.length - 1} fixtures, ` +
-      `\`${INDEX_FIXTURE_STAYS}\` in both crates over each one's own state`,
+      `\`${INDEX_FIXTURE_STAYS}\` rebuilt over the core's \`State\``,
   );
 }
 
@@ -935,7 +922,7 @@ const HOMECOMING = [
 for (const { module, tests: names } of HOMECOMING) {
   const deskPath = join(DESK, module, "mod.rs");
   const corePath = join(CORE, `${module}.rs`);
-  const desk = split(read(deskPath));
+  const desk = split(out.get(deskPath) ?? read(deskPath));
   const deskTests = desk.items.find((it) => it.kind === "mod" && it.name === "tests");
   if (!deskTests) throw new Error(`${module}/mod.rs has no \`mod tests\``);
   const body = inner(deskTests);
@@ -1016,31 +1003,24 @@ if (DRY) {
   process.exit(0);
 }
 
-// `git mv` first, so each moved file is a rename in history; then the contents.
-const git = (...args) =>
-  execFileSync("git", args, { cwd: ROOT, stdio: ["ignore", "pipe", "inherit"] });
+// Files only. Everything above decided what to write and checked every replacement against the
+// tree, so a run either reaches here whole or has written nothing. No `git mv`: git infers a
+// rename from the contents when the change is committed, and a half-finished sequence of index
+// operations is a tree this script's own guard would then call finished.
 const rel = (path) =>
   path
     .slice(ROOT.length + 1)
     .split("\\")
     .join("/");
-git("rm", "-q", "--cached", rel(join(CORE, "index/mod.rs")));
-rmSync(join(CORE, "index/mod.rs"));
-for (const [from, to] of [
-  ["sync.rs", "sync.rs"],
-  ["index/lifecycle.rs", "index/lifecycle.rs"],
-  ["index/facets.rs", "index/facets.rs"],
-  ["index/mod.rs", "index/mod.rs"],
-]) {
-  git("mv", rel(join(DESK, from)), rel(join(CORE, to)));
+for (const path of removed) {
+  rmSync(path);
+  // A remainder that was the only file in its folder leaves no folder behind.
+  if (readdirSync(dirname(path)).length === 0) rmdirSync(dirname(path));
 }
-git("rm", "-q", rel(join(DESK, "collection_source/mod.rs")));
 for (const [path, text] of out) {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, text);
 }
-// Nothing is left staged: a later `git add` of something else must not carry these along.
-git("reset", "-q");
 
 if (!NO_FMT) {
   const files = [...out.keys()].filter((p) => p.endsWith(".rs")).map(rel);

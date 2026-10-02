@@ -80,8 +80,9 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// wholesale; either one mapped to a surface would fire this a hundred thousand times per
 /// refresh and turn every sync into a mirror rebuild. What those two change — a corrected
 /// card name, a moved price — enters through one full pass after the refresh *completes*
-/// ([`crate::sync::run_sync`] and [`crate::marketplace_feed::refresh`] both call
-/// [`Mask::mark_all`]), which is a bounded event instead of a per-row storm. The same goes
+/// ([`crate::marketplace_feed::refresh`] calls [`Mask::mark_all`], and the card sync reaches it
+/// through [`WriteObserver::corpus_replaced`]), which is a bounded event instead of a per-row
+/// storm. The same goes
 /// for `deck_audit`, `deck_undo`, `error_log`, `image_cache`, the art- and oracle-tag tables,
 /// `app_meta` and `sync_meta`: none of them is read by [`crate::mirror::read`].
 ///
@@ -1824,10 +1825,11 @@ mod tests {
 
     /// The sync's mark, through the door it comes in by: the card sync, which is the core's,
     /// calls `State::corpus_replaced` where its swap lands, and the mirror's mask is one of the
-    /// observers the desktop gives the state. The *call* inside `do_sync` is still not driven
-    /// here — that needs a run against a mock Scryfall. What is pinned is that the mask hears
-    /// it, and what it marks: a swapped corpus moved every mirrored price, so it is every
-    /// surface.
+    /// observers the desktop gives the state. The *call* inside `do_sync` is driven in the
+    /// core, by `sync::run_tests`, which runs a whole sync against a mock Scryfall and counts
+    /// what an observer is told. What is pinned here is the desktop's half: that the mask is
+    /// one of those observers, and what it marks — a swapped corpus moved every mirrored
+    /// price, so it is every surface.
     ///
     /// It was gated on `run_sync`'s result until issue #551, which is why a run that swapped the
     /// cards and then failed at `/sets` left the mirror's prices a corpus behind.

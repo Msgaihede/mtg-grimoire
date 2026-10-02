@@ -7867,10 +7867,13 @@ pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// touches, and the thing it defends against is a database arriving *at head* with an index
 /// missing — an interrupted swap, a restored data folder, a hand-edited file — which is a state
 /// no version number describes.
-/// **`pub(crate)` for the test fixtures, and that is the point rather than a convenience.**
-/// [`crate::index::fixtures::state_with_seeded_cards`] builds its database the way a fresh
-/// install is built — [`crate::split::convert`], which runs the frozen [`migrate_single_file`]
-/// ladder and stamps head — and then opened it without ever migrating. That is not a database
+/// **`pub` for the test fixtures, and that is the point rather than a convenience.** A
+/// fixture that builds its database the way the desktop's fresh install is built —
+/// `split::convert`, which runs the frozen [`migrate_single_file`] ladder and stamps head —
+/// and opens it without ever migrating has to call this itself; the index's fixture did
+/// exactly that while it lived in `src-tauri`, and the ingest's one test there still does.
+/// (The core's own index fixture builds the pair at head with [`build_pair`] and needs no
+/// climb.) Without it, that is not a database
 /// any launch produces, because every launch goes through `prepare_database`, and the gap was invisible until a corpus rung finally changed a table shape: the fixture
 /// carried a v26-shaped `combos` under a header claiming head, which is precisely the state
 /// [`combos_are_at_head`] exists to repair.

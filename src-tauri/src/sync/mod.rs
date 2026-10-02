@@ -13,8 +13,8 @@
 //! * [`status`], which reads the image cache's failure count beside five `sync_meta` rows. It
 //!   goes home with the cache.
 //!
-//! And six tests: each asks [`status`], or drives `with_write` over an [`AppState`] built on a
-//! file `split` converted.
+//! And five tests, with the `file_state` they share: each asks [`status`], or drives
+//! `with_write` over an [`AppState`] built on a file `split` converted.
 
 pub use grimoire_core::sync::*;
 
@@ -23,8 +23,8 @@ use rusqlite::Connection;
 use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex, MutexGuard};
 
-/// Everything a command or a background sync needs. Managed by Tauri as
-/// `Arc<AppState>` so a spawned sync can own a handle of its own.
+/// Everything a command needs. Managed by Tauri as `Arc<AppState>`, so a command's blocking
+/// task can own a handle of its own; a sync owns one on the core inside it, `state.core`.
 ///
 /// **It wraps `grimoire-core`'s [`State`] and derefs to it**, so `state.db`, `state.data_dir`,
 /// `state.fence` and `state.events` are that struct's fields, read here exactly as they were

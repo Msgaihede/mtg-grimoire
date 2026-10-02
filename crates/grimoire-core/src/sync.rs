@@ -1466,3 +1466,7 @@ mod tests {
         assert_eq!(conditional_etag(None, 116_568), None);
     }
 }
+
+/// A whole sync, driven against a mock Scryfall. Its own file: `sync/run_tests.rs`.
+#[cfg(test)]
+mod run_tests;

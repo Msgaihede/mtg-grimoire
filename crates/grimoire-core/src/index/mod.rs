@@ -187,7 +187,7 @@ impl CardIndex {
     /// every printing — a digital-only set still needs an ordinal.
     ///
     /// **Give this its own read-only connection.** It is a full pass over `cards` and holding
-    /// `AppState.db_read` for it would stall every search behind it at launch, which is the
+    /// the state's read connection for it would stall every search behind it at launch, which is the
     /// exact failure that second connection exists to prevent.
     pub fn build(conn: &Connection) -> rusqlite::Result<CardIndex> {
         // **One read transaction over both halves of the build.** The corpus scan and the
@@ -893,9 +893,9 @@ mod tests {
 /// `lea`, 1 in `rav`, 3 paper) are properties of *these four rows*, so the two files must
 /// read the same ones or the assertions stop meaning what they say.
 ///
-/// **At the foot of the file, and behind `testing`**: `src-tauri`'s tests seed the same four
-/// rows through it, and everything below a file's `mod tests` is test code to the fence and
-/// to the coverage script alike.
+/// **At the foot of the file, and behind `testing`**: everything below a file's `mod tests`
+/// is test code to the fence and to the coverage script alike, and another crate's tests can
+/// reach these through the feature.
 #[cfg(any(test, feature = "testing"))]
 pub mod fixtures {
     use rusqlite::Connection;
@@ -968,10 +968,10 @@ pub mod fixtures {
     /// count here would be zero.
     ///
     /// The pair is built at head, as [`crate::schema::memory_pair`] builds its two, rather than
-    /// converted from a single file: that conversion is the desktop's, and its own copy of this
-    /// fixture — over an `AppState` — is in `src-tauri`'s `index`. No capture triggers and no
-    /// launch passes, for the reason that copy gives: twenty fixtures never asked for sync's op
-    /// log.
+    /// converted from a single file and then migrated, which is what this fixture did while it
+    /// lived in `src-tauri`: that conversion is the desktop's. The two shapes are held equal by
+    /// `schema`'s own tests of the ladder against the head DDL. No capture triggers and no
+    /// launch passes: twenty fixtures never asked for sync's op log.
     ///
     /// The directory is [`crate::scratch::path`]'s, private to the calling test and to this
     /// `cargo test` process, so `name` only labels it.

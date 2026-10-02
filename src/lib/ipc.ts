@@ -10,10 +10,10 @@
  *
  * Sources, verified field by field:
  * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `crates/grimoire-core/src/search.rs`
- * `FacetResponse`                                 — `src-tauri/src/index/facets.rs`
+ * `FacetResponse`                                 — `crates/grimoire-core/src/index/facets.rs`
  * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`/
  * `FinishPrices`/`PrintingPrices`/`MeldRelation` — `crates/grimoire-core/src/card.rs`
- * `SyncOutcome`/`SyncStatus`/`Progress`          — `src-tauri/src/sync.rs`
+ * `SyncOutcome`/`SyncStatus`/`Progress`          — `crates/grimoire-core/src/sync.rs`
  * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
  * `CollectionPage`/`CollectionSummary`/`BreakdownRow` — `crates/grimoire-core/src/collection.rs`
  * `MoveOutcome`                                  — `crates/grimoire-core/src/collection_alloc.rs`
@@ -623,7 +623,7 @@ export interface SearchResponse {
 /**
  * Facet counts for one search — how many results each filter option would leave.
  *
- * Mirrors `src-tauri/src/index/facets.rs`. **`ready: false` means the index is still
+ * Mirrors `crates/grimoire-core/src/index/facets.rs`. **`ready: false` means the index is still
  * building**, not that everything is empty: the UI leaves every control live, because
  * not-greyed has to mean "we don't know" rather than "this is empty".
  *

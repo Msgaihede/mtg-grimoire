@@ -879,8 +879,8 @@ fn start(app: &tauri::AppHandle) {
 
     // Warm the facet index: ~767 ms of full table scan on its own thread and its own
     // read-only connection, so the window comes up now and the first searches answer
-    // out of `db_read` untouched. Here rather than inside `init_state` because that
-    // returns an `AppState` and this needs the `Arc` — and because it must run after
+    // out of `db_read` untouched. Here rather than inside `init_state`, which builds a state
+    // and starts nothing: a build is the first thing that *runs* on one, and it must run after
     // `prepare_database`, which is the last thing that can change what `cards` is.
     // Until it lands, `facet_cards` answers `ready: false` and every filter control
     // stays live. Nothing about it is fatal; the handle is dropped and the thread
@@ -1306,8 +1306,8 @@ fn init_state(
     // connection, so the core owns the installer and everything else that needs to hear about
     // a write registers with it — see `grimoire_core::hooks`.
     //
-    // The state starts with no sync in flight and a cold index, which `start` builds the
-    // moment this is in an `Arc` — see there for why the build cannot be started from in here.
+    // The state starts with no sync in flight and a cold index, which `start` builds once this
+    // function has returned — see there for why nothing is started from in here.
     let core = grimoire_core::state::State::new(
         conn,
         Some(conn_read),
