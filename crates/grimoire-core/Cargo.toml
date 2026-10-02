@@ -1,6 +1,10 @@
 [package]
 name = "grimoire-core"
-version = "0.0.0"
+# **The app's version, not this crate's own**: `scryfall::USER_AGENT` is built from it, and
+# Scryfall asks for an accurate one. release-please bumps it with `src-tauri`'s
+# (`release-please-config.json`), and `src-tauri`'s `the_core_wears_the_apps_version` goes red
+# on a release that moved one and not the other.
+version = "0.39.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "MTG Grimoire's engine, with no window: what every host links."
@@ -51,6 +55,21 @@ testing = []
 # moved here from `src-tauri/Cargo.toml` with it.
 unicode-normalization = "0.1"
 flate2 = "1"
+# `platform::http`, on every target: natively the client this app has always used, and in a
+# browser `reqwest`'s own `fetch` backend — which is why it is one line and not two. rustls,
+# never native-tls (no OpenSSL or schannel in a portable build; the feature names nothing on
+# wasm, where the TLS is the browser's), and deliberately NO `gzip` feature: Scryfall's bulk
+# data is a real .gz *file*, not a `Content-Encoding`, so transparent decompression would
+# corrupt the download. `stream` is what makes `bytes_stream()` available. The same line as
+# `src-tauri`'s, which still builds the feeds', the relay's and the updater's clients.
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
+# A body's chunks (`platform::http::Body`), the browser arm's deadline (`platform::timer`) and
+# `scryfall`'s pacing gate — an async mutex that is not the runtime's, because the browser has
+# no runtime to borrow one from.
+futures-util = "0.3"
+# What a chunk of a response body is. `reqwest` hands these out; naming the crate is what lets
+# `platform::http::Body::chunk` say so in its signature.
+bytes = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
@@ -99,6 +118,14 @@ qrcode = { version = "0.14", default-features = false }
 # and so does every observer a host registers.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
+# `platform::timer` and `platform::files::aio`, natively. **Every host's async code runs on
+# tokio** — Tauri's runtime is one — so the sleep is the runtime's and the file writes go through
+# its blocking pool. `rt` is not optional: `tokio::fs` runs every operation through
+# `spawn_blocking`, which needs a runtime handle. The features are the ones this crate's own
+# source names; `src-tauri` asks for more (`sync`, `macros`) for code that is still its own.
+# Not on wasm: `tokio::fs` does not compile there, and a Worker has no tokio runtime to drive
+# a timer.
+tokio = { version = "1", features = ["fs", "io-util", "rt", "time"] }
 
 # ── Web ──────────────────────────────────────────────────────────────────────────────────────
 # ⚠️ NEVER add `default-features = false` to this rusqlite line. `ffi-sqlite-wasm-rs` — the FFI
@@ -118,9 +145,17 @@ rusqlite = { version = "0.40", features = ["hooks"] }
 getrandom = { version = "0.4", features = ["wasm_js"] }
 # `Date.now()`, for `platform::clock` — `SystemTime::now()` panics on this target.
 js-sys = "0.3"
+# `platform::timer`'s browser arm: a `Promise` around the Worker's `setTimeout`, awaited.
+# Both are in the tree already, under `reqwest`'s `fetch` backend.
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 
 # Native tests only: a scratch directory for the tests that open a real pair of files. Nothing
 # builds dev-dependencies for a target that cannot run them, which is why this needs no target
 # table.
 [dev-dependencies]
 tempfile = "3"
+# `scryfall`'s tests answer from a local mock server, and never from Scryfall.
+httpmock = "0.8"
+# `#[tokio::test]`, for the tests of what is async here.
+tokio = { version = "1", features = ["macros", "rt"] }

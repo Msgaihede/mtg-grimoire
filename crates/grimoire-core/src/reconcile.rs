@@ -729,7 +729,7 @@ mod tests {
     use super::*;
     // The deck fixtures' one shared piece: a category is what a deck card is filed under
     // since schema v8, and `schema::tests` already owns the insert.
-    use crate::schema::tests::category;
+    use crate::schema::fixtures::category;
 
     fn migration(id: &str, strategy: &str, old: &str, new: Option<&str>) -> Migration {
         Migration {

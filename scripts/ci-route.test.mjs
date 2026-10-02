@@ -106,6 +106,7 @@ describe("the census", () => {
     expect(rustPaths).toContain("src/features/transfer/__golden__");
     expect(rustPaths).toContain("src/features/transfer/__golden__/corpus.json");
     expect(rustPaths).toContain("share-worker/wrangler.jsonc");
+    expect(rustPaths).toContain("release-please-config.json");
   });
 
   // The engine's sources are in the census by the same glob as `card-scanner`'s, so a file one
@@ -168,6 +169,8 @@ describe("the arms", () => {
     [".vscode/settings.json", F, F, F, F, F],
     [".gitignore", F, F, F, F, F],
     [".release-please-manifest.json", F, F, F, F, F],
+    // Read by a Rust test since the engine's manifest began carrying the app's version.
+    ["release-please-config.json", T, T, F, F, F],
     ["scripts/x.ps1", F, F, F, T, F],
     [".claude/skills/running-the-app/lock.ps1", F, F, F, T, F],
     ["src-tauri/x.psm1", F, F, F, T, F],

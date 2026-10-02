@@ -28,7 +28,10 @@ use std::sync::Mutex;
 /// Two jobs, deliberately the same number: it is how long another writer can be made
 /// to wait for the connection, and how often a stalled ingest becomes visible. At the
 /// measured 2 600 rows/s both are well under a second.
-const BATCH: u64 = 2000;
+///
+/// `pub` for the one test that stayed in `src-tauri` — it counts batches against a database
+/// `split` converted, and `split` is the desktop's.
+pub const BATCH: u64 = 2000;
 
 /// What an ingest did. `inserted + skipped` is the number of lines read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -102,7 +105,7 @@ pub fn ingest_gz(
 
     // Opened before the database is touched: a missing or unreadable path must not
     // cost the caller the staging table it was about to fill.
-    let mut file = std::fs::File::open(gz_path)?;
+    let mut file = crate::platform::files::open(gz_path)?;
     let chunks = std::iter::from_fn(move || {
         let mut buf = vec![0u8; 64 * 1024];
         match file.read(&mut buf) {
@@ -408,62 +411,14 @@ const STAGING_INSERT: &str =
 
 #[cfg(test)]
 mod tests {
+    use super::fixtures::*;
     use super::*;
-    use flate2::{write::GzEncoder, Compression};
-    use std::io::Write;
-
-    /// Tests run in parallel and share the temp directory, so the file name is keyed
-    /// on the content — two fixtures with the same line count must not race each
-    /// other for the same path.
-    ///
-    /// **That is only half the race, and the other half bit `oracle_tags`' copy of this
-    /// function on 2026-08-20.** Keying on content also guarantees that two fixtures with the
-    /// *same* content share a path, which in a test module is the likely case rather than the
-    /// unlikely one — and `File::create` truncates, so one test empties the file another is
-    /// still streaming and that one dies with `Io(Kind(UnexpectedEof))`. No test here has
-    /// collided yet; nothing about this helper made it safe, so it takes the same fix.
-    ///
-    /// Write a private file and move it into place: nothing ever opens the shared path for
-    /// writing. Losing the move is fine — the name is the content's hash, so whoever won wrote
-    /// the same bytes.
-    fn gz_fixture(lines: &[&str]) -> std::path::PathBuf {
-        use std::hash::{DefaultHasher, Hash, Hasher};
-        let mut h = DefaultHasher::new();
-        lines.hash(&mut h);
-        let p = std::env::temp_dir().join(format!(
-            "mtgtest-{}-{:016x}.jsonl.gz",
-            lines.len(),
-            h.finish()
-        ));
-        if !p.exists() {
-            use std::sync::atomic::{AtomicU64, Ordering};
-            static NEXT: AtomicU64 = AtomicU64::new(0);
-            let tmp = p.with_extension(format!("{}.tmp", NEXT.fetch_add(1, Ordering::Relaxed)));
-            let mut enc = GzEncoder::new(std::fs::File::create(&tmp).unwrap(), Compression::fast());
-            for l in lines {
-                enc.write_all(l.as_bytes()).unwrap();
-                enc.write_all(b"\n").unwrap();
-            }
-            enc.finish().unwrap();
-            if std::fs::rename(&tmp, &p).is_err() {
-                let _ = std::fs::remove_file(&tmp);
-            }
-        }
-        p
-    }
 
     /// A migrated in-memory database in the shape the ingest is handed now: the shared
     /// write mutex, not a bare connection.
     fn mem_db() -> Mutex<Connection> {
         let conn = crate::schema::memory_pair();
         Mutex::new(conn)
-    }
-
-    /// A minimal but complete card line, distinct per `i`.
-    fn card_line(i: u64) -> String {
-        format!(
-            r#"{{"object":"card","id":"c{i}","name":"Card {i}","lang":"en","layout":"normal","set":"x","collector_number":"{i}","games":["paper"],"finishes":["nonfoil"],"digital":false}}"#
-        )
     }
 
     /// The sink and the iterator entry point must agree row for row.
@@ -530,7 +485,7 @@ mod tests {
         crate::db::lock_blocking(&db).execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw) VALUES ('stale','Stale','x','1','en','normal','{}')", []).unwrap();
         let sample = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/../crates/grimoire-core/tests/fixtures/cards_sample.jsonl"
+            "/tests/fixtures/cards_sample.jsonl"
         ))
         .unwrap();
         let lines: Vec<&str> = sample.lines().collect();
@@ -1029,81 +984,6 @@ mod tests {
         );
     }
 
-    /// The whole point of chunking. Plan 3 writes user rows from commands, and the ingest
-    /// used to hold `AppState.db` for its entire ~44 s run — so an "Add to collection"
-    /// during the daily sync was a frozen button. Now the load commits every `BATCH` rows
-    /// and drops the guard between batches, so the longest anyone waits is one batch.
-    ///
-    /// The probe runs on another thread, as a command would, and asks with a bound. What
-    /// makes the count mean something is *when* a take is allowed to count: only between
-    /// the first progress callback (the first batch has committed, so the ingest is
-    /// demonstrably mid-run and using the connection) and the ingest returning. A take won
-    /// before the ingest got going, or in the instant after it finished, is discarded.
-    ///
-    /// Without that window the assertion is decoration: an ingest that held the connection
-    /// from end to end would simply make the probe wait, and it would then collect three
-    /// locks from an idle mutex and pass. With it, the same regression scores zero.
-    #[test]
-    fn a_writer_gets_the_connection_between_batches_of_an_ingest() {
-        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
-
-        let dir = crate::scratch::path("ingest-chunked");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::split::convert(&dir).unwrap();
-        let conn = crate::db::open_write(&dir).unwrap();
-        // **The corpus is brought to head, because a launch brings it to head** —
-        // `index::fixtures::state_with_seeded_cards`' line and its whole argument. `convert`
-        // builds the file through the frozen `migrate_single_file` ladder and *then* stamps
-        // `CORPUS_SCHEMA_VERSION` on it, so what comes out wears head while carrying whatever
-        // shape that ladder last built; `db::open_write` migrates nothing, by design. Without
-        // this line the fixture is a database no launch can produce, and corpus schema 3 is
-        // where that stopped being invisible: the `cards` this ingest stages from had no
-        // `produced_mana`, and the run died on `table cards_staging has no column named
-        // produced_mana` — the exact field failure the rung's shape gate exists to prevent.
-        crate::schema::migrate_corpus(&conn).unwrap();
-        let db = std::sync::Mutex::new(conn);
-
-        // Eight batches' worth. Only the seven release points *after* the first batch
-        // count, so the run has to have plenty of them left once counting opens.
-        let rows: Vec<String> = (0..BATCH * 8).map(card_line).collect();
-        let lines: Vec<&str> = rows.iter().map(String::as_str).collect();
-        let p = gz_fixture(&lines);
-
-        let taken = AtomicUsize::new(0);
-        let ingesting = AtomicBool::new(false);
-        let done = AtomicBool::new(false);
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                // Runs for the length of the ingest, asking the way a command asks.
-                while taken.load(Ordering::SeqCst) < 3 && !done.load(Ordering::SeqCst) {
-                    let won =
-                        crate::db::lock_for(&db, std::time::Duration::from_millis(200)).is_some();
-                    if won && ingesting.load(Ordering::SeqCst) && !done.load(Ordering::SeqCst) {
-                        taken.fetch_add(1, Ordering::SeqCst);
-                    }
-                    std::thread::sleep(std::time::Duration::from_millis(5));
-                }
-            });
-            // The first progress call is the first committed batch: from here the ingest
-            // is unambiguously running, and every lock it gives up is one it chose to.
-            let stats = ingest_gz(&db, &p, &mut |_| ingesting.store(true, Ordering::SeqCst));
-            // Set before any assertion: a panic here must still release the probe, or
-            // the scope would join a thread that never leaves its loop.
-            done.store(true, Ordering::SeqCst);
-            assert_eq!(stats.unwrap().inserted, BATCH * 8);
-        });
-
-        assert!(
-            taken.load(Ordering::SeqCst) >= 3,
-            "a writer must be able to take the connection while the ingest is running, \
-             and took it {} times",
-            taken.load(Ordering::SeqCst)
-        );
-        drop(db);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
     /// Bad lines are counted and stepped over — and a file exactly half bad still swaps, because
     /// the floor ([`crate::feed::mostly_unusable`]) is strictly more unusable than usable.
     #[test]
@@ -1194,5 +1074,61 @@ mod tests {
         let chunks = plain.chunks(31).map(|c| Ok(c.to_vec())).collect::<Vec<_>>();
         let stats = ingest_stream(&db, chunks.into_iter(), &mut |_| {}).unwrap();
         assert_eq!(stats.inserted, 30);
+    }
+}
+
+/// **The two helpers this module's tests share with the one that stayed in `src-tauri`**
+/// (`a_writer_gets_the_connection_between_batches_of_an_ingest`, which builds its database
+/// with `split`). Test builds, and other crates' through `testing`.
+#[cfg(any(test, feature = "testing"))]
+pub mod fixtures {
+    use flate2::{write::GzEncoder, Compression};
+    use std::io::Write;
+
+    /// Tests run in parallel and share the temp directory, so the file name is keyed
+    /// on the content — two fixtures with the same line count must not race each
+    /// other for the same path.
+    ///
+    /// **That is only half the race, and the other half bit `oracle_tags`' copy of this
+    /// function on 2026-08-20.** Keying on content also guarantees that two fixtures with the
+    /// *same* content share a path, which in a test module is the likely case rather than the
+    /// unlikely one — and `File::create` truncates, so one test empties the file another is
+    /// still streaming and that one dies with `Io(Kind(UnexpectedEof))`. No test here has
+    /// collided yet; nothing about this helper made it safe, so it takes the same fix.
+    ///
+    /// Write a private file and move it into place: nothing ever opens the shared path for
+    /// writing. Losing the move is fine — the name is the content's hash, so whoever won wrote
+    /// the same bytes.
+    pub fn gz_fixture(lines: &[&str]) -> std::path::PathBuf {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut h = DefaultHasher::new();
+        lines.hash(&mut h);
+        let p = std::env::temp_dir().join(format!(
+            "mtgtest-{}-{:016x}.jsonl.gz",
+            lines.len(),
+            h.finish()
+        ));
+        if !p.exists() {
+            use std::sync::atomic::{AtomicU64, Ordering};
+            static NEXT: AtomicU64 = AtomicU64::new(0);
+            let tmp = p.with_extension(format!("{}.tmp", NEXT.fetch_add(1, Ordering::Relaxed)));
+            let mut enc = GzEncoder::new(std::fs::File::create(&tmp).unwrap(), Compression::fast());
+            for l in lines {
+                enc.write_all(l.as_bytes()).unwrap();
+                enc.write_all(b"\n").unwrap();
+            }
+            enc.finish().unwrap();
+            if std::fs::rename(&tmp, &p).is_err() {
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+        p
+    }
+
+    /// A minimal but complete card line, distinct per `i`.
+    pub fn card_line(i: u64) -> String {
+        format!(
+            r#"{{"object":"card","id":"c{i}","name":"Card {i}","lang":"en","layout":"normal","set":"x","collector_number":"{i}","games":["paper"],"finishes":["nonfoil"],"digital":false}}"#
+        )
     }
 }

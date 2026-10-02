@@ -90,9 +90,9 @@ pub mod deckpane;
 /// `deck_undo` and `errors` is where the next person looking for the deck gallery's settings
 /// will look.
 pub mod decksort;
-/// **`grimoire-core`'s error log, and the one classifier that still names `scryfall`.** See
-/// the module doc: everything but `kind_of` is re-exported.
-pub mod errors;
+/// **The error log**: what failed, when, how often. `grimoire-core`'s, re-exported — whole
+/// since the I/O step, when `kind_of` followed `scryfall` there.
+pub use grimoire_core::errors;
 pub mod export;
 pub use grimoire_core::feed;
 /// **Every file dialog the app shows, opened from Rust** (issue #545) — so the path the reader
@@ -114,6 +114,8 @@ pub use grimoire_core::image_uri;
 pub mod images;
 pub mod import;
 pub mod index;
+/// **`grimoire-core`'s bulk-file ingest**, and the one test of it that builds its database with
+/// [`split`].
 pub mod ingest;
 pub use grimoire_core::legalities;
 /// **The four view-state modules.** `listview`, `nav`, `searchopen` and `zoom` each keep one
@@ -157,7 +159,9 @@ pub mod price_history;
 /// recently, one `app_meta` row of ids and times, joined with the corpus at read time. Its clock is
 /// SQLite's `unixepoch()` rather than `SystemTime::now()`.
 pub mod recent_cards;
-pub mod reconcile;
+/// **Scryfall's id-migration log applied to the reader's rows, and the orphan sweep.**
+/// `grimoire-core`'s, re-exported.
+pub use grimoire_core::reconcile;
 /// **Settings' four clears.** `clear_collection`, `clear_wishlist` and `clear_decks` are
 /// `&Connection` in and a DTO out; `clear_cache` takes [`images`]' byte cache as well.
 pub mod reset;
@@ -173,7 +177,10 @@ pub mod schema;
 /// `[dev-dependencies]`.
 #[cfg(test)]
 use grimoire_core::scratch;
-pub mod scryfall;
+/// **The Scryfall client** — the bulk check, the download, the set list, the migration log and
+/// one card image, behind the pacing gate and the 429 lockout. `grimoire-core`'s, re-exported,
+/// over its `platform::http`.
+pub use grimoire_core::scryfall;
 pub mod search;
 pub mod searchopen;
 /// **How much of each set the reader owns**, for the home page's Set completion widget. One

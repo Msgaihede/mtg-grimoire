@@ -5528,7 +5528,7 @@ fn remove_database_files(path: &std::path::Path) -> std::io::Result<()> {
     for suffix in ["", "-wal", "-shm"] {
         let mut name = path.as_os_str().to_owned();
         name.push(suffix);
-        match std::fs::remove_file(&name) {
+        match crate::platform::files::remove(std::path::Path::new(&name)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound && first.is_ok() => first = Err(e),
             _ => {}
         }
@@ -5578,13 +5578,13 @@ pub fn back_up_user_file(
     };
     let backups = dir.join(USER_BACKUPS_DIR);
     let dest = backups.join(format!("user.v{from}.db"));
-    if dest.exists() {
+    if crate::platform::files::exists(&dest) {
         return Ok(None);
     }
-    std::fs::create_dir_all(&backups).map_err(|e| e.to_string())?;
+    crate::platform::files::create_dir_all(&backups).map_err(|e| e.to_string())?;
     if let Err(e) = conn.execute("VACUUM main INTO ?1", [dest.to_string_lossy().as_ref()]) {
         // A half-written copy is worse than none: it would be kept, and never overwritten.
-        let _ = std::fs::remove_file(&dest);
+        let _ = crate::platform::files::remove(&dest);
         return Err(e.to_string());
     }
     prune_user_backups(&backups);
@@ -5594,24 +5594,23 @@ pub fn back_up_user_file(
 /// Keep the newest [`USER_BACKUPS_KEPT`] `user.v{N}.db` copies by `N`, and leave every other
 /// file in the folder alone — a reader may keep their own copies there.
 fn prune_user_backups(backups: &std::path::Path) {
-    let Ok(entries) = std::fs::read_dir(backups) else {
+    let Ok(entries) = crate::platform::files::entries(backups) else {
         return;
     };
     let mut copies: Vec<(i64, std::path::PathBuf)> = entries
-        .flatten()
-        .filter_map(|entry| {
-            let name = entry.file_name().into_string().ok()?;
+        .into_iter()
+        .filter_map(|(name, path)| {
             let n = name
                 .strip_prefix("user.v")?
                 .strip_suffix(".db")?
                 .parse()
                 .ok()?;
-            Some((n, entry.path()))
+            Some((n, path))
         })
         .collect();
     copies.sort_by_key(|c| std::cmp::Reverse(c.0));
     for (_, path) in copies.into_iter().skip(USER_BACKUPS_KEPT) {
-        let _ = std::fs::remove_file(path);
+        let _ = crate::platform::files::remove(&path);
     }
 }
 
@@ -8259,7 +8258,7 @@ fn rebuild_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()>
 /// The desktop's `prepare_data_dir` is this behind `split::convert`, which takes a pre-27
 /// single file apart first and stays in `src-tauri`.
 pub fn replace_unreadable_corpus(data_dir: &std::path::Path) -> bool {
-    let marked = data_dir.join(CORPUS_DAMAGED_MARK).is_file();
+    let marked = crate::platform::files::is_file(&data_dir.join(CORPUS_DAMAGED_MARK));
     if !marked && corpus_is_readable(data_dir) {
         return false;
     }
@@ -8279,7 +8278,7 @@ pub fn replace_unreadable_corpus(data_dir: &std::path::Path) -> bool {
     // After the corpus and never before it: a crash between the two leaves a mark over a missing
     // file, which the next launch deletes again for nothing, where the other order could leave a
     // damaged corpus with no mark and nothing left to find it until the background check runs.
-    let _ = std::fs::remove_file(data_dir.join(CORPUS_DAMAGED_MARK));
+    let _ = crate::platform::files::remove(&data_dir.join(CORPUS_DAMAGED_MARK));
     eprintln!(
         "the card database could not be opened and has been replaced; the next sync \
          will rebuild it. Nothing in your collection, decks or wishlist was touched."
@@ -8302,7 +8301,7 @@ pub fn replace_unreadable_corpus(data_dir: &std::path::Path) -> bool {
 /// file that is not a database, or whose schema page is gone, fails here.
 pub fn corpus_is_readable(data_dir: &std::path::Path) -> bool {
     let path = data_dir.join(crate::db::CORPUS_DB);
-    if !path.is_file() {
+    if !crate::platform::files::is_file(&path) {
         return false;
     }
     let Ok(conn) = crate::db::open(&path) else {
@@ -8348,7 +8347,7 @@ pub enum CorpusCheck {
 /// minutes, and the checkpoint on exit folds it back.
 pub fn check_corpus(data_dir: &std::path::Path) -> CorpusCheck {
     let path = data_dir.join(crate::db::CORPUS_DB);
-    if !path.is_file() {
+    if !crate::platform::files::is_file(&path) {
         return CorpusCheck::Unanswered(format!("{} does not exist", path.display()));
     }
     let conn = match crate::db::open_read_only(&path) {
@@ -8375,7 +8374,7 @@ fn classify_check_error(e: rusqlite::Error) -> CorpusCheck {
 /// Leave [`CORPUS_DAMAGED_MARK`] beside the corpus, holding `answer`, so the next launch replaces
 /// it.
 pub fn mark_corpus_damaged(data_dir: &std::path::Path, answer: &str) -> std::io::Result<()> {
-    std::fs::write(data_dir.join(CORPUS_DAMAGED_MARK), answer)
+    crate::platform::files::write(&data_dir.join(CORPUS_DAMAGED_MARK), answer.as_bytes())
 }
 
 /// The one row [`migrate_single_file`]'s v25 rung seeds into a *user* table.
