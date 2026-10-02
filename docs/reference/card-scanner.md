@@ -1113,6 +1113,40 @@ pixels tall before any of them.
   the verdict names the frame a read used. **Warping from the 960 px frame alone changed nothing
   measurable** (the first table below): the resolution is what helps, and only the detail frame
   carries it.
+- **The page waits before it takes that frame (issue #741, 2026-10-02).** The report was a
+  collector band that came back blurred whenever cards were scanned quickly, and sharp again after
+  covering the lens and letting the card be found where it lay. The pump took the detail frame on
+  its very next iteration after the ask, and the ask comes as soon as the hash tier is satisfied:
+  in Fast on the verdict of the frame that commits — the second of two clear frames, for an early
+  decision — and for a card laid on the last one, on the frame the watch calls it at rest. Both
+  are judged on a card scaled down to a few hundred pixels, which a card still moving satisfies as
+  well as a still one (§5 *An early decision has to be read*: "a sliding card looks the same frame
+  to frame"), and the fine print is what motion and a lens still refocusing take first. So
+  `useScanLoop` now waits `detailWaitMs` before that grab and sends nothing meanwhile — the
+  session reads on the next trusted frame it gets, so a plain frame sent to fill the time would be
+  the read.
+  - **A run of asks waits once, on its first ask with the lock trusted.** A run is consecutive
+    verdicts that ask; one that does not ask ends it. Counted by verdicts and not by what the last
+    grab was, so a paired grab that fails — which sends the next frame plain — does not earn a
+    second wait.
+  - **Where that puts the wait.** A Fast decision: between the commit and the frame its
+    confirming read is made on, which is the reported case. A card laid on a decided one, in
+    either mode: on the frame the watch ends the old decision, ahead of the detail frame a Fast
+    read or an Exact resolve then uses. A Fast rescue read: ahead of each one, one eligible frame
+    in four, for as long as a locked card stays undecided — a cost with nothing argued for it,
+    since that card has been locked seven frames or more. **A fresh card in Exact is the weakest
+    case**: it asks from its first quad, the wait falls on the first trusted frame, and that
+    frame is already the first of the three a resolve reads over — so two of its three views
+    come after the wait and one before.
+  - ⚠️ **The default, 200 ms, is the middle of the 100–300 ms the reporter suggested and was not
+    measured on a camera** — nor was the mechanism above, which is read off the code and the
+    report. `detail wait` in the Developer panels' Controls is the slider to find the value with,
+    from 0 (the old behaviour) to 500. It is the page's, like `send px`, and goes back to the
+    default when the Scanner view is left.
+  - **What it costs**: that long per run, with the overlay holding its last quad through it. And
+    the two frames either side of the wait are that much further apart, which the lock judges by
+    how far the quad moved between them (`max_drift`, 35% of the short edge): a card in a moving
+    hand is more likely to lose its lock across the wait than across one frame. Not measured.
 - **The Readouts panel says which pixels the collector line came from (2026-09-30).**
   `CollectorView::origin` (`ocr::BandOrigin`) is the image the band was warped out of and the
   band's own extent in it — `1920×1080 frame · band 190×70 px` from a detail frame, a few dozen
@@ -1815,6 +1849,15 @@ cycle with the card never leaving the lens**.
     turned Plains ZNR 268 wrong in Exact. Doubling (what ships) is rarely accepted there, which is
     also why it rescues Tyrranax Rex ONE 457 on no frame since `quad_from_hull` was fixed. The gate
     needs a test a card's half can pass and a whole card cannot — not a different length.
+22. **The wait before a detail frame is a guess** (issue #741, §4 *Where the bands come from*).
+    200 ms was chosen from the reporter's range and no camera has measured it, or shown that a
+    fixed wait is enough: a lens that takes longer to refocus than the wait still gives a blurred
+    band, and a card already sharp waits for nothing. The Readouts panel's collector crop at a few
+    settings of the `detail wait` slider, on the reporter's camera, is the measurement owed — and
+    with it, whether a hand-held card loses its lock across the wait more often than it did, and
+    whether a fresh card in Exact, whose first view is taken before the wait, reads any better. If
+    no fixed value serves, the alternative is to wait for the frame to stop getting sharper rather
+    than for a time.
 
 Struck 2026-09-08: the two doc comments that quoted a title read at ~250 ms against a ~80 ms
 frame — `session::OCR_EVERY` and `ocr.rs`'s `COLLECTOR_FALLBACKS` — where §4 and §7 measured
@@ -2189,14 +2232,16 @@ the next generated write is one editor away.
 | `panels/BudgetPanel.tsx` | The per-stage milliseconds as a stacked bar |
 | `panels/RectifiedPanel.tsx` | The rectification and the detection numbers |
 | `panels/ReadoutsPanel.tsx` | Both OCR bands, and every collector pairing with what it resolved to — drawn from `lastOcr`/`lastCollector` props, **never from `verdict.ocr`** |
-| `scannerOptions.ts` | `FrameOptions::default()` verbatim, the slider specs, `send px` |
+| `scannerOptions.ts` | `FrameOptions::default()` verbatim, the slider specs, `send px`, `detail wait` |
 | `verdictText.ts` | The pure sentence functions the panels, the tests and the stories share |
 | `types.ts` | Re-exports of the `ipc.ts` mirror types, so a panel imports from its own feature |
 | `fixtures.ts` | The canned verdicts the tests and the stories are both driven from |
 
 **`send px` is not a `FrameOptions` field**, which is why it is a prop of its own beside the
 sliders: it is the long edge the page downscales to before sending, and the detector never sees
-the size it was not sent.
+the size it was not sent. **`detail wait` is the second such prop** (issue #741): how long the
+pump waits before it grabs a detail frame, which is over before anything is sent — §4 *Where the
+bands come from*.
 
 **The fold state is in the app store, not in the view** — `scannerFolds` and `setScannerFold`,
 keyed by `ScannerPanelId` — so a reader who folded the pipeline away and jumped to Settings

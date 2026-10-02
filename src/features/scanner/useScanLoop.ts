@@ -144,12 +144,34 @@ function sleep(ms: number): Promise<void> {
  * shows — and both go out in one request. Every other frame is the one JPEG it always was: the
  * full-size encode is the expensive half, and paying it nine times a second for a read that runs
  * on one frame in four would halve the rate the overlay tracks at.
+ *
+ * **And that grab waits `detailWaitMs` after the ask** (issue #741). The session asks as soon as
+ * its hash tier is satisfied — in Fast, two frames that agree — and that tier works on a card
+ * scaled down to a few hundred pixels, which a card still sliding into place or a lens still
+ * refocusing after a hand crossed it satisfies as well as a sharp one. The fine print does not
+ * survive either, so a grab on the very next iteration read a blurred collector line whenever
+ * cards were laid down quickly. Three rules, each with its test:
+ *
+ * - **Nothing is sent during the wait.** The session reads its bands on the next trusted frame it
+ *   gets, whatever that frame carries, so a plain frame sent to keep the overlay moving would
+ *   *be* the read — at 960 px. The overlay holds its last quad for the length of the wait instead.
+ * - **A run of asks waits once, on its first ask with the lock trusted.** A run is consecutive
+ *   *verdicts* that ask, whatever each grab came to. Exact asks from the first frame with a quad
+ *   in it until its resolve starts: a wait on each would stall the overlay through all of them,
+ *   and a wait on the first would be spent before the lock had formed — on every stray quad, and
+ *   two or three frames ahead of the first one a resolve can read. A verdict that does not ask
+ *   ends the run, so the next ask waits again.
+ * - **A camera that stops during the wait is not read after it**, and one that restarts during
+ *   it starts a pump of its own that owes no wait.
+ *
+ * ⚠️ **None of it was measured on a camera** — `scannerOptions.ts`'s `DEFAULT_DETAIL_WAIT_MS`.
  */
 export function useScanLoop({
   videoRef,
   live,
   options,
   sendPx,
+  detailWaitMs,
   grabFrame = defaultGrabFrame,
   grabPair = defaultGrabPair,
   onDecision,
@@ -158,6 +180,12 @@ export function useScanLoop({
   live: boolean;
   options: ScannerOptions;
   sendPx: number;
+  /**
+   * The wait before a paired grab, in milliseconds. Read through a ref like `sendPx`, and
+   * required like it: with a default here, a page that forgot to pass its slider's value would
+   * compile, and the slider would move nothing.
+   */
+  detailWaitMs: number;
   grabFrame?: GrabFrame;
   /** The paired grab a frame after `wants_detail` uses. Injectable for {@link GrabFrame}'s reason. */
   grabPair?: GrabPair;
@@ -211,12 +239,14 @@ export function useScanLoop({
   // guaranteed to run before that.
   const optionsRef = useRef(options);
   const sendPxRef = useRef(sendPx);
+  const detailWaitRef = useRef(detailWaitMs);
   const grabRef = useRef(grabFrame);
   const grabPairRef = useRef(grabPair);
   const onDecisionRef = useRef(onDecision);
   useLayoutEffect(() => {
     optionsRef.current = options;
     sendPxRef.current = sendPx;
+    detailWaitRef.current = detailWaitMs;
     grabRef.current = grabFrame;
     grabPairRef.current = grabPair;
     onDecisionRef.current = onDecision;
@@ -248,6 +278,15 @@ export function useScanLoop({
    * would send nothing at all: a lost read is worth less than a frozen overlay.
    */
   const wantsDetailRef = useRef(false);
+  /**
+   * Whether the run of asks the loop is in has had its wait. Lowered by a verdict that does not
+   * ask, which is what ends a run.
+   *
+   * **Kept from the verdicts and not from what the last grab was.** A paired grab that fails
+   * sends the next frame plain, and Exact asks again on that one — so "the last frame was not a
+   * pair" waited afresh every other frame, for as long as the grab kept failing.
+   */
+  const waitedRef = useRef(false);
 
   const grab = useCallback(
     async (longEdge: number, quality: number): Promise<Uint8Array | null> => {
@@ -266,6 +305,7 @@ export function useScanLoop({
     lastSeqRef.current = null;
     sinceDecisionRef.current = Infinity;
     wantsDetailRef.current = false;
+    waitedRef.current = false;
 
     async function pump() {
       while (!stopped) {
@@ -305,6 +345,8 @@ export function useScanLoop({
         }
 
         inFlightRef.current = true;
+        // Whether this frame's answer earns the wait before the next grab — see `waitedRef`.
+        let waits = false;
         const t0 = performance.now();
         try {
           // Two arities rather than a trailing `null`, so a frame with no detail is the very
@@ -320,7 +362,14 @@ export function useScanLoop({
           if (stopped) return;
           // `=== true` rather than the field itself: a far end that predates the field sends no
           // key, and `undefined` must mean "no" rather than whatever a truthiness test makes of it.
-          wantsDetailRef.current = answer.wants_detail === true;
+          const asks = answer.wants_detail === true;
+          wantsDetailRef.current = asks;
+          if (!asks) {
+            waitedRef.current = false;
+          } else if (!waitedRef.current && answer.lock?.phase === "locked") {
+            waitedRef.current = true;
+            waits = true;
+          }
           setRoundTripMs(ms);
           setRate((1000 * trips.length) / trips.reduce((a, b) => a + b, 0));
           setVerdict(answer);
@@ -354,6 +403,14 @@ export function useScanLoop({
           if (!stopped) setError(ipcError(e));
         } finally {
           inFlightRef.current = false;
+        }
+
+        // The wait before a paired grab — see the hook's own note. Here, at the tail of the
+        // iteration that took the ask, rather than ahead of the grab: the loop's head then looks
+        // at `stopped`, the video and its `readyState` afresh once the wait is over, where a
+        // sleep in front of the grab would draw from a video it last checked before sleeping.
+        if (waits && detailWaitRef.current > 0) {
+          await sleep(detailWaitRef.current);
         }
       }
     }
