@@ -598,11 +598,17 @@ published, so the devices that stay go on listing this one until somebody remove
 **"Always possible" had quietly depended on the write lock, and issue #546 took that away.**
 `sync_group_leave` ran the three steps inside `sync::with_write`, which answers `db::BUSY` after
 `WRITE_LOCK_WAIT` (5 s) — and a sync trip holds the write connection across its whole network round
-trip, so a *Leave group* pressed during a slow trip failed with *"the database is busy"*. It now
-runs through `sync::with_write_waiting`, which does everything `with_write` does except give up:
+trip, so a *Leave group* pressed during a slow trip failed with *"the database is busy"*. It then
+ran through `sync::with_write_waiting`, which does everything `with_write` does except give up:
 the one sanctioned unbounded wait, because a trip always ends (every request it makes has a 10 s
 connect and a 30 s read timeout) and a departure is the reader's instruction rather than an
-optional write. `sync_device_revoke` keeps the 5 s answer on purpose — a removal is refused without
+optional write. **Since 2026-10-03 the thing it waits for is the sync lane** (`State::lane`, where
+every other press takes `State::lane_for_press`): a trip no longer holds the connection across its
+requests — *A trip holds nothing across a request*, below — so what a departure queues behind is
+the one lock every sync operation takes, and the promise is the same one. Measured in the shipped
+window against a loopback mock relay: a Leave pressed one second into a six-second trip waited
+5.0 s, published its rotation the moment the trip's pull answered, and cleared.
+`sync_device_revoke` keeps the 5 s answer on purpose — a removal is refused without
 the relay anyway and starts with a round trip of its own. **A departure plans two epochs ahead** once
 the relay has advertised it (`identity::plan_departure_by` with `client::removal_step`), the
 removal marker under *One correction to the plan*, below.
@@ -3218,6 +3224,98 @@ of the two ways it happens:
 
 ---
 
+## A trip holds nothing across a request
+
+**2026-10-03, debug build, Windows.** Until then every sync operation was
+`sync::with_write(&state, |conn| runtime.block_on(client::run_once(conn)))`: the write connection
+taken, a runtime built on a blocking thread, and an `async fn` holding `conn` through every
+request it made. Thirty-one functions in `client.rs`, `entitlement.rs` and `pairing.rs` held a
+connection across an `.await`, fifty-six awaits between them
+(`node scripts/core-step-6-census.mjs .`; it reads none now, and a vitest test holds it there).
+[The spike](../superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md) is the full
+record and [the plan](../superpowers/plans/2026-10-02-light-app-core-step-6-sync.md) the step;
+this is what is true of the code.
+
+**A stretch.** Each of those functions takes `db: &impl Store` (`grimoire_core::state`) and
+reads or writes inside `db.with(|conn| …)` — one closure, run to its end with the connection. A
+request is made between two stretches with nothing held. A test hands over a bare `Connection`,
+which is a store whose stretches run back to back, so the modules' tests did not change.
+
+**The lane.** One async lock on the core's `State`, held for the whole of each sync operation,
+and its guard is the app's only store — `Store` is not implemented for `State` — so a stretch
+outside it does not compile. The held connection used to give "one sync operation at a time" by
+accident; without it a pairing confirm, a rotation's commit, a claim and a leave corrupt each
+other five ways (the spike's §4).
+
+| Takes the lane | How |
+| --- | --- |
+| the socket's trip, the socket's token, the exit push, **Leave group** | `State::lane()` — waits its turn |
+| Sync now, a claim, a pairing accept / confirm / poll, Remove device, a share publish | `State::lane_for_press()` — `db::BUSY` after `WRITE_LOCK_WAIT`, as a press during a sync always was |
+
+The pending pairing offer has an async lock of its own, taken before the lane and held across
+the request: a Cancel waits behind it and wins, and two polls cannot both complete one offer.
+
+**What can land between two stretches is the reader's own write**, and the trip is shaped by it
+in three places:
+
+- **`push` sends the outbox as it stood when it read it.** A write behind that read is a row
+  with a higher `seq`: neither sent nor stamped by this trip, and carried by the next — which the
+  write's own commit has already asked for.
+- **`pull` is one stretch from the page to the cursor**: the envelopes opened, measured against
+  the clock and the watermarks, applied, the hold decided, the cursor moved, the conversions
+  behind an advancing pull. Its one request inside the page — `/keys`, for an envelope above the
+  epoch in hand — is asked ahead of the page instead, once, on the same condition.
+- **A baseline's rows, its clock and its horizon are one stretch, and none is begun while an op
+  written since the trip read its outbox is pending.** The second half was found by the test,
+  not by the design: such a write is in the rows and under the horizon and not yet on the
+  relay's log, so it goes out with the *next* trip, behind the baseline — and a peer that pulls
+  in between reads the claim in one page and the op in the next, where no horizon filters it.
+  `3 here, 4 there`.
+
+**A stretch waits for the connection and never answers `db::BUSY`** (`state::with_write_waiting`,
+whose one caller it now is). It may be recording an answer the relay will not give twice: the
+grant behind a claim code that is now spent, the group a founding `confirm` has just handed a
+joiner the key to, a rotation the relay has accepted. What it waits behind is local work.
+
+### The tests that hold it
+
+| Test | What it lands | Red when |
+| --- | --- | --- |
+| `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` | a copy added behind each of a trip's 19 stretches, a second trip, a peer that pulls after each | a baseline goes out over a pending write: `3 here, 4 there` behind 7 of the 19 (the mutation was run) |
+| `a_write_anywhere_beside_a_pull_is_counted_once_on_both_devices` | the same, with a peer's own copy of that row in the page | the write and the apply disagree about a counter |
+| `a_write_anywhere_in_a_baselines_emission_reaches_the_peer` | a copy added behind each stretch of one emission | the rows and the horizon are read apart: `3 here, 2 there` |
+| `leaving_waits_for_an_operation_in_flight_and_then_clears` | a departure behind a held lane | it takes a press's lane, or none |
+| `state::tests::a_second_operation_waits_for_the_first`, `a_press_behind_a_sync_or_a_busy_connection_is_told_busy` | two operations; a press behind one, and behind a held connection | the lane is not exclusive, or a press queues |
+
+Both whole-trip tests add their first copies "ten seconds ago". A baseline op is stamped from
+its row's `updated_at` — a whole second — and `apply` skips as seen whatever its sender stamped
+at or below the watermark the peer holds, while the horizon it carries still filters the delta:
+an edit made in the second the peer last heard from this device is lost on that peer. That is
+`apply`'s, was reproduced on `main`'s code, and is filed on its own.
+
+**And the compiler holds the rule itself.** A future that keeps a `MutexGuard` across an
+`.await` is not `Send`; `nothing_is_held_across_a_request`, in each of the three files, hands
+every entry point's future to `fn sendable<T: Send>(_: T)` and is never called.
+`clippy::await_holding_lock` refuses the same in every function, tests included.
+
+### Driven in the shipped window
+
+`tauri dev` over CDP, the dev copy's `relay_url` pointed at a mock relay on the loopback (the
+copy was in no group and held no grant; its files were put back afterwards). **Nothing reached
+the real relay.**
+
+| | Measured |
+| --- | --- |
+| A claim, then a trip | `/claim`, `/keys`, `/keys`, `/rotate` (a join this copy still owed), `/pull`, `/ack`; 10 ms and 18 ms |
+| A sticky note written 1.5 s into a trip whose pull took 8 s | **answered in 9 ms** — it was told *the database is busy* after 5 s |
+| The status read beside it | 2 ms, `pending: 1` |
+| A second Sync now, pressed during that trip | `db::BUSY` after **5 013 ms** |
+| That trip | 8 022 ms, `pushed: 0` — the note was written behind its outbox read |
+| What happened next, unasked | the socket's own trip: `/keys`, `/push` (641 B), `/pull` — `pending: 0` |
+| Leave group, pressed 1 s into a 6 s trip | waited **5 016 ms**, then `/rotate` 3 ms behind the pull's answer; no group, no grant |
+| `sync_pairing_begin`, `poll` ×2, `cancel`, `poll` | 16 ms; *waiting*, *waiting*; done; *idle* |
+| Each refusal on a device in no group | in words, in 2–3 ms |
+
 ## Schema — user v30
 
 | Object | What it is |
@@ -3624,8 +3722,12 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   either a frame sent from the roster post — which no longer needs the rotate to reach an object it
   avoids, only the handler it already reaches to send one, best effort like the post itself; not
   built — or the removing device pushing something after it publishes.
-- **A round trip holds the write connection across the network, so a user edit can be told the
-  database is busy.** `live::trip` and `commands::sync_now` both wrap the whole of
+- ~~**A round trip holds the write connection across the network, so a user edit can be told the
+  database is busy.**~~ **Closed 2026-10-03**, by the change the last sentence of this bullet
+  asked for: the connection is held only for the statements that need it, and the failure mode it
+  named — a push and a concurrent edit interleaving on `sync_ops` — is the one a test now lands
+  behind every stretch of a trip. See *A trip holds nothing across a request*, below. What this
+  bullet said: `live::trip` and `commands::sync_now` both wrap the whole of
   `client::run_once` in `sync::with_write`, and that closure is `check_keys` → `push` → `pull` →
   `emit_baselines` → `ack` — five HTTP requests, one of them a `push` that loops a batch at a
   time. A write the reader makes while one is in flight waits out `db::WRITE_LOCK_WAIT` and then

@@ -2005,8 +2005,8 @@ mod tests {
     // The removal, with the relay in the middle of it
     //
     // **Driven through `remove_device` rather than through `sync_device_revoke`**, which takes a
-    // `tauri::State` no test can build. The command is four lines around this function and a
-    // `block_on`; everything that can be got wrong is here.
+    // `tauri::State` no test can build. The command is a worker and the lane around this
+    // function; everything else that can be got wrong is here.
     // -----------------------------------------------------------------------------------
 
     /// A group of two, pointed at a relay on localhost.

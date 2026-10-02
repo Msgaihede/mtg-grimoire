@@ -79,10 +79,10 @@ impl State {
 }
 ```
 
-- [ ] Write the tests first: `a_second_operation_waits_for_the_first` (take the lane, spawn a second `lane()`, assert it has not resolved, drop, assert it has); `a_press_behind_a_held_lane_is_told_busy` (under `tokio::time::pause`, `lane_for_press` answers `db::BUSY` after `WRITE_LOCK_WAIT`); `a_stretch_runs_the_writes_tail` (a `Lane::with` that edits a deck's card leaves the managed-wishlist marks settled — it goes through `with_write_waiting`); `a_trip_over_the_lane_can_be_sent` (`fn sendable<T: Send>` over a future that makes two stretches around an `.await`).
-- [ ] Implement; `State::new` builds the lock and takes no new argument.
-- [ ] `cargo test -p grimoire-core state::` and both clippies (workspace, wasm32).
-- [ ] Commit: `feat(core): a store a sync operation reaches a stretch at a time, on a lane`.
+- [x] Write the tests first: `a_second_operation_waits_for_the_first` (take the lane, spawn a second `lane()`, assert it has not resolved, drop, assert it has); `a_press_behind_a_sync_or_a_busy_connection_is_told_busy` (`lane_within` with a 40 ms bound — the bound is an argument, so no paused clock is needed — behind a held lane, and behind a connection another thread holds); `a_stretch_is_a_user_facing_write` (a `Lane::with` arms the managed wishlists on the connection — it goes through `with_write_waiting`); `an_operation_over_the_lane_holds_nothing_across_an_await` (`fn sendable<T: Send>` over a future that makes two stretches around an `.await`); `a_connection_in_hand_is_used_where_it_stands`; `a_bare_connection_is_a_store_whose_stretches_run_back_to_back`. **Two of them first held the connection's guard across an `.await` and clippy's `await_holding_lock` refused them** — a second fence nobody had planned on.
+- [x] Implement; `State::new` builds the lock and takes no new argument.
+- [x] `cargo test -p grimoire-core state::` and both clippies (workspace, wasm32).
+- [x] Commit: `feat(core): a store a sync operation reaches a stretch at a time, on a lane`.
 
 ### Task 2: the client over `Store`
 
@@ -105,9 +105,9 @@ impl State {
 | `round_trip` | each `me`, `roster_is_dirty` and the closing `LAST_SYNC_AT` is a stretch; `through` — the newest op there is — is read ahead of the push; everything else is the callee's |
 | `emit_baselines(db, base, token, through)` | per peer, **one**: whether an op above `through` is pending, the rows, the clock, the horizon. Pending, and no baseline is begun this trip (Task 3 found it) |
 
-- [ ] Restate, function by function, compiling as it goes (`cargo check -p mtg-grimoire --tests`).
-- [ ] `sendable` over `run_once`, `run_once_without_baselines`, `check_keys`, `publish_join`, `post_rotation`, `post_rendezvous`, `get_rendezvous` taking a `&Lane`.
-- [ ] `cargo test -p mtg-grimoire --lib sync_engine::client` — the 88 pass.
+- [x] Restate, function by function, compiling as it goes (`cargo check -p mtg-grimoire --tests`).
+- [x] `sendable` over `run_once`, `run_once_without_baselines`, `check_keys`, `publish_join`, `post_rotation`, `post_rendezvous`, `get_rendezvous` taking a `&Lane`.
+- [x] `cargo test -p mtg-grimoire --lib sync_engine::client` — the 88 pass.
 
 ### Task 3: a write behind every stretch of a whole trip
 
@@ -131,9 +131,9 @@ impl State {
 | `group_door` | the request; one stretch: `keep_group_grant`, or `revoke` |
 | `claim(db, code)` | one: the group, `base`, `this_device`; the request; one: `store_grant` + `store_status` |
 
-- [ ] Restate; `sendable` over `access_token` and `claim`.
-- [ ] `cargo test -p mtg-grimoire --lib sync_engine::entitlement` — its 49 pass unedited.
-- [ ] Commit: `refactor(sync): the entitlement reaches the database a stretch at a time`.
+- [x] Restate; `sendable` over `access_token` and `claim`.
+- [x] `cargo test -p mtg-grimoire --lib sync_engine::entitlement` — its 49 pass unedited.
+- [x] Commit: `refactor(sync): the entitlement reaches the database a stretch at a time`.
 
 ### Task 5: pairing over `Store`, and the pending offer on an async lock
 
@@ -152,24 +152,24 @@ impl State {
 
 **The wrappers**: `sync::on_a_worker(|| async { pending → lane → the function })` — a blocking worker with a runtime of its own, written once in `src-tauri/src/sync/mod.rs`. A press takes `lane_for_press`; `sync_group_leave` takes `lane`. `sync_pairing_cancel` takes the pending lock alone, and is an `async fn` for it: an async lock is awaited, and `blocking_lock` panics on the runtime's own thread.
 
-- [ ] Write `leaving_waits_for_an_operation_in_flight_and_then_clears` first: hold the lane, start `leave_group_now` behind `state.lane()`, assert the group is still there, release, assert it is gone and the grant with it.
-- [ ] Restate; `sendable` over the five entry points.
-- [ ] `cargo test -p mtg-grimoire --lib sync_pair` — its tests pass with their calls unedited.
-- [ ] Commit: `refactor(sync): pairing reaches the database a stretch at a time`.
+- [x] Write `leaving_waits_for_an_operation_in_flight_and_then_clears` first: hold the lane, start `leave_group_now` behind `state.lane()`, assert the group is still there, release, assert it is gone and the grant with it.
+- [x] Restate; `sendable` over the five entry points.
+- [x] `cargo test -p mtg-grimoire --lib sync_pair` — its tests pass with their calls unedited.
+- [x] Commit: `refactor(sync): pairing reaches the database a stretch at a time`.
 
 ### Task 6: the callers
 
 **Files:** Modify: `src-tauri/src/sync_engine/commands.rs` (`sync_now`, `sync_patreon_claim`), `src-tauri/src/sync_engine/live.rs` (`credentials`, `trip`, `push_now`), `src-tauri/src/share/commands.rs` and `share/publish.rs` (the lane first, then `with_write`; `credentials` and `list` take the store their token is asked through), `src-tauri/src/desktop.rs` (the exit push's comment), `crates/grimoire-core/src/state.rs` (`with_write_waiting`'s doc)
 
-- [ ] `live::trip` and `push_now` take `lane()`; `sync_now` and the claim take `lane_for_press()`; each records its failure in a stretch of its own after the trip.
-- [ ] `share`: `on_the_write_connection` takes the lane, then the connection, and hands `lane.in_hand(conn)` down.
-- [ ] `node scripts/core-step-6-census.mjs .` reads `held: 0`; the script also fails on a `with_write` + `block_on` pair in the eight files.
-- [ ] Commit: `refactor(sync): every sync operation takes the lane`.
+- [x] `live::trip` and `push_now` take `lane()`; `sync_now` and the claim take `lane_for_press()`; each records its failure in a stretch of its own after the trip.
+- [x] `share`: `on_the_write_connection` takes the lane, then the connection, and hands `lane.in_hand(conn)` down as `tokens`, which `publish`, `refresh`, `revoke` and `list` take beside `conn`.
+- [x] `node scripts/core-step-6-census.mjs .` reads `held: 0, blocking: 0`, and `scripts/core-step-6-census.test.mjs` holds the eight files there.
+- [x] Commit: `refactor(sync): every sync operation takes the lane`.
 
 ### Task 7: verify, record, ship
 
-- [ ] `npm run verify`. A/B upgrade check against `main`'s binary on a copy of the dev data (no sync is made by it: the copy's group is checked first and the relay override pointed at nothing).
-- [ ] A live pass in `tauri dev` **against a local mock relay only** — never Markus's group: the app lock, `sync_state.relay_url` pointed at a loopback `httpmock`-style server, `sync_now` pressed while a deck edit is made, both landing.
+- [x] Every Rust gate and the frontend's build, lint and suite. **No A/B upgrade check against `main`'s binary**: nothing here touches a schema rung, a launch pass or a file, so there is no upgrade to compare.
+- [x] A live pass in `tauri dev` **against a mock relay on the loopback only** — never Markus's group: the dev copy was checked to be in no group and to hold no grant, its `relay_url` pointed at `127.0.0.1`, and its files copied aside and put back. A claim, a trip, a write and a second press during a slow trip, a departure during a slow trip, and the pairing commands. `docs/reference/sync.md` has the table.
 - [ ] A fresh reviewer subagent (Opus, read-only) on the branch's diff.
 - [ ] Docs: `docs/reference/sync.md`, `docs/reference/light-app.md` §6.8, `src-tauri/CLAUDE.md` (*Hard rules — pairing*, *— sync*: the leave bullet, the `with_write` + `block_on` sentences), `crates/grimoire-core/CLAUDE.md`, the spec's §2.8 note, the spike's §8.
 - [ ] PR linked to #761, auto-merge and auto-fix; #761's 6a line.

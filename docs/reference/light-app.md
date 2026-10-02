@@ -276,7 +276,9 @@ steps of seven have landed — the leaves, the storage layer, the state a host h
 the domain: the decks, the collection, the wishlist and the search — and the whole of the
 fifth, in three parts: a request, a timer, a file, a lock and background work under
 `platform/`; the Scryfall client, the ingest and the reconciler over them; the card sync and
-the facet index that drive those; and the three feeds and the image cache.
+the facet index that drive those; and the three feeds and the image cache. **The sixth has begun**:
+the sync client, the entitlement and pairing reach the database a stretch at a time, on a lane,
+and hold nothing across a request — restated where they are, ahead of their move.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -1412,3 +1414,76 @@ there, so a host that never answers holds that feed's refresh claim for good.
   is `#[ignore]`d and was not run.
 - **Step 5 is whole.** What is left of the engine in `src-tauri` is the sync client, the
   entitlement and pairing (step 6), and the scanner's session (step 7).
+
+### 6.8 Step 6, first part — a sync operation that holds nothing across a request (2026-10-03)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-6-sync.md), Part 6a, and
+[the spike](../superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md) the spec
+asked for before it. Measured on Windows 11, debug builds, on the branch's own tree over `main`
+at `fdaec0f9`.
+
+**This is the step where code changes rather than moves, so it is two pull requests and this
+one moves nothing.** The sync client, the entitlement and pairing are restated where they are,
+in `src-tauri`, under the tests they already had; the move is the second part's. What is new in
+the core is small and is there because the lane is a field of `State`: `state::Store`,
+`state::Lane`, `State::lane()` and `lane_for_press()`.
+
+| | Before | Now |
+| --- | --- | --- |
+| A sync operation | `with_write(&state, \|conn\| runtime.block_on(run_once(conn)))` — the write connection held through every request | `run_once(&lane)`: the database inside `db.with(\|conn\| …)`, a request between two stretches |
+| One operation at a time | by accident: they all held the one connection | the lane — one async lock on `State`, whose guard is the app's only `Store` |
+| A press during a sync | `db::BUSY` after 5 s | the same, from `lane_for_press` |
+| A reader's write during a sync | `db::BUSY` after 5 s | lands, in milliseconds |
+| Leave group during a sync | waited for the connection | waits for the lane |
+| The pending pairing offer | a `std` mutex held across the request | an async lock, held across the request |
+| `share`'s publisher | the connection for the whole publish | the lane, then the connection; its token asked through the connection in hand |
+
+**Thirty-one functions held a connection across an `.await`, fifty-six awaits between them;
+none does.** `scripts/core-step-6-census.mjs` counts, and its test holds the eight files at
+none, and at no `block_on`. The compiler holds the rule itself: each entry point's future is
+handed to `fn sendable<T: Send>(_: T)` by a function that is never called, and a `MutexGuard`
+across an `.await` is not `Send`. `clippy::await_holding_lock` refuses the same everywhere,
+which two of the lane's own tests found out.
+
+**The tests the modules had did not change**: 87 in the client, 49 in the entitlement, 40 in
+pairing hand over a bare connection, which is a store whose stretches run back to back — in a
+test build only. Ten are new — six in the core for the lane, four in `src-tauri`. Core 2 660
+passed and 5 ignored, desktop 752 and 1; clippy for the workspace and for `wasm32`; the wasm
+build; `cargo check --locked`; no `testing` in the shipped tree; the frontend's build and lint.
+
+**What building it found, that a prototype of three functions had not.** A test lands a write
+behind every one of a round trip's nineteen stretches, with a second trip behind it and a peer
+that pulls after each. It was red behind seven of them: `3 here, 4 there`. A baseline emitted
+while that write was pending held it in its rows and under its horizon, and the op itself went
+out a trip later — where a peer that had pulled in between counted it again. A card out of
+nothing. **No baseline is begun while an op written since the trip read its outbox is pending**;
+the marker stays unset and the next trip, which the write has already asked for, emits behind
+it. With the rule switched off the test is red at those seven boundaries and nowhere else.
+
+**Driven in `tauri dev`, against a mock relay on the loopback** — the dev copy was in no group
+and held no grant, its `relay_url` was pointed at `127.0.0.1`, and its files were put back
+afterwards; nothing reached the real relay. A sticky note written 1.5 s into a trip whose pull
+took 8 s **answered in 9 ms**, where it was told the database was busy after five seconds; the
+socket's own trip then pushed it, unasked. A second Sync now during that trip was told `BUSY`
+after 5 013 ms. Leave group, pressed one second into a six-second trip, waited 5 016 ms, posted
+its rotation 3 ms behind the pull's answer, and left no group and no grant. The nine pairing
+commands each answered — a begin, two polls that found nobody, a cancel, and each refusal in
+words. [sync.md](sync.md) has the table.
+
+**No upgrade check against `main`'s binary this time**: nothing here touches a schema rung, a
+launch pass or a file. What a launch does is unchanged.
+
+**Open after this part:**
+
+- **A baseline op the peer's watermark has already passed is skipped, while its horizon still
+  filters the delta** — an edit made in the same second the peer last heard from this device is
+  lost on that peer. It is `apply`'s, it was reproduced on `main`'s code, and it is filed as its
+  own task. The new rule above turns a mid-trip write into this shape rather than into an
+  over-count when the two share a second or the emitter's clock runs ahead; that is no wider
+  than the bug already was.
+- **The lane's wait ends because every request does, and in a browser none has a deadline.**
+  The second part owes `platform::http` one.
+- **`share::publish` still holds the connection for a whole publish.** It takes the lane first
+  now, so it cannot interleave with a sync; a reader's write during an upload still waits.
+- **The second part**: `client`, `entitlement`, `wire`, `schedule`, `identity`, `pairing` and
+  the commands' plain functions move, with `platform::http`'s `POST`.

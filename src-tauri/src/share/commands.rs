@@ -83,8 +83,9 @@ fn unfinished(e: tauri::Error) -> String {
 /// write to `collection_shares` — the list's reconcile, a publish's cached row, a withdrawal's
 /// state.
 ///
-/// **This is [`crate::sync_engine::commands::sync_now`]'s shape and it is not ceremony.** The
-/// write connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a
+/// **This was [`crate::sync_engine::commands::sync_now`]'s shape until the light app's step 6
+/// took the connection out of a sync trip's hands, and it is still this module's.** The write
+/// connection is behind a `Mutex`, so a guard on it cannot cross an `await` on a
 /// multi-threaded runtime; `spawn_blocking` moves the whole trip to a thread where a `block_on`
 /// is legal and the guard never has to be `Send`.
 ///

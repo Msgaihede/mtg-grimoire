@@ -50,6 +50,23 @@
 //! the request count down without missing it. See [`super::live`] for the connection manager
 //! itself — when it opens a socket, the jittered reconnect backoff, and the protocol ping that
 //! keeps a hibernating socket alive for free.
+//!
+//! # A trip holds nothing across a request
+//!
+//! **Every `async fn` here takes `db: &impl Store` and reaches the database a *stretch* at a
+//! time** — `db.with(|conn| …)`, one closure run to its end — with each request made between two
+//! stretches. A trip used to be handed the write connection for its whole length by a caller that
+//! blocked a thread on it, which kept every other writer out for the length of a round trip and
+//! cannot be done at all where there is one thread. The app's store is the guard of the sync
+//! *lane* (`grimoire_core::state::Lane`): one sync operation at a time, which is what the
+//! held connection used to give by accident.
+//!
+//! **What can land between two stretches is a reader's own write**, and three places are shaped
+//! by it: [`emit_baselines`] reads a baseline's rows and its horizon in one stretch and begins
+//! none while such a write is pending; [`push`] sends the outbox as it stood when it read it,
+//! and what was written since goes with the next trip; [`pull`] opens, applies and moves its
+//! cursor in one. The record, with the test that lands a write behind every stretch of a trip,
+//! is `docs/superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md`.
 
 use crate::errors::{self, Kind, Source};
 use crate::sync_engine::apply::{self, ApplyReport};

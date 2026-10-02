@@ -678,12 +678,14 @@ const WAKE_LOCK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 /// [`crate::sync::with_write`], so taking that same mutex is what orders this question *after*
 /// the commit that asked it.
 ///
-/// **It cannot contend with a round trip**, which is the other reason it can afford the write
-/// connection: trips are single-flight and [`trip`] is awaited inside the same `select!` as this
-/// arm, so the loop is never in both places at once.
+/// **It contends with a round trip for a stretch at most**, which is the other reason it can
+/// afford the write connection: this loop's own [`trip`] is awaited inside the same `select!` as
+/// this arm, so the loop is never in both places at once, and a *press's* trip — which used to
+/// hold the connection for its whole length, a second longer than this waits — now holds it only
+/// while it reads or writes.
 ///
-/// On the blocking pool for [`credentials`]' reason — a `MutexGuard` on a connection is not
-/// `Send` and must not be held across an `.await`.
+/// On the blocking pool because the wait for the connection blocks, and a `MutexGuard` on one
+/// is not `Send` and must not be held across an `.await`.
 async fn outbox_has_work(state: &Arc<AppState>) -> bool {
     let owned = state.clone();
     tokio::task::spawn_blocking(move || unpushed(&owned.db, WAKE_LOCK_WAIT))
