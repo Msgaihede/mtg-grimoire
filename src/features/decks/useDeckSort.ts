@@ -2,7 +2,7 @@
  * The order the gallery is in, remembered across restarts.
  *
  * One `app_meta` row holding `"<key>:<direction>"`, read once at launch and written on every
- * press — `src-tauri/src/listview.rs`'s arrangement, which is the app's pattern for a single
+ * press — `crates/grimoire-core/src/listview.rs`'s arrangement, which is the app's pattern for a single
  * remembered preference. **Only the sort is remembered**, and the filter row deliberately is
  * not: a filter is a thing a reader is doing right now, and a gallery that opened already
  * narrowed, with no memory of having asked for it, is a gallery that looks like it has lost

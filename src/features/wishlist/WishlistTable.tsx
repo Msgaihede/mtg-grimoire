@@ -69,7 +69,7 @@ function extraHeightOf(row: WishTableRow): number {
  * names no set, and a list where half the rows sort under the same blank is not an order —
  * the same reason `useWishlist` has never offered a set order either.
  *
- * The keys are the backend's, verbatim: `WISHLIST_SORTS` in `src-tauri/src/wishlist.rs`.
+ * The keys are the backend's, verbatim: `WISHLIST_SORTS` in `crates/grimoire-core/src/wishlist.rs`.
  *
  * One options object rather than a row of positional arguments: the list grew five members for
  * spec §4 and §5, and a call site of nine bare values is a call site where two of them get
@@ -235,7 +235,7 @@ function columnsFor({
       // drawings of one list must not disagree about what can be edited.
       //
       // **The backend never held the old rule.** `set_wish_quantity` returns
-      // `remove_wish(conn, id)` at zero (`src-tauri/src/wishlist.rs`), because
+      // `remove_wish(conn, id)` at zero (`crates/grimoire-core/src/wishlist.rs`), because
       // `wishlist_entries.quantity` carries `CHECK (quantity > 0)` — there is no stored zero
       // for a floor to sit above, and there never was. Only the front of the control moved.
       //

@@ -3529,7 +3529,7 @@ layer.
     was `overflow-y-auto` itself, and an absolutely-positioned handle in a scroller scrolls away
     with the content and clips. The heading and its `+` no longer scroll off as a side effect.
   **The width and the rail survive a restart** — one `app_meta` row, `deck_folder_pane`
-  (`src-tauri/src/deckpane.rs`), read per-field so a junk width cannot cost the reader their rail.
+  (`crates/grimoire-core/src/deckpane.rs`), read per-field so a junk width cannot cost the reader their rail.
   The storage band is **80..=1200** and is deliberately *not* the UI clamp: how narrow the tree may
   be dragged and how wide the desk can spare are measurements about a window the crate never sees.
   `usePrefetchFolderPane` runs in `AppShell` for `usePrefetchSearchOpen`'s measured reason — asked
@@ -4011,7 +4011,7 @@ layer.
     of the view, and the arrow walk steps over it as if it were empty. `HIDDEN_STACK_ATTR`
     (`data-stack-hidden`) marks the section for a test or a live pass.
   - **Stored per device, never synced — the reader's call.** One `app_meta` row, `hidden_stacks`
-    (`src-tauri/src/stackhide.rs`, `shelffolds.rs`' shape keyed by deck): deck id → hidden
+    (`crates/grimoire-core/src/stackhide.rs`, `shelffolds.rs`' shape keyed by deck): deck id → hidden
     category ids. `useHiddenStacks` reads it under `["hiddenStacks", deckId]` — **not under
     `["decks"]`**, which every deck write invalidates — writes optimistically and never rolls back,
     and the key is on `crossWindow.ts`' `PER_WINDOW_KEYS`. Keyed by category id, which is already

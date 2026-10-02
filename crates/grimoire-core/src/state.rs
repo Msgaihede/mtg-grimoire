@@ -8,14 +8,16 @@
 //! **It is the every-host half as far as the extraction has got.** The Scryfall client, the
 //! image cache, the facet index, the sync-in-flight flag and the pending pairing offer are every
 //! host's too, and are still fields of the desktop's `AppState` — each is a type that has not
-//! moved here yet, and arrives with the step that moves it. `with_write`, the one definition of
-//! a user-facing write, is still the desktop's for the same reason: its body calls the managed
-//! wishlist and the token reconcile.
+//! moved here yet, and arrives with the step that moves it.
 //!
-//! **A host opens the connections; this does not.** Bringing the pair to head is
-//! [`crate::schema::bring_to_head`], and until the modules behind the launch's logged passes
-//! move, what follows it is the host's. So [`State::new`] takes connections that are already
-//! at head.
+//! **[`with_write`] is the one definition of a user-facing write**, and it is here since the
+//! extraction's domain step brought the managed wishlist and the token reconcile its body calls.
+//!
+//! **A host opens the connections; this does not.** Bringing the pair to head and running the
+//! launch's logged passes is [`crate::schema::prepare_database`], which is this crate's too —
+//! but the desktop converts a pre-27 single file first, with a module only it has, so what a
+//! host-neutral "open the data folder" should be is left to the first host that is not the
+//! desktop. [`State::new`] takes connections that are already at head.
 
 use crate::db::{self, CrossFileFence};
 use crate::events::EventSink;
@@ -107,6 +109,133 @@ impl State {
     pub fn lock_db_read(&self) -> MutexGuard<'_, Connection> {
         db::lock_blocking(self.reader())
     }
+}
+
+/// Run `f` with the write connection, or answer [`crate::db::BUSY`].
+///
+/// Bounded rather than blocking: every caller is a button press on a worker thread, and the
+/// one thing that can hold [`State::db`] for any length of time is a sync — which, since the
+/// ingest was chunked, holds it for one batch at a time.
+///
+/// **This is the one definition of that rule**, the way [`crate::db::lock_plain`] is the one
+/// definition of poison recovery. It was five identical private copies (`collection`, `deck`,
+/// `deck_meta`, `deck_theory`, `wishlist`) plus six sites that inlined the same four lines,
+/// each documented as "kept per-module the way every other one in this crate is" — which was
+/// true, and was the problem.
+///
+/// Here rather than in [`crate::db`] because the parameter is [`State`]: `db` is the layer
+/// below and must not learn about the app's state. **`&State`, and it was `&AppState` until the
+/// extraction's domain step** — the desktop's `AppState` derefs to this struct, so a command
+/// there holding an `Arc<AppState>` still passes `&state`, and `index::lifecycle`, which holds a
+/// bare reference, needs no clone. A free function rather than a method so that every one of
+/// those callers reads as it did; `src-tauri`'s `sync` re-exports it under its old name.
+///
+/// **It could not move before the modules its body names did**: [`written`] arms and settles
+/// [`crate::managed_wishlist`] and runs [`crate::deck_tokens`]' reconcile around the caller's
+/// closure, with no line to be cut at.
+///
+/// **Never call this while holding a guard on `state.db`** — it does not deadlock, because
+/// [`crate::db::lock_for`] is a `try_lock`-plus-sleep loop rather than a blocking one, but a
+/// same-thread reentrant call spends the whole [`crate::db::WRITE_LOCK_WAIT`] failing to
+/// take a lock its own thread already holds, then answers [`crate::db::BUSY`] against itself.
+/// `do_sync`'s orphan-sweep arm is the site that has to remember: it passes its already-open
+/// connection down instead.
+pub fn with_write<T>(
+    state: &State,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    written(
+        state,
+        crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT),
+        f,
+    )
+}
+
+/// [`with_write`] that **waits for the write connection as long as it takes** instead of
+/// answering [`crate::db::BUSY`]. ⚠️ **The one sanctioned unbounded wait on [`State::db`], and a
+/// departure is the only press that earns it.**
+///
+/// Every other press is optional: the reader can press again, and a five-second "busy" is kinder
+/// than a button that freezes for as long as whatever holds the connection. **Leaving a group is
+/// not optional in that sense** — `pairing::sync_group_leave` is the reader's instruction that
+/// this device be out of its group, the design promises that press always works (and
+/// `SyncPanel`'s `LEAVE_WARNING` names an unreachable relay as its only cost), and a sync trip
+/// (`sync_now`, `sync_engine::live`'s `trip`) holds this connection across its whole network round
+/// trip — so under [`with_write`] a Leave pressed during a slow trip failed with "the database is
+/// busy" (issue #546, item 7), which is a promise with a condition nobody wrote down.
+///
+/// **What makes the wait safe to have is that a trip always ends**: every relay request carries a
+/// 10 s connect and 30 s read timeout (`sync_engine::client`'s client, and `entitlement`'s at
+/// 10 s/10 s), so the holder gives the connection back in bounded time even with the network gone.
+/// **What makes it safe to *call*** is [`with_write`]'s reentrancy rule, which is sharper here:
+/// that one spends five seconds and answers BUSY against its own thread, where a same-thread call
+/// to this one **deadlocks** (std's `Mutex` may also panic on it). Nothing may call it holding a
+/// guard on `state.db`.
+///
+/// **Everything else is [`with_write`]'s, because it is [`with_write`]'s body** — the managed
+/// wishlists armed and settled, the token reconcile, and the cross-file fence — and the lock is
+/// [`crate::db::lock_blocking`], which recovers a poisoned mutex exactly as
+/// [`crate::db::lock_for`] does.
+///
+/// ⚠️ **`pairing::sync_device_revoke` deliberately stays on [`with_write`].** A removal must
+/// reach the relay to mean anything and is refused without it, and its first step is a round trip
+/// of its own — so waiting out one trip to start another buys a reader nothing a second press
+/// would not, and freezes the button for the length of both.
+pub fn with_write_waiting<T>(
+    state: &State,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    written(state, Some(crate::db::lock_blocking(&state.db)), f)
+}
+
+/// [`with_write`] and [`with_write_waiting`]'s shared body: `guard` is the write connection, or
+/// `None` when the bounded wait gave up. **One body so the two cannot drift** — a waiting write
+/// that skipped the managed-wishlist settle or the fence would be a second definition of "a
+/// user-facing write", which is the thing [`with_write`] exists to have exactly one of.
+fn written<T>(
+    state: &State,
+    guard: Option<MutexGuard<'_, Connection>>,
+    f: impl FnOnce(&Connection) -> Result<T, String>,
+) -> Result<T, String> {
+    let out = match guard {
+        Some(conn) => {
+            // **The managed wishlists ride every write, before and after** (issue #512). Armed
+            // first so the write's own changes to a deck are marked, and settled after — outside
+            // the write's transaction, which has committed or rolled back by then — so a folder
+            // is rewritten once per press rather than once per row. Neither can fail the write:
+            // an arm that did not take is a folder that catches up at the next launch.
+            if let Err(e) = crate::managed_wishlist::arm(&conn) {
+                eprintln!("the managed wishlists could not be armed on this connection: {e}");
+            }
+            let out = f(&conn);
+            // **The token reconcile's backstop rides the same marks** (spec §4.2 rule 7): a
+            // token no card in a list makes any more loses its entries, for the writes that
+            // file no undo step and so could not do it inside their own transaction — the
+            // Collection tab's filing and cut, a sync pull, undo and redo. Scryfall's
+            // `reconcile::apply` takes this connection through `lock_db`, not through here, so
+            // the marks it leaves are reconciled at the NEXT write that comes through here.
+            // **Before the settle and not after it**, because the settle empties the dirty table
+            // this reads — and because the reconcile's deletions are token entries, which a
+            // managed wishlist's Tokens subfolder counts and whose triggers mark the settle's own
+            // token table, so settling second files the reconciled count in the same write.
+            // Logged, never failing the write, for the settle's reason.
+            crate::deck_tokens::reconcile_dirty_logged(&conn);
+            crate::managed_wishlist::settle_logged(&conn);
+            out
+        }
+        None => Err(crate::db::BUSY.to_owned()),
+    };
+    // **Every user-facing write in the crate passes through here**, so a debug build runs the
+    // whole suite with the fence armed and this is where a path that crossed the files stops
+    // being a line in a log. Release keeps the `eprintln!` in the commit hook and nothing
+    // else: the write has already happened by then, and a panic on a reader's machine would
+    // be a worse answer than a sentence.
+    debug_assert!(
+        !state.fence.tripped(),
+        "a transaction wrote to both user.db and corpus.db; SQLite does not guarantee those \
+         commit together in WAL mode"
+    );
+    out
 }
 
 #[cfg(test)]

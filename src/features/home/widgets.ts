@@ -3,7 +3,7 @@
  * database nobody has customised answers with.
  *
  * **This is the whole of the widget vocabulary and it appears in no Rust file.**
- * `src-tauri/src/home.rs` validates the *shape* of a layout document — a non-empty `id`, a
+ * `crates/grimoire-core/src/home.rs` validates the *shape* of a layout document — a non-empty `id`, a
  * non-empty `kind`, a footprint inside its bounds, a size cap — and refuses a kind never, because
  * a kind it has never heard of is the case that module is built around rather than an error. So
  * `HomeWidget.kind` is a free `string` on the wire and this file is the only place that says

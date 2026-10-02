@@ -457,7 +457,7 @@ describe("boundsOf", () => {
 
 describe("DEFAULT_LAYOUT", () => {
   /**
-   * ⚠️ **The literal below is `src-tauri/src/home.rs`'s `DEFAULT_LAYOUT` table, transcribed.**
+   * ⚠️ **The literal below is `crates/grimoire-core/src/home.rs`'s `DEFAULT_LAYOUT` table, transcribed.**
    * The two are one fact in two places and the Rust one is what a first launch gets, so this
    * test's job is to make changing the TypeScript half alone impossible to do quietly. If it
    * goes red, the question is which of the two moved — not how to make the assertion pass.

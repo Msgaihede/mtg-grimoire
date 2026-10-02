@@ -186,6 +186,13 @@ no combo" and "we have never downloaded the list" have to be two different sente
 - **Rust owns data plumbing** (SQLite/FTS5, Scryfall sync, image cache). **TS owns domain
   logic** (deck validation, import/export parsing). Rust supplies _facts_; TS draws
   _conclusions_. Keep that boundary.
+- **The Rust is two crates, and the line between them is "does it know about a window".**
+  `crates/grimoire-core` is the engine — the schema, the decks, the collection, the wishlist, the
+  search — and has no `tauri`; `src-tauri` is the desktop: the window, the mirror, the updater,
+  what still reaches a network, and **every `#[tauri::command]`**. A command's function is
+  written in the core over `&Connection`; its wrapper is written in
+  `src-tauri/src/<module>/mod.rs`, which re-exports the core's module of that name with a glob.
+  So `crate::deck::…` in `src-tauri` is the core's `deck` unless that file defines the item.
 - **Export _writing_ is the one thing that lives on both sides, by design, and the golden fence
   is what makes it legal.** The plain-text mirror is maintained by a Rust thread and cannot ask
   the page to render a file, so `src-tauri/src/transfer/` is a second implementation of
@@ -209,8 +216,8 @@ on — do not work from this page alone.
 
 | File | Read it when you are working on |
 | --- | --- |
-| [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md) | Anything Rust: schema and migrations, sync, Scryfall, images, deck storage, capabilities |
-| [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md) | The engine with no window, which three hosts will link — its four rules and the fence behind them, how a module moves there from `src-tauri`, and how to compile it for WASM on this machine. **`src-tauri/CLAUDE.md`'s rules about a module still bind it after it moves** |
+| [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md) | Anything Rust: schema and migrations, sync, Scryfall, images, deck storage, capabilities. **Its rules bind a module wherever its file is** — and since 2026-10-02 the file for the decks, the collection, the wishlist and the search is in the crate below |
+| [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md) | The engine with no window, which three hosts will link, **and where most of the Rust now is**: the schema, the decks, the collection, the wishlist, the search. Its four rules and the fence behind them, why no `#[tauri::command]` is in it (each is in `src-tauri/src/<module>/mod.rs`, under a glob re-export), how a module moves there, and how to compile it for WASM on this machine |
 | [`src/CLAUDE.md`](src/CLAUDE.md) | Any UI. Carries the Storybook-MCP rule, the `frontend-design` skill, layers, card images |
 | [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, the editor's views and drags |
 | [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export — parsing, planning, the two dialogs |
@@ -285,7 +292,7 @@ number to compare against.
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
 | [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what the 2026-10-01 deploy has not proved** |
-| [light-app.md](docs/reference/light-app.md) | The Android and web face — one entry and two faces, what a browser over the fake was driven to show at 360 and 1280 and across the crossing between them, the phone-sized Tauri window over the real core and the desktop app launched after it, the build's chunks, the two ways the dev server died, and what is open by the phase that owns it — and, in §6, the shared core as each extraction step lands it: the cargo workspace and why `target/` did not move, which modules have moved, the WASM compile, and what the desktop was checked for afterwards. **No Android host, no WASM host, no sync** |
+| [light-app.md](docs/reference/light-app.md) | The Android and web face — one entry and two faces, what a browser over the fake was driven to show at 360 and 1280 and across the crossing between them, the phone-sized Tauri window over the real core and the desktop app launched after it, the build's chunks, the two ways the dev server died, and what is open by the phase that owns it — and, in §6, the shared core as each extraction step lands it: the cargo workspace and why `target/` did not move, which modules have moved (four steps of seven: the leaves, storage, state, and the forty-nine domain modules one script moved), what stayed behind and why, the WASM compile, and what the desktop was checked for afterwards — an upgrade run side by side with `main` on a copy of real data each time. **No Android host, no WASM host, no sync** |
 | [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eighteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 

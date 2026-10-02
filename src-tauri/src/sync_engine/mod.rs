@@ -17,13 +17,14 @@
 //! writes it makes, and [`crate::reconcile`] already merges two versions of the reader's own
 //! rows and writes `needs_review` sentences from Rust.
 //!
-//! [`hlc`], [`merge`] and [`capture`] are `grimoire-core`'s, re-exported here beside the layers
-//! that have not moved yet.
+//! [`hlc`], [`merge`], [`capture`], [`apply`] and [`baseline`] are `grimoire-core`'s, re-exported
+//! here beside the layers that have not moved yet — the envelope, the client and what drives
+//! them, which wait for the roster in `sync_pair::identity`.
 
-pub mod apply;
-pub mod baseline;
+pub use grimoire_core::sync_engine::apply;
+pub use grimoire_core::sync_engine::baseline;
 pub use grimoire_core::sync_engine::capture;
-/// The three of `capture`'s tests that drive `reconcile` and the launch, which are still here.
+/// The two of `capture`'s tests that drive `reconcile`, which is still here.
 #[cfg(test)]
 mod capture_tests;
 pub mod client;

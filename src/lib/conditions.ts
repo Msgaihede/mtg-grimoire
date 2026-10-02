@@ -50,7 +50,7 @@ export type Condition = (typeof CONDITIONS)[number];
  * today.** This one is *the absence of a grade*; that one is *what a menu chooses to write*.
  * They agree because the app decided a menu should say nothing, which is a decision that could
  * be made differently tomorrow without this constant moving an inch —
- * `src-tauri/src/collection.rs` keeps `CONDITION_NOT_SET` and `DEFAULT_CONDITION` apart for
+ * `crates/grimoire-core/src/collection.rs` keeps `CONDITION_NOT_SET` and `DEFAULT_CONDITION` apart for
  * exactly the same reason, and this is the name to import when the sentinel is what is meant.
  */
 export const CONDITION_NOT_SET: Condition = "NONE";

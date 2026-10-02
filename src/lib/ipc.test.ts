@@ -9,54 +9,89 @@ vi.mock("@tauri-apps/api/event", () => ({ listen }));
 // compares the hand-written mirror below with the crate it mirrors. `viewports.test.ts`
 // reads `tauri.conf.json` the same way, for the same reason — Rust owns the fact and
 // TypeScript only quotes it, so the quote is what can rot.
-import activityRs from "../../src-tauri/src/activity.rs?raw";
-import cardRs from "../../src-tauri/src/card.rs?raw";
+import activityRsCore from "../../crates/grimoire-core/src/activity.rs?raw";
+import activityRsDesktop from "../../src-tauri/src/activity/mod.rs?raw";
+import cardRsCore from "../../crates/grimoire-core/src/card.rs?raw";
+import cardRsDesktop from "../../src-tauri/src/card/mod.rs?raw";
 import changesRs from "../../src-tauri/src/changes.rs?raw";
-import bulkUndoRs from "../../src-tauri/src/bulk_undo.rs?raw";
-import collectionRs from "../../src-tauri/src/collection.rs?raw";
-import collectionFoldersRs from "../../src-tauri/src/collection_folders.rs?raw";
-import importRs from "../../src-tauri/src/import.rs?raw";
+import bulkUndoRsCore from "../../crates/grimoire-core/src/bulk_undo.rs?raw";
+import bulkUndoRsDesktop from "../../src-tauri/src/bulk_undo/mod.rs?raw";
+import collectionRsCore from "../../crates/grimoire-core/src/collection.rs?raw";
+import collectionRsDesktop from "../../src-tauri/src/collection/mod.rs?raw";
+import collectionFoldersRsCore from "../../crates/grimoire-core/src/collection_folders.rs?raw";
+import collectionFoldersRsDesktop from "../../src-tauri/src/collection_folders/mod.rs?raw";
+import importRsCore from "../../crates/grimoire-core/src/import.rs?raw";
+import importRsDesktop from "../../src-tauri/src/import/mod.rs?raw";
 import combosRs from "../../src-tauri/src/combos.rs?raw";
-import deckRs from "../../src-tauri/src/deck.rs?raw";
-import deckpaneRs from "../../src-tauri/src/deckpane.rs?raw";
-import decksortRs from "../../src-tauri/src/decksort.rs?raw";
-import deckCompletionRs from "../../src-tauri/src/deck_completion.rs?raw";
-import deckMetaRs from "../../src-tauri/src/deck_meta.rs?raw";
-import deckMissingRs from "../../src-tauri/src/deck_missing.rs?raw";
-import deckNotesRs from "../../src-tauri/src/deck_notes.rs?raw";
-import deckPullRs from "../../src-tauri/src/deck_pull.rs?raw";
-import deckQuickAddRs from "../../src-tauri/src/deck_quick_add.rs?raw";
-import deckTheoryRs from "../../src-tauri/src/deck_theory.rs?raw";
-import deckTodosRs from "../../src-tauri/src/deck_todos.rs?raw";
-import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
+import deckRsCore from "../../crates/grimoire-core/src/deck.rs?raw";
+import deckRsDesktop from "../../src-tauri/src/deck/mod.rs?raw";
+import deckpaneRsCore from "../../crates/grimoire-core/src/deckpane.rs?raw";
+import deckpaneRsDesktop from "../../src-tauri/src/deckpane/mod.rs?raw";
+import decksortRsCore from "../../crates/grimoire-core/src/decksort.rs?raw";
+import decksortRsDesktop from "../../src-tauri/src/decksort/mod.rs?raw";
+import deckCompletionRsCore from "../../crates/grimoire-core/src/deck_completion.rs?raw";
+import deckCompletionRsDesktop from "../../src-tauri/src/deck_completion/mod.rs?raw";
+import deckMetaRsCore from "../../crates/grimoire-core/src/deck_meta.rs?raw";
+import deckMetaRsDesktop from "../../src-tauri/src/deck_meta/mod.rs?raw";
+import deckMissingRsCore from "../../crates/grimoire-core/src/deck_missing.rs?raw";
+import deckMissingRsDesktop from "../../src-tauri/src/deck_missing/mod.rs?raw";
+import deckNotesRsCore from "../../crates/grimoire-core/src/deck_notes.rs?raw";
+import deckNotesRsDesktop from "../../src-tauri/src/deck_notes/mod.rs?raw";
+import deckPullRsCore from "../../crates/grimoire-core/src/deck_pull.rs?raw";
+import deckPullRsDesktop from "../../src-tauri/src/deck_pull/mod.rs?raw";
+import deckQuickAddRsCore from "../../crates/grimoire-core/src/deck_quick_add.rs?raw";
+import deckQuickAddRsDesktop from "../../src-tauri/src/deck_quick_add/mod.rs?raw";
+import deckTheoryRsCore from "../../crates/grimoire-core/src/deck_theory.rs?raw";
+import deckTheoryRsDesktop from "../../src-tauri/src/deck_theory/mod.rs?raw";
+import deckTodosRsCore from "../../crates/grimoire-core/src/deck_todos.rs?raw";
+import deckTodosRsDesktop from "../../src-tauri/src/deck_todos/mod.rs?raw";
+import deckTokensRsCore from "../../crates/grimoire-core/src/deck_tokens.rs?raw";
+import deckTokensRsDesktop from "../../src-tauri/src/deck_tokens/mod.rs?raw";
 import desktopRs from "../../src-tauri/src/desktop.rs?raw";
 // `cardFiltersRs` rather than `filtersRs`, which the scanner's own `filters.rs` already holds
 // below — two files of that name in two crates, and the engine's (`grimoire-core`, where it
 // moved from `src-tauri/src` on 2026-10-02) is the one `CardFilters` lives in.
 import cardFiltersRs from "../../crates/grimoire-core/src/filters.rs?raw";
-import homeRs from "../../src-tauri/src/home.rs?raw";
+import homeRsCore from "../../crates/grimoire-core/src/home.rs?raw";
+import homeRsDesktop from "../../src-tauri/src/home/mod.rs?raw";
 import facetsRs from "../../src-tauri/src/index/facets.rs?raw";
-import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";
-import newPrintingsRs from "../../src-tauri/src/new_printings.rs?raw";
-import priceHistoryRs from "../../src-tauri/src/price_history.rs?raw";
-import recentCardsRs from "../../src-tauri/src/recent_cards.rs?raw";
-import resetRs from "../../src-tauri/src/reset.rs?raw";
-import searchRs from "../../src-tauri/src/search.rs?raw";
-import setCompletionRs from "../../src-tauri/src/set_completion.rs?raw";
+import markcolorsRsCore from "../../crates/grimoire-core/src/markcolors.rs?raw";
+import markcolorsRsDesktop from "../../src-tauri/src/markcolors/mod.rs?raw";
+import newPrintingsRsCore from "../../crates/grimoire-core/src/new_printings.rs?raw";
+import newPrintingsRsDesktop from "../../src-tauri/src/new_printings/mod.rs?raw";
+import priceHistoryRsCore from "../../crates/grimoire-core/src/price_history.rs?raw";
+import priceHistoryRsDesktop from "../../src-tauri/src/price_history/mod.rs?raw";
+import recentCardsRsCore from "../../crates/grimoire-core/src/recent_cards.rs?raw";
+import recentCardsRsDesktop from "../../src-tauri/src/recent_cards/mod.rs?raw";
+import resetRsCore from "../../crates/grimoire-core/src/reset.rs?raw";
+import resetRsDesktop from "../../src-tauri/src/reset/mod.rs?raw";
+import searchRsCore from "../../crates/grimoire-core/src/search.rs?raw";
+import searchRsDesktop from "../../src-tauri/src/search/mod.rs?raw";
+import setCompletionRsCore from "../../crates/grimoire-core/src/set_completion.rs?raw";
+import setCompletionRsDesktop from "../../src-tauri/src/set_completion/mod.rs?raw";
 import shareRs from "../../src-tauri/src/share/commands.rs?raw";
-import shelffoldsRs from "../../src-tauri/src/shelffolds.rs?raw";
-import stackhideRs from "../../src-tauri/src/stackhide.rs?raw";
+import shelffoldsRsCore from "../../crates/grimoire-core/src/shelffolds.rs?raw";
+import shelffoldsRsDesktop from "../../src-tauri/src/shelffolds/mod.rs?raw";
+import stackhideRsCore from "../../crates/grimoire-core/src/stackhide.rs?raw";
+import stackhideRsDesktop from "../../src-tauri/src/stackhide/mod.rs?raw";
 import startupRs from "../../src-tauri/src/startup.rs?raw";
-import startviewRs from "../../src-tauri/src/startview.rs?raw";
-import stickyNotesRs from "../../src-tauri/src/sticky_notes.rs?raw";
+import startviewRsCore from "../../crates/grimoire-core/src/startview.rs?raw";
+import startviewRsDesktop from "../../src-tauri/src/startview/mod.rs?raw";
+import stickyNotesRsCore from "../../crates/grimoire-core/src/sticky_notes.rs?raw";
+import stickyNotesRsDesktop from "../../src-tauri/src/sticky_notes/mod.rs?raw";
 import syncClientRs from "../../src-tauri/src/sync_engine/client.rs?raw";
 import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
-import upcomingSetsRs from "../../src-tauri/src/upcoming_sets.rs?raw";
-import valueHistoryRs from "../../src-tauri/src/value_history.rs?raw";
-import wishlistFoldersRs from "../../src-tauri/src/wishlist_folders.rs?raw";
-import wishlistRs from "../../src-tauri/src/wishlist.rs?raw";
-import wishlistOptimizeRs from "../../src-tauri/src/wishlist_optimize.rs?raw";
+import upcomingSetsRsCore from "../../crates/grimoire-core/src/upcoming_sets.rs?raw";
+import upcomingSetsRsDesktop from "../../src-tauri/src/upcoming_sets/mod.rs?raw";
+import valueHistoryRsCore from "../../crates/grimoire-core/src/value_history.rs?raw";
+import valueHistoryRsDesktop from "../../src-tauri/src/value_history/mod.rs?raw";
+import wishlistFoldersRsCore from "../../crates/grimoire-core/src/wishlist_folders.rs?raw";
+import wishlistFoldersRsDesktop from "../../src-tauri/src/wishlist_folders/mod.rs?raw";
+import wishlistRsCore from "../../crates/grimoire-core/src/wishlist.rs?raw";
+import wishlistRsDesktop from "../../src-tauri/src/wishlist/mod.rs?raw";
+import wishlistOptimizeRsCore from "../../crates/grimoire-core/src/wishlist_optimize.rs?raw";
+import wishlistOptimizeRsDesktop from "../../src-tauri/src/wishlist_optimize/mod.rs?raw";
 // The scanner's sources. All but one are in the `card-scanner` crate rather than under
 // `src-tauri/src` — the detector is a library with a CLI of its own, and the shapes the page
 // reads are declared there — and `src-tauri/src/scanner.rs` is the app's own commands, with the
@@ -97,6 +132,45 @@ import {
   type SyncProgressEvent,
   type TheorySlot,
 } from "@/lib/ipc";
+
+// **A module the core extraction split in two is read as both halves** — the engine's file in
+// `crates/grimoire-core` and the desktop's command wrappers, which stayed in `src-tauri` — under
+// the one name every assertion below already uses.
+const activityRs = activityRsCore + "\n" + activityRsDesktop;
+const cardRs = cardRsCore + "\n" + cardRsDesktop;
+const bulkUndoRs = bulkUndoRsCore + "\n" + bulkUndoRsDesktop;
+const collectionRs = collectionRsCore + "\n" + collectionRsDesktop;
+const collectionFoldersRs = collectionFoldersRsCore + "\n" + collectionFoldersRsDesktop;
+const importRs = importRsCore + "\n" + importRsDesktop;
+const deckRs = deckRsCore + "\n" + deckRsDesktop;
+const deckpaneRs = deckpaneRsCore + "\n" + deckpaneRsDesktop;
+const decksortRs = decksortRsCore + "\n" + decksortRsDesktop;
+const deckCompletionRs = deckCompletionRsCore + "\n" + deckCompletionRsDesktop;
+const deckMetaRs = deckMetaRsCore + "\n" + deckMetaRsDesktop;
+const deckMissingRs = deckMissingRsCore + "\n" + deckMissingRsDesktop;
+const deckNotesRs = deckNotesRsCore + "\n" + deckNotesRsDesktop;
+const deckPullRs = deckPullRsCore + "\n" + deckPullRsDesktop;
+const deckQuickAddRs = deckQuickAddRsCore + "\n" + deckQuickAddRsDesktop;
+const deckTheoryRs = deckTheoryRsCore + "\n" + deckTheoryRsDesktop;
+const deckTodosRs = deckTodosRsCore + "\n" + deckTodosRsDesktop;
+const deckTokensRs = deckTokensRsCore + "\n" + deckTokensRsDesktop;
+const homeRs = homeRsCore + "\n" + homeRsDesktop;
+const markcolorsRs = markcolorsRsCore + "\n" + markcolorsRsDesktop;
+const newPrintingsRs = newPrintingsRsCore + "\n" + newPrintingsRsDesktop;
+const priceHistoryRs = priceHistoryRsCore + "\n" + priceHistoryRsDesktop;
+const recentCardsRs = recentCardsRsCore + "\n" + recentCardsRsDesktop;
+const resetRs = resetRsCore + "\n" + resetRsDesktop;
+const searchRs = searchRsCore + "\n" + searchRsDesktop;
+const setCompletionRs = setCompletionRsCore + "\n" + setCompletionRsDesktop;
+const shelffoldsRs = shelffoldsRsCore + "\n" + shelffoldsRsDesktop;
+const stackhideRs = stackhideRsCore + "\n" + stackhideRsDesktop;
+const startviewRs = startviewRsCore + "\n" + startviewRsDesktop;
+const stickyNotesRs = stickyNotesRsCore + "\n" + stickyNotesRsDesktop;
+const upcomingSetsRs = upcomingSetsRsCore + "\n" + upcomingSetsRsDesktop;
+const valueHistoryRs = valueHistoryRsCore + "\n" + valueHistoryRsDesktop;
+const wishlistFoldersRs = wishlistFoldersRsCore + "\n" + wishlistFoldersRsDesktop;
+const wishlistRs = wishlistRsCore + "\n" + wishlistRsDesktop;
+const wishlistOptimizeRs = wishlistOptimizeRsCore + "\n" + wishlistOptimizeRsDesktop;
 
 beforeEach(() => {
   invoke.mockReset();

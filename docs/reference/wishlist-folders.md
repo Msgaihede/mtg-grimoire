@@ -720,7 +720,7 @@ both answers again with that branch gone.
 
 ## What a wish costs, and which printing it is drawn as
 
-Two changes, both 2026-08-26, both in `src-tauri/src/wishlist.rs`, and the second one dragged
+Two changes, both 2026-08-26, both in `crates/grimoire-core/src/wishlist.rs`, and the second one dragged
 `wishlist_folders.rs` with it. The design is
 [2026-08-26-card-chin-and-exact-prices-design.md](../superpowers/specs/2026-08-26-card-chin-and-exact-prices-design.md).
 
@@ -1416,9 +1416,9 @@ they were before the press. Findings B and C, both known and accepted, are recor
 | Path | What is in it |
 | --- | --- |
 | `crates/grimoire-core/src/schema.rs` | The v23 step, `WISHLIST_GRAIN`, and the whole-schema `ON DELETE` inventory |
-| `src-tauri/src/wishlist_folders.rs` | The folder commands, `set_wish_folder`, `folder_summary`, and since issue #471 `clear_folder` and `delete_folder_and_wishes` |
-| `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `WISH_PREFERRED_FINISH`, the cheapest-printing join — and since 2026-09-26 `WishlistQuery::shelves`, `shelf_counts`, `wishlist_peek_sql` and `wishlist_shelf_counts` |
-| `src-tauri/src/wishlist_optimize.rs` | `plan` and `apply`, the candidate query, and the six DTOs `ipc.test.ts`'s `plainMirrors` pins |
+| `crates/grimoire-core/src/wishlist_folders.rs` | The folder commands, `set_wish_folder`, `folder_summary`, and since issue #471 `clear_folder` and `delete_folder_and_wishes` |
+| `crates/grimoire-core/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `WISH_PREFERRED_FINISH`, the cheapest-printing join — and since 2026-09-26 `WishlistQuery::shelves`, `shelf_counts`, `wishlist_peek_sql` and `wishlist_shelf_counts` |
+| `crates/grimoire-core/src/wishlist_optimize.rs` | `plan` and `apply`, the candidate query, and the six DTOs `ipc.test.ts`'s `plainMirrors` pins |
 | `src/features/wishlist/optimizePlan.ts` | The conclusions drawn from those facts — the ticked set, the headline, the outcome reading |
 | `src/features/wishlist/OptimizeWishlistDialog.tsx` | The preview, and the one press that commits it |
 | `crates/grimoire-core/src/sorting.rs` | `row_price_expr`'s two arms, and `deck_card_price_expr` as one caller of it |
@@ -1432,8 +1432,8 @@ they were before the press. Findings B and C, both known and accepted, are recor
 | `src/components/ParentFolderCard.tsx` | The up-one-level tile — drawn by no cabinet since 2026-09-26, with its stories kept; the deck gallery's `FolderCard` imports its words. Its folder half is a breadcrumb segment's drop now |
 | `src/features/card/cardMenu.tsx` | `buildWishlistTargetItems` — `Add to → Wishlist` |
 | `src/features/wishlist/WishDestination.tsx` | The destination dropdown both deck sweeps draw — the root, the full-path rows, and `New folder…` |
-| `src-tauri/src/deck_theory.rs` | `missing_to_wishlist`, the Compare dialog's write and its up-front folder check |
-| `src-tauri/src/deck.rs` | `missing_to_wishlist`, the live deck's, taking the same optional folder |
+| `crates/grimoire-core/src/deck_theory.rs` | `missing_to_wishlist`, the Compare dialog's write and its up-front folder check |
+| `crates/grimoire-core/src/deck.rs` | `missing_to_wishlist`, the live deck's, taking the same optional folder |
 
 ## Managed wishlists — a folder a deck owns (user schema v48 and v49, 2026-09-24; its Tokens subfolder v55, 2026-09-27; its tokens switch v57, 2026-09-28)
 

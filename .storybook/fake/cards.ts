@@ -25,7 +25,7 @@
  * the same row without any of them being stored — which is what makes a fixture unable to
  * answer the same question two ways.
  *
- * Field names and nullability mirror `src-tauri/src/card.rs`'s `card_row`, because the DTOs
+ * Field names and nullability mirror `crates/grimoire-core/src/card.rs`'s `card_row`, because the DTOs
  * derived from it must come out identical to Rust's. Two rules from CLAUDE.md are
  * load-bearing here and are easy to get wrong from memory:
  *

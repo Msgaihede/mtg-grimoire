@@ -157,6 +157,15 @@ A pure module that only the desktop reads still moves. The rule is "has no reaso
 window", not "the phone needs it today": a module left behind is one the core cannot call, and the
 home reads are exactly the kind of thing a later light destination will want.
 
+**Built 2026-10-02, and the wrappers are not in a `commands/` folder.** Each module's stayed at
+the module's own path — `src-tauri/src/deck/mod.rs` is `pub use grimoire_core::deck::*;` and
+deck's wrappers below it — which is the shape step 2 had already given `schema`. Read against the
+tree, 245 of `generate_handler!`'s 257 entries are a path through a module, and a folder would
+have meant rewriting every one of them and every cross-module call a wrapper makes; this way no
+handler entry and no caller changed. Markus chose it over the folder. The folder can still be a
+rename, with §2.4's table. [The step's plan](../plans/2026-10-02-light-app-core-step-4-domain.md)
+has the argument.
+
 ### 2.4 The command table
 
 One declaration per command, in the core. The shape below is illustrative — the macro's spelling
@@ -300,6 +309,14 @@ Each step is its own PR. **The light UI waits for none of them** (§9).
    recursive ("no leaf modules"), so it cannot go piecemeal. **It is done by a re-runnable script on
    an announced day**: it will touch every open branch, and a branch that merges `main` afterwards
    re-runs the script rather than resolving the move by hand.
+   **Built 2026-10-02: forty-nine modules, about 105 000 lines, in one run of
+   `scripts/core-step-4.mjs`** — and "no leaf modules" measured: eighteen of them name none of the
+   others, and the other thirty-one are one knot around `deck`. `with_write` and
+   `prepare_database` came with them. **Three things on the list did not move**, each because it
+   names step-5 code and nothing was hoisted to free it: `reconcile` (`scryfall::Migration`),
+   `tags/` (the queries take `tags::Dataset`, which sits in the fetch engine) and
+   `deck::bracket_reads` (`combos::match_combos`). They join step 5.
+   [The step's plan](../plans/2026-10-02-light-app-core-step-4-domain.md) has the table.
 5. **I/O** — `scryfall`, `ingest`, `run_sync` behind a progress sink, the three feeds,
    `index/lifecycle`, `images`.
 6. **The sync client, entitlement and pairing** — see below. `sync_pair/identity` and

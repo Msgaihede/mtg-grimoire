@@ -25,7 +25,7 @@
  * can be *added* and never what is already named. A named card the deck no longer holds is drawn
  * at the head of the list, ticked, saying so under its name — **and keeping its picture**, which
  * is the opposite of the natural guess. `attachments_by_note` resolves each named card's printing
- * over the *whole corpus* (`src-tauri/src/deck_notes.rs`: `ORDER BY (dc.card_id IS NULL), c.id` —
+ * over the *whole corpus* (`crates/grimoire-core/src/deck_notes.rs`: `ORDER BY (dc.card_id IS NULL), c.id` —
  * a printing this deck holds first, any printing otherwise), so cutting a card takes its deck row
  * and not its art. The frame is empty only for the orphan whose oracle id the corpus knows no
  * printing of at all.
@@ -382,7 +382,7 @@ function Picker({
  * replaced for a stray by the one thing that is true of it, {@link CUT_FROM_DECK}.
  *
  * **The frame beside it is usually a real picture, and that is worth stating because the opposite
- * is the natural guess.** `attachments_by_note` (`src-tauri/src/deck_notes.rs`) resolves a printing
+ * is the natural guess.** `attachments_by_note` (`crates/grimoire-core/src/deck_notes.rs`) resolves a printing
  * over the *whole corpus* — `ORDER BY (dc.card_id IS NULL), c.id`, so a printing the deck holds
  * first and any printing otherwise — so a card cut from the deck keeps its `cardId`, and the frame
  * draws from that. A deck row leaving does not take the art with it. `cardId` is absent, and the

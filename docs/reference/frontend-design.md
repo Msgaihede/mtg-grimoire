@@ -774,7 +774,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   page.
 
   One `app_meta` row, `card_zoom`, holding a JSON object of section → multiplier
-  (`src-tauri/src/zoom.rs`); `src/lib/useCardZoomPersistence.ts` is the whole of the frontend and
+  (`crates/grimoire-core/src/zoom.rs`); `src/lib/useCardZoomPersistence.ts` is the whole of the frontend and
   `AppShell` is its only mount. Five decisions in it, each with a failure it is avoiding:
 
   - **The row is an object, not one key per section.** Every wall is seeded in one pass at launch,
@@ -808,7 +808,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     second costs only the next launch's starting size.
 - **A list's grid-or-table choice is remembered too, and it is `card_zoom`'s mechanism with one
   deliberate difference** (2026-08-26). One `app_meta` row, `list_view`, holding a JSON object of
-  section → `"grid"`/`"table"` (`src-tauri/src/listview.rs`); `src/lib/useListViewPersistence.ts`
+  section → `"grid"`/`"table"` (`crates/grimoire-core/src/listview.rs`); `src/lib/useListViewPersistence.ts`
   is the whole of the frontend and `AppShell` is its only mount. It copies the object row, the
   preserve-what-you-do-not-understand write, the per-entry fallback, the `hydrate…` seed with its
   `pulse !== 0` guard, and the swallow-every-failure rule. Three things differ, and each is the same

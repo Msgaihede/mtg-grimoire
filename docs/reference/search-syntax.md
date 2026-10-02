@@ -594,7 +594,7 @@ exactly one term.
 | --- | --- |
 | `src/features/search/queryLanguage.ts` | The grammar. `parseQuery`, `QUERY_KEYWORDS`, `excludedName`, the source spans, and the three rewrites (`removeToken`, `setTokenNegated`, `setTokenValue`) |
 | `crates/grimoire-core/src/filters.rs` | `QueryPredicate` and the SQL — one arm per field in `push_card_filters`, and `fts_match` (with `fts_phrase` for a name) for the three that ride the index |
-| `src-tauri/src/wishlist.rs` | The one search that answers a name term from its own column rather than from `cards_fts` |
+| `crates/grimoire-core/src/wishlist.rs` | The one search that answers a name term from its own column rather than from `cards_fts` |
 | `crates/grimoire-core/src/schema.rs` | Corpus schema 5, `cards.keywords` |
 | `src-tauri/src/tags/query.rs` | `run_tag_resolve` / `tag_resolve` — names to slugs, exact, through `slug_norm` |
 | `src/features/tags/tagFilters.ts` | `mergeTagTerms` — the caller's chips ANDed with the typed ones |
