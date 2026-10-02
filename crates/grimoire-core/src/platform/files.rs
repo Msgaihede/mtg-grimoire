@@ -61,6 +61,12 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
     imp::create_dir_all(path)
 }
 
+/// Remove `path`, a directory with nothing in it. One that still holds something is refused
+/// and left as it was.
+pub fn remove_dir(path: &Path) -> io::Result<()> {
+    imp::remove_dir(path)
+}
+
 /// Every entry of `dir`, as its file name and its path. An entry whose name is not Unicode is
 /// left out: nothing this app writes has one.
 pub fn entries(dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
@@ -83,15 +89,15 @@ pub struct Entry {
     pub name: String,
     pub path: PathBuf,
     pub kind: Kind,
-    /// A file's length. `None` for anything but a file, and for a file the host would not
-    /// measure.
+    /// The entry's own length — a link's is the link's, never what it points at. `None` for a
+    /// directory, and for an entry the host would not measure.
     pub len: Option<u64>,
-    /// When a file was last written, or stamped with [`set_modified`]. `None` as for `len`.
+    /// When it was last written, or stamped with [`set_modified`]. `None` as for `len`.
     pub modified: Option<Wall>,
 }
 
-/// Every entry of `dir` with what it is — and, for a file, how long it is and when it was
-/// last written. **A directory that is not there answers `None`**, which is an ordinary state:
+/// Every entry of `dir` with what it is — and, for anything but a directory, how long it is
+/// and when it was last written. **A directory that is not there answers `None`**, which is an ordinary state:
 /// nothing was ever put in it.
 ///
 /// For a caller that has to tell "absent" from "unreadable": any other failure, on the
@@ -219,6 +225,10 @@ mod imp {
         std::fs::create_dir_all(path)
     }
 
+    pub fn remove_dir(path: &Path) -> io::Result<()> {
+        std::fs::remove_dir(path)
+    }
+
     pub fn entries(dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
         Ok(std::fs::read_dir(dir)?
             .flatten()
@@ -247,8 +257,8 @@ mod imp {
             };
             // Listed, even when it cannot be measured.
             let meta = match kind {
-                Kind::File => entry.metadata().ok(),
-                Kind::Dir | Kind::Other => None,
+                Kind::File | Kind::Other => entry.metadata().ok(),
+                Kind::Dir => None,
             };
             found.push(Entry {
                 name,
@@ -377,6 +387,10 @@ mod imp {
         Err(unsupported())
     }
 
+    pub fn remove_dir(_path: &Path) -> io::Result<()> {
+        Err(unsupported())
+    }
+
     pub fn entries(_dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
         Err(unsupported())
     }
@@ -453,17 +467,17 @@ mod tests {
 
     fn dir(name: &str) -> PathBuf {
         let dir = crate::scratch::path(&format!("files-{name}"));
-        let _ = remove_dir(&dir);
+        let _ = empty(&dir);
         create_dir_all(&dir).unwrap();
         dir
     }
 
     /// Empty `dir`, one level down as well: the listing test leaves a folder in its own.
-    fn remove_dir(dir: &Path) -> io::Result<()> {
+    fn empty(dir: &Path) -> io::Result<()> {
         for (_, path) in entries(dir)? {
             if !is_file(&path) {
+                empty(&path)?;
                 remove_dir(&path)?;
-                std::fs::remove_dir(&path)?;
                 continue;
             }
             remove(&path)?;
@@ -537,6 +551,18 @@ mod tests {
         let stamped = stamped.iter().find(|e| e.kind == Kind::File).unwrap();
         assert_eq!(stamped.modified, Some(long_ago));
         assert_eq!(stamped.len, Some(5), "a stamp is not a write");
+
+        // A folder goes only once it is empty, which is what lets a sweep leave behind one
+        // that still holds a file it could not delete.
+        write(&shard.join("kept.webp"), b"x").unwrap();
+        assert!(
+            remove_dir(&shard).is_err(),
+            "a folder with a file in it stays"
+        );
+        assert!(exists(&shard.join("kept.webp")));
+        remove(&shard.join("kept.webp")).unwrap();
+        remove_dir(&shard).unwrap();
+        assert!(!exists(&shard));
 
         let gone = dir.join("gone.webp");
         assert_eq!(
