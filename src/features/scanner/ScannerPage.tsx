@@ -17,7 +17,7 @@ import { addDecision, commitPlan, setPrinting, totalCopies, trayLayoutOf } from 
 import { trayFinish } from "./reader/trayFinish";
 import { TrayPanel } from "./reader/TrayPanel";
 import { ScannerPanels } from "./ScannerPanels";
-import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
+import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import type { ScannerDecision, ScannerOptions, ScannerTrayRow } from "./types";
 import { useCamera, useCameraDevices } from "./useCamera";
 import { useScanLoop } from "./useScanLoop";
@@ -139,6 +139,7 @@ function LiveScanner() {
   // the prefs on the way out rather than from here.
   const [options, setOptions] = useState<ScannerOptions>(DEFAULT_SCANNER_OPTIONS);
   const [sendPx, setSendPx] = useState(DEFAULT_SEND_PX);
+  const [detailWaitMs, setDetailWaitMs] = useState(DEFAULT_DETAIL_WAIT_MS);
   // `previews` is the Developer switch's too: the rectified preview and its hash cost a JPEG
   // encode a frame, and nothing but the developer panels draws them.
   const frameOptions = useMemo(
@@ -263,6 +264,7 @@ function LiveScanner() {
     live: camera.kind === "live" && loaded && tray.loaded && !parked.paused,
     options: frameOptions,
     sendPx,
+    detailWaitMs,
     onDecision,
   });
 
@@ -579,8 +581,10 @@ function LiveScanner() {
                   rate={loop.rate}
                   options={options}
                   sendPx={sendPx}
+                  detailWaitMs={detailWaitMs}
                   onOptions={setOptions}
                   onSendPx={setSendPx}
+                  onDetailWaitMs={setDetailWaitMs}
                   onCapture={onCapture}
                 />
                 <TiersPanel resolution={loop.lastResolution} />
