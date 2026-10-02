@@ -316,15 +316,15 @@ function splitCommands(what, text) {
   return { header: file.header, uses, stay, moved, tail: file.tail };
 }
 
-/** Write a `use` block. */
-const useBlock = (lines) => lines.map((l) => `${l}\n`).join("");
+/** Write a block of Rust `use` lines. (Not `useBlock`: eslint reads a `use…` name as a React hook.) */
+const importLines = (lines) => lines.map((l) => `${l}\n`).join("");
 
 // sync_engine/commands.rs
 {
   const text = read(join(DESK, "sync_engine/commands.rs"));
   const parts = splitCommands("commands.rs", text);
   // The core half: the module doc, its own imports, everything but the commands.
-  const coreUses = useBlock([
+  const coreUses = importLines([
     "use crate::sync_engine::client;",
     "use crate::sync_engine::entitlement;",
     "use crate::sync_pair::{crypto, identity};",
@@ -344,7 +344,7 @@ const useBlock = (lines) => lines.map((l) => `${l}\n`).join("");
 pub use grimoire_core::sync_engine::commands::*;
 
 ` +
-    useBlock([
+    importLines([
       "use crate::sync::{self, AppState};",
       "use crate::sync_engine::client::{self, RelayOutcome};",
       "use crate::sync_engine::entitlement;",
@@ -383,7 +383,7 @@ fn now_ms() -> i64 {
   const parts = splitCommands("pairing.rs", text);
   const banner = parts.uses.find((u) => /use crate::sync::\{self, AppState\};/.test(u.text));
   if (!banner) throw new Error("pairing.rs: the commands' banner");
-  const coreUses = useBlock([
+  const coreUses = importLines([
     "use crate::state::{Lane, Store};",
     "use crate::sync_engine::client;",
     "use crate::sync_engine::commands;",
