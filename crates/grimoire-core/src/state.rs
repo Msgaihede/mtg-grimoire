@@ -6,9 +6,10 @@
 //! this crate that needs the database is handed a `&State` or a `&Connection` taken from it.
 //!
 //! **It is the every-host half as far as the extraction has got.** The Scryfall client, the
-//! image cache, the facet index, the sync-in-flight flag and the pending pairing offer are every
-//! host's too, and are still fields of the desktop's `AppState` — each is a type that has not
-//! moved here yet, and arrives with the step that moves it.
+//! facet index and the sync-in-flight flag are here since the I/O step brought the card sync
+//! and the index's lifecycle. The image cache and the pending pairing offer are every host's
+//! too, and are still fields of the desktop's `AppState` — each is a type that has not moved
+//! here yet, and arrives with the step that moves it.
 //!
 //! **[`with_write`] is the one definition of a user-facing write**, and it is here since the
 //! extraction's domain step brought the managed wishlist and the token reconcile its body calls.
@@ -22,9 +23,12 @@
 use crate::db::{self, CrossFileFence};
 use crate::events::EventSink;
 use crate::hooks::{self, WriteObserver};
+use crate::index::lifecycle::IndexSlot;
+use crate::scryfall;
 use rusqlite::Connection;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::sync::atomic::AtomicBool;
+use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 /// The connections and what rides them.
 ///
@@ -45,6 +49,23 @@ pub struct State {
     pub fence: Arc<CrossFileFence>,
     /// Where an event goes — see [`crate::events`].
     pub events: Arc<dyn EventSink>,
+    /// Whether a card sync is in flight. Claimed with an atomic swap and released by a guard
+    /// in [`crate::sync::run_sync`], so no way out of a run leaves it set.
+    pub syncing: AtomicBool,
+    /// The one Scryfall client: one pacing gate and one 429 lockout for everything that asks
+    /// `api.scryfall.com` — the card sync here, and the tag feeds, which borrow it.
+    pub client: scryfall::Client,
+    /// The in-memory facet index and the generation of the corpus it describes — cold, which
+    /// is a supported state and not an error, until the first build lands. Read it through
+    /// [`crate::index::lifecycle::current`]; everything else about it is that module's.
+    ///
+    /// `RwLock` and not `Mutex`: every facet request reads it and only a sync or a collection
+    /// write replaces it. The `Arc` inside is so a reader clones the handle and lets the lock
+    /// go at once — a facet pass must never hold a lock a sync's rebuild is waiting on.
+    pub index: RwLock<IndexSlot>,
+    /// The host's observers, kept for the one thing the hooks cannot tell them — see
+    /// [`State::corpus_replaced`]. The hooks hold their own handles on the same list.
+    observers: Vec<Arc<dyn WriteObserver>>,
 }
 
 impl State {
@@ -60,21 +81,40 @@ impl State {
     /// connection. Everywhere else it is a connection opened read-only on the same files
     /// ([`db::open_read`]), which is what lets a search answer from the last committed
     /// snapshot without queueing behind any writer.
+    ///
+    /// **`client` is the host's to build**, because where Scryfall's API lives and what lockout
+    /// an earlier run earned are the host's to know: the desktop restores a persisted 429
+    /// deadline into it before handing it over. No sync is in flight and the index is cold —
+    /// the host starts the first build once the state is in an `Arc`.
     pub fn new(
         write: Connection,
         read: Option<Connection>,
         data_dir: PathBuf,
         events: Arc<dyn EventSink>,
         observers: Vec<Arc<dyn WriteObserver>>,
+        client: scryfall::Client,
     ) -> State {
         let fence = Arc::new(CrossFileFence::new());
-        hooks::install(&write, fence.clone(), observers);
+        hooks::install(&write, fence.clone(), observers.clone());
         State {
             db: Mutex::new(write),
             db_read: read.map(Mutex::new),
             data_dir,
             fence,
             events,
+            syncing: AtomicBool::new(false),
+            client,
+            index: RwLock::default(),
+            observers,
+        }
+    }
+
+    /// Tell every observer the card corpus was just replaced — [`WriteObserver::corpus_replaced`].
+    ///
+    /// The card sync calls it the moment its swap has landed. In list order, like the hooks.
+    pub fn corpus_replaced(&self) {
+        for observer in &self.observers {
+            observer.corpus_replaced();
         }
     }
 
@@ -250,6 +290,7 @@ mod tests {
             PathBuf::from("nowhere"),
             crate::events::silent(),
             observers,
+            scryfall::Client::new("http://127.0.0.1:1".into()),
         )
     }
 
@@ -287,6 +328,7 @@ mod tests {
     struct Counter {
         rows: AtomicUsize,
         commits: AtomicUsize,
+        swaps: AtomicUsize,
     }
 
     impl WriteObserver for Counter {
@@ -297,6 +339,29 @@ mod tests {
         fn committed(&self) {
             self.commits.fetch_add(1, Ordering::Relaxed);
         }
+
+        fn corpus_replaced(&self) {
+            self.swaps.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// The one thing an observer hears that no hook carries: a sync that swapped `cards` says
+    /// so once, to every observer the host gave the state — and to nobody when no row moved.
+    #[test]
+    fn a_replaced_corpus_is_told_to_every_observer_once_and_is_not_a_write() {
+        let first = Arc::new(Counter::default());
+        let second = Arc::new(Counter::default());
+        let state = over_memory(vec![first.clone(), second.clone()]);
+
+        state.corpus_replaced();
+
+        for counter in [&first, &second] {
+            assert_eq!(counter.swaps.load(Ordering::Relaxed), 1);
+            assert_eq!(counter.rows.load(Ordering::Relaxed), 0);
+            assert_eq!(counter.commits.load(Ordering::Relaxed), 0);
+        }
+        // And a state with nobody listening has nobody to tell.
+        over_memory(Vec::new()).corpus_replaced();
     }
 
     #[test]
@@ -367,6 +432,7 @@ mod tests {
             dir,
             crate::events::silent(),
             vec![counter.clone()],
+            scryfall::Client::new("http://127.0.0.1:1".into()),
         );
         assert!(!std::ptr::eq(state.reader(), &state.db));
 

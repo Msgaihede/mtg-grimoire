@@ -80,8 +80,9 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// wholesale; either one mapped to a surface would fire this a hundred thousand times per
 /// refresh and turn every sync into a mirror rebuild. What those two change — a corrected
 /// card name, a moved price — enters through one full pass after the refresh *completes*
-/// ([`crate::sync::run_sync`] and [`crate::marketplace_feed::refresh`] both call
-/// [`Mask::mark_all`]), which is a bounded event instead of a per-row storm. The same goes
+/// ([`crate::marketplace_feed::refresh`] calls [`Mask::mark_all`], and the card sync reaches it
+/// through [`WriteObserver::corpus_replaced`]), which is a bounded event instead of a per-row
+/// storm. The same goes
 /// for `deck_audit`, `deck_undo`, `error_log`, `image_cache`, the art- and oracle-tag tables,
 /// `app_meta` and `sync_meta`: none of them is read by [`crate::mirror::read`].
 ///
@@ -264,6 +265,13 @@ impl WriteObserver for Mask {
         if let Some(d) = surface_of(table) {
             self.mark(d);
         }
+    }
+
+    /// A sync swapped `cards`: every mirrored CSV's `Price` column, and any corrected card
+    /// name, is owed a pass. One of the four things that run a full mirror pass (spec §5), and
+    /// the one `row` cannot carry — `cards` maps to no surface on purpose.
+    fn corpus_replaced(&self) {
+        self.mark_all();
     }
 }
 
@@ -645,18 +653,16 @@ mod tests {
             // **No observers, on purpose**: this fixture has never hooked its connection, so
             // nothing a test built on it writes marks the mask. `State::new` still arms the
             // fence, which every other fixture's connection already carried.
-            core: grimoire_core::state::State::new(
+            core: std::sync::Arc::new(grimoire_core::state::State::new(
                 conn,
                 Some(read),
                 dir.to_path_buf(),
                 grimoire_core::events::silent(),
                 Vec::new(),
-            ),
-            syncing: std::sync::atomic::AtomicBool::new(false),
-            // Never called: nothing in this module reaches the network or an image.
-            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                // Never called: nothing in this module reaches the network or an image.
+                crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            )),
             images: crate::images::Cache::new(dir.join("images")),
-            index: std::sync::RwLock::default(),
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
             changes: Default::default(),
@@ -1817,22 +1823,36 @@ mod tests {
         assert_eq!(state.mirror.take(), None);
     }
 
-    /// The sync's mark, through the one part of it a test can reach — `do_sync` takes a
-    /// `tauri::AppHandle` and this crate has no mock-app harness, so the *call*, which sits where
-    /// the swap lands, stays untested and is reported as such. What is pinned here is what it
-    /// marks: a swapped corpus moved every mirrored price, so it is every surface.
+    /// The sync's mark, through the door it comes in by: the card sync, which is the core's,
+    /// calls `State::corpus_replaced` where its swap lands, and the mirror's mask is one of the
+    /// observers the desktop gives the state. The *call* inside `do_sync` is driven in the
+    /// core, by `sync::run_tests`, which runs a whole sync against a mock Scryfall and counts
+    /// what an observer is told. What is pinned here is the desktop's half: that the mask is
+    /// one of those observers, and what it marks — a swapped corpus moved every mirrored
+    /// price, so it is every surface.
     ///
     /// It was gated on `run_sync`'s result until issue #551, which is why a run that swapped the
     /// cards and then failed at `/sets` left the mirror's prices a corpus behind.
     #[test]
     fn a_swapped_corpus_marks_every_surface() {
         let dir = tempfile::tempdir().unwrap();
-        let state = state_at(dir.path());
-        assert_eq!(state.mirror.take(), None);
+        // The fixture hooks no observers, so this one is built the way `init_state` builds the
+        // app's: the mirror's mask in the list the state is given.
+        crate::split::convert(dir.path()).unwrap();
+        let mask = Arc::new(Mask::default());
+        let state = grimoire_core::state::State::new(
+            crate::db::open_write(dir.path()).unwrap(),
+            None,
+            dir.path().to_path_buf(),
+            grimoire_core::events::silent(),
+            observers(mask.clone(), Default::default(), Default::default()),
+            crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+        );
+        assert_eq!(mask.take(), None);
 
-        crate::sync::note_mirror_after_swap(&state);
+        state.corpus_replaced();
         assert_eq!(
-            state.mirror.take(),
+            mask.take(),
             Some(Dirty::ALL),
             "a corrected card name or a moved price reaches the files this way and no other"
         );

@@ -40,7 +40,7 @@ pub mod changes;
 pub mod collection;
 pub mod collection_alloc;
 pub mod collection_folders;
-pub mod collection_source;
+pub use grimoire_core::collection_source;
 pub mod combos;
 pub use grimoire_core::db;
 pub mod deck;

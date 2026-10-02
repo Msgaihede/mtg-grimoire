@@ -7867,10 +7867,13 @@ pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
 /// touches, and the thing it defends against is a database arriving *at head* with an index
 /// missing — an interrupted swap, a restored data folder, a hand-edited file — which is a state
 /// no version number describes.
-/// **`pub(crate)` for the test fixtures, and that is the point rather than a convenience.**
-/// [`crate::index::fixtures::state_with_seeded_cards`] builds its database the way a fresh
-/// install is built — [`crate::split::convert`], which runs the frozen [`migrate_single_file`]
-/// ladder and stamps head — and then opened it without ever migrating. That is not a database
+/// **`pub` for the test fixtures, and that is the point rather than a convenience.** A
+/// fixture that builds its database the way the desktop's fresh install is built —
+/// `split::convert`, which runs the frozen [`migrate_single_file`] ladder and stamps head —
+/// and opens it without ever migrating has to call this itself; the index's fixture did
+/// exactly that while it lived in `src-tauri`, and the ingest's one test there still does.
+/// (The core's own index fixture builds the pair at head with [`build_pair`] and needs no
+/// climb.) Without it, that is not a database
 /// any launch produces, because every launch goes through `prepare_database`, and the gap was invisible until a corpus rung finally changed a table shape: the fixture
 /// carried a v26-shaped `combos` under a header claiming head, which is precisely the state
 /// [`combos_are_at_head`] exists to repair.
@@ -8428,8 +8431,22 @@ pub fn memory_pair() -> Connection {
     let conn = Connection::open_in_memory().unwrap();
     conn.execute_batch(&format!("ATTACH DATABASE ':memory:' AS {CORPUS}"))
         .unwrap();
-    create_user_schema(&conn, "main").unwrap();
-    create_corpus_schema(&conn, CORPUS).unwrap();
+    build_pair(&conn);
+    conn
+}
+
+/// Both schemas at head on a connection whose pair is empty: [`memory_pair`]'s second half,
+/// for a test that needs the pair on **files** — `db::open_write` on an empty directory, then
+/// this. A second connection can then be opened on the same pair, which two in-memory ones
+/// can never be.
+///
+/// It is a fresh install with no single file to convert, built the way a host that has never
+/// had one would build it. No capture triggers and no launch passes: a test that wants a
+/// launch calls [`prepare_database`].
+#[cfg(any(test, feature = "testing"))]
+pub fn build_pair(conn: &Connection) {
+    create_user_schema(conn, "main").unwrap();
+    create_corpus_schema(conn, CORPUS).unwrap();
     conn.execute_batch(&on_schema("main", USER_SEED_SQL))
         .unwrap();
     conn.execute_batch(&format!(
@@ -8438,7 +8455,6 @@ pub fn memory_pair() -> Connection {
     ))
     .unwrap();
     conn.pragma_update(None, "foreign_keys", "ON").unwrap();
-    conn
 }
 
 /// Create a fresh, empty `cards_staging` table with the exact `cards` layout.

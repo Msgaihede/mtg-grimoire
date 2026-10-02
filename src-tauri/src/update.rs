@@ -1991,7 +1991,6 @@ mod tests {
     /// in-memory connections are two different databases). `sync::tests::file_state`'s
     /// arrangement, for its reason.
     fn file_state(name: &str) -> (Arc<AppState>, std::path::PathBuf) {
-        use std::sync::atomic::AtomicBool;
         let dir = crate::scratch::path(&format!("update-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -2008,7 +2007,7 @@ mod tests {
         let changes = std::sync::Arc::new(crate::changes::Changes::new());
         (
             Arc::new(AppState {
-                core: grimoire_core::state::State::new(
+                core: std::sync::Arc::new(grimoire_core::state::State::new(
                     conn,
                     Some(read),
                     dir.clone(),
@@ -2018,11 +2017,9 @@ mod tests {
                         changes.clone(),
                         Default::default(),
                     ),
-                ),
-                syncing: AtomicBool::new(false),
-                client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                    crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                )),
                 images: crate::images::Cache::new(dir.join("images")),
-                index: std::sync::RwLock::default(),
                 // The mirror is never started in these tests; a clean mask and an empty record are
                 // what an `AppState` looks like before the first pass.
                 mirror,

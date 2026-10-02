@@ -12,11 +12,16 @@
 //! describes. Anything a reader must not miss is also stored where they can ask for it — a
 //! failed sync is in `sync_meta`, a failed pass in `error_log`.
 //!
-//! **Nothing in this crate emits yet.** The code that does is still in `src-tauri` and still
-//! calls its window directly: the card sync and the three feeds (the extraction's I/O step) and
-//! live sync (the sync step). The sink is on the state now so that each of those arrives to a
-//! place it can already speak through, rather than to a constructor that has to change under
-//! every host.
+//! **The card sync is the first to speak through it** — `sync:progress` and
+//! `collection:reconciled`, since the extraction's I/O step. The three feeds and live sync are
+//! still in `src-tauri` and still call their window directly; each moves onto the sink as it
+//! arrives. The sink was put on the state a step early so that they come to a place they can
+//! already speak through, rather than to a constructor that has to change under every host.
+//!
+//! **A typed payload reaches the sink as a `serde_json::Value`, so its keys arrive in
+//! alphabetical order** where a struct handed straight to a window kept its field order. A page
+//! reads a payload by key, so nothing sees it; a test that compares the serialised *text* of an
+//! event would.
 
 use std::sync::Arc;
 

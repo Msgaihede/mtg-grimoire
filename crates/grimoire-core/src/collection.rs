@@ -9053,6 +9053,49 @@ mod tests {
         );
         assert_eq!(feed(&conn).len(), 1);
     }
+
+    /// Every write in this module goes through
+    /// [`crate::collection_source::with_write_owned`], and this is what that
+    /// buys: the facet index's `owned` dimension is true again by the time the command
+    /// answers, so the panel the user is looking at does not grey out "Owned" for a card they
+    /// have just added.
+    ///
+    /// And **only on success**, which is asserted on the published `Arc`'s identity rather
+    /// than on its contents: a refusal changed no rows, so a refresh after one arrives at the
+    /// same counts and a count is therefore blind to whether the work was done. A new `Arc` is
+    /// the only visible trace of ~1 MB of index copied to learn nothing. (Measured: with the
+    /// `is_ok` guard removed, the count assertion still passes and this one fails.)
+    ///
+    /// The refusal is [`GONE`] rather than [`crate::db::BUSY`]: a busy write would need the
+    /// lock held from another thread, and the point being pinned is the same either way.
+    #[test]
+    fn a_write_that_lands_refreshes_the_owned_facet_and_one_that_is_refused_does_not() {
+        let state = crate::index::fixtures::state_with_seeded_cards("collection-owned");
+        crate::index::lifecycle::build_now(&state).unwrap();
+        let before = crate::index::lifecycle::current(&state).unwrap();
+        assert_eq!(before.owned.count(), 0);
+
+        crate::collection_source::with_write_owned(&state, |c| {
+            add_entry(c, &input("1", "nonfoil", 2))
+        })
+        .unwrap();
+        let refreshed = crate::index::lifecycle::current(&state).unwrap();
+        assert_eq!(
+            refreshed.owned.count(),
+            1,
+            "the index has to know about the row the command just wrote"
+        );
+
+        let refused =
+            crate::collection_source::with_write_owned(&state, |c| set_quantity(c, 4_242, 3));
+        assert_eq!(refused.unwrap_err(), GONE);
+        let after = crate::index::lifecycle::current(&state).unwrap();
+        assert!(
+            std::sync::Arc::ptr_eq(&refreshed, &after),
+            "a refused write must not republish the index at all"
+        );
+        assert_eq!(after.owned.count(), 1);
+    }
 }
 
 /// **The test scaffolding this module's tests share with the ones `src-tauri` still holds** —

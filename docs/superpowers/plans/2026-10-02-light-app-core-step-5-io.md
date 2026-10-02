@@ -143,14 +143,41 @@ Pacing, retry, the 429 lockout and the size checks stay in `scryfall::Client` �
 
 ## Part 5b — the state, the facet index and the card sync
 
-Its tasks are written in its own pull request, against the tree 5a leaves. What is decided and what was measured:
+Measured on this branch's tree over `main` at `4b0bb2d3` (part 5a merged, #768).
 
-- **`State` gains `syncing`, `client` and `index`** (`images` in 5c), per the table in `crates/grimoire-core/CLAUDE.md`. `AppState` keeps the mirror's fields, the change mask and — until step 6 — `pairing`.
-- **`run_sync` takes no `AppHandle`.** Its `sync:progress` events leave through `state.events` (`EventSink`), which the desktop already forwards to `app.emit`.
-- **`platform::spawn` arrives here**, with its first callers: `run_sync`'s `spawn_blocking` for the ingest and `index::lifecycle`'s build thread. Natively the async runtime's blocking pool and a thread; what a browser's arm does — run it inline, or refuse — is decided with the code in front of it.
-- **The mirror hears a finished sync through an observer**, not through `state.mirror`: `run_sync` calls `Mask::mark_all` today, and the mirror is the desktop's. `hooks::WriteObserver` is the existing way out.
-- **`collection_source::with_write_owned` comes home** with the index's lifecycle.
-- **The commands stay**: `sync_start`, `sync_status` and the index's are split off by the step-4 script, generalised into a library both this part and 5c call.
+### What was read first
+
+`src-tauri/src/sync.rs` is 1 899 lines: 51 items and a test module of 26. Of the 51, **seven name the desktop and nothing else does** — `AppState` and its `Deref`, four lock helpers every desktop module calls, and `status` — but nine more take a `tauri::AppHandle` for one purpose: to emit. `index/lifecycle.rs` takes `&AppState` throughout and names nothing of the desktop's; `index/facets.rs` has one command at its foot; `index/mod.rs` has a fixture that builds a whole `AppState` on a file `split` converted.
+
+So this part is a move with a rewrite inside it, and the rewrite is small and regular: a window becomes the state's event sink, an `Arc<AppState>` becomes an `Arc<State>`, and tauri's blocking pool becomes `platform::spawn`.
+
+### Decisions
+
+- **`run_sync(state: Arc<State>, force)`.** No window. `sync:progress` and `collection:reconciled` leave through `state.events`; the desktop's sink forwards both to every window, as `app.emit` did. Same names, same payloads.
+- **`State` gains `syncing`, `client` and `index`**, and `State::new` a sixth argument: the client, which the host builds — where the API lives and what 429 lockout an earlier run earned are the host's to know.
+- **`AppState.core` is an `Arc<State>`.** A sync and an index build each outlive the call that starts them, and the engine cannot be handed an `Arc<AppState>`. `AppState` still derefs to `State`, so `state.client`, `state.syncing` and `state.index` read as they did at every site that does not need the `Arc`.
+- **`platform::spawn`**: `blocking(f).await` and `background(f)`. Natively the async runtime's blocking pool and a thread. **In a browser both run the work where it stands** — a Worker has one thread, and deferring to a microtask would only move the block while letting a caller think it had been taken off them.
+- **The mirror hears a swap as an observer.** `WriteObserver` gains `corpus_replaced` (default: nothing); `State` keeps the list it was built with and `State::corpus_replaced()` tells each once. `do_sync` calls it where it called `note_mirror_after_swap`. The alternative was an event name the desktop's sink intercepts, which would have put a mirror rule in a function called "emit".
+- **`status` stays**, alone: it reads `images.store_failures()`, and the image cache is 5c's. Nothing hoisted, no argument added for the next part to delete.
+- **The core gets its own index fixture.** `state_with_seeded_cards` over a `State`, on a file pair built at head by a new `schema::build_pair` — `memory_pair`'s second half, on a connection somebody else opened. The desktop's copy, over an `AppState` through `split::convert`, goes: every test that called it moved.
+- **The script touches no git state.** It decides everything, checks every replacement, then writes and removes files. An earlier draft ran `git mv` first and reset the index after; a run that stopped between the two left a tree its own guard called finished.
+
+### Tasks
+
+- [x] `platform/spawn.rs`, with its tests: work answered from another thread; a panic that is lost and says so; a background job joined.
+- [x] `scripts/core-step-5b.mjs`: `sync.rs` and the three index files split item by item (`scripts/lib/rs-items.mjs`), every rewrite an exact replacement that must match the number of times it says; `with_write_owned` and two tests home; `ipc.test.ts`'s `?raw` import of `facets.rs` as both halves. `--dry` first.
+- [x] By hand, in the same commit: `hooks.rs` (`corpus_replaced`), `state.rs` (three fields, the sixth argument, `corpus_replaced()`, a test), `schema.rs` (`build_pair`), both module maps, `desktop.rs` (`init_state`, `sync_run`, the startup sync, `spawn_build`), `mirror/watch.rs` (the observer and its test), and the six other tests that build an `AppState`.
+- [x] From a clean tree, the script and the hand edits reproduce the committed tree: the same diff, hashed.
+- [x] Item by item, old against new: of `sync.rs`'s 78 items and tests, 56 identical and 21 changed — each on the replacement list — and one gone (`note_mirror_after_swap`).
+- [x] `cargo fmt`; `cargo clippy --workspace --all-targets -- -D warnings`; `cargo check -p mtg-grimoire`; the wasm build and its clippy; the fence.
+- [x] `#[test]` and `#[tokio::test]` attributes: 3 393 before, 3 394 after — 94 moved to the core, one new.
+- [x] `cargo test --workspace`.
+- [x] `npm run build`, `npm run lint`, `npm run test:run`.
+- [x] An existing database upgraded by `main`'s binary and by this branch's, compared row for row.
+- [x] `tauri dev`: a real sync with its progress events read in the page; the facet index cold, then ready; an owned facet after a collection write; the mirror's pass after a swap.
+- [x] A fresh reviewer over the diff — and what it found, fixed: `blocking` started at its first poll rather than at the call; a desktop fixture nothing called; the script's git phase; nine comments the move made false.
+- [x] `sync/run_tests.rs`: `run_sync` end to end against a mock Scryfall, which nothing could do while it took a window — a first sync and the 304 after it, a sync that repoints a copy, a download refused.
+- [x] The record, the pull request, the issue.
 
 ## Part 5c — the feeds and the image cache
 

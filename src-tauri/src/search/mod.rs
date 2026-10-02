@@ -75,8 +75,6 @@ mod tests {
     #[test]
     fn a_search_answers_while_an_ingest_holds_the_write_connection() {
         use crate::sync::lock_db_read;
-        use std::sync::atomic::AtomicBool;
-
         let dir = crate::scratch::path("search-concurrent");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -95,21 +93,24 @@ mod tests {
         let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
         let changes = std::sync::Arc::new(crate::changes::Changes::new());
         let state = Arc::new(AppState {
-            core: grimoire_core::state::State::new(
-                write,
-                Some(read),
-                dir.clone(),
-                grimoire_core::events::silent(),
-                crate::mirror::watch::observers(
-                    mirror.clone(),
-                    changes.clone(),
-                    Default::default(),
-                ),
-            ),
-            syncing: AtomicBool::new(true),
-            client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            core: std::sync::Arc::new({
+                let core = grimoire_core::state::State::new(
+                    write,
+                    Some(read),
+                    dir.clone(),
+                    grimoire_core::events::silent(),
+                    crate::mirror::watch::observers(
+                        mirror.clone(),
+                        changes.clone(),
+                        Default::default(),
+                    ),
+                    crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                );
+                core.syncing
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                core
+            }),
             images: crate::images::Cache::new(dir.join("images")),
-            index: std::sync::RwLock::default(),
             // The mirror is never started in these tests; a clean mask and an empty record are
             // what an `AppState` looks like before the first pass.
             mirror,

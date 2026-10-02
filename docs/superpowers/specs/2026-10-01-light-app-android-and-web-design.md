@@ -237,7 +237,10 @@ Three things round one measured that this layer inherits rather than rediscovers
 - **`sleep` is two things.** `platform::pause` parks a thread (the storage step, for
   `db::lock_for`); `platform::timer` is the wait a future awaits, and a deadline on one.
 
-`spawn` arrives with its first caller, in the I/O step's second part.
+**`spawn` arrived with its first callers, in the I/O step's second part, and its browser arm
+is not a microtask**: `platform::spawn::blocking` and `background` both run the work where it
+stands there, to completion. A Worker has one thread; deferring the work to a microtask would
+only move the block, and would let a caller believe something had been taken off it.
 [The step's plan](../plans/2026-10-02-light-app-core-step-5-io.md) has each reason.
 
 ### 2.6 State, events and the one update hook
@@ -259,7 +262,8 @@ Three things round one measured that this layer inherits rather than rediscovers
   and the fence. The Scryfall client, the image cache, the facet index, the sync flag and the
   pending pairing offer are every host's too, and each is a type that has not moved — they
   stay on the desktop's `AppState`, which wraps `State` and derefs to it, until the I/O and sync
-  steps bring them.
+  steps bring them. (**The client, the sync flag and the index came with the I/O step's second
+  part**, 2026-10-02; the image cache and the pairing offer are the two still waiting.)
 - **The desktop registers three observers, not one.** The other windows' change mask has one
   reader, and it emits only with two or more windows open — a browser is one tab and Android
   one window — so it is the desktop's, as the mirror is. Live sync's wake is a third until the
@@ -341,6 +345,9 @@ Each step is its own PR. **The light UI waits for none of them** (§9).
    cache. **The first is built**: the three modules, `errors::kind_of` and `capture`'s two
    reconcile tests are the core's, `schema`'s file calls go through `platform::files`, and the
    fence refuses `reqwest`, `tokio`, `std::fs` and `std::thread` anywhere else the crate ships.
+   **So is the second**: `sync` and `index/` are the core's, `run_sync` takes no window and
+   emits through `EventSink`, `State` holds the sync flag, the Scryfall client and the facet
+   index, and the desktop's mirror hears a swapped corpus as a `WriteObserver`.
    [The step's plan](../plans/2026-10-02-light-app-core-step-5-io.md) has the decisions.
 6. **The sync client, entitlement and pairing** — see below. `sync_pair/identity` and
    `sync_engine/wire` arrive here rather than in step 2.

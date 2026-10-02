@@ -12,7 +12,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 import { PHASE_LABEL, useSyncProgress } from "./useSyncProgress";
 
 /**
- * The phase strings are a hand-mirrored union of `sync::PHASES` in `src-tauri/src/sync.rs`,
+ * The phase strings are a hand-mirrored union of `sync::PHASES` in `crates/grimoire-core/src/sync.rs`,
  * and a phase Rust emits that is missing here has no label — the mana line renders
  * `undefined` while the sync runs perfectly, so nothing fails except what the user reads.
  * The Rust half is pinned by `the_progress_phases_are_the_ones_the_frontend_mirrors`; this

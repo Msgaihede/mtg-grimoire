@@ -24,12 +24,12 @@
 //! over them — [`state::State`], the one update hook on its write connection ([`hooks`]) and the
 //! way out for an event ([`events`]); and, since the domain step, what the app is *about*: the
 //! decks, the collection, the wishlist, the search, the card pane and the view-state modules,
-//! with [`state::with_write`] over them. The I/O step is arriving in three parts, and the
-//! first is here: [`platform`]'s request, timer and files, and their first callers —
-//! [`scryfall`], [`ingest`] and [`reconcile`]. What is not here yet is the rest of what reaches
-//! a network, a filesystem or the relay: the card sync that drives those three, the facet
-//! index's lifecycle, the feeds, the images, the sync client. What moves next, and in what
-//! order, is the light-app spec's §2.8.
+//! with [`state::with_write`] over them. The I/O step is arriving in three parts, and two
+//! are here: [`platform`]'s request, timer, files and background work; their first callers —
+//! [`scryfall`], [`ingest`] and [`reconcile`]; and what drives those three — [`sync`], the card
+//! sync, and [`index`], the facet index with its lifecycle. What is not here yet is the rest
+//! of what reaches a network, a filesystem or the relay: the feeds, the images, the sync
+//! client. What moves next, and in what order, is the light-app spec's §2.8.
 //!
 //! **`src-tauri` re-exports each moved module at the path it always had**, so `crate::schema`
 //! over there is this crate's `schema` and no caller changed; its `AppState` wraps a
@@ -40,8 +40,8 @@
 //!
 //! **A few modules arrived without one function**, because that function names code a later
 //! step moves — `deck`'s `bracket_reads` (it matches against `combos`, a feed), `reset`'s
-//! `clear_cache` (the image cache) and `collection_source`'s `with_write_owned` (the facet
-//! index) — or names something only the desktop has: `schema`'s `prepare_data_dir`, `import`'s
+//! `clear_cache` and `sync`'s `status` (the image cache) — or names something only the
+//! desktop has: `schema`'s `prepare_data_dir`, `import`'s
 //! `read_import_file`, `marketplace`'s `set_marketplace_now`. Each is still `src-tauri`'s, in
 //! the module that re-exports the rest. (`errors`' `kind_of` was a fourth; it came home with
 //! [`scryfall`], whose error it classifies.)
@@ -103,7 +103,8 @@ pub mod hooks;
 /// between them and one predicate over a string.
 pub mod image_uri;
 pub mod import;
-/// **The facet index's bitset.** The index itself still lives in `src-tauri`.
+/// **The in-memory facet index**: `CardIndex`, the facet pass over it, and the lifecycle that
+/// keeps it — cold, built, and amended when the collection moves.
 pub mod index;
 /// **A Scryfall bulk file, streamed into `cards`** a batch at a time, the write connection
 /// given back between batches.
@@ -149,6 +150,9 @@ pub mod startview;
 /// user-facing write.
 pub mod state;
 pub mod sticky_notes;
+/// **The card sync**: check, download, ingest, sets, the migration log, the reclaim — one
+/// supervised run over a [`state::State`], saying what it is doing through the state's sink.
+pub mod sync;
 /// **The sync engine without its transport** — the hybrid logical clock, the capture triggers,
 /// the merge rules, apply and the baseline. The envelope and the client are still `src-tauri`'s.
 pub mod sync_engine;

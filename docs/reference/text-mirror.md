@@ -643,9 +643,14 @@ away and back orphaned 21 files. All three now have tests.
    or `note_failure`'s `Duration::ZERO` `try_lock` dropping rows under contention, and **the two were
    not separated**. What matters for the design — one row, never one per file — is settled; the
    cadence is not.
-6. **`do_sync`'s `note_mirror_after_swap` call site is unreachable from any automated test.**
-   `do_sync` takes a `tauri::AppHandle` and this crate has no mock-app harness, so nothing in the
-   suite can enter it. What it marks is extracted and tested; the single line that calls it is not.
+6. **`do_sync`'s mark was unreachable from any automated test until 2026-10-02, and is driven
+   now.** While `do_sync` took a `tauri::AppHandle` nothing in the suite could enter it, so what
+   the mark *does* was tested and the line that calls it was not. The card sync is
+   `grimoire-core`'s since then and takes no window: it calls `State::corpus_replaced()` where
+   the swap lands, the mirror's `Mask` hears that as a `WriteObserver`, and
+   `sync::run_tests` runs a whole sync against a mock Scryfall and counts the call — once on a
+   run that ingests, never on a 304 or a failed download. The rest of this item is the record
+   of the gap as it stood.
    **The live pass verified the mark works** — the launch sync's completion produced a full pass that
    rewrote exactly the ten price-bearing CSVs — so this is a coverage gap rather than an unknown, and
    the same shape applies to `marketplace_feed::refresh`'s twin (also verified live, 149,321 rows).
