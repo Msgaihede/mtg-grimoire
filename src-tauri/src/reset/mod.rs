@@ -104,7 +104,11 @@ pub async fn cache_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<Cache
 /// The one test of the cache sweep that could not go home with it: it makes a symlink with a
 /// Windows call, behind a platform gate, and the core keeps those under `platform/` — in its
 /// tests too. It drives the core's `clear_cache`.
-#[cfg(test)]
+///
+/// **The gate is on the module and not on the test**: a module holding nothing but a
+/// Windows-only test is two unused imports on every other target, which is what CI's Linux
+/// clippy refuses.
+#[cfg(all(test, windows))]
 mod tests {
     use super::*;
     use grimoire_core::reset::fixtures::*;
@@ -112,7 +116,6 @@ mod tests {
     /// A symlink is unlinked, never followed. The sweep would otherwise walk into whatever a
     /// link in the data directory points at — which on a portable install beside the reader's
     /// own folders is not a theoretical target.
-    #[cfg(windows)]
     #[test]
     fn the_cache_sweep_unlinks_rather_than_follows() {
         let dir = tempfile::tempdir().unwrap();
