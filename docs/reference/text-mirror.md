@@ -143,7 +143,10 @@ write in this crate passes through, on the one `Mutex<Connection>` the app write
 `update_hook` there sees every insert, update and delete with the table's name. No command has to
 remember to tell the mirror anything, and no command added next year can forget to. The hook fires
 inside SQLite's own callback, on the writer's thread, with the write connection's mutex held: it
-does one `fetch_or` and returns. `rusqlite` 0.40.1 gates it behind a `hooks` feature whose manifest
+does one `fetch_or` and returns. **The hook itself is `grimoire-core`'s since 2026-10-02**
+(`hooks::install`, called by `State::new`): SQLite allows one per connection, so the core owns
+the installer and the mirror's `Mask` is an observer of it — one of the three in
+`watch::observers`. What the mask does per row is unchanged. `rusqlite` 0.40.1 gates it behind a `hooks` feature whose manifest
 entry is `hooks = []` — **an empty feature list, so no package is added**. The `Cargo.lock` diff is
 empty, and that is the right evidence rather than a missing one: a lockfile records resolved
 versions and dependency edges, not feature selections.
@@ -207,7 +210,7 @@ figure is in the stamped cost table below), which is those two constants working
 `take()` is a single `swap(0)` — read and clear in one atomic — because a write landing between a
 separate peek and clear would be seen by neither the pass that is starting nor the one after it, and
 the file would stay stale until an unrelated edit. The startup pass deliberately takes the mask
-*before* it runs: anything written between `install_hook` and the thread starting is already covered
+*before* it runs: anything written between the hook going on and the thread starting is already covered
 by a full render, and a write that lands *during* the pass must stay marked because it may not be in
 the rows that pass read.
 

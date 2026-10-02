@@ -114,9 +114,9 @@ pub fn install(
 );
 ```
 
-- [ ] `install`: update hook — `fence.note(db)`, then each observer's `row` in order; commit hook — `fence.settle()` and its sentence, then each observer's `committed` in order, answering `false`; rollback hook — `fence.clear()`. The three hooks' docs move here from `mirror::watch` where they are about the hook rather than about a rider
-- [ ] Tests, with a recording observer: the fence trips on a transaction that writes both files; a rolled-back one is not charged to the next commit; an observer hears each row with its schema and table; it hears a commit and not a rollback; observers are told in the order given; a `WITHOUT ROWID` write reaches `committed` and never `row`; a second `install` replaces the first
-- [ ] `#[ignore]`d measurement, timed through `platform::clock::Tick`: one `UPDATE` over 100 000 rows with no observer and with three that do nothing — run in release, `cargo test -p grimoire-core --release -- --ignored hook`
+- [x] `install`: update hook — `fence.note(db)`, then each observer's `row` in order; commit hook — `fence.settle()` and its sentence, then each observer's `committed` in order, answering `false`; rollback hook — `fence.clear()`. The three hooks' docs move here from `mirror::watch` where they are about the hook rather than about a rider
+- [x] Tests, with a recording observer: the fence trips on a transaction that writes both files; a rolled-back one is not charged to the next commit; an observer hears each row with its schema and table; it hears a commit and not a rollback; observers are told in the order given; a `WITHOUT ROWID` write reaches `committed` and never `row`; a second `install` replaces the first. **As built, one more**: a bare `DELETE` on a table nothing points at is heard as a commit only — the hook's second blind spot, pinned beside the first
+- [x] `#[ignore]`d measurement, timed through `platform::clock::Tick`: one `UPDATE` over 100 000 rows with no observer and with three that each do one atomic add — run in release, `cargo test -p grimoire-core --release -- --ignored --nocapture what_three_observers`. **+2.9 to +4.1 ns per row**, five runs
 
 ### Task 2 — `events` and `state`
 
@@ -158,10 +158,10 @@ impl State {
 }
 ```
 
-- [ ] `events.rs` and its two tests: a `camelCase` struct reaches a recording sink as the JSON the page reads; the silent sink takes anything
-- [ ] `state.rs`: `new` installs the hooks, then wraps the connections
-- [ ] Tests: a state's own write connection trips its own fence; observers given to `new` hear a write made through `lock_db`; a state with one connection reads through the one it writes with (`reader()` is `&db`, and a row written is read back); a state with two reads through the second, which cannot write
-- [ ] `lib.rs`: the three modules in the map, and the crate doc's "what is here"
+- [x] `events.rs` and its tests: a `camelCase` struct reaches a recording sink as the JSON the page reads; a payload that will not serialise is dropped; the silent sink takes anything
+- [x] `state.rs`: `new` installs the hooks, then wraps the connections
+- [x] Tests: a state's own write connection trips its own fence; observers given to `new` hear a write made through `lock_db`; a state with one connection reads through the one it writes with (`reader()` is `&db`, and a row written is read back); a state with two reads through the second, which cannot write
+- [x] `lib.rs`: the three modules in the map, and the crate doc's "what is here"
 
 ### Task 3 — the desktop wraps it
 
@@ -171,30 +171,30 @@ impl State {
 
 **Produces:** `sync::AppState { core, syncing, client, images, index, mirror, mirror_status, changes, pairing }` with `Deref<Target = State>`; `mirror::watch::observers(mask, changes, writes) -> Vec<Arc<dyn WriteObserver>>`; `sync_engine::live::WriteWake`.
 
-- [ ] `sync.rs`: the struct, the `Deref`, `lock_db` and `lock_db_read` as one-line delegates to the core's. `with_write` and its two siblings untouched
-- [ ] `impl WriteObserver for Mask` (`row`: `surface_of`, then `mark`), `for Changes` (`row`: `mark`; `committed`: ring when pending), and `WriteWake(Arc<Notify>)` (`committed`: `notify_one`), each carrying the comment that argued it inside the hook
-- [ ] `mirror::watch::observers` — wake, change mask, mirror mask: the order that keeps both hooks' call order — and `install_hook_with_changes` as `hooks::install(conn, fence, observers(…))`. `install_hook` and its 24 call sites unedited
-- [ ] `desktop.rs`: `WindowEvents(AppHandle)` as the sink; `init_state(app, writes)` mints the installation name, then builds the `State`; `start` loses the install block and keeps the two spawns
-- [ ] The five `&state.db_read` become `state.reader()`
-- [ ] The eight fixtures build a `State` where they built four fields and called `install_hook`
+- [x] `sync.rs`: the struct, the `Deref`, `lock_db` and `lock_db_read` as one-line delegates to the core's. `with_write` and its two siblings untouched
+- [x] `impl WriteObserver for Mask` (`row`: `surface_of`, then `mark`), `for Changes` (`row`: `mark`; `committed`: ring when pending), and `WriteWake(Arc<Notify>)` (`committed`: `notify_one`), each carrying the comment that argued it inside the hook
+- [x] `mirror::watch::observers` — wake, change mask, mirror mask: the order that keeps both hooks' call order — and `install_hook_with_changes` as `hooks::install(conn, fence, observers(…))`. `install_hook` and its 24 call sites unedited
+- [x] `desktop.rs`: `WindowEvents(AppHandle)` as the sink; `init_state(app, writes)` mints the installation name, then builds the `State`; `start` loses the install block and keeps the two spawns
+- [x] The five `&state.db_read` become `state.reader()`
+- [x] The eight fixtures build a `State` where they built four fields and called `install_hook`. Seven hand it `observers(…)` with the state's own change mask, where the hook used to get a throwaway; `watch`'s `state_at` never hooked its connection and passes none
 
 ### Task 4 — the record
 
-- [ ] `crates/grimoire-core/CLAUDE.md`: what is here now, the three modules, how a host builds a `State`, what `AppState` still holds and the step each field leaves in
-- [ ] `docs/reference/light-app.md` §6.3: what was built, what waits and why, the hook measured, what is open
-- [ ] The spec's §2.6 and §2.8, dated; `platform/mod.rs`'s table
-- [ ] Every sentence elsewhere this makes false: `src-tauri/CLAUDE.md` (where the hook is installed and by whom, `ensure_installation`'s place), `text-mirror.md`, `multi-window.md`, `sync.md`
+- [x] `crates/grimoire-core/CLAUDE.md`: what is here now, the three modules, how a host builds a `State`, what `AppState` still holds and the step each field leaves in
+- [x] `docs/reference/light-app.md` §6.3: what was built, what waits and why, the hook measured, what is open
+- [x] The spec's §2.6 and §2.8, dated; `platform/mod.rs`'s table
+- [x] Every sentence elsewhere this makes false: `src-tauri/CLAUDE.md` (where the hook is installed and by whom, `ensure_installation`'s place), `text-mirror.md`, `multi-window.md`, `sync.md`
 - [ ] Issue #761: step 3 ticked with what it built; step 4 gains `with_write`; steps 5 and 6 gain the fields; the one-connection item settled; phase 5 gains what that shape leaves open
 
 ### Task 5 — verify and ship
 
-- [ ] `cargo fmt -p mtg-grimoire -p grimoire-core --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; `cargo check -p mtg-grimoire --locked`
-- [ ] `cargo test --workspace`; the test-attribute count against the baseline above
-- [ ] `npm run build`, `npm run lint`, `npm run test:run`
-- [ ] The core for `wasm32-unknown-unknown`, build and clippy
-- [ ] `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core`: no `testing`
-- [ ] The hook measurement, release
-- [ ] **The live pass**, `tauri dev` over a copy of the main checkout's data: the app starts and searches; a deck edit reaches the mirrored file; a second window refreshes after a write in the first
+- [x] `cargo fmt -p mtg-grimoire -p grimoire-core --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`; `cargo check -p mtg-grimoire --locked`
+- [x] `cargo test --workspace`; the test-attribute count against the baseline above — 2 810 and 572, the sixteen new ones this step's own
+- [x] `npm run build`, `npm run lint`, `npm run test:run` — 458 files, 12 875 tests. **The card-scanner suite was not run here**: nothing under `crates/card-scanner` changed, and CI's `rust` job runs it
+- [x] The core for `wasm32-unknown-unknown`, build and clippy
+- [x] `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core`: no `testing`
+- [x] The hook measurement, release
+- [x] **The live pass**, `tauri dev` over a copy of the main checkout's data: the app starts and searches; a deck edit reaches the mirrored file; a second window refreshes after a write in the first. [light-app.md](../../reference/light-app.md) §6.3 has every figure. **Not driven: live sync's wake** — the copy is in no group, so nothing waits on it
 - [ ] A fresh reviewer over the branch
 - [ ] PR linked to #761, auto-merge armed; `ci-ok` green, including `core` on both targets
 

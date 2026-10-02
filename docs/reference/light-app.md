@@ -271,8 +271,8 @@ The engine is moving out of `src-tauri` into `crates/grimoire-core`, a crate wit
 dependency that the desktop, the Android host and the WASM host will all link (spec §2). The
 rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md);
 this section is what each step built and measured. **Nothing here runs on a phone or in a
-browser yet**: what exists is a crate the desktop links, compiled for two more targets. Two
-steps of seven have landed — the leaves, and the storage layer.
+browser yet**: what exists is a crate the desktop links, compiled for two more targets. Three
+steps of seven have landed — the leaves, the storage layer, and the state a host holds over it.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -549,3 +549,127 @@ row above is a debug build answering, not a timing.
 - `index/mod.rs`'s tests still time themselves with `Instant::now()`; they arrive with the index.
 - The card-scanner suite was not run locally for this step: nothing under `crates/card-scanner`
   changed, and CI's `rust` job runs it.
+
+### 6.3 Step 3 — state (2026-10-02)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-3-state.md). Everything below was
+measured that day on Windows 11, on the branch's own tree over `main` at `2531db8a`; debug builds
+unless a line says release.
+
+**The core owns the state every host holds and the one update hook — and `with_write` is not in
+it.** This step moved no file. It added three modules and changed what `AppState` is made of:
+
+| New in the core | |
+| --- | --- |
+| `state` | `State`: the write connection, an optional read one, the data directory, the cross-file fence, the event sink |
+| `hooks` | `install` — SQLite's one update, commit and rollback hook per connection — and `WriteObserver` |
+| `events` | `EventSink`, the one way an event leaves the crate |
+
+The spec gave this step four things, and each was read for what it names:
+
+| | Names | |
+| --- | --- | --- |
+| `AppState`'s `db`, `db_read`, `data_dir`, `fence` | `rusqlite`, `PathBuf`, `db::CrossFileFence` | **in `State`** |
+| `syncing`, `client`, `images`, `index` | `run_sync`, `scryfall::Client`, `images::Cache`, `index::lifecycle::IndexSlot` | wait for step 5 |
+| `pairing` | `sync_pair::pairing::Pending` | waits for step 6 |
+| `mirror`, `mirror_status`, `changes` | the mirror; the other windows | the desktop's, for good |
+| `with_write` | `managed_wishlist::{arm, settle_logged}`, `deck_tokens::reconcile_dirty_logged` | waits for step 4, whole |
+| The hook installer | The fence, once its riders are observers | **in `hooks`** |
+| `EventSink` | Nothing — and nothing in the core emits: of 15 `emit` sites, 8 are in step-5 modules, 3 in step-6, 4 the desktop's | **in `events`**, the trait and the field |
+
+Markus was shown that with two alternatives — moving `with_write` now through riders the desktop
+registers and step 4 deletes, or rewriting the eleven emit sites onto the sink now — and chose
+this, step 2's rule again. **`with_write` has no line to be cut at**, which is where it differs
+from `prepare_database`: its three calls sit around the caller's closure, between the lock and
+the fence's assertion, so a split would leave the core a write with no managed-wishlist settle.
+
+**The hook's riders are observers, and the desktop registers all three.** Until now
+`mirror::watch::install_hook_with_changes` put four things on the one hook. The core's
+`hooks::install` carries the one the core itself reads — the fence — and tells a list of
+`WriteObserver`s: `row(db, table)` from the update hook, `committed()` from the commit hook.
+
+- The spec's §2.1 counted the other windows' change mask among core state. Read against the
+  tree, its one reader emits only while two or more windows are open, all seven hand marks are in
+  command wrappers, and both it and live sync's wake are `tokio::sync::Notify`. A browser is one
+  tab and Android one window. Markus chose observers: **the core gained no dependency**
+  (`cargo tree -p grimoire-core -i tokio` matches no package).
+- **One list gives both hooks their old call order**: `mirror::watch::observers` is wake, change
+  mask, mirror mask. A row is heard by the change mask and then the mirror's; a commit by the wake
+  and then the change mask's bell. `hooks`' tests pin that list order is call order.
+- `mirror::watch::install_hook` and `install_hook_with_changes` are that installer under their
+  old names. Their 24 call sites — 15 of them `watch`'s own tests — are unedited.
+- The hook's two blind spots are pinned where it is installed now: a `WITHOUT ROWID` write and a
+  bare `DELETE` on a table nothing points at each reach `committed` and never `row`.
+
+**`AppState` wraps the core's `State` and derefs to it.** `AppState` is named 480 times in 73
+files and `state.db` 164 times in 38; none was edited. What was: the nine places that build one
+(`desktop::init_state` and eight test fixtures), and the five that passed `&state.db_read` as a
+mutex, which ask `state.reader()`.
+
+**The hook goes on when the state is built.** `State::new` installs it before the write
+connection is behind its mutex, so no host holds a state whose fence is not riding. On the
+desktop that moves the install from `start` to the end of `init_state`, still after
+`prepare_database`. One write sat between the two — `mirror::settings::ensure_installation`,
+which mints the mirror's name ahead of the hook on purpose — and it moved with it, to just above
+`State::new`.
+
+**One connection in a Worker is the shape, and `State` allows it.** Issue #761 gave this step
+the question; spec §6 had measured that `opfs-sahpool` permits one connection. `State`'s read
+connection is optional, and `reader()` answers the write connection where there is no other.
+`lock_db_read` keeps its 112 callers. Tested natively both ways; **no browser has run it**.
+
+**No test was lost.** `#[test]` and `#[tokio::test]` attributes: 3 366 before, 3 382 after —
+2 810 in `src-tauri`, unchanged, and 556 → 572 in the core. The sixteen are this step's own:
+eight of the installer's and its measurement, three of the sink's, four of the state's.
+`cargo test --workspace`: `src-tauri` 2 806 passed and 4 ignored, as before.
+
+**What the observer list costs per row** — the one thing the installer added to a hook that
+called its riders directly. A **release** build of the core alone, one `UPDATE` over 100 000
+rows, the best of nine rounds, five runs:
+
+| | ns per row |
+| --- | --- |
+| No observer | 72.9 – 74.0 |
+| Three observers, each one atomic add | 76.9 – 77.6 |
+| The difference | **+2.9 to +4.1** |
+
+About 0.4 ms per hundred thousand rows, against an ingest measured in tens of seconds. It is an
+upper bound on the list: the three riders did their atomic work before this too.
+`cargo test -p grimoire-core --release -- --ignored --nocapture what_three_observers` re-takes it.
+
+**It compiles for WASM** with the hook installer in it — 20 s, `clippy -- -D warnings` clean —
+and `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` still prints
+`default` and nothing else.
+
+**The real window**, `tauri dev` over a copy of the main checkout's two databases (user schema
+v46, so the launch climbed thirteen rungs; in no sync group, mirroring to its own folder):
+
+| Asked or done | Answer |
+| --- | --- |
+| `startup_status` | `ready` |
+| The copy after the launch | `user_version` 59, 33 tables, `backups/user.v46.db` written; 5 decks, 699 deck cards, 277 collection entries, 89 wishes, as before it |
+| `search_cards`, `lightning bolt` | 78 printings, 6–10 ms warm |
+| The mirror's startup pass | 128 files written, none failed |
+| **A deck created** | A pass 2 323 ms later: 15 files written, 113 unchanged — seven under `Decks/`, seven under `Collection/` |
+| **Renamed in one window, a second window listening** | The second heard `db:changed` naming `collection_folders`, `deck_audit`, `deck_undo` and `decks`; the mirror wrote 15 and pruned 16 |
+| Deleted | The mirror pruned its 16 |
+| **The launch's own card sync, left to finish** | 118 610 → 118 467 printings, 0 skipped, no error — every row through the observer list |
+| `error_log`; the app's stderr | The two rows it arrived with; no fence sentence, no panic |
+
+That is the mirror's observer and the change mask's driven end to end. **The third was not**:
+the copy is in no sync group, so live sync stays off, and what holds the wake is
+`watch`'s `a_commit_leaves_a_permit_on_the_write_wake`, through the delegate.
+
+**Open after step 3:**
+
+- **`with_write` waits for step 4**, with `collection_source::with_write_owned` behind it.
+- **`EventSink` has no caller.** The desktop's implementation — `desktop::WindowEvents`, three
+  lines over `app.emit` — has never run. Its first caller is step 5's `run_sync`.
+- **A `State` with one connection has never run in a browser.** There `reader()` is the write
+  connection's own mutex, so a read asked for while the same thread holds the write connection
+  is a lock taken twice. The desktop's two connections never notice; phase 5 has to look.
+- **`State::new` takes connections that are already at head.** A host-neutral "open the data
+  folder" needs the launch's logged passes, which are `src-tauri`'s until step 4.
+- **The eight fixtures now hook the state's own change mask**, where they used to hand the hook
+  a throwaway. Nothing reads it there; it is what the app does.
+- `scripts/coverage-rust.mjs` was not run, and neither was the card-scanner suite locally.

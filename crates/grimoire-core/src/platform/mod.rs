@@ -17,7 +17,7 @@
 //! | a sleep a future awaits | the async runtime's | a timer | the I/O step, with its first caller |
 //! | HTTP — a request, a streamed body | `reqwest` | `fetch` | the I/O step |
 //! | files — the data directory, temp files | `std::fs` | OPFS | the I/O step |
-//! | background work | a thread, the async runtime | a microtask | the state step |
+//! | background work | a thread, the async runtime | a microtask | the I/O step — the state step had no caller for it |
 //!
 //! **Each is here because something calls it.** The rows without a link are named so the step
 //! that brings their first caller knows where they go; an interface written before the code
