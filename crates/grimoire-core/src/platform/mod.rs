@@ -17,11 +17,10 @@
 //! | [`timer`] — a sleep a future awaits, and a deadline on one | the async runtime's | `setTimeout` | the I/O step, for `scryfall`'s pacing and its image deadline |
 //! | [`http`] — a request, a streamed body | `reqwest` over rustls | `reqwest` over `fetch` | the I/O step, for `scryfall` |
 //! | [`files`] — a download on disk, the files the schema keeps | `std::fs`, `tokio::fs` | refused | the I/O step, for `scryfall`, `ingest` and `schema` |
-//! | background work | a thread, the async runtime | a microtask | not here yet: the I/O step's second part, with the facet index's build |
+//! | [`spawn`] — work taken off the caller: minutes of SQLite under an `async fn`, a build nobody waits for | the async runtime's blocking pool, a thread | run where it stands: a Worker has no second thread | the I/O step, for the card sync's ingest and the facet index's build |
 //!
-//! **Each is here because something calls it.** The row without a link is named so the change
-//! that brings its first caller knows where it goes; an interface written before the code that
-//! calls it is a guess.
+//! **Each is here because something calls it**: an interface written before the code that calls
+//! it is a guess.
 //!
 //! **The fence holds four more names to this directory since the I/O step**: `reqwest`,
 //! `tokio`, `std::fs` and `std::thread`, in shipped code. Each compiles for a desktop wherever
@@ -34,6 +33,7 @@ pub mod clock;
 pub mod files;
 pub mod http;
 mod pause;
+pub mod spawn;
 pub mod timer;
 
 pub use pause::pause;
