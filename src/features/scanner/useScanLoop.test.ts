@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
+import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { READS, VERDICTS } from "./fixtures";
 import type { ScannerOptions, ScannerVerdict } from "./types";
 import { useScanLoop, type GrabbedPair } from "./useScanLoop";
@@ -61,6 +61,13 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+/** The page's three knobs as the page starts them, for a test that is about none of them. */
+const KNOBS = {
+  options: DEFAULT_SCANNER_OPTIONS,
+  sendPx: DEFAULT_SEND_PX,
+  detailWaitMs: DEFAULT_DETAIL_WAIT_MS,
+};
+
 function mount(over: Partial<Parameters<typeof useScanLoop>[0]> = {}) {
   const grabFrame = vi.fn(async () => BYTES);
   const grabPair = vi.fn(
@@ -69,8 +76,7 @@ function mount(over: Partial<Parameters<typeof useScanLoop>[0]> = {}) {
   const args = {
     videoRef: { current: readyVideo() },
     live: true,
-    options: DEFAULT_SCANNER_OPTIONS,
-    sendPx: DEFAULT_SEND_PX,
+    ...KNOBS,
     grabFrame,
     grabPair,
     ...over,
@@ -126,7 +132,7 @@ describe("useScanLoop", () => {
     const videoRef = { current: readyVideo() };
     const { rerender } = renderHook(
       ({ options, sendPx }: { options: ScannerOptions; sendPx: number }) =>
-        useScanLoop({ videoRef, live: true, options, sendPx, grabFrame }),
+        useScanLoop({ videoRef, live: true, ...KNOBS, options, sendPx, grabFrame }),
       { initialProps: { options: DEFAULT_SCANNER_OPTIONS, sendPx: DEFAULT_SEND_PX } },
     );
     await tick(60);
@@ -177,7 +183,7 @@ describe("useScanLoop", () => {
     const grabFrame = vi.fn(async () => BYTES);
     const { rerender } = renderHook(
       ({ live }: { live: boolean }) =>
-        useScanLoop({ videoRef, live, options: DEFAULT_SCANNER_OPTIONS, sendPx: DEFAULT_SEND_PX, grabFrame }),
+        useScanLoop({ videoRef, live, ...KNOBS, grabFrame }),
       { initialProps: { live: false } },
     );
     await tick(60);
@@ -203,7 +209,7 @@ describe("useScanLoop", () => {
     const grabFrame = vi.fn(async () => BYTES);
     const { rerender } = renderHook(
       ({ live }: { live: boolean }) =>
-        useScanLoop({ videoRef, live, options: DEFAULT_SCANNER_OPTIONS, sendPx: DEFAULT_SEND_PX, grabFrame }),
+        useScanLoop({ videoRef, live, ...KNOBS, grabFrame }),
       { initialProps: { live: true } },
     );
     await tick();
@@ -271,7 +277,7 @@ describe("useScanLoop", () => {
     const grabFrame = vi.fn(async () => BYTES);
     const { result, rerender } = renderHook(
       ({ live }: { live: boolean }) =>
-        useScanLoop({ videoRef, live, options: DEFAULT_SCANNER_OPTIONS, sendPx: DEFAULT_SEND_PX, grabFrame }),
+        useScanLoop({ videoRef, live, ...KNOBS, grabFrame }),
       { initialProps: { live: true } },
     );
     await tick();
@@ -405,8 +411,7 @@ describe("useScanLoop", () => {
         useScanLoop({
           videoRef,
           live,
-          options: DEFAULT_SCANNER_OPTIONS,
-          sendPx: DEFAULT_SEND_PX,
+          ...KNOBS,
           grabFrame,
           onDecision,
         }),
@@ -443,8 +448,7 @@ describe("useScanLoop", () => {
         useScanLoop({
           videoRef,
           live,
-          options: DEFAULT_SCANNER_OPTIONS,
-          sendPx: DEFAULT_SEND_PX,
+          ...KNOBS,
           grabFrame,
           onDecision,
         }),
@@ -508,7 +512,8 @@ describe("useScanLoop", () => {
     const gates = answers.map(() => deferred<ScannerVerdict>());
     let n = 0;
     scannerFrame.mockImplementation(() => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise);
-    const { grabFrame, grabPair } = mount({ sendPx: 720 });
+    // No wait in this test or the two after it: they are about what a paired frame carries.
+    const { grabFrame, grabPair } = mount({ sendPx: 720, detailWaitMs: 0 });
     await tick();
 
     // The first frame of a stream: nothing has asked for a detail yet.
@@ -543,7 +548,7 @@ describe("useScanLoop", () => {
     const grabPair = vi.fn(async (): Promise<GrabbedPair | null> => {
       throw new Error("the detail canvas is too large");
     });
-    const { result, grabFrame } = mount({ grabPair });
+    const { result, grabFrame } = mount({ grabPair, detailWaitMs: 0 });
     await tick();
 
     await act(async () => first.resolve({ ...VERDICTS.voting, wants_detail: true }));
@@ -561,11 +566,238 @@ describe("useScanLoop", () => {
     const first = deferred<ScannerVerdict>();
     scannerFrame.mockReturnValueOnce(first.promise).mockReturnValue(deferred<ScannerVerdict>().promise);
     const grabPair = vi.fn(async (): Promise<GrabbedPair | null> => ({ frame: PAIR_FRAME, detail: null }));
-    mount({ grabPair });
+    mount({ grabPair, detailWaitMs: 0 });
     await tick();
     await act(async () => first.resolve({ ...VERDICTS.voting, wants_detail: true }));
     expect(scannerFrame).toHaveBeenCalledTimes(2);
     expect(scannerFrame.mock.calls[1]).toEqual([PAIR_FRAME, DEFAULT_SCANNER_OPTIONS]);
+  });
+
+  /**
+   * **The detail grab waits after the ask** (issue #741). The session asks the moment two hashed
+   * frames agree, and a card still sliding or a lens still focusing agrees just as well — so a
+   * grab on the very next iteration took the fine print while it was blurred. Nothing goes out
+   * during the wait: the session reads its bands on the next frame it is sent, whatever that
+   * frame carries, so a plain frame sent to fill the time would be the read.
+   */
+  it("waits before the paired grab, and sends nothing while it does", async () => {
+    const first = deferred<ScannerVerdict>();
+    scannerFrame.mockReturnValueOnce(first.promise).mockReturnValue(deferred<ScannerVerdict>().promise);
+    const { grabFrame, grabPair } = mount();
+    await tick();
+    expect(scannerFrame).toHaveBeenCalledTimes(1);
+
+    await act(async () => first.resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await tick(DEFAULT_DETAIL_WAIT_MS - 1);
+    expect(grabPair).not.toHaveBeenCalled();
+    expect(grabFrame).toHaveBeenCalledTimes(1);
+    expect(scannerFrame).toHaveBeenCalledTimes(1);
+
+    await tick(1);
+    expect(grabPair).toHaveBeenCalledTimes(1);
+    expect(scannerFrame).toHaveBeenCalledTimes(2);
+    expect(scannerFrame.mock.calls[1]).toEqual([PAIR_FRAME, DEFAULT_SCANNER_OPTIONS, PAIR_DETAIL]);
+  });
+
+  /**
+   * Exact asks on every frame until its resolve starts, and a wait on each would stall the
+   * overlay through the whole run. The wait is for the card and the lens to settle, and once it
+   * has been spent the frames after it are all later than it.
+   */
+  it("waits once for a run of asks, not once a frame", async () => {
+    const gates = [0, 1, 2].map(() => deferred<ScannerVerdict>());
+    let n = 0;
+    scannerFrame.mockImplementation(() => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise);
+    const { grabPair } = mount({ detailWaitMs: 300 });
+    await tick();
+
+    await act(async () => gates[0].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    expect(grabPair).not.toHaveBeenCalled();
+    await tick(300);
+    expect(grabPair).toHaveBeenCalledTimes(1);
+
+    // The pair's own answer asks again: the next pair goes out with no clock moved at all.
+    await act(async () => gates[1].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    expect(grabPair).toHaveBeenCalledTimes(2);
+    expect(scannerFrame).toHaveBeenCalledTimes(3);
+  });
+
+  /** A plain frame between two asks ends the run, so the second ask waits like the first. */
+  it("waits again for an ask that follows a plain frame", async () => {
+    const gates = [0, 1, 2, 3].map(() => deferred<ScannerVerdict>());
+    let n = 0;
+    scannerFrame.mockImplementation(() => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise);
+    const { grabPair } = mount({ detailWaitMs: 300 });
+    await tick();
+
+    await act(async () => gates[0].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await tick(300);
+    expect(grabPair).toHaveBeenCalledTimes(1);
+    // The pair's answer does not ask, so a plain frame goes out; its answer asks again.
+    await act(async () => gates[1].resolve({ ...VERDICTS.voting, wants_detail: false }));
+    expect(scannerFrame).toHaveBeenCalledTimes(3);
+    await act(async () => gates[2].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await tick(299);
+    expect(grabPair).toHaveBeenCalledTimes(1);
+    await tick(1);
+    expect(grabPair).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * Exact asks from the first frame with a quad in it, two frames before the lock trusts it. A
+   * wait there is spent on every stray quad and is over before the card is one the session will
+   * read, so the run's one wait is held for the first ask that comes with the lock trusted.
+   */
+  it("holds the wait for the first ask on a trusted lock", async () => {
+    const acquiring: ScannerVerdict = {
+      ...VERDICTS.voting,
+      lock: { phase: "acquiring", agree: 1, misses: 0 },
+      wants_detail: true,
+    };
+    const gates = [0, 1, 2].map(() => deferred<ScannerVerdict>());
+    let n = 0;
+    scannerFrame.mockImplementation(() => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise);
+    const { grabPair } = mount({ detailWaitMs: 300 });
+    await tick();
+
+    // Not trusted yet: the pair goes out at once, as it did before there was a wait.
+    await act(async () => gates[0].resolve(acquiring));
+    expect(grabPair).toHaveBeenCalledTimes(1);
+    // Trusted, and still the same run of asks: this is the ask that waits.
+    await act(async () => gates[1].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await tick(299);
+    expect(grabPair).toHaveBeenCalledTimes(1);
+    await tick(1);
+    expect(grabPair).toHaveBeenCalledTimes(2);
+    // …and the run has had its wait.
+    await act(async () => gates[2].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    expect(grabPair).toHaveBeenCalledTimes(3);
+  });
+
+  /**
+   * A paired grab that fails sends the next frame plain, and Exact asks again on that one. Counted
+   * by what the last grab was, that ask waited afresh — every other frame, for as long as the
+   * grab kept failing. A run is the verdicts that ask, so it has had its wait.
+   */
+  it("does not wait a second time when the pair it waited for could not be grabbed", async () => {
+    const gates = [0, 1].map(() => deferred<ScannerVerdict>());
+    let n = 0;
+    scannerFrame.mockImplementation(() => gates[n++]?.promise ?? deferred<ScannerVerdict>().promise);
+    let fail = true;
+    const grabPair = vi.fn(async (): Promise<GrabbedPair | null> => {
+      if (fail) throw new Error("the detail canvas is too large");
+      return { frame: PAIR_FRAME, detail: PAIR_DETAIL };
+    });
+    mount({ grabPair, detailWaitMs: 300 });
+    await tick();
+
+    await act(async () => gates[0].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await tick(300);
+    expect(grabPair).toHaveBeenCalledTimes(1);
+    // The failed grab's idle tick, then the plain frame that stands in for the pair.
+    await tick();
+    expect(scannerFrame).toHaveBeenCalledTimes(2);
+    expect(scannerFrame.mock.calls[1]).toEqual([BYTES, DEFAULT_SCANNER_OPTIONS]);
+
+    // That plain frame's answer asks again, and the pair is tried at once.
+    fail = false;
+    await act(async () => gates[1].resolve({ ...VERDICTS.voting, wants_detail: true }));
+    expect(grabPair).toHaveBeenCalledTimes(2);
+    expect(scannerFrame).toHaveBeenCalledTimes(3);
+  });
+
+  /** The slider's value is read through a ref like the others: the next ask waits the new time. */
+  it("waits the time it was last handed, without restarting the loop", async () => {
+    const first = deferred<ScannerVerdict>();
+    scannerFrame.mockReturnValueOnce(first.promise).mockReturnValue(deferred<ScannerVerdict>().promise);
+    const grabFrame = vi.fn(async () => BYTES);
+    const grabPair = vi.fn(
+      async (): Promise<GrabbedPair | null> => ({ frame: PAIR_FRAME, detail: PAIR_DETAIL }),
+    );
+    const videoRef = { current: readyVideo() };
+    const { rerender } = renderHook(
+      ({ detailWaitMs }: { detailWaitMs: number }) =>
+        useScanLoop({
+          videoRef,
+          live: true,
+          options: DEFAULT_SCANNER_OPTIONS,
+          sendPx: DEFAULT_SEND_PX,
+          detailWaitMs,
+          grabFrame,
+          grabPair,
+        }),
+      { initialProps: { detailWaitMs: 400 } },
+    );
+    await tick();
+    rerender({ detailWaitMs: 100 });
+
+    await act(async () => first.resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await tick(99);
+    expect(grabPair).not.toHaveBeenCalled();
+    await tick(1);
+    expect(grabPair).toHaveBeenCalledTimes(1);
+    // One plain grab at the start and no second stream: the drag did not restart the pump.
+    expect(grabFrame).toHaveBeenCalledTimes(1);
+  });
+
+  /** A camera stopped during the wait is not read once the wait is over. */
+  it("grabs nothing when the camera stops during the wait", async () => {
+    const first = deferred<ScannerVerdict>();
+    scannerFrame.mockReturnValueOnce(first.promise).mockReturnValue(deferred<ScannerVerdict>().promise);
+    const grabFrame = vi.fn(async () => BYTES);
+    const grabPair = vi.fn(
+      async (): Promise<GrabbedPair | null> => ({ frame: PAIR_FRAME, detail: PAIR_DETAIL }),
+    );
+    const videoRef = { current: readyVideo() };
+    const { rerender } = renderHook(
+      ({ live }: { live: boolean }) =>
+        useScanLoop({
+          videoRef,
+          live,
+          options: DEFAULT_SCANNER_OPTIONS,
+          sendPx: DEFAULT_SEND_PX,
+          detailWaitMs: 300,
+          grabFrame,
+          grabPair,
+        }),
+      { initialProps: { live: true } },
+    );
+    await tick();
+    await act(async () => first.resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await tick(100);
+    rerender({ live: false });
+    await tick(500);
+    expect(grabPair).not.toHaveBeenCalled();
+    expect(grabFrame).toHaveBeenCalledTimes(1);
+    expect(scannerFrame).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Off and on again inside the wait: the new stream's pump starts with no ask and no wait owed,
+   * and the old one, waking from its sleep, sends nothing beside it.
+   */
+  it("starts a restarted camera with a plain frame, and only one", async () => {
+    const first = deferred<ScannerVerdict>();
+    scannerFrame.mockReturnValueOnce(first.promise).mockReturnValue(deferred<ScannerVerdict>().promise);
+    const grabFrame = vi.fn(async () => BYTES);
+    const grabPair = vi.fn(
+      async (): Promise<GrabbedPair | null> => ({ frame: PAIR_FRAME, detail: PAIR_DETAIL }),
+    );
+    const videoRef = { current: readyVideo() };
+    const { rerender } = renderHook(
+      ({ live }: { live: boolean }) =>
+        useScanLoop({ videoRef, live, ...KNOBS, detailWaitMs: 300, grabFrame, grabPair }),
+      { initialProps: { live: true } },
+    );
+    await tick();
+    await act(async () => first.resolve({ ...VERDICTS.voting, wants_detail: true }));
+    await tick(100);
+    rerender({ live: false });
+    rerender({ live: true });
+    await tick(500);
+    expect(grabPair).not.toHaveBeenCalled();
+    expect(scannerFrame).toHaveBeenCalledTimes(2);
+    expect(scannerFrame.mock.calls[1]).toEqual([BYTES, DEFAULT_SCANNER_OPTIONS]);
   });
 
   it("exposes the same grab for a full-resolution capture", async () => {

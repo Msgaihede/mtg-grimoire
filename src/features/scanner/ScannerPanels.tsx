@@ -31,8 +31,11 @@ export interface ScannerPanelsProps {
   rate: number | null;
   options: ScannerOptions;
   sendPx: number;
+  /** The pump's wait before a detail grab, in milliseconds — `useScanLoop`'s `detailWaitMs`. */
+  detailWaitMs: number;
   onOptions: (next: ScannerOptions) => void;
   onSendPx: (px: number) => void;
+  onDetailWaitMs: (ms: number) => void;
   /** Resolves to the saved file name, rejects with a sentence the panel prints verbatim. */
   onCapture: (expected: string) => Promise<string>;
 }
@@ -71,8 +74,10 @@ export function ScannerPanels(p: ScannerPanelsProps) {
       <ControlsPanel
         options={p.options}
         sendPx={p.sendPx}
+        detailWaitMs={p.detailWaitMs}
         onOptions={p.onOptions}
         onSendPx={p.onSendPx}
+        onDetailWaitMs={p.onDetailWaitMs}
       />
       {p.options.stages && <PipelinePanel stages={p.verdict?.stages ?? null} />}
       <BudgetPanel verdict={p.verdict} roundTripMs={p.roundTripMs} />

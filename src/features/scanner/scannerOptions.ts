@@ -26,6 +26,18 @@ export const DEFAULT_SCANNER_OPTIONS: ScannerOptions = {
 export const DEFAULT_SEND_PX = 960;
 export const SEND_PX = { min: 480, max: 1440, step: 80 } as const;
 
+/**
+ * How long the pump waits, in milliseconds, between a verdict asking for a detail image and the
+ * grab that takes it — the page's `detail wait` slider (issue #741). Not a `FrameOptions` field
+ * for `send px`'s reason: the wait is over before anything is sent.
+ *
+ * ⚠️ **200 is the middle of the 100–300 ms the issue's reporter suggested, and no camera has
+ * measured it.** The slider is how the right value gets found; `0` is the grab on the very next
+ * iteration that shipped before, which is what to compare against.
+ */
+export const DEFAULT_DETAIL_WAIT_MS = 200;
+export const DETAIL_WAIT_MS = { min: 0, max: 500, step: 25 } as const;
+
 export interface SliderSpec {
   key: keyof ScannerOptions;
   label: string;

@@ -1,6 +1,6 @@
 import { PRESS_STILL } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { SEND_PX, SLIDERS, type SliderSpec } from "../scannerOptions";
+import { DETAIL_WAIT_MS, SEND_PX, SLIDERS, type SliderSpec } from "../scannerOptions";
 import type { ScannerMethod, ScannerOptions, ScannerRule } from "../types";
 import { Panel } from "./Panel";
 
@@ -92,24 +92,29 @@ function Slider({
 }
 
 /**
- * Every knob the detector takes, and the one the *page* takes.
+ * Every knob the detector takes, and the two the *page* takes.
  *
  * The seven numeric sliders come from `SLIDERS` rather than being written out here, because
  * their bounds are a fact about `FrameOptions` and are asserted against the crate's defaults
  * next door. The eighth — `send px` — is deliberately not one of them: it is the size a frame
  * is downscaled to *before* it is sent, so the detector never sees it and it has no field in
- * `ScannerOptions` to live in.
+ * `ScannerOptions` to live in. Nor is the ninth, `detail wait`, for the same reason: it is how
+ * long the pump holds off before it grabs a detail image (issue #741), in milliseconds.
  */
 export function ControlsPanel({
   options,
   sendPx,
+  detailWaitMs,
   onOptions,
   onSendPx,
+  onDetailWaitMs,
 }: {
   options: ScannerOptions;
   sendPx: number;
+  detailWaitMs: number;
   onOptions: (next: ScannerOptions) => void;
   onSendPx: (px: number) => void;
+  onDetailWaitMs: (ms: number) => void;
 }) {
   // `SliderSpec["key"]` is `keyof ScannerOptions`, which includes the three that are not
   // numbers — the seven specs above name only numeric ones, and this assertion is where that
@@ -162,6 +167,15 @@ export function ControlsPanel({
         value={sendPx}
         display={String(sendPx)}
         onChange={onSendPx}
+      />
+      <Slider
+        label="detail wait"
+        min={DETAIL_WAIT_MS.min}
+        max={DETAIL_WAIT_MS.max}
+        step={DETAIL_WAIT_MS.step}
+        value={detailWaitMs}
+        display={String(detailWaitMs)}
+        onChange={onDetailWaitMs}
       />
     </Panel>
   );

@@ -4,7 +4,7 @@ import { expect, fn, within } from "storybook/test";
 import { useAppStore, type ScannerPanelId } from "@/lib/store";
 import { READS, STATUS, VERDICTS } from "./fixtures";
 import { NO_RESOLVE, TiersPanel } from "./panels/TiersPanel";
-import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
+import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
 import { ScannerPanels, type ScannerPanelsProps } from "./ScannerPanels";
 import type { ScannerResolution } from "./types";
 
@@ -78,8 +78,10 @@ const meta = {
     rate: 5.6,
     options: DEFAULT_SCANNER_OPTIONS,
     sendPx: DEFAULT_SEND_PX,
+    detailWaitMs: DEFAULT_DETAIL_WAIT_MS,
     onOptions: fn(),
     onSendPx: fn(),
+    onDetailWaitMs: fn(),
     onCapture: fn(async () => "live-1.jpg"),
   },
   decorators: [
@@ -254,10 +256,11 @@ export const ReadoutsWithReads: Story = {
 /**
  * Every knob the detector takes, open.
  *
- * Three segments and eight sliders in a 320px column — the row template is `76px / 1fr / 46px`,
- * which is the narrowest the name, the track and the figure all fit in. `send px` is last and
- * is not one of the seven: it is the size a frame is downscaled to *before* it is sent, so the
- * detector never sees it and it has no `FrameOptions` field to live in.
+ * Three segments and nine sliders in a 320px column — the row template is `76px / 1fr / 46px`,
+ * which is the narrowest the name, the track and the figure all fit in. `send px` and
+ * `detail wait` are last and are not among the seven: one is the size a frame is downscaled to
+ * *before* it is sent and the other how long the pump waits before it grabs a detail image, so
+ * the detector sees neither and neither has a `FrameOptions` field to live in.
  */
 export const ControlsOpen: Story = {
   render: column("controls"),
@@ -265,6 +268,7 @@ export const ControlsOpen: Story = {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("slider", { name: "decide at" })).toBeInTheDocument();
     await expect(canvas.getByRole("slider", { name: "send px" })).toBeInTheDocument();
+    await expect(canvas.getByRole("slider", { name: "detail wait" })).toBeInTheDocument();
   },
 };
 

@@ -2,7 +2,12 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { useAppStore, type ScannerPanelId } from "@/lib/store";
-import { DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
+import {
+  DEFAULT_DETAIL_WAIT_MS,
+  DEFAULT_SCANNER_OPTIONS,
+  DEFAULT_SEND_PX,
+  DETAIL_WAIT_MS,
+} from "./scannerOptions";
 import { ScannerPanels, type ScannerPanelsProps } from "./ScannerPanels";
 import { MARKS, READS, STATUS, VERDICTS } from "./fixtures";
 import type { ScannerVerdict } from "./types";
@@ -22,8 +27,10 @@ function props(over: Partial<ScannerPanelsProps> = {}): ScannerPanelsProps {
     rate: 5.6,
     options: DEFAULT_SCANNER_OPTIONS,
     sendPx: DEFAULT_SEND_PX,
+    detailWaitMs: DEFAULT_DETAIL_WAIT_MS,
     onOptions: vi.fn(),
     onSendPx: vi.fn(),
+    onDetailWaitMs: vi.fn(),
     onCapture: vi.fn(async () => "live-1.jpg"),
     ...over,
   };
@@ -195,6 +202,22 @@ describe("the folded panels", () => {
     });
     expect(p.onSendPx).toHaveBeenLastCalledWith(1120);
     expect(p.onOptions).not.toHaveBeenCalled();
+  });
+
+  it("sends the detail-wait slider to its own writer, and starts it inside its own range", () => {
+    const p = props();
+    useAppStore.setState({ scannerFolds: { ...ALL_FOLDED, controls: true } });
+    render(<ScannerPanels {...p} />);
+    const slider = screen.getByRole("slider", { name: "detail wait" });
+    expect(slider).toHaveValue(String(DEFAULT_DETAIL_WAIT_MS));
+    // A default off the slider's own steps would be a value the reader could never drag back to.
+    expect(DEFAULT_DETAIL_WAIT_MS).toBeGreaterThanOrEqual(DETAIL_WAIT_MS.min);
+    expect(DEFAULT_DETAIL_WAIT_MS).toBeLessThanOrEqual(DETAIL_WAIT_MS.max);
+    expect((DEFAULT_DETAIL_WAIT_MS - DETAIL_WAIT_MS.min) % DETAIL_WAIT_MS.step).toBe(0);
+    fireEvent.change(slider, { target: { value: "125" } });
+    expect(p.onDetailWaitMs).toHaveBeenLastCalledWith(125);
+    expect(p.onOptions).not.toHaveBeenCalled();
+    expect(p.onSendPx).not.toHaveBeenCalled();
   });
 
   it("shows the budget's six stages and the readouts' two reads when open", () => {
