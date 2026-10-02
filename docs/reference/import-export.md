@@ -1141,7 +1141,7 @@ them a pile their export left out. A backup that holds more than you asked for n
 including `export/arena.ts`, the Arena filter's rule — and `import/`) is the whole of the
 TypeScript side, with `__golden__/` and `scripts/golden.mjs` the fence between it and
 `src-tauri/src/transfer/`, the Rust writer the plain-text mirror renders through
-([text-mirror.md](text-mirror.md)); `src-tauri/src/import.rs` (renamed from
+([text-mirror.md](text-mirror.md)); `crates/grimoire-core/src/import.rs` (renamed from
 `deck_import.rs`), `export.rs`, `collection.rs`'s `collection_import_commit` and `wishlist.rs`'s
 `wishlist_import_commit` are the Rust side. `src/components/Dialog.tsx` is the shared modal shell
 both `ExportDialog` and `ImportDialog` are built on. `src/features/decks/CLAUDE.md` still owns

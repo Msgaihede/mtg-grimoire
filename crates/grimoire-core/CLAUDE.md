@@ -6,15 +6,40 @@ a Worker later. The design is
 §2; what each extraction step built and measured is in
 [light-app.md](../../docs/reference/light-app.md).
 
-**It is being filled a step at a time, and most of the engine is still in `src-tauri`.** What is
-here is what `src/lib.rs` declares: the leaves; since 2026-10-02 the storage layer — `db`,
-`schema` with both ladders, `sync_meta`, `filters`, `sorting`, `card_row`, `image_uri`, `errors`,
-`feed::backoff` and `sync_engine::capture`; and, the same day, the state a host holds over it —
-`state`, `hooks` and `events`, which are new code rather than moved files. Every rule in
-[`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a module binds that module wherever it
-lives — moving a file changes which crate compiles it and nothing about what it must do. **That
-file's database rules are this crate's now**: a schema rung, a grain, a capture spec is edited
-here.
+**It is being filled a step at a time, and since 2026-10-02 most of the engine is here.** What is
+here is what `src/lib.rs` declares: the leaves; the storage layer — `db`, `schema` with both
+ladders, `sync_meta`, `filters`, `sorting`, `card_row`, `image_uri`, `errors`, `feed::backoff` and
+`sync_engine::capture`; the state a host holds over it — `state`, `hooks` and `events`; and the
+**domain** — the decks, the collection, the wishlist, the search, the card pane, the view-state
+modules, `maintenance`, and the sync engine's `apply` and `baseline`: forty-nine modules, moved in
+one pass by `scripts/core-step-4.mjs`. **What is not here reaches a network, a filesystem or the
+relay**: `scryfall`, `ingest`, the three feeds (`combos`, `marketplace_feed`, `tags/`), `images`,
+`index/`'s facets and lifecycle, `reconcile`, `sync` (the card sync), the sync client and pairing,
+`share/` and the scanner. Every rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a
+module binds that module wherever it lives — moving a file changes which crate compiles it and
+nothing about what it must do. **That file's database and deck rules are this crate's now**: a
+schema rung, a grain, a capture spec, a deck write is edited here.
+
+## A command wrapper is not here, and never will be
+
+**Nothing in this crate is a `#[tauri::command]`.** A wrapper names a window, the desktop's
+`AppState` and a thread to run on, so each one stayed in `src-tauri`, in a module of the same
+name: `src-tauri/src/deck/mod.rs` is `pub use grimoire_core::deck::*;` and, below it, deck's
+wrappers. An item a module defines shadows a glob import of the same name, so `crate::deck::…`
+over there is this crate's item unless that file defines one.
+
+- **A new command is written in `src-tauri/src/<module>/mod.rs`; the function it calls is
+  written here**, `&Connection` in and a DTO out, and is `pub` — a `pub(crate)` item does not
+  cross the glob. Forty-six modules have such a file; `managed_wishlist` and the sync engine's
+  `apply` and `baseline` have none, because nothing of theirs stayed.
+- **A module's own `//!` doc may still say its wrappers are "in one block at the foot".** They are
+  at the foot of `src-tauri`'s file. The docs moved with the code, unedited.
+- **`ipc.test.ts` reads such a module as both halves**, joined under the name its assertions
+  already used (`deckRs = deckRsCore + deckRsDesktop`). A new `?raw` import of a moved module
+  owes both files.
+- **It was meant to be a `commands/` folder** (spec §2.3). Markus chose this shape instead on
+  2026-10-02: 245 of `generate_handler!`'s 257 entries are a path through a module and none had to change. The folder
+  can be a rename later, with the command table.
 
 ## Four rules, and what goes red for each
 
@@ -117,11 +142,21 @@ mutex. So there is no `State` whose cross-file fence is not riding.
 | `pairing` | `sync_pair::pairing::Pending` | step 6 |
 | `mirror`, `mirror_status`, `changes` | the mirror's and the other windows' | never: the desktop's |
 
-**`with_write` is still `src-tauri`'s, whole.** Its body arms and settles the managed wishlists
-and reconciles tokens around the caller's closure, and those modules are step 4's. It has no line
-to be cut at — the three calls sit between the lock and the fence's assertion — so it was not
-split: a write with no settle would be a second definition of a user-facing write. It reads
-`state.db` and `state.fence` through the deref and is byte for byte what it was.
+**`state::with_write` is the one definition of a user-facing write, and it is here since the
+domain step.** `with_write`, `with_write_waiting` and the private `written` they share: the
+managed wishlists armed, the caller's closure, the token reconcile, the settle, and the fence's
+`debug_assert` — in that order, on both the bounded path and the waiting one. They are free
+functions over `&State` rather than methods, so every caller in `src-tauri` reads as it did:
+`sync` re-exports the two, and an `Arc<AppState>` passes as `&state` through the deref. The body
+is byte for byte what it was but for the parameter's type. **It waited a step** because it has no
+line to be cut at — the three calls sit between the lock and the assertion — and a write with no
+settle would have been a second definition of a user-facing write.
+
+- **A function here that writes takes `&Connection`, and its host wraps it in `with_write`.** Not
+  the other way round: a core function that took the write lock itself could not be composed
+  into a caller's transaction, and none does.
+- `collection_source::with_write_owned` — `with_write` plus the facet index's `owned` rebuild —
+  is still `src-tauri`'s, because the index's lifecycle is.
 
 ## Moving a module here
 
@@ -159,34 +194,61 @@ split: a write with no settle would be a second definition of a user-facing writ
     switches on `test` goes dark without a compile error.** `image_uri` allowed a loopback host
     under `cfg!(test)`; moved, it refused, and ten of `src-tauri`'s `images` tests were served
     the placeholder. Rule 10's gate is the fix, and anything it widens is then something the
-    `testing` feature ships if it leaks — say so beside it. Three `#[cfg(not(test))]` sites wait
-    in modules that have not moved: `bulk_undo.rs`, `sync_engine/entitlement.rs` and
-    `sync_engine/client.rs`.
+    `testing` feature ships if it leaks — say so beside it. `bulk_undo::with_store` was the
+    second: its process-wide ticket store and its per-thread twin follow the feature since the
+    domain step. Two `#[cfg(not(test))]` sites wait in modules that have not moved:
+    `sync_engine/entitlement.rs` and `sync_engine/client.rs`.
+12. **A `#[tauri::command]` wrapper stays, with everything that names the desktop** — `tauri::`,
+    `AppState`, an `AppHandle` — and with any private helper only those items call. `src-tauri`
+    keeps `x/mod.rs` as in rule 8, and its `lib.rs` line stays `pub mod x;`.
+13. **A test that names something that stays, stays**, in the remainder's own `mod tests`. A
+    helper both sides call is a fixture (rule 10); a helper only the staying tests call goes with
+    them.
+14. **Do it with the splitter, not by hand.** `scripts/lib/rs-items.mjs` cuts a file into its
+    top-level items and rejoins it byte for byte, and `scripts/core-step-4.mjs` is rules 2 to 13
+    applied to a list of modules: what stays, what moves, the imports each half still needs, the
+    visibilities `src-tauri` still reaches, the fixtures. `--dry` prints the decisions without
+    writing. The next step's script is that one with another list.
 
 ## What a moved module left in `src-tauri`
 
 Each row goes home in the step that moves what it names.
 
+**Beside every module's command wrappers**, which are not listed — `grep -c '#\[tauri::command'
+src-tauri/src/<module>/mod.rs` counts them:
+
 | Module | Still in `src-tauri` | Because it names | Home with |
 | --- | --- | --- | --- |
-| `schema` (`src/schema/mod.rs`) | `prepare_database` — `schema::bring_to_head` here, then the launch's logged passes | `maintenance`, `managed_wishlist`, `deck_tokens`, `deck_meta` | step 4 |
-| `schema` | `prepare_data_dir` — `split::convert`, then `schema::replace_unreadable_corpus` here | `split`, which only the desktop has | never: `split` stays |
-| `schema` | 17 of its 280 tests | the launch, `split`, `deck_tokens`, `deck_todos`, `deck`, `tags::query`, `maintenance` | steps 4 and 5 |
-| `sync_engine::capture` | 3 of its 42 tests, in `sync_engine/capture_tests.rs` | `reconcile`, the launch | step 4 |
+| `schema` (`src/schema/mod.rs`) | `prepare_data_dir` — `split::convert`, then `schema::replace_unreadable_corpus` here | `split`, which only the desktop has | never: `split` stays |
+| `schema` | 8 of its tests | `split`, through that function or a converted fixture; one, `tags::query` | never, and step 5 |
+| `sync_engine::capture` | 2 of its tests, in `sync_engine/capture_tests.rs` | `reconcile` | step 5 |
 | `errors` (`src/errors/mod.rs`) | `kind_of` and its test | `scryfall::ScryfallError` | step 5 |
+| `deck` | `bracket_reads`, `DeckBracketRead`, their two SQL constants and 5 tests | `combos::match_combos` — `combos` is a feed | step 5 |
+| `reset` | `clear_cache`, what only it calls, and 8 tests | `images::Cache`, the three feeds' `any_refresh_running` | step 5 |
+| `collection_source` | `with_write_owned` | `index::lifecycle::invalidate_owned` | step 5 |
+| `collection`, `deck_tokens`, `card`, `search` | 1, 2, 1 and 1 tests | `index::fixtures`, `sync_engine::client`, `images`, an `AppState` built whole | steps 5 and 6 |
+| `maintenance` | 9 tests — nothing of its code | a database `split` converted | never |
+| `import` | `read_import_file`, two helpers and 5 tests | a path the desktop's file dialog answered | never: a host reads its own file |
+| `marketplace` | `set_marketplace_now` | `AppState.mirror` | never: the mirror is the desktop's |
 
-**`bring_to_head` is every step of a launch that may stop it**: `migrate_user`, `migrate_corpus`
-(or the corpus replaced), then `capture::clear_stale_guard` and `capture::install`. A host that
-opens a database calls it; what the desktop does after it is logged and left owing.
+**Three modules on the domain step's list did not move, and one function**: `reconcile` (its
+`apply` takes `&[scryfall::Migration]`), `tags/` (`query` and `muted` take `tags::Dataset`, which
+sits in the fetch engine) and `deck::bracket_reads`. The alternative was to hoist those three
+small pieces into this crate ahead of their modules; Markus declined, as he had for the sync
+client's cursor keys in step 2. They arrive with the I/O step.
 
-⚠️ **A new user rung owes its `UNDO_V<N>` in two files while this lasts**: the constant goes in
+**`schema::prepare_database` is the launch**: `bring_to_head`, then the logged passes — the FTS
+rebuild an interrupted compaction owes, the staging table a killed ingest left, the trims, the
+managed wishlists, the token conversion and repair, and last the drain of the dirty marks those
+left. **`bring_to_head` is every step of it that may stop a launch**: `migrate_user`,
+`migrate_corpus` (or the corpus replaced), then `capture::clear_stale_guard` and
+`capture::install`. A host that opens a database calls `prepare_database`; `State::new` then
+takes the connections.
+
+⚠️ **A new user rung still owes its `UNDO_V<N>` in two files**: the constant goes in
 `schema::fixtures` here, at the head of every chain in this file's tests — and at the head of
-the two chains that stayed in `src-tauri/src/schema/mod.rs`. The v59 conversion test's goes red
-by itself. `migrate_the_real_database_to_v29`'s does not: that test is `#[ignore]`d.
-
-The other direction, once: `sync_meta` holds `K_FTS_REBUILD_PENDING`, which is
-`maintenance`'s flag, because `schema::swap_staging` clears it. `maintenance` re-exports it and
-takes it back when it moves.
+the one chain left in `src-tauri/src/schema/mod.rs`, `migrate_the_real_database_to_v29`'s, which
+is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain came home.)
 
 ## The manifest
 
@@ -198,12 +260,15 @@ takes it back when it moves.
 - A target-specific dependency goes in a `[target.'cfg(…)'.dependencies]` table. That is the one
   place outside `src/platform/` a target is named, and the fence does not read it for that.
 - **The `testing` feature is test scaffolding and nothing a build ships**: `schema::memory_pair`,
-  `schema::fixtures`, `sync_engine::capture::fixtures`, `scratch` and `CardRow::from_json`.
-  `src-tauri` asks for it under `[dev-dependencies]` only, and resolver 2 leaves that out of
-  every build that is not a test. ⚠️ **Never name it on a host's `[dependencies]` line, never
-  make it a default, never have another feature imply it — because one thing behind it is not
-  scaffolding**: `image_uri::is_allowed_host` lets a loopback host through under it, for the
-  image fetcher's mock server. Two things hold that, and only the second is complete:
+  `scratch`, `CardRow::from_json`, and every `pub mod fixtures` — `schema`'s,
+  `sync_engine::capture`'s, and since the domain step `card`'s, `collection`'s, `deck`'s,
+  `deck_tokens`', `maintenance`'s and `reset`'s. `src-tauri` asks for it under
+  `[dev-dependencies]` only, and resolver 2 leaves that out of every build that is not a test.
+  ⚠️ **Never name it on a host's `[dependencies]` line, never make it a default, never have
+  another feature imply it — because two things behind it are not scaffolding**:
+  `image_uri::is_allowed_host` lets a loopback host through under it, for the image fetcher's
+  mock server, and `bulk_undo::with_store` keeps its tickets per thread under it, where a shipped
+  build keeps one store for the process. Two things hold that, and only the second is complete:
   `platform::fence` sweeps every workspace member's manifest as text (a
   `[workspace.dependencies]` entry, a renamed dependency and a command-line `--features` all
   pass it), and CI's `rust` job fails when
@@ -222,7 +287,8 @@ The crate is a member of the workspace at the repository root, so it shares `Car
 | | |
 | --- | --- |
 | `cargo test -p grimoire-core` | This crate's tests alone, natively |
-| `cargo test -p grimoire-core schema::` | The schema's — `cargo test -p mtg-grimoire schema::` runs only the 17 that stayed |
+| `cargo test -p grimoire-core schema::` | The schema's — `cargo test -p mtg-grimoire schema::` runs only the 8 that stayed |
+| `cargo test -p grimoire-core deck::` | A domain module's — the same, for any of the forty-nine; `-p mtg-grimoire deck::` runs only the 5 that stayed |
 | `npm run verify` | Both members: `fmt --check`, `clippy -D warnings`, `cargo test --workspace` |
 | `cargo build --lib -p grimoire-core --target wasm32-unknown-unknown` | The WASM compile. Needs clang 18 or newer for SQLite's C |
 

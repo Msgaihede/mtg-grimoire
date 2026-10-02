@@ -2923,7 +2923,7 @@ Two contract details the caller depends on:
 
 ### `deck_sort` / `set_deck_sort` — one `app_meta` row, and a vocabulary Rust does not have
 
-`src-tauri/src/decksort.rs`, ported from `listview.rs` whole: one key, `deck_sort`, holding a
+`crates/grimoire-core/src/decksort.rs`, ported from `listview.rs` whole: one key, `deck_sort`, holding a
 single string like `"updated:desc"`, with `DEFAULT = "updated:desc"` — today's order exactly, so
 the release that added a sort control does not quietly re-sort a reader's wall. **No migration**:
 `app_meta` is schema v6's key/value table — the *application's*, deliberately not `sync_meta`,

@@ -271,8 +271,9 @@ The engine is moving out of `src-tauri` into `crates/grimoire-core`, a crate wit
 dependency that the desktop, the Android host and the WASM host will all link (spec §2). The
 rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md);
 this section is what each step built and measured. **Nothing here runs on a phone or in a
-browser yet**: what exists is a crate the desktop links, compiled for two more targets. Three
-steps of seven have landed — the leaves, the storage layer, and the state a host holds over it.
+browser yet**: what exists is a crate the desktop links, compiled for two more targets. Four
+steps of seven have landed — the leaves, the storage layer, the state a host holds over it, and
+the domain: the decks, the collection, the wishlist and the search.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -689,3 +690,255 @@ the copy is in no sync group, so live sync stays off, and what holds the wake is
 - **`EventSink` and `WriteObserver` are `Send + Sync`**, so a browser's sink cannot hold a
   `JsValue`. Phase 5 meets that first.
 - `scripts/coverage-rust.mjs` was not run, and neither was the card-scanner suite locally.
+
+### 6.4 Step 4 — the domain cluster (2026-10-02)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-4-domain.md). Everything below was
+measured that day on Windows 11, debug builds, on the branch's own tree over `main` at `28258b21`.
+
+**Forty-nine modules moved in one run of a script, and most of the engine is in the core now.**
+`src-tauri/src` went from 183 533 lines to 77 880, and `crates/grimoire-core/src` from 38 223 to
+144 519 — 105 386 of them the forty-nine: the decks (`deck`, `deck_meta`, `deck_tokens`,
+`deck_undo`, `deck_theory` and eleven more), the collection (`collection`, `collection_folders`,
+`collection_alloc`, `collection_source`), the wishlist (`wishlist`, `wishlist_folders`,
+`wishlist_optimize`, `managed_wishlist`), `search`, `card`, `import`, `bulk_undo`, `activity`,
+the home page's reads, the view-state modules, `maintenance`, `reset`, and the sync engine's
+`apply` and `baseline`.
+
+**It was read before it was moved.** `scripts/lib/rs-items.mjs` cuts a rustfmt-formatted file into
+its top-level items by tracking comments, literals and bracket depth, and every item of every file
+in `src-tauri/src` was read for what it names. Two things came out of that:
+
+- **What holds a domain file in `src-tauri` is one block at its foot** — the `#[tauri::command]`
+  wrappers, the `use crate::sync::{with_write, AppState}` line above them, an
+  `unfinished(e: tauri::Error)` helper in eight files, and the inner `mod commands` four files
+  register from. No item that moves names an item that stays, in any of the forty-nine.
+- **The cluster is closed only as a whole.** Eighteen of the forty-nine name none of the others
+  — the view-state modules and a few reads. The other thirty-one are one knot: `deck` names
+  twelve of them, and each of those names `deck` or one another. That is the first web build's
+  "no leaf modules", measured.
+
+**The wrappers stayed at each module's own path, not in a `commands/` folder.** Spec §2.3 wrote
+the folder. Read against the tree, 245 of `generate_handler!`'s 257 entries are a path through a
+module (`deck::deck_create`, `deck_pull::commands::deck_pull_plan`), and
+`collection_source::with_write_owned` — which stays, because it names the index — is called from
+wrappers in 14 files. Markus was shown both layouts and chose this one:
+`src-tauri/src/deck/mod.rs` is `pub use grimoire_core::deck::*;` and deck's wrappers below it,
+step 2's `schema/mod.rs` shape. **No handler entry, no caller and no test path was edited.**
+
+| | |
+| --- | --- |
+| Modules that left a file behind | 46, holding 183 of the 257 commands in 5 783 lines |
+| Modules that moved whole | 3 — `managed_wishlist`, `sync_engine::apply`, `sync_engine::baseline` |
+| Commands in the core | 0 |
+
+**Nothing was hoisted, so three things on this step's list wait for step 5.** Each names code
+the I/O step moves:
+
+| | Names | So |
+| --- | --- | --- |
+| `reconcile` | `scryfall::Migration`, the type its `apply` takes | waits whole |
+| `tags::query`, `tags::muted` | `tags::Dataset` and its two constants, in the fetch engine | `tags/` waits whole |
+| `deck::bracket_reads` | `combos::match_combos` — `combos` is a feed, with `reqwest` in its error type | `deck` arrived without it |
+
+The alternative was to move those three small pieces into the core ahead of their modules.
+Markus declined it, as he had in step 2 for the sync client's cursor keys. Nothing else in the
+cluster calls `reconcile` or the tag queries.
+
+**What else stayed, by the rule that a function naming a later step's code stays alone**:
+`collection_source::with_write_owned` (the facet index's lifecycle), `reset::clear_cache` and
+what only it calls (`images::Cache`, the three feeds), and — for good —
+`marketplace::set_marketplace_now` (it tells the mirror), `import::read_import_file` (a path the
+desktop's own file dialog answered: a host reads its own file) and `schema::prepare_data_dir`
+(`split`). `share/` was never on this step's list.
+
+**`with_write` is the core's.** `state::with_write`, `with_write_waiting` and the private
+`written` they share moved out of `sync.rs` byte for byte but for one word — the parameter is
+`&State` where it was `&AppState`. `sync` re-exports the two, and a wrapper holding an
+`Arc<AppState>` passes `&state` as before, through the `Deref` step 3 added. `sync`'s two tests
+of them stayed where they were and pass unedited, which is the same body called through the
+re-export.
+
+**`prepare_database` went home, and ten tests with it.** It rejoined `bring_to_head` in the
+core's `schema.rs`, directly below it. Of the tests step 2 left in `src-tauri` because they named
+a module still there, nine of `schema`'s seventeen and one of `capture`'s three name nothing
+`src-tauri` holds any more and joined their file's own `mod tests`. The eight of `schema`'s that
+remain drive `split`, or the tag search; the two of `capture`'s drive `reconcile`.
+`maintenance::K_FTS_REBUILD_PENDING`, parked in `sync_meta` since step 2, is `maintenance`'s
+again.
+
+**Thirty-two of the cluster's 1 684 tests stayed**, each because it names something that did —
+and for nine of them that something is `split`, which stays for good:
+
+| Module | Stayed | Names |
+| --- | --- | --- |
+| `maintenance` | 9 | a database `split` converted |
+| `reset` | 8 | `clear_cache` |
+| `deck` | 5 | `bracket_reads` |
+| `import` | 5 | `read_import_file` |
+| `deck_tokens` | 2 | `index::fixtures`, `sync_engine::client` |
+| `card`, `collection`, `search` | 1 each | `images::resolve`; `index::fixtures`; an `AppState` built whole |
+
+A helper both sides call became a fixture — a `pub mod fixtures` at the foot of the core file,
+behind `any(test, feature = "testing")` — in six modules: `card`, `collection`, `deck`,
+`deck_tokens`, `maintenance`, `reset`. A helper only the staying tests call went with them.
+
+**No test was lost.** `#[test]` and `#[tokio::test]` attributes: 3 382 before (2 810 in
+`src-tauri`, 572 in the core) and 3 382 after (1 148 and 2 234). `cargo test --workspace` on the
+final tree: the core 2 232 passed and 2 ignored, `src-tauri` 1 144 passed and 4 ignored. It
+passed on the script's first complete output too, and on every run between.
+
+**Three bodies were edited rather than moved**, each an exact replacement the script refuses to
+make if its text is not there:
+
+- `maintenance::reclaim_freed_pages` slept between chunks with `std::thread::sleep`, which panics
+  in a browser. It asks `platform::pause`, which is that call natively.
+- `bulk_undo::with_store` switched on `cfg(test)` between a process-wide ticket store and a
+  per-thread one. A dependency's `cfg(test)` is off while another crate's tests build, so both
+  arms follow `any(test, feature = "testing")` — the second thing behind that feature that is
+  behaviour rather than scaffolding, after `image_uri`'s loopback allowance.
+- Four paths: `crate::sync::{get_meta, set_meta, set_meta_opt}` are `crate::sync_meta`'s,
+  `crate::sync::with_write` is `crate::state`'s, `crate::sync::lock_plain` is `crate::db`'s and
+  `crate::schema::tests` is `crate::schema::fixtures`. In code only: a doc link was left as it
+  stood.
+
+**Fourteen names were widened to `pub`**, because `src-tauri` still reaches them: `bulk_undo`'s
+`Table`, `Store`, `Store::table_of` and both `with_store` arms; `card::card_image_uri_inner`;
+`collection`'s `commit_import`, `commit_import_with` and `fold_entry`; `collection_folders`'
+`LOCKED_FOLDER_IDS` and `effectively_locked`; `deck::THEORY` (for a staying test);
+`deck_undo::apply_reversal`; `import::decode`; `wishlist::commit_import`. Two of those the sweep
+cannot see and are on a list in the script: a wrapper asks `with_store(|s| s.table_of(id))`, and
+a closure parameter never spells its type.
+
+- ⚠️ **The first version of that sweep published nine things nothing reaches, and the compiler
+  said nothing** — a reviewer diffing visibilities against the base found them. It matched a
+  member by `.name` anywhere in `src-tauri`, so `.name`, `.id` and `.record(` on unrelated types
+  made fields of four private structs `pub`, and a wrapper's *parameter* called `category_name`
+  made a function of that name `pub`. A member is widened now only where its type is named by
+  this module's path, and a function only by a call. **Too wide is silent and too narrow is a
+  compile error**, so the sweep leans narrow.
+
+**The script**, `scripts/core-step-4.mjs`: 49 modules in one run, `cargo fmt` at the end, and a
+second run changes nothing — a module whose file is gone from `src-tauri/src` is skipped and
+each one-off step checks whether it has been done. `--dry` prints what would stay, move and widen
+without writing. The splitter rejoins every Rust file in both crates byte for byte, which
+`scripts/lib/rs-items.test.mjs` holds on every run. Git records 51 renames.
+
+- **It was right about the cut on its first run and wrong about three smaller things**, each
+  found by the compiler and fixed in the script rather than in its output: a constant used only
+  inside a format string (`"{GRAIN}"`) is a reference the literal hides; a fully qualified
+  `std::sync::Mutex::new(…)` uses no import; and a re-export is the module's API, which the
+  remainder's glob already carries.
+- ⚠️ **`git mv` stages.** A `git commit` of the script alone, made after a run, committed the
+  fifty-one renames with their old contents, and the reset that followed threw the run away.
+  Commit the script with the tree clean, or by path.
+- **A reviewer replayed it**: the script at its own commit, run on an extract of that commit and
+  put through `rustfmt`, reproduces the output commit's files byte for byte. And item by item,
+  the 4 177 non-`use` items of the forty-nine modules, `schema`, `capture` and `sync` each appear
+  exactly once after the move — 4 170 unchanged but for whitespace, visibility and the four
+  paths, the other seven the edits this section names.
+- **What the splitter gets wrong is written into its test**: a brace in an item's head — the
+  const argument in `impl Foo<{ N }> for X` — ends the item early. The pieces still rejoin, and
+  neither crate has one.
+- **A branch that edited a moved file runs the script before it merges `main`** — the plan has
+  the four commands — and one that did not just merges: git follows the renames. **Driven on a
+  scratch branch** with an edit to a core item, an edit to a wrapper's helper, a new test and a
+  new command: the merge reported seven conflicts. Three were the branch's own changes, one hunk
+  each, where its side is the answer. Four were in files the branch never touched — the ones
+  edited by hand on `main` after the script (`lib.rs`, `maintenance.rs`, `state.rs`,
+  `schema/mod.rs`) — where `main`'s side is. The core item's edit and the new test merged clean.
+
+**It compiles for WASM with the domain in it.** `cargo build --lib -p grimoire-core --target
+wasm32-unknown-unknown`: 30 s, and `clippy -- -D warnings` for that target clean. The core gained
+**no dependency**: 105 386 lines of decks, collection and search needed nothing the storage layer
+had not already brought. `cargo tree -p grimoire-core -i tokio` and `-i tauri` each match no
+package, and `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints
+`default` and nothing else. Outside `platform/` and the test-only `scratch`, the crate's non-test
+code names a filesystem in the five `schema` functions step 2 left for the I/O step and nowhere
+else, and names no thread. **Compiles is still all that proves**; the Android compile is CI's.
+
+**An existing database, upgraded by this build and by `main`, side by side.** Two byte copies of
+the main checkout's dev data — user schema v46, 30 tables, 4 645 rows — one launched under a
+binary built from `main` and one under this branch's, each stopped 20 s after its `user_version`
+read 59:
+
+| | `main` | this branch |
+| --- | --- | --- |
+| `user_version` reached 59 after | 1 369 ms | 1 172 ms |
+| Tables / rows / schema objects | 33 / 5 209 / 148 | 33 / 5 209 / 148 |
+| The whole of `sqlite_master` | — | identical |
+| `foreign_key_check`, `integrity_check` | 0, `ok` | 0, `ok` |
+| `backups/user.v46.db` | written | written, and equal to the file before the climb row for row |
+
+Compared row by row, 30 of the 33 tables are identical. The three that differ, differ in a clock
+and a random number: two `app_meta` values (`mirror_installation`, minted per install, and
+`update_last_check_at`) and three `unixepoch()` stamps on the token rows the launch conversion
+wrote — 33 s apart, the gap between the two launches. That is the launch's logged passes run
+from their new crate and writing what `main`'s wrote.
+
+⚠️ **The control build poisoned the branch's, and only `cmp` showed it.** The control was built
+from a scratch worktree into this worktree's `target`. Cargo then reused `main`'s `grimoire-core`
+for this branch's — the same package name and version, built later than this branch's sources
+were last touched — and `cargo build` failed with 61 unresolved imports that `clippy` and
+`cargo test`, which build other units, had not. The first "branch" binary copied out was
+`main`'s, byte for byte. `touch` both `lib.rs` files after a control build, and `cmp` the two
+binaries before trusting either.
+
+**The real window, on this branch**, `tauri dev` over a third copy (v46, so the launch climbed
+thirteen rungs; in no sync group, mirroring to its own folder):
+
+| Asked or done | Answer |
+| --- | --- |
+| `startup_status` | `ready` |
+| `search_cards`, `lightning bolt` | 78 printings, 11 ms |
+| `facet_cards`, `bolt` | `ready: true`, 23 formats |
+| `deck_list`; `collection_list`; `collection_folder_list`; `wishlist_list` | 5 decks; 277 entries; 7 folders; 87 wishes |
+| The mirror's startup pass | 128 files written, none failed |
+| **A deck created, two cards added, renamed** | Each landed, through the wrappers and the core's `with_write`; `deck_get` read 2 cards in 5 piles |
+| `deck_bracket_reads` on it — the function that stayed | 2 cards, no combos |
+| **A collection entry added, removed by `collection_remove_many`, then `bulk_undo`** | `removed: 1, copies: 2, undoId: 1`, then `restored: 1` and the entry back at 2 — the process-wide ticket store, in a build without `testing` |
+| A wish added and removed; a sticky note made and deleted | 87 wishes and no notes, as before |
+| The mirror after those writes | A pass: 15 files written, 127 unchanged |
+| The deck deleted | 5 decks |
+| **The launch's own card sync, left to finish** | 118 610 → 118 467 printings, 0 skipped, no error — through the ingest, `swap_staging`, `price_history::snapshot` and `maintenance::reclaim_freed_pages`, the last two from their new crate; the facet index `ready` again after it |
+| Search, Collection, Wishlist, Decks and a deck — pressed and read | Each drew: 118,467 cards; 340 cards / 273 unique; 89 wishes; 5 decks; a 100+3 card deck with its stats and `Bracket ~4` |
+| `error_log`; the app's stderr | The two rows it arrived with; no fence sentence, no panic |
+
+The copy afterwards: `user_version` 59, 33 tables, 5 decks, 699 deck cards, 277 collection
+entries, 89 wishes, `foreign_key_check` 0, `integrity_check` `ok`.
+
+**The frontend**: `ipc.test.ts` reads each split module as both halves, joined under the name
+its assertions already used, and passes unedited below its imports; `npm run test:run`, 459
+files and 12 891 tests; `npm run build` and `npm run lint` clean.
+
+**Nothing in [data-and-sync.md](data-and-sync.md) or [search-faceting.md](search-faceting.md)
+was re-taken, and this is the step that could have moved a release figure most.** A debug build
+inlines nothing before or after. A release build has no LTO and inlines a non-generic function
+across crates only when it says so — and the wrappers now call every domain function across a
+crate boundary, where they called it across a file. Each such call is one per command, around a
+statement that runs for milliseconds; what moved *together* — `search` with `filters` and
+`sorting`, `deck` with `deck_undo` — is in one crate as it was. The rows above are a debug build
+answering, not a timing.
+
+**Open after step 4:**
+
+- **`reconcile`, `tags/` and `deck::bracket_reads` wait for step 5**, with
+  `collection_source::with_write_owned` and `reset::clear_cache` behind them, and the cluster's
+  tests that name `images`, `index` or the sync client.
+- **A module's own `//!` doc may say its wrappers are "at the foot".** The docs moved unedited;
+  the wrappers are at the foot of `src-tauri`'s file of that name.
+- **`State::new` still takes connections already at head.** `schema::prepare_database` is the
+  whole launch and is the core's now, but the desktop converts a single file first with a module
+  only it has. What a host-neutral "open the data folder" should be is left to the first host
+  that is not the desktop.
+- **A new user rung still owes its `UNDO_V<N>` in two files**: one chain is left in
+  `src-tauri/src/schema/mod.rs`, in a test that is `#[ignore]`d.
+- **The `testing` feature now gates two behaviours**, not one: a host that turned it on would
+  accept a loopback image host *and* keep its bulk-undo tickets per thread, where a command and
+  the write it undoes run on different ones.
+- **The one-connection `State` is likelier to bite now.** `with_write` holds the write
+  connection while a caller's closure runs; on a host with one connection, a closure that asked
+  for `lock_db_read` would take a lock its own thread holds. No wrapper does — a write closure is
+  handed the connection — but nothing checks it. Phase 5's.
+- `scripts/coverage-rust.mjs` was not run, and neither was the card-scanner suite locally:
+  nothing under `crates/card-scanner` changed, and CI's `rust` job runs it.

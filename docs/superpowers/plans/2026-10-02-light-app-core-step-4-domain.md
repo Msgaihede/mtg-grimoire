@@ -21,7 +21,7 @@ A splitter was written first — it cuts a rustfmt-formatted file into its top-l
 | | As measured by the run |
 | --- | --- |
 | Modules that move | 49 |
-| Their lines in the core, tests included | 103 868 |
+| Their lines in the core, tests included | 105 386 |
 | Their tests | 1 684, of which 32 stay |
 | Command wrappers that stay, in 46 files | 183 of the crate's 257 |
 
@@ -31,7 +31,7 @@ A splitter was written first — it cuts a rustfmt-formatted file into its top-l
 
 ### The wrappers stay at each module's own path — Markus, 2026-10-02
 
-Spec §2.3 puts the desktop's wrappers in `src-tauri/src/commands/`. Read against the tree: 245 of `generate_handler!`'s 256 entries are a path through a module (`deck::deck_create`, `deck_pull::commands::deck_pull_plan`), and `collection_source::with_write_owned` — which stays, because it names the index — is called from wrappers in 14 files. Two layouts were put to Markus: a `commands/` folder, with the handler list and every cross-module call a wrapper makes rewritten; or each module's wrappers at `src-tauri/src/<module>/mod.rs` beside a glob re-export, step 2's `schema/mod.rs` shape. **He chose the second.** No handler entry, no caller and no test path is edited, and a branch that adds a command still merges. A `commands/` folder can be a rename later, with the command table.
+Spec §2.3 puts the desktop's wrappers in `src-tauri/src/commands/`. Read against the tree: 245 of `generate_handler!`'s 257 entries are a path through a module (`deck::deck_create`, `deck_pull::commands::deck_pull_plan`), and `collection_source::with_write_owned` — which stays, because it names the index — is called from wrappers in 14 files. Two layouts were put to Markus: a `commands/` folder, with the handler list and every cross-module call a wrapper makes rewritten; or each module's wrappers at `src-tauri/src/<module>/mod.rs` beside a glob re-export, step 2's `schema/mod.rs` shape. **He chose the second.** No handler entry, no caller and no test path is edited, and a branch that adds a command still merges. A `commands/` folder can be a rename later, with the command table.
 
 ### Nothing is hoisted — Markus, 2026-10-02
 
@@ -71,7 +71,7 @@ The launch's logged passes call `maintenance`, `managed_wishlist`, `deck_tokens`
 
 ### Test scaffolding
 
-- A test that names something that stays, stays — in the remainder's own `mod tests`, with copies of the helpers it calls. Everything else in the test module moves.
+- A test that names something that stays, stays — in the remainder's own `mod tests`. A helper both sides call becomes a fixture: a `pub mod fixtures` at the foot of the core file, behind `any(test, feature = "testing")`, which the staying tests import. A helper only the staying tests call goes with them. Nothing is copied.
 - `bulk_undo::with_store` switches on `#[cfg(test)]` between a process-wide store and a thread-local one. A dependency's `cfg(test)` is off while `src-tauri`'s tests build, so it follows `any(test, feature = "testing")` (rule 11).
 - `crate::schema::tests::…` in a moved file is `crate::schema::fixtures::…` in the core.
 
@@ -90,7 +90,7 @@ For each module on its list:
 
 Then, once: `with_write` into `state.rs`, `prepare_database` into `schema.rs`, the two module maps, and the TypeScript tests that read a moved file as text.
 
-**A branch that predates this step runs the script before it merges `main`**, so both sides have made the same move and what is left to merge is what the branch changed:
+**A branch that edited a moved file runs the script before it merges `main`**, so both sides have made the same move. What is left to merge is what the branch changed, and four files `main` edited by hand after its own run:
 
 ```bash
 git checkout origin/main -- scripts/core-step-4.mjs scripts/lib/rs-items.mjs

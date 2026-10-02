@@ -28,7 +28,7 @@ portable app share one database without either quietly emptying the other's page
 
 One `app_meta` row, `home_layout`, per device. `app_meta` has been the application's key/value
 table since user schema v6, so **there is no migration** — this is a key in it, and
-`src-tauri/src/home.rs` is the module that owns the key.
+`crates/grimoire-core/src/home.rs` is the module that owns the key.
 
 ```ts
 interface HomeWidget { id: string; kind: string; x: number; y: number; w: number; h: number; span?: number; config: unknown }
@@ -77,7 +77,7 @@ one**, and three files each keep a third of it. Break any one and the other two 
 
 | Where | What it does | What it must not do |
 | --- | --- | --- |
-| `src-tauri/src/home.rs` | stores and returns `kind` and `config` untouched; validates shape only | grow an enum, an allow-list, or a `kind` check |
+| `crates/grimoire-core/src/home.rs` | stores and returns `kind` and `config` untouched; validates shape only | grow an enum, an allow-list, or a `kind` check |
 | `layout.ts`'s `parseLayout` | keeps an entry whose `kind` this build cannot draw, drops only an entry that is not a widget at all | filter on `isWidgetKind` |
 | `HomePage.tsx`'s body switch `default` arm | draws the unknown-widget body — a sentence saying where the widget came from — inside the ordinary card, tray and all | throw, or return `null` |
 
@@ -101,7 +101,7 @@ the screen in front of the reader, not about the collection.
 
 ### The landing view is the second key
 
-`src-tauri/src/startview.rs`, key `start_view`, is `nav.rs`'s module with a word instead of a bit
+`crates/grimoire-core/src/startview.rs`, key `start_view`, is `nav.rs`'s module with a word instead of a bit
 and the same two rules — reading can never fail, writing validates only what Rust can validate.
 Rust stores a non-empty trimmed word and checks nothing else, because the vocabulary of *views* is
 TypeScript's for `listview.rs`'s reason. `useStartView` (`src/lib/useStartView.ts`) checks the
@@ -972,7 +972,7 @@ anywhere. `HomePage.test.tsx` asserts both arms by hand because the type system 
 
 ### Two statements over one `WHERE`, and what one statement would have cost
 
-`src-tauri/src/new_printings.rs`, `list_printings`' shape: the page, then the decks holding the
+`crates/grimoire-core/src/new_printings.rs`, `list_printings`' shape: the page, then the decks holding the
 cards on it. A single join to `deck_cards` multiplies a printing by the decks holding it, which is
 how the issue's *each printing appears only once* gets quietly broken — and the count beside it
 would be wrong in the same breath. Statement 2 groups on `(oracle_id, deck_id)` and **not** on the
@@ -1286,7 +1286,7 @@ from NULL counts, and the widget to drawing that state over it.
 
 ### One read, and the thinning applied twice
 
-`collection_value_history(split, marketplace)` lives in `src-tauri/src/value_history.rs` and
+`collection_value_history(split, marketplace)` lives in `crates/grimoire-core/src/value_history.rs` and
 answers `{ buckets, points, today }`: every kept period before today, oldest first, plus a live
 point for today, each carrying its total, one value per bucket and `moved`. `today` is
 `unixepoch(date('now'))`, SQLite's UTC midnight, so the page reads no clock — `price_history`'s

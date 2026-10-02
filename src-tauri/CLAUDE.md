@@ -11,9 +11,44 @@ module map is a module that has moved there and is re-exported at the path it al
 rule below about `legalities`, `sync_pair::crypto`, `db` or any other moved module still binds it,
 in its new file. **`schema` and `errors` moved too and still have a file here** —
 `src/schema/mod.rs` and `src/errors/mod.rs`: each is
-`pub use grimoire_core::x::*;` plus what could not go with it — `schema::prepare_database` and
-`prepare_data_dir`, `errors::kind_of` — so the ladders, the DDL, every `schema::` constant below
-and all but seventeen of the schema's tests are in `crates/grimoire-core/src/schema.rs`.
+`pub use grimoire_core::x::*;` plus what could not go with it — `schema::prepare_data_dir`,
+`errors::kind_of` — so the ladders, the DDL, `prepare_database`, every `schema::` constant below
+and all but eight of the schema's tests are in `crates/grimoire-core/src/schema.rs`.
+
+⚠️ **Most of what this file is about is no longer in this package** (2026-10-02, the extraction's
+domain step). `deck`, `deck_meta`, `deck_tokens`, `deck_undo`, `collection`,
+`collection_folders`, `collection_alloc`, `wishlist`, `wishlist_folders`, `managed_wishlist`,
+`search`, `card`, `import`, `bulk_undo`, `maintenance`, `reset`, the view-state modules and
+`sync_engine::{apply, baseline}` — forty-nine modules — are files under
+`crates/grimoire-core/src/`. **Every rule below still binds them, by module name**: `deck.rs`
+below is `crates/grimoire-core/src/deck.rs`, and a schema rung, a grain, a deck write or a
+capture spec is edited there.
+
+- **What is still here of each is `src/<module>/mod.rs`: `pub use grimoire_core::<module>::*;`
+  and the module's `#[tauri::command]` wrappers.** A wrapper names a window and `AppState`, so
+  it cannot move; the function it calls is the core's, `&Connection` in and a DTO out. An item a
+  module defines shadows a glob import of the same name, so `crate::deck::…` here is the core's
+  item unless that file defines it. `lib.rs` still says `pub mod deck;`, and `generate_handler!`
+  still says `deck::deck_create`.
+- **A new command is two edits in two crates**: the function in the core's file, `pub`, and the
+  wrapper in this package's `<module>/mod.rs`. A `pub(crate)` item in the core does not cross
+  the glob, and the compile error names the wrapper, not the visibility.
+- **`sync::with_write` is the core's `state::with_write`**, re-exported under its old name; it
+  takes `&State`, which an `&AppState` derefs to. `collection_source::with_write_owned` is still
+  this package's, because the facet index's lifecycle is.
+- **A few functions stayed beside the wrappers**, each named in its file's own doc:
+  `deck::bracket_reads` (it calls `combos`), `reset::clear_cache` (the image cache and the
+  feeds), `collection_source::with_write_owned`, `marketplace::set_marketplace_now` (the mirror),
+  `import::read_import_file` (a path this app's dialog answered). `reconcile` and `tags/` did
+  not move at all: each names a Scryfall or feed type the I/O step moves.
+- **A module's tests are in the core with it**, and `cargo test -p grimoire-core <module>::` runs
+  them; `cargo test -p mtg-grimoire <module>::` runs only the few that name something still
+  here. A test that needs a helper from the other crate reaches it through
+  `grimoire_core::<module>::fixtures`, behind the core's `testing` feature.
+
+[`crates/grimoire-core/CLAUDE.md`](../crates/grimoire-core/CLAUDE.md) has the table of what
+stayed and why, and [light-app.md](../docs/reference/light-app.md) §6.4 the record.
+
 **`AppState` wraps the core's `state::State` and derefs to it** (2026-10-02): `state.db`,
 `state.data_dir`, `state.fence` and `state.events` are that struct's fields, read here as they
 always were, and the read connection is `state.reader()` where a mutex is wanted —
@@ -232,8 +267,8 @@ feature.
   index definition must `DROP` it first or the widening is a silent no-op on exactly the
   machines that need it. **A step whose DDL is not idempotent (`ADD COLUMN`, unlike
   `CREATE TABLE IF NOT EXISTS`) also owes a line in every rewind fixture in `schema.rs`'s
-  tests** (the core's, **and the tests left in this package's `schema/mod.rs`** — one of them
-  `#[ignore]`d, so no suite reads its chain) — those walk to head and undo the steps above the
+  tests** (the core's, **and the one chain left in this package's `schema/mod.rs`** — in a test
+  that is `#[ignore]`d, so no suite reads it) — those walk to head and undo the steps above the
   version they claim, so anything above them is replayed over them; that is what `UNDO_V12` and
   `UNDO_V13` are for, one named constant per rung. **And a version that has shipped is spent.**
   v12 and v13 were written the same day on two branches, each numbered 12 against a head of 11 —
