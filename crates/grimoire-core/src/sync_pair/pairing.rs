@@ -1,9 +1,11 @@
-//! The pairing state machine, and the commands the webview presses.
+//! The pairing state machine, the removal and the departure. The commands the webview presses
+//! are `src-tauri`'s `sync_pair::pairing`, over a glob re-export of this module.
 //!
 //! **The pending offer lives in memory and never in SQLite**, which is what makes the token
 //! one-time in fact rather than by convention: an offer that survived a restart would be an
 //! invite a reader printed last month still being accepted today. It has to outlive a page
-//! reload, because a reader may open Settings twice, and `AppState` is exactly that lifetime.
+//! reload, because a reader may open Settings twice, and a host's [`crate::state::State`] —
+//! whose `pairing` field holds it — is exactly that lifetime.
 //!
 //! **Only the invite still crosses a screen.** It is base32 through [`super::invite`]'s
 //! alphabet — the same reason it always was: a reader with no camera may have to type it — and
@@ -21,16 +23,15 @@
 //! is what proves the clear prefix belongs to the same handshake: the joiner's key is repeated
 //! inside the sealed bytes and compared, and the initiator's id is the AEAD's associated data.
 
+use crate::state::{Lane, Store};
 use crate::sync_engine::client;
+use crate::sync_engine::commands;
 use crate::sync_engine::entitlement;
 use crate::sync_pair::crypto;
 use crate::sync_pair::identity;
 use crate::sync_pair::invite::{Invite, QrMatrix};
-use grimoire_core::state::{Lane, Store};
 use rusqlite::Connection;
 use serde::Serialize;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A pairing in flight, on either side. One at a time per device: a second `begin` replaces the
 /// first, which is what a reader who pressed the button twice means.
@@ -161,14 +162,6 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 
-/// Now, in unix milliseconds.
-fn now_ms() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0)
-}
-
 /// 16 random bytes as 32 lowercase hex characters — `identity`'s own `hex`, which is private to
 /// that module. Duplicated rather than exposed: [`confirm`] needs to compute a *candidate* group
 /// id to seal before it is allowed to write anything, and `identity::create_group` both mints
@@ -206,7 +199,7 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
         group_id,
         token,
         rv,
-        expires_at: now_ms() + RENDEZVOUS_TTL_MS,
+        expires_at: crate::platform::clock::now_ms() + RENDEZVOUS_TTL_MS,
         peer_public: None,
         peer_device_id: None,
         peer_name: None,
@@ -263,7 +256,7 @@ pub async fn accept(
         group_id: inv.group_id,
         token: inv.token,
         rv,
-        expires_at: now_ms() + RENDEZVOUS_TTL_MS,
+        expires_at: crate::platform::clock::now_ms() + RENDEZVOUS_TTL_MS,
         peer_public: Some(inv.public_key),
         peer_device_id: None,
         peer_name: None,
@@ -777,27 +770,6 @@ fn from_hex16(s: &str) -> Option<[u8; 16]> {
     }
     Some(out)
 }
-
-// ---------------------------------------------------------------------------------------
-// The commands
-// ---------------------------------------------------------------------------------------
-//
-// **A press that talks to the relay takes two things, in this order: the pending offer and
-// the lane.** The offer's lock is held for the whole call — a request included — which is what
-// makes a Cancel wait and win, and what keeps two polls from completing one offer twice. The
-// lane is `State::lane_for_press`: a sync in flight answers `BUSY` after five seconds, like
-// every other press here, and a departure alone waits (`State::lane`).
-//
-// **A press that only reads or writes the database** — the status, a begin, a rename — takes
-// the write connection through `sync::with_write` as it always did. `identity::ensure` writes
-// on a database that has never paired, so even `status` is a write path.
-//
-// ⚠️ **`with_write` must not be called while holding a guard on `state.db`.** It is a bounded
-// `try_lock` loop, so a reentrant call spends the whole `WRITE_LOCK_WAIT` failing against its
-// own thread and then answers `BUSY` against itself.
-
-use crate::sync::{self, AppState};
-use crate::sync_engine::commands;
 // **`entitlement` is reachable from this module again since spec §2.1, and for one call beyond
 // `begin`'s and `confirm`'s own use of `entitlement::base`.** A *pairing* still asks the
 // membership nothing and writes it nothing — §2.2's rule, and the block of tests at the bottom
@@ -821,126 +793,6 @@ const COULD_NOT_COLLECT: &str =
 /// (`identity::supersede`). The next sync publishes the join, and then the removal can go out.
 const JOIN_NOT_PUBLISHED: &str = "Your other devices have not heard about a device paired here \
      yet, so nothing was removed. Sync, then try again.";
-
-/// What Settings draws: this device, the group it is in, and the roster.
-#[tauri::command]
-pub async fn sync_pairing_status(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<PairingStatus, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || sync::with_write(&state, status))
-        .await
-        .map_err(|e| format!("could not read the pairing status: {e}"))?
-}
-
-/// Start offering a pairing. Replaces any offer already in flight.
-#[tauri::command]
-pub async fn sync_pairing_begin(state: tauri::State<'_, Arc<AppState>>) -> Result<Offer, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut pending = state.pairing.blocking_lock();
-        sync::with_write(&state, |conn| begin(conn, &mut pending))
-    })
-    .await
-    .map_err(|e| format!("could not start pairing: {e}"))?
-}
-
-/// Read an offer on the joining device: derives the key, posts the answer to the relay, and
-/// answers the six digits.
-///
-/// On a worker ([`sync::on_a_worker`]), under the pending offer and then the lane.
-#[tauri::command]
-pub async fn sync_pairing_accept(
-    state: tauri::State<'_, Arc<AppState>>,
-    code: String,
-) -> Result<Handshake, String> {
-    let state = state.inner().clone();
-    sync::on_a_worker(move || async move {
-        let mut pending = state.pairing.lock().await;
-        let lane = state.lane_for_press().await?;
-        accept(&lane, &mut pending, &code).await
-    })
-    .await
-    .map_err(|e| format!("could not read that pairing code: {e}"))?
-}
-
-/// The reader says the digits matched: the group key is sealed, posted to the relay, and only
-/// then committed. Answers the sealed group key.
-///
-/// On a worker, under the pending offer and then the lane, as [`sync_pairing_accept`] is.
-#[tauri::command]
-pub async fn sync_pairing_confirm(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<SealedKey, String> {
-    let state = state.inner().clone();
-    sync::on_a_worker(move || async move {
-        let mut pending = state.pairing.lock().await;
-        let lane = state.lane_for_press().await?;
-        confirm(&lane, &mut pending).await
-    })
-    .await
-    .map_err(|e| format!("could not finish pairing: {e}"))?
-}
-
-/// What the panel asks every 1.5 seconds while a pairing is in flight. See [`poll`].
-///
-/// On a worker, under the pending offer and then the lane, as [`sync_pairing_accept`] is.
-/// `now` is read here, on the IPC thread, before either is waited for.
-///
-/// **A poll that meets a sync in flight is told `BUSY` like any press**, and the panel's query
-/// asks again a second and a half later — which is what it did before, when the trip held the
-/// connection.
-#[tauri::command]
-pub async fn sync_pairing_poll(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<PairingProgress, String> {
-    let state = state.inner().clone();
-    let now = now_ms();
-    sync::on_a_worker(move || async move {
-        let mut pending = state.pairing.lock().await;
-        let lane = state.lane_for_press().await?;
-        poll(&lane, &mut pending, now).await
-    })
-    .await
-    .map_err(|e| format!("could not check the pairing's progress: {e}"))?
-}
-
-/// Throw away whatever is in flight.
-///
-/// **It waits for the pending offer and nothing else** — not the lane, not the connection — so a
-/// Cancel pressed while an accept or a confirm is talking to the relay lands the moment that
-/// request ends, and is what the offer is left as.
-#[tauri::command]
-pub async fn sync_pairing_cancel(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
-    cancel(&mut *state.inner().pairing.lock().await);
-    Ok(())
-}
-
-/// Rename a device on the roster.
-#[tauri::command]
-pub async fn sync_device_rename(
-    state: tauri::State<'_, Arc<AppState>>,
-    device_id: String,
-    name: String,
-) -> Result<(), String> {
-    let state = state.inner().clone();
-    let marks = state.clone();
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        sync::with_write(&state, |conn| {
-            identity::rename_device(conn, &device_id, &name).map_err(err)
-        })
-    })
-    .await
-    .map_err(|e| format!("could not rename that device: {e}"))?;
-    // `identity::rename_device` writes `sync_devices` and `device_names`, and both are
-    // `WITHOUT ROWID`, which the update hook never sees — so the other windows hear about a
-    // rename from here. See `crate::changes::MARKED_BY_COMMAND`.
-    if out.is_ok() {
-        marks.changes.mark_table("sync_devices");
-        marks.changes.mark_table("device_names");
-    }
-    out
-}
 
 /// Remove a device, in the four steps whose **order is the whole of the fix**.
 ///
@@ -970,7 +822,7 @@ pub async fn sync_device_rename(
 ///
 /// What a removal still cannot do is take back what the removed device already synced. No server
 /// can, and §12.3 says so.
-async fn remove_device(db: &impl Store, device_id: &str) -> Result<(), String> {
+pub async fn remove_device(db: &impl Store, device_id: &str) -> Result<(), String> {
     if !db.with(|conn| Ok(commands::entitled(conn)))? {
         return Err(identity::NO_MEMBERSHIP.to_owned());
     }
@@ -993,28 +845,6 @@ async fn remove_device(db: &impl Store, device_id: &str) -> Result<(), String> {
     // **Planned before the request and committed behind it, against the same roster**: a device
     // joins or leaves only under the lane this removal holds.
     db.with(|conn| identity::commit_rotation(conn, device_id, &plan))
-}
-
-/// Remove a device and rotate the group key. See [`remove_device`] for the order.
-///
-/// On a worker ([`sync::on_a_worker`]), under the lane.
-///
-/// **A press's lane, where [`sync_group_leave`] waits — on purpose.** A removal means nothing
-/// until the relay accepts it and opens with a round trip of its own, so waiting out a sync in
-/// flight only to start another buys nothing a second press would not; *busy* after five seconds
-/// is the kinder answer.
-#[tauri::command]
-pub async fn sync_device_revoke(
-    state: tauri::State<'_, Arc<AppState>>,
-    device_id: String,
-) -> Result<(), String> {
-    let state = state.inner().clone();
-    sync::on_a_worker(move || async move {
-        let lane = state.lane_for_press().await?;
-        remove_device(&lane, &device_id).await
-    })
-    .await
-    .map_err(|e| format!("could not remove that device: {e}"))?
 }
 
 /// Leave the group this device is in. **Three steps, and the third runs whatever the second
@@ -1085,40 +915,10 @@ async fn leave_group_now(db: &impl Store) -> Result<(), String> {
     })
 }
 
-/// Leave the group. See [`leave_group_now`] for the order and why the last step is unconditional.
-///
-/// On a worker ([`sync::on_a_worker`]), under the lane.
-///
-/// **[`State::lane`] and never [`State::lane_for_press`]** (issue #546, item 7). A sync in flight
-/// holds the lane for its whole round trip, so under a press's bounded wait a Leave pressed during
-/// a slow trip would answer *the database is busy* — and "always possible" would have a
-/// condition. This press waits the trip out instead, which is bounded because every request in a
-/// trip is, and its own stretches wait for the connection as every stretch does.
-#[tauri::command]
-pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
-    let state = state.inner().clone();
-    let marks = state.clone();
-    let out = sync::on_a_worker(move || async move { leave(&state).await }).await;
-    // **Three marks, because the update hook hears none of what a departure writes.**
-    // `identity::leave_group` empties `sync_devices`, which is `WITHOUT ROWID`, and `sync_group`
-    // with a bare `DELETE` on a table no trigger and no foreign key touches — so SQLite truncates it
-    // and visits no row. It also deletes its own `sync_state` rows — the superseded keys and the
-    // held pull — and `entitlement::clear` then empties the grant's, `WITHOUT ROWID` again. See
-    // `crate::changes`' module doc for both blind spots.
-    //
-    // **Marked whatever the answer, because `Err` does not mean nothing was written**: the
-    // departure commits before the clear runs, so a failed clear answers an error over a group
-    // this device has already left. Over-marking costs another window one refetch (spec §4).
-    for table in ["sync_devices", "sync_group", "sync_state"] {
-        marks.changes.mark_table(table);
-    }
-    out.map_err(|e| format!("could not leave that group: {e}"))?
-}
-
 /// The departure the command makes: **the lane, waited for** — never a press's — and then
 /// [`leave_group_now`] on it. Its own function so that what the command chooses is what a test
 /// drives.
-async fn leave(state: &grimoire_core::state::State) -> Result<(), String> {
+pub async fn leave(state: &crate::state::State) -> Result<(), String> {
     let lane = state.lane().await;
     leave_group_now(&lane).await
 }
@@ -1127,7 +927,7 @@ async fn leave(state: &grimoire_core::state::State) -> Result<(), String> {
 /// called.
 #[allow(dead_code)]
 fn nothing_is_held_across_a_request(lane: &Lane<'_>, pending: &mut Option<Pending>) {
-    fn sendable<T: Send>(_: T) {}
+    fn sendable<T: crate::platform::Sendable>(_: T) {}
     sendable(accept(lane, &mut *pending, ""));
     sendable(confirm(lane, &mut *pending));
     sendable(poll(lane, &mut *pending, 0));
@@ -1144,7 +944,7 @@ mod tests {
     // is the one thing above that reaches it, and leaving is not a pairing.
     use httpmock::prelude::*;
     use std::collections::HashMap;
-    use std::sync::Mutex;
+    use std::sync::{Arc, Mutex};
 
     fn db() -> Connection {
         crate::schema::memory_pair()
@@ -1383,7 +1183,9 @@ mod tests {
 
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         let sealed = confirm(&a, &mut pa).await.unwrap();
 
         let group = crate::sync_pair::identity::group(&a)
@@ -1437,7 +1239,9 @@ mod tests {
 
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
 
         // A relay that refuses every request, so the post in step 2 fails.
         let bad = MockServer::start_async().await;
@@ -1483,7 +1287,9 @@ mod tests {
 
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
 
         let bad = MockServer::start_async().await;
         bad.mock(|when, then| {
@@ -1523,7 +1329,9 @@ mod tests {
 
         let offer = begin(&a, &mut a_pending).unwrap();
         let accepted = accept(&b, &mut b_pending, &offer.code).await.unwrap();
-        let progress = poll(&a, &mut a_pending, now_ms()).await.unwrap();
+        let progress = poll(&a, &mut a_pending, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         assert_eq!(progress.stage, STAGE_COMPARE);
 
         assert_eq!(
@@ -1533,7 +1341,9 @@ mod tests {
         );
 
         let sealed = confirm(&a, &mut a_pending).await.unwrap();
-        let progress = poll(&b, &mut b_pending, now_ms()).await.unwrap();
+        let progress = poll(&b, &mut b_pending, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         assert_eq!(progress.stage, STAGE_COMPLETE);
 
         let ga = crate::sync_pair::identity::group(&a).unwrap().unwrap();
@@ -1558,9 +1368,13 @@ mod tests {
 
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         confirm(&a, &mut pa).await.unwrap();
-        poll(&b, &mut pb, now_ms()).await.unwrap();
+        poll(&b, &mut pb, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
 
         let ra = crate::sync_pair::identity::roster(&a).unwrap();
         let rb = crate::sync_pair::identity::roster(&b).unwrap();
@@ -1606,7 +1420,9 @@ mod tests {
 
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         confirm(&a, &mut pa).await.unwrap();
 
         let filed = crate::sync_pair::identity::roster(&a)
@@ -1639,7 +1455,9 @@ mod tests {
         // A offers. M accepts it, so A ends up computing digits against M's key.
         let a_offer = begin(&a, &mut pa).unwrap();
         accept(&m, &mut pm_join, &a_offer.code).await.unwrap();
-        let a_sees = poll(&a, &mut pa, now_ms()).await.unwrap();
+        let a_sees = poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         assert_eq!(a_sees.stage, STAGE_COMPARE);
 
         // M makes its own offer to B, so B computes digits against M's key too.
@@ -1689,7 +1507,9 @@ mod tests {
             .expect("M's own accept posted somewhere");
         relay.set_blob(&rv, "join", &attacker_blob);
 
-        let progress = poll(&a, &mut pa, now_ms()).await.unwrap();
+        let progress = poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         assert_eq!(progress.stage, STAGE_COMPARE);
 
         assert_ne!(
@@ -1714,7 +1534,9 @@ mod tests {
 
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         confirm(&a, &mut pa).await.unwrap();
 
         // A second joiner's blob, built off its own relay so the shared one's first-write-wins
@@ -1813,7 +1635,9 @@ mod tests {
 
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         let sealed = confirm(&a, &mut pa).await.unwrap();
 
         assert!(complete(&b, &mut pb, &bend(&sealed.sealed_key)).is_err());
@@ -1866,15 +1690,21 @@ mod tests {
 
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         confirm(&a, &mut pa).await.unwrap();
-        poll(&b, &mut pb, now_ms()).await.unwrap();
+        poll(&b, &mut pb, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         let joined = crate::sync_pair::identity::group(&b).unwrap().unwrap();
 
         // C runs a perfectly good pairing at B, into a group of its own.
         let c_offer = begin(&c, &mut pc).unwrap();
         accept(&b, &mut pb, &c_offer.code).await.unwrap();
-        poll(&c, &mut pc, now_ms()).await.unwrap();
+        poll(&c, &mut pc, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         let sealed_c = confirm(&c, &mut pc).await.unwrap();
 
         assert!(complete(&b, &mut pb, &sealed_c.sealed_key).is_err());
@@ -1898,7 +1728,9 @@ mod tests {
 
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         confirm(&a, &mut pa).await.unwrap();
 
         let group = crate::sync_pair::identity::group(&a).unwrap().unwrap();
@@ -1950,9 +1782,13 @@ mod tests {
         let mut pb = None;
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         confirm(&a, &mut pa).await.unwrap();
-        poll(&b, &mut pb, now_ms()).await.unwrap();
+        poll(&b, &mut pb, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
 
         let after = status(&a).unwrap();
         assert_eq!(
@@ -2560,7 +2396,9 @@ mod tests {
         let (mut pa, mut pb) = (None, None);
         let offer = begin(a, &mut pa).unwrap();
         accept(b, &mut pb, &offer.code).await.unwrap();
-        poll(a, &mut pa, now_ms()).await.unwrap();
+        poll(a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         confirm(a, &mut pa).await
     }
 
@@ -2660,7 +2498,9 @@ mod tests {
         let (mut pa, mut pb) = (None, None);
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         let sealed = confirm(&a, &mut pa).await.unwrap();
         complete(&b, &mut pb, &sealed.sealed_key).unwrap();
 
@@ -2681,7 +2521,9 @@ mod tests {
         let (mut pa, mut pb) = (None, None);
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         let sealed = confirm(&a, &mut pa).await.unwrap();
         complete(&b, &mut pb, &sealed.sealed_key).expect("the fifth device was refused");
         assert_eq!(live(&b), 5);
@@ -2697,7 +2539,9 @@ mod tests {
         let (mut pa, mut pb) = (None, None);
         let offer = begin(&a, &mut pa).unwrap();
         accept(&b, &mut pb, &offer.code).await.unwrap();
-        poll(&a, &mut pa, now_ms()).await.unwrap();
+        poll(&a, &mut pa, crate::platform::clock::now_ms())
+            .await
+            .unwrap();
         let sealed = confirm(&a, &mut pa).await.unwrap();
         let refused = complete(&b, &mut pb, &sealed.sealed_key)
             .expect_err("a sixth row was filed on the joining side");
@@ -2729,7 +2573,7 @@ mod tests {
         relay.point(b);
         let offer = begin(a, pa).unwrap();
         accept(b, pb, &offer.code).await.unwrap();
-        poll(a, pa, now_ms()).await.unwrap();
+        poll(a, pa, crate::platform::clock::now_ms()).await.unwrap();
         confirm(a, pa).await.unwrap().sealed_key
     }
 
@@ -2899,8 +2743,8 @@ mod tests {
     fn in_a_group_on_the_lane(
         name: &str,
         server: &httpmock::MockServer,
-    ) -> (Arc<grimoire_core::state::State>, String) {
-        let (state, _dir) = grimoire_core::state::fixtures::on_files(name, "http://127.0.0.1:1");
+    ) -> (Arc<crate::state::State>, String) {
+        let (state, _dir) = crate::state::fixtures::on_files(name, "http://127.0.0.1:1");
         let group = {
             let conn = state.lock_db();
             let me = identity::ensure(&conn).unwrap();
@@ -2936,9 +2780,8 @@ mod tests {
             when.method(POST).path(format!("/g/{group}/rotate"));
             then.status(200).body("{}");
         });
-        let in_a_group = |state: &grimoire_core::state::State| {
-            identity::group(&state.lock_db()).unwrap().is_some()
-        };
+        let in_a_group =
+            |state: &crate::state::State| identity::group(&state.lock_db()).unwrap().is_some();
 
         let in_flight = state.lane().await;
         let leaving = {

@@ -81,8 +81,9 @@ import startviewRsCore from "../../crates/grimoire-core/src/startview.rs?raw";
 import startviewRsDesktop from "../../src-tauri/src/startview/mod.rs?raw";
 import stickyNotesRsCore from "../../crates/grimoire-core/src/sticky_notes.rs?raw";
 import stickyNotesRsDesktop from "../../src-tauri/src/sticky_notes/mod.rs?raw";
-import syncClientRs from "../../src-tauri/src/sync_engine/client.rs?raw";
-import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
+import syncClientRs from "../../crates/grimoire-core/src/sync_engine/client.rs?raw";
+import syncCommandsRsCore from "../../crates/grimoire-core/src/sync_engine/commands.rs?raw";
+import syncCommandsRsDesktop from "../../src-tauri/src/sync_engine/commands/mod.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import upcomingSetsRsCore from "../../crates/grimoire-core/src/upcoming_sets.rs?raw";
 import upcomingSetsRsDesktop from "../../src-tauri/src/upcoming_sets/mod.rs?raw";
@@ -113,6 +114,10 @@ import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
 import { SCANNER_OPEN_ELSEWHERE } from "@/features/scanner/verdictText";
+
+// `sync_engine::commands` is two files since the sync step: the functions and DTOs in the core,
+// the `#[tauri::command]` wrappers in `src-tauri`.
+const syncCommandsRs = syncCommandsRsCore + "\n" + syncCommandsRsDesktop;
 import {
   AUTO_BRACKET,
   ipc,

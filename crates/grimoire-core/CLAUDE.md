@@ -16,10 +16,12 @@ one pass by `scripts/core-step-4.mjs`. **The I/O step arrived in three parts and
 here**: `platform`'s request, timer, files and background work; the three modules that were
 their first callers — `scryfall`, `ingest` and `reconcile`; what drives them — `sync`, the
 card sync, and `index/`, the facet index with its lifecycle; and the three feeds (`combos`,
-`marketplace_feed`, `tags/`) with `images`, the image cache. **What is not here yet**: the
-sync client and pairing — restated where they are, in `src-tauri`, in the sync step's first
-part, over `state::Store` and the lane, which *are* here — and the scanner's session.
-`share/`, the mirror and the updater are the desktop's for good.
+`marketplace_feed`, `tags/`) with `images`, the image cache. **The sync step arrived in two
+parts and both are here** (2026-10-03): `state::Store` and the lane, then the relay's client,
+the entitlement, the wire format, the socket's schedule, the sync panel's reads, and pairing
+with the identity under it. **What is not here yet** is the scanner's session. `share/`, the
+mirror, the updater and live sync's connection manager (`sync_engine::live`, `tokio` tasks and a
+socket) are the desktop's for good.
 Every rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a
 module binds that module wherever it lives — moving a file changes which crate compiles it and
 nothing about what it must do. **That file's database and deck rules are this crate's now**: a
@@ -92,9 +94,11 @@ over there is this crate's item unless that file defines one.
 | `platform::clock::Wall` — a moment that can be **stored and compared**: `now()`, `+` and `-` a `Duration`, `as_secs()` | whole milliseconds since the epoch | the same |
 | `platform::pause(Duration) -> bool` — stand aside for another thread | `thread::sleep`, `true` | **`false`, at once**: a Worker has no other thread to wait for |
 | `platform::timer::sleep`, `timeout` — a wait a future awaits, and a deadline on one | `tokio::time` | a `Promise` around the global `setTimeout` |
-| `platform::http` — `Client`, `Request`, `Response`, `Body`, `Error` | `reqwest` over rustls, with a connect bound and a per-read bound | `reqwest` over `fetch`: **no timeouts to set**, and `is_connect()` is always `false` |
+| `platform::http` — `Client` (`get`, `post`, `deadline`), `Request` (`header`, `body`), `Response` (`bytes`, `text`), `Body`, `Error` | `reqwest` over rustls, with a connect bound and a per-read bound; `deadline` is **not applied** | `reqwest` over `fetch`: **no connect or read bound to set**, so `deadline` — the whole request — is the only bound there is; `is_connect()` is always `false` |
+| `platform::device::name()` — what this machine is called, for a device's default name | `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere | `None`: a page has no such thing to ask, and `identity::mint_name` falls back to a word |
 | `platform::files` — `open`, `write`, `remove`, `remove_dir`, `create_dir_all`, `entries`, `listing`, `set_modified`, `is_file`, `exists`; and `files::aio` for an `async fn`, with `read` and `rename` | `std::fs`; `tokio::fs` | **refused**, `ErrorKind::Unsupported`; the two questions answer `false` |
-| `platform::sync::Semaphore`, `Lock` — a permit and a lock an `async fn` holds across an `.await`, **first come, first served** | `tokio::sync` | `tokio::sync`: it needs no runtime |
+| `platform::sync::Semaphore`, `Lock` — a permit and a lock an `async fn` holds across an `.await`, **first come, first served**; `Shared<T>` — a value one holder at a time changes, the same lock with something behind it | `tokio::sync` | `tokio::sync`: it needs no runtime |
+| `platform::Sendable` — what a fence over a future's `Send`-ness bounds by | `Send` | anything: no request is `Send` there, and there is no other thread |
 | `platform::spawn::blocking(f).await` — synchronous work under an `async fn`; `spawn::background(f)` — work nobody waits for | the async runtime's blocking pool, **started by the call**; a thread | **run where it stands**: a Worker has no second thread, so `blocking` runs at its first poll and `background` before it returns |
 
 `db::lock_for` and `db::lock_background` are why `Tick` and `pause` exist. **A wait that polls is
@@ -104,8 +108,8 @@ there and its caller answers `db::BUSY`. **No browser arm has ever run** — the
 
 - **`http` is the wire and nothing above it.** Pacing, retry, the 429 lockout and the size checks
   are rules about Scryfall or about a feed, and live with the client that owns them
-  (`scryfall::Client::api_send`). **`GET` is the only verb**, because it is the only one with a
-  caller here; the sync client's `POST` arrives with it.
+  (`scryfall::Client::api_send`). **`GET` and `POST` are the verbs**, because they are the ones
+  with a caller here; `POST`, a text body and `Response::text` arrived with the relay's client.
 - **A status is a `u16`, a header is `Option<&str>`, a chunk is `bytes::Bytes`.** No `reqwest`
   type crosses out of the module, which is what lets the fence refuse the name everywhere else.
 - **`timer`'s native arm needs a tokio runtime on the current task** — every host's async code
@@ -120,10 +124,13 @@ there and its caller answers `db::BUSY`. **No browser arm has ever run** — the
   (27.5 MB asked for, the body abandoned) and fold an `error_log` row, with no backoff —
   `Unsupported` is not one of the failures that rests a feed. Reorder them, or give them a
   stream, before a web host runs either.
-- ⚠️ **A feed's request has no deadline in a browser.** `http` sets no timeout there and
-  neither feed races its `send()` with `timer::timeout`, as `scryfall::fetch_image` does. A
-  host that never answers holds that feed's refresh claim for good: every later refresh says
-  "already being refreshed", and `reset::cache_clear_refusal` says a download is running.
+- ⚠️ **A feed's request has no deadline in a browser.** `http` sets no connect or read bound
+  there, and neither feed races its `send()` with `timer::timeout`, as `scryfall::fetch_image`
+  does, or sets `Client::deadline`, as both relay clients do. A host that never answers holds
+  that feed's refresh claim for good: every later refresh says "already being refreshed", and
+  `reset::cache_clear_refusal` says a download is running. ⚠️ **A deadline is a bound on the
+  whole body**, so a feed's would have to outlast its slowest honest download (27.5 MB for the
+  combos) — which is why it was not simply copied from the relay's.
 - **`spawn` takes work off the caller only where there is somewhere to put it.** The card
   sync's ingest, its migration pass, its reclaim and its compaction go through `blocking`; the
   facet index's build through `background`. In a browser both run on the caller, to completion —
@@ -157,8 +164,9 @@ there and its caller answers `db::BUSY`. **No browser arm has ever run** — the
   a reviewer found exactly that in its source; `platform::sync`'s own test holds the order.
   (Scryfall's pacing gate is `futures_util::lock::Mutex`, which promises spacing and not
   order.)
-- **An interface grows with a caller, not ahead of one.** `POST` is the sync client's, and
-  arrives with it.
+- **An interface grows with a caller, not ahead of one.** `POST`, a text body, a request's
+  `deadline`, `device::name` and `sync::Shared` all arrived with the sync step's second part,
+  because that is when something here first called them.
 
 **Most of the engine never asks for the time.** The domain modules use SQLite's `unixepoch()`
 and `date('now')` inside the statement that needs them, which is the same on every host.
@@ -208,8 +216,9 @@ where the pictures are kept are the host's to know. ⚠️ **Seven arguments is 
   code with something to say calls `events::emit` with `&*state.events` — `sync:progress`, and
   `collection:reconciled` when the migration log moved something; `combos:progress`,
   `marketplace:progress` and each tag binding's own, through that module's `emit`. Never an
-  `AppHandle`, a window or a channel as a parameter. Live sync still emits through the
-  desktop's window from `src-tauri`, and moves onto the sink with the sync step.
+  `AppHandle`, a window or a channel as a parameter. Live sync still emits `sync:live` and
+  `sync:applied` through the desktop's window, because what emits them is its connection manager
+  (`src-tauri`'s `sync_engine::live`), which did not move.
 - **A feed's `refresh` takes its progress as a callback and its `emit` is what a host hands
   it.** `refresh(&state, force, &mut |phase, done, total| emit(&state, phase, done, total))` is
   the whole of a command's body. The callback is what lets a test drive the path and read what
@@ -224,12 +233,13 @@ where the pictures are kept are the host's to know. ⚠️ **Seven arguments is 
 
 **`State` is the every-host half of the desktop's `AppState` as far as the extraction has got.**
 `AppState` wraps it and derefs to it, so `state.db` over there is this struct's field. What
-`AppState` still declares, and when each leaves:
-
-| Field | Its type | Comes here with |
-| --- | --- | --- |
-| `pairing` | `sync_pair::pairing::Pending` | step 6 |
-| `mirror`, `mirror_status`, `changes` | the mirror's and the other windows' | never: the desktop's |
+`AppState` still declares — `mirror`, `mirror_status` and `changes`, the mirror's and the other
+windows' — is the desktop's for good. **The last field that was waiting, the pending pairing
+offer, came here with the sync step's second part**: `State.pairing`, a
+`platform::sync::Shared<Option<sync_pair::pairing::Pending>>`, because an offer outlives the
+page that made it on every host, and dies with the process on every host. **Take it before the
+lane, never after** — a press holding the lane and waiting on the offer is behind a poll holding
+the offer and waiting on the lane.
 
 **`state::with_write` is the one definition of a user-facing write, and it is here since the
 domain step.** `with_write`, `with_write_waiting` and the private `written` they share: the
@@ -254,8 +264,9 @@ the relay.** It takes `db: &impl state::Store` and reaches the database inside
 `db.with(|conn| …)` — a *stretch*, one closure run to its end — with each request made between
 two stretches and nothing held. A browser has one thread: a lock held across an `.await` there is
 a lock nobody else can ever take. [The spike](../../docs/superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md)
-is the record; the functions themselves are still in `src-tauri` and arrive with the sync step's
-second part.
+is the record. They were restated in `src-tauri` in the sync step's first part and moved here in
+its second: `sync_engine::{client, entitlement}` and `sync_pair::pairing`, with `wire`,
+`schedule`, `identity` and the sync panel's reads (`sync_engine::commands`) beside them.
 
 - **`State::lane()` is one sync operation at a time, and its guard is the app's store.**
   `state::Lane` is the only `Store` a shipped build has for a host's database — the trait is
@@ -272,12 +283,21 @@ second part.
   a baseline's rows and its horizon, a commit's rows — go in one stretch.
 - **Two fences, one of them the compiler.** A future that keeps a `MutexGuard` across an
   `.await` is not `Send`, and each entry point is checked by a function that is never called
-  (`fn sendable<T: Send>(_: T) {}`); `clippy::await_holding_lock` refuses the same in every
-  function, tests included, which is why a test that needs the connection held holds it from
-  another thread.
-- **The lane's wait ends because every operation on it does**: each relay request is bounded.
-  ⚠️ **That is not yet true in a browser**, where `platform::http` sets no timeout — the move
-  owes every relay request a deadline there before a web host runs one.
+  (`fn sendable<T: platform::Sendable>(_: T) {}`); `clippy::await_holding_lock` refuses the same
+  in every function, tests included, which is why a test that needs the connection held holds it
+  from another thread. ⚠️ **Bound it by `platform::Sendable` and never by `Send`**: in a browser a
+  request's future is a JavaScript promise and is never `Send`, so a `Send` bound fails the WASM
+  compile on every entry point — which is what the move did, and the only gate that saw it was
+  the `core` job's. `Sendable` is `Send` natively, so the fence asks exactly what it asked.
+- **The lane's wait ends because every operation on it does**: each relay request is bounded —
+  natively by its connect and read bounds, and in a browser by `Client::deadline`, the whole
+  request: **120 s** for the sync client — pairing's rendezvous included, which goes through it
+  — whose unpaged pull can be large, and **30 s** for the entitlement. ⚠️ **No browser has run
+  either number**; the web phase measures them.
+- **What a press runs on is the host's.** The desktop's wrappers are
+  `sync::on_a_worker(|| async { … state.lane_for_press().await? … })` in `src-tauri`, and a
+  departure is `sync_pair::pairing::leave(&State)` here, which takes `State::lane()` — so a
+  host's Leave button is one call, and waits as the desktop's does.
 
 ## The image cache: the pass is here, the schedule is the host's
 
@@ -339,8 +359,10 @@ pre-warm fetches, and the eviction pass that spares exactly those.
     the placeholder. Rule 10's gate is the fix, and anything it widens is then something the
     `testing` feature ships if it leaks — say so beside it. `bulk_undo::with_store` was the
     second: its process-wide ticket store and its per-thread twin follow the feature since the
-    domain step. Two `#[cfg(not(test))]` sites wait in modules that have not moved:
-    `sync_engine/entitlement.rs` and `sync_engine/client.rs`.
+    domain step. The sync step's second part moved the last two, `sync_engine/client.rs` and
+    `entitlement.rs`: each `http()` keeps one client for the process in a shipped build and makes
+    a fresh one per call under `any(test, feature = "testing")`, so the desktop's sync tests,
+    which link this crate with the feature on, still get a client per runtime.
 12. **A `#[tauri::command]` wrapper stays, with everything that names the desktop** — `tauri::`,
     `AppState`, an `AppHandle` — and with any private helper only those items call. `src-tauri`
     keeps `x/mod.rs` as in rule 8, and its `lib.rs` line stays `pub mod x;`.
@@ -377,7 +399,7 @@ src-tauri/src/<module>/mod.rs` counts them:
 | `sync` (`src/sync/mod.rs`) | `AppState` and its `Deref`; `lock_db`, `lock_db_read`, `lock_plain` | the mirror's fields, the change mask, the pending pairing | never |
 | `index` (`src/index/mod.rs`, `src/index/facets/mod.rs`) | the `facet_cards` command, and no test: every one moved, onto a fixture this crate builds at head | a window | never |
 | `images` (`src/images/mod.rs`) | `serve`, `respond`, `fail`, `not_ready`, `IMAGE_MAX_AGE`; `spawn_upkeep`; 7 tests | `tauri::http`, an `AppHandle`; a thread that sleeps | never: how a picture reaches a page, and when to wake for a pass, are a host's |
-| `deck_tokens` | 1 test | `sync_engine::client` | step 6 |
+| `sync_engine` (`src/sync_engine/mod.rs`) | `live`, the connection manager — its socket, its backoff timers, the exit push — and its tests | `tokio` tasks, a WebSocket and an `AppHandle` it emits `sync:live` and `sync:applied` through | never: how a host keeps a socket open is the host's; `schedule` is the half that decides, and it is here |
 | `maintenance` | 9 tests — nothing of its code | a database `split` converted | never |
 | `import` | `read_import_file`, two helpers and 5 tests | a path the desktop's file dialog answered | never: a host reads its own file |
 | `marketplace` | `set_marketplace_now` | `AppState.mirror` | never: the mirror is the desktop's |
@@ -440,7 +462,9 @@ is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain c
   another feature imply it — because two things behind it are not scaffolding**:
   `image_uri::is_allowed_host` lets a loopback host through under it, for the image fetcher's
   mock server, and `bulk_undo::with_store` keeps its tickets per thread under it, where a shipped
-  build keeps one store for the process. Two things hold that, and only the second is complete:
+  build keeps one store for the process. (A third costs only sockets: the relay clients'
+  `http()` builds a client per request under it, where a shipped build keeps one.) Two things
+  hold that, and only the second is complete:
   `platform::fence` sweeps every workspace member's manifest as text (a
   `[workspace.dependencies]` entry, a renamed dependency and a command-line `--features` all
   pass it), and CI's `rust` job fails when

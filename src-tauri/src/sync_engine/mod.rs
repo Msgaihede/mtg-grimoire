@@ -17,22 +17,22 @@
 //! writes it makes, and [`crate::reconcile`] already merges two versions of the reader's own
 //! rows and writes `needs_review` sentences from Rust.
 //!
-//! [`hlc`], [`merge`], [`capture`], [`apply`] and [`baseline`] are `grimoire-core`'s, re-exported
-//! here beside the layers that have not moved yet — the envelope, the client and what drives
-//! them, which wait for the roster in `sync_pair::identity`.
+//! **Every layer but the socket is `grimoire-core`'s** since the sync step's second part,
+//! re-exported here at the paths it always had. What is still this crate's is [`live`] — the
+//! WebSocket connection manager, which is `tokio` tasks, `tokio-tungstenite` and a window to tell
+//! — and [`commands`]' `#[tauri::command]` wrappers, beside a glob re-export of the core's module
+//! of that name.
 
 pub use grimoire_core::sync_engine::apply;
 pub use grimoire_core::sync_engine::baseline;
 pub use grimoire_core::sync_engine::capture;
-pub mod client;
-/// The IPC surface.
+pub use grimoire_core::sync_engine::client;
+/// The IPC surface: the core's functions, and the wrappers that call them.
 pub mod commands;
-/// The entitlement grant — the tokens that let this device talk to the relay at all, and the
-/// supporter status the relay last reported.
-pub mod entitlement;
+pub use grimoire_core::sync_engine::entitlement;
 pub use grimoire_core::sync_engine::hlc;
 /// The relay socket and the task that acts on it.
 pub mod live;
 pub use grimoire_core::sync_engine::merge;
-pub mod schedule;
-pub mod wire;
+pub use grimoire_core::sync_engine::schedule;
+pub use grimoire_core::sync_engine::wire;

@@ -2504,7 +2504,7 @@ async fn a_device_that_changes_group_acks_the_new_log_at_the_old_logs_number() {
 #[tokio::test]
 async fn a_pull_that_lands_converts_the_legacy_picks_and_one_held_at_an_epoch_does_not() {
     let b = paired("dev-b", 0);
-    let deck = crate::schema::tests::deck(&b, "Tokens");
+    let deck = crate::schema::fixtures::deck(&b, "Tokens");
     b.execute(
         "INSERT INTO deck_tokens
              (deck_id, oracle_id, card_id, quantity, state, created_at, updated_at, sync_uid)
@@ -3512,7 +3512,7 @@ async fn an_ordinary_page_advances_and_clears_a_stale_hold() {
 #[tokio::test]
 async fn no_legacy_pick_conversion_runs_behind_a_held_pull() {
     let b = paired("dev-b", 0);
-    let deck = crate::schema::tests::deck(&b, "Tokens");
+    let deck = crate::schema::fixtures::deck(&b, "Tokens");
     b.execute(
         "INSERT INTO deck_tokens
              (deck_id, oracle_id, card_id, quantity, state, created_at, updated_at, sync_uid)
@@ -5250,7 +5250,7 @@ async fn a_trip_whose_only_write_is_a_conversion_behind_its_pull_reports_a_chang
         then.status(204);
     });
     let b = paired("dev-b", 0);
-    let deck = crate::schema::tests::deck(&b, "Tokens");
+    let deck = crate::schema::fixtures::deck(&b, "Tokens");
     b.execute(
         "INSERT INTO deck_tokens
              (deck_id, oracle_id, card_id, quantity, state, created_at, updated_at, sync_uid)

@@ -792,7 +792,7 @@ mod tests {
     /// nothing.
     #[test]
     fn the_sealed_cap_is_the_relays() {
-        let relay = include_str!("../../../relay/src/log.ts");
+        let relay = include_str!("../../../../relay/src/log.ts");
         assert_eq!(MAX_SEALED_CHARS, 1_500_000);
         assert!(
             relay.contains("export const MAX_SEALED_CHARS = 1_500_000;"),
