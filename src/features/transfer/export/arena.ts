@@ -47,7 +47,7 @@ import type { TransferCard } from "../TransferCard";
 /**
  * Scryfall `legalities` keys for the formats MTG Arena runs.
  *
- * **Names, never bit positions.** `src-tauri/src/legalities.rs` packs these same keys into
+ * **Names, never bit positions.** `crates/grimoire-core/src/legalities.rs` packs these same keys into
  * `cards.legal_mask` at frozen, append-only bit offsets that are *stored data*; a copy of that
  * order over here would be a second place for it to drift, and a wrong bit reads as a plausible
  * legality rather than as a crash. A key name is Scryfall's public vocabulary and cannot drift.
@@ -68,7 +68,7 @@ export const ARENA_LEGALITY_KEYS: readonly string[] = [
 ];
 
 /**
- * The values that count as playable — `src-tauri/src/legalities.rs`' `PLAYABLE`, spelled the
+ * The values that count as playable — `crates/grimoire-core/src/legalities.rs`' `PLAYABLE`, spelled the
  * same way for the same reason.
  *
  * `restricted` is playable: a restricted card is one you may run one of, which is a copy-count

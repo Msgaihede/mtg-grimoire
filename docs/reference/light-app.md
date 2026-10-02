@@ -4,10 +4,12 @@ The Android and web face of MTG Grimoire — card search, decks, collection, wis
 as one second entry over the desktop's own components. **What is built is phase 1, the skeleton:
 it runs in a browser over the Storybook fake (§2.1) and in a phone-sized window over the real
 Rust core (§2.2), and both were driven. There is no Android host, no WASM host, no service worker
-and no sync on a light install yet.**
+and no sync on a light install yet.** Underneath it, phase 2 has started: the engine is moving
+into a crate those hosts can link, a step at a time (§6).
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md).
+- What is left, phase by phase: [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761).
 - The binding rules for anyone changing it: [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
 
 This page is the record: what was measured, on what, and what is known to be open.
@@ -262,3 +264,138 @@ purpose; the phase that owns the surface owns the fix.
 - `window::open_sized_to_monitor` centres the phone-sized window without clamping it. On a work
   area shorter than about 954 logical px — a 1080p panel at 125% or 150% — the OS caption opens
   above the top of the screen.
+
+## 6. The shared core — phase 2, a step at a time
+
+The engine is moving out of `src-tauri` into `crates/grimoire-core`, a crate with no `tauri`
+dependency that the desktop, the Android host and the WASM host will all link (spec §2). The
+rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md);
+this section is what each step built and measured. **Nothing here runs on a phone or in a
+browser yet**: what exists is a crate the desktop links, compiled for two more targets.
+
+### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-1-leaves.md). Everything below was
+measured that day on Windows 11, debug builds, unless a line says CI.
+
+**The repository is a cargo workspace now, and `target/` did not move.** Three arrangements were
+measured or weighed and put to Markus, who chose a workspace at the repository root:
+
+| Arrangement | What cargo answered |
+| --- | --- |
+| No workspace, the core a path dependency | `cargo test -p grimoire-core` from `src-tauri` ran — until the core had a dev-dependency: `package grimoire-core cannot be tested because it requires dev-dependencies and is not a member of the workspace`. So: a second `Cargo.lock` and a second build tree |
+| A workspace rooted at `src-tauri` | `cargo metadata`: root `src-tauri`, target `src-tauri/target`; `test`, `clippy`, `fmt -p` all ran |
+| **A workspace at the root** (built) | `cargo metadata`: root the repository, target `src-tauri/target` — with the pin below |
+
+- **`.cargo/config.toml` pins `build.target-dir` to `src-tauri/target`.** A root workspace
+  builds into `<root>/target` otherwise, which would have moved every checkout's dev database
+  (a debug build keeps `data/` beside its executable), the portable-zip path in `release.yml`,
+  and 37 mentions of `src-tauri/target` in 22 files outside `docs/superpowers/`. What moved is
+  `Cargo.lock`, to the root, and the seventeen `[profile.dev.package.*]` overrides, to the root
+  manifest — cargo reads profiles from the build root only.
+- **`crates/card-scanner` is excluded by name and builds where it always did.** The pin reaches
+  any cargo run under the repository, because config follows the working directory and not
+  `--manifest-path`: from the root, `cargo metadata --manifest-path crates/card-scanner/Cargo.toml`
+  answered `src-tauri/target`; from inside that folder, its own `target`, through a
+  `.cargo/config.toml` of its own. Scripted runs from the root pass
+  `--target-dir crates/card-scanner/target`.
+- **`tauri dev` was launched under it** and built to `src-tauri/target/debug/mtg-grimoire.exe`
+  (1 m 49 s with the dependencies already built).
+
+**Ten modules moved, with their tests, and no caller changed.** `app_meta`, `slug`,
+`cardtypes`, `legalities`, `feed::frame` (and `feed`'s `mostly_unusable`), `index::bitset`,
+`sync_pair::{crypto, invite}` and `sync_engine::{hlc, merge}`. Each is `git mv`'d and
+re-exported from `src-tauri` at the path it had — `pub mod legalities;` became
+`pub use grimoire_core::legalities;` — so `crate::legalities` still resolves there.
+
+- **The spec listed fifteen leaves and six were not.** `sorting`, `image_uri`, `card_row`,
+  `errors`, `feed::backoff` and `sync_engine::wire` name `schema`, `sync` or
+  `sync_pair::identity` — three of them only in their *tests*, which open
+  `schema::memory_pair()`. A module's tests move with it, so those wait for step 2. The plan has
+  each reason.
+- **One test changed crates rather than moving with its module**: `slug`'s check that `tags`
+  re-exports its function names `crate::tags`, which the core cannot, so it sits beside the
+  re-export in `src-tauri/src/tags/mod.rs`.
+- **No test was lost.** `#[test]` and `#[tokio::test]` attributes: 3 356 under `src-tauri/src`
+  before; 3 231 there and 131 in the core after — the difference is the six the core's
+  `platform` module added. `cargo test --workspace`: every one of them passed, 5 ignored as before.
+- The pairing cryptography's four crates (`x25519-dalek`, `chacha20poly1305`, `hkdf`,
+  `qrcode`) left `src-tauri/Cargo.toml` for the core's, with the comments that argue their
+  versions. Nothing in `src-tauri` names them any more.
+
+**`platform/` holds the clock and a fence.** `platform::clock` answers the wall clock from
+`SystemTime` natively and `Date.now()` in a browser — the first web build hit
+`SystemTime::now()`'s panic five times — and has no caller yet: the leaves take their time as
+an argument or from SQLite. `platform::fence` is the source sweep the spec's §2.2 asks for. It
+refuses a target `cfg`, `cfg(windows)`/`cfg(unix)`, `SystemTime::now` and `Instant::now`
+outside `src/platform/`, and a `tauri` dependency in the manifest; each rule has a case proving
+the detector fires, including one that runs it over `clock.rs` and expects offences. HTTP, files,
+a sleep and background work are named in the module doc and not written: none has a caller.
+
+**The core compiles for WASM, here.** `cargo build --lib -p grimoire-core --target
+wasm32-unknown-unknown` — 19 s cold for that target — and `clippy -- -D warnings` the same way,
+clean. That compiles SQLite's C through `sqlite-wasm-rs` 0.5.5 under `rusqlite` 0.40.1, with
+clang 22.1.8 from `C:\Program Files\LLVM`, which `cc-rs` only finds through
+`CC_wasm32_unknown_unknown`. **Compiles is all it proves**: nothing instantiated the module.
+**The Android compile has run nowhere yet**: there is no NDK on this machine, so its first
+run is the `core` job on the pull request that adds it.
+
+**CI gained a `core` job**: `cargo build --lib` and `clippy` of the crate for
+`wasm32-unknown-unknown` and `aarch64-linux-android`, on Ubuntu 24.04. The desktop compile and
+every test are still the `rust` job's, now over `--workspace`.
+[ci-and-releases.md](ci-and-releases.md) has the routing.
+
+**The desktop, after the move** — the real window, `tauri dev`, over a copy of the main
+checkout's data (118 610 printings):
+
+| Asked through the live `ipc` module | Answer | Reaches |
+| --- | --- | --- |
+| `search_cards`, text `lightning bolt` | 78 printings, first `Lightning Bolt`, 9 ms warm | — |
+| `search_cards`, text `bolt`, format `modern`, type `Instant` | 94 | `legalities`' mask and `cardtypes`' — both moved |
+| `facet_cards`, text `bolt` | `ready: true`, 23 formats, 8 types | `index::bitset` — moved |
+
+**No figure in [data-and-sync.md](data-and-sync.md) or
+[search-faceting.md](search-faceting.md) was re-taken, and a release one could have moved.**
+A debug build cannot have: it inlines nothing before or after. A release build can, because
+the moved code is now called across a crate boundary with no LTO, and a non-generic function
+is only inlined across crates when it says so. `index::bitset`'s per-printing and per-word
+methods are the ones on a hot path — the facet index calls `set` and `contains` once per
+printing per dimension — and they gained `#[inline]` with the move for that reason. **That
+restores what the compiler was free to do; it was not measured.** The pass above is a check
+that the app still answers, in a debug build, and not a timing.
+
+**What the root workspace costs every other checkout.** Cargo finds a workspace by walking up
+parent directories, and the agent worktrees live under the main checkout
+(`.claude/worktrees/<name>/`). Reproduced in a scratch copy of the layout, with the main
+checkout carrying the root manifest:
+
+| Checkout nested under it | `cargo metadata` |
+| --- | --- |
+| A worktree whose branch predates the workspace — no root manifest of its own | **Refused**: `current package believes it's in a workspace when it's not` |
+| An up-to-date worktree, its `src-tauri` | Its own root, its own `src-tauri/target` |
+| An up-to-date worktree, `crates/card-scanner` with no `[workspace]` table | **Refused**, the same way — its own root excludes it, so the walk carries on up |
+| …with the empty `[workspace]` table it now has | Its own root |
+| A stale worktree, if the main root also excluded `.claude` | Resolves — **into the main checkout's `src-tauri/target`**, so its app would open the main checkout's dev database |
+
+So once the main checkout has this change, **every worktree that has not merged `main` fails
+every cargo command until it does**, and a worktree parked on an older commit on purpose needs
+an empty `[workspace]` table added to its `src-tauri/Cargo.toml` by hand. Markus weighed that
+against a workspace rooted at `src-tauri` — where all of those cases resolved, also reproduced —
+and kept the root: the break is one merge per open branch, and the layout is the conventional
+one the Android and WASM hosts join as ordinary members. The fifth row is why the root manifest
+says never to exclude `.claude`.
+
+**Open after step 1:**
+
+- **`release.yml` has not run under the workspace.** `tauri-action`'s lookup was read at the
+  pinned SHA and honours `build.target-dir`; the first release is still the first proof.
+- **`scripts/coverage-rust.mjs` was rewritten for two members and not run against cargo.**
+- **Moving `target/` to the root** is deleting `.cargo/config.toml` and sweeping what names the
+  folder — on an announced day, since every checkout rebuilds and its dev database moves.
+- **The fence sweeps test code too**, and `index/mod.rs`'s tests time themselves with
+  `Instant::now()`. When they arrive they go through `platform`, or the fence learns to read
+  `#[cfg(test)]`.
+- **`errors::kind_of` names `scryfall::ScryfallError`**, a type the I/O step moves — the one
+  place a storage-step module depends on a later step's.
+- Doc links in the core to modules still in `src-tauri` (`crate::filters`, `super::apply`) do
+  not resolve until those arrive. Nothing builds docs, so nothing is red.

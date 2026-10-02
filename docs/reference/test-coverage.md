@@ -37,6 +37,16 @@ is minutes, against `cargo test`'s seconds on a warm target directory.
 `node scripts/coverage-rust.mjs --report-only` re-prints the table from the last LCOV without
 re-running anything.
 
+**Since 2026-10-02 the script measures both members of the cargo workspace, and no figure on
+this page was taken that way.** The Rust engine is moving out of `src-tauri` into
+`crates/grimoire-core`, a module at a time, so a run over `src-tauri` alone would lose every
+module that has moved — `legalities.rs` and `index/bitset.rs` in the table below are two of the
+first. It now runs `cargo llvm-cov --workspace` and reads sources under both `src-tauri/src` and
+`crates/grimoire-core/src`; an engine file is printed with a `grimoire-core/` prefix and an app
+file bare, as before. **The changed script has not been run against cargo** — it was checked
+with `--report-only` over a synthetic LCOV — so the first real run is also its first test, and
+every number below is still the 2026-08-12 measurement of a single package.
+
 ## Frontend — what is in the denominator
 
 `vite.config.ts` sets `coverage.include` to `src/**/*.{ts,tsx}` explicitly. **In Vitest 4 that

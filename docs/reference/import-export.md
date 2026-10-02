@@ -177,7 +177,7 @@ has not been released yet. Both are cards an Arena decklist should not name eith
 measured rather than assumed: **0** oracle cards have printings that disagree about any of the
 eight keys, and **0** cards match the eight-key rule without having an Arena printing.
 
-**Names, never bit positions.** `src-tauri/src/legalities.rs` packs these same keys into
+**Names, never bit positions.** `crates/grimoire-core/src/legalities.rs` packs these same keys into
 `cards.legal_mask` at frozen, append-only offsets that are *stored data*; a copy of that order in
 TypeScript would be a second place for it to drift, and a wrong bit reads as a plausible legality
 rather than as a crash. Scryfall's key names are public vocabulary and cannot drift. That is also

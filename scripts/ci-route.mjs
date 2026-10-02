@@ -14,6 +14,12 @@
 // drifted from `src/lib/ipc.ts` merged green and went red on the next unrelated PR. The test
 // derives that census from the sources on every run, so it cannot rot the way the sentence did.
 //
+// **`core` is the narrow one** (2026-10-02). It compiles `crates/grimoire-core` for the two
+// targets `rust` never builds, so it reads that crate and what every cargo build in the
+// workspace shares — the root manifest, the lockfile, cargo's config, the pinned toolchain —
+// and nothing under `src-tauri/`, which the engine does not depend on. Its native compile and
+// its tests are `rust`'s, so everything that routes to `core` routes to `rust` as well.
+//
 // Semantics are `case`'s, kept exactly: **first match wins** — the order of `ARMS` is the rule
 // every arm below is placed by — and `*` matches any run of characters **including `/`**, so
 // `src/*` is the whole tree and `*.md` is a Markdown file at any depth. Nothing else is special.
@@ -21,7 +27,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /** Every job a `changes` output gates, in the order the outputs are printed. */
-export const JOBS = ["frontend", "rust", "powershell", "storybook"];
+export const JOBS = ["frontend", "rust", "core", "powershell", "storybook"];
 
 /**
  * The two jobs a Rust source can break: `rust`, which compiles it, and `frontend`, whose tests
@@ -31,18 +37,35 @@ export const JOBS = ["frontend", "rust", "powershell", "storybook"];
  */
 const RUST_SIDE = ["frontend", "rust"];
 
-/** The three jobs that build something. The fail-safe sets these and not `powershell`. */
-const BUILD = [...RUST_SIDE, "storybook"];
+/**
+ * Those two and `core`, for what the engine's other two targets are built from: the
+ * `grimoire-core` crate itself, and the files every cargo build in the workspace shares.
+ */
+const CORE_SIDE = [...RUST_SIDE, "core"];
+
+/** Every job that builds something. The fail-safe sets these and not `powershell`. */
+const BUILD = [...CORE_SIDE, "storybook"];
 
 export const ARMS = [
   // The gate itself. A change to the gate re-runs the whole gate.
   { match: [".github/workflows/ci.yml", "scripts/ci-route.mjs"], jobs: JOBS },
 
-  // The pinned Rust toolchain and the one action that installs it. `rust` reads them, and
-  // `frontend` because `scripts/toolchain.test.mjs` does — it holds every workflow to installing
-  // Rust through that action and nothing else. **Above the `*` fail-safe only for `storybook`'s
-  // sake**, which installs no Rust.
-  { match: ["rust-toolchain.toml", ".github/actions/rust-toolchain/*"], jobs: RUST_SIDE },
+  // The pinned Rust toolchain and the one action that installs it. `rust` and `core` read
+  // them, and `frontend` because `scripts/toolchain.test.mjs` does — it holds every workflow to
+  // installing Rust through that action and nothing else. **Above the `*` fail-safe only for
+  // `storybook`'s sake**, which installs no Rust.
+  { match: ["rust-toolchain.toml", ".github/actions/rust-toolchain/*"], jobs: CORE_SIDE },
+
+  // The cargo workspace's own files, at the repository root since 2026-10-02: the manifest that
+  // names the members and holds the profiles, the one lockfile both members resolve from, and
+  // the config that says where they build. **`core` because the lockfile is shared**: a
+  // dependency bumped for the desktop moves the versions the engine's other two targets
+  // compile, and `rust` builds neither of them. `frontend` is here as it was while the lockfile
+  // sat under `src-tauri/*`; no test reads these three today, so that half is the cheap
+  // direction to be wrong in. Above the fail-safe for `storybook`'s sake, as the arm above is.
+  // **The patterns are anchored, so these are the root's only** — `src-tauri/Cargo.toml` and
+  // `crates/card-scanner/.cargo/config.toml` match their own trees' arms below.
+  { match: ["Cargo.toml", "Cargo.lock", ".cargo/*"], jobs: CORE_SIDE },
 
   // The two workflows outside this gate, and Dependabot's config. No job in `ci.yml` runs any of
   // them, but `scripts/toolchain.test.mjs` reads both workflows — a release built on a floating
@@ -101,6 +124,8 @@ export const ARMS = [
   // Narrowing `frontend` to exactly those paths was considered and not done: a new `?raw` import
   // would need a new entry here, and forgetting it is the silent skip this arm exists to
   // prevent. The `dist/index.html` that `tauri-build` demands is stubbed by the jobs themselves.
+  // **Not `core`**: the engine does not depend on the desktop host, so nothing here can change
+  // what its other targets compile. What the two share is the lockfile, which has its own arm.
   { match: ["src-tauri/*"], jobs: RUST_SIDE },
 
   // The TypeScript side's files that Rust tests read. `transfer::write` asserts the Rust export
@@ -138,17 +163,28 @@ export const ARMS = [
   // `vitest` collects `scripts/**/*.test.mjs`.
   { match: ["scripts/*"], jobs: ["frontend"] },
 
-  // The `card-scanner` crate: a separate cargo package, deliberately not a workspace member,
+  // The engine: `grimoire-core`, a workspace member three hosts link. `rust` compiles it for
+  // the desktop and runs its tests, `core` compiles it for the two targets `rust` never builds,
+  // and `frontend` because a module that moves here takes its `?raw` readers with it —
+  // `ipc.test.ts`'s mirror rows follow the file, and the census holds this arm to them.
+  // **Above `crates/*`**, and the order is the rule: first match wins, so that arm would take
+  // this tree and skip `core`, the one job that exists for it.
+  { match: ["crates/grimoire-core/*"], jobs: CORE_SIDE },
+
+  // The `card-scanner` crate: a separate cargo package, excluded from the workspace on purpose,
   // that `src-tauri` takes as a path dependency. `rust` compiles it into the app and runs its
   // own suite, and `frontend` reads eight of its `.rs` files as text (`ipc.test.ts`'s mirror
-  // rows) and lints `crates/*/scripts/**/*.mjs`.
+  // rows) and lints `crates/*/scripts/**/*.mjs`. **Not `core`**: the engine does not depend on
+  // it. The day it does — the scanner's session glue is the extraction's last step — this arm
+  // gains `core` in the same commit.
   { match: ["crates/*"], jobs: RUST_SIDE },
 
-  // Anything unrecognised runs every build job. This is the fail-safe that makes the lists above
-  // safe to be wrong in the cheap direction: a new root config, a new top-level directory, a
-  // path nobody thought about — all of it gets full CI until someone deliberately narrows it.
-  // **It is load-bearing for `share-worker/`**: a Rust test reads `share-worker/wrangler.jsonc`
-  // (`share::publish`'s `SHARE_BASE` check), so an arm narrowing that tree must keep `rust`.
+  // Anything unrecognised runs every build job, `core` among them. This is the fail-safe that
+  // makes the lists above safe to be wrong in the cheap direction: a new root config, a new
+  // top-level directory, a path nobody thought about — all of it gets full CI until someone
+  // deliberately narrows it. **It is load-bearing for `share-worker/`**: a Rust test reads
+  // `share-worker/wrangler.jsonc` (`share::publish`'s `SHARE_BASE` check), so an arm narrowing
+  // that tree must keep `rust`.
   { match: ["*"], jobs: BUILD },
 ];
 

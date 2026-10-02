@@ -19,19 +19,27 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `storybook`**, which builds nothing from there; `src/features/transfer/__golden__/**` and
   `src/lib/userTables.json` and `src/lib/syncedTables.json` → `frontend`, `rust` and `storybook`,
   because Rust tests read them;
+  **`crates/grimoire-core/**` → `frontend`, `rust` and `core`** (2026-10-02), on an arm that
+  must stay **above** `crates/*` — first match wins, and that arm would take the engine's tree
+  and skip the one job that exists for it;
   **`crates/*` → the same two as `src-tauri/**`** (the `card-scanner` package is compiled by
   `rust`, and `frontend` reads eight of its `.rs` files as text for `ipc.test.ts` and lints its
-  `scripts/*.mjs`); frontend sources, `.storybook/**`, lockfiles, configs and `.nvmrc` →
+  `scripts/*.mjs`) — **and neither tree runs `core`**, because the engine depends on neither;
+  frontend sources, `.storybook/**`, the npm lockfile, configs and `.nvmrc` →
   `frontend` and `storybook`; **`scripts/` because `eslint .` lints it** → `frontend` alone;
-  `rust-toolchain.toml` and `.github/actions/rust-toolchain/` → the two Rust-side jobs;
+  `rust-toolchain.toml` and `.github/actions/rust-toolchain/` → `frontend`, `rust` and `core`,
+  and so do **the cargo workspace's own files at the root — `Cargo.toml`, `Cargo.lock` and
+  `.cargo/**`** — because the lockfile is shared: a dependency bumped for the desktop moves
+  what the engine's other two targets compile, and `rust` builds neither of them;
   `release.yml`, `scanner-bundle.yml` and `dependabot.yml` → `frontend`, because
   `scripts/toolchain.test.mjs` and `scripts/actions-pinned.test.mjs` read them;
   `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router
   itself → every job, `powershell` included; prose and editor bookkeeping → neither; and **anything
-  unrecognised → every build job**, `storybook` included. That last arm is the fail-safe that
-  makes the lists safe to be wrong in the cheap direction — and it is load-bearing for
-  `share-worker/`, whose `wrangler.jsonc` a Rust test reads. **Only the "neither" arm can
-  wrongly skip work, so it stays small.**
+  unrecognised → every build job**, `storybook` and `core` included. That last arm is the
+  fail-safe that makes the lists safe to be wrong in the cheap direction — and it is
+  load-bearing for `share-worker/`, whose `wrangler.jsonc` a Rust test reads. **Only the
+  "neither" arm can wrongly skip work, so it stays small.** And **nothing routes to `core`
+  without `rust`**: `core` compiles and runs nothing, so the engine's tests are `rust`'s.
   - **The two halves read each other's files, and `scripts/ci-route.test.mjs` is the fence.**
     Until 2026-09-26 the router said they shared no inputs, so a Rust-only PR that drifted from
     `ipc.ts` merged green and the red landed on the next unrelated PR. The test derives the
@@ -87,8 +95,10 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   preference — `lock.ps1` identifies a holder by pid + name + `StartTime`.
 - **A new job gated on a `changes` output belongs in every list of jobs, not one:**
   `ci-route.mjs`'s `JOBS`, the classify step's output-name check, `changes.outputs`, `ci-ok`'s
-  `needs` **and** its success-or-skipped loop. In `needs` alone, its failure is a result the gate
-  never reads.
+  `needs` **and** its success-or-skipped loop — with the `env:` line that hands the loop its
+  result, and the `echo` above it. In `needs` alone, its failure is a result the gate never
+  reads. `core` went into all of them on 2026-10-02, and into `ci-route.test.mjs`'s table,
+  where a job is a column every row has to answer for.
 - **Three traps in that routing, all measured against a fixture repo:**
   1. A workflow-level `paths:` filter is the obvious implementation and is **wrong** — it skips
      the whole workflow, `ci-ok` included, and a required check that never reports leaves every
@@ -103,8 +113,45 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `frontendDist: "../dist"` and fails outright when it is missing, so a Rust-only job cannot
   compile a fresh checkout. It is also why `rust` is safe to run with `frontend` skipped: the
   frontend it needs is one file it writes itself.
+- **The cargo workspace is rooted at the repository, and its build tree is still
+  `src-tauri/target`** (2026-10-02). The root `Cargo.toml` makes members of the app in
+  `src-tauri` and the engine in `crates/grimoire-core`, with one `Cargo.lock` beside it, and
+  `.cargo/config.toml` pins `target-dir` back to where every script, skill and dev database
+  already is. So the `rust` job's three commands run from the root, with no
+  `working-directory`: `cargo fmt -p mtg-grimoire -p grimoire-core --check`,
+  `cargo clippy --workspace --all-targets` and `cargo test --workspace`. **Never
+  `cargo fmt --all`** — it follows path dependencies into `card-scanner`, which is not
+  rustfmt-clean; `--workspace` on the other two sees the members and nothing else.
+  `Swatinem/rust-cache` is told both halves — `workspaces: ". -> src-tauri/target"` — in
+  `ci.yml` and `release.yml` alike. **This is the only job that tests the engine, and the only
+  one that compiles it for Windows.** The layout was read off `cargo metadata` on the day
+  (root at the repository, target under `src-tauri`), and `tauri dev` was launched under it
+  that day and built to `src-tauri/target/debug`. **`tauri-action`'s bundle lookup was read,
+  not run**: at the pinned SHA its `getTargetDir` walks up from the Tauri directory for a
+  `.cargo/config.toml` and takes `build.target-dir` relative to the directory that holds it,
+  ahead of its `<workspace>/target` default — so it looks in `src-tauri/target`, as before.
+  The cache line is first exercised by the PR that adds it, and the bundle lookup only by the
+  next release.
+- **The `core` job is a compile gate for `grimoire-core` on the two targets a desktop build
+  never touches** (2026-10-02): a matrix over `wasm32-unknown-unknown` and
+  `aarch64-linux-android` on `ubuntu-24.04`, each leg `cargo build --lib -p grimoire-core
+  --locked --target …` and then `cargo clippy` the same way with `-D warnings`. **It proves
+  the crate compiles and lints clean for each triple, and nothing more** — no test runs, no
+  APK or bundle is assembled, and nothing in it has been on a phone or in a browser. No
+  `dist/` stub and no Node: the core has no `tauri-build`. `ci-ok` reads `needs.core.result`,
+  so the matrix changes no protected name.
+  **Nothing in this bullet was measured on this job when it was written** — its first run is
+  the pull request that adds it. What it carries is the first attempt's `wasm` and `android`
+  jobs, removed on 2026-09-27, where each of these was measured: **24.04 because
+  `sqlite-wasm-rs`'s shim needs clang ≥ 18** (C23 `[[noreturn]]`; 22.04's
+  `apt-get install clang` gives 14 and the failure reads `cc-rs: command did not execute
+  successfully`), with the version printed and checked in the step; **the NDK's `bin` on
+  `PATH` and `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` set by hand**, because cargo and
+  `cc-rs` have never read `NDK_HOME`; and **a `rust-cache` `key` per target**, or one cache
+  thrashes between the legs. The linker is the API-26 one, carried over and not decided here:
+  the level is phase 4's to settle, with the Android host.
 - **The `rust` job runs a second, separate package's tests and only its tests.**
-  `crates/card-scanner` is deliberately not a workspace member, so `cargo test` in `src-tauri`
+  `crates/card-scanner` is excluded from the workspace on purpose, so `cargo test --workspace`
   compiles it and runs none of it — `session::tests` (the `live.html` key census, the panic
   guard, the reader cadence) was fenced by `npm run verify` and by nothing in CI until
   2026-09-08. One step, Linux leg, `--features cli` to match `verify` — **and a second command
@@ -116,9 +163,14 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   no `clippy -D warnings` for that package**: it is not rustfmt-clean and carries four
   pre-existing clippy warnings, both measured and listed in
   [card-scanner.md](../docs/reference/card-scanner.md) §8, so either gate would go red on day
-  one for something the step is not about.
+  one for something the step is not about. **Every line names
+  `--target-dir crates/card-scanner/target`** (2026-10-02): cargo reads its config from the
+  working directory and never from `--manifest-path`, so run from the root these would follow
+  `.cargo/config.toml` into `src-tauri/target`. `npm run verify` and `scanner-bundle.yml`
+  pass the same flag; `crates/card-scanner/.cargo/config.toml` covers a run started inside it.
 - `--locked` on every cargo call in every workflow. `cargo fmt --check` on Linux only;
-  `clippy -D warnings` and `cargo test` on both — for `src-tauri` only, per the bullet above.
+  `clippy -D warnings` and `cargo test` on both — over the workspace's members and never
+  `card-scanner`, per the bullet above.
   **`npm run verify` runs the same two as `lint:rust`** since 2026-09-27, after at least seven
   `style: cargo fmt` catch-up commits in eight weeks — CI ran both and `verify` ran neither.
 
@@ -138,7 +190,10 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   footer.
 - **The `Cargo.lock` selector must read `@.name.value`, never `@.name`** — release-please parses
   TOML into tagged nodes, so the obvious form matches nothing, and a non-match is a _warning_,
-  not an error. `--locked` is what converts that silence into a failed check.
+  not an error. `--locked` is what converts that silence into a failed check. **The file is
+  the root `Cargo.lock` since 2026-10-02**, and `release-please-config.json`'s `path` moved
+  with it. What release-please does with a wrong path has not been measured; `--locked` on
+  the release PR catches a lockfile it failed to bump either way.
 - **Every build leg runs `npm run scanner:assets` straight after `npm ci`, and a missing asset
   fails the leg on purpose** (2026-09-15). It downloads the card scanner's hash bundle and both
   OCR models from the prerelease **`scanner-bundle-v<FORMAT_VERSION>`** — `scanner-bundle-v3`
@@ -182,6 +237,11 @@ Added 2026-09-15 and **green on GitHub** — dispatched on `main` that day (38 m
   `pub const FORMAT_VERSION: u16 = N;`** and a non-match fails the step rather than publishing to
   `scanner-bundle-v`. `scripts/scanner-assets.mjs` reads the same line; change its shape and both
   must follow.
+- **Both `cargo run` lines name `--target-dir crates/card-scanner/target`** (2026-10-02). They
+  run from the root, where `.cargo/config.toml` would otherwise send the build to
+  `src-tauri/target` — and the job's `rust-cache` saves `crates/card-scanner`, so without the
+  flag a run would build somewhere the cache never looks and save nothing of it (derived from
+  the two config lines, not measured on a run).
 - **Scryfall's descriptor has no `download_uri`** — only `jsonl_download_uri`, a gzipped JSON Lines
   file (checked live 2026-09-15). `jq -er` refuses a missing field instead of handing `curl` the
   word `null`, and the job's default shell is `bash` so `pipefail` makes a failed `curl` in a pipe

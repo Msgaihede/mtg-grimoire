@@ -46,15 +46,4 @@ mod tests {
         // needle that matches no row rather than one that matches every row.
         assert_eq!(normalize("---"), "");
     }
-
-    /// The re-export in `tags` is what keeps five call sites inside that module — and
-    /// `schema`'s own test — spelled the way they always were. A re-export that quietly
-    /// stopped pointing here would be invisible everywhere else.
-    #[test]
-    fn the_tags_re_export_is_this_function() {
-        assert_eq!(
-            crate::tags::normalize("Spot-Removal"),
-            normalize("Spot-Removal")
-        );
-    }
 }

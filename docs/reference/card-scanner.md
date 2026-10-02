@@ -38,6 +38,26 @@ when integration lands; that works fine across two standalone packages. The cost
 is one line in `.gitignore` (`crates/*/target/`), because `src-tauri/target/` does not cover
 it.
 
+**A workspace did arrive, on 2026-10-02, and this crate is still outside it.** The repository
+root holds one now, for `src-tauri` and `crates/grimoire-core`, and its `exclude` names this
+crate — without it a path dependency under the root would have joined. It stays out because it
+is not `cargo fmt`-clean and carries clippy warnings (§8), which membership would put under
+`--workspace` lints. **Its manifest carries an empty `[workspace]` table, which is not
+optional**: excluded from the root, cargo would otherwise keep walking up the parent
+directories for a workspace, and an agent worktree sits under the main checkout — whose root
+manifest knows nothing of a crate inside a worktree and refuses it (`current package believes
+it's in a workspace when it's not`; reproduced that day in a scratch copy of the layout).
+`target/` did not move either: the root's `.cargo/config.toml` pins the workspace's
+tree to `src-tauri/target`. **That pin reaches this crate too when cargo is run from the
+repository root**, because cargo reads config from the working directory and not from
+`--manifest-path` — measured that day, `cargo metadata --manifest-path
+crates/card-scanner/Cargo.toml` from the root answered `src-tauri/target`, and from inside this
+folder `crates/card-scanner/target`. So this folder carries a `.cargo/config.toml` of its own for
+a run started here, and every command in this document that is run from the root with
+`--manifest-path` needs `--target-dir crates/card-scanner/target` to keep building where it
+always has. Without the flag nothing breaks — the build lands in the app's tree and compiles
+once more.
+
 **Pure Rust throughout, and verified rather than assumed.** `image` + `imageproc` for the
 geometry, `ocrs` on `rten` for the text, hand-written descriptors. The full transitive
 dependency closure of every candidate crate was walked for `cc`, `cmake`, `bindgen`,
@@ -1833,12 +1853,14 @@ handler and story counts are the earlier tree's.
 card-scanner = { path = "../crates/card-scanner", features = ["corpus", "ocr"] }
 ```
 
-A plain path dependency across two standalone packages, which is what §1 anticipated: no
-workspace is created, and the three tools keep building into `crates/card-scanner/target/`.
+A plain path dependency on a standalone package, which is what §1 anticipated: the three tools
+keep building into `crates/card-scanner/target/`. ("No workspace is created" stood here until
+2026-10-02; one exists now and excludes this crate — §1.)
 `corpus` is the join back to `corpus.db` for labels and unifies with `src-tauri`'s own
 `rusqlite = "0.40"`; `ocr` is the two readers.
 
-**The `[profile.dev.package.*]` overrides are repeated in `src-tauri/Cargo.toml`.** §1 already
+**The `[profile.dev.package.*]` overrides are repeated in the build root's manifest** — the
+workspace root's `Cargo.toml` since 2026-10-02, `src-tauri/Cargo.toml` before it. §1 already
 says a profile override in a *dependency* is ignored; cargo reads `[profile.*]` from the build
 root and nowhere else, so the moment `src-tauri` took this crate the crate's own overrides
 stopped applying to it. The measured reason is §7's release/debug table read from the other
