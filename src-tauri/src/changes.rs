@@ -8,8 +8,9 @@
 //!
 //! Three pieces:
 //!
-//! * [`Changes::mark`] rides the one update hook on the write connection
-//!   ([`crate::mirror::watch::install_hook_with_changes`]) and sets one bit per user table. It is
+//! * [`Changes::mark`] rides the one update hook on the write connection — [`Changes`] is an
+//!   observer of `grimoire-core`'s installer, one of the three
+//!   [`crate::mirror::watch::observers`] lists — and sets one bit per user table. It is
 //!   the hook's own discipline: one binary search over a list built in [`Changes::new`], one
 //!   `fetch_or`, no allocation and no lock.
 //! * The commit hook rings [`Changes::ring`] **only when a bit is set**, so the thousands of corpus
@@ -179,6 +180,25 @@ impl Changes {
     /// Resolves after the next ring (or at once, if one is already stored).
     pub async fn notified(&self) {
         self.wake.notified().await;
+    }
+}
+
+/// **The other windows' half of the hook** — the second of the desktop's three observers
+/// ([`crate::mirror::watch::observers`]), riding the core's one installer because SQLite allows
+/// one update hook and one commit hook per connection.
+///
+/// A row marks its table at the hook's own price: one binary search and one `fetch_or`, no
+/// allocation and no lock. A commit rings the bell **only when a user table was written**, so a
+/// Scryfall ingest's corpus commits wake nothing.
+impl grimoire_core::hooks::WriteObserver for Changes {
+    fn row(&self, db: &str, table: &str) {
+        self.mark(db, table);
+    }
+
+    fn committed(&self) {
+        if self.pending() {
+            self.ring();
+        }
     }
 }
 

@@ -1070,7 +1070,7 @@ pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<
     respond(
         state
             .images
-            .get(&state.client, &state.db_read, &state.db, &key)
+            .get(&state.client, state.reader(), &state.db, &key)
             .await,
     )
 }
@@ -1137,7 +1137,7 @@ pub async fn prefetch_images(
         warm(
             &state.images,
             &state.client,
-            &state.db_read,
+            state.reader(),
             &state.db,
             keys,
         )
@@ -1287,7 +1287,7 @@ pub async fn prewarm_collection(
         warm(
             &state.images,
             &state.client,
-            &state.db_read,
+            state.reader(),
             &state.db,
             keys,
         )
@@ -1778,7 +1778,7 @@ pub fn spawn_upkeep(state: &Arc<crate::sync::AppState>) {
                 stores_at_last_pass = Some(stores);
                 match evict(
                     &state.images,
-                    &state.db_read,
+                    state.reader(),
                     &state.db,
                     BUDGET,
                     SystemTime::now(),

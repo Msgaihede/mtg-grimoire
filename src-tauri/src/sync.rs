@@ -33,9 +33,9 @@
 
 use crate::ingest;
 use crate::scryfall;
+use grimoire_core::state::State;
 use rusqlite::{params, Connection};
 use serde::Serialize;
-use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -80,17 +80,27 @@ const DOWNLOAD_EMIT_BYTES: u64 = 1_000_000;
 /// Everything a command or a background sync needs. Managed by Tauri as
 /// `Arc<AppState>` so a spawned sync can own a handle of its own.
 ///
+/// **It wraps `grimoire-core`'s [`State`] and derefs to it**, so `state.db`, `state.data_dir`,
+/// `state.fence` and `state.events` are that struct's fields, read here exactly as they were
+/// while this one declared them — and a function that takes `&State` can be handed this. The
+/// core holds what every host needs and has no reason to know about a window: the connections,
+/// the data directory, the cross-file fence and the event sink, with the one update hook
+/// already on the write connection.
+///
 /// Two connections to one file, deliberately. `db` is the only one that writes, and every
 /// writer shares it — the ingest included, which is why it takes the lock a batch at a
-/// time rather than for its whole run. `db_read` is opened read-only so searches and
+/// time rather than for its whole run. The other is opened read-only so searches and
 /// status polls answer from the last committed WAL snapshot without queueing behind any
-/// writer at all. See [`crate::db::open_read_only`].
+/// writer at all: take it through [`lock_db_read`], or as a mutex through [`State::reader`].
+/// See [`crate::db::open_read_only`].
+///
+/// **Not everything below is the desktop's for good.** The two mirror fields and the change
+/// mask are; the rest are every host's, and wait here for the type each one holds to move —
+/// `syncing`, `client`, `images` and `index` with the extraction's I/O step, `pairing` with
+/// its sync step.
 pub struct AppState {
-    pub db: Mutex<Connection>,
-    /// The read-only connection: what it buys is a search that does not queue behind an
-    /// ingest running on another thread. Take it through [`lock_db_read`].
-    pub db_read: Mutex<Connection>,
-    pub data_dir: PathBuf,
+    /// The every-host half, built by [`State::new`].
+    pub core: State,
     pub syncing: AtomicBool,
     pub client: scryfall::Client,
     /// The image cache. Lives here so the `mtgimg://` handler can reach it from an
@@ -107,9 +117,9 @@ pub struct AppState {
     /// What the plain-text mirror still owes the disk, as three bits.
     ///
     /// An `Arc` and not a plain field because the update hook on `db` holds a clone of it for
-    /// the life of the process — see [`crate::mirror::watch::install_hook`]. Written from
-    /// inside SQLite's own callback and read by the mirror thread; no lock is involved either
-    /// way, which is the point.
+    /// the life of the process — it is one of the observers [`crate::mirror::watch::observers`]
+    /// hands to [`State::new`]. Written from inside SQLite's own callback and read by the
+    /// mirror thread; no lock is involved either way, which is the point.
     pub mirror: Arc<crate::mirror::watch::Mask>,
     /// What the mirror's last pass did, for the Settings panel to read back.
     ///
@@ -117,16 +127,9 @@ pub struct AppState {
     /// that may not survive a restart, and a count read back after one would be a claim about
     /// a disk nobody has looked at since. See [`crate::mirror::watch::LastPass`].
     pub mirror_status: Mutex<crate::mirror::watch::LastPass>,
-    /// Whether any transaction on `db` has committed across both files.
-    ///
-    /// An `Arc` for [`AppState::mirror`]'s reason and by the same mechanism: the update hook
-    /// on `db` holds a clone of it for the life of the process, because the two share that
-    /// hook — SQLite allows one per connection. See [`crate::db::CrossFileFence`], which also
-    /// names what it cannot see.
-    pub fence: Arc<crate::db::CrossFileFence>,
     /// Which user tables have been written since the other windows were last told — see
     /// [`crate::changes`]. An `Arc` for [`AppState::mirror`]'s reason: the update hook on `db`
-    /// holds a clone of it for the life of the process.
+    /// holds a clone of it for the life of the process, as a second observer.
     pub changes: Arc<crate::changes::Changes>,
     /// A pairing in flight, if there is one.
     ///
@@ -139,6 +142,17 @@ pub struct AppState {
     /// It holds the derived pair key, which is the other reason it is here and not in SQLite:
     /// nothing this side of a completed pairing has any business surviving a crash.
     pub pairing: Mutex<Option<crate::sync_pair::pairing::Pending>>,
+}
+
+/// **What keeps every reader of `state.db` unedited.** `AppState` is named in seventy-odd files
+/// and its connection in half of them; a field access and a method call both auto-deref, and a
+/// `&AppState` coerces to the `&State` a function in the core asks for.
+impl std::ops::Deref for AppState {
+    type Target = State;
+
+    fn deref(&self) -> &State {
+        &self.core
+    }
 }
 
 /// Result of a sync run. `updated_at` is `Some` only when `updated` is true, so a
@@ -385,9 +399,10 @@ fn unchanged(card_count: i64) -> SyncOutcome {
 /// itself survives that (rusqlite rolls an open transaction back as it unwinds), so
 /// refusing to lock ever again would brick every later sync and search for no gain.
 ///
-/// Shared with [`crate::search`] so that recovery rule lives in exactly one place.
+/// Shared with [`crate::search`] so that recovery rule lives in exactly one place — which is
+/// [`State::lock_db`] now, and this is the name every caller here has always reached it by.
 pub(crate) fn lock_db(state: &AppState) -> MutexGuard<'_, Connection> {
-    lock_conn(&state.db)
+    state.core.lock_db()
 }
 
 /// Lock a connection mutex, recovering from poisoning.
@@ -418,8 +433,11 @@ pub(crate) fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 /// A different mutex from `db`, which is the point: this one is only ever held for a short
 /// run of queries — one search, or the five reads [`status`] makes — and never across an
 /// `.await`, so waiting for it is bounded no matter what the writer is doing.
+///
+/// [`State::lock_db_read`], by the name its callers know. On the desktop that is always the
+/// second connection; a host with only one reads through the one it writes with.
 pub(crate) fn lock_db_read(state: &AppState) -> MutexGuard<'_, Connection> {
-    lock_conn(&state.db_read)
+    state.core.lock_db_read()
 }
 
 /// Run `f` with the write connection, or answer [`crate::db::BUSY`].
@@ -1336,6 +1354,7 @@ pub fn status(state: &AppState) -> SyncStatus {
 mod tests {
     use super::*;
     use rusqlite::Connection;
+    use std::path::PathBuf;
 
     fn db() -> Connection {
         crate::schema::memory_pair()
@@ -1368,21 +1387,26 @@ mod tests {
         let conn = crate::db::open_write(&dir).unwrap();
         let read = crate::db::open_read(&dir).unwrap();
         // **Hooked up, so what these fixtures drive runs with the cross-file fence
-        // armed.** `crate::sync::with_write`'s `debug_assert` reads it, so a command
-        // that committed to both files fails its own test rather than printing a line
-        // nobody reads. The mask rides along because SQLite allows one update hook per
-        // connection, and nothing here looks at it.
+        // armed.** `State::new` installs it, `crate::sync::with_write`'s `debug_assert`
+        // reads it, so a command that committed to both files fails its own test rather
+        // than printing a line nobody reads. The desktop's three observers ride along as
+        // they do in the app, and nothing here looks at them: the wake is a throwaway,
+        // since nothing in this fixture starts `sync_engine::live`.
         let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
-        let fence = std::sync::Arc::new(crate::db::CrossFileFence::new());
-        // A throwaway notifier: nothing in this fixture starts `sync_engine::live`, so it
-        // only has to satisfy the hook's signature.
-        let writes = std::sync::Arc::new(tokio::sync::Notify::new());
-        crate::mirror::watch::install_hook(&conn, mirror.clone(), fence.clone(), writes);
+        let changes = std::sync::Arc::new(crate::changes::Changes::new());
         (
             AppState {
-                db: Mutex::new(conn),
-                db_read: Mutex::new(read),
-                data_dir: PathBuf::from("D:\\app\\data"),
+                core: State::new(
+                    conn,
+                    Some(read),
+                    PathBuf::from("D:\\app\\data"),
+                    grimoire_core::events::silent(),
+                    crate::mirror::watch::observers(
+                        mirror.clone(),
+                        changes.clone(),
+                        Default::default(),
+                    ),
+                ),
                 syncing: AtomicBool::new(syncing),
                 // Never called: these tests stop short of the network.
                 client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
@@ -1395,8 +1419,7 @@ mod tests {
                 mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
                 pairing: std::sync::Mutex::new(None),
-                fence,
-                changes: Default::default(),
+                changes,
             },
             dir,
         )
