@@ -49,7 +49,7 @@ pub const PROGRESS_EVENT: &str = "oracle-tags:progress";
 /// sessions on the same afternoon.
 ///
 /// The ETag makes a check that finds nothing cost zero bytes either way, and
-/// [`oracle_tags_refresh`]'s `force` is the way past this for anyone who wants today's file.
+/// a forced refresh is the way past this for anyone who wants today's file.
 pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 
 /// Scryfall's Oracle Tags — what a card *does*.

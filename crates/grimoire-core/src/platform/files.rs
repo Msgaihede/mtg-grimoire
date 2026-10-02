@@ -20,7 +20,10 @@
 //! questions answer `false`. That is a refusal a caller already handles: a download that cannot
 //! be written is a failed sync — the card sync makes the download's folder first, so it stops
 //! there, after the bulk check and before the download is asked for, with its reason in
-//! `sync_meta`'s `last_error` — a backup before a climb is logged and skipped, and `schema::replace_unreadable_corpus` — which a browser's host has no reason
+//! `sync_meta`'s `last_error`, and the tag engine does the same. **The combo feed and the
+//! price feeds ask first and find out at the folder**, so there each launch would spend a
+//! request it cannot keep and fold a row into `error_log`; that is theirs to reorder when a
+//! web host first runs them. A backup before a climb is logged and skipped, and `schema::replace_unreadable_corpus` — which a browser's host has no reason
 //! to call — would try, be refused, say so and leave everything as it was.
 //!
 //! `std::fs` itself compiles for a browser and fails there when called, which is why `schema`
@@ -86,6 +89,8 @@ pub enum Kind {
 /// One entry of a [`listing`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Entry {
+    /// The entry's name, for reading. One that is not Unicode is given with the bytes that
+    /// are not replaced; [`Entry::path`] is always exact, and is what to act on.
     pub name: String,
     pub path: PathBuf,
     pub kind: Kind,
@@ -103,7 +108,8 @@ pub struct Entry {
 /// For a caller that has to tell "absent" from "unreadable": any other failure, on the
 /// directory or on one entry of it, is the error, so a partial listing is never mistaken for a
 /// whole one. An entry that vanishes between being listed and being asked what it is is left
-/// out, as is one whose name is not Unicode.
+/// out. **No entry is left out for its name**: a caller that deletes what it lists must not
+/// leave behind a file it could not spell.
 ///
 /// On Windows a file's length and time come out of the directory listing itself, so this is
 /// one call per directory; elsewhere it is one more per file.
@@ -252,9 +258,7 @@ mod imp {
                 Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
                 Err(e) => return Err(e),
             };
-            let Ok(name) = entry.file_name().into_string() else {
-                continue;
-            };
+            let name = entry.file_name().to_string_lossy().into_owned();
             // Listed, even when it cannot be measured.
             let meta = match kind {
                 Kind::File | Kind::Other => entry.metadata().ok(),

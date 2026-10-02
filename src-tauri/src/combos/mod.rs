@@ -59,8 +59,8 @@ pub async fn combos_refresh(
 /// still works end to end from a cold database, which is otherwise reachable only by deleting
 /// `corpus.db` and paying for a whole resync to test one feed. **The caller is expected to
 /// follow it with a forced [`combos_refresh`]** — and that refresh really downloads, because
-/// [`clear_combos`] takes the rows out from under the stored ETag and [`conditional_etag`]
-/// therefore replays nothing.
+/// [`clear_combos`] takes the rows out from under the stored ETag and the core's
+/// `conditional_etag` therefore replays nothing.
 ///
 /// It answers the post-clear [`ComboStatus`], which is [`status_of`]'s never-ingested answer:
 /// two zeros, three nulls and `stale: true`. Answering the status rather than nothing means the
@@ -71,7 +71,7 @@ pub async fn combos_refresh(
 /// [`clear`].
 ///
 /// **A lock it could not have is reported rather than swallowed**, which is the difference
-/// between this and [`mark_checked`]. That one is a best-effort watermark nobody is waiting on;
+/// between this and the core's `mark_checked`. That one is a best-effort watermark nobody is waiting on;
 /// this is a press somebody is watching, and a clear that quietly did nothing would read as a
 /// database that refuses to empty.
 #[tauri::command]

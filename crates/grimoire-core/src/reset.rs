@@ -419,7 +419,8 @@ struct Swept {
 ///
 /// Depth is three (`images/<variant>/<shard>/`) and one (`tmp/`), so the recursion is bounded
 /// by the layout rather than by a counter. A directory that cannot be read — or one entry of
-/// which cannot, since a listing is whole or it is an error — is skipped whole:
+/// which cannot, since a listing is whole or it is an error — is skipped whole and counted
+/// once in `failed`:
 /// the caller's promise is "the cache is disposable", and a cache that is partly still there
 /// costs a re-fetch rather than correctness — [`crate::images::Cache::get`] treats a row
 /// whose file is gone as a miss, and so does every bulk download.
@@ -429,8 +430,16 @@ struct Swept {
 /// until custom deck covers were removed on 2026-08-31. Nothing should give this function a
 /// fourth root without an argument for it: what it is handed, it empties.
 fn sweep_dir(root: &Path, out: &mut Swept) {
-    let Ok(Some(entries)) = files::listing(root) else {
-        return;
+    let entries = match files::listing(root) {
+        Ok(Some(entries)) => entries,
+        // Not there: nothing was ever put in it.
+        Ok(None) => return,
+        // There, and it would not be read. Counted, so a sweep that left a whole directory
+        // behind cannot answer as if it had left nothing.
+        Err(_) => {
+            out.failed += 1;
+            return;
+        }
     };
     for entry in entries {
         // A listing says what an entry is without following it, so a link into the user's

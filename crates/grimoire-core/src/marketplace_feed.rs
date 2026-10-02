@@ -908,8 +908,8 @@ fn temp_path(state: &State, provider: &dyn FeedProvider) -> PathBuf {
 
 /// One refresh at a time, per marketplace.
 ///
-/// A module-level registry rather than a field on `AppState`, because it is this module's
-/// concern alone and `AppState` is shared with everything else. Two refreshes of the *same*
+/// A module-level registry rather than a field on the [`State`], because it is this
+/// module's concern alone and the state is shared with everything else. Two refreshes of the *same*
 /// feed would download 63.7 MiB twice to write the same rows; two of *different* feeds are
 /// fine and are allowed.
 static REFRESHING: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
@@ -1121,8 +1121,8 @@ pub fn is_stale(fetched_at: Option<i64>, now: i64) -> bool {
 }
 
 /// One marketplace's feed state, read through the read-only connection.
-/// Its one caller is [`refresh`]. The status *command* does not come through here at all - it
-/// maps [`PROVIDERS`] over [`read_status`] itself.
+/// Its one caller is [`refresh_from`]. A host's status command does not come through here at
+/// all - it maps [`PROVIDERS`] over [`read_status`] itself.
 fn status_of(state: &State, provider: &dyn FeedProvider) -> FeedStatus {
     let conn = state.lock_db_read();
     read_status(&conn, provider, unix_now())

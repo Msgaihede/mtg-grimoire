@@ -33,10 +33,10 @@
 //! `collection:reconciled` when the migration log moved something. The desktop forwards both
 //! to every window; a host with no page to tell gives the state a silent sink.
 //!
-//! **Two things of the old `sync` module are still `src-tauri`'s**, in its module of this
-//! name: the desktop's `AppState`, which wraps a [`State`], and `status`, which reads the
-//! image cache's failure count beside the five fields this module's keys answer — it comes
-//! home with the cache.
+//! **One thing of the old `sync` module is still `src-tauri`'s**, in its module of this
+//! name: the desktop's `AppState`, which wraps a [`State`]. [`status`] waited there for the
+//! image cache, whose failure count it reads beside the five fields this module's keys
+//! answer, and came home with it.
 //!
 //! `sync_meta.value` is `NOT NULL`, so this module never writes an absent value as
 //! NULL or as `""`: [`set_meta_opt`] deletes the row instead. See [`get_meta`].

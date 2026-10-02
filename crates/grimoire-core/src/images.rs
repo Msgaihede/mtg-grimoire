@@ -31,6 +31,7 @@ use crate::scryfall::{self, rate_limit_penalty, ScryfallError};
 use crate::image_uri::IMAGE_HOST;
 use crate::platform::clock::{Tick, Wall};
 use crate::platform::files::{self, aio};
+use crate::platform::sync::{Lock, Semaphore};
 use crate::state::State;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -314,7 +315,7 @@ pub fn is_current(conn: &Connection, key: &ImageKey, uri: &str) -> bool {
 /// Record what was just written to disk. An upsert, because a re-fetch replaces a row.
 ///
 /// **Write connection only.** `image_cache` is the one table this module writes, and it
-/// writes it through `AppState.db` — the read handle is opened `SQLITE_OPEN_READ_ONLY`
+/// writes it through the state's write connection — the read handle is opened `SQLITE_OPEN_READ_ONLY`
 /// and would refuse this outright.
 pub fn record(conn: &Connection, key: &ImageKey, uri: &str, bytes: usize) -> rusqlite::Result<()> {
     conn.execute(
@@ -414,7 +415,7 @@ pub enum ImageError {
 pub struct Cache {
     dir: PathBuf,
     /// Caps images in flight. A grid that scrolls fast can queue hundreds of tiles.
-    permits: async_lock::Semaphore,
+    permits: Semaphore,
     /// When the 429 penalty lifts. Scryfall's rate limit is per application, so a limit one
     /// request earns has to be paid by every request, not just that one.
     ///
@@ -429,13 +430,13 @@ pub struct Cache {
     store_failures: AtomicU64,
     /// One lock per key, so two callers who want the same image do not both fetch it.
     ///
-    /// A `Mutex<HashMap<ImageKey, Arc<async_lock::Mutex<()>>>>` rather than the shared
+    /// A `Mutex<HashMap<ImageKey, Arc<Lock>>>` rather than the shared
     /// *future* the carryover sketched: a `Shared<BoxFuture<…>>` has to be `'static`, which
     /// would mean an `Arc<Cache>` plus owned clones of the client and both connections
     /// threaded through the protocol handler. The second caller here waits on the key,
     /// then re-reads the disk — a 2 ms read instead of a shared buffer, for a fraction of
     /// the surface, and the network saving is identical.
-    inflight: Mutex<HashMap<ImageKey, Arc<async_lock::Mutex<()>>>>,
+    inflight: Mutex<HashMap<ImageKey, Arc<Lock>>>,
     /// Rows owed to `image_cache`: bytes that are **on disk** but that no row vouches for
     /// yet, because the write connection was busy at the moment they landed.
     ///
@@ -499,7 +500,7 @@ impl Cache {
     pub fn new(images_dir: PathBuf) -> Cache {
         Cache {
             dir: images_dir,
-            permits: async_lock::Semaphore::new(MAX_CONCURRENT_FETCHES),
+            permits: Semaphore::new(MAX_CONCURRENT_FETCHES),
             gate: Mutex::new(None),
             store_failures: AtomicU64::new(0),
             inflight: Mutex::new(HashMap::new()),
@@ -514,9 +515,9 @@ impl Cache {
     ///
     /// Bounded like the owed-row queue, and for its reason. A key that does not fit is not
     /// counted: what it loses is that one picture looking older to the next pass than it is,
-    /// and the set is drained every [`UPKEEP_TICK`] — the webview keeps what it was served for
-    /// a day ([`IMAGE_MAX_AGE`]), so a minute of distinct hits is a few screenfuls, never
-    /// thousands.
+    /// and the set is drained every [`UPKEEP_TICK`] — the desktop's webview keeps what it was
+    /// served for a day (its `IMAGE_MAX_AGE`), so a minute of distinct hits is a few screenfuls,
+    /// never thousands.
     fn touch(&self, key: &ImageKey) {
         let mut touched = crate::db::lock_plain(&self.touched);
         if touched.len() < MAX_TOUCHED || touched.contains(key) {
@@ -528,7 +529,7 @@ impl Cache {
     /// by setting its modified time to `now`. Returns how many files took the stamp.
     ///
     /// **Never on the path that served them.** Each is an open and a metadata write, and a
-    /// served tile pays for neither: [`spawn_upkeep`]'s thread calls this once a tick, and
+    /// served tile pays for neither: [`upkeep_tick`] calls this once a tick, and
     /// [`evict`] calls it first so the pass it runs sees them.
     ///
     /// A file that is gone — swept by [`crate::reset::clear_cache`], evicted, never stored —
@@ -679,11 +680,11 @@ impl Cache {
     }
 
     /// The lock for one key, created if this is the first caller to ask.
-    fn key_lock(&self, key: &ImageKey) -> Arc<async_lock::Mutex<()>> {
+    fn key_lock(&self, key: &ImageKey) -> Arc<Lock> {
         let mut map = crate::db::lock_plain(&self.inflight);
         Arc::clone(
             map.entry(key.clone())
-                .or_insert_with(|| Arc::new(async_lock::Mutex::new(()))),
+                .or_insert_with(|| Arc::new(Lock::new())),
         )
     }
 
@@ -1124,8 +1125,8 @@ pub fn prewarm_keys(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<Ima
 
 /// Walk a batch, stopping at the first rate limit. Returns how many keys were attempted.
 ///
-/// Split out of [`prefetch_images`] because that command needs a `tauri::State` and a
-/// running app, and the abandon-on-429 rule is exactly the part worth a test.
+/// Split out of the desktop's `prefetch_images` command, which needs a running app, because
+/// the abandon-on-429 rule is exactly the part worth a test.
 pub async fn warm(
     cache: &Cache,
     client: &scryfall::Client,
@@ -1191,9 +1192,9 @@ const _: () = assert!(CACHE_BUDGET_BYTES > MAX_PREWARM as u64 * 93_000);
 /// fresh, and the last of the rest go at the first pass after 2026-11-18 — sooner under the
 /// budget.
 ///
-/// Many times the stamp's own resolution, which is about a day: the webview keeps what it was
-/// served for [`IMAGE_MAX_AGE`], so a picture on screen every day reaches [`Cache::get`] — and is
-/// touched — about once a day.
+/// Many times the stamp's own resolution, which is about a day: the desktop's webview keeps
+/// what it was served for a day (its `IMAGE_MAX_AGE`), so a picture on screen every day reaches
+/// [`Cache::get`] — and is touched — about once a day.
 const MAX_IDLE: Duration = Duration::from_secs(90 * 24 * 60 * 60);
 
 /// [`CACHE_BUDGET_BYTES`] and [`MAX_IDLE`] together, so a test can hand [`evict`] a small cache.
@@ -2633,6 +2634,32 @@ mod tests {
             started.elapsed() < Duration::from_millis(1_000),
             "{N} sequential fetches took {:?} — something is pacing them apart again",
             started.elapsed()
+        );
+    }
+
+    /// **A lockout ends.** The gate is a moment and how long the penalty runs from it, so what
+    /// is left shrinks as time passes and is nothing once the penalty has — and a penalty
+    /// charged after that starts a new one rather than being measured against the old.
+    #[test]
+    fn a_lockout_runs_out_and_a_later_penalty_starts_a_new_one() {
+        let cache = Cache::new(PathBuf::from("D:\\app\\data\\images"));
+
+        cache.penalise(Duration::from_millis(40));
+        let left = cache.lockout_remaining().expect("just charged");
+        assert!(left <= Duration::from_millis(40), "{left:?}");
+
+        assert!(crate::platform::pause(Duration::from_millis(80)));
+        assert_eq!(
+            cache.lockout_remaining(),
+            None,
+            "the penalty has run its course"
+        );
+
+        cache.penalise(Duration::from_secs(60));
+        let left = cache.lockout_remaining().expect("charged again");
+        assert!(
+            left > Duration::from_secs(55),
+            "a new penalty runs from when it was charged: {left:?}"
         );
     }
 

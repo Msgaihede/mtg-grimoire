@@ -17,6 +17,7 @@
 //! | [`timer`] — a sleep a future awaits, and a deadline on one | the async runtime's | `setTimeout` | the I/O step, for `scryfall`'s pacing and its image deadline |
 //! | [`http`] — a request, a streamed body | `reqwest` over rustls | `reqwest` over `fetch` | the I/O step, for `scryfall` |
 //! | [`files`] — a download on disk, the files the schema keeps, the image cache's pictures | `std::fs`, `tokio::fs` | refused | the I/O step, for `scryfall`, `ingest` and `schema`; a listing, a stamp and a rename for `images` |
+//! | [`sync`] — a permit and a lock an `async fn` holds across an `.await`, first come first served | `tokio::sync` | `tokio::sync`: it needs no runtime | the I/O step, for the image cache |
 //! | [`spawn`] — work taken off the caller: minutes of SQLite under an `async fn`, a build nobody waits for | the async runtime's blocking pool, a thread | run where it stands: a Worker has no second thread | the I/O step, for the card sync's ingest and the facet index's build |
 //!
 //! **Each is here because something calls it**: an interface written before the code that calls
@@ -34,6 +35,7 @@ pub mod files;
 pub mod http;
 mod pause;
 pub mod spawn;
+pub mod sync;
 pub mod timer;
 
 pub use pause::pause;

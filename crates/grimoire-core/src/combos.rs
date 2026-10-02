@@ -160,7 +160,7 @@ const PROGRESS_EMIT_BYTES: u64 = 1_000_000;
 /// failure worth avoiding. 27.5 MB an ask is the other half of it.
 ///
 /// The ETag makes a check that finds nothing cost zero bytes either way, and
-/// [`combos_refresh`]'s `force` is the way past this for anyone who wants today's file.
+/// a forced refresh is the way past this for anyone who wants today's file.
 pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 
 /// The connect timeout. This is an ordinary web host, not a CDN this app has measured.
@@ -977,8 +977,8 @@ pub fn ingest_stream(
 /// before replaying one — so a cleared database really re-downloads rather than being told 304
 /// into staying empty. The caller is expected to follow this with a forced refresh.
 ///
-/// Takes a `&Connection` and not an [`AppState`], so the rule can be asserted against
-/// [`crate::schema::memory_pair`] with no app handle — the split every other helper here uses.
+/// Takes a `&Connection` and not a [`State`], so the rule can be asserted against
+/// [`crate::schema::memory_pair`] with no state built — the split every other helper here uses.
 pub fn clear_combos(conn: &Connection) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM combo_cards", [])?;
@@ -2018,8 +2018,8 @@ pub fn card_combos(
 ///
 /// **A flag rather than [`crate::tags`]'s list of names**, because there is one file: that list
 /// exists so an art refresh does not refuse because an oracle one is running, and there is no
-/// second dataset here to be refused by. Module-level rather than a field on `AppState` because
-/// it is this module's concern alone.
+/// second dataset here to be refused by. Module-level rather than a field on the [`State`]
+/// because it is this module's concern alone.
 static REFRESHING: AtomicBool = AtomicBool::new(false);
 
 /// Clears the claim however the refresh ends — an early return, an error, a dropped future.

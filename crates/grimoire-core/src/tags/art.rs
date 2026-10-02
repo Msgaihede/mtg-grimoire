@@ -56,7 +56,7 @@ pub const PROGRESS_EVENT: &str = "art-tags:progress";
 /// sessions on the same afternoon.
 ///
 /// The ETag makes a check that finds nothing cost zero bytes either way, and
-/// [`art_tags_refresh`]'s `force` is the way past this for anyone who wants today's file.
+/// a forced refresh is the way past this for anyone who wants today's file.
 pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 
 /// Scryfall's Art Tags — what an illustration *depicts*.
@@ -122,7 +122,7 @@ mod tests {
     use rusqlite::Connection;
     use std::sync::Mutex;
 
-    /// `src-tauri/tests/fixtures/art-tags-sample.jsonl`, gzipped the way the bulk origin
+    /// This crate's `tests/fixtures/art-tags-sample.jsonl`, gzipped the way the bulk origin
     /// serves it.
     ///
     /// **A hand-written file rather than a `format!` helper**, because three of the seven

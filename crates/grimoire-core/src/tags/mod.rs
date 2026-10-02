@@ -1339,7 +1339,7 @@ fn unix_now() -> i64 {
 /// A list of names rather than a flag, which is [`crate::marketplace_feed`]'s shape one family
 /// over and for its reason: a single flag would make an art refresh refuse because an oracle
 /// one happened to be running, and the two share nothing but a rate limiter. Module-level
-/// rather than a field on `AppState` because it is this module's concern alone.
+/// rather than a field on the [`State`] because it is this module's concern alone.
 static REFRESHING: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
 
 /// Clears the claim however the refresh ends — an early return, an error, a dropped future.
@@ -1783,7 +1783,7 @@ pub(crate) mod testing {
         NEXT.fetch_add(1, Ordering::Relaxed)
     }
 
-    /// One line of `src-tauri/tests/fixtures/{name}` per element, ready for [`gz_fixture`].
+    /// One line of this crate's `tests/fixtures/{name}` per element, ready for [`gz_fixture`].
     ///
     /// A file rather than a `format!` for the art fixture, because the things it has to
     /// exercise are things a formatter cannot say: an `annotation` key that is **absent**

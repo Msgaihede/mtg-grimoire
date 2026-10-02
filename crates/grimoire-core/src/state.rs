@@ -6,10 +6,10 @@
 //! this crate that needs the database is handed a `&State` or a `&Connection` taken from it.
 //!
 //! **It is the every-host half as far as the extraction has got.** The Scryfall client, the
-//! facet index and the sync-in-flight flag are here since the I/O step brought the card sync
-//! and the index's lifecycle. The image cache and the pending pairing offer are every host's
-//! too, and are still fields of the desktop's `AppState` — each is a type that has not moved
-//! here yet, and arrives with the step that moves it.
+//! facet index, the sync-in-flight flag and the image cache are here since the I/O step
+//! brought the card sync, the index's lifecycle and the cache. The pending pairing offer is
+//! every host's too, and is still a field of the desktop's `AppState` — its type has not
+//! moved here yet, and arrives with the sync step.
 //!
 //! **[`with_write`] is the one definition of a user-facing write**, and it is here since the
 //! extraction's domain step brought the managed wishlist and the token reconcile its body calls.
@@ -119,9 +119,10 @@ impl State {
         }
     }
 
-    /// Tell every observer the card corpus was just replaced — [`WriteObserver::corpus_replaced`].
+    /// Tell every observer the corpus was just replaced — [`WriteObserver::corpus_replaced`].
     ///
-    /// The card sync calls it the moment its swap has landed. In list order, like the hooks.
+    /// The card sync calls it the moment its swap has landed, and a price refresh when it has
+    /// rewritten `marketplace_prices`. In list order, like the hooks.
     pub fn corpus_replaced(&self) {
         for observer in &self.observers {
             observer.corpus_replaced();

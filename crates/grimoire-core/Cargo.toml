@@ -67,10 +67,6 @@ reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"
 # `scryfall`'s pacing gate — an async mutex that is not the runtime's, because the browser has
 # no runtime to borrow one from.
 futures-util = "0.3"
-# The image cache's permits and its one-lock-per-key: a semaphore and a mutex an `async fn`
-# can hold across an `.await`, with no runtime behind them, so they build for a browser where
-# `tokio::sync`'s home crate does not. Already in `Cargo.lock`, under `httpmock`.
-async-lock = "3"
 # What a chunk of a response body is. `reqwest` hands these out; naming the crate is what lets
 # `platform::http::Body::chunk` say so in its signature.
 bytes = "1"
@@ -126,10 +122,11 @@ rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 # tokio** — Tauri's runtime is one — so the sleep is the runtime's and the file writes go through
 # its blocking pool. `rt` is not optional: `tokio::fs` runs every operation through
 # `spawn_blocking`, which needs a runtime handle. The features are the ones this crate's own
-# source names; `src-tauri` asks for more (`sync`, `macros`) for code that is still its own.
-# Not on wasm: `tokio::fs` does not compile there, and a Worker has no tokio runtime to drive
-# a timer.
-tokio = { version = "1", features = ["fs", "io-util", "rt", "time"] }
+# source names; `src-tauri` asks for more (`macros`) for code that is still its own.
+# `sync` is `platform::sync`'s — the image cache's permits and its lock per key — and is the
+# one feature the web table asks for too. The rest are not on wasm: `tokio::fs` does not
+# compile there, and a Worker has no tokio runtime to drive a timer.
+tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
 
 # ── Web ──────────────────────────────────────────────────────────────────────────────────────
 # ⚠️ NEVER add `default-features = false` to this rusqlite line. `ffi-sqlite-wasm-rs` — the FFI
@@ -149,6 +146,10 @@ rusqlite = { version = "0.40", features = ["hooks"] }
 getrandom = { version = "0.4", features = ["wasm_js"] }
 # `Date.now()`, for `platform::clock` — `SystemTime::now()` panics on this target.
 js-sys = "0.3"
+# `platform::sync` and nothing else: a semaphore and a mutex need no runtime, so this is the
+# one part of tokio a browser build carries. **Never widen it here** — `fs`, `rt` and `time`
+# each either fail to compile for this target or need a runtime a Worker does not have.
+tokio = { version = "1", features = ["sync"] }
 # `platform::timer`'s browser arm: a `Promise` around the Worker's `setTimeout`, awaited.
 # Both are in the tree already, under `reqwest`'s `fetch` backend.
 wasm-bindgen = "0.2"

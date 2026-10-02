@@ -20,8 +20,10 @@
 // * What steps 4 and 5b left behind because it named one of those comes home:
 //   `deck::bracket_reads`, `reset::clear_cache`, `sync::status`, and the tests beside them.
 //
-// It writes nothing outside those files. `State`'s new field, both module maps and the desktop's
-// `init_state` are edited by hand in the same commit: they are a handful of sites, not a move.
+// Beside those it moves one fixture the tags' tests read (`tests/fixtures/art-tags-sample.jsonl`)
+// and splits one `?raw` import in `src/lib/ipc.test.ts`, and it writes nothing else. `State`'s
+// new field, both module maps and the desktop's `init_state` are edited by hand in the same
+// commit: they are a handful of sites, not a move.
 //
 // Each section runs only where its file is still in `src-tauri`, so a tree where a file has
 // moved skips that section. **It touches no git state**: every decision is made and every
@@ -425,6 +427,22 @@ pub fn emit(state: &State, phase: &str, done: u64, total: u64) {
     ],
   ]);
 
+  // ── prose that named the desktop
+  core = swaps(core, [
+    [
+      "/// [`combos_refresh`]'s `force` is the way past this for anyone who wants today's file.",
+      "/// a forced refresh is the way past this for anyone who wants today's file.",
+    ],
+    [
+      "/// Takes a `&Connection` and not an [`AppState`], so the rule can be asserted against\n/// [`crate::schema::memory_pair`] with no app handle — the split every other helper here uses.",
+      "/// Takes a `&Connection` and not a [`State`], so the rule can be asserted against\n/// [`crate::schema::memory_pair`] with no state built — the split every other helper here uses.",
+    ],
+    [
+      "/// second dataset here to be refused by. Module-level rather than a field on `AppState` because\n/// it is this module's concern alone.",
+      "/// second dataset here to be refused by. Module-level rather than a field on the [`State`]\n/// because it is this module's concern alone.",
+    ],
+  ]);
+
   // ── the tests: all of them, one rewritten ───────────────────────────────────────────────
   let coreTests = swaps(tests.text, [
     [
@@ -533,6 +551,16 @@ use std::time::Duration;
         emit(&state, phase, done, total)
     })
     .await`,
+    ],
+  ]);
+  desk = swaps(desk, [
+    [
+      "/// [`clear_combos`] takes the rows out from under the stored ETag and [`conditional_etag`]\n/// therefore replays nothing.",
+      "/// [`clear_combos`] takes the rows out from under the stored ETag and the core's\n/// `conditional_etag` therefore replays nothing.",
+    ],
+    [
+      "/// between this and [`mark_checked`]. That one is a best-effort watermark nobody is waiting on;",
+      "/// between this and the core's `mark_checked`. That one is a best-effort watermark nobody is waiting on;",
     ],
   ]);
   put(
@@ -820,6 +848,18 @@ pub fn emit(state: &State, marketplace: &str, phase: &str, done: u64, total: u64
         },
     );
 }`,
+    ],
+  ]);
+
+  // ── prose that named the desktop
+  core = swaps(core, [
+    [
+      "/// A module-level registry rather than a field on `AppState`, because it is this module's\n/// concern alone and `AppState` is shared with everything else.",
+      "/// A module-level registry rather than a field on the [`State`], because it is this\n/// module's concern alone and the state is shared with everything else.",
+    ],
+    [
+      "/// Its one caller is [`refresh`]. The status *command* does not come through here at all - it\n/// maps [`PROVIDERS`] over [`read_status`] itself.",
+      "/// Its one caller is [`refresh_from`]. A host's status command does not come through here at\n/// all - it maps [`PROVIDERS`] over [`read_status`] itself.",
     ],
   ]);
 
@@ -1288,6 +1328,18 @@ pub fn emit(ds: &Dataset, state: &State, phase: &str, done: u64, total: u64) {
     ],
   ]);
 
+  // ── prose that named the desktop
+  core = swaps(core, [
+    [
+      "/// one happened to be running, and the two share nothing but a rate limiter. Module-level\n/// rather than a field on `AppState` because it is this module's concern alone.",
+      "/// one happened to be running, and the two share nothing but a rate limiter. Module-level\n/// rather than a field on the [`State`] because it is this module's concern alone.",
+    ],
+    [
+      "    /// One line of `src-tauri/tests/fixtures/{name}` per element, ready for [`gz_fixture`].",
+      "    /// One line of this crate's `tests/fixtures/{name}` per element, ready for [`gz_fixture`].",
+    ],
+  ]);
+
   const coreTests = swaps(tests.text, [
     [
       "        use std::time::{Duration, Instant};\n",
@@ -1388,7 +1440,13 @@ use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::Arc;
 `,
-      coreSwaps: [tagRefreshIfDue("ORACLE")],
+      coreSwaps: [
+        tagRefreshIfDue("ORACLE"),
+        [
+          "/// [`oracle_tags_refresh`]'s `force` is the way past this for anyone who wants today's file.",
+          "/// a forced refresh is the way past this for anyone who wants today's file.",
+        ],
+      ],
       testSwaps: [
         SPLIT_TO_PAIR,
         [
@@ -1419,8 +1477,19 @@ use std::sync::Arc;
 use crate::state::State;
 use std::sync::Arc;
 `,
-    coreSwaps: [tagRefreshIfDue("ART")],
-    testSwaps: [],
+    coreSwaps: [
+      tagRefreshIfDue("ART"),
+      [
+        "/// [`art_tags_refresh`]'s `force` is the way past this for anyone who wants today's file.",
+        "/// a forced refresh is the way past this for anyone who wants today's file.",
+      ],
+    ],
+    testSwaps: [
+      [
+        "    /// `src-tauri/tests/fixtures/art-tags-sample.jsonl`, gzipped the way the bulk origin",
+        "    /// This crate's `tests/fixtures/art-tags-sample.jsonl`, gzipped the way the bulk origin",
+      ],
+    ],
     deskDoc: `//! **Art Tags are \`grimoire-core\`'s, re-exported here beside their two commands.**
 //!
 //! The binding — the \`Dataset\` and the launch's refresh — is in
@@ -1508,7 +1577,7 @@ if (existsSync(join(DESK, "images.rs"))) {
   core = core.split("crate::sync::lock_conn(").join("crate::db::lock_blocking(");
   core = swaps(core, [
     // ── the cache's own concurrency: permits, a deadline, a lock per key
-    ["    permits: tokio::sync::Semaphore,", "    permits: async_lock::Semaphore,"],
+    ["    permits: tokio::sync::Semaphore,", "    permits: Semaphore,"],
     [
       `    /// An instant in the past — the gate open — for the whole of a normal session: since the
     /// pacing interval went, this carries a penalty and nothing else.
@@ -1521,25 +1590,25 @@ if (existsSync(join(DESK, "images.rs"))) {
     ],
     [
       "    /// A `Mutex<HashMap<ImageKey, Arc<tokio::sync::Mutex<()>>>>` rather than the shared",
-      "    /// A `Mutex<HashMap<ImageKey, Arc<async_lock::Mutex<()>>>>` rather than the shared",
+      "    /// A `Mutex<HashMap<ImageKey, Arc<Lock>>>` rather than the shared",
     ],
     [
       "    inflight: Mutex<HashMap<ImageKey, Arc<tokio::sync::Mutex<()>>>>,",
-      "    inflight: Mutex<HashMap<ImageKey, Arc<async_lock::Mutex<()>>>>,",
+      "    inflight: Mutex<HashMap<ImageKey, Arc<Lock>>>,",
     ],
     [
       `            permits: tokio::sync::Semaphore::new(MAX_CONCURRENT_FETCHES),
             gate: tokio::sync::Mutex::new(tokio::time::Instant::now()),`,
-      `            permits: async_lock::Semaphore::new(MAX_CONCURRENT_FETCHES),
+      `            permits: Semaphore::new(MAX_CONCURRENT_FETCHES),
             gate: Mutex::new(None),`,
     ],
     [
       "    fn key_lock(&self, key: &ImageKey) -> Arc<tokio::sync::Mutex<()>> {",
-      "    fn key_lock(&self, key: &ImageKey) -> Arc<async_lock::Mutex<()>> {",
+      "    fn key_lock(&self, key: &ImageKey) -> Arc<Lock> {",
     ],
     [
       "                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),",
-      "                .or_insert_with(|| Arc::new(async_lock::Mutex::new(()))),",
+      "                .or_insert_with(|| Arc::new(Lock::new())),",
     ],
     [
       `        let _permit = self
@@ -1762,6 +1831,30 @@ fn walk(images_dir: &Path) -> std::io::Result<Vec<OnDisk>> {
     ["const UPKEEP_TICK: Duration = ", "pub const UPKEEP_TICK: Duration = "],
   ]);
 
+  // ── prose that named the desktop
+  core = swaps(core, [
+    [
+      "/// writes it through `AppState.db` — the read handle is opened `SQLITE_OPEN_READ_ONLY`",
+      "/// writes it through the state's write connection — the read handle is opened `SQLITE_OPEN_READ_ONLY`",
+    ],
+    [
+      "    /// and the set is drained every [`UPKEEP_TICK`] — the webview keeps what it was served for\n    /// a day ([`IMAGE_MAX_AGE`]), so a minute of distinct hits is a few screenfuls, never\n    /// thousands.",
+      "    /// and the set is drained every [`UPKEEP_TICK`] — the desktop's webview keeps what it was\n    /// served for a day (its `IMAGE_MAX_AGE`), so a minute of distinct hits is a few screenfuls,\n    /// never thousands.",
+    ],
+    [
+      "    /// served tile pays for neither: [`spawn_upkeep`]'s thread calls this once a tick, and",
+      "    /// served tile pays for neither: [`upkeep_tick`] calls this once a tick, and",
+    ],
+    [
+      "/// Split out of [`prefetch_images`] because that command needs a `tauri::State` and a\n/// running app, and the abandon-on-429 rule is exactly the part worth a test.",
+      "/// Split out of the desktop's `prefetch_images` command, which needs a running app, because\n/// the abandon-on-429 rule is exactly the part worth a test.",
+    ],
+    [
+      "/// Many times the stamp's own resolution, which is about a day: the webview keeps what it was\n/// served for [`IMAGE_MAX_AGE`], so a picture on screen every day reaches [`Cache::get`] — and is\n/// touched — about once a day.",
+      "/// Many times the stamp's own resolution, which is about a day: the desktop's webview keeps\n/// what it was served for a day (its `IMAGE_MAX_AGE`), so a picture on screen every day reaches\n/// [`Cache::get`] — and is touched — about once a day.",
+    ],
+  ]);
+
   // ── one wake of the upkeep loop: the body of the thread, cut where it sleeps ────────────
   const tick = swaps(upkeep.text, [
     [
@@ -1921,6 +2014,39 @@ pub fn upkeep_tick(state: &State, stores_at_last_pass: &mut Option<u64>) {
     ],
   ]);
   coreTests = coreTests.split("SystemTime").join("Wall");
+  // The gate's two halves were only ever tested against each other, and never past the end
+  // of a penalty — which is the half the rewrite changed the arithmetic of.
+  coreTests = swap(
+    coreTests,
+    "    /// The gate is still there, and it is still what a 429 is charged to: what changed is",
+    `    /// **A lockout ends.** The gate is a moment and how long the penalty runs from it, so what
+    /// is left shrinks as time passes and is nothing once the penalty has — and a penalty
+    /// charged after that starts a new one rather than being measured against the old.
+    #[test]
+    fn a_lockout_runs_out_and_a_later_penalty_starts_a_new_one() {
+        let cache = Cache::new(PathBuf::from("D:\\\\app\\\\data\\\\images"));
+
+        cache.penalise(Duration::from_millis(40));
+        let left = cache.lockout_remaining().expect("just charged");
+        assert!(left <= Duration::from_millis(40), "{left:?}");
+
+        assert!(crate::platform::pause(Duration::from_millis(80)));
+        assert_eq!(
+            cache.lockout_remaining(),
+            None,
+            "the penalty has run its course"
+        );
+
+        cache.penalise(Duration::from_secs(60));
+        let left = cache.lockout_remaining().expect("charged again");
+        assert!(
+            left > Duration::from_secs(55),
+            "a new penalty runs from when it was charged: {left:?}"
+        );
+    }
+
+    /// The gate is still there, and it is still what a 429 is charged to: what changed is`,
+  );
 
   const coreText =
     file.header +
@@ -1934,6 +2060,7 @@ use crate::scryfall::{self, rate_limit_penalty, ScryfallError};
 use crate::image_uri::IMAGE_HOST;
 use crate::platform::clock::{Tick, Wall};
 use crate::platform::files::{self, aio};
+use crate::platform::sync::{Lock, Semaphore};
 use crate::state::State;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
@@ -2160,7 +2287,8 @@ if (existsSync(join(DESK, "images.rs")) || process.argv.includes("--home")) {
 /// by the layout rather than by a counter. A directory that cannot be read is skipped whole:`,
         `/// Depth is three (\`images/<variant>/<shard>/\`) and one (\`tmp/\`), so the recursion is bounded
 /// by the layout rather than by a counter. A directory that cannot be read — or one entry of
-/// which cannot, since a listing is whole or it is an error — is skipped whole:`,
+/// which cannot, since a listing is whole or it is an error — is skipped whole and counted
+/// once in \`failed\`:`,
       ],
       [
         `fn sweep_dir(root: &Path, out: &mut Swept) {
@@ -2192,8 +2320,16 @@ if (existsSync(join(DESK, "images.rs")) || process.argv.includes("--home")) {
     }
 }`,
         `fn sweep_dir(root: &Path, out: &mut Swept) {
-    let Ok(Some(entries)) = files::listing(root) else {
-        return;
+    let entries = match files::listing(root) {
+        Ok(Some(entries)) => entries,
+        // Not there: nothing was ever put in it.
+        Ok(None) => return,
+        // There, and it would not be read. Counted, so a sweep that left a whole directory
+        // behind cannot answer as if it had left nothing.
+        Err(_) => {
+            out.failed += 1;
+            return;
+        }
     };
     for entry in entries {
         // A listing says what an entry is without following it, so a link into the user's
@@ -2445,25 +2581,36 @@ if (DRY) {
 }
 
 // Files only. Everything above decided what to write and checked every replacement against the
-// tree, so a run either reaches here whole or has written nothing.
+// tree, so a run either reaches here whole or has written nothing. **Written before anything is
+// removed**: a write that fails then leaves every source where it was, and the tree is the old
+// one with some new files beside it rather than half of each.
 const rel = (path) =>
   path
     .slice(ROOT.length + 1)
     .split("\\")
     .join("/");
+for (const [path, text] of out) {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, text);
+}
 for (const path of removed) {
+  // Unless this run wrote the same path: `tags/mod.rs` is replaced where it stands.
+  if (out.has(path)) continue;
   rmSync(path);
   // A file that was the only one in its folder leaves no folder behind, nor an empty one
   // above it.
   for (let dir = dirname(path); readdirSync(dir).length === 0; dir = dirname(dir)) rmdirSync(dir);
 }
-for (const [path, text] of out) {
-  mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, text);
-}
 
 if (!NO_FMT) {
   const files = [...out.keys()].filter((p) => p.endsWith(".rs")).map(rel);
-  execFileSync("rustfmt", ["--edition", "2021", ...files], { cwd: ROOT, stdio: "inherit" });
+  try {
+    execFileSync("rustfmt", ["--edition", "2021", ...files], { cwd: ROOT, stdio: "inherit" });
+  } catch {
+    // The move is done and a second run would find nothing to move, so say how to finish.
+    console.error("rustfmt failed. The files are written; format them with:");
+    console.error("  cargo fmt -p grimoire-core -p mtg-grimoire");
+    process.exit(1);
+  }
 }
 console.log(`wrote ${out.size} files, removed ${removed.length}.`);

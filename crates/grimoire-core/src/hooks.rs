@@ -57,14 +57,16 @@ pub trait WriteObserver: Send + Sync {
     /// rollback.
     fn committed(&self) {}
 
-    /// **Not from a hook at all**: the card corpus was replaced wholesale — a sync swapped
-    /// `cards` — and [`crate::state::State::corpus_replaced`] is saying so.
+    /// **Not from a hook at all**: a corpus table was replaced wholesale — a sync swapped
+    /// `cards`, or a price refresh rewrote `marketplace_prices` — and
+    /// [`crate::state::State::corpus_replaced`] is saying so. **It does not say which**: an
+    /// observer that must tell the two apart needs a second signal, and none has asked.
     ///
     /// It exists because [`WriteObserver::row`] cannot carry this usefully. A swap rewrites
     /// 116 700 rows, so an observer that mapped `cards` to something it must redo would be
     /// told a hundred thousand times per refresh; the desktop's mirror maps it to nothing for
     /// that reason and is told once, here, the moment the swap has landed. Called on the
-    /// thread that ran the sync, with no connection held.
+    /// thread that ran the sync or the refresh, with no connection held.
     fn corpus_replaced(&self) {}
 }
 

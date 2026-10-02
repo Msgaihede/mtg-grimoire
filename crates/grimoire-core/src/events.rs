@@ -12,11 +12,12 @@
 //! describes. Anything a reader must not miss is also stored where they can ask for it — a
 //! failed sync is in `sync_meta`, a failed pass in `error_log`.
 //!
-//! **The card sync is the first to speak through it** — `sync:progress` and
-//! `collection:reconciled`, since the extraction's I/O step. The three feeds and live sync are
-//! still in `src-tauri` and still call their window directly; each moves onto the sink as it
-//! arrives. The sink was put on the state a step early so that they come to a place they can
-//! already speak through, rather than to a constructor that has to change under every host.
+//! **The card sync and the three feeds speak through it** since the extraction's I/O step —
+//! `sync:progress` and `collection:reconciled`; `combos:progress`, `marketplace:progress` and
+//! each tag binding's own. Live sync is still in `src-tauri` and still calls its window
+//! directly; it moves onto the sink when it arrives. The sink was put on the state a step
+//! early so that each came to a place it could already speak through, rather than to a
+//! constructor that has to change under every host.
 //!
 //! **A typed payload reaches the sink as a `serde_json::Value`, so its keys arrive in
 //! alphabetical order** where a struct handed straight to a window kept its field order. A page
