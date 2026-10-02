@@ -324,8 +324,13 @@ export interface FolderTreeProps {
   nodes: readonly FolderNode[];
   /** Every live deck there is — what the "All decks" row counts. */
   totalDecks: number;
-  /** The folder the wall is showing, or `null` for the top level. */
-  selectedId: number | null;
+  /**
+   * The folder the wall is showing, `null` for the top level — or `undefined` when the wall is
+   * showing **no level at all**, which is the gallery's flat `View all` wall (issue #750). No row
+   * is `aria-current` then, because no row is what is on screen: marking "All decks" would claim
+   * the top level, which is one drawer of the cabinet, beside a wall showing every deck there is.
+   */
+  selectedId: number | null | undefined;
   onSelect: (id: number | null) => void;
   /** The deck in the air, or `null`: every folder that could take *this one* says so. */
   drag: DeckDrag | null;

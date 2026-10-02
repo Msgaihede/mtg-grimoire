@@ -3610,6 +3610,32 @@ layer.
   **the filtered-empty state is untouched and stays gated on `here` rather than `shown`** — a
   dashed `New deck` box on a wall the reader has just narrowed says the same wrong thing the old
   sentence would have.
+- **`View all` lays every deck on one wall, with the folders left out** (2026-10-02,
+  [#750](https://github.com/Msgaihede/mtg-grimoire/issues/750)). The tree's `All decks` row has
+  always counted every deck and shown one level of the cabinet, so a reader who files everything
+  had no way to see their decks side by side. The toggle sits first in the heading row's control
+  group, `aria-pressed`, visible word `View all` and name `View all decks`. Five things bind it:
+  - **It is a view laid over the drawer, not a drawer of its own.** `selectedFolderId` is left
+    where it was underneath, so pressing it off walks back into that folder; every route that
+    *chooses* a folder — a tree row, a folder just made, a tree row's `Delete…` — goes through
+    `openFolder`, which turns the flat wall off first. The heading is `EVERY_DECK_LABEL`
+    (`Every deck`) and never `ROOT_LABEL`, which is that tree row's name for the top level, and
+    `FolderTree`'s `selectedId` is `undefined` so no row is `aria-current`.
+  - **It is `useAppStore`'s `deckWallFlat`, not a `useState`**, because `App.tsx` swaps this page
+    out for the editor: a flat wall a reader opened a deck from would otherwise be a folder on the
+    way back. Session-only like the rest of the store — every launch opens on the folders.
+  - **`here` and `archivedHere` are the whole of `live` and `archived`**, so the count, the format
+    chips, the filter, the sort and the `Archived` disclosure all apply unchanged. No folder cards,
+    no up-tile, no empty-folder placeholder, and no `Folder actions` — the flat wall stands in no
+    folder, so a menu about the hidden one would be about nothing on screen. `New deck` and
+    `New folder` default to the top level there (`level`), for the same reason.
+  - **Escape leaves the flat wall and nothing else, with the caret on the toggle.** The folder
+    rung is *switched off* under it (`!flat`), not merely outranked: two `"navigation"` rungs of
+    one rank are ordered by registration, and on a return from the editor the folder rung would
+    register last and walk the hidden folder up instead. `DecksPage.test.tsx` has the case.
+  - **Drawn only where there is a folder to leave out**, and kept while it is on: with no folders
+    the top level already is every deck, but a reader who deletes their last folder from the flat
+    wall still needs the switch.
 - **The sort is remembered and the filter is not**, and that split is the rule rather than an
   omission. `useDeckSort` keeps one `app_meta` row; `deckFilter.ts` holds no state and reads no
   storage. An order is how a reader likes to read their gallery and it is visible in the toolbar
