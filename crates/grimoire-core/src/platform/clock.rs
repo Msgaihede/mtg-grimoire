@@ -1,4 +1,5 @@
-//! The wall clock, and a [`Tick`] to measure a wait from.
+//! The wall clock, a [`Wall`] moment that can be written down, and a [`Tick`] to measure a
+//! wait from.
 //!
 //! **`SystemTime::now()` panics on `wasm32-unknown-unknown`** — at run time, in a build that
 //! compiled without a warning — and the first web build hit that five separate times. So
@@ -49,6 +50,69 @@ impl Tick {
     pub fn elapsed(&self) -> std::time::Duration {
         imp::elapsed(&self.0)
     }
+}
+
+/// A moment on the wall clock that can be **written down and compared** — on a file as its
+/// modified time, against another moment read back months later.
+///
+/// Whole milliseconds since the Unix epoch, on every host: what [`now_ms`] answers, with the
+/// arithmetic a stamp needs. The image cache's used-stamp is why it exists — it orders pictures
+/// by when each was last served, across restarts, which a [`Tick`] cannot do and a bare `i64`
+/// would do without saying which unit it was in.
+///
+/// **Not for measuring a wait**: a reader or an NTP step can move it either way. That is what
+/// [`Tick`] is for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Wall(i64);
+
+impl Wall {
+    /// 1970-01-01T00:00:00Z.
+    pub const EPOCH: Wall = Wall(0);
+
+    pub fn now() -> Wall {
+        Wall(now_ms())
+    }
+
+    pub fn from_ms(ms: i64) -> Wall {
+        Wall(ms)
+    }
+
+    /// Milliseconds since the epoch; negative for a moment before it.
+    pub fn as_ms(self) -> i64 {
+        self.0
+    }
+
+    /// Whole seconds since the epoch, rounded towards the past — what `unixepoch()` answers
+    /// for the same moment.
+    pub fn as_secs(self) -> i64 {
+        self.0.div_euclid(1000)
+    }
+
+    /// This moment, `by` earlier. `None` only where the arithmetic cannot be done at all.
+    pub fn checked_sub(self, by: std::time::Duration) -> Option<Wall> {
+        self.0.checked_sub(whole_ms(by)).map(Wall)
+    }
+}
+
+impl std::ops::Add<std::time::Duration> for Wall {
+    type Output = Wall;
+
+    fn add(self, by: std::time::Duration) -> Wall {
+        Wall(self.0.saturating_add(whole_ms(by)))
+    }
+}
+
+impl std::ops::Sub<std::time::Duration> for Wall {
+    type Output = Wall;
+
+    fn sub(self, by: std::time::Duration) -> Wall {
+        Wall(self.0.saturating_sub(whole_ms(by)))
+    }
+}
+
+/// A duration in whole milliseconds, saturating: a span too long to count is the longest one.
+fn whole_ms(d: std::time::Duration) -> i64 {
+    i64::try_from(d.as_millis()).unwrap_or(i64::MAX)
 }
 
 #[cfg(not(target_family = "wasm"))]
@@ -124,6 +188,36 @@ mod tests {
         assert!(
             (before..=after).contains(&secs),
             "{before} <= {secs} <= {after}"
+        );
+    }
+
+    /// A stamp is the clock's own milliseconds, ordered and stepped as a date is — and its
+    /// seconds round towards the past on both sides of the epoch, as SQLite's do.
+    #[test]
+    fn a_wall_moment_is_ordered_stepped_and_read_back_in_seconds() {
+        let before = now_ms();
+        let now = Wall::now();
+        assert!((before..=now_ms()).contains(&now.as_ms()));
+
+        let day = std::time::Duration::from_secs(86_400);
+        let then = Wall::EPOCH + day * 1_000;
+        assert_eq!(then.as_ms(), 86_400_000_000);
+        assert_eq!(then.as_secs(), 86_400_000);
+        assert!(then - day < then && then < then + day);
+        assert_eq!(then.checked_sub(day), Some(then - day));
+        assert_eq!((then - day) + day, then);
+
+        assert_eq!(Wall::from_ms(1_999).as_secs(), 1);
+        assert_eq!(Wall::from_ms(-1).as_secs(), -1, "towards the past");
+        assert_eq!(
+            Wall::from_ms(i64::MAX) + day,
+            Wall::from_ms(i64::MAX),
+            "a step past the end stays at the end"
+        );
+        assert_eq!(
+            Wall::from_ms(i64::MIN).checked_sub(day),
+            None,
+            "and the one subtraction that cannot be done says so"
         );
     }
 

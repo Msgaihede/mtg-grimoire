@@ -1,5 +1,5 @@
 //! Files in the data directory: a download being written, a feed being read back, the handful
-//! of files the schema itself keeps.
+//! of files the schema itself keeps, and the image cache's pictures.
 //!
 //! **Everything this crate does to a file goes through here**, so the answer to "what does the
 //! engine touch on disk" is the list of callers of this module. Two halves, because there are
@@ -26,6 +26,7 @@
 //! `std::fs` itself compiles for a browser and fails there when called, which is why `schema`
 //! could name it directly until the I/O step. `tokio::fs` does not compile there at all.
 
+use super::clock::Wall;
 use std::io;
 use std::path::{Path, PathBuf};
 
@@ -64,6 +65,50 @@ pub fn create_dir_all(path: &Path) -> io::Result<()> {
 /// left out: nothing this app writes has one.
 pub fn entries(dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
     imp::entries(dir)
+}
+
+/// What a directory entry is, as the entry itself says — a link is a link, never what it
+/// points at.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    File,
+    Dir,
+    /// A link, a device, anything else.
+    Other,
+}
+
+/// One entry of a [`listing`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Entry {
+    pub name: String,
+    pub path: PathBuf,
+    pub kind: Kind,
+    /// A file's length. `None` for anything but a file, and for a file the host would not
+    /// measure.
+    pub len: Option<u64>,
+    /// When a file was last written, or stamped with [`set_modified`]. `None` as for `len`.
+    pub modified: Option<Wall>,
+}
+
+/// Every entry of `dir` with what it is — and, for a file, how long it is and when it was
+/// last written. **A directory that is not there answers `None`**, which is an ordinary state:
+/// nothing was ever put in it.
+///
+/// For a caller that has to tell "absent" from "unreadable": any other failure, on the
+/// directory or on one entry of it, is the error, so a partial listing is never mistaken for a
+/// whole one. An entry that vanishes between being listed and being asked what it is is left
+/// out, as is one whose name is not Unicode.
+///
+/// On Windows a file's length and time come out of the directory listing itself, so this is
+/// one call per directory; elsewhere it is one more per file.
+pub fn listing(dir: &Path) -> io::Result<Option<Vec<Entry>>> {
+    imp::listing(dir)
+}
+
+/// Set `path`'s modified time. **It never creates the file**: a path that is not there is
+/// `NotFound`, and stays not there.
+pub fn set_modified(path: &Path, when: Wall) -> io::Result<()> {
+    imp::set_modified(path, when)
 }
 
 pub fn is_file(path: &Path) -> bool {
@@ -129,12 +174,30 @@ pub mod aio {
     pub async fn remove(path: &Path) -> io::Result<()> {
         imp::remove_async(path).await
     }
+
+    /// The whole of `path`, in memory.
+    pub async fn read(path: &Path) -> io::Result<Vec<u8>> {
+        imp::read_async(path).await
+    }
+
+    pub async fn create_dir_all(path: &Path) -> io::Result<()> {
+        imp::create_dir_all_async(path).await
+    }
+
+    /// Move `from` to `to`, **replacing** a file already there — one operation on every host
+    /// that has files, which is what lets a writer finish a file under another name and swap
+    /// it in whole.
+    pub async fn rename(from: &Path, to: &Path) -> io::Result<()> {
+        imp::rename_async(from, to).await
+    }
 }
 
 #[cfg(not(target_family = "wasm"))]
 mod imp {
+    use super::{Entry, Kind, Wall};
     use std::io;
     use std::path::{Path, PathBuf};
+    use std::time::{Duration, SystemTime, UNIX_EPOCH};
     use tokio::io::AsyncWriteExt as _;
 
     pub type Reader = std::fs::File;
@@ -163,12 +226,84 @@ mod imp {
             .collect())
     }
 
+    pub fn listing(dir: &Path) -> io::Result<Option<Vec<Entry>>> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(e) if e.kind() == io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e),
+        };
+        let mut found = Vec::new();
+        for entry in entries {
+            let entry = entry?;
+            let kind = match entry.file_type() {
+                Ok(kind) if kind.is_file() => Kind::File,
+                Ok(kind) if kind.is_dir() => Kind::Dir,
+                Ok(_) => Kind::Other,
+                Err(e) if e.kind() == io::ErrorKind::NotFound => continue,
+                Err(e) => return Err(e),
+            };
+            let Ok(name) = entry.file_name().into_string() else {
+                continue;
+            };
+            // Listed, even when it cannot be measured.
+            let meta = match kind {
+                Kind::File => entry.metadata().ok(),
+                Kind::Dir | Kind::Other => None,
+            };
+            found.push(Entry {
+                name,
+                path: entry.path(),
+                kind,
+                len: meta.as_ref().map(|m| m.len()),
+                modified: meta.and_then(|m| m.modified().ok()).map(wall),
+            });
+        }
+        Ok(Some(found))
+    }
+
+    /// A file time as a [`Wall`]: whole milliseconds, a time before 1970 counted backwards.
+    fn wall(time: SystemTime) -> Wall {
+        let ms = |d: Duration| i64::try_from(d.as_millis()).unwrap_or(i64::MAX);
+        Wall::from_ms(match time.duration_since(UNIX_EPOCH) {
+            Ok(since) => ms(since),
+            Err(before) => -ms(before.duration()),
+        })
+    }
+
+    pub fn set_modified(path: &Path, when: Wall) -> io::Result<()> {
+        let ms = when.as_ms();
+        let span = Duration::from_millis(ms.unsigned_abs());
+        let time = if ms >= 0 {
+            UNIX_EPOCH.checked_add(span)
+        } else {
+            UNIX_EPOCH.checked_sub(span)
+        }
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a time a file can hold"))?;
+        // `write(true)` and never `create(true)`: a file that is gone stays gone.
+        std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)?
+            .set_modified(time)
+    }
+
     pub fn is_file(path: &Path) -> bool {
         path.is_file()
     }
 
     pub fn exists(path: &Path) -> bool {
         path.exists()
+    }
+
+    pub async fn read_async(path: &Path) -> io::Result<Vec<u8>> {
+        tokio::fs::read(path).await
+    }
+
+    pub async fn create_dir_all_async(path: &Path) -> io::Result<()> {
+        tokio::fs::create_dir_all(path).await
+    }
+
+    pub async fn rename_async(from: &Path, to: &Path) -> io::Result<()> {
+        tokio::fs::rename(from, to).await
     }
 
     pub async fn create(path: &Path) -> io::Result<Writer> {
@@ -210,7 +345,7 @@ mod imp {
 
 #[cfg(target_family = "wasm")]
 mod imp {
-    use super::unsupported;
+    use super::{unsupported, Entry, Wall};
     use std::io;
     use std::path::{Path, PathBuf};
 
@@ -246,12 +381,32 @@ mod imp {
         Err(unsupported())
     }
 
+    pub fn listing(_dir: &Path) -> io::Result<Option<Vec<Entry>>> {
+        Err(unsupported())
+    }
+
+    pub fn set_modified(_path: &Path, _when: Wall) -> io::Result<()> {
+        Err(unsupported())
+    }
+
     pub fn is_file(_path: &Path) -> bool {
         false
     }
 
     pub fn exists(_path: &Path) -> bool {
         false
+    }
+
+    pub async fn read_async(_path: &Path) -> io::Result<Vec<u8>> {
+        Err(unsupported())
+    }
+
+    pub async fn create_dir_all_async(_path: &Path) -> io::Result<()> {
+        Err(unsupported())
+    }
+
+    pub async fn rename_async(_from: &Path, _to: &Path) -> io::Result<()> {
+        Err(unsupported())
     }
 
     pub async fn create(_path: &Path) -> io::Result<Writer> {
@@ -303,8 +458,14 @@ mod tests {
         dir
     }
 
+    /// Empty `dir`, one level down as well: the listing test leaves a folder in its own.
     fn remove_dir(dir: &Path) -> io::Result<()> {
         for (_, path) in entries(dir)? {
+            if !is_file(&path) {
+                remove_dir(&path)?;
+                std::fs::remove_dir(&path)?;
+                continue;
+            }
             remove(&path)?;
         }
         Ok(())
@@ -331,6 +492,89 @@ mod tests {
         remove(&path).unwrap();
         assert!(!exists(&path));
         assert_eq!(remove(&path).unwrap_err().kind(), io::ErrorKind::NotFound);
+    }
+
+    /// What the image cache's eviction asks of it: a folder that is not there is not an
+    /// error, a file is told from a folder, and a file carries its length and a stamp that can
+    /// be moved — without ever being created by the moving.
+    #[test]
+    fn a_listing_tells_a_file_from_a_folder_and_carries_a_stamp_that_can_be_set() {
+        let dir = dir("listing");
+        assert_eq!(listing(&dir.join("never-made")).unwrap(), None);
+        assert_eq!(listing(&dir).unwrap(), Some(Vec::new()));
+
+        let file = dir.join("picture.webp");
+        let shard = dir.join("ab");
+        write(&file, b"12345").unwrap();
+        create_dir_all(&shard).unwrap();
+
+        let mut found = listing(&dir).unwrap().unwrap();
+        found.sort_by(|a, b| a.name.cmp(&b.name));
+        assert_eq!(found.len(), 2);
+        assert_eq!(
+            (found[0].name.as_str(), &found[0].path, found[0].kind),
+            ("ab", &shard, Kind::Dir)
+        );
+        assert_eq!((found[0].len, found[0].modified), (None, None));
+        assert_eq!(
+            (found[1].name.as_str(), &found[1].path, found[1].kind),
+            ("picture.webp", &file, Kind::File)
+        );
+        assert_eq!(found[1].len, Some(5));
+        let written = found[1].modified.expect("a file just written has a time");
+        let now = Wall::now();
+        let minute = std::time::Duration::from_secs(60);
+        assert!(
+            now - minute < written && written < now + minute,
+            "{written:?} against {now:?}"
+        );
+
+        // Two seconds is the coarsest stamp any filesystem this app meets keeps (FAT), so a
+        // whole number of them survives the trip on all of them.
+        let long_ago = Wall::from_ms(1_000_000_000_000);
+        set_modified(&file, long_ago).unwrap();
+        let stamped = listing(&dir).unwrap().unwrap();
+        let stamped = stamped.iter().find(|e| e.kind == Kind::File).unwrap();
+        assert_eq!(stamped.modified, Some(long_ago));
+        assert_eq!(stamped.len, Some(5), "a stamp is not a write");
+
+        let gone = dir.join("gone.webp");
+        assert_eq!(
+            set_modified(&gone, long_ago).unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert!(
+            !exists(&gone),
+            "stamping a file that is gone must not make one"
+        );
+    }
+
+    /// What storing a picture asks of it: bytes finished under another name and swapped in
+    /// whole, over a file already there.
+    #[tokio::test]
+    async fn a_file_is_read_whole_and_a_rename_replaces_what_was_there() {
+        let dir = dir("swap");
+        let shard = dir.join("images").join("ab");
+        aio::create_dir_all(&shard).await.unwrap();
+        aio::create_dir_all(&shard).await.unwrap();
+
+        let dest = shard.join("card.webp");
+        let tmp = shard.join("card.0.tmp");
+        aio::write(&dest, b"old").await.unwrap();
+        aio::write(&tmp, b"new bytes").await.unwrap();
+        aio::rename(&tmp, &dest).await.unwrap();
+        assert_eq!(aio::read(&dest).await.unwrap(), b"new bytes");
+        assert!(!exists(&tmp), "the temporary name is gone with the swap");
+
+        assert_eq!(
+            aio::read(&tmp).await.unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(
+            aio::rename(&tmp, &dest).await.unwrap_err().kind(),
+            io::ErrorKind::NotFound
+        );
+        assert_eq!(aio::read(&dest).await.unwrap(), b"new bytes");
     }
 
     /// What a download asks of it: a file started, added to after a restart, and measured —

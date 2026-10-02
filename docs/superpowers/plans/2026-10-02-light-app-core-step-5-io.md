@@ -181,10 +181,51 @@ So this part is a move with a rewrite inside it, and the rewrite is small and re
 
 ## Part 5c — the feeds and the image cache
 
-- **Three feeds keep three clients.** `combos` and `marketplace_feed` each build their own `platform::http::Client`; `tags/` shares Scryfall's, pacing gate and lockout included.
-- **The feeds' temp files and the image cache's files go through `platform::files`**, which grows what they call — a rename, a modified time — with them.
-- **`images::Cache` joins `State`**; the `mtgimg://` protocol handler stays the desktop's.
-- **`deck::bracket_reads`, `reset::clear_cache` and the tests that name `images`, `index::fixtures` or `tags::query` go home.**
+Read on this branch's tree over part 5b's (#769), 2026-10-02.
+
+### What was read first
+
+Eight files, 17 023 lines, cut into items by `scripts/lib/rs-items.mjs` and each item read for what it names of the machine:
+
+| File | Lines | Items that name the desktop | What else it reaches |
+| --- | --- | --- | --- |
+| `combos.rs` | 5 042 | 5 commands; `refresh_if_due` and `emit`, for a window | its own `reqwest` client, `tokio::fs`, `std::fs`, a thread's sleep, the wall clock, tauri's blocking pool |
+| `marketplace_feed.rs` | 2 182 | 2 commands; `refresh_selected_if_due`, for a window; `refresh`, for the mirror | the same list |
+| `tags/mod.rs` | 2 255 | `refresh_if_due` and `emit`, for a window | Scryfall's client, `std::fs`, a sleep, the wall clock, the blocking pool |
+| `tags/{oracle,art,query,muted}.rs` | 3 719 | 12 commands, and two `refresh_if_due`s that pass a window on | nothing |
+| `images.rs` | 3 825 | 2 commands; `serve`, `respond`, `fail`, `not_ready` — the `mtgimg://` answer | a semaphore, two async mutexes and a deadline from `tokio`; `tokio::fs` and `std::fs`; a file's modified time; a thread |
+
+Every `refresh` already takes its progress as a callback, "for `ingest`'s reason": the window is named only by the two things that call it. So the feeds are a move with the same small rewrite 5b made — a window becomes the state's event sink, tauri's blocking pool becomes `platform::spawn::blocking` — plus each feed's client onto `platform::http` and its temp file onto `platform::files`. **The image cache is the part that is not regular**: it is the one module that reads a file's modified time, walks a directory tree, renames, and bounds its own concurrency.
+
+### Decisions
+
+- **Three feeds keep three clients.** `combos` and `marketplace_feed` each build their own `platform::http::Client`, with the timeouts each has today; `tags/` shares Scryfall's, pacing gate and lockout included. `ComboError::Http` and `FeedError::Http` carry a `platform::http::Error`, which prints as `reqwest`'s does.
+- **A feed speaks through the sink.** `combos::emit(&State, …)`, `tags::emit(ds, &State, …)` and a new `marketplace_feed::emit(&State, marketplace, …)` — the last was the same closure written twice. `refresh_if_due(&Arc<State>)` takes no window. Same event names, same payloads.
+- **A finished price refresh tells the observers.** `state.mirror.mark_all()` becomes `state.corpus_replaced()`: `marketplace_prices` is a corpus table rewritten whole, which is the sentence that method already says.
+- **`platform::files` grows what the cache calls**: `rename`, `set_modified`, `listing` — a directory's entries with each one's kind, length and modified time — and, for an `async fn`, `aio::{read, create_dir_all, rename}`. Refused in a browser, like the rest.
+- **`platform::clock::Wall`** — a moment on the wall clock that can be written to a file and compared: milliseconds since the epoch, with `now()`, `+` and `-` a `Duration`. The cache's used-stamp is one. `SystemTime` stays under `platform/`.
+- **The cache's permits and its per-key locks are `async-lock`'s**, which needs no runtime and builds for a browser. It was already in `Cargo.lock`, under `httpmock`; this is one new edge and no new package. The 429 deadline becomes `(Tick, Duration)` behind a plain mutex — it was never held across an `.await` that mattered — with the same *later of the two* rule.
+- **`State` gains `images`**, and `State::new` a seventh argument: the cache, which the host builds because it knows where the pictures live.
+- **The upkeep *pass* is the core's and the upkeep *thread* is the host's.** `images::upkeep_tick(&State, &mut last)` is one wake of today's loop, cut where the loop sleeps; `spawn_upkeep` stays in `src-tauri` as a thread that sleeps and calls it. A browser has no files to evict and no thread to sleep on, and an Android host owes the same ten lines.
+- **The `mtgimg://` answer stays**: `serve`, `respond`, `fail`, `not_ready`, `IMAGE_MAX_AGE` and their six tests name `tauri::http`.
+- **In a browser the cache fetches and stores nothing.** `files` refuses, so every store is a counted failure and a folded `error_log` row, and the bytes are still served. What a web host keeps pictures in — the HTTP cache, the Cache API — is phase 5's.
+- **What steps 4 and 5b left behind comes home**: `deck::bracket_reads` with its five tests, `reset::clear_cache` with its eight, `sync::status`, and the tests of `card`, `deck_tokens`, `search` and `schema` that name `images` or `tags::query`.
+
+### Tasks
+
+- [ ] `platform::clock::Wall`; `platform::files::{rename, set_modified, listing}` and `aio::{read, create_dir_all, rename}`; tests for each — a stamp written and read back, a listing that tells a file from a folder, a rename that replaces.
+- [ ] `scripts/core-step-5c.mjs`: the eight files split item by item, every rewrite an exact replacement; the homecomings; `ipc.test.ts`'s `?raw` imports as both halves. `--dry` first. No git state.
+- [ ] By hand: `state.rs` (`images`, the seventh argument), both module maps, `desktop.rs` (the cache built, the feeds started, the upkeep thread), the fence's pinned list, `Cargo.toml`.
+- [ ] The cache's tests onto `Wall` and `Tick`; the feeds' tests onto a core `State`.
+- [ ] One test per feed that the sink receives its progress, and one that a finished price refresh tells an observer once.
+- [ ] Item by item, old against new: only what is on the replacement list changed.
+- [ ] `cargo fmt`; clippy for the workspace; `cargo check -p mtg-grimoire --locked`; the wasm build and its clippy; the fence; `cargo tree` for `testing`.
+- [ ] `#[test]` attributes before and after.
+- [ ] `cargo test --workspace`; `npm run build`, `lint`, `test:run`.
+- [ ] An existing database upgraded by `main`'s binary and by this branch's, compared row for row, with the four downloads compared by hash.
+- [ ] `tauri dev`: each feed refreshed by its button with its progress read in the page; a search wall's pictures from an empty cache; the upkeep pass a minute in; the mirror's pass after a price refresh.
+- [ ] A fresh reviewer over the diff.
+- [ ] The record, the pull request, the issue.
 
 ## What step 6 inherits
 
