@@ -17,7 +17,8 @@ Spellbook's editors'. Both were verified live on **2026-08-27** and are recorded
 the source; this document is the reference the shipped code is held to and does not restate it.
 
 **Every duration in the feed sections below was taken on Windows against a _debug_ build**, by
-`combos::tests::live_ingest` — an `#[ignore]`d test in `src-tauri/src/combos.rs` that exists so
+`combos::tests::live_ingest` — an `#[ignore]`d test in `crates/grimoire-core/src/combos.rs`
+(`cargo test -p grimoire-core -- --ignored combos::tests::live_ingest --nocapture`) that exists so
 these can be re-taken rather than trusted. A release build can differ by ~8×, which is the root
 `CLAUDE.md`'s standing rule, so no timing here appears without the build it was taken on.
 
@@ -292,8 +293,9 @@ claim about how a deck plays, and no list of cards answers it.
 
 ## The combo feed
 
-`src-tauri/src/combos.rs`. Modelled on `marketplace_feed.rs` and not on `tags/`: it is not
-Scryfall, so it gets its own `reqwest` client, its own timeouts, no share of Scryfall's
+`crates/grimoire-core/src/combos.rs` since 2026-10-02, with its five commands in
+`src-tauri/src/combos/mod.rs`. Modelled on `marketplace_feed.rs` and not on `tags/`: it is not
+Scryfall, so it gets its own client (a `platform::http::Client`, which is `reqwest`), its own timeouts, no share of Scryfall's
 rate-limit budget and no place in its 429 penalty state.
 
 ### The file
@@ -1491,7 +1493,7 @@ without a relaunch, and it is covered in the suite and in Storybook instead.
 
 | File | Holds |
 | --- | --- |
-| `src-tauri/src/combos.rs` | The feed: client, streaming parse, staged write, `due_at_startup`, `clear_combos`, the commands, `combos:progress` — **and both match queries**: `match_combos`/`combos_for_cards` (*which combos does this pile of printings hold*, the deck advisory's and the gallery's fourth signal) and `card_combos`/`combos_for_card` (*which combos name this one oracle card* — `HIT_CTE`, `OWNED_CTE`, `GRP_CTE`, `counts_sql`, `page_sql`, `pieces_sql`, `MAX_PAGE`) |
+| `crates/grimoire-core/src/combos.rs` (commands: `src-tauri/src/combos/mod.rs`) | The feed: client, streaming parse, staged write, `due_at_startup`, `clear_combos`, the commands, `combos:progress` — **and both match queries**: `match_combos`/`combos_for_cards` (*which combos does this pile of printings hold*, the deck advisory's and the gallery's fourth signal) and `card_combos`/`combos_for_card` (*which combos name this one oracle card* — `HIT_CTE`, `OWNED_CTE`, `GRP_CTE`, `counts_sql`, `page_sql`, `pieces_sql`, `MAX_PAGE`) |
 | `crates/grimoire-core/src/schema.rs` | The v26 rung — `decks.bracket`, `combos`, `combo_cards`, `combo_meta`, the two indexes, and the staging twins — **and corpus schema 2**: `COMBO_TABLES_SQL`, `create_combo_tables`, `combos_are_at_head`, `COMBO_V2_COLUMNS`, `rebuild_combo_tables` |
 | `crates/grimoire-core/src/deck.rs` | `AUTO_BRACKET`, `valid_bracket`, `BAD_BRACKET`, the column on `DeckRow`/`DeckPatch`/`DeckBefore` and the audit line — **and `deck_bracket_reads`**, with `BRACKET_CARDS_SQL` and `BRACKET_IDS_SQL` behind it |
 | `src/lib/ipc.ts` | `AUTO_BRACKET`, `ComboBracketTag`, `DeckCombo`, `ComboStatus`, `ComboProgress` and the calls — plus `BracketCardRow`/`DeckBracketRead`/`deckBracketReads`, and the card side's `ComboPiece`/`CardCombo`/`ComboCountBucket`/`CardCombosPage`, plus `CardCombosQuery`, which mirrors no Rust struct and exists so the call site and `cardCombosKey` cannot disagree about what was asked |

@@ -34,9 +34,8 @@
 //! **Nothing here may break a launch or a card sync.** A failure leaves the previous tags in
 //! place and writes the reason to `error_log`; a database that has never fetched this file is
 //! a supported state, and the app it describes is the app before this module existed.
-
 use super::{Dataset, TagStatus};
-use crate::sync::AppState;
+use crate::state::State;
 use std::sync::Arc;
 
 /// The event a refresh reports itself through.
@@ -57,7 +56,7 @@ pub const PROGRESS_EVENT: &str = "art-tags:progress";
 /// sessions on the same afternoon.
 ///
 /// The ETag makes a check that finds nothing cost zero bytes either way, and
-/// [`art_tags_refresh`]'s `force` is the way past this for anyone who wants today's file.
+/// a forced refresh is the way past this for anyone who wants today's file.
 pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 
 /// Scryfall's Art Tags — what an illustration *depicts*.
@@ -102,48 +101,14 @@ pub type ArtTagStatus = TagStatus;
 /// Payload of [`PROGRESS_EVENT`] — [`super::TagProgress`], under the name the frontend knows.
 pub type ArtTagProgress = super::TagProgress;
 
-// ---------------------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------------------
-
-/// Download the Art Tags file if it has changed and rebuild the taxonomy from it.
-///
-/// `force` skips the weekly throttle, not the ETag check.
-#[tauri::command]
-pub async fn art_tags_refresh(
-    state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
-    force: bool,
-) -> Result<ArtTagStatus, String> {
-    let state = state.inner().clone();
-    super::refresh(&ART, &state, force, &mut |phase, done, total| {
-        super::emit(&ART, &app, phase, done, total)
-    })
-    .await
-}
-
-/// Whether there is an art taxonomy, which file it came from, and how old it is.
-///
-/// `async`, and answered on the blocking pool, because a sync command body runs inline on the
-/// IPC thread and this takes `db_read`'s mutex.
-#[tauri::command]
-pub async fn art_tags_status(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<ArtTagStatus, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || super::status_of(&ART, &state))
-        .await
-        .map_err(|e| format!("could not read the art tag status: {e}"))
-}
-
 /// Refresh the taxonomy at startup if it is due.
 ///
 /// **Silent, best-effort and never blocking** — [`super::refresh_if_due`]'s contract. The
 /// honest fallback here is a Tags page that says it has nothing yet, which is what a database
 /// that has never fetched this file has; neither the launch, the card sync nor the *oracle*
 /// refresh may ever wait on it, and 12.5 MB is the reason that last one is worth saying.
-pub async fn refresh_if_due(state: &Arc<AppState>, app: &tauri::AppHandle) {
-    super::refresh_if_due(&ART, state, app).await
+pub async fn refresh_if_due(state: &Arc<State>) {
+    super::refresh_if_due(&ART, state).await
 }
 
 #[cfg(test)]
@@ -157,7 +122,7 @@ mod tests {
     use rusqlite::Connection;
     use std::sync::Mutex;
 
-    /// `src-tauri/tests/fixtures/art-tags-sample.jsonl`, gzipped the way the bulk origin
+    /// This crate's `tests/fixtures/art-tags-sample.jsonl`, gzipped the way the bulk origin
     /// serves it.
     ///
     /// **A hand-written file rather than a `format!` helper**, because three of the seven

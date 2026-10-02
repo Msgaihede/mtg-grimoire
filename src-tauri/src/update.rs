@@ -2018,8 +2018,8 @@ mod tests {
                         Default::default(),
                     ),
                     crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                    crate::images::Cache::new(dir.join("images")),
                 )),
-                images: crate::images::Cache::new(dir.join("images")),
                 // The mirror is never started in these tests; a clean mask and an empty record are
                 // what an `AppState` looks like before the first pass.
                 mirror,

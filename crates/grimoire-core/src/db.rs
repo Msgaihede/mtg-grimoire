@@ -279,8 +279,8 @@ pub const BUSY: &str = "The card database is busy finishing a sync. Try that aga
 /// would brick the app for no gain.
 ///
 /// This is the *one* definition of that rule. [`lock_blocking`] is it over a `Connection`,
-/// `sync::lock_conn`/`lock_db`/`lock_db_read`/`lock_plain` are the names the rest of the
-/// crate reaches it by, and [`lock_for`] applies the same recovery to the bounded case.
+/// [`crate::state::State::lock_db`] and `lock_db_read` are how the rest of the crate reaches
+/// it, and [`lock_for`] applies the same recovery to the bounded case.
 pub fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(|e| e.into_inner())
 }

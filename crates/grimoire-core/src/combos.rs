@@ -79,8 +79,9 @@
 //! of its own and neither is Spellbook's), and the per-`uses` `zoneLocations` and `*CardState`
 //! strings — "on the battlefield, tapped" is a fact about *playing* the combo that the
 //! description already spells out in prose.
-
-use crate::sync::AppState;
+use crate::platform::files::aio;
+use crate::platform::http;
+use crate::state::State;
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::de::{DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -91,8 +92,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
+use std::time::Duration;
 
 // ---------------------------------------------------------------------------------------
 // Constants
@@ -160,7 +160,7 @@ const PROGRESS_EMIT_BYTES: u64 = 1_000_000;
 /// failure worth avoiding. 27.5 MB an ask is the other half of it.
 ///
 /// The ETag makes a check that finds nothing cost zero bytes either way, and
-/// [`combos_refresh`]'s `force` is the way past this for anyone who wants today's file.
+/// a forced refresh is the way past this for anyone who wants today's file.
 pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 
 /// The connect timeout. This is an ordinary web host, not a CDN this app has measured.
@@ -187,7 +187,7 @@ const BATCH: usize = 2_000;
 const YIELD_BETWEEN_BATCHES: Duration = Duration::from_millis(5);
 
 fn stand_aside() {
-    std::thread::sleep(YIELD_BETWEEN_BATCHES);
+    crate::platform::pause(YIELD_BETWEEN_BATCHES);
 }
 
 /// The largest deck a combo check will accept in one call.
@@ -691,7 +691,7 @@ impl<'de> Visitor<'de> for Variants<'_> {
 #[derive(Debug, thiserror::Error)]
 pub enum ComboError {
     #[error("could not reach Commander Spellbook: {0}")]
-    Http(reqwest::Error),
+    Http(crate::platform::http::Error),
     #[error("Commander Spellbook answered {status}")]
     Status { status: u16 },
     /// The body is longer than [`MAX_FEED_BYTES`], declared or streamed.
@@ -922,7 +922,7 @@ pub fn ingest_gz(
 
     // Opened before the database is touched: a missing or unreadable path must not cost the
     // caller the staging tables it was about to fill.
-    let mut handle = std::fs::File::open(gz_path)?;
+    let mut handle = crate::platform::files::open(gz_path)?;
     let chunks = std::iter::from_fn(move || {
         let mut buf = vec![0u8; 64 * 1024];
         match handle.read(&mut buf) {
@@ -977,8 +977,8 @@ pub fn ingest_stream(
 /// before replaying one — so a cleared database really re-downloads rather than being told 304
 /// into staying empty. The caller is expected to follow this with a forced refresh.
 ///
-/// Takes a `&Connection` and not an [`AppState`], so the rule can be asserted against
-/// [`crate::schema::memory_pair`] with no app handle — the split every other helper here uses.
+/// Takes a `&Connection` and not a [`State`], so the rule can be asserted against
+/// [`crate::schema::memory_pair`] with no state built — the split every other helper here uses.
 pub fn clear_combos(conn: &Connection) -> rusqlite::Result<()> {
     let tx = conn.unchecked_transaction()?;
     tx.execute("DELETE FROM combo_cards", [])?;
@@ -1036,15 +1036,14 @@ fn note_failure(db: &Mutex<Connection>, err: &ComboError) {
 /// **Deliberately not [`crate::scryfall::Client`]** — see the module header. The user agent is
 /// shared because it is accurate here too: it names this app, its version and its repository,
 /// which is what a public bulk endpoint is owed.
-fn client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+fn client() -> &'static http::Client {
+    static CLIENT: OnceLock<http::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .user_agent(crate::scryfall::USER_AGENT)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .read_timeout(READ_TIMEOUT)
-            .build()
-            .unwrap_or_default()
+        http::Client::new(&http::Config {
+            user_agent: crate::scryfall::USER_AGENT,
+            connect_timeout: Some(CONNECT_TIMEOUT),
+            read_timeout: Some(READ_TIMEOUT),
+        })
     })
 }
 
@@ -1060,7 +1059,7 @@ pub enum Fetch {
 /// Stream the combo file to `dest`, reporting `(done, total)` as it goes.
 ///
 /// To a file and not into memory, for [`crate::sync`]'s reason: the parse wants a `Read` and
-/// reqwest only offers an async stream, so the choice is a temp file or 27.5 MB of `Vec<u8>`
+/// a response is only ever an async stream, so the choice is a temp file or 27.5 MB of `Vec<u8>`
 /// held while a second copy of it is decompressed. `total` is `0` when the host declares no
 /// `Content-Length`, which is a progress bar with no denominator rather than an error.
 ///
@@ -1084,15 +1083,12 @@ async fn download_capped(
     max_bytes: u64,
     progress: &mut (dyn FnMut(u64, u64) + Send),
 ) -> Result<Fetch, ComboError> {
-    use futures_util::StreamExt;
-    use tokio::io::AsyncWriteExt;
-
     let mut req = client().get(url);
     if let Some(etag) = if_none_match {
         req = req.header("If-None-Match", etag);
     }
     let resp = req.send().await.map_err(ComboError::Http)?;
-    let status = resp.status().as_u16();
+    let status = resp.status();
     // The common case once a database has the file, and it costs zero bytes. Checked before the
     // success range, because 304 is not in it.
     if status == 304 {
@@ -1101,11 +1097,7 @@ async fn download_capped(
     if !(200..300).contains(&status) {
         return Err(ComboError::Status { status });
     }
-    let etag = resp
-        .headers()
-        .get(reqwest::header::ETAG)
-        .and_then(|v| v.to_str().ok())
-        .map(str::to_owned);
+    let etag = resp.header("etag").map(str::to_owned);
 
     // The cheap check first: a declared length past the bound is refused before a byte of body
     // is read. It is a claim, though, and a chunked response makes none — so the streamed total
@@ -1116,20 +1108,20 @@ async fn download_capped(
     }
 
     if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        aio::create_dir_all(parent).await?;
     }
-    let mut file = tokio::fs::File::create(dest).await?;
+    let mut file = aio::Writer::create(dest).await?;
     let mut done = 0u64;
     let mut last_emit = 0u64;
-    let mut stream = resp.bytes_stream();
+    let mut body = resp.into_body();
     progress(0, total);
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = body.chunk().await {
         let chunk = chunk.map_err(ComboError::Http)?;
         done += chunk.len() as u64;
         if done > max_bytes {
             // Closed before it is removed: Windows refuses to delete a file that is still open.
-            drop(file);
-            let _ = tokio::fs::remove_file(dest).await;
+            file.close();
+            let _ = aio::remove(dest).await;
             return Err(ComboError::TooLarge);
         }
         file.write_all(&chunk).await?;
@@ -1144,7 +1136,7 @@ async fn download_capped(
 
 /// Where the file is downloaded to. Beside the bulk file's and the price feeds' `tmp/`, and
 /// deleted either way.
-fn temp_path(state: &AppState) -> PathBuf {
+fn temp_path(state: &State) -> PathBuf {
     state
         .data_dir
         .join("tmp")
@@ -1264,8 +1256,8 @@ pub fn read_status(conn: &Connection, now: i64) -> ComboStatus {
 }
 
 /// [`read_status`] over the read-only connection, with the clock read off that connection.
-pub(crate) fn status_of(state: &AppState) -> ComboStatus {
-    let conn = crate::sync::lock_db_read(state);
+pub fn status_of(state: &State) -> ComboStatus {
+    let conn = state.lock_db_read();
     let now = conn
         .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
         .unwrap_or(0);
@@ -1275,10 +1267,7 @@ pub(crate) fn status_of(state: &AppState) -> ComboStatus {
 /// Seconds since the Unix epoch. A clock before 1970 reads as 0, which makes the combo
 /// database stale — [`crate::sync`]'s choice, for its reason.
 fn unix_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::platform::clock::now_secs()
 }
 
 // ---------------------------------------------------------------------------------------
@@ -2029,8 +2018,8 @@ pub fn card_combos(
 ///
 /// **A flag rather than [`crate::tags`]'s list of names**, because there is one file: that list
 /// exists so an art refresh does not refuse because an oracle one is running, and there is no
-/// second dataset here to be refused by. Module-level rather than a field on `AppState` because
-/// it is this module's concern alone.
+/// second dataset here to be refused by. Module-level rather than a field on the [`State`]
+/// because it is this module's concern alone.
 static REFRESHING: AtomicBool = AtomicBool::new(false);
 
 /// Clears the claim however the refresh ends — an early return, an error, a dropped future.
@@ -2112,7 +2101,7 @@ fn due_at_launch(conn: &Connection, now: i64) -> bool {
 /// stamp costs is one more conditional request a week from now. **Nothing is written when there
 /// is no row**, which is the never-ingested state: a watermark with no rows behind it is exactly
 /// what would make the next run 304 past an empty database.
-fn mark_checked(state: &Arc<AppState>) {
+fn mark_checked(state: &State) {
     let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) else {
         return;
     };
@@ -2127,16 +2116,16 @@ fn mark_checked(state: &Arc<AppState>) {
 /// `force` skips the [`REFRESH_INTERVAL_SECS`] throttle but **not** the ETag check: a forced
 /// refresh that finds the same file answers in well under a second and downloads nothing.
 ///
-/// `progress` is called with `(phase, done, total)`; [`combos_refresh`] turns that into
-/// [`PROGRESS_EVENT`]. Taken as a callback rather than an `AppHandle` for [`crate::ingest`]'s
-/// reason — it is what lets the whole path be driven from a test.
+/// `progress` is called with `(phase, done, total)`; a caller that has somebody to tell hands
+/// it [`emit`], which says each as [`PROGRESS_EVENT`]. Taken as a callback for
+/// [`crate::ingest`]'s reason — it is what lets the whole path be driven from a test.
 ///
 /// Every failure leaves the previous combos exactly where they were and is written to
 /// `error_log`. A file that arrived and could not be used — refused as too large, or failed in
 /// the ingest — also rests the feed for a day at launch ([`crate::feed::backoff`]): 27.5 MB and
 /// a 639 MB parse is what every launch used to spend on a file upstream had broken.
 pub async fn refresh(
-    state: &Arc<AppState>,
+    state: &Arc<State>,
     force: bool,
     progress: &mut (dyn FnMut(&str, u64, u64) + Send),
 ) -> Result<ComboStatus, String> {
@@ -2148,7 +2137,7 @@ pub async fn refresh(
     };
 
     let (etag, checked_at, populated) = {
-        let conn = crate::sync::lock_db_read(state);
+        let conn = state.lock_db_read();
         let meta = read_meta(&conn);
         (
             meta.as_ref().and_then(|m| m.etag.clone()),
@@ -2181,7 +2170,7 @@ pub async fn refresh(
         Err(e) => {
             // The partial is no use to anyone: there is no resume here and a half-written body
             // would only fail to decompress next time. (A size refusal has already removed it.)
-            let _ = std::fs::remove_file(&gz);
+            let _ = crate::platform::files::remove(&gz);
             note_failure(&state.db, &e);
             // A refusal on size is Spellbook's answer and will be the same at the next launch;
             // a connection that failed or a status is this machine's network, and is not.
@@ -2198,14 +2187,15 @@ pub async fn refresh(
     let joined = {
         let state = state.clone();
         let gz = gz.clone();
-        // 639 MB of decompressed JSON and hundreds of thousands of inserts: a blocking thread,
-        // never the async runtime, and never across an `.await` with a lock in hand.
-        tauri::async_runtime::spawn_blocking(move || {
+        // 639 MB of decompressed JSON and hundreds of thousands of inserts: off the async
+        // task where the host has somewhere to put it, and never across an `.await` with a
+        // lock in hand.
+        crate::platform::spawn::blocking(move || {
             ingest_gz(&state.db, &gz, etag.as_deref(), fetched_at, &mut |_, _| {})
         })
         .await
     };
-    let _ = std::fs::remove_file(&gz);
+    let _ = crate::platform::files::remove(&gz);
 
     match joined {
         Ok(Ok(_)) => {
@@ -2234,7 +2224,7 @@ const BACKOFF_FEED: &str = "combos";
 
 /// Rest the feed for a day at launch — its file arrived and could not be used. Best-effort, for
 /// [`note_failure`]'s reason.
-fn note_unusable(state: &AppState) {
+fn note_unusable(state: &State) {
     if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
         let _ = crate::feed::backoff::note_unusable(&conn, BACKOFF_FEED, unix_now());
     }
@@ -2265,17 +2255,16 @@ fn note_unusable(state: &AppState) {
 /// or, on a first run that fails, the three signals the estimate had before this feed existed.
 /// A failed first fetch leaves no watermark at all, because [`mark_checked`] updates a row that
 /// is not there, so it is retried at the next launch rather than throttled out for a week.
-pub async fn refresh_if_due(state: &Arc<AppState>, app: &tauri::AppHandle) {
+pub async fn refresh_if_due(state: &Arc<State>) {
     let due = {
-        let conn = crate::sync::lock_db_read(state);
+        let conn = state.lock_db_read();
         due_at_launch(&conn, unix_now())
     };
     if !due {
         return;
     }
-    let app = app.clone();
     if let Err(e) = refresh(state, false, &mut |phase, done, total| {
-        emit(&app, phase, done, total)
+        emit(state, phase, done, total)
     })
     .await
     {
@@ -2297,164 +2286,21 @@ pub struct ComboProgress {
     pub total: u64,
 }
 
-/// Emit one progress event. Dropped if nobody is listening, which is Tauri's behaviour and is
-/// why [`combos_status`] exists: the event is the fast path, the tables are what a reader can
-/// still consult a minute later.
-fn emit(app: &tauri::AppHandle, phase: &str, done: u64, total: u64) {
+/// Say one step of a refresh, as [`PROGRESS_EVENT`], through the host's event sink
+/// ([`crate::events::EventSink`]). Dropped if nobody is listening, which is why a status read
+/// exists beside it: the event is the fast path, the tables are what a reader can still consult
+/// a minute later.
+pub fn emit(state: &State, phase: &str, done: u64, total: u64) {
     debug_assert!(PHASES.contains(&phase), "unknown combo phase `{phase}`");
-    let _ = app.emit(
+    crate::events::emit(
+        &*state.events,
         PROGRESS_EVENT,
-        ComboProgress {
+        &ComboProgress {
             phase: phase.to_owned(),
             done,
             total,
         },
     );
-}
-
-// ---------------------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------------------
-
-/// What this app knows about combos: how many, over how many cards, from which build of the
-/// file, and how old.
-///
-/// **Safe before the first refresh has ever run** — a database with no `combo_meta` row answers
-/// two zeros, three nulls and `stale: true` rather than rejecting, so no caller needs a guard.
-///
-/// `async`, and answered on the blocking pool, because a sync command body runs inline on the
-/// IPC thread and this takes `db_read`'s mutex.
-#[tauri::command]
-pub async fn combos_status(state: tauri::State<'_, Arc<AppState>>) -> Result<ComboStatus, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || status_of(&state))
-        .await
-        .map_err(|e| format!("could not read the combo status: {e}"))
-}
-
-/// Download Commander Spellbook's combo file if it has changed and rebuild the combo tables
-/// from it.
-///
-/// `force` skips the weekly throttle, not the ETag check. Long-running by nature (27.5 MB), so
-/// it reports itself through [`PROGRESS_EVENT`]. A failure leaves the previous combos in place,
-/// and the reason is in the error log.
-#[tauri::command]
-pub async fn combos_refresh(
-    state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
-    force: bool,
-) -> Result<ComboStatus, String> {
-    let state = state.inner().clone();
-    refresh(&state, force, &mut |phase, done, total| {
-        emit(&app, phase, done, total)
-    })
-    .await
-}
-
-/// Throw away every stored combo and the watermark with it.
-///
-/// **A debugging affordance rather than something the ordinary reader needs.** Nothing about a
-/// bracket estimate is improved by an empty combo table; what this is for is proving the ingest
-/// still works end to end from a cold database, which is otherwise reachable only by deleting
-/// `corpus.db` and paying for a whole resync to test one feed. **The caller is expected to
-/// follow it with a forced [`combos_refresh`]** — and that refresh really downloads, because
-/// [`clear_combos`] takes the rows out from under the stored ETag and [`conditional_etag`]
-/// therefore replays nothing.
-///
-/// It answers the post-clear [`ComboStatus`], which is [`status_of`]'s never-ingested answer:
-/// two zeros, three nulls and `stale: true`. Answering the status rather than nothing means the
-/// page that pressed this has no second round trip to make to find out what it did.
-///
-/// `async`, and answered on the blocking pool, for [`combos_status`]'s reason: a sync command
-/// body runs inline on the IPC thread, and this one takes the write lock. The body itself is
-/// [`clear`].
-///
-/// **A lock it could not have is reported rather than swallowed**, which is the difference
-/// between this and [`mark_checked`]. That one is a best-effort watermark nobody is waiting on;
-/// this is a press somebody is watching, and a clear that quietly did nothing would read as a
-/// database that refuses to empty.
-#[tauri::command]
-pub async fn combos_clear(state: tauri::State<'_, Arc<AppState>>) -> Result<ComboStatus, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) else {
-            return Err(crate::db::BUSY.to_owned());
-        };
-        clear(&conn)
-    })
-    .await
-    .map_err(|e| format!("could not clear the combos: {e}"))?
-}
-
-/// Every combo the given printings can make between them.
-///
-/// One round trip for a whole deck, and the ids are `cards.id` — a printing id, which is what
-/// every deck row, drag source and resolved import line already holds. At most
-/// [`MAX_CARD_IDS`] of them; see [`match_combos`] for why the list length is a real bound.
-///
-/// `async`, and answered on the blocking pool, for [`combos_status`]'s reason.
-#[tauri::command]
-pub async fn combos_for_cards(
-    state: tauri::State<'_, Arc<AppState>>,
-    card_ids: Vec<String>,
-) -> Result<Vec<DeckCombo>, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = crate::sync::lock_db_read(&state);
-        match_combos(&conn, &card_ids)
-    })
-    .await
-    .map_err(|e| format!("could not look for combos: {e}"))?
-}
-
-/// Every combo that names one card, a page at a time.
-///
-/// **The card is named by `oracle_id` and not by a printing id**, which is the one place this
-/// command's wire shape differs from [`combos_for_cards`]' and is not an oversight: a combo is
-/// a fact about a *card*, `combo_cards` is keyed on the oracle id, and asking about a printing
-/// would mean resolving it to its oracle card first only to answer identically for all of them.
-/// Every surface that opens this panel is looking at a card rather than at a deck row.
-///
-/// `search` is a case-insensitive substring over **any** piece's name, the asked-about card's
-/// own included; `card_count` is an exact size — `Some(2)` is *two-card combos*, `None` is every
-/// size — and `owned_only` narrows to the combos the reader owns every piece of. `limit` is
-/// clamped to [`MAX_PAGE`] and `offset` to zero; neither is refused, because both are a page's
-/// own numbers rather than a reader's.
-///
-/// **`search` is `Option<String>` for `card_count`'s reason and answers to the same three
-/// spellings of nothing.** An absent key, a `null` and a box the reader cleared are one state
-/// and [`card_combos`] flattens them into it; what the three of them mean — *no search*, an
-/// answer identical to the one this command gave before the box existed — is that function's
-/// contract and not this wrapper's.
-///
-/// `async`, and answered on the blocking pool, for [`combos_status`]'s reason: a sync command
-/// body runs inline on the IPC thread and this one takes `db_read`'s mutex. The body is
-/// [`card_combos`].
-#[tauri::command]
-pub async fn combos_for_card(
-    state: tauri::State<'_, Arc<AppState>>,
-    oracle_id: String,
-    search: Option<String>,
-    card_count: Option<i64>,
-    owned_only: bool,
-    limit: i64,
-    offset: i64,
-) -> Result<CardCombosPage, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = crate::sync::lock_db_read(&state);
-        card_combos(
-            &conn,
-            &oracle_id,
-            search.as_deref(),
-            card_count,
-            owned_only,
-            limit,
-            offset,
-        )
-    })
-    .await
-    .map_err(|e| format!("could not look for this card's combos: {e}"))?
 }
 
 #[cfg(test)]
@@ -4729,7 +4575,7 @@ mod tests {
     /// is not a per-commit cost. Run it deliberately:
     ///
     /// ```text
-    /// cargo test --manifest-path src-tauri/Cargo.toml -- --ignored combos::tests::live_ingest --nocapture
+    /// cargo test -p grimoire-core -- --ignored combos::tests::live_ingest --nocapture
     /// ```
     #[test]
     #[ignore]
@@ -4738,26 +4584,32 @@ mod tests {
         let gz = dir.join("tmp").join("spellbook-variants.json.gz");
         std::fs::create_dir_all(gz.parent().unwrap()).unwrap();
 
-        let started = std::time::Instant::now();
-        let fetched = tauri::async_runtime::block_on(download_capped(
-            FEED_URL,
-            &gz,
-            None,
-            MAX_FEED_BYTES,
-            &mut |_, _| {},
-        ))
-        .expect("the feed answered");
+        let started = crate::platform::clock::Tick::now();
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        let fetched = runtime
+            .block_on(download_capped(
+                FEED_URL,
+                &gz,
+                None,
+                MAX_FEED_BYTES,
+                &mut |_, _| {},
+            ))
+            .expect("the feed answered");
         assert!(matches!(fetched, Fetch::Fetched { .. }), "{fetched:?}");
         let on_disk = std::fs::metadata(&gz).unwrap().len();
         println!("downloaded {on_disk} bytes in {:?}", started.elapsed());
 
         // A **file** database rather than an in-memory one, because one of the figures this
-        // test exists to take is what the feed costs a reader on disk.
-        crate::split::convert(&dir).unwrap();
+        // test exists to take is what the feed costs a reader on disk. Built at head, as a
+        // fresh install's is.
         let db_path = dir.join(crate::db::CORPUS_DB);
         let db = Mutex::new(crate::db::open_write(&dir).unwrap());
+        crate::schema::build_pair(&db.lock().unwrap());
 
-        let parsing = std::time::Instant::now();
+        let parsing = crate::platform::clock::Tick::now();
         let ingested =
             ingest_gz(&db, &gz, Some("live"), 1_800_000_000, &mut |_, _| {}).expect("it ingested");
         println!(
@@ -4853,7 +4705,7 @@ mod tests {
             })
             .collect();
 
-        let matching = std::time::Instant::now();
+        let matching = crate::platform::clock::Tick::now();
         let found = match_combos(&conn, &card_ids).expect("the match ran");
         println!(
             "matched {} combos from {} cards in {:?}",
@@ -5038,5 +4890,31 @@ mod tests {
             &conn,
             now + crate::feed::backoff::FAILURE_BACKOFF_SECS
         ));
+    }
+
+    /// **What the page hears**: the event's name, and the keys it reads — camelCase, nothing
+    /// more. The payload leaves through the host's sink, which is what took a window's place.
+    #[test]
+    fn a_step_of_a_refresh_reaches_the_sink_as_the_event_the_page_listens_for() {
+        let (state, heard, dir) = crate::state::fixtures::listening("combos-heard");
+
+        emit(&state, "downloading", 3, 10);
+        emit(&state, "done", 0, 0);
+
+        assert_eq!(
+            heard.taken(),
+            vec![
+                (
+                    "combos:progress".to_owned(),
+                    serde_json::json!({"phase": "downloading", "done": 3, "total": 10})
+                ),
+                (
+                    "combos:progress".to_owned(),
+                    serde_json::json!({"phase": "done", "done": 0, "total": 0})
+                ),
+            ]
+        );
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

@@ -596,7 +596,7 @@ exactly one term.
 | `crates/grimoire-core/src/filters.rs` | `QueryPredicate` and the SQL — one arm per field in `push_card_filters`, and `fts_match` (with `fts_phrase` for a name) for the three that ride the index |
 | `crates/grimoire-core/src/wishlist.rs` | The one search that answers a name term from its own column rather than from `cards_fts` |
 | `crates/grimoire-core/src/schema.rs` | Corpus schema 5, `cards.keywords` |
-| `src-tauri/src/tags/query.rs` | `run_tag_resolve` / `tag_resolve` — names to slugs, exact, through `slug_norm` |
+| `crates/grimoire-core/src/tags/query.rs` (command: `src-tauri/src/tags/query/mod.rs`) | `run_tag_resolve` / `tag_resolve` — names to slugs, exact, through `slug_norm` |
 | `src/features/tags/tagFilters.ts` | `mergeTagTerms` — the caller's chips ANDed with the typed ones |
 | `src/features/search/useCardSearch.ts` | The wiring: parse, resolve, merge, gate, and the two chip rewrites |
 | `src/features/search/TagQueryRow.tsx` | The chip row and the unknown-tag note |

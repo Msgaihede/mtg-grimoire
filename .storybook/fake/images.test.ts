@@ -7,7 +7,8 @@
  * rather than emitting a broken `<img>` — and keeps checking it. The *visual* half (the
  * toolbar item appears, the switch repaints) is still owed.
  *
- * The four dimension pairs are restated here from `src-tauri/src/images.rs:94-101` instead of
+ * The four dimension pairs are restated here from `Variant::dimensions` in
+ * `crates/grimoire-core/src/images.rs` instead of
  * being imported from `images.ts`'s own `SIZE`. That is the whole value of the test: a
  * placeholder at the wrong size is a story whose layout is not the app's layout, and a test
  * that read the constant it is checking would agree with any typo in it.
@@ -26,7 +27,7 @@ import { IMAGE_VARIANTS, type ImageVariant } from "../../src/lib/images";
 import { CARDS, type FakeCard } from "./cards";
 import { installWorld } from "./world";
 
-/** `Variant::dimensions`, `src-tauri/src/images.rs:94-101`. */
+/** `Variant::dimensions`, `crates/grimoire-core/src/images.rs`. */
 const DIMENSIONS: Record<ImageVariant, [number, number]> = {
   thumb: [146, 204],
   grid: [488, 680],

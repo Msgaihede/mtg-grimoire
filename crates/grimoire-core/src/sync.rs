@@ -33,10 +33,10 @@
 //! `collection:reconciled` when the migration log moved something. The desktop forwards both
 //! to every window; a host with no page to tell gives the state a silent sink.
 //!
-//! **Two things of the old `sync` module are still `src-tauri`'s**, in its module of this
-//! name: the desktop's `AppState`, which wraps a [`State`], and `status`, which reads the
-//! image cache's failure count beside the five fields this module's keys answer — it comes
-//! home with the cache.
+//! **One thing of the old `sync` module is still `src-tauri`'s**, in its module of this
+//! name: the desktop's `AppState`, which wraps a [`State`]. [`status`] waited there for the
+//! image cache, whose failure count it reads beside the five fields this module's keys
+//! answer, and came home with it.
 //!
 //! `sync_meta.value` is `NOT NULL`, so this module never writes an absent value as
 //! NULL or as `""`: [`set_meta_opt`] deletes the row instead. See [`get_meta`].
@@ -1049,6 +1049,50 @@ async fn do_sync(state: &Arc<State>, force: bool) -> Result<SyncOutcome, String>
     })
 }
 
+/// Current sync state for the UI.
+///
+/// Read through the **read-only** connection, which is what makes the header's numbers
+/// stay live during a sync: this used to share the write connection, and so answered
+/// `None` for every database-derived field for the whole of an ingest — 44 s when that
+/// was written, ~80 s of a 92–99 s sync since schema v3 gzipped `raw`. Under WAL a
+/// reader sees the last committed snapshot without blocking, so mid-sync this reports the
+/// pre-swap figures — which are true, and are what the user is still looking at in the
+/// results list. (The ingest now releases the write lock between batches too, but that is
+/// belt to this brace: a poll must not depend on catching a gap.)
+///
+/// The fields stay `Option` regardless, because the read can still fail outright — this
+/// app runs from a USB stick, and the database going away underneath it is the case they
+/// are `Option` *for*. `None` means "not readable right now", never "zero".
+///
+/// `image_store_failures` is the one field here that never touches the connection at all —
+/// it is read straight off the image cache's atomic, which is what makes it answerable on
+/// exactly the polls where a full disk has also made the database unreadable.
+///
+/// `card_count` is counted live rather than read from `sync_meta`, so it is right even if
+/// a previous run died before writing its meta — and it is counted *here* rather than
+/// through [`count_cards`], whose `unwrap_or(0)` is right for its own callers (an empty
+/// database must download) and wrong for this one. `Some(0)` is not the smaller lie: `0`
+/// is what the UI renders as "no card data yet", so a failed count would put a first-run
+/// overlay over a running app and throw away the figures it already had. `None` is what
+/// the frontend's `mergeStatus` keys off to keep them; the test
+/// `a_count_that_cannot_be_read_is_none_and_never_zero` pins this side of that contract.
+pub fn status(state: &State) -> SyncStatus {
+    let conn = state.lock_db_read();
+    SyncStatus {
+        card_count: conn
+            .query_row("SELECT count(*) FROM cards", [], |r| r.get(0))
+            .ok(),
+        last_check_at: get_meta(&conn, K_LAST_CHECK_AT),
+        bulk_updated_at: get_meta(&conn, K_BULK_UPDATED_AT),
+        last_error: get_meta(&conn, K_LAST_ERROR),
+        last_ingest_skipped: get_meta(&conn, K_LAST_INGEST_SKIPPED).and_then(|s| s.parse().ok()),
+        data_dir: state.data_dir.display().to_string(),
+        syncing: state.syncing.load(Ordering::SeqCst),
+        // An atomic in memory, so this one is answered even when the read above was not.
+        image_store_failures: state.images.store_failures(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1464,6 +1508,229 @@ mod tests {
             "an empty `cards` must be able to get past its own ETag"
         );
         assert_eq!(conditional_etag(None, 116_568), None);
+    }
+
+    /// A real file with both connections on it — the shape `init_state` builds — because
+    /// a status that reads through `db_read` cannot be tested against a `db_read` that
+    /// points somewhere else. (An in-memory pair cannot stand in: two in-memory
+    /// connections are two different databases.)
+    fn file_state(name: &str, syncing: bool) -> (State, std::path::PathBuf) {
+        let dir = crate::scratch::path(&format!("sync-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        crate::schema::build_pair(&conn);
+        let read = crate::db::open_read(&dir).unwrap();
+        let state = State::new(
+            conn,
+            Some(read),
+            // Not where the files are: what the status reports is the directory it was told.
+            std::path::PathBuf::from("D:\\app\\data"),
+            crate::events::silent(),
+            Vec::new(),
+            // Never called: these tests stop short of the network.
+            crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            // Never touched either — a `Cache` creates nothing until it is asked for an
+            // image, so this directory does not have to exist.
+            crate::images::Cache::new(std::path::PathBuf::from("D:\\app\\data\\images")),
+        );
+        state.syncing.store(syncing, Ordering::SeqCst);
+        (state, dir)
+    }
+
+    /// The status a UI polls *during* a sync. The header used to go blank for the whole of
+    /// an ingest — a 44 s one then, ~80 s of a 92–99 s sync now — because the poll shared
+    /// the write connection with it. The read-only connection exists for exactly this, and
+    /// under WAL it answers from the last committed snapshot without waiting for anyone.
+    ///
+    /// The ingest also releases that write connection between batches now, so this test
+    /// holds it by hand: what is being pinned is that a poll answers while the connection
+    /// is held, not that it catches a gap between two batches.
+    #[test]
+    fn status_answers_real_numbers_while_the_write_connection_is_held() {
+        let (state, dir) = file_state("status", true);
+        {
+            let conn = state.lock_db();
+            set_meta(&conn, K_LAST_CHECK_AT, "1800000000").unwrap();
+            set_meta(&conn, K_LAST_ERROR, "rate limited by Scryfall").unwrap();
+            set_meta(&conn, K_LAST_INGEST_SKIPPED, "12").unwrap();
+            conn.execute(
+                "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+                 VALUES ('x','Lightning Bolt','lea','161','en','normal','{}')",
+                [],
+            )
+            .unwrap();
+            crate::db::checkpoint_truncate(&conn).unwrap();
+        }
+        let state = Arc::new(state);
+
+        // Stands in for the ingest. Called from another thread, as the real poll is, so a
+        // regression to a blocking lock fails here in five seconds instead of hanging.
+        let held = state.db.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let _ = tx.send(status(&state));
+            });
+        }
+        let busy = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("status must not queue behind the writer");
+        drop(held);
+
+        assert!(busy.syncing);
+        assert_eq!(busy.data_dir, "D:\\app\\data");
+        assert_eq!(
+            busy.card_count,
+            Some(1),
+            "the read connection can count cards while the writer is busy"
+        );
+        assert_eq!(busy.last_check_at.as_deref(), Some("1800000000"));
+        assert_eq!(busy.last_error.as_deref(), Some("rate limited by Scryfall"));
+        assert_eq!(busy.last_ingest_skipped, Some(12));
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The other half of the `Option`, and the case the whole nullable DTO exists for: a
+    /// status read that genuinely cannot count answers `None`, never `Some(0)`.
+    ///
+    /// This is a USB-stick app, so "the database went away underneath us" is a Tuesday.
+    /// `Some(0)` there is not a smaller lie than a wrong number: `0` is the value the UI
+    /// reads as "no card data yet", and it takes the whole screen with a first-run overlay
+    /// over a running app. `None` is what `mergeStatus` keys off to keep the figures it
+    /// already had, so this test is the backend half of that contract.
+    #[test]
+    fn a_count_that_cannot_be_read_is_none_and_never_zero() {
+        let (state, dir) = file_state("unreadable", false);
+        {
+            // Stands in for the volume disappearing: the table the count needs is gone,
+            // which is what the read connection then reports. (Deleting the file itself
+            // is not available as a test — Windows will not unlink an open one.)
+            let conn = state.lock_db();
+            conn.execute_batch("DROP TABLE cards_fts; DROP TABLE cards;")
+                .unwrap();
+        }
+
+        let broken = status(&state);
+
+        assert_eq!(
+            broken.card_count, None,
+            "an unreadable count must not be reported as an empty collection"
+        );
+        // The two that never needed the database still answer, as they always did.
+        assert!(!broken.syncing);
+        assert_eq!(broken.data_dir, "D:\\app\\data");
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The skipped count survives the process, which the `done` event does not: the
+    /// startup sync emits it before the webview is listening, and Tauri drops it.
+    #[test]
+    fn the_skipped_count_is_readable_from_the_status_long_after_the_event() {
+        let (state, dir) = file_state("skipped", false);
+        set_meta(&state.lock_db(), K_LAST_INGEST_SKIPPED, "12").unwrap();
+
+        assert_eq!(status(&state).last_ingest_skipped, Some(12));
+
+        // No ingest yet is not the same as an ingest that skipped nothing.
+        let (fresh, fresh_dir) = file_state("skipped-fresh", false);
+        assert_eq!(status(&fresh).last_ingest_skipped, None);
+
+        drop(state);
+        drop(fresh);
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&fresh_dir);
+    }
+
+    /// A write that cannot have the connection answers the one sentence, after spending the one
+    /// bound — and runs `f` when it can. Five copies of this helper agreed on that by accident
+    /// until 2026-08-16; now there is one and this is what holds it.
+    #[test]
+    fn with_write_answers_busy_rather_than_queueing_when_the_connection_is_held() {
+        let (state, dir) = file_state("with-write-busy", false);
+        let held = crate::db::lock_blocking(&state.db);
+
+        let start = crate::platform::clock::Tick::now();
+        let answer: Result<(), String> = crate::state::with_write(&state, |_| Ok(()));
+        let waited = start.elapsed();
+
+        assert_eq!(
+            answer.unwrap_err(),
+            crate::db::BUSY,
+            "a write that cannot have the connection answers the one sentence"
+        );
+        // It spent the bound rather than failing instantly or queueing forever.
+        assert!(
+            waited >= crate::db::WRITE_LOCK_WAIT,
+            "with_write must spend the whole bound before giving up, waited {waited:?}"
+        );
+        assert!(
+            waited < crate::db::WRITE_LOCK_WAIT * 2,
+            "the wait is bounded, and took {waited:?}"
+        );
+        drop(held);
+
+        // And with the connection free it runs `f` and hands back its answer.
+        let answer = crate::state::with_write(&state, |c| {
+            c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+                .map_err(|e| e.to_string())
+        });
+        assert_eq!(answer.unwrap(), 1);
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **The waiting write outlasts the bound [`with_write`] gives up at, and runs `f` once the
+    /// connection comes back** — issue #546, item 7: a Leave pressed during a sync trip that held
+    /// the connection for longer than five seconds answered BUSY, and "leaving is always possible"
+    /// had a condition.
+    ///
+    /// The holder is **another thread**, because that is the real shape (a trip on the blocking
+    /// pool) and because a same-thread call would never return — see the helper's doc. It holds
+    /// for the bound plus half a second, so an implementation that quietly kept the bound fails
+    /// with BUSY rather than passing on timing luck.
+    #[test]
+    fn with_write_waiting_outlasts_the_bound_and_runs_once_the_connection_is_free() {
+        let (state, dir) = file_state("with-write-waiting", false);
+        let hold = crate::db::WRITE_LOCK_WAIT + std::time::Duration::from_millis(500);
+        let (taken_tx, taken_rx) = std::sync::mpsc::channel();
+
+        let (answer, waited) = std::thread::scope(|scope| {
+            let holder = scope.spawn(|| {
+                let held = crate::db::lock_blocking(&state.db);
+                taken_tx.send(()).expect("signal");
+                std::thread::sleep(hold);
+                drop(held);
+            });
+            taken_rx.recv().expect("the holder took the connection");
+
+            let start = crate::platform::clock::Tick::now();
+            let answer = crate::state::with_write_waiting(&state, |c| {
+                c.query_row("SELECT 1", [], |r| r.get::<_, i64>(0))
+                    .map_err(|e| e.to_string())
+            });
+            let waited = start.elapsed();
+            holder.join().expect("the holder");
+            (answer, waited)
+        });
+
+        assert_eq!(
+            answer.expect("the waiting write gave up, which is the bug"),
+            1
+        );
+        assert!(
+            waited > crate::db::WRITE_LOCK_WAIT,
+            "it ran before the holder let go, so nothing was held: waited {waited:?}"
+        );
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }
 

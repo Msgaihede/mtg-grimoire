@@ -44,8 +44,9 @@
 //! Implement [`FeedProvider`] and add the value to [`PROVIDERS`]. Nothing else branches on a
 //! marketplace id: the fetch, the dedupe, the replace, the meta row, the status command and
 //! the progress event are all written once against the trait.
-
-use crate::sync::AppState;
+use crate::platform::files::aio;
+use crate::platform::http;
+use crate::state::State;
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::de::{DeserializeOwned, DeserializeSeed, IgnoredAny, MapAccess, SeqAccess, Visitor};
 use serde::{Deserialize, Serialize};
@@ -57,8 +58,6 @@ use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::{Arc, OnceLock};
 use std::time::Duration;
-use std::time::{SystemTime, UNIX_EPOCH};
-use tauri::Emitter;
 
 /// The event a refresh reports itself through — the ribbon's `Activity` line reads it, the
 /// way it reads `sync:progress` and `update:progress`.
@@ -586,7 +585,7 @@ pub enum FeedError {
     Http {
         host: &'static str,
         #[source]
-        source: reqwest::Error,
+        source: crate::platform::http::Error,
     },
     #[error("{host} answered {status}")]
     Status { host: &'static str, status: u16 },
@@ -775,7 +774,7 @@ pub fn ingest_file(
     fetched_at: i64,
 ) -> Result<Ingested, FeedError> {
     let result = (|| {
-        let mut file = std::fs::File::open(path)?;
+        let mut file = crate::platform::files::open(path)?;
         let mut feed = Feed::new(provider.marketplace());
         provider.parse(&mut file, &mut feed)?;
         store(db, &feed, fetched_at)
@@ -822,15 +821,14 @@ fn note_failure(db: &Mutex<Connection>, provider: &dyn FeedProvider, err: &FeedE
 /// do with, and — worse — a marketplace 429 would lock the card corpus out of syncing. The
 /// user agent is shared because it is accurate for both: it names this app, its version and
 /// its repository, which is what a bulk endpoint is owed.
-fn client() -> &'static reqwest::Client {
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+fn client() -> &'static http::Client {
+    static CLIENT: OnceLock<http::Client> = OnceLock::new();
     CLIENT.get_or_init(|| {
-        reqwest::Client::builder()
-            .user_agent(crate::scryfall::USER_AGENT)
-            .connect_timeout(CONNECT_TIMEOUT)
-            .read_timeout(READ_TIMEOUT)
-            .build()
-            .unwrap_or_default()
+        http::Client::new(&http::Config {
+            user_agent: crate::scryfall::USER_AGENT,
+            connect_timeout: Some(CONNECT_TIMEOUT),
+            read_timeout: Some(READ_TIMEOUT),
+        })
     })
 }
 
@@ -845,7 +843,7 @@ fn host_of(url: &'static str) -> &'static str {
 /// Stream a feed to `dest`, reporting `(done, total)` as it goes.
 ///
 /// To a file and not into memory, for [`crate::sync`]'s reason: the parse wants a `Read` and
-/// reqwest only offers an async stream, so the choice is a temp file or 63.7 MiB of `Vec<u8>`
+/// a response is only ever an async stream, so the choice is a temp file or 63.7 MiB of `Vec<u8>`
 /// held while a second copy of it is decoded. `total` is `0` when the host declares no
 /// `Content-Length`, which is a progress bar with no denominator rather than an error.
 pub async fn download(
@@ -853,9 +851,6 @@ pub async fn download(
     dest: &Path,
     progress: &mut (dyn FnMut(u64, u64) + Send),
 ) -> Result<(), FeedError> {
-    use futures_util::StreamExt;
-    use tokio::io::AsyncWriteExt;
-
     let host = host_of(url);
     let resp = client()
         .get(url)
@@ -863,7 +858,7 @@ pub async fn download(
         .send()
         .await
         .map_err(|source| FeedError::Http { host, source })?;
-    let status = resp.status().as_u16();
+    let status = resp.status();
     if !(200..300).contains(&status) {
         return Err(FeedError::Status { host, status });
     }
@@ -876,14 +871,14 @@ pub async fn download(
     }
 
     if let Some(parent) = dest.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        aio::create_dir_all(parent).await?;
     }
-    let mut file = tokio::fs::File::create(dest).await?;
+    let mut file = aio::Writer::create(dest).await?;
     let mut done = 0u64;
     let mut last_emit = 0u64;
-    let mut stream = resp.bytes_stream();
+    let mut body = resp.into_body();
     progress(0, total);
-    while let Some(chunk) = stream.next().await {
+    while let Some(chunk) = body.chunk().await {
         let chunk = chunk.map_err(|source| FeedError::Http { host, source })?;
         done += chunk.len() as u64;
         if done > MAX_FEED_BYTES {
@@ -900,7 +895,7 @@ pub async fn download(
 }
 
 /// Where a feed is downloaded to. Beside the bulk file's `tmp/`, and deleted either way.
-fn temp_path(state: &AppState, provider: &dyn FeedProvider) -> PathBuf {
+fn temp_path(state: &State, provider: &dyn FeedProvider) -> PathBuf {
     state
         .data_dir
         .join("tmp")
@@ -913,8 +908,8 @@ fn temp_path(state: &AppState, provider: &dyn FeedProvider) -> PathBuf {
 
 /// One refresh at a time, per marketplace.
 ///
-/// A module-level registry rather than a field on `AppState`, because it is this module's
-/// concern alone and `AppState` is shared with everything else. Two refreshes of the *same*
+/// A module-level registry rather than a field on the [`State`], because it is this
+/// module's concern alone and the state is shared with everything else. Two refreshes of the *same*
 /// feed would download 63.7 MiB twice to write the same rows; two of *different* feeds are
 /// fine and are allowed.
 static REFRESHING: Mutex<Vec<&'static str>> = Mutex::new(Vec::new());
@@ -972,16 +967,16 @@ pub(crate) fn hold_refresh_for_test(name: &'static str) -> RefreshGuard {
 
 /// Fetch a marketplace's feed and replace its prices.
 ///
-/// `progress` is called with `(phase, done, total)`; the command below turns that into the
-/// [`PROGRESS_EVENT`]. Taken as a callback rather than an `AppHandle` for [`crate::ingest`]'s
-/// reason — it is what lets the whole path be driven from a test.
+/// `progress` is called with `(phase, done, total)`; a caller that has somebody to tell hands
+/// it [`emit`], which says each as [`PROGRESS_EVENT`]. Taken as a callback for
+/// [`crate::ingest`]'s reason — it is what lets the whole path be driven from a test.
 ///
 /// Every failure leaves the previous prices exactly where they were and is written to
 /// `error_log`. A feed that arrived and could not be used — refused as too large, or failed in
 /// the parse or the store — also rests for a day at launch ([`crate::feed::backoff`]); a
 /// [`FeedError::Busy`] does not, because that is this app's own connection and not the feed.
 pub async fn refresh(
-    state: &Arc<AppState>,
+    state: &Arc<State>,
     marketplace: &str,
     progress: &mut (dyn FnMut(&str, u64, u64) + Send),
 ) -> Result<FeedStatus, String> {
@@ -995,6 +990,17 @@ pub async fn refresh(
                 .join(", ")
         ));
     };
+    refresh_from(state, provider, provider.url(), progress).await
+}
+
+/// [`refresh`] with the feed's address handed in, which is the seam its test drives: a
+/// provider's own address is the live host.
+async fn refresh_from(
+    state: &Arc<State>,
+    provider: &'static dyn FeedProvider,
+    url: &'static str,
+    progress: &mut (dyn FnMut(&str, u64, u64) + Send),
+) -> Result<FeedStatus, String> {
     let Some(_guard) = RefreshGuard::claim(provider.marketplace()) else {
         // Refused rather than queued, exactly as a second concurrent sync is: the run already
         // in flight is the one driving the progress event, and a second would download the
@@ -1007,14 +1013,14 @@ pub async fn refresh(
 
     let path = temp_path(state, provider);
     progress("downloading", 0, 0);
-    if let Err(e) = download(provider.url(), &path, &mut |done, total| {
+    if let Err(e) = download(url, &path, &mut |done, total| {
         progress("downloading", done, total)
     })
     .await
     {
         // The partial is no use to anyone: there is no resume here (neither endpoint offers
         // ranges) and a half-written body would only fail to parse next time.
-        let _ = std::fs::remove_file(&path);
+        let _ = crate::platform::files::remove(&path);
         note_failure(&state.db, provider, &e);
         if matches!(e, FeedError::TooLarge { .. }) {
             note_unusable(&state.db, provider);
@@ -1028,23 +1034,24 @@ pub async fn refresh(
     let joined = {
         let state = state.clone();
         let path = path.clone();
-        // Seconds of JSON and ~100 000 inserts: a blocking thread, never the async runtime,
-        // and never across an `.await` with a lock in hand.
-        tauri::async_runtime::spawn_blocking(move || {
+        // Seconds of JSON and ~100 000 inserts: off the async task where the host has
+        // somewhere to put it, and never across an `.await` with a lock in hand.
+        crate::platform::spawn::blocking(move || {
             ingest_file(&state.db, provider, &path, fetched_at)
         })
         .await
     };
-    let _ = std::fs::remove_file(&path);
+    let _ = crate::platform::files::remove(&path);
 
     match joined {
         Ok(Ok(_)) => {
-            // The second of the four things that run a full mirror pass (spec §5).
-            // `marketplace_prices` maps to no surface on purpose — this refresh rewrites the
-            // whole table, and a per-row mark would be ~100 000 hook fires — so the completed
-            // refresh is what tells the mirror the `Price` column in every mirrored CSV has
-            // moved. One line, at the one place this path succeeds.
-            state.mirror.mark_all();
+            // `marketplace_prices` is a corpus table and this refresh rewrote the whole of
+            // it, which no observer was told row by row — on purpose, at ~100 000 hook fires.
+            // So the completed refresh is what tells whoever renders from the corpus that it
+            // moved: on the desktop, the plain-text mirror, whose `Price` column in every CSV
+            // is now a refresh old (the second of the four things that run a full pass, its
+            // spec §5). One line, at the one place this path succeeds.
+            state.corpus_replaced();
             if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
                 let _ = crate::feed::backoff::clear(&conn, &backoff_feed(provider));
             }
@@ -1114,10 +1121,10 @@ pub fn is_stale(fetched_at: Option<i64>, now: i64) -> bool {
 }
 
 /// One marketplace's feed state, read through the read-only connection.
-/// Its one caller is [`refresh`]. The status *command* does not come through here at all - it
-/// maps [`PROVIDERS`] over [`read_status`] itself.
-fn status_of(state: &AppState, provider: &dyn FeedProvider) -> FeedStatus {
-    let conn = crate::sync::lock_db_read(state);
+/// Its one caller is [`refresh_from`]. A host's status command does not come through here at
+/// all - it maps [`PROVIDERS`] over [`read_status`] itself.
+fn status_of(state: &State, provider: &dyn FeedProvider) -> FeedStatus {
+    let conn = state.lock_db_read();
     read_status(&conn, provider, unix_now())
 }
 
@@ -1150,10 +1157,7 @@ pub fn read_status(conn: &Connection, provider: &dyn FeedProvider, now: i64) -> 
 /// Seconds since the Unix epoch. A clock before 1970 reads as 0, which makes every feed
 /// stale — the same choice [`crate::sync`] makes, and for the same reason.
 fn unix_now() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0)
+    crate::platform::clock::now_secs()
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1171,61 +1175,22 @@ pub struct FeedProgress {
     pub total: u64,
 }
 
-/// Download a marketplace's price feed and replace its prices with it.
-///
-/// Long-running by nature (63.7 MiB), so it reports itself through [`PROGRESS_EVENT`] for the
-/// ribbon's activity line. A failure leaves the previous prices in place, and the reason is in
-/// the error log.
-#[tauri::command]
-pub async fn marketplace_feed_refresh(
-    state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
-    marketplace: String,
-) -> Result<FeedStatus, String> {
-    let state = state.inner().clone();
-    let id = marketplace.clone();
-    refresh(&state, &marketplace, &mut |phase, done, total| {
-        debug_assert!(FEED_PHASES.contains(&phase), "unknown feed phase `{phase}`");
-        // Dropped if nobody is listening, which is Tauri's behaviour and is why
-        // `marketplace_feed_status` exists: the event is the fast path, the table is the one
-        // a reader can still consult a minute later.
-        let _ = app.emit(
-            PROGRESS_EVENT,
-            FeedProgress {
-                marketplace: id.clone(),
-                phase: phase.to_owned(),
-                done,
-                total,
-            },
-        );
-    })
-    .await
-}
-
-/// Every feed-backed marketplace's state: never fetched, when it was fetched, what the feed
-/// itself says it was built at, and how many rows came of it.
-///
-/// One entry per feed rather than one for the selected marketplace, so Settings can show both
-/// without asking twice — and so a marketplace with no feed is simply absent from the answer
-/// rather than reported as an empty one.
-///
-/// `async`, and answered on the blocking pool, because a sync command body runs inline on the
-/// IPC thread and this takes `db_read`'s mutex.
-#[tauri::command]
-pub async fn marketplace_feed_status(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<Vec<FeedStatus>, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = crate::sync::lock_db_read(&state);
-        let now = unix_now();
-        PROVIDERS
-            .iter()
-            .map(|p| read_status(&conn, *p, now))
-            .collect()
-    })
-    .await
-    .map_err(|e| format!("could not read the price feed status: {e}"))
+/// Say one step of `marketplace`'s refresh, as [`PROGRESS_EVENT`], through the host's event
+/// sink ([`crate::events::EventSink`]). Dropped if nobody is listening, which is why a status
+/// read exists beside it: the event is the fast path, the table is the one a reader can still
+/// consult a minute later.
+pub fn emit(state: &State, marketplace: &str, phase: &str, done: u64, total: u64) {
+    debug_assert!(FEED_PHASES.contains(&phase), "unknown feed phase `{phase}`");
+    crate::events::emit(
+        &*state.events,
+        PROGRESS_EVENT,
+        &FeedProgress {
+            marketplace: marketplace.to_owned(),
+            phase: phase.to_owned(),
+            done,
+            total,
+        },
+    );
 }
 
 /// Refresh the selected marketplace's feed if it is feed-backed and due, at startup.
@@ -1237,9 +1202,9 @@ pub async fn marketplace_feed_status(
 ///
 /// Silent and best-effort: this runs before there is a window to complain in, the failure is
 /// already in `error_log`, and the honest fallback is the prices already on disk.
-pub async fn refresh_selected_if_due(state: &Arc<AppState>, app: &tauri::AppHandle) {
+pub async fn refresh_selected_if_due(state: &Arc<State>) {
     let (marketplace, fetched_at, resting) = {
-        let conn = crate::sync::lock_db_read(state);
+        let conn = state.lock_db_read();
         let id = crate::marketplace::stored(&conn);
         let now = unix_now();
         let provider = provider_for(&id);
@@ -1255,18 +1220,8 @@ pub async fn refresh_selected_if_due(state: &Arc<AppState>, app: &tauri::AppHand
     if !is_stale(fetched_at, unix_now()) || resting {
         return;
     }
-    let app = app.clone();
-    let id = marketplace.clone();
     if let Err(e) = refresh(state, &marketplace, &mut |phase, done, total| {
-        let _ = app.emit(
-            PROGRESS_EVENT,
-            FeedProgress {
-                marketplace: id.clone(),
-                phase: phase.to_owned(),
-                done,
-                total,
-            },
-        );
+        emit(state, &marketplace, phase, done, total)
     })
     .await
     {
@@ -1976,49 +1931,9 @@ mod tests {
         assert!(RefreshGuard::claim("cardkingdom").is_some(), "and again");
     }
 
-    // ---- The network ------------------------------------------------------------------
-
-    /// An `AppState` pointed at a scratch directory and a database of its own.
-    fn test_state() -> (Arc<AppState>, PathBuf) {
-        let dir = crate::scratch::path("feed-state");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::schema::prepare_data_dir(&dir).unwrap();
-        let conn = crate::db::open_write(&dir).unwrap();
-        crate::schema::prepare_database(&conn).unwrap();
-        let read = crate::db::open_read(&dir).unwrap();
-        // **Hooked up, so what these fixtures drive runs with the cross-file fence
-        // armed.** `State::new` installs it, `crate::sync::with_write`'s `debug_assert`
-        // reads it, so a command that committed to both files fails its own test rather
-        // than printing a line nobody reads. The desktop's three observers ride along as
-        // they do in the app, and nothing here looks at them: the wake is a throwaway,
-        // since nothing in this fixture starts `sync_engine::live`.
-        let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
-        let changes = std::sync::Arc::new(crate::changes::Changes::new());
-        (
-            Arc::new(AppState {
-                core: std::sync::Arc::new(grimoire_core::state::State::new(
-                    conn,
-                    Some(read),
-                    dir.clone(),
-                    grimoire_core::events::silent(),
-                    crate::mirror::watch::observers(
-                        mirror.clone(),
-                        changes.clone(),
-                        Default::default(),
-                    ),
-                    crate::scryfall::Client::new("http://127.0.0.1:1".into()),
-                )),
-                images: crate::images::Cache::new(dir.join("images")),
-                // The mirror is never started in these tests; a clean mask and an empty record are
-                // what an `AppState` looks like before the first pass.
-                mirror,
-                mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
-                pairing: std::sync::Mutex::new(None),
-                changes,
-            }),
-            dir,
-        )
+    /// A host's [`State`] pointed at a scratch directory and a database of its own.
+    fn test_state() -> (Arc<State>, PathBuf) {
+        crate::state::fixtures::on_files("feed-state", "http://127.0.0.1:1")
     }
 
     /// The download, end to end over HTTP: the body reaches disk and progress is reported
@@ -2117,11 +2032,125 @@ mod tests {
                 ("a".to_owned(), "nonfoil".to_owned(), 0.35),
             ]
         );
-        let conn = crate::sync::lock_db_read(&state);
+        let conn = state.lock_db_read();
         let status = read_status(&conn, &CardKingdom, 1_800_000_060);
         assert_eq!(status.row_count, Some(2));
         assert_eq!(status.feed_built_at.as_deref(), Some("2026-08-11 21:07:02"));
         drop(conn);
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A whole refresh, through the seam that takes the feed's address**: the phases the
+    /// caller hears in order, the prices in the table, the temp file gone, the status read
+    /// back — and whoever renders from the corpus told **once**, where a refused download
+    /// tells nobody.
+    #[tokio::test]
+    async fn a_whole_refresh_stores_the_prices_and_tells_the_observers_once() {
+        use crate::hooks::WriteObserver;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[derive(Default)]
+        struct Swaps(AtomicUsize);
+        impl WriteObserver for Swaps {
+            fn corpus_replaced(&self) {
+                self.0.fetch_add(1, Ordering::SeqCst);
+            }
+        }
+
+        /// Card Kingdom's document under a name no other test claims: the refresh registry is
+        /// process-wide and the tests run in parallel.
+        struct OnMock;
+        impl FeedProvider for OnMock {
+            fn marketplace(&self) -> &'static str {
+                "refresh-test"
+            }
+            fn url(&self) -> &'static str {
+                "http://127.0.0.1:1/never-asked"
+            }
+            fn parse(&self, body: &mut dyn Read, feed: &mut Feed) -> Result<(), FeedError> {
+                CardKingdom.parse(body, feed)
+            }
+        }
+        static ON_MOCK: OnMock = OnMock;
+
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/pricelist");
+                then.status(200).body(
+                    r#"{"meta":{"created_at":"2026-08-11 21:07:02"},"data":[
+                        {"id":1,"scryfall_id":"a","variation":"","is_foil":"false","price_retail":"0.35"}
+                    ]}"#,
+                );
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/gone");
+                then.status(404);
+            })
+            .await;
+        let good: &'static str = Box::leak(server.url("/pricelist").into_boxed_str());
+        let gone: &'static str = Box::leak(server.url("/gone").into_boxed_str());
+
+        let dir = crate::scratch::path("feed-refresh");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let conn = crate::db::open_write(&dir).unwrap();
+        crate::schema::build_pair(&conn);
+        let read = crate::db::open_read(&dir).unwrap();
+        let swaps = Arc::new(Swaps::default());
+        let state = Arc::new(State::new(
+            conn,
+            Some(read),
+            dir.clone(),
+            crate::events::silent(),
+            vec![swaps.clone()],
+            crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            crate::images::Cache::new(dir.join("images")),
+        ));
+
+        let mut phases: Vec<String> = Vec::new();
+        let err = refresh_from(&state, &ON_MOCK, gone, &mut |phase, _, _| {
+            phases.push(phase.to_owned())
+        })
+        .await
+        .unwrap_err();
+        assert!(err.contains("404"), "{err}");
+        assert_eq!(phases.first().map(String::as_str), Some("downloading"));
+        assert_eq!(phases.last().map(String::as_str), Some("error"));
+        assert_eq!(
+            swaps.0.load(Ordering::SeqCst),
+            0,
+            "nothing swapped, nobody told"
+        );
+        assert!(
+            !is_refreshing("refresh-test"),
+            "a failure gives the claim back"
+        );
+
+        let mut phases: Vec<String> = Vec::new();
+        let status = refresh_from(&state, &ON_MOCK, good, &mut |phase, _, _| {
+            phases.push(phase.to_owned())
+        })
+        .await
+        .unwrap();
+        phases.dedup();
+        assert_eq!(phases, ["downloading", "ingesting", "done"]);
+        assert_eq!(status.marketplace, "refresh-test");
+        assert_eq!(status.row_count, Some(1));
+        assert_eq!(
+            stored_prices(&state.db, "refresh-test"),
+            vec![("a".to_owned(), "nonfoil".to_owned(), 0.35)]
+        );
+        assert!(
+            !temp_path(&state, &ON_MOCK).exists(),
+            "the download is not kept"
+        );
+        assert_eq!(swaps.0.load(Ordering::SeqCst), 1);
+        assert!(!is_refreshing("refresh-test"), "and so does a success");
+
         drop(state);
         let _ = std::fs::remove_dir_all(dir);
     }
@@ -2178,5 +2207,29 @@ mod tests {
     fn the_progress_phases_are_the_ones_the_frontend_mirrors() {
         assert_eq!(FEED_PHASES, ["downloading", "ingesting", "done", "error"]);
         assert_eq!(PROGRESS_EVENT, "marketplace:progress");
+    }
+
+    /// **What the page hears**: the event's name, and the keys it reads — camelCase, nothing
+    /// more. The payload leaves through the host's sink, which is what took a window's place.
+    #[test]
+    fn a_step_of_a_refresh_reaches_the_sink_as_the_event_the_page_listens_for() {
+        let (state, heard, dir) = crate::state::fixtures::listening("feed-heard");
+
+        emit(&state, "manapool", "ingesting", 0, 0);
+
+        assert_eq!(
+            heard.taken(),
+            vec![(
+                "marketplace:progress".to_owned(),
+                serde_json::json!({
+                    "marketplace": "manapool",
+                    "phase": "ingesting",
+                    "done": 0,
+                    "total": 0
+                })
+            ),]
+        );
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
     }
 }

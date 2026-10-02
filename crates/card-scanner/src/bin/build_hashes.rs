@@ -7,7 +7,7 @@
 //! That is what the sidecar cache is for, and its key is **the image URI, not a timestamp**.
 //! Scryfall's image URLs carry a cache-buster (`…/0/0/<id>.webp?1783910776`) that equals the
 //! printing's `image_updated_at`, so "are these bytes still current" is a string comparison —
-//! the same rule `src-tauri/src/images.rs` already relies on. No clock, no mtime, nothing a
+//! the same rule `crates/grimoire-core/src/images.rs` already relies on. No clock, no mtime, nothing a
 //! filesystem can round away. A newly released set costs a few hundred fetches; a full build
 //! from empty costs 168,582.
 //!

@@ -85,6 +85,7 @@ fn host(name: &str, base_url: String) -> Run {
         events.clone(),
         vec![swaps.clone()],
         scryfall::Client::new(base_url),
+        crate::images::Cache::new(dir.join("images")),
     ));
     Run {
         state,

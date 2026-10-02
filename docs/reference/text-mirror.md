@@ -175,8 +175,10 @@ refresh rewrites `marketplace_prices` wholesale; a Card Kingdom refresh driven l
 wrote 149,321 rows. Mapping either to a surface would fire the hook that many times per refresh and
 turn every sync into a mirror rebuild triggered a hundred thousand times over. **What those two
 change instead enters through one full pass after the refresh *lands*** — `sync::do_sync` the
-moment its swap has committed, and `marketplace_feed::refresh` on success, each call
-`Mask::mark_all` — which is a bounded event rather than a per-row storm.
+moment its swap has committed, and `marketplace_feed::refresh` on success. Both are
+`grimoire-core`'s since 2026-10-02 and name no mirror: each calls `State::corpus_replaced()`,
+which tells every observer the host gave the state, and the mirror's `Mask` is one of them and
+answers with `mark_all` — a bounded event rather than a per-row storm.
 
 **Writing it as a match on a fixed list, with `_ => None` as the default, is also how a table added
 by a future migration stays safe.** A prefix test would have got `deck_audit` wrong. What keeps

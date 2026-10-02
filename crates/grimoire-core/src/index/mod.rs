@@ -983,6 +983,7 @@ pub mod fixtures {
         crate::schema::build_pair(&conn);
         seed(&conn);
         let read = crate::db::open_read(&dir).unwrap();
+        let images = crate::images::Cache::new(dir.join("images"));
         // **Hooked up, so what these fixtures drive runs with the cross-file fence armed.**
         // `State::new` installs it and `state::with_write`'s `debug_assert` reads it.
         std::sync::Arc::new(crate::state::State::new(
@@ -993,6 +994,7 @@ pub mod fixtures {
             Vec::new(),
             // Never called: nothing in the lifecycle reaches the network.
             crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            images,
         ))
     }
 

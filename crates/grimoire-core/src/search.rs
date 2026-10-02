@@ -5284,4 +5284,47 @@ mod tests {
         assert_eq!(f.colors_strict, Some(true));
         assert_eq!(f.types.as_deref(), Some(&["Creature".to_owned()][..]));
     }
+
+    /// The reason there are two connections. A search must answer while an ingest holds
+    /// the write connection — under WAL the reader sees the last committed snapshot and
+    /// never waits, and the only thing that used to serialise them was sharing one
+    /// `Mutex<Connection>`. This test holds that lock outright, which is the guarantee
+    /// being pinned: the chunked ingest releases it between batches, so a search that only
+    /// answered in those gaps would still pass a gentler test and still stall a reader for
+    /// the length of a batch. Run from another thread, as the real command is, so a
+    /// regression to the shared lock fails here in five seconds rather than hanging the
+    /// suite.
+    #[test]
+    fn a_search_answers_while_an_ingest_holds_the_write_connection() {
+        let (state, dir) =
+            crate::state::fixtures::on_files("search-concurrent", "http://127.0.0.1:1");
+        state.lock_db().execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw) VALUES ('1','Lightning Bolt','lea','161','en','normal',1,'{}')", []).unwrap();
+        state
+            .syncing
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+
+        // Stands in for the ingest, which holds this exact lock for the length of a sync.
+        let held = state.db.lock().unwrap();
+        let (tx, rx) = std::sync::mpsc::channel();
+        {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let req = SearchRequest {
+                    limit: 10,
+                    ..Default::default()
+                };
+                let _ = tx.send(run_search(&state.lock_db_read(), &req));
+            });
+        }
+        let answered = rx
+            .recv_timeout(std::time::Duration::from_secs(5))
+            .expect("search must not queue behind the write connection");
+        drop(held);
+        drop(state);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let r = answered.unwrap();
+        assert_eq!(r.total, 1);
+        assert_eq!(r.items[0].name, "Lightning Bolt");
+    }
 }

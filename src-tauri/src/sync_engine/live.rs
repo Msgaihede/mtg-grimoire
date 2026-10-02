@@ -759,8 +759,8 @@ mod tests {
                 ),
                 // Never called: `push_now` with no group answers `Ok(None)` before it would be.
                 crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                crate::images::Cache::new(dir.join("images")),
             )),
-            images: crate::images::Cache::new(dir.join("images")),
             mirror,
             mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
             changes,

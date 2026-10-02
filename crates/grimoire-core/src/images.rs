@@ -21,7 +21,6 @@
 //!   [`evict`] runs on the `image-upkeep` thread: every picture of a card the reader owns, wants
 //!   or has in a deck is kept at the variant the pre-warm fetches it at, and everything else is
 //!   least-recently-used against [`BUDGET`] — see the "Upkeep" section below.
-
 // `rate_limit_penalty` is the *API* client's clamp, imported rather than copied: the API's
 // lockout and this cache's are separate deadlines over separate hosts, but they are one
 // rule, and a second copy of a clamp is a second place for it to drift.
@@ -30,12 +29,16 @@ use crate::scryfall::{self, rate_limit_penalty, ScryfallError};
 // cache that reads them. IMAGE_HOST is imported rather than
 // re-spelled because the stderr line below names it.
 use crate::image_uri::IMAGE_HOST;
+use crate::platform::clock::{Tick, Wall};
+use crate::platform::files::{self, aio};
+use crate::platform::sync::{Lock, Semaphore};
+use crate::state::State;
 use rusqlite::{params, Connection, OptionalExtension};
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// Images in flight at once — and the whole of the pacing, because there is deliberately
 /// no interval between fetch *starts* any more.
@@ -312,7 +315,7 @@ pub fn is_current(conn: &Connection, key: &ImageKey, uri: &str) -> bool {
 /// Record what was just written to disk. An upsert, because a re-fetch replaces a row.
 ///
 /// **Write connection only.** `image_cache` is the one table this module writes, and it
-/// writes it through `AppState.db` — the read handle is opened `SQLITE_OPEN_READ_ONLY`
+/// writes it through the state's write connection — the read handle is opened `SQLITE_OPEN_READ_ONLY`
 /// and would refuse this outright.
 pub fn record(conn: &Connection, key: &ImageKey, uri: &str, bytes: usize) -> rusqlite::Result<()> {
     conn.execute(
@@ -412,26 +415,28 @@ pub enum ImageError {
 pub struct Cache {
     dir: PathBuf,
     /// Caps images in flight. A grid that scrolls fast can queue hundreds of tiles.
-    permits: tokio::sync::Semaphore,
+    permits: Semaphore,
     /// When the 429 penalty lifts. Scryfall's rate limit is per application, so a limit one
     /// request earns has to be paid by every request, not just that one.
     ///
-    /// An instant in the past — the gate open — for the whole of a normal session: since the
-    /// pacing interval went, this carries a penalty and nothing else.
-    gate: tokio::sync::Mutex<tokio::time::Instant>,
+    /// `None` — the gate open — for the whole of a normal session: since the pacing interval
+    /// went, this carries a penalty and nothing else. A penalty is the moment it was charged
+    /// and how long it runs: a [`Tick`] can be asked how long ago it was and cannot be moved
+    /// forward, so the deadline is the pair.
+    gate: Mutex<Option<(Tick, Duration)>>,
     /// Images fetched but not stored. A read-only data directory or a full disk costs the
     /// user a slower grid rather than a blank one, which is right — but it is also
     /// invisible, and a number that only ever climbs is what makes it findable.
     store_failures: AtomicU64,
     /// One lock per key, so two callers who want the same image do not both fetch it.
     ///
-    /// A `Mutex<HashMap<ImageKey, Arc<tokio::sync::Mutex<()>>>>` rather than the shared
+    /// A `Mutex<HashMap<ImageKey, Arc<Lock>>>` rather than the shared
     /// *future* the carryover sketched: a `Shared<BoxFuture<…>>` has to be `'static`, which
     /// would mean an `Arc<Cache>` plus owned clones of the client and both connections
     /// threaded through the protocol handler. The second caller here waits on the key,
     /// then re-reads the disk — a 2 ms read instead of a shared buffer, for a fraction of
     /// the surface, and the network saving is identical.
-    inflight: Mutex<HashMap<ImageKey, Arc<tokio::sync::Mutex<()>>>>,
+    inflight: Mutex<HashMap<ImageKey, Arc<Lock>>>,
     /// Rows owed to `image_cache`: bytes that are **on disk** but that no row vouches for
     /// yet, because the write connection was busy at the moment they landed.
     ///
@@ -495,8 +500,8 @@ impl Cache {
     pub fn new(images_dir: PathBuf) -> Cache {
         Cache {
             dir: images_dir,
-            permits: tokio::sync::Semaphore::new(MAX_CONCURRENT_FETCHES),
-            gate: tokio::sync::Mutex::new(tokio::time::Instant::now()),
+            permits: Semaphore::new(MAX_CONCURRENT_FETCHES),
+            gate: Mutex::new(None),
             store_failures: AtomicU64::new(0),
             inflight: Mutex::new(HashMap::new()),
             pending: Mutex::new(HashMap::new()),
@@ -510,11 +515,11 @@ impl Cache {
     ///
     /// Bounded like the owed-row queue, and for its reason. A key that does not fit is not
     /// counted: what it loses is that one picture looking older to the next pass than it is,
-    /// and the set is drained every [`UPKEEP_TICK`] — the webview keeps what it was served for
-    /// a day ([`IMAGE_MAX_AGE`]), so a minute of distinct hits is a few screenfuls, never
-    /// thousands.
+    /// and the set is drained every [`UPKEEP_TICK`] — the desktop's webview keeps what it was
+    /// served for a day (its `IMAGE_MAX_AGE`), so a minute of distinct hits is a few screenfuls,
+    /// never thousands.
     fn touch(&self, key: &ImageKey) {
-        let mut touched = crate::sync::lock_plain(&self.touched);
+        let mut touched = crate::db::lock_plain(&self.touched);
         if touched.len() < MAX_TOUCHED || touched.contains(key) {
             touched.insert(key.clone());
         }
@@ -524,15 +529,15 @@ impl Cache {
     /// by setting its modified time to `now`. Returns how many files took the stamp.
     ///
     /// **Never on the path that served them.** Each is an open and a metadata write, and a
-    /// served tile pays for neither: [`spawn_upkeep`]'s thread calls this once a tick, and
+    /// served tile pays for neither: [`upkeep_tick`] calls this once a tick, and
     /// [`evict`] calls it first so the pass it runs sees them.
     ///
     /// A file that is gone — swept by [`crate::reset::clear_cache`], evicted, never stored —
     /// is skipped, and **the open never creates one**. That is the property worth the test: an
     /// empty file at a key's path, under a row that vouches for it, would be served as a
     /// zero-byte picture until Scryfall next re-scanned the card.
-    pub fn flush_touches(&self, now: SystemTime) -> usize {
-        let owed: Vec<ImageKey> = crate::sync::lock_plain(&self.touched).drain().collect();
+    pub fn flush_touches(&self, now: Wall) -> usize {
+        let owed: Vec<ImageKey> = crate::db::lock_plain(&self.touched).drain().collect();
         owed.iter()
             .filter_map(|key| cache_path(&self.dir, key))
             .filter(|path| stamp_used(path, now).is_ok())
@@ -546,7 +551,7 @@ impl Cache {
 
     /// Hold a row until the write connection is free.
     fn queue_record(&self, key: &ImageKey, uri: &str, bytes: usize) {
-        let mut pending = crate::sync::lock_plain(&self.pending);
+        let mut pending = crate::db::lock_plain(&self.pending);
         if pending.len() >= MAX_PENDING_RECORDS && !pending.contains_key(key) {
             self.dropped_records.fetch_add(1, Ordering::Relaxed);
             return;
@@ -570,7 +575,7 @@ impl Cache {
     /// A row that fails to write individually is dropped rather than re-queued: the failure
     /// is then the database refusing this exact statement, which retrying will not fix.
     pub fn flush_records(&self, write: &Mutex<Connection>, wait: Duration) -> usize {
-        if crate::sync::lock_plain(&self.pending).is_empty() {
+        if crate::db::lock_plain(&self.pending).is_empty() {
             return 0;
         }
         let Some(conn) = crate::db::lock_for(write, wait) else {
@@ -579,7 +584,7 @@ impl Cache {
         // Drained only once the connection is in hand, so a failed lock leaves the queue
         // exactly as it was rather than losing it to a lock that never came.
         let owed: Vec<(ImageKey, PendingRecord)> =
-            crate::sync::lock_plain(&self.pending).drain().collect();
+            crate::db::lock_plain(&self.pending).drain().collect();
         let mut written = 0usize;
         for (key, row) in owed {
             if record(&conn, &key, &row.uri, row.bytes).is_ok() {
@@ -591,7 +596,7 @@ impl Cache {
 
     /// How many owed rows are waiting for the write connection.
     pub fn pending_records(&self) -> usize {
-        crate::sync::lock_plain(&self.pending).len()
+        crate::db::lock_plain(&self.pending).len()
     }
 
     /// Throw the owed rows away, and answer how many went.
@@ -607,7 +612,7 @@ impl Cache {
     /// Dropping rather than flushing, and only ever after the files have gone: what is lost is
     /// bookkeeping for pictures that no longer exist.
     pub fn forget_pending(&self) -> usize {
-        let mut pending = crate::sync::lock_plain(&self.pending);
+        let mut pending = crate::db::lock_plain(&self.pending);
         let owed = pending.len();
         pending.clear();
         owed
@@ -675,11 +680,11 @@ impl Cache {
     }
 
     /// The lock for one key, created if this is the first caller to ask.
-    fn key_lock(&self, key: &ImageKey) -> Arc<tokio::sync::Mutex<()>> {
-        let mut map = crate::sync::lock_plain(&self.inflight);
+    fn key_lock(&self, key: &ImageKey) -> Arc<Lock> {
+        let mut map = crate::db::lock_plain(&self.inflight);
         Arc::clone(
             map.entry(key.clone())
-                .or_insert_with(|| Arc::new(tokio::sync::Mutex::new(()))),
+                .or_insert_with(|| Arc::new(Lock::new())),
         )
     }
 
@@ -690,7 +695,7 @@ impl Cache {
     /// map is the last owner, and any caller still waiting on the key is holding a clone
     /// that keeps the entry (and therefore the coalescing) alive.
     fn release_key(&self, key: &ImageKey) {
-        let mut map = crate::sync::lock_plain(&self.inflight);
+        let mut map = crate::db::lock_plain(&self.inflight);
         if map.get(key).is_some_and(|l| Arc::strong_count(l) == 1) {
             map.remove(key);
         }
@@ -726,7 +731,7 @@ impl Cache {
             // A short synchronous scope, closed before the first `.await` below: a
             // `MutexGuard` held across one would make this future `!Send` (the protocol
             // spawns it) and would hold the read connection open for a network fetch.
-            let conn = crate::sync::lock_conn(read);
+            let conn = crate::db::lock_blocking(read);
             match resolve(&conn, key).map_err(ImageError::Db)? {
                 Resolution::Unknown => return Err(ImageError::UnknownCard),
                 Resolution::Missing(kind) => {
@@ -751,7 +756,7 @@ impl Cache {
             // The row says these bytes are current; the *file* is the thing that can have
             // been deleted under us, and that is allowed — the cache is disposable, so a
             // missing file is a miss rather than an error.
-            if let Ok(bytes) = tokio::fs::read(&path).await {
+            if let Ok(bytes) = aio::read(&path).await {
                 // A hit is the likeliest moment for the write connection to be free, so it
                 // is the best moment to pay off any rows owed from a busier one. Costs one
                 // uncontended mutex when nothing is owed, which is almost always.
@@ -828,11 +833,11 @@ impl Cache {
         // it is a winner whose bookkeeping lost the race for the write connection, or whose
         // store failed, and the honest answer to both is to fetch.
         let fresh = {
-            let conn = crate::sync::lock_conn(read);
+            let conn = crate::db::lock_blocking(read);
             is_current(&conn, key, uri)
         };
         if fresh {
-            if let Ok(bytes) = tokio::fs::read(path).await {
+            if let Ok(bytes) = aio::read(path).await {
                 return Ok(Served {
                     bytes,
                     content_type: WEBP,
@@ -908,19 +913,11 @@ impl Cache {
     /// seconds" is a complete answer, and the protocol turns it into a 503 with a
     /// `Retry-After` the UI can act on.
     async fn fetch(&self, client: &scryfall::Client, uri: &str) -> Result<Vec<u8>, ImageError> {
-        let _permit = self
-            .permits
-            .acquire()
-            .await
-            .map_err(|e| ImageError::Fetch(e.to_string()))?;
-        {
-            let next = self.gate.lock().await;
-            let remaining = next.saturating_duration_since(tokio::time::Instant::now());
-            if !remaining.is_zero() {
-                return Err(ImageError::RateLimited {
-                    retry_after_secs: secs_rounded_up(remaining),
-                });
-            }
+        let _permit = self.permits.acquire().await;
+        if let Some(remaining) = self.lockout_remaining() {
+            return Err(ImageError::RateLimited {
+                retry_after_secs: secs_rounded_up(remaining),
+            });
         }
 
         match client.fetch_image(uri).await {
@@ -929,7 +926,7 @@ impl Cache {
                 // The penalty is per application, so it applies to everyone: push the
                 // gate out so no other tile even starts until the window has passed.
                 let penalty = rate_limit_penalty(retry_after_secs);
-                self.penalise(penalty).await;
+                self.penalise(penalty);
                 Err(ImageError::RateLimited {
                     retry_after_secs: penalty.as_secs(),
                 })
@@ -946,133 +943,22 @@ impl Cache {
     /// `max`, never assignment: two tiles hitting the same 429 window can come back with
     /// different `Retry-After` values, and the shorter one arriving second must not
     /// release the app from the longer lockout that is already in force.
-    async fn penalise(&self, penalty: Duration) {
-        let mut next = self.gate.lock().await;
-        *next = (*next).max(tokio::time::Instant::now() + penalty);
+    fn penalise(&self, penalty: Duration) {
+        let mut gate = crate::db::lock_plain(&self.gate);
+        let left = gate.map_or(Duration::ZERO, |(charged, runs)| {
+            runs.saturating_sub(charged.elapsed())
+        });
+        if penalty > left {
+            *gate = Some((Tick::now(), penalty));
+        }
     }
-}
 
-/// How long the webview may keep an image it has been given.
-///
-/// A day, not a year: the URL is stable across Scryfall re-scanning a card, so an
-/// immutable cache would pin a superseded picture inside the webview until the app is
-/// reinstalled. A day of staleness after a re-scan is invisible; being asked again for
-/// every tile that scrolls past is not.
-const IMAGE_MAX_AGE: &str = "max-age=86400";
-
-/// The HTTP answer for one resolved request.
-///
-/// Separated from [`serve`] because this is the whole contract with the renderer and it is
-/// pure — `serve` itself needs a running Tauri app, and a contract that can only be
-/// exercised by launching one is a contract nothing checks.
-///
-/// The distinction that matters is permanent-versus-retryable. A printing Scryfall has no
-/// art for is a **200** with a placeholder, because there is nothing to retry; a failed
-/// fetch is a **502**, and a rate limit a **503** carrying the wait, so the `<img>` can
-/// report an error and the grid can heal itself. Serving a placeholder for a network
-/// failure would quietly turn a temporary outage into a permanently artless collection.
-fn respond(result: Result<Served, ImageError>) -> tauri::http::Response<Vec<u8>> {
-    use tauri::http::{header, Response, StatusCode};
-
-    match result {
-        Ok(served) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, served.content_type)
-            // A placeholder is the one 200 whose content is *meant* to change. It stands in
-            // for a picture the next sync may well supply — Scryfall scans a card and the
-            // `soon.jpg` becomes real art — and there is no URI change to notice it by,
-            // because the placeholder was never fetched from a URI at all. Real bytes keep
-            // their day: their URI *is* their version, so their staleness is bounded by the
-            // re-scan that ended it.
-            .header(
-                header::CACHE_CONTROL,
-                if served.content_type == SVG {
-                    "no-store"
-                } else {
-                    IMAGE_MAX_AGE
-                },
-            )
-            .body(served.bytes)
-            .expect("image response"),
-        Err(ImageError::UnknownCard) => fail(StatusCode::NOT_FOUND, "no such card", None),
-        Err(ImageError::RateLimited { retry_after_secs }) => fail(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "rate limited by Scryfall",
-            Some(retry_after_secs),
-        ),
-        Err(e) => fail(StatusCode::BAD_GATEWAY, &e.to_string(), None),
+    /// What is left of a rate limit's lockout, or `None` while the gate is open.
+    fn lockout_remaining(&self) -> Option<Duration> {
+        let (charged, runs) = (*crate::db::lock_plain(&self.gate))?;
+        let left = runs.saturating_sub(charged.elapsed());
+        (!left.is_zero()).then_some(left)
     }
-}
-
-/// A failure, as the webview sees it.
-///
-/// `no-store` on every one of them. A 404 is *heuristically* cacheable, and the card
-/// behind one can arrive in the next sync — a cached 404 would outlive the thing it was
-/// true about, with no way to invalidate it short of restarting the app. The same applies
-/// to a 503 the whole design expects to be retried.
-fn fail(
-    status: tauri::http::StatusCode,
-    message: &str,
-    retry_after: Option<u64>,
-) -> tauri::http::Response<Vec<u8>> {
-    use tauri::http::{header, Response};
-
-    let mut builder = Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "text/plain;charset=utf-8")
-        .header(header::CACHE_CONTROL, "no-store");
-    if let Some(secs) = retry_after {
-        builder = builder.header(header::RETRY_AFTER, secs.to_string());
-    }
-    builder
-        .body(message.as_bytes().to_vec())
-        .expect("static response")
-}
-
-/// The answer for a request that arrives before `setup` has managed the state.
-///
-/// The webview and the app's own startup genuinely race at launch, so this is a real
-/// state rather than a defensive impossibility — and a retryable one, in about the time
-/// it takes to read the header.
-fn not_ready() -> tauri::http::Response<Vec<u8>> {
-    fail(
-        tauri::http::StatusCode::SERVICE_UNAVAILABLE,
-        "app is still starting",
-        Some(1),
-    )
-}
-
-/// Answer one `mtgimg://` request.
-///
-/// Only the *path* is ever read: on Windows the origin is `http://mtgimg.localhost/…` and
-/// elsewhere `mtgimg://localhost/…`, so a handler that looked at the host would be a
-/// handler that worked on exactly one platform.
-///
-/// **One route.** A card image is `/<variant>/<card id>/<face>` over the four [`Variant`]
-/// words, and that is the whole protocol. There was a second — `/cover/<deck id>`, the file a
-/// reader picked as a deck's cover — which went with the custom cover itself on 2026-08-31: a
-/// cover is now `decks.cover_card_id`, the art crop of a card, which this route already serves
-/// as an ordinary card image.
-pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<Vec<u8>> {
-    use tauri::Manager;
-
-    let Some(key) = parse_request_path(path) else {
-        return fail(
-            tauri::http::StatusCode::NOT_FOUND,
-            "not an image request",
-            None,
-        );
-    };
-    let Some(state) = app.try_state::<std::sync::Arc<crate::sync::AppState>>() else {
-        return not_ready();
-    };
-
-    respond(
-        state
-            .images
-            .get(&state.client, state.reader(), &state.db, &key)
-            .await,
-    )
 }
 
 /// Images **one** prefetch call will warm — two pages of results.
@@ -1114,36 +1000,6 @@ pub fn prefetch_keys(card_ids: &[String], variant: Variant) -> Vec<ImageKey> {
         // list, which is nowhere near it.
         .take(MAX_PREFETCH)
         .collect()
-}
-
-/// Warm the cache for a page of results.
-///
-/// Returns as soon as the work is queued rather than when it is done: nothing is waiting
-/// on the answer, and a command that took the length of 100 downloads to resolve would be
-/// a command the UI has to manage. Failures are silent for the same reason — an image
-/// that did not prefetch is an image that fetches when it is rendered.
-#[tauri::command]
-pub async fn prefetch_images(
-    state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
-    card_ids: Vec<String>,
-    variant: String,
-) -> Result<(), String> {
-    let Some(variant) = Variant::parse(&variant) else {
-        return Err(format!("unknown image variant: {variant}"));
-    };
-    let state = state.inner().clone();
-    let keys = prefetch_keys(&card_ids, variant);
-    tauri::async_runtime::spawn(async move {
-        warm(
-            &state.images,
-            &state.client,
-            state.reader(),
-            &state.db,
-            keys,
-        )
-        .await;
-    });
-    Ok(())
 }
 
 /// Images one pre-warm pass will fetch.
@@ -1267,40 +1123,11 @@ pub fn prewarm_keys(conn: &Connection, limit: usize) -> rusqlite::Result<Vec<Ima
         .collect())
 }
 
-/// Warm the cache for what the user owns. Returns how many images were queued.
-///
-/// Fire-and-forget in the same sense as [`prefetch_images`]: it resolves when the work is
-/// queued. The loop shares the cache's own semaphore with the live grid, so a pre-warm
-/// running behind a browsing session competes for the same budget rather than doubling it,
-/// and it abandons the batch on the first rate limit.
-#[tauri::command]
-pub async fn prewarm_collection(
-    state: tauri::State<'_, std::sync::Arc<crate::sync::AppState>>,
-) -> Result<usize, String> {
-    let state = state.inner().clone();
-    let keys = {
-        let conn = crate::sync::lock_db_read(&state);
-        prewarm_keys(&conn, MAX_PREWARM).map_err(|e| e.to_string())?
-    };
-    let queued = keys.len();
-    tauri::async_runtime::spawn(async move {
-        warm(
-            &state.images,
-            &state.client,
-            state.reader(),
-            &state.db,
-            keys,
-        )
-        .await;
-    });
-    Ok(queued)
-}
-
 /// Walk a batch, stopping at the first rate limit. Returns how many keys were attempted.
 ///
-/// Split out of [`prefetch_images`] because that command needs a `tauri::State` and a
-/// running app, and the abandon-on-429 rule is exactly the part worth a test.
-async fn warm(
+/// Split out of the desktop's `prefetch_images` command, which needs a running app, because
+/// the abandon-on-429 rule is exactly the part worth a test.
+pub async fn warm(
     cache: &Cache,
     client: &scryfall::Client,
     read: &Mutex<Connection>,
@@ -1365,9 +1192,9 @@ const _: () = assert!(CACHE_BUDGET_BYTES > MAX_PREWARM as u64 * 93_000);
 /// fresh, and the last of the rest go at the first pass after 2026-11-18 — sooner under the
 /// budget.
 ///
-/// Many times the stamp's own resolution, which is about a day: the webview keeps what it was
-/// served for [`IMAGE_MAX_AGE`], so a picture on screen every day reaches [`Cache::get`] — and is
-/// touched — about once a day.
+/// Many times the stamp's own resolution, which is about a day: the desktop's webview keeps
+/// what it was served for a day (its `IMAGE_MAX_AGE`), so a picture on screen every day reaches
+/// [`Cache::get`] — and is touched — about once a day.
 const MAX_IDLE: Duration = Duration::from_secs(90 * 24 * 60 * 60);
 
 /// [`CACHE_BUDGET_BYTES`] and [`MAX_IDLE`] together, so a test can hand [`evict`] a small cache.
@@ -1384,7 +1211,7 @@ const BUDGET: Budget = Budget {
 
 /// How often the upkeep thread wakes: to stamp what was served since, and to see whether a pass
 /// is owed.
-const UPKEEP_TICK: Duration = Duration::from_secs(60);
+pub const UPKEEP_TICK: Duration = Duration::from_secs(60);
 
 /// Pictures stored between two passes — ~46 MB at `display`, so the cache overshoots its budget
 /// by at most 9% of it before a pass brings it back. The launch's pass runs one tick in, whatever
@@ -1424,32 +1251,16 @@ struct OnDisk {
     /// When it was last used, as far as this cache has written down: the file's modified time,
     /// which [`store`] sets by writing it and [`Cache::flush_touches`] moves forward. `None`
     /// when the filesystem would not say, and a picture that cannot be dated is never evicted.
-    used: Option<SystemTime>,
+    used: Option<Wall>,
 }
 
 /// Set `path`'s modified time to `when` — the used-stamp.
 ///
-/// `write(true)` and **never** `create(true)`: a key whose file is gone must stay gone. See
-/// [`Cache::flush_touches`] for what an empty file there would cost.
-fn stamp_used(path: &Path, when: SystemTime) -> std::io::Result<()> {
-    std::fs::OpenOptions::new()
-        .write(true)
-        .open(path)?
-        .set_modified(when)
-}
-
-/// `read_dir`, with a directory that is not there answered as an empty one.
-///
-/// Absent is an ordinary state — no picture of that variant was ever stored, or
-/// [`crate::reset::clear_cache`] is mid-sweep. Anything else (a permission, an I/O error) is
-/// returned, and [`evict`] then does nothing at all: a partial walk would read every file it
-/// missed as gone and reap the rows that vouch for them.
-fn read_dir_if_present(dir: &Path) -> std::io::Result<Option<std::fs::ReadDir>> {
-    match std::fs::read_dir(dir) {
-        Ok(entries) => Ok(Some(entries)),
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
-        Err(e) => Err(e),
-    }
+/// **It never creates the file**, which is [`files::set_modified`]'s own promise: a key whose
+/// file is gone must stay gone. See [`Cache::flush_touches`] for what an empty file there
+/// would cost.
+fn stamp_used(path: &Path, when: Wall) -> std::io::Result<()> {
+    files::set_modified(path, when)
 }
 
 /// Every cache file under `images_dir`, with its size and its used-stamp.
@@ -1464,49 +1275,34 @@ fn read_dir_if_present(dir: &Path) -> std::io::Result<Option<std::fs::ReadDir>> 
 /// **On Windows it is one directory listing per shard and no call per file**: `DirEntry`'s
 /// metadata there comes out of the listing itself (the standard library documents it as making
 /// no extra system call), which is where both the size and the stamp are read from.
+///
+/// **A folder that is not there is an empty one** — no picture of that variant was ever
+/// stored, or [`crate::reset::clear_cache`] is mid-sweep — and that is [`files::listing`]'s
+/// `None`. Anything else (a permission, an I/O error, on a folder or on one entry of it) is
+/// returned, and [`evict`] then does nothing at all: a partial walk would read every file it
+/// missed as gone and reap the rows that vouch for them.
 fn walk(images_dir: &Path) -> std::io::Result<Vec<OnDisk>> {
-    use std::io::ErrorKind::NotFound;
-
     let mut found = Vec::new();
     for variant in Variant::ALL {
-        let Some(shards) = read_dir_if_present(&images_dir.join(variant.key()))? else {
+        let Some(shards) = files::listing(&images_dir.join(variant.key()))? else {
             continue;
         };
-        for shard in shards {
-            let shard = shard?;
-            match shard.file_type() {
-                Ok(kind) if kind.is_dir() => {}
-                Ok(_) => continue,
-                Err(e) if e.kind() == NotFound => continue,
-                Err(e) => return Err(e),
-            }
-            let Some(files) = read_dir_if_present(&shard.path())? else {
+        for shard in shards.iter().filter(|e| e.kind == files::Kind::Dir) {
+            let Some(pictures) = files::listing(&shard.path)? else {
                 continue;
             };
-            for file in files {
-                let file = file?;
-                match file.file_type() {
-                    Ok(kind) if kind.is_file() => {}
-                    Ok(_) => continue,
-                    Err(e) if e.kind() == NotFound => continue,
-                    Err(e) => return Err(e),
-                }
-                let Some(key) = file
-                    .file_name()
-                    .to_str()
-                    .and_then(|name| parse_cache_file_name(name, variant))
-                else {
+            for file in pictures.into_iter().filter(|e| e.kind == files::Kind::File) {
+                let Some(key) = parse_cache_file_name(&file.name, variant) else {
                     continue;
                 };
-                if cache_path(images_dir, &key).as_deref() != Some(file.path().as_path()) {
+                if cache_path(images_dir, &key).as_deref() != Some(file.path.as_path()) {
                     continue;
                 }
                 // Found, even when it cannot be measured: a file that is there keeps its row.
-                let meta = file.metadata().ok();
                 found.push(OnDisk {
                     key,
-                    bytes: meta.as_ref().map_or(0, |m| m.len()),
-                    used: meta.and_then(|m| m.modified().ok()),
+                    bytes: file.len.unwrap_or(0),
+                    used: file.modified,
                 });
             }
         }
@@ -1586,13 +1382,13 @@ fn choose_evictions(
     found: &[OnDisk],
     spared: impl Fn(&ImageKey) -> bool,
     budget: Budget,
-    now: SystemTime,
+    now: Wall,
 ) -> Vec<usize> {
     let unspared: Vec<usize> = (0..found.len())
         .filter(|&i| !spared(&found[i].key))
         .collect();
     let mut over: u64 = unspared.iter().map(|&i| found[i].bytes).sum();
-    let mut oldest_first: Vec<(SystemTime, usize)> = unspared
+    let mut oldest_first: Vec<(Wall, usize)> = unspared
         .iter()
         .filter_map(|&i| Some((found[i].used?, i)))
         .collect();
@@ -1673,32 +1469,30 @@ fn drop_rows(conn: &Connection, keys: &[ImageKey], started: i64) -> rusqlite::Re
 ///
 /// Never deleted: anything [`walk`] did not parse as its own, a [`spared_keys`] picture, one
 /// whose row is still owed ([`Cache::pending`] — it has just landed), and one it cannot date.
-/// **A walk that fails deletes nothing**, for [`read_dir_if_present`]'s reason.
+/// **A walk that fails deletes nothing**, for the reason [`walk`] gives.
 fn evict(
     cache: &Cache,
     read: &Mutex<Connection>,
     write: &Mutex<Connection>,
     budget: Budget,
-    now: SystemTime,
+    now: Wall,
 ) -> Result<Upkeep, String> {
     let mut done = Upkeep {
         touched: cache.flush_touches(now) as u64,
         ..Upkeep::default()
     };
-    let started = now
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX));
+    let started = now.as_secs().max(0);
 
     let found =
         walk(&cache.dir).map_err(|e| format!("could not read {}: {e}", cache.dir.display()))?;
     let (spared, rows) = {
-        let conn = crate::sync::lock_conn(read);
+        let conn = crate::db::lock_blocking(read);
         (
             spared_keys(&conn).map_err(|e| e.to_string())?,
             cached_rows(&conn).map_err(|e| e.to_string())?,
         )
     };
-    let owed: HashSet<ImageKey> = crate::sync::lock_plain(&cache.pending)
+    let owed: HashSet<ImageKey> = crate::db::lock_plain(&cache.pending)
         .keys()
         .cloned()
         .collect();
@@ -1715,7 +1509,7 @@ fn evict(
         let Some(path) = cache_path(&cache.dir, &picture.key) else {
             continue;
         };
-        match std::fs::remove_file(&path) {
+        match files::remove(&path) {
             Ok(()) => {
                 done.files += 1;
                 done.bytes += picture.bytes;
@@ -1743,9 +1537,15 @@ fn evict(
     Ok(done)
 }
 
-/// Start the `image-upkeep` thread: the one caller of [`evict`] and of [`Cache::flush_touches`].
+/// One wake of a host's upkeep loop: the one caller of [`evict`] and of
+/// [`Cache::flush_touches`].
 ///
-/// It wakes every [`UPKEEP_TICK`]. The first wake runs a pass — a minute after launch, so the
+/// **The pass is here and the loop is the host's.** The desktop calls this from its
+/// `image-upkeep` thread, which sleeps [`UPKEEP_TICK`] between calls (`spawn_upkeep`, in
+/// `src-tauri`); a host with no thread to sleep on has no files to evict either.
+/// `stores_at_last_pass` is the loop's one piece of memory, and starts `None`.
+///
+/// The first wake runs a pass — a minute after launch, so the
 /// window, the facet index and the first page of tiles are not competing with a directory walk —
 /// and after that a pass is owed once [`STORES_PER_PASS`] pictures have landed since the last,
 /// because a store is the only thing that grows the cache. Every other wake just stamps what was
@@ -1758,64 +1558,41 @@ fn evict(
 /// retried until the next one is owed, so an unreadable folder costs one row per 500 pictures
 /// rather than one a minute.
 ///
-/// Detached, like [`crate::index::lifecycle::spawn_build`]: nothing waits on it, and a process
-/// that exits mid-pass leaves the interruption [`evict`]'s order was chosen for.
-pub fn spawn_upkeep(state: &Arc<crate::sync::AppState>) {
-    let state = Arc::clone(state);
-    let spawned = std::thread::Builder::new()
-        .name("image-upkeep".into())
-        .spawn(move || {
-            let mut stores_at_last_pass: Option<u64> = None;
-            loop {
-                std::thread::sleep(UPKEEP_TICK);
-                let stores = state.images.stores();
-                let owed = stores_at_last_pass
-                    .is_none_or(|at| stores.saturating_sub(at) >= STORES_PER_PASS);
-                if !owed || state.syncing.load(Ordering::Relaxed) {
-                    state.images.flush_touches(SystemTime::now());
-                    continue;
-                }
-                stores_at_last_pass = Some(stores);
-                match evict(
-                    &state.images,
-                    state.reader(),
-                    &state.db,
-                    BUDGET,
-                    SystemTime::now(),
-                ) {
-                    Ok(done)
-                        if done.files > 0
-                            || done.rows > 0
-                            || done.failed > 0
-                            || done.rows_owed > 0 =>
-                    {
-                        eprintln!(
-                            "image cache: evicted {} files ({} bytes), dropped {} rows; \
+/// Nothing waits on it, and a process that exits mid-pass leaves the interruption [`evict`]'s
+/// order was chosen for.
+pub fn upkeep_tick(state: &State, stores_at_last_pass: &mut Option<u64>) {
+    let stores = state.images.stores();
+    let owed = stores_at_last_pass.is_none_or(|at| stores.saturating_sub(at) >= STORES_PER_PASS);
+    if !owed || state.syncing.load(Ordering::Relaxed) {
+        state.images.flush_touches(Wall::now());
+        return;
+    }
+    *stores_at_last_pass = Some(stores);
+    match evict(
+        &state.images,
+        state.reader(),
+        &state.db,
+        BUDGET,
+        Wall::now(),
+    ) {
+        Ok(done) if done.files > 0 || done.rows > 0 || done.failed > 0 || done.rows_owed > 0 => {
+            eprintln!(
+                "image cache: evicted {} files ({} bytes), dropped {} rows; \
                          {} would not go, {} rows owed, {} stamped used",
-                            done.files,
-                            done.bytes,
-                            done.rows,
-                            done.failed,
-                            done.rows_owed,
-                            done.touched
-                        )
-                    }
-                    Ok(_) => {}
-                    Err(e) => {
-                        eprintln!("image cache: eviction pass skipped: {e}");
-                        state.images.note(
-                            &state.db,
-                            crate::errors::Source::ImageStore,
-                            "image_evict",
-                            &ImageError::Io(e),
-                            &state.images.dir().display().to_string(),
-                        );
-                    }
-                }
-            }
-        });
-    if let Err(e) = spawned {
-        eprintln!("image cache: could not start the upkeep thread, so nothing is evicted: {e}");
+                done.files, done.bytes, done.rows, done.failed, done.rows_owed, done.touched
+            )
+        }
+        Ok(_) => {}
+        Err(e) => {
+            eprintln!("image cache: eviction pass skipped: {e}");
+            state.images.note(
+                &state.db,
+                crate::errors::Source::ImageStore,
+                "image_evict",
+                &ImageError::Io(e),
+                &state.images.dir().display().to_string(),
+            );
+        }
     }
 }
 
@@ -1844,13 +1621,13 @@ async fn store(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     static WRITE_SEQ: AtomicU64 = AtomicU64::new(0);
 
     if let Some(parent) = path.parent() {
-        tokio::fs::create_dir_all(parent).await?;
+        aio::create_dir_all(parent).await?;
     }
     let tmp = path.with_extension(format!("{}.tmp", WRITE_SEQ.fetch_add(1, Ordering::Relaxed)));
-    tokio::fs::write(&tmp, bytes).await?;
-    if let Err(e) = tokio::fs::rename(&tmp, path).await {
+    aio::write(&tmp, bytes).await?;
+    if let Err(e) = aio::rename(&tmp, path).await {
         // Nothing will ever look for this name again, so a failed swap must not leave it.
-        let _ = tokio::fs::remove_file(&tmp).await;
+        let _ = aio::remove(&tmp).await;
         return Err(e);
     }
     Ok(())
@@ -2288,8 +2065,8 @@ mod tests {
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
 
-            crate::split::convert(&dir).unwrap();
             let write = crate::db::open_write(&dir).unwrap();
+            crate::schema::build_pair(&write);
             let read = crate::db::open_read(&dir).unwrap();
 
             Fixture {
@@ -2573,12 +2350,7 @@ mod tests {
             ),
             "the wait the caller is told to take must be the one we will honour: {err:?}"
         );
-        let ahead = f
-            .cache
-            .gate
-            .lock()
-            .await
-            .saturating_duration_since(tokio::time::Instant::now());
+        let ahead = f.cache.lockout_remaining().unwrap_or_default();
         assert!(
             ahead > Duration::from_secs(25),
             "every tile waits out a 429, not just the one that earned it: {ahead:?}"
@@ -2656,12 +2428,7 @@ mod tests {
             ),
             "{err:?}"
         );
-        let ahead = f
-            .cache
-            .gate
-            .lock()
-            .await
-            .saturating_duration_since(tokio::time::Instant::now());
+        let ahead = f.cache.lockout_remaining().unwrap_or_default();
         assert!(
             ahead <= Duration::from_secs(300),
             "a year of lockout is not something a header gets to ask for: {ahead:?}"
@@ -2688,7 +2455,7 @@ mod tests {
 
         f.get(&client, &k).await.unwrap_err(); // earns the 60 s lockout
 
-        let started = std::time::Instant::now();
+        let started = Tick::now();
         let err = tokio::time::timeout(Duration::from_secs(5), f.get(&client, &k))
             .await
             .expect("a request must not wait out a penalty it did not earn")
@@ -2718,14 +2485,10 @@ mod tests {
     async fn a_later_penalty_never_shortens_a_lockout_already_in_force() {
         let cache = Cache::new(PathBuf::from("D:\\app\\data\\images"));
 
-        cache.penalise(Duration::from_secs(300)).await;
-        cache.penalise(Duration::from_secs(30)).await;
+        cache.penalise(Duration::from_secs(300));
+        cache.penalise(Duration::from_secs(30));
 
-        let ahead = cache
-            .gate
-            .lock()
-            .await
-            .saturating_duration_since(tokio::time::Instant::now());
+        let ahead = cache.lockout_remaining().unwrap_or_default();
         assert!(
             ahead > Duration::from_secs(290),
             "a 30 s penalty must not end a 300 s lockout: {ahead:?}"
@@ -2837,7 +2600,7 @@ mod tests {
         }
         let client = scryfall::Client::new(server.base_url());
 
-        let started = std::time::Instant::now();
+        let started = Tick::now();
         for id in &ids {
             f.get(&client, &key(id, 0, Variant::Grid)).await.unwrap();
         }
@@ -2874,6 +2637,32 @@ mod tests {
         );
     }
 
+    /// **A lockout ends.** The gate is a moment and how long the penalty runs from it, so what
+    /// is left shrinks as time passes and is nothing once the penalty has — and a penalty
+    /// charged after that starts a new one rather than being measured against the old.
+    #[test]
+    fn a_lockout_runs_out_and_a_later_penalty_starts_a_new_one() {
+        let cache = Cache::new(PathBuf::from("D:\\app\\data\\images"));
+
+        cache.penalise(Duration::from_millis(40));
+        let left = cache.lockout_remaining().expect("just charged");
+        assert!(left <= Duration::from_millis(40), "{left:?}");
+
+        assert!(crate::platform::pause(Duration::from_millis(80)));
+        assert_eq!(
+            cache.lockout_remaining(),
+            None,
+            "the penalty has run its course"
+        );
+
+        cache.penalise(Duration::from_secs(60));
+        let left = cache.lockout_remaining().expect("charged again");
+        assert!(
+            left > Duration::from_secs(55),
+            "a new penalty runs from when it was charged: {left:?}"
+        );
+    }
+
     /// The gate is still there, and it is still what a 429 is charged to: what changed is
     /// that it holds a *penalty* deadline and never a routine one. A cache that has earned
     /// nothing must let a fetch straight through.
@@ -2882,17 +2671,13 @@ mod tests {
         let cache = Cache::new(std::env::temp_dir().join("mtg-grimoire-test-gate"));
 
         assert!(
-            cache.gate.lock().await.elapsed() >= Duration::ZERO,
+            cache.lockout_remaining().is_none(),
             "a fresh gate must already be open"
         );
 
-        cache.penalise(Duration::from_secs(120)).await;
+        cache.penalise(Duration::from_secs(120));
 
-        let remaining = cache
-            .gate
-            .lock()
-            .await
-            .saturating_duration_since(tokio::time::Instant::now());
+        let remaining = cache.lockout_remaining().unwrap_or_default();
         assert!(
             remaining > Duration::from_secs(115),
             "a penalty must still shut the gate: {remaining:?}"
@@ -2911,144 +2696,6 @@ mod tests {
         let write = Mutex::new(Connection::open_in_memory().unwrap());
 
         assert_send(&cache.get(&client, &read, &write, &key(BOLT, 0, Variant::Grid)));
-    }
-
-    fn header<'a>(r: &'a tauri::http::Response<Vec<u8>>, name: &str) -> Option<&'a str> {
-        r.headers().get(name).and_then(|v| v.to_str().ok())
-    }
-
-    /// Bytes, and permission to keep them for a day — not forever. The URL is stable
-    /// across Scryfall re-scanning a card, so an immutable cache would pin a superseded
-    /// picture inside the webview until the app is reinstalled.
-    #[test]
-    fn a_served_image_is_a_200_the_webview_may_cache_for_a_day() {
-        let r = respond(Ok(Served {
-            bytes: vec![0x52, 0x49, 0x46, 0x46],
-            content_type: WEBP,
-        }));
-
-        assert_eq!(r.status(), tauri::http::StatusCode::OK);
-        assert_eq!(header(&r, "content-type"), Some(WEBP));
-        assert_eq!(header(&r, "cache-control"), Some("max-age=86400"));
-        assert_eq!(r.body(), &vec![0x52u8, 0x49, 0x46, 0x46]);
-    }
-
-    /// A printing Scryfall has no art for is a **200**: there is nothing to retry, and a
-    /// failure status would put a broken-image icon where the app has a considered answer.
-    ///
-    /// But it is the one 200 the webview may not keep. Every other image carries its own
-    /// version in its URL, so a day of caching is bounded by the re-scan that ended it; a
-    /// placeholder was never fetched from a URL at all, and the thing that replaces it —
-    /// a sync that fills in the art, or a `soon.jpg` that finally becomes a picture —
-    /// changes nothing the webview could notice. `no-store` is what makes the next look at
-    /// that card ask again.
-    #[test]
-    fn a_placeholder_is_a_200_the_webview_may_not_keep() {
-        let svg = placeholder_svg(Placeholder::NoImage, Variant::Grid);
-        let r = respond(Ok(Served {
-            bytes: svg.clone().into_bytes(),
-            content_type: SVG,
-        }));
-
-        assert_eq!(r.status(), tauri::http::StatusCode::OK);
-        assert_eq!(header(&r, "content-type"), Some(SVG));
-        assert_eq!(header(&r, "cache-control"), Some("no-store"));
-        assert_eq!(r.body(), &svg.into_bytes());
-    }
-
-    /// **`img-src` is pinned whole, and that is the point of having this beside
-    /// `desktop.rs`'s guard.**
-    ///
-    /// `app.security.csp` is configuration, so nothing else in the build can fail when it is
-    /// loosened — `desktop.rs`'s `the_shipped_csp_allows_ipc_and_images_and_nothing_wild`
-    /// asserts the sources the app needs are *present* and that no wildcard is, which a new
-    /// source passes. This asserts the one directive every picture in the app goes through is
-    /// **exactly** these four and nothing else: a source added to it fails here by name.
-    ///
-    /// It was written for the deck-cover route, which was a path on `mtgimg:` precisely so it
-    /// would need no new source; that route went on 2026-08-31 and the pin outlived it, because
-    /// serving any image from `file:`, `asset:` or a `blob:` is the same change and would still
-    /// be the one nothing else in this app notices.
-    ///
-    /// `data:` is on the list already — it is the inline SVG placeholder's.
-    #[test]
-    fn the_shipped_csp_is_untouched() {
-        let conf: serde_json::Value =
-            serde_json::from_str(include_str!("../tauri.conf.json")).unwrap();
-        let csp = conf["app"]["security"]["csp"].as_str().unwrap();
-
-        let img_src = csp
-            .split(';')
-            .map(str::trim)
-            .find(|d| d.starts_with("img-src"))
-            .expect("the CSP must name img-src");
-        assert_eq!(
-            img_src, "img-src 'self' data: mtgimg: http://mtgimg.localhost",
-            "every picture in this app is a path on `mtgimg:`, so img-src must not have grown"
-        );
-    }
-
-    /// An id nothing resolves to is a caller error. A 404 rather than a placeholder,
-    /// because a broken link must not be indistinguishable from a card with no art — and
-    /// `no-store`, because the card can arrive in the very next sync and a heuristically
-    /// cached 404 would outlive it.
-    #[test]
-    fn an_unknown_card_is_an_uncacheable_404() {
-        let r = respond(Err(ImageError::UnknownCard));
-
-        assert_eq!(r.status(), tauri::http::StatusCode::NOT_FOUND);
-        assert_eq!(header(&r, "content-type"), Some("text/plain;charset=utf-8"));
-        assert_eq!(header(&r, "cache-control"), Some("no-store"));
-        assert!(header(&r, "retry-after").is_none());
-    }
-
-    /// The one case the grid can heal from on its own, so it is the one case that carries
-    /// instructions: a **503** with the wait in seconds. The number is the *clamped* one
-    /// the fetcher will actually honour — telling the UI to come back sooner than the gate
-    /// opens is how a retry loop walks straight into a Scryfall ban.
-    #[test]
-    fn a_rate_limit_is_a_503_carrying_the_wait_the_fetcher_will_honour() {
-        let r = respond(Err(ImageError::RateLimited {
-            retry_after_secs: 30,
-        }));
-
-        assert_eq!(r.status(), tauri::http::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(
-            header(&r, "retry-after"),
-            Some("30"),
-            "the header is what the grid schedules its retry from"
-        );
-        assert_eq!(header(&r, "cache-control"), Some("no-store"));
-    }
-
-    /// Everything else is a **502**: the app reached its own cache fine and the far end is
-    /// what failed. Emphatically not a 200 with a placeholder — that would turn a
-    /// five-second outage into a collection that is permanently artless, with no signal
-    /// anywhere that a retry would fix it.
-    #[test]
-    fn every_other_failure_is_a_502_that_says_what_broke() {
-        for e in [
-            ImageError::Fetch("connection reset".into()),
-            ImageError::Io("the disk is full".into()),
-            ImageError::Db("database is locked".into()),
-        ] {
-            let expected = e.to_string();
-            let r = respond(Err(e));
-            assert_eq!(r.status(), tauri::http::StatusCode::BAD_GATEWAY);
-            assert_eq!(header(&r, "cache-control"), Some("no-store"));
-            assert_eq!(String::from_utf8(r.body().clone()).unwrap(), expected);
-        }
-    }
-
-    /// A request that arrives before `setup` has managed the state — the webview and the
-    /// first sync race at launch. Retryable, and the shortest honest wait, because the
-    /// state appears within milliseconds.
-    #[test]
-    fn a_request_before_the_app_has_its_state_is_a_503_worth_retrying_at_once() {
-        let r = not_ready();
-
-        assert_eq!(r.status(), tauri::http::StatusCode::SERVICE_UNAVAILABLE);
-        assert_eq!(header(&r, "retry-after"), Some("1"));
     }
 
     /// Carryover item 3, ledgered twice: nothing deduplicated two requests for the same
@@ -3254,7 +2901,7 @@ mod tests {
         let deck = conn.last_insert_rowid();
         // A deck card is filed under a category since schema v8, and `category_id` is
         // `NOT NULL` — so the pile has to exist before anything can be in it.
-        let main = crate::schema::tests::category(&conn, deck, "main", "Main deck");
+        let main = crate::schema::fixtures::category(&conn, deck, "main", "Main deck");
         conn.execute(
             "INSERT INTO deck_cards
                 (deck_id,category_id,card_id,set_code,collector_number,lang,name,quantity,
@@ -3434,7 +3081,7 @@ mod tests {
         Duration::from_secs(n * 24 * 60 * 60)
     }
 
-    fn found(id: &str, variant: Variant, bytes: u64, used: Option<SystemTime>) -> OnDisk {
+    fn found(id: &str, variant: Variant, bytes: u64, used: Option<Wall>) -> OnDisk {
         OnDisk {
             key: key(id, 0, variant),
             bytes,
@@ -3460,7 +3107,7 @@ mod tests {
     /// on the disk, so they count.
     #[test]
     fn eviction_takes_the_least_recently_used_first_and_stops_once_the_rest_fits() {
-        let now = UNIX_EPOCH + days(1_000);
+        let now = Wall::EPOCH + days(1_000);
         let disk = [
             found(A, Variant::Display, 100, Some(now - days(5))),
             found(B, Variant::Display, 100, Some(now - days(1))),
@@ -3492,7 +3139,7 @@ mod tests {
     /// browsing out behind it.
     #[test]
     fn a_picture_the_prewarm_wants_is_never_evicted_and_is_not_charged_to_the_budget() {
-        let now = UNIX_EPOCH + days(1_000);
+        let now = Wall::EPOCH + days(1_000);
         let disk = [
             found(A, Variant::Display, 10_000, Some(now - days(900))),
             found(B, Variant::Display, 100, Some(now - days(1))),
@@ -3517,7 +3164,7 @@ mod tests {
     /// unread for longer than it goes, and nothing younger does.
     #[test]
     fn a_picture_nobody_has_used_within_the_idle_horizon_goes_even_under_the_budget() {
-        let now = UNIX_EPOCH + days(1_000);
+        let now = Wall::EPOCH + days(1_000);
         let disk = [
             found(A, Variant::Grid, 60_000, Some(now - days(91))),
             found(A, Variant::Display, 93_000, Some(now - days(89))),
@@ -3566,7 +3213,7 @@ mod tests {
     impl Fixture {
         /// A picture on disk and the row that vouches for it: `bytes` long, last used at
         /// `used`, recorded at `fetched_at`.
-        fn put(&self, k: &ImageKey, bytes: usize, used: SystemTime, fetched_at: i64) {
+        fn put(&self, k: &ImageKey, bytes: usize, used: Wall, fetched_at: i64) {
             self.file(k, bytes, used);
             self.write
                 .lock()
@@ -3580,7 +3227,7 @@ mod tests {
         }
 
         /// A picture on disk with no row at all.
-        fn file(&self, k: &ImageKey, bytes: usize, used: SystemTime) -> PathBuf {
+        fn file(&self, k: &ImageKey, bytes: usize, used: Wall) -> PathBuf {
             let path = cache_path(self.cache.dir(), k).unwrap();
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
             std::fs::write(&path, vec![7u8; bytes]).unwrap();
@@ -3614,13 +3261,13 @@ mod tests {
                 .unwrap();
         }
 
-        fn evict(&self, budget: Budget, now: SystemTime) -> Upkeep {
+        fn evict(&self, budget: Budget, now: Wall) -> Upkeep {
             evict(&self.cache, &self.read, &self.write, budget, now).unwrap()
         }
     }
 
-    fn epoch_secs(t: SystemTime) -> i64 {
-        t.duration_since(UNIX_EPOCH).unwrap().as_secs() as i64
+    fn epoch_secs(t: Wall) -> i64 {
+        t.as_secs()
     }
 
     /// The whole pass over a real disk and a real database: what goes is deleted file **and**
@@ -3630,7 +3277,7 @@ mod tests {
     #[test]
     fn an_eviction_pass_deletes_file_and_row_together_and_spares_what_the_prewarm_owns() {
         let f = Fixture::new("upkeep-pass");
-        let now = SystemTime::now();
+        let now = Wall::now();
         let before = epoch_secs(now) - 1_000;
         let owned = key(A, 0, COLLECTION_PREWARM);
         let orphan = key(A, 0, Variant::Grid);
@@ -3692,7 +3339,7 @@ mod tests {
     #[test]
     fn a_row_whose_file_is_gone_is_reaped_but_one_written_after_the_pass_began_is_kept() {
         let f = Fixture::new("upkeep-reap");
-        let now = SystemTime::now();
+        let now = Wall::now();
         let gone = key(A, 0, COLLECTION_PREWARM);
         let landing = key(B, 0, Variant::Display);
         f.own(A);
@@ -3732,7 +3379,7 @@ mod tests {
         let (read_again, left_alone) = (key(A, 0, Variant::Grid), key(B, 0, Variant::Grid));
         f.get(&client, &read_again).await.unwrap();
         f.get(&client, &left_alone).await.unwrap();
-        let month_ago = SystemTime::now() - days(30);
+        let month_ago = Wall::now() - days(30);
         for k in [&read_again, &left_alone] {
             stamp_used(&cache_path(f.cache.dir(), k).unwrap(), month_ago).unwrap();
         }
@@ -3743,7 +3390,7 @@ mod tests {
                 bytes: 16,
                 idle: days(90),
             },
-            SystemTime::now() + Duration::from_secs(5),
+            Wall::now() + Duration::from_secs(5),
         );
 
         assert_eq!(done.touched, 1);
@@ -3773,7 +3420,7 @@ mod tests {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
 
         cache.touch(&k);
-        assert_eq!(cache.flush_touches(SystemTime::now()), 0);
+        assert_eq!(cache.flush_touches(Wall::now()), 0);
 
         assert!(
             !path.exists(),
@@ -3788,7 +3435,7 @@ mod tests {
     #[test]
     fn the_walk_never_deletes_a_file_it_did_not_parse_as_its_own() {
         let f = Fixture::new("upkeep-foreign");
-        let long_ago = SystemTime::now() - days(1_000);
+        let long_ago = Wall::now() - days(1_000);
         let ours = key(A, 0, Variant::Display);
         f.file(&ours, 10, long_ago);
         let root = f.cache.dir().to_path_buf();
@@ -3813,7 +3460,7 @@ mod tests {
                 bytes: 0,
                 idle: Duration::from_secs(1),
             },
-            SystemTime::now(),
+            Wall::now(),
         );
 
         assert_eq!(done.files, 1);

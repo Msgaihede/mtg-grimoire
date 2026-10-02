@@ -24,9 +24,8 @@
 //! **Nothing here may break a launch or a card sync.** A failure leaves the previous tags in
 //! place and writes the reason to `error_log`. Categorising by card type is the honest
 //! fallback, and it is what the app did before this file existed.
-
 use super::{read_tags_keyed, Dataset, TagStatus};
-use crate::sync::AppState;
+use crate::state::State;
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::Arc;
@@ -50,7 +49,7 @@ pub const PROGRESS_EVENT: &str = "oracle-tags:progress";
 /// sessions on the same afternoon.
 ///
 /// The ETag makes a check that finds nothing cost zero bytes either way, and
-/// [`oracle_tags_refresh`]'s `force` is the way past this for anyone who wants today's file.
+/// a forced refresh is the way past this for anyone who wants today's file.
 pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 
 /// Scryfall's Oracle Tags — what a card *does*.
@@ -190,86 +189,13 @@ const BY_PRINTING_ID: &str = "SELECT c.id, t.slug
        JOIN oracle_tag_cards t ON t.oracle_id = c.oracle_id
       WHERE c.id IN ({holes}) ORDER BY c.id, t.slug";
 
-// ---------------------------------------------------------------------------------------
-// Commands
-// ---------------------------------------------------------------------------------------
-
-/// Download the Oracle Tags file if it has changed and rebuild the taxonomy from it.
-///
-/// `force` skips the weekly throttle, not the ETag check.
-#[tauri::command]
-pub async fn oracle_tags_refresh(
-    state: tauri::State<'_, Arc<AppState>>,
-    app: tauri::AppHandle,
-    force: bool,
-) -> Result<OracleTagStatus, String> {
-    let state = state.inner().clone();
-    super::refresh(&ORACLE, &state, force, &mut |phase, done, total| {
-        super::emit(&ORACLE, &app, phase, done, total)
-    })
-    .await
-}
-
-/// Whether there is a taxonomy, which file it came from, and how old it is.
-///
-/// `async`, and answered on the blocking pool, because a sync command body runs inline on the
-/// IPC thread and this takes `db_read`'s mutex.
-#[tauri::command]
-pub async fn oracle_tags_status(
-    state: tauri::State<'_, Arc<AppState>>,
-) -> Result<OracleTagStatus, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || super::status_of(&ORACLE, &state))
-        .await
-        .map_err(|e| format!("could not read the oracle tag status: {e}"))
-}
-
-/// Every tag each of `oracle_ids` holds, inherited ones included — one entry per id, in the
-/// order asked, empty for a card the taxonomy says nothing about.
-///
-/// Read through `db_read` like every other read, so a decklist import answers during a sync
-/// rather than queueing behind the ingest.
-#[tauri::command]
-pub async fn oracle_tags_for_cards(
-    state: tauri::State<'_, Arc<AppState>>,
-    oracle_ids: Vec<String>,
-) -> Result<Vec<CardTags>, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = crate::sync::lock_db_read(&state);
-        read_card_tags(&conn, &oracle_ids).map_err(|e| format!("could not read the tags: {e}"))
-    })
-    .await
-    .map_err(|e| format!("could not read the tags: {e}"))?
-}
-
-/// The same answer as [`oracle_tags_for_cards`], asked with **printing** ids — one entry per
-/// requested `cards.id`, in the order asked, empty for anything the taxonomy (or the corpus)
-/// says nothing about.
-///
-/// This is the one most of the app wants: a quick add, every drag source and a resolved
-/// decklist line all hold a printing id, and `CardSummary` carries no oracle id at all.
-#[tauri::command]
-pub async fn oracle_tags_for_printings(
-    state: tauri::State<'_, Arc<AppState>>,
-    card_ids: Vec<String>,
-) -> Result<Vec<PrintingTags>, String> {
-    let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let conn = crate::sync::lock_db_read(&state);
-        read_printing_tags(&conn, &card_ids).map_err(|e| format!("could not read the tags: {e}"))
-    })
-    .await
-    .map_err(|e| format!("could not read the tags: {e}"))?
-}
-
 /// Refresh the taxonomy at startup if it is due.
 ///
 /// **Silent, best-effort and never blocking** — [`super::refresh_if_due`]'s contract. The
 /// honest fallback here is categorising by card type, exactly as the app did before this file
 /// existed; neither the launch nor the card sync may ever wait on it.
-pub async fn refresh_if_due(state: &Arc<AppState>, app: &tauri::AppHandle) {
-    super::refresh_if_due(&ORACLE, state, app).await
+pub async fn refresh_if_due(state: &Arc<State>) {
+    super::refresh_if_due(&ORACLE, state).await
 }
 #[cfg(test)]
 mod tests {
@@ -841,8 +767,8 @@ mod tests {
         let dir = crate::scratch::path("oracle-tags-chunked");
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        crate::split::convert(&dir).unwrap();
         let db = Mutex::new(crate::db::open_write(&dir).unwrap());
+        crate::schema::build_pair(&db.lock().unwrap());
 
         // The one line holding every tagging commits as one batch, because a line is folded
         // whole; the release points are the tags', the edges' and twenty batches of closure
@@ -1369,49 +1295,10 @@ mod tests {
     /// `Err` a test expecting a refusal would happily accept, for the wrong reason.
     static ORACLE_REFRESHES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
-    /// An `AppState` pointed at a scratch directory, a database of its own, and a Scryfall
-    /// that is really a mock server — [`crate::marketplace_feed`]'s `test_state`, with the
-    /// base URL injected, which is what lets the whole refresh be driven here.
-    fn test_state(base_url: String) -> (Arc<AppState>, std::path::PathBuf) {
-        let dir = crate::scratch::path("tags-state");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        crate::schema::prepare_data_dir(&dir).unwrap();
-        let conn = crate::db::open_write(&dir).unwrap();
-        crate::schema::prepare_database(&conn).unwrap();
-        let read = crate::db::open_read(&dir).unwrap();
-        // **Hooked up, so what these fixtures drive runs with the cross-file fence
-        // armed.** `State::new` installs it, `crate::sync::with_write`'s `debug_assert`
-        // reads it, so a command that committed to both files fails its own test rather
-        // than printing a line nobody reads. The desktop's three observers ride along as
-        // they do in the app, and nothing here looks at them: the wake is a throwaway,
-        // since nothing in this fixture starts `sync_engine::live`.
-        let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
-        let changes = std::sync::Arc::new(crate::changes::Changes::new());
-        (
-            Arc::new(AppState {
-                core: std::sync::Arc::new(grimoire_core::state::State::new(
-                    conn,
-                    Some(read),
-                    dir.clone(),
-                    grimoire_core::events::silent(),
-                    crate::mirror::watch::observers(
-                        mirror.clone(),
-                        changes.clone(),
-                        Default::default(),
-                    ),
-                    crate::scryfall::Client::new(base_url),
-                )),
-                images: crate::images::Cache::new(dir.join("images")),
-                // The mirror is never started in these tests; a clean mask and an empty record are
-                // what an `AppState` looks like before the first pass.
-                mirror,
-                mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
-                pairing: std::sync::Mutex::new(None),
-                changes,
-            }),
-            dir,
-        )
+    /// A host's [`State`] pointed at a scratch directory, a database of its own, and a Scryfall
+    /// that is really a mock server — which is what lets the whole refresh be driven here.
+    fn test_state(base_url: String) -> (Arc<State>, std::path::PathBuf) {
+        crate::state::fixtures::on_files("tags-state", &base_url)
     }
 
     /// The gzipped bytes of a JSONL body, as the bulk origin serves them.

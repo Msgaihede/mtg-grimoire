@@ -24,12 +24,13 @@
 //! over them — [`state::State`], the one update hook on its write connection ([`hooks`]) and the
 //! way out for an event ([`events`]); and, since the domain step, what the app is *about*: the
 //! decks, the collection, the wishlist, the search, the card pane and the view-state modules,
-//! with [`state::with_write`] over them. The I/O step is arriving in three parts, and two
+//! with [`state::with_write`] over them. The I/O step arrived in three parts, and all three
 //! are here: [`platform`]'s request, timer, files and background work; their first callers —
-//! [`scryfall`], [`ingest`] and [`reconcile`]; and what drives those three — [`sync`], the card
-//! sync, and [`index`], the facet index with its lifecycle. What is not here yet is the rest
-//! of what reaches a network, a filesystem or the relay: the feeds, the images, the sync
-//! client. What moves next, and in what order, is the light-app spec's §2.8.
+//! [`scryfall`], [`ingest`] and [`reconcile`]; what drives those three — [`sync`], the card
+//! sync, and [`index`], the facet index with its lifecycle; and the three feeds — [`combos`],
+//! [`marketplace_feed`] and [`tags`] — with [`images`], the image cache. What is not here
+//! yet is what reaches the relay: the sync client and pairing. What moves next, and in what
+//! order, is the light-app spec's §2.8.
 //!
 //! **`src-tauri` re-exports each moved module at the path it always had**, so `crate::schema`
 //! over there is this crate's `schema` and no caller changed; its `AppState` wraps a
@@ -38,15 +39,14 @@
 //! module of the same name that re-exports this crate's with a glob and defines the wrappers
 //! beside it. Nothing here is a command, and nothing here spawns a thread to run one on.
 //!
-//! **A few modules arrived without one function**, because that function names code a later
-//! step moves — `deck`'s `bracket_reads` (it matches against `combos`, a feed), `reset`'s
-//! `clear_cache` and `sync`'s `status` (the image cache) — or names something only the
-//! desktop has: `schema`'s `prepare_data_dir`, `import`'s
-//! `read_import_file`, `marketplace`'s `set_marketplace_now`. Each is still `src-tauri`'s, in
-//! the module that re-exports the rest. (`errors`' `kind_of` was a fourth; it came home with
-//! [`scryfall`], whose error it classifies.)
+//! **Three modules arrived without one function**, because that function names something
+//! only the desktop has: `schema`'s `prepare_data_dir`, `import`'s `read_import_file`,
+//! `marketplace`'s `set_marketplace_now`. Each is still `src-tauri`'s, in the module that
+//! re-exports the rest. (Four more waited the same way for code a later step moved, and came
+//! home with it: `errors`' `kind_of` with [`scryfall`], and `deck`'s `bracket_reads`,
+//! `reset`'s `clear_cache` and `sync`'s `status` with the feeds and the image cache.)
 //!
-//! **A doc link here that names a module still in `src-tauri` — [`crate::images`], say —
+//! **A doc link here that names a module still in `src-tauri` — `crate::mirror`, say —
 //! does not resolve yet.** They are left spelled as they were: every one names a module that
 //! arrives in a later step, at which point the link is right again without an edit. A moved
 //! file's own `//!` doc may still say its command wrappers are "at the foot": they are at the
@@ -65,6 +65,10 @@ pub mod collection;
 pub mod collection_alloc;
 pub mod collection_folders;
 pub mod collection_source;
+/// **Commander Spellbook's combos**: the feed streamed into `combos` over its own
+/// [`platform::http`] client, and the two questions asked of it — which combos a pile of
+/// printings holds, and which combos name one card.
+pub mod combos;
 /// **The connections**: the pair `user.db` + `corpus.db`, the pragmas each file needs, and the
 /// two ways of asking for the write connection — a bounded ask that answers `BUSY`, and a
 /// background batch that stands aside for one.
@@ -102,6 +106,10 @@ pub mod hooks;
 /// **The resolution rule under the image cache.** Two columns of `cards`, the precedence
 /// between them and one predicate over a string.
 pub mod image_uri;
+/// **The image cache**: lazy, bounded, one fetch per key — what resolves a
+/// `(card, face, variant)` to bytes, the keys a pre-warm fetches, and the eviction pass that
+/// spares exactly those. How its bytes reach a page is the host's.
+pub mod images;
 pub mod import;
 /// **The in-memory facet index**: `CardIndex`, the facet pass over it, and the lifecycle that
 /// keeps it — cold, built, and amended when the collection moves.
@@ -115,6 +123,9 @@ pub mod maintenance;
 pub mod managed_wishlist;
 pub mod markcolors;
 pub mod marketplace;
+/// **The two price feeds** — Card Kingdom's and Mana Pool's bulk pricelists, each parsed in one
+/// streaming pass and stored whole — over a client of their own, never Scryfall's.
+pub mod marketplace_feed;
 pub mod nav;
 pub mod new_printings;
 /// **The one place this crate knows which machine it is on.**
@@ -160,6 +171,10 @@ pub mod sync_engine;
 pub mod sync_meta;
 /// **Pairing's pure half** — the cryptography and the invite.
 pub mod sync_pair;
+/// **Scryfall's two Tagger taxonomies** — Oracle Tags and Art Tags: one engine with two
+/// bindings, the tag search over both, and the reader's mute list. They share Scryfall's
+/// client, its pacing gate and its lockout.
+pub mod tags;
 pub mod upcoming_sets;
 pub mod value_history;
 pub mod wishlist;

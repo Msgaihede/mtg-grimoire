@@ -80,7 +80,7 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// wholesale; either one mapped to a surface would fire this a hundred thousand times per
 /// refresh and turn every sync into a mirror rebuild. What those two change — a corrected
 /// card name, a moved price — enters through one full pass after the refresh *completes*
-/// ([`crate::marketplace_feed::refresh`] calls [`Mask::mark_all`], and the card sync reaches it
+/// (the card sync and [`crate::marketplace_feed::refresh`] each reach [`Mask::mark_all`]
 /// through [`WriteObserver::corpus_replaced`]), which is a bounded event instead of a per-row
 /// storm. The same goes
 /// for `deck_audit`, `deck_undo`, `error_log`, `image_cache`, the art- and oracle-tag tables,
@@ -267,8 +267,8 @@ impl WriteObserver for Mask {
         }
     }
 
-    /// A sync swapped `cards`: every mirrored CSV's `Price` column, and any corrected card
-    /// name, is owed a pass. One of the four things that run a full mirror pass (spec §5), and
+    /// A sync swapped `cards`, or a price refresh rewrote `marketplace_prices`: every mirrored
+    /// CSV's `Price` column, and any corrected card name, is owed a pass. One of the four things that run a full mirror pass (spec §5), and
     /// the one `row` cannot carry — `cards` maps to no surface on purpose.
     fn corpus_replaced(&self) {
         self.mark_all();
@@ -661,8 +661,8 @@ mod tests {
                 Vec::new(),
                 // Never called: nothing in this module reaches the network or an image.
                 crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+                crate::images::Cache::new(dir.join("images")),
             )),
-            images: crate::images::Cache::new(dir.join("images")),
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
             changes: Default::default(),
@@ -1847,6 +1847,7 @@ mod tests {
             grimoire_core::events::silent(),
             observers(mask.clone(), Default::default(), Default::default()),
             crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            crate::images::Cache::new(dir.path().join("images")),
         );
         assert_eq!(mask.take(), None);
 

@@ -2631,7 +2631,7 @@ layer.
   that both figures are widths at **100% zoom** and that a CSS pixel is not a device pixel. A 210px
   card at 2× on a display at 200% scaling asks 840 device pixels of a 488px source, which is the
   blur readers reported. **The pairing itself was never broken by the stale prose**: `DECK_PREWARM`
-  is `Variant::Display` in `src-tauri/src/images.rs` and `DECK_CARD_VARIANT` is `display` in
+  is `Variant::Display` in `crates/grimoire-core/src/images.rs` and `DECK_CARD_VARIANT` is `display` in
   `cardControl.tsx`, so the two agree and always did — only this page disagreed with both. Both
   constants carry the whole argument at their own sites, and neither of those sites went stale;
   this one did, because it is the one place the number was **written down** rather than read. A
