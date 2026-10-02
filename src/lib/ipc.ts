@@ -25,7 +25,7 @@
  * `ActivityEntry`                                — `src-tauri/src/activity.rs`
  * `HomeWidget`/`HomeLayout`                      — `src-tauri/src/home.rs`
  * `StickyNoteRow`                                — `src-tauri/src/sticky_notes.rs`
- * `CardFilters`, flattened into both list queries — `src-tauri/src/filters.rs`
+ * `CardFilters`, flattened into both list queries — `crates/grimoire-core/src/filters.rs`
  * `MarketplaceFeedStatus`                        — `src-tauri/src/marketplace_feed.rs`
  * `CardTags`/`PrintingTags`                     — `src-tauri/src/tags/oracle.rs`
  * `TagStatus`/`TagProgressEvent`                 — `src-tauri/src/tags/mod.rs`, aliased per
@@ -37,7 +37,7 @@
  * `ComboCountBucket`/`CardCombosPage`            — `src-tauri/src/combos.rs`
  * `MirrorStatus`                                 — `src-tauri/src/mirror/settings.rs`
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
- * `TagTerms`                                     — `src-tauri/src/filters.rs`
+ * `TagTerms`                                     — `crates/grimoire-core/src/filters.rs`
  * `PairingStatus`/`PairingOffer`/`PairingHandshake`/`PairingSealedKey`/
  * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `src-tauri/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
@@ -302,8 +302,8 @@ export interface SearchRequest {
   /**
    * Every printing of one oracle card — the card, not the cardboard. Absent means unset,
    * like every other filter here; it ANDs with the rest. Mirrors
-   * `CardFilters::oracle_id`/`SearchRequest::oracle_id` in `src-tauri/src/filters.rs` and
-   * `search.rs`.
+   * `CardFilters::oracle_id` in `crates/grimoire-core/src/filters.rs` and
+   * `SearchRequest::oracle_id` in `src-tauri/src/search.rs`.
    */
   oracleId?: string;
   /** Set codes. ORed with each other, ANDed with every other filter. */

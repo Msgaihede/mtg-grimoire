@@ -530,7 +530,7 @@ mod tests {
         crate::db::lock_blocking(&db).execute("INSERT INTO cards (id,name,set_code,collector_number,lang,layout,raw) VALUES ('stale','Stale','x','1','en','normal','{}')", []).unwrap();
         let sample = std::fs::read_to_string(concat!(
             env!("CARGO_MANIFEST_DIR"),
-            "/tests/fixtures/cards_sample.jsonl"
+            "/../crates/grimoire-core/tests/fixtures/cards_sample.jsonl"
         ))
         .unwrap();
         let lines: Vec<&str> = sample.lines().collect();

@@ -325,7 +325,7 @@ impl CardRow {
     /// has the verbatim bytes and must pass them. This exists because most of the parser's
     /// tests are about the *derived* columns and have no interest in `raw` — building the
     /// line back out of the `Value` keeps their call shape a single argument.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "testing"))]
     pub fn from_json(v: &Value) -> Option<CardRow> {
         CardRow::from_json_line(v, &v.to_string())
     }

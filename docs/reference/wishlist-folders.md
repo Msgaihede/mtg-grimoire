@@ -40,9 +40,9 @@ ALTER TABLE wishlist_entries ADD COLUMN folder_id INTEGER
 **This pair is the deck gallery's pair verbatim** — `wishlist_folders.parent_id` is
 `deck_folders.parent_id` and `wishlist_entries.folder_id` is `decks.folder_id` — and the symmetry
 is the decision rather than a coincidence: "folders nest, and the things filed in them outlive the
-filing" is a rule this schema has now made twice. `schema.rs`'s module doc carries the whole-schema
-inventory of both lists and is the copy of record; `decks-storage.md` carries the deck slice of it.
-A rung that adds one half of a new filing cabinet and forgets the other is exactly what those
+filing" is a rule this schema has now made twice. The core's `schema.rs` module doc carries the
+whole-schema inventory of both lists and is the copy of record; `decks-storage.md` carries the
+deck slice of it. A rung that adds one half of a new filing cabinet and forgets the other is exactly what those
 inventories exist to catch, since a prose-only edit routes to neither CI job.
 
 Nesting was ported rather than flattened for a cost reason, not an aspirational one: the tree
@@ -1415,13 +1415,13 @@ they were before the press. Findings B and C, both known and accepted, are recor
 
 | Path | What is in it |
 | --- | --- |
-| `src-tauri/src/schema.rs` | The v23 step, `WISHLIST_GRAIN`, and the whole-schema `ON DELETE` inventory |
+| `crates/grimoire-core/src/schema.rs` | The v23 step, `WISHLIST_GRAIN`, and the whole-schema `ON DELETE` inventory |
 | `src-tauri/src/wishlist_folders.rs` | The folder commands, `set_wish_folder`, `folder_summary`, and since issue #471 `clear_folder` and `delete_folder_and_wishes` |
 | `src-tauri/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `WISH_PREFERRED_FINISH`, the cheapest-printing join — and since 2026-09-26 `WishlistQuery::shelves`, `shelf_counts`, `wishlist_peek_sql` and `wishlist_shelf_counts` |
 | `src-tauri/src/wishlist_optimize.rs` | `plan` and `apply`, the candidate query, and the six DTOs `ipc.test.ts`'s `plainMirrors` pins |
 | `src/features/wishlist/optimizePlan.ts` | The conclusions drawn from those facts — the ticked set, the headline, the outcome reading |
 | `src/features/wishlist/OptimizeWishlistDialog.tsx` | The preview, and the one press that commits it |
-| `src-tauri/src/sorting.rs` | `row_price_expr`'s two arms, and `deck_card_price_expr` as one caller of it |
+| `crates/grimoire-core/src/sorting.rs` | `row_price_expr`'s two arms, and `deck_card_price_expr` as one caller of it |
 | `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
 | `src/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
 | ~~`src/features/wishlist/WishFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band, beside `ManagedWishFolders.tsx`. A folder is a shelf heading |

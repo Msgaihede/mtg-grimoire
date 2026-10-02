@@ -171,7 +171,7 @@ describe("the arms", () => {
     ["tools/x.psd1", F, F, F, T, F],
     ["src-tauri/src/deck.rs", T, T, F, F, F],
     ["src-tauri/src/desktop.rs", T, T, F, F, F],
-    ["src-tauri/src/schema.rs", T, T, F, F, F],
+    ["src-tauri/src/schema/mod.rs", T, T, F, F, F],
     ["src-tauri/Cargo.toml", T, T, F, F, F],
     ["src-tauri/src/share/__golden__/snapshot.json", T, T, F, F, F],
     ["src/features/transfer/__golden__/deck.arena.all.txt", T, T, F, F, T],
@@ -189,6 +189,9 @@ describe("the arms", () => {
     ["eslint.config.js", T, F, F, F, T],
     ["scripts/golden.mjs", T, F, F, F, F],
     ["crates/grimoire-core/src/lib.rs", T, T, T, F, F],
+    // The schema since 2026-10-02. `src-tauri/src/schema/mod.rs` above is what the desktop host
+    // kept of it — the launch — so both rows are true, and this is the one a new rung changes.
+    ["crates/grimoire-core/src/schema.rs", T, T, T, F, F],
     ["crates/grimoire-core/Cargo.toml", T, T, T, F, F],
     ["crates/card-scanner/src/session.rs", T, T, F, F, F],
     ["crates/card-scanner/Cargo.lock", T, T, F, F, F],

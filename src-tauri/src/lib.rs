@@ -26,7 +26,7 @@ pub mod camera;
 /// **The card pane.** Its six command wrappers sit in a block and everything else is
 /// `&Connection` in, DTO out.
 pub mod card;
-pub mod card_row;
+pub use grimoire_core::card_row;
 pub use grimoire_core::cardtypes;
 /// **Which user tables a commit wrote, told to every open window.** It rides the write
 /// connection's update hook and lives on `AppState` beside `mirror`. See the module doc.
@@ -36,7 +36,7 @@ pub mod collection_alloc;
 pub mod collection_folders;
 pub mod collection_source;
 pub mod combos;
-pub mod db;
+pub use grimoire_core::db;
 pub mod deck;
 pub mod deck_audit;
 /// **The home page's Deck completion read and To review's deck-card count** — how much of each
@@ -84,14 +84,16 @@ pub mod deckpane;
 /// `deck_undo` and `errors` is where the next person looking for the deck gallery's settings
 /// will look.
 pub mod decksort;
+/// **`grimoire-core`'s error log, and the one classifier that still names `scryfall`.** See
+/// the module doc: everything but `kind_of` is re-exported.
 pub mod errors;
 pub mod export;
-pub mod feed;
+pub use grimoire_core::feed;
 /// **Every file dialog the app shows, opened from Rust** (issue #545) — so the path the reader
 /// chose goes to the read or the write without crossing IPC, and no command takes a path from
 /// the page. The rule for the next file command is in the module doc.
 pub mod file_dialog;
-pub mod filters;
+pub use grimoire_core::filters;
 /// **[`markcolors`]'s shape with a document instead of a map.** One `app_meta` row, an
 /// infallible read that answers the default layout for anything it cannot parse, and a write
 /// that validates the document's *shape* and never its vocabulary — a widget kind this build
@@ -101,8 +103,8 @@ pub mod home;
 /// **The resolution rule under the image cache.** Two columns of `cards`, the precedence
 /// between them and one predicate over a string — no filesystem and no protocol handler.
 /// `search.rs` puts a card's URL on a result row from here, and [`images`] composes the same
-/// three pieces into a cached fetch.
-pub mod image_uri;
+/// three pieces into a cached fetch. `grimoire-core`'s, re-exported.
+pub use grimoire_core::image_uri;
 pub mod images;
 pub mod import;
 pub mod index;
@@ -156,11 +158,15 @@ pub mod reset;
 /// **The card scanner, and its stored preferences and review tray.** See `scanner`'s own doc for
 /// the request body and the asset load order. Its commands are registered in `desktop.rs`.
 pub mod scanner;
+/// **`grimoire-core`'s schema, and the two launch functions that could not move with it** —
+/// `prepare_database` and `prepare_data_dir`. See the module doc for where the cut is.
 pub mod schema;
 /// **Where a test puts a real file** — one directory per `cargo test` process and one per test
-/// below it, so two worktrees' runs at once never share a database. Test builds only.
+/// below it, so two worktrees' runs at once never share a database. Test builds only:
+/// `grimoire-core`'s, behind its `testing` feature, which this crate asks for under
+/// `[dev-dependencies]`.
 #[cfg(test)]
-mod scratch;
+use grimoire_core::scratch;
 pub mod scryfall;
 pub mod search;
 pub mod searchopen;
@@ -175,7 +181,7 @@ pub mod share;
 /// folder id, and `None` taking an override back off. No filesystem, no clock and no network.
 pub mod shelffolds;
 pub use grimoire_core::slug;
-pub mod sorting;
+pub use grimoire_core::sorting;
 /// **A pre-27 single-file `mtg.db`, taken apart into `user.db` and `corpus.db`.** Its one
 /// caller, [`schema::prepare_data_dir`], is reached only from `desktop::init_state`.
 pub mod split;

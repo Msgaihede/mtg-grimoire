@@ -36,8 +36,8 @@ const MORE_STEP = 50;
 /**
  * How many sets one search may name.
  *
- * Mirrors `MAX_SET_FILTER` in `src-tauri/src/filters.rs`, whose `picked_sets` truncates
- * past it — so
+ * Mirrors `MAX_SET_FILTER` in `crates/grimoire-core/src/filters.rs`, whose `picked_sets`
+ * truncates past it — so
  * without a ceiling here the button would say "65 sets" while the backend filtered on 64,
  * and the results would quietly disagree with the control that produced them. The backend
  * keeps its truncation as the belt; this is the braces, and it is the only one the reader

@@ -35,17 +35,17 @@ fn key(feed: &str) -> String {
 
 /// Record that `feed`'s file arrived at `now` and could not be used.
 pub fn note_unusable(conn: &Connection, feed: &str, now: i64) -> rusqlite::Result<()> {
-    crate::sync::set_meta(conn, &key(feed), &now.to_string())
+    crate::sync_meta::set_meta(conn, &key(feed), &now.to_string())
 }
 
 /// Forget `feed`'s last failure — its file has since been used.
 pub fn clear(conn: &Connection, feed: &str) -> rusqlite::Result<()> {
-    crate::sync::set_meta_opt(conn, &key(feed), None)
+    crate::sync_meta::set_meta_opt(conn, &key(feed), None)
 }
 
 /// When `feed`'s last unusable file arrived, if one did since its last success.
 pub fn failed_at(conn: &Connection, feed: &str) -> Option<i64> {
-    crate::sync::get_meta(conn, &key(feed)).and_then(|v| v.parse().ok())
+    crate::sync_meta::get_meta(conn, &key(feed)).and_then(|v| v.parse().ok())
 }
 
 /// Is `feed` resting at `now`?

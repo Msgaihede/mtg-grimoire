@@ -17,12 +17,15 @@
 //! writes it makes, and [`crate::reconcile`] already merges two versions of the reader's own
 //! rows and writes `needs_review` sentences from Rust.
 //!
-//! [`hlc`] and [`merge`] are `grimoire-core`'s, re-exported here beside the layers that have not
-//! moved yet.
+//! [`hlc`], [`merge`] and [`capture`] are `grimoire-core`'s, re-exported here beside the layers
+//! that have not moved yet.
 
 pub mod apply;
 pub mod baseline;
-pub mod capture;
+pub use grimoire_core::sync_engine::capture;
+/// The three of `capture`'s tests that drive `reconcile` and the launch, which are still here.
+#[cfg(test)]
+mod capture_tests;
 pub mod client;
 /// The IPC surface.
 pub mod commands;

@@ -225,7 +225,7 @@ fn feed_price(feed: &str, finish: &str) -> String {
 /// `schema::AUDIT_KINDS[0]`, `deck::LIVE` is `DECK_VARIANTS[0]`). Quoting here rather than in
 /// the constant because a SQL literal is this module's concern and not the schema's — the
 /// three `format!`s are built once per query alongside a SQL string of several kilobytes.
-pub(crate) fn finish_literals() -> [String; 3] {
+pub fn finish_literals() -> [String; 3] {
     crate::schema::FINISHES.map(|finish| format!("'{finish}'"))
 }
 

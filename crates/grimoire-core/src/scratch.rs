@@ -41,7 +41,7 @@ static RUN: OnceLock<Run> = OnceLock::new();
 /// A path of this test's own for a file or directory called `name`. Its parent exists; the path
 /// itself is left for the caller to create, or not — several tests are about what happens when
 /// it is missing.
-pub(crate) fn path(name: &str) -> PathBuf {
+pub fn path(name: &str) -> PathBuf {
     let thread: String = format!("{:?}", std::thread::current().id())
         .chars()
         .filter(char::is_ascii_digit)

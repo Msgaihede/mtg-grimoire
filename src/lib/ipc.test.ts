@@ -31,8 +31,9 @@ import deckTodosRs from "../../src-tauri/src/deck_todos.rs?raw";
 import deckTokensRs from "../../src-tauri/src/deck_tokens.rs?raw";
 import desktopRs from "../../src-tauri/src/desktop.rs?raw";
 // `cardFiltersRs` rather than `filtersRs`, which the scanner's own `filters.rs` already holds
-// below — two files of that name in two crates, and the app's is the one `CardFilters` lives in.
-import cardFiltersRs from "../../src-tauri/src/filters.rs?raw";
+// below — two files of that name in two crates, and the engine's (`grimoire-core`, where it
+// moved from `src-tauri/src` on 2026-10-02) is the one `CardFilters` lives in.
+import cardFiltersRs from "../../crates/grimoire-core/src/filters.rs?raw";
 import homeRs from "../../src-tauri/src/home.rs?raw";
 import facetsRs from "../../src-tauri/src/index/facets.rs?raw";
 import markcolorsRs from "../../src-tauri/src/markcolors.rs?raw";

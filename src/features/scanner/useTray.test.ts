@@ -22,7 +22,7 @@ vi.mock("@/lib/ipc", async (original) => ({
   },
 }));
 
-import dbRs from "../../../src-tauri/src/db.rs?raw";
+import dbRs from "../../../crates/grimoire-core/src/db.rs?raw";
 import { refreshForTables } from "@/lib/crossWindow";
 import { TRAY_QUIET_MS, TRAY_RETRY_MS, useTray } from "./useTray";
 import { DB_BUSY, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
