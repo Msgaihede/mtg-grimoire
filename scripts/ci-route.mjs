@@ -87,9 +87,17 @@ export const ARMS = [
   // `powershell` install none.
   { match: [".nvmrc"], jobs: ["frontend", "storybook"] },
 
+  // release-please's config, which says which files a release bumps. `desktop.rs`'s
+  // `the_core_wears_the_apps_version` reads it: the engine's manifest carries the app's version
+  // (the `User-Agent` is built from it), and a config that stopped naming that manifest would
+  // ship a release whose two versions disagree. `frontend` beside `rust` because the census
+  // test holds every file a Rust source reads from outside its crate to both. **Above the prose
+  // arm**, where this file sat until a test read it.
+  { match: ["release-please-config.json"], jobs: RUST_SIDE },
+
   // Affects no job. Nothing here is compiled, linted or tested: `eslint .` never sees a `.md`,
   // no test on either side reads one (`ci-route.test.mjs` holds that to the census), and
-  // release-please's own files are read by `release.yml` rather than by this gate. **Keep this
+  // release-please's manifest is read by `release.yml` rather than by this gate. **Keep this
   // list small — it is the only arm that can wrongly skip work.**
   {
     match: [
@@ -99,7 +107,6 @@ export const ARMS = [
       ".gitignore",
       ".gitattributes",
       ".release-please-manifest.json",
-      "release-please-config.json",
     ],
     jobs: [],
   },

@@ -1391,6 +1391,41 @@ mod tests {
         assert!(msg.contains("C:\\data"), "{msg}");
     }
 
+    /// **The `User-Agent` every request carries is built in `grimoire-core`, from that crate's
+    /// own package version** — so that version has to be this app's, or Scryfall, the feeds and
+    /// the relay are told a version that is not running. Two manifests hold the number and
+    /// release-please bumps both (`release-please-config.json`'s `extra-files`); this is what
+    /// goes red on a release pull request that moved one without the other.
+    #[test]
+    fn the_core_wears_the_apps_version() {
+        let expected = concat!("MTGGrimoire/", env!("CARGO_PKG_VERSION"), " (");
+        assert!(
+            scryfall::USER_AGENT.starts_with(expected),
+            "`{}` does not name this build, {}: crates/grimoire-core/Cargo.toml and \
+             src-tauri/Cargo.toml must carry the same version",
+            scryfall::USER_AGENT,
+            env!("CARGO_PKG_VERSION")
+        );
+
+        // And the release tooling is told about both manifests and both lockfile entries.
+        // Whitespace taken out, so a reformatted file is the same file.
+        let config: String = include_str!("../../release-please-config.json")
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect();
+        for path in [
+            "\"path\":\"src-tauri/Cargo.toml\"",
+            "\"path\":\"crates/grimoire-core/Cargo.toml\"",
+            "$.package[?(@.name.value=='mtg-grimoire')].version",
+            "$.package[?(@.name.value=='grimoire-core')].version",
+        ] {
+            assert!(
+                config.contains(path),
+                "release-please no longer bumps {path}"
+            );
+        }
+    }
+
     /// The CSP is configuration, not code, so nothing else can fail when it is loosened.
     /// This is the guard: it reads the shipped config and pins the sources the app
     /// genuinely needs — Tauri's IPC transport, which is a `fetch` to

@@ -66,10 +66,11 @@ pub const REFRESH_INTERVAL_SECS: i64 = 7 * 86_400;
 /// above and below reaches [`super`] through it.
 /// Scryfall's name for this bulk entry, **and this dataset's `operation` in `error_log`**.
 ///
-/// It lives here rather than in [`crate::scryfall`] because it is this dataset's own name: it
-/// is the key [`super::is_refreshing`] answers a status query from. `scryfall` aliases this
-/// rather than holding its own, so the two cannot drift.
-pub const BULK_NAME: &str = "art_tags";
+/// It is this dataset's own name — the key [`super::is_refreshing`] answers a status query
+/// from — and it aliases [`crate::scryfall::BULK_ART_TAGS`] rather than holding its own copy, so
+/// the two cannot drift. (`scryfall` aliased this until it moved to `grimoire-core` ahead of
+/// the tag engine; one definition either way.)
+pub const BULK_NAME: &str = crate::scryfall::BULK_ART_TAGS;
 
 pub const ART: Dataset = Dataset {
     bulk_name: BULK_NAME,

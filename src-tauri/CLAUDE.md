@@ -9,11 +9,23 @@ _facts_; TypeScript draws _conclusions_. Keep that boundary.
 engine being extracted for the Android and web hosts. A `pub use grimoire_core::…` in `lib.rs`'s
 module map is a module that has moved there and is re-exported at the path it always had — so a
 rule below about `legalities`, `sync_pair::crypto`, `db` or any other moved module still binds it,
-in its new file. **`schema` and `errors` moved too and still have a file here** —
-`src/schema/mod.rs` and `src/errors/mod.rs`: each is
-`pub use grimoire_core::x::*;` plus what could not go with it — `schema::prepare_data_dir`,
-`errors::kind_of` — so the ladders, the DDL, `prepare_database`, every `schema::` constant below
-and all but eight of the schema's tests are in `crates/grimoire-core/src/schema.rs`.
+in its new file. **`schema` moved too and still has a file here** — `src/schema/mod.rs` is
+`pub use grimoire_core::schema::*;` plus what could not go with it, `schema::prepare_data_dir` —
+so the ladders, the DDL, `prepare_database`, every `schema::` constant below and all but eight
+of the schema's tests are in `crates/grimoire-core/src/schema.rs`. (`errors` was a second such
+file until the I/O step: `kind_of` followed `scryfall` to the core, and the module is
+re-exported whole.)
+
+**The Scryfall client, the ingest and the reconciler are the core's since the I/O step's first
+part** (2026-10-02): `scryfall.rs`, `ingest.rs` and `reconcile.rs` are files under
+`crates/grimoire-core/src/`, re-exported here at the paths they always had, and every rule under
+*Scryfall and the network* below binds them there. **What changed is how they reach the machine**:
+a request is `platform::http`, a sleep and a deadline are `platform::timer`, a file is
+`platform::files`, and the core's fence refuses `reqwest`, `tokio`, `std::fs` and `std::thread`
+anywhere else in what that crate ships. Nothing a request sends changed. `sync::run_sync`, which
+drives all three, is still this package's, as are the feeds, the image cache and the facet index's
+lifecycle — the step's second and third parts. `src/ingest/mod.rs` is the glob re-export and one
+test, which builds its database with `split`.
 
 ⚠️ **Most of what this file is about is no longer in this package** (2026-10-02, the extraction's
 domain step). `deck`, `deck_meta`, `deck_tokens`, `deck_undo`, `collection`,
@@ -39,8 +51,9 @@ capture spec is edited there.
 - **A few functions stayed beside the wrappers**, each named in its file's own doc:
   `deck::bracket_reads` (it calls `combos`), `reset::clear_cache` (the image cache and the
   feeds), `collection_source::with_write_owned`, `marketplace::set_marketplace_now` (the mirror),
-  `import::read_import_file` (a path this app's dialog answered). `reconcile` and `tags/` did
-  not move at all: each names a Scryfall or feed type the I/O step moves.
+  `import::read_import_file` (a path this app's dialog answered). `tags/` did not move at all:
+  its queries take a type that sits in the feed engine, which the I/O step's third part moves.
+  (`reconcile` waited the same way for `scryfall::Migration`, and went with it.)
 - **A module's tests are in the core with it**, and `cargo test -p grimoire-core <module>::` runs
   them; `cargo test -p mtg-grimoire <module>::` runs only the few that name something still
   here. A test that needs a helper from the other crate reaches it through

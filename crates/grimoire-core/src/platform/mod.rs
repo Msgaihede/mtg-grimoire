@@ -10,26 +10,31 @@
 //! of them, with a hand-written router beside it. `fence.rs` is what stops that starting again:
 //! a test that reads every source file in the crate.
 //!
-//! | Interface | Native | Web | Lands with |
+//! | Interface | Native | Web | Landed with |
 //! | --- | --- | --- | --- |
 //! | [`clock`] — the wall clock, and a tick to measure a wait from | `SystemTime`, `Instant` | `Date.now()` | the leaves; the tick with the storage step |
 //! | [`pause`] — standing aside for another thread | `thread::sleep` | nothing: there is no other thread | the storage step, for `db::lock_for` |
-//! | a sleep a future awaits | the async runtime's | a timer | the I/O step, with its first caller |
-//! | HTTP — a request, a streamed body | `reqwest` | `fetch` | the I/O step |
-//! | files — the data directory, temp files | `std::fs` | OPFS | the I/O step |
-//! | background work | a thread, the async runtime | a microtask | the I/O step — the state step had no caller for it |
+//! | [`timer`] — a sleep a future awaits, and a deadline on one | the async runtime's | `setTimeout` | the I/O step, for `scryfall`'s pacing and its image deadline |
+//! | [`http`] — a request, a streamed body | `reqwest` over rustls | `reqwest` over `fetch` | the I/O step, for `scryfall` |
+//! | [`files`] — a download on disk, the files the schema keeps | `std::fs`, `tokio::fs` | refused | the I/O step, for `scryfall`, `ingest` and `schema` |
+//! | background work | a thread, the async runtime | a microtask | not here yet: the I/O step's second part, with the facet index's build |
 //!
-//! **Each is here because something calls it.** The rows without a link are named so the step
-//! that brings their first caller knows where they go; an interface written before the code
-//! that calls it is a guess.
+//! **Each is here because something calls it.** The row without a link is named so the change
+//! that brings its first caller knows where it goes; an interface written before the code that
+//! calls it is a guess.
 //!
-//! **`std::fs` is named outside this directory today**, by `schema` — the corpus it replaces,
-//! the backup it takes before a climb, the mark a damaged corpus leaves. That compiles for a
-//! browser and fails there when called. It waits for the I/O step, where an OPFS arm has a host
-//! to be written against.
+//! **The fence holds four more names to this directory since the I/O step**: `reqwest`,
+//! `tokio`, `std::fs` and `std::thread`, in shipped code. Each compiles for a desktop wherever
+//! it is written, which is exactly why a compiler cannot be what keeps them here.
+//!
+//! **Every browser arm under this directory compiles and none has run.** CI's `core` job builds
+//! them for `wasm32-unknown-unknown`; the first host to call one is the web build.
 
 pub mod clock;
+pub mod files;
+pub mod http;
 mod pause;
+pub mod timer;
 
 pub use pause::pause;
 

@@ -22,15 +22,17 @@
 //!
 //! Every request to `api.scryfall.com` must carry a real `User-Agent` *and* an
 //! `Accept` header; Cloudflare answers 403 without them, so the UA is pinned on the
-//! client itself and [`Client::api_get`] is the only way this module builds an API
+//! client itself and [`Client::api_send`] is the only way this module builds an API
 //! request. The API host is rate limited (a 429 locks the caller out for 30 seconds,
 //! and Scryfall bans repeat offenders), so 429 gets its own error variant carrying the
 //! duration the caller must wait — a bare marker leaves it guessing. The file origins
 //! under `*.scryfall.io` are explicitly unlimited.
 
+use crate::platform::clock::{self, Tick};
+use crate::platform::{files, http, timer};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 /// Sent on every request. Scryfall requires an accurate, app-specific UA and says
 /// plainly: "Do not allow HTTP libraries to choose the header for you."
@@ -39,6 +41,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 /// stale silently and this one had: it still said `0.1` at 0.2.0. "Accurate" is the whole
 /// requirement, so the two halves that can drift — version and repository — are the two
 /// this line does not spell out by hand.
+///
+/// **The package this reads is `grimoire-core`, whose version is the app's** — its manifest
+/// says so, release-please bumps the two together, and `src-tauri`'s
+/// `the_core_wears_the_apps_version` is what goes red if they part. Every host sends this
+/// string, and the feeds', the relay's and the updater's clients borrow it.
 pub const USER_AGENT: &str = concat!(
     "MTGGrimoire/",
     env!("CARGO_PKG_VERSION"),
@@ -171,7 +178,7 @@ pub const MAX_MIGRATION_PAGES: usize = 20;
 #[derive(Debug, thiserror::Error)]
 pub enum ScryfallError {
     #[error("http request failed: {0}")]
-    Http(#[from] reqwest::Error),
+    Http(#[from] http::Error),
     #[error("failed to write download: {0}")]
     Io(#[from] std::io::Error),
     /// The download finished but is not the size the API promised. A truncated file
@@ -216,10 +223,11 @@ pub const BULK_DEFAULT_CARDS: &str = "default_cards";
 /// Same document shape as [`BULK_DEFAULT_CARDS`] in the one way that matters here — it
 /// publishes `jsonl_download_uri` and `compressed_size` and neither of the pre-2026-07-20
 /// `download_uri`/`size` fields — which is why one [`BulkInfo`] describes both.
-/// **Aliases [`crate::tags::oracle::BULK_NAME`] rather than holding its own copy**, because
-/// that name is also the key a status query answers from. One definition, so the two cannot
-/// disagree.
-pub const BULK_ORACLE_TAGS: &str = crate::tags::oracle::BULK_NAME;
+/// **`tags::oracle::BULK_NAME` aliases this rather than holding its own copy**, because that
+/// name is also the key a status query answers from. One definition, so the two cannot
+/// disagree. (The alias pointed the other way until this module moved to `grimoire-core`
+/// ahead of the tag engine.)
+pub const BULK_ORACLE_TAGS: &str = "oracle_tags";
 
 /// Scryfall's Art Tags: 11 531 tag objects, ~12.5 MB gzipped, each carrying its own
 /// `taggings` array of `illustration_id`s. [`crate::tags::art`] reads it.
@@ -228,7 +236,7 @@ pub const BULK_ORACLE_TAGS: &str = crate::tags::oracle::BULK_NAME;
 /// `48da5752-eeb6-4126-bf97-8829e20ad14f`, `compressed_size` 12 544 874 and no
 /// `download_uri`/`size`.
 /// [`BULK_ORACLE_TAGS`]'s aliasing, for its reason.
-pub const BULK_ART_TAGS: &str = crate::tags::art::BULK_NAME;
+pub const BULK_ART_TAGS: &str = "art_tags";
 
 /// The bits of a `bulk_data` object this app needs. Note `jsonl_download_uri` and
 /// `compressed_size`: the pre-2026-07-20 `download_uri`/`size` fields are gone and
@@ -280,33 +288,37 @@ pub struct Migration {
 /// local mock server; production passes `"https://api.scryfall.com"`.
 #[derive(Debug, Clone)]
 pub struct Client {
-    http: reqwest::Client,
+    http: http::Client,
     base_url: String,
     /// The deadline one image gets. A field rather than a straight read of
     /// [`IMAGE_TIMEOUT`] for the same reason `base_url` is one: the behaviour worth testing
     /// is "the deadline is what ends the call", and a test that had to sit out the
     /// production number to prove it would be a ten-second test.
     image_timeout: std::time::Duration,
-    /// The pacing gate: the earliest instant the next `api.scryfall.com` request may go
-    /// out. Shared through an `Arc` so a cloned `Client` paces against the same budget —
-    /// two clones with two gates would be two applications as far as Scryfall can tell.
-    next_api_slot: Arc<tokio::sync::Mutex<tokio::time::Instant>>,
+    /// The pacing gate: when the last `api.scryfall.com` request claimed its slot, and the gap
+    /// its endpoint asks for before the next may go out. Shared through an `Arc` so a cloned
+    /// `Client` paces against the same budget — two clones with two gates would be two
+    /// applications as far as Scryfall can tell.
+    ///
+    /// An async mutex, because [`Client::await_slot`] holds it across a sleep — and
+    /// `futures_util`'s rather than a runtime's, because a browser has no runtime to lend one.
+    next_api_slot: Arc<futures_util::lock::Mutex<(Tick, Duration)>>,
     /// Unix seconds until which the API has locked this application out, `0` for none.
     ///
-    /// Wall-clock rather than a [`tokio::time::Instant`] because it has to outlive the
-    /// process — see [`Client::penalty_until_unix`]. A `std` mutex, not a `tokio` one,
-    /// because every access is one integer read or write with no `.await` inside it.
+    /// Wall-clock rather than a [`Tick`] because it has to outlive the process — see
+    /// [`Client::penalty_until_unix`]. A `std` mutex, not an async one, because every access
+    /// is one integer read or write with no `.await` inside it.
     penalty_until: Arc<Mutex<u64>>,
 }
 
 impl Client {
     pub fn new(base_url: String) -> Client {
-        let http = reqwest::Client::builder()
-            .user_agent(USER_AGENT)
+        let http = http::Client::new(&http::Config {
+            user_agent: USER_AGENT,
             // Bounds a dead host, not a slow one. Deliberately *not* an overall request
             // timeout: a 77 MB bulk download legitimately runs for minutes, and a
             // `timeout()` here would kill it partway every time.
-            .connect_timeout(std::time::Duration::from_secs(30))
+            connect_timeout: Some(Duration::from_secs(30)),
             // Bounds each *read* instead — the gap between two chunks, not the length of
             // the download — so the "no overall timeout" rule above still holds while a
             // connection that stops delivering can no longer hang forever. That is not a
@@ -315,17 +327,22 @@ impl Client {
             // will never arrive, `syncing` latched true for the life of the process, and
             // both the header's Refresh and the first-run Retry disabled behind it — an
             // unrecoverable UI that only a restart clears.
-            .read_timeout(READ_TIMEOUT)
-            .build()
-            .expect("client");
+            //
+            // A browser has neither bound to set (`platform::http`): there a download that
+            // stops delivering is the web host's to bound, when there is one.
+            read_timeout: Some(READ_TIMEOUT),
+        });
         Client {
             // Trailing slash trimmed so joining a path can never produce `//`.
             base_url: base_url.trim_end_matches('/').to_owned(),
             http,
             image_timeout: IMAGE_TIMEOUT,
-            // In the past, so the first request of a session goes out immediately: the
+            // No gap owed, so the first request of a session goes out immediately: the
             // gate spaces requests apart, it does not charge an entry fee.
-            next_api_slot: Arc::new(tokio::sync::Mutex::new(tokio::time::Instant::now())),
+            next_api_slot: Arc::new(futures_util::lock::Mutex::new((
+                Tick::now(),
+                Duration::ZERO,
+            ))),
             penalty_until: Arc::new(Mutex::new(0)),
         }
     }
@@ -401,7 +418,7 @@ impl Client {
         &self,
         url: &str,
         headers: &[(&str, &str)],
-    ) -> Result<reqwest::Response, ScryfallError> {
+    ) -> Result<http::Response, ScryfallError> {
         let mut attempt: u32 = 0;
         loop {
             if let Some(remaining) = self.penalty_remaining(unix_now()) {
@@ -413,19 +430,19 @@ impl Client {
 
             let mut req = self.http.get(url).header("Accept", ACCEPT);
             for (name, value) in headers {
-                req = req.header(*name, *value);
+                req = req.header(name, value);
             }
 
             // Whatever this attempt earned, if it is worth another go.
             let pending = match req.send().await {
-                Ok(resp) if resp.status().as_u16() == 429 => {
+                Ok(resp) if resp.status() == 429 => {
                     let asked = retry_after_secs(&resp);
                     return Err(ScryfallError::RateLimited {
                         retry_after_secs: self.charge_penalty(asked, unix_now()),
                     });
                 }
-                Ok(resp) if resp.status().is_server_error() => {
-                    ScryfallError::Unexpected(format!("status {}", resp.status().as_u16()))
+                Ok(resp) if (500..600).contains(&resp.status()) => {
+                    ScryfallError::Unexpected(format!("status {}", resp.status()))
                 }
                 Ok(resp) => return Ok(resp),
                 Err(e) if e.is_timeout() => ScryfallError::Timeout(READ_TIMEOUT),
@@ -437,7 +454,7 @@ impl Client {
             if attempt >= MAX_ATTEMPTS {
                 return Err(pending);
             }
-            tokio::time::sleep(retry_backoff(attempt)).await;
+            timer::sleep(retry_backoff(attempt)).await;
         }
     }
 
@@ -448,14 +465,19 @@ impl Client {
     /// leave together. The waits are the documented intervals — 100 ms for everything this
     /// app calls — so a queue of them is bounded by the number of requests in flight, which
     /// for this app is one.
+    ///
+    /// What is waited is what is left of the last request's gap, measured with a
+    /// [`Tick`] — monotonic natively. A browser's tick is the wall clock, which can step
+    /// forwards and open the gate early; see `platform::clock`.
     async fn await_slot(&self, url: &str) {
         let interval = min_interval(url);
-        let mut next = self.next_api_slot.lock().await;
-        let now = tokio::time::Instant::now();
-        if *next > now {
-            tokio::time::sleep_until(*next).await;
+        let mut slot = self.next_api_slot.lock().await;
+        let (claimed, gap) = *slot;
+        let owed = gap.saturating_sub(claimed.elapsed());
+        if !owed.is_zero() {
+            timer::sleep(owed).await;
         }
-        *next = tokio::time::Instant::now() + interval;
+        *slot = (Tick::now(), interval);
     }
 
     /// GET `uri`, optionally resuming from byte `from`. File origins, not the API, so
@@ -464,10 +486,10 @@ impl Client {
         &self,
         uri: &str,
         from: Option<u64>,
-    ) -> Result<reqwest::Response, ScryfallError> {
+    ) -> Result<http::Response, ScryfallError> {
         let mut req = self.http.get(uri);
         if let Some(n) = from {
-            req = req.header("Range", format!("bytes={n}-"));
+            req = req.header("Range", &format!("bytes={n}-"));
         }
         Ok(req.send().await?)
     }
@@ -503,14 +525,10 @@ impl Client {
         let headers: Vec<(&str, &str)> =
             etag.map(|e| vec![("If-None-Match", e)]).unwrap_or_default();
         let resp = self.api_send(&url, &headers).await?;
-        match resp.status().as_u16() {
+        match resp.status() {
             304 => Ok(BulkCheck::NotModified),
             200 => {
-                let etag = resp
-                    .headers()
-                    .get("etag")
-                    .and_then(|v| v.to_str().ok())
-                    .map(str::to_owned);
+                let etag = resp.header("etag").map(str::to_owned);
                 let v = json_body(resp).await?;
                 Ok(BulkCheck::Available(BulkInfo {
                     // The one field with no sane default: without a download URI there
@@ -575,15 +593,9 @@ impl Client {
         expected_size: u64,
         progress: &mut (dyn FnMut(u64, u64) + Send),
     ) -> Result<(), ScryfallError> {
-        use futures_util::StreamExt;
-        use tokio::io::AsyncWriteExt;
-
-        let existing = tokio::fs::metadata(dest)
-            .await
-            .map(|m| m.len())
-            .unwrap_or(0);
+        let existing = files::aio::len(dest).await.unwrap_or(0);
         let origin = origin_path(dest);
-        let same_origin = tokio::fs::read_to_string(&origin)
+        let same_origin = files::aio::read_to_string(&origin)
             .await
             .is_ok_and(|recorded| recorded == uri);
         // A file at or past the expected size is not resumable — it is either finished
@@ -597,39 +609,29 @@ impl Client {
         // never be satisfied, and re-sending it on every future attempt would wedge the
         // sync forever, so drop the range and take the whole file instead. The 200 arm
         // below then truncates the stale partial away.
-        if resp.status().as_u16() == 416 && resuming {
+        if resp.status() == 416 && resuming {
             resuming = false;
             resp = self.get_from(uri, None).await?;
         }
 
-        let (mut file, mut done) = match resp.status().as_u16() {
+        let (mut file, mut done) = match resp.status() {
             206 if resuming => {
                 // Trusting the offset is exactly what would make a wrong one silent.
-                let start = resp
-                    .headers()
-                    .get("content-range")
-                    .and_then(|v| v.to_str().ok())
-                    .and_then(content_range_start);
+                let start = resp.header("content-range").and_then(content_range_start);
                 if start != Some(existing) {
                     return Err(ScryfallError::Unexpected(format!(
                         "206 resumed at {start:?}, expected byte {existing}"
                     )));
                 }
-                (
-                    tokio::fs::OpenOptions::new()
-                        .append(true)
-                        .open(dest)
-                        .await?,
-                    existing,
-                )
+                (files::aio::Writer::append(dest).await?, existing)
             }
             200 => {
                 // Truncated and made durable *before* the origin is recorded, so no crash can
                 // leave a record naming this URI over bytes from another one: at worst the
                 // record is missing, and a missing record discards the partial.
-                let file = tokio::fs::File::create(dest).await?;
+                let file = files::aio::Writer::create(dest).await?;
                 file.sync_all().await?;
-                tokio::fs::write(&origin, uri).await?;
+                files::aio::write(&origin, uri.as_bytes()).await?;
                 (file, 0)
             }
             429 => {
@@ -640,8 +642,8 @@ impl Client {
             s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
         };
 
-        let mut stream = resp.bytes_stream();
-        while let Some(chunk) = stream.next().await {
+        let mut body = resp.into_body();
+        while let Some(chunk) = body.chunk().await {
             let chunk = chunk?;
             file.write_all(&chunk).await?;
             done += chunk.len() as u64;
@@ -651,9 +653,9 @@ impl Client {
         // Durable before it is verified: the whole point of keeping a partial file is
         // that it survives a crash and can be resumed.
         file.sync_all().await?;
-        drop(file);
+        file.close();
 
-        let actual = tokio::fs::metadata(dest).await?.len();
+        let actual = files::aio::len(dest).await?;
         if actual != expected_size {
             return Err(ScryfallError::SizeMismatch {
                 expected: expected_size,
@@ -661,7 +663,7 @@ impl Client {
             });
         }
         // A whole file is no resume point, so its record has nothing left to vouch for.
-        let _ = tokio::fs::remove_file(&origin).await;
+        let _ = files::aio::remove(&origin).await;
         Ok(())
     }
 
@@ -675,7 +677,7 @@ impl Client {
         let mut followed_the_chain = false;
         for _ in 0..MAX_SET_PAGES {
             let resp = self.api_send(&url, &[]).await?;
-            match resp.status().as_u16() {
+            match resp.status() {
                 200 => {}
                 s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
             }
@@ -727,7 +729,7 @@ impl Client {
         let mut followed_the_chain = false;
         for _ in 0..MAX_MIGRATION_PAGES {
             let resp = self.api_send(&url, &[]).await?;
-            match resp.status().as_u16() {
+            match resp.status() {
                 200 => {}
                 s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
             }
@@ -795,19 +797,17 @@ impl Client {
     /// file, so there is no legitimate reason for one of these to be slow and every reason
     /// for the `<img>` waiting on it to be told quickly when it is.
     pub async fn fetch_image(&self, uri: &str) -> Result<Vec<u8>, ScryfallError> {
-        tokio::time::timeout(self.image_timeout, self.image_bytes(uri))
+        timer::timeout(self.image_timeout, self.image_bytes(uri))
             .await
-            .unwrap_or_else(|_| Err(ScryfallError::Timeout(self.image_timeout)))
+            .unwrap_or(Err(ScryfallError::Timeout(self.image_timeout)))
     }
 
     /// The fetch itself, with no deadline of its own — [`fetch_image`](Client::fetch_image)
     /// owns that, so there is exactly one place the bound is applied and no way to reach
     /// this without it.
     async fn image_bytes(&self, uri: &str) -> Result<Vec<u8>, ScryfallError> {
-        use futures_util::StreamExt;
-
         let resp = self.get_from(uri, None).await?;
-        match resp.status().as_u16() {
+        match resp.status() {
             200 => {
                 // The declared length first: refusing before a byte of the body is read is
                 // the only check that costs nothing.
@@ -823,9 +823,9 @@ impl Client {
                 // memory and check its size after the fact, which is not a cap, it is a
                 // report. The header check above is the cheap path; this is the one that
                 // actually holds, and it holds against a host that simply omits the header.
-                let mut stream = resp.bytes_stream();
+                let mut stream = resp.into_body();
                 let mut body: Vec<u8> = Vec::new();
-                while let Some(chunk) = stream.next().await {
+                while let Some(chunk) = stream.chunk().await {
                     let chunk = chunk?;
                     let total = body.len() as u64 + chunk.len() as u64;
                     if total > MAX_IMAGE_BYTES {
@@ -866,8 +866,8 @@ pub fn origin_path(dest: &Path) -> PathBuf {
 /// own is harmless — a missing partial is never resumed — but it is a file in `tmp/` that
 /// nothing would ever clear.
 pub fn discard_partial(dest: &Path) {
-    let _ = std::fs::remove_file(dest);
-    let _ = std::fs::remove_file(origin_path(dest));
+    let _ = files::remove(dest);
+    let _ = files::remove(origin_path(dest).as_path());
 }
 
 /// First byte of a `Content-Range: bytes 400-999/1000` header.
@@ -881,11 +881,8 @@ fn content_range_start(value: &str) -> Option<u64> {
 
 /// Seconds since the Unix epoch. A clock before 1970 reads as 0, which leaves every gate
 /// open rather than panicking over a wall clock this module does not control.
-pub(crate) fn unix_now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
+pub fn unix_now() -> u64 {
+    u64::try_from(clock::now_secs()).unwrap_or(0)
 }
 
 /// How long a 429 stops this application, given the `Retry-After` it came with.
@@ -945,20 +942,14 @@ fn min_interval(url: &str) -> Duration {
 /// at the same instant. It is a spreading function, not a source of secrets.
 fn retry_backoff(attempt: u32) -> Duration {
     let base = RETRY_BASE_BACKOFF * 2u32.saturating_pow(attempt.saturating_sub(1));
-    let spread = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| u64::from(d.subsec_millis()))
-        .unwrap_or(0)
-        % 100;
+    let spread = u64::try_from(clock::now_ms().rem_euclid(100)).unwrap_or(0);
     base + Duration::from_millis(spread)
 }
 
 /// The backoff a 429 asks for: `Retry-After` when it is a plain seconds count, and
 /// Scryfall's documented 30 s otherwise.
-fn retry_after_secs(resp: &reqwest::Response) -> u64 {
-    resp.headers()
-        .get("retry-after")
-        .and_then(|v| v.to_str().ok())
+fn retry_after_secs(resp: &http::Response) -> u64 {
+    resp.header("retry-after")
         .and_then(|v| v.trim().parse::<u64>().ok())
         .unwrap_or(RATE_LIMIT_BACKOFF_SECS)
 }
@@ -967,7 +958,7 @@ fn retry_after_secs(resp: &reqwest::Response) -> u64 {
 ///
 /// reqwest is built without its `json` feature (it would only duplicate `serde_json`,
 /// which this crate already depends on), so bodies are decoded here.
-async fn json_body(resp: reqwest::Response) -> Result<serde_json::Value, ScryfallError> {
+async fn json_body(resp: http::Response) -> Result<serde_json::Value, ScryfallError> {
     let bytes = resp.bytes().await?;
     serde_json::from_slice(&bytes)
         .map_err(|e| ScryfallError::Unexpected(format!("response was not JSON: {e}")))
@@ -1313,6 +1304,8 @@ mod tests {
         assert_send(&c.check_bulk_update(None));
         assert_send(&c.fetch_sets());
         assert_send(&c.fetch_migrations());
+        // The image cache spawns this one, and its body is a boxed stream that has to say so.
+        assert_send(&c.fetch_image("http://127.0.0.1:1/x.webp"));
         assert_send(&c.download(
             "http://127.0.0.1:1/x.gz",
             Path::new("unused"),
@@ -1394,7 +1387,7 @@ mod tests {
         let c = Client::new(server.base_url())
             .with_image_timeout(std::time::Duration::from_millis(150));
 
-        let started = std::time::Instant::now();
+        let started = Tick::now();
         let result = c
             .fetch_image(&format!("{}/stalled.webp", server.base_url()))
             .await;
@@ -1528,7 +1521,7 @@ mod tests {
         });
         let c = Client::new(server.base_url());
 
-        let started = std::time::Instant::now();
+        let started = Tick::now();
         for _ in 0..3 {
             let _ = c.check_bulk_update(Some("W/\"x\"")).await;
         }

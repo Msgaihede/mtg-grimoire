@@ -24,9 +24,6 @@
 pub use grimoire_core::sync_engine::apply;
 pub use grimoire_core::sync_engine::baseline;
 pub use grimoire_core::sync_engine::capture;
-/// The two of `capture`'s tests that drive `reconcile`, which is still here.
-#[cfg(test)]
-mod capture_tests;
 pub mod client;
 /// The IPC surface.
 pub mod commands;

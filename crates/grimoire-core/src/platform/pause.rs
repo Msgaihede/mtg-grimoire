@@ -16,7 +16,7 @@
 //! aside for, the next chunk is simply taken at once.
 //!
 //! **This is not the async sleep.** A timer a future can await is a different interface with a
-//! different caller — the feeds' pacing — and arrives with the I/O step.
+//! different caller — `scryfall`'s pacing gate — and is [`crate::platform::timer`].
 
 use std::time::Duration;
 
