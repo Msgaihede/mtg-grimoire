@@ -28,6 +28,7 @@ use crate::db::{self, CrossFileFence};
 use crate::events::EventSink;
 use crate::hooks::{self, WriteObserver};
 use crate::index::lifecycle::IndexSlot;
+use crate::platform::clock::Tick;
 use crate::platform::sync::{Held, Lock};
 use crate::platform::timer;
 use crate::scryfall;
@@ -157,15 +158,17 @@ impl State {
 
     /// [`State::lane_for_press`] with the bound as an argument, which a test passes short.
     ///
-    /// **The connection is asked for inside the same bound, once, before the operation
-    /// starts** — the other half of what [`db::BUSY`] has always meant. The operation's own
-    /// stretches wait ([`Lane`]'s `with`), so this is the one place a press hears that the
-    /// connection is busy with something that is not a sync.
+    /// **The connection is asked for inside what is left of the same bound, once, before the
+    /// operation starts** — the other half of what [`db::BUSY`] has always meant, and one bound
+    /// for both, so a press is answered within it whichever of the two kept it waiting. The
+    /// operation's own stretches wait ([`Lane`]'s `with`), so this is the one place a press
+    /// hears that the connection is busy with something that is not a sync.
     pub async fn lane_within(&self, bound: Duration) -> Result<Lane<'_>, String> {
+        let asked = Tick::now();
         let Some(lane) = timer::timeout(bound, self.lane()).await else {
             return Err(db::BUSY.to_owned());
         };
-        if db::lock_for(&self.db, bound).is_none() {
+        if db::lock_for(&self.db, bound.saturating_sub(asked.elapsed())).is_none() {
             return Err(db::BUSY.to_owned());
         }
         Ok(lane)
@@ -282,13 +285,15 @@ pub fn with_write<T>(
 ///
 /// **Everything else is [`with_write`]'s, because it is [`with_write`]'s body** — the managed
 /// wishlists armed and settled, the token reconcile, and the cross-file fence — and the lock is
-/// [`crate::db::lock_blocking`], which recovers a poisoned mutex exactly as
-/// [`crate::db::lock_for`] does.
+/// [`crate::db::lock_waiting`], which recovers a poisoned mutex exactly as
+/// [`crate::db::lock_for`] does, and **counts as an ask while it waits**: the batch loops of
+/// an ingest stand aside for a stretch as they do for a press, where a thread parked on the
+/// mutex would get the connection only when it happened to catch it free.
 pub fn with_write_waiting<T>(
     state: &State,
     f: impl FnOnce(&Connection) -> Result<T, String>,
 ) -> Result<T, String> {
-    written(state, Some(crate::db::lock_blocking(&state.db)), f)
+    written(state, Some(crate::db::lock_waiting(&state.db)), f)
 }
 
 /// [`with_write`] and [`with_write_waiting`]'s shared body: `guard` is the write connection, or

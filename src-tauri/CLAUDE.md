@@ -1847,8 +1847,11 @@ record, with every measurement, is
     for a press, which is told `db::BUSY` after `WRITE_LOCK_WAIT` of a sync in flight, as it
     always was. `Store` is **not** implemented for `State`, and for a bare `Connection` only in a
     test build — so a stretch on the app's database outside the lane does not compile. Every
-    operation that writes `sync_group`, `sync_devices` or the grant takes it; the spike's §4 has
-    the five ways two of them corrupt each other without it.
+    operation that writes the group, the roster's membership, the grant, the cursor or the hold
+    takes it; the spike's §4 has the five ways two of them corrupt each other without it. **Three
+    writers stay outside it, deliberately**: `sync_device_rename` and `identity::ensure` (through
+    the pairing panel's status and begin) write a device's *name*, and `sync_patreon_begin` its
+    OAuth state — none of which a sync operation reads across a request.
   - **What can land between two stretches is a reader's own write, and reads that must agree
     share a stretch.** A baseline's rows, its clock and its horizon are one; so is everything a
     pull does behind its response; so are a commit's rows (`found_group` + `add_device`,

@@ -1098,11 +1098,7 @@ async fn leave_group_now(db: &impl Store) -> Result<(), String> {
 pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let state = state.inner().clone();
     let marks = state.clone();
-    let out = sync::on_a_worker(move || async move {
-        let lane = state.lane().await;
-        leave_group_now(&lane).await
-    })
-    .await;
+    let out = sync::on_a_worker(move || async move { leave(&state).await }).await;
     // **Three marks, because the update hook hears none of what a departure writes.**
     // `identity::leave_group` empties `sync_devices`, which is `WITHOUT ROWID`, and `sync_group`
     // with a bare `DELETE` on a table no trigger and no foreign key touches — so SQLite truncates it
@@ -1117,6 +1113,14 @@ pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<
         marks.changes.mark_table(table);
     }
     out.map_err(|e| format!("could not leave that group: {e}"))?
+}
+
+/// The departure the command makes: **the lane, waited for** — never a press's — and then
+/// [`leave_group_now`] on it. Its own function so that what the command chooses is what a test
+/// drives.
+async fn leave(state: &grimoire_core::state::State) -> Result<(), String> {
+    let lane = state.lane().await;
+    leave_group_now(&lane).await
 }
 
 /// **The fence, and it is the compiler's** — `sync_engine::client`'s has the reason. Never
@@ -2913,16 +2917,19 @@ mod tests {
         (state, group)
     }
 
-    /// **Leaving waits for the sync operation in flight, and then it clears — whatever that
-    /// operation was doing.** This is "always possible" as it stands since a trip stopped
-    /// holding the connection: the press queues behind the lane, where it used to queue behind
-    /// the write lock, and is never told the database is busy.
+    /// **Leaving waits out the sync operation in flight, however long, and then it clears.**
+    /// This is "always possible" as it stands since a trip stopped holding the connection: the
+    /// departure queues behind the lane, where it used to queue behind the write lock, and is
+    /// never told the database is busy — which every other press is, after
+    /// `db::WRITE_LOCK_WAIT`.
     ///
-    /// **What makes it red**: a departure that takes a press's lane (it would be told `BUSY`
-    /// after five seconds of a slow trip), or one that takes no lane at all — the group would be
-    /// gone under an operation that is about to write it back.
-    #[tokio::test]
-    async fn leaving_waits_for_an_operation_in_flight_and_then_clears() {
+    /// **Driven through [`leave`], which is the command's body**, on a paused clock that runs
+    /// ten of a press's bounds while the operation holds on: a departure that took
+    /// `lane_for_press` would have given up with `BUSY` and finished, and this goes red.
+    /// (The fresh review of the step found the first version of this test took the lane itself,
+    /// and so could not tell either way.)
+    #[tokio::test(start_paused = true)]
+    async fn leaving_waits_out_an_operation_in_flight_where_a_press_is_told_busy() {
         let server = MockServer::start_async().await;
         let (state, group) = in_a_group_on_the_lane("leaving-waits-for-the-lane", &server);
         let rotate = server.mock(|when, then| {
@@ -2936,17 +2943,13 @@ mod tests {
         let in_flight = state.lane().await;
         let leaving = {
             let state = state.clone();
-            tokio::spawn(async move {
-                let lane = state.lane().await;
-                leave_group_now(&lane).await
-            })
+            tokio::spawn(async move { leave(&state).await })
         };
-        for _ in 0..16 {
-            tokio::task::yield_now().await;
-        }
+        // Ten of a press's bounds go by on the paused clock while the operation holds on.
+        tokio::time::sleep(crate::db::WRITE_LOCK_WAIT * 10).await;
         assert!(
             !leaving.is_finished(),
-            "it left beside the operation in flight"
+            "it gave up, or left beside the operation in flight"
         );
         assert!(
             in_a_group(&state),
@@ -2954,6 +2957,8 @@ mod tests {
         );
         assert_eq!(rotate.calls(), 0, "it published from behind the lane");
 
+        // Real time again before the request, so the client's own timeouts mean what they say.
+        tokio::time::resume();
         drop(in_flight);
         leaving.await.unwrap().expect("left");
 

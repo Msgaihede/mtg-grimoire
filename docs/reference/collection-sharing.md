@@ -386,9 +386,14 @@ Three of the five are worth a sentence each:
 
 Four of the five run on the **write** connection through one `spawn_blocking` helper, so each can
 record its failure in `error_log` and write its answer to `collection_shares` — and because a
-guard on a `Mutex`-held connection cannot cross an `await` on a multi-threaded runtime. That is
-`sync_engine::commands::sync_now`'s shape exactly, precedent rather than a new sin, and it is
-tolerable only because the far end is the reader's own Worker.
+guard on a `Mutex`-held connection cannot cross an `await` on a multi-threaded runtime. That was
+`sync_engine::commands::sync_now`'s shape exactly — precedent rather than a new sin — until
+2026-10-03, when a sync trip stopped holding the connection across its requests; it is still this
+module's, and it is tolerable only because the far end is the reader's own Worker. **It takes the
+sync lane first now**, as a press does: a publish mints its bearer through
+`entitlement::access_token`, which writes the grant a sync trip or a claim is writing too, so the
+two must not interleave. The connection in hand is what the token is asked through
+(`Lane::in_hand`).
 
 ⚠️ **All five did until 2026-09-28, and `share_open` was the sin** — it talks to whatever host a
 stranger's link names, and held the app's only writer while it did. It holds nothing now; see
@@ -1021,8 +1026,9 @@ it, withdraw it.
   `on_the_write_connection` → `sync::with_write` — so it **holds the exclusive write lock across a
   relay round trip**, and every other user write in the app answers `db::BUSY` after
   `WRITE_LOCK_WAIT` (5 s), whose own doc says only something genuinely stuck should hold it that
-  long. The share client's read timeout is **60 s**. That shape is `sync_now`'s and was deferred as
-  matching it — but `sync_now` is a **press**, while this hook is called unconditionally by a
+  long. The share client's read timeout is **60 s**. That shape was `sync_now`'s and was deferred as
+  matching it (it no longer is: since 2026-10-03 a sync trip holds the connection only for a
+  stretch) — but `sync_now` is a **press**, while this hook is called unconditionally by a
   component that mounts with the whole Collection page, and `query.ts` leaves
   `refetchOnWindowFocus` at TanStack's default **true**. So on a connected device every focus of
   the app on that page could hold the write connection for a network trip, and it is invisible

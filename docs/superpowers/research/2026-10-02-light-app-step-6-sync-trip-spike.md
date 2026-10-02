@@ -180,9 +180,10 @@ table.
 
 **Entitlement and pairing read no user table at all.** They touch `sync_state`'s grant keys,
 `sync_group`, `sync_devices`, `sync_identity` and `device_names`, and no deck, collection or
-wishlist write reaches any of those. One cosmetic exception: `confirm` writes the device's name
-back from a value read before its request, which reverts a `sync_device_rename` pressed in
-between in one column the roster does not prefer.
+wishlist write reaches any of those. One cosmetic exception was found here: `confirm` wrote the
+device's name back from a value read before its request, which would have reverted a
+`sync_device_rename` pressed in between. The restatement reads this device again in the stretch
+that commits, so there is none.
 
 **Other sync operations — what the lane is for.** Without it:
 
@@ -307,3 +308,10 @@ restatement itself turned up that the three-function prototype had not.
   connection it holds would be the whole-operation lock again, with no lane.
 - **The census is a test.** `scripts/core-step-6-census.test.mjs` holds the eight files at no
   function that takes a connection and awaits with it, and none that blocks a thread on a future.
+  It reads a connection or a transaction however the parameter is spelled, and the methods of an
+  `impl`; run over `main`'s eight files it reads 31 held, 56 awaits and 10 `block_on` callers.
+- **A stretch registers while it waits** (`db::lock_waiting`). A thread parked on the mutex is
+  nobody an ingest's batch loop knows to stand aside for, and a sync operation used to ask
+  through `lock_for`, which registers. **And a press's two waits — the lane, then the
+  connection — share one bound**, so it is answered within five seconds whichever kept it.
+  Both were found by the fresh review, which found no must-fix.

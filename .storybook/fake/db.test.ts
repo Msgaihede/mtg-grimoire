@@ -11867,7 +11867,8 @@ describe("the busy fault", () => {
       // The eleventh, and the first that touches **no connection of any kind**: pairing's
       // cancel clears `AppState.pairing`, a mutex of its own that has nothing to do with
       // the database, so there is no `BUSY` for it to answer. Its seven neighbours all take
-      // `sync::with_write` and are in the loop below — `sync_pairing_status` included,
+      // `sync::with_write` — or, since the light app's step 6, the sync lane, which answers the
+      // same `BUSY` after the same five seconds — and are in the loop below — `sync_pairing_status` included,
       // which is a *write* in the crate because `identity::ensure` mints a row on first
       // read, and sits in `readHandlers` here only because this fake mints its identity in
       // `makeDb`.
@@ -12278,13 +12279,15 @@ describe("the busy fault", () => {
     // because every one of them reaches `refuseIfBusy` before it looks at an argument.
     const names = Object.keys(w).filter((n) => !unlocked.includes(n));
     // Pairing then added **seven**, 73 -> 80: begin, accept, respond, confirm, complete,
-    // rename and revoke all take `sync::with_write`, because every one of them reads or
-    // writes the three tables user schema v28 created. The eighth handler the feature ships,
+    // rename and revoke all took `sync::with_write`, because every one of them reads or
+    // writes the three tables user schema v28 created. (Accept, confirm and revoke take the
+    // sync lane since the light app's step 6, with the same five-second `BUSY`.) The eighth handler the feature ships,
     // `sync_pairing_cancel`, joined `unlocked` instead — the fourth distinct reason on
     // that list, and the cleanest: it touches no connection at all.
     // The relay then added **five**, 80 -> 85, and two of them are *reads*. Every one of
-    // the five takes `sync::with_write` in the crate: `sync_relay_set_url`, `sync_now` and
-    // `sync_review_clear` because they write, and `sync_relay_status` and `sync_review_list`
+    // the five took `sync::with_write` in the crate: `sync_relay_set_url`, `sync_now` and
+    // `sync_review_clear` because they write (`sync_now` takes the sync lane now, with the same
+    // five-second `BUSY`), and `sync_relay_status` and `sync_review_list`
     // because that is the crate's single-writer path — the status counts unpushed rows of
     // `sync_ops` on the write connection, and `ipc.ts` says so at the call site. So both sit in
     // `writeHandlers` here, which is the opposite call from `sync_pairing_status` one feature

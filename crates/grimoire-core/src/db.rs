@@ -290,6 +290,35 @@ pub fn lock_blocking(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     lock_plain(mutex)
 }
 
+/// Take `mutex`, **waiting as long as it takes — and counted as an ask while it waits**, so a
+/// batch loop stands aside for it exactly as it does for [`lock_for`].
+///
+/// [`lock_blocking`] waits too, but invisibly: a thread parked in `Mutex::lock` is nobody
+/// [`lock_background`] knows to defer to, so under the launch's three ingests it gets the
+/// connection whenever it happens to catch it free. That was the right shape for a departure's
+/// one write and is the wrong one for a sync operation's stretches, which are the waits
+/// [`crate::state::with_write_waiting`] makes now and which used to come through [`lock_for`]
+/// as a whole operation.
+///
+/// **On a host with no second thread it blocks**, as [`lock_blocking`] does: a Worker cannot
+/// pause, and nothing but its own caller can be holding the lock there.
+pub fn lock_waiting(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
+    // Held until this returns, and withdrawn by its `Drop`.
+    let mut waiting: Option<Waiting> = None;
+    loop {
+        match mutex.try_lock() {
+            Ok(guard) => return guard,
+            Err(TryLockError::Poisoned(e)) => return e.into_inner(),
+            Err(TryLockError::WouldBlock) => {
+                waiting.get_or_insert_with(|| Waiting::register(key_of(mutex)));
+                if !crate::platform::pause(LOCK_POLL_INTERVAL) {
+                    return lock_blocking(mutex);
+                }
+            }
+        }
+    }
+}
+
 /// The same rule over an `RwLock` — the shape [`crate::sync::AppState::index`] uses, because
 /// every facet request reads it and only a sync or a collection write replaces it.
 ///
@@ -644,6 +673,46 @@ mod tests {
         assert!(
             worst < Duration::from_millis(500),
             "an asker waited {worst:?} between two 15 ms batch loops: {asks:?}"
+        );
+    }
+
+    /// **And so does a wait with no bound** — a sync operation's stretch, which registers while
+    /// it waits as a bounded ask does, so the batch loops stand aside for it.
+    #[test]
+    fn a_waiting_ask_gets_its_turn_between_two_batch_loops() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+
+        let mutex = Mutex::new(Connection::open_in_memory().unwrap());
+        let stop = AtomicBool::new(false);
+        let mut waits: Vec<Duration> = Vec::new();
+        std::thread::scope(|scope| {
+            for _ in 0..2 {
+                scope.spawn(|| {
+                    while !stop.load(Ordering::SeqCst) {
+                        let batch = lock_background(&mutex);
+                        std::thread::sleep(Duration::from_millis(15));
+                        drop(batch);
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                });
+            }
+            std::thread::sleep(Duration::from_millis(60));
+            for _ in 0..5 {
+                let asked = Tick::now();
+                drop(lock_waiting(&mutex));
+                waits.push(asked.elapsed());
+                std::thread::sleep(Duration::from_millis(10));
+            }
+            stop.store(true, Ordering::SeqCst);
+        });
+        let worst = waits.iter().max().copied().unwrap_or_default();
+        assert!(
+            worst < Duration::from_millis(500),
+            "a waiting ask waited {worst:?} between two 15 ms batch loops: {waits:?}"
+        );
+        assert!(
+            !someone_is_waiting(key_of(&mutex)),
+            "an ask that was served is still registered"
         );
     }
 

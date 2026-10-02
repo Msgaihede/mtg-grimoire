@@ -1447,8 +1447,8 @@ which two of the lane's own tests found out.
 
 **The tests the modules had did not change**: 87 in the client, 49 in the entitlement, 40 in
 pairing hand over a bare connection, which is a store whose stretches run back to back — in a
-test build only. Ten are new — six in the core for the lane, four in `src-tauri`. Core 2 660
-passed and 5 ignored, desktop 752 and 1; clippy for the workspace and for `wasm32`; the wasm
+test build only. Eleven are new — six in the core for the lane and one for its wait, four in
+`src-tauri`. Core 2 661 passed and 5 ignored, desktop 752 and 1; clippy for the workspace and for `wasm32`; the wasm
 build; `cargo check --locked`; no `testing` in the shipped tree; the frontend's build and lint.
 
 **What building it found, that a prototype of three functions had not.** A test lands a write
@@ -1469,6 +1469,14 @@ after 5 013 ms. Leave group, pressed one second into a six-second trip, waited 5
 its rotation 3 ms behind the pull's answer, and left no group and no grant. The nine pairing
 commands each answered — a begin, two polls that found nobody, a cancel, and each refusal in
 words. [sync.md](sync.md) has the table.
+
+**A fresh reviewer read the branch and found no must-fix.** What it found was fixed: the
+departure's test took the lane itself and so could not tell a departure on a press's lane from
+one on `lane()` — it drives the command's own body on a paused clock now, and the mutation is
+red; a press's two waits had a bound each, where one is promised; a stretch waited invisibly to
+an ingest's batch loops, where a sync operation used to be an ask they stood aside for
+(`db::lock_waiting`); the census missed a connection spelled any other way and the methods of an
+`impl`; and eleven passages and comments the step had made false.
 
 **No upgrade check against `main`'s binary this time**: nothing here touches a schema rung, a
 launch pass or a file. What a launch does is unchanged.

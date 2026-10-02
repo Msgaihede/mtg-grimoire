@@ -109,9 +109,10 @@ The four layers behind it, and the boundary between them is that only the last t
   *be* the eviction rather than the fix. Carrying public keys in the manifest is the change that
   would close the rest, and it is a wire change on both sides that this branch does not make.
 - **`sync_pair::pairing`** — the state machine and the nine commands. Two of them do network I/O
-  now (`accept`, `confirm`), so they and `poll` run on the blocking pool with a runtime of their
-  own — `sync_device_revoke`'s shape, for its reason: the write connection is behind a `Mutex`, a
-  guard cannot cross an `await` on a multi-threaded runtime.
+  now (`accept`, `confirm`), so they and `poll` run on a blocking worker with a runtime of their
+  own (`sync::on_a_worker`). **Since 2026-10-03 each takes the pending offer's lock and then the
+  sync lane, and reaches the database a stretch at a time** — it held the write connection across
+  its requests until then. See *A trip holds nothing across a request*, below.
 
 ### Two costs, stated rather than buried
 
@@ -212,7 +213,10 @@ not be a return to something.
 
 ### The pending offer is in memory and never in SQLite
 
-`AppState.pairing`, a `Mutex<Option<Pending>>`. An offer that survived a restart would be an
+`AppState.pairing`, a `tokio::sync::Mutex<Option<Pending>>` — **an async lock since 2026-10-03,
+held across the request an `accept`, a `confirm` or a `poll` makes**, so a Cancel waits behind
+it and wins and two polls cannot both complete one offer; taken before the sync lane, never
+after. An offer that survived a restart would be an
 invite a reader printed last month still being accepted today. It outlives the webview, which is
 what a reader who opens Settings twice needs, and dies with the process — which is what makes
 the token one-time in fact rather than in the documentation. `Pending` holds the derived pair
@@ -3275,7 +3279,17 @@ in three places:
 **A stretch waits for the connection and never answers `db::BUSY`** (`state::with_write_waiting`,
 whose one caller it now is). It may be recording an answer the relay will not give twice: the
 grant behind a claim code that is now spent, the group a founding `confirm` has just handed a
-joiner the key to, a rotation the relay has accepted. What it waits behind is local work.
+joiner the key to, a rotation the relay has accepted. What it waits behind is local work, and it
+**counts as an ask while it waits** (`db::lock_waiting`), so an ingest's batch loops stand aside
+for it as they do for a press — a thread parked on the mutex would get the connection only when
+it happened to catch it free.
+
+**What the baseline rule costs, and what it leaves.** A baseline now needs a trip with no write
+between its outbox read and its rows — a reader editing through every trip keeps a newly paired
+device waiting until they pause for longer than the three-second debounce and one trip. It does
+not reach the ops an *earlier* refusal left pending: a push deferred as `too_large` still lets a
+baseline go out over them, the over-count this rule closes for a mid-trip write, which was there
+before and needs the client and the relay to disagree about a size the client cuts under.
 
 ### The tests that hold it
 
@@ -3284,7 +3298,7 @@ joiner the key to, a rotation the relay has accepted. What it waits behind is lo
 | `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` | a copy added behind each of a trip's 19 stretches, a second trip, a peer that pulls after each | a baseline goes out over a pending write: `3 here, 4 there` behind 7 of the 19 (the mutation was run) |
 | `a_write_anywhere_beside_a_pull_is_counted_once_on_both_devices` | the same, with a peer's own copy of that row in the page | the write and the apply disagree about a counter |
 | `a_write_anywhere_in_a_baselines_emission_reaches_the_peer` | a copy added behind each stretch of one emission | the rows and the horizon are read apart: `3 here, 2 there` |
-| `leaving_waits_for_an_operation_in_flight_and_then_clears` | a departure behind a held lane | it takes a press's lane, or none |
+| `leaving_waits_out_an_operation_in_flight_where_a_press_is_told_busy` | the command's own departure (`pairing::leave`) behind a held lane, on a paused clock, for ten of a press's bounds | it takes a press's lane: red, the mutation was run |
 | `state::tests::a_second_operation_waits_for_the_first`, `a_press_behind_a_sync_or_a_busy_connection_is_told_busy` | two operations; a press behind one, and behind a held connection | the lane is not exclusive, or a press queues |
 
 Both whole-trip tests add their first copies "ten seconds ago". A baseline op is stamped from

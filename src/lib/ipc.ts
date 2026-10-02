@@ -10855,8 +10855,9 @@ export const ipc = {
    * This device, the group it is in, and the roster — the pairing panel's only read.
    *
    * A **write** path at the far end despite the name: a database that has never paired has no
-   * identity row, and reading the panel is what mints one. So it answers `BUSY` while a sync
-   * holds the write connection, like every other write here.
+   * identity row, and reading the panel is what mints one. So it answers `BUSY` if the write
+   * connection is held past five seconds, like every other write here — which a sync trip no
+   * longer does: it holds the connection only while it reads or writes, never across a request.
    */
   syncPairingStatus: () => invoke<PairingStatus>("sync_pairing_status"),
   /** Start offering a pairing. Replaces any offer already in flight. */
@@ -10879,7 +10880,8 @@ export const ipc = {
    * The relay, what is waiting to be sent, and what wants looking at.
    *
    * A **write** path at the far end, like {@link ipc.syncPairingStatus}: it counts unpushed
-   * ops on the write connection, so it answers `BUSY` while a sync holds it.
+   * ops on the write connection, so it answers `BUSY` if that is held past five seconds — which
+   * a sync trip, holding it only while it reads or writes, no longer does.
    */
   syncRelayStatus: () => invoke<RelayStatus>("sync_relay_status"),
   /**

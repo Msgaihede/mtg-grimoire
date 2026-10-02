@@ -35,8 +35,8 @@ export const SHARE_LIST_KEY: QueryKey = ["share", "list"];
  * `share_list` is the only one of these commands that reconciles, and `share::commands` runs it
  * inside `on_the_write_connection` → `sync::with_write` — so it holds the exclusive write lock
  * across a relay round trip, and every other user write in the app answers `BUSY` after
- * `WRITE_LOCK_WAIT` (5 s) while it does. That is `sync_now`'s shape, but `sync_now` is a
- * **press**: this is a query mounted with `CollectionPage`, and TanStack refetches on window
+ * `WRITE_LOCK_WAIT` (5 s) while it does. That was `sync_now`'s shape until a sync trip stopped
+ * holding the connection across its requests, and `sync_now` was a **press**: this is a query mounted with `CollectionPage`, and TanStack refetches on window
  * focus by default. So an unconnected device asks nothing at all — it has no membership, the
  * Share control is hidden for it anyway, and the answer would be the local cache it already has —
  * and a connected one asks on a mount and on a write, never on a focus.

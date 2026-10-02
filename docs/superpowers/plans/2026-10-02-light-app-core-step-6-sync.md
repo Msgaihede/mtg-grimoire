@@ -152,7 +152,7 @@ impl State {
 
 **The wrappers**: `sync::on_a_worker(|| async { pending → lane → the function })` — a blocking worker with a runtime of its own, written once in `src-tauri/src/sync/mod.rs`. A press takes `lane_for_press`; `sync_group_leave` takes `lane`. `sync_pairing_cancel` takes the pending lock alone, and is an `async fn` for it: an async lock is awaited, and `blocking_lock` panics on the runtime's own thread.
 
-- [x] Write `leaving_waits_for_an_operation_in_flight_and_then_clears` first: hold the lane, start `leave_group_now` behind `state.lane()`, assert the group is still there, release, assert it is gone and the grant with it.
+- [x] Write `leaving_waits_out_an_operation_in_flight_where_a_press_is_told_busy` first: hold the lane, start the command's own departure (`pairing::leave`, the body `sync_group_leave` runs) behind it on a paused clock, let ten of a press's bounds go by, assert it has not finished and the group is still there, release, assert it is gone and the grant with it. **The first version took the lane itself and called `leave_group_now`**, so it could not tell a departure on a press's lane from one on `lane()`; the fresh review found it, and the mutation — `leave` on `lane_for_press` — is red now.
 - [x] Restate; `sendable` over the five entry points.
 - [x] `cargo test -p mtg-grimoire --lib sync_pair` — its tests pass with their calls unedited.
 - [x] Commit: `refactor(sync): pairing reaches the database a stretch at a time`.
@@ -170,7 +170,7 @@ impl State {
 
 - [x] Every Rust gate and the frontend's build, lint and suite. **No A/B upgrade check against `main`'s binary**: nothing here touches a schema rung, a launch pass or a file, so there is no upgrade to compare.
 - [x] A live pass in `tauri dev` **against a mock relay on the loopback only** — never Markus's group: the dev copy was checked to be in no group and to hold no grant, its `relay_url` pointed at `127.0.0.1`, and its files copied aside and put back. A claim, a trip, a write and a second press during a slow trip, a departure during a slow trip, and the pairing commands. `docs/reference/sync.md` has the table.
-- [ ] A fresh reviewer subagent (Opus, read-only) on the branch's diff.
+- [x] A fresh reviewer subagent (Opus, read-only) on the branch's diff. **No must-fix.** What it found and what was done: the departure test above; a press could wait two bounds rather than one (`lane_within` now shares one); a stretch waited invisibly to an ingest's batch loops (`db::lock_waiting`, which registers as an ask); the census missed a connection spelled any other way, and `impl` methods (it reads both now, and still counts 31 on `main`); and eleven passages and comments the step had made false.
 - [ ] Docs: `docs/reference/sync.md`, `docs/reference/light-app.md` §6.8, `src-tauri/CLAUDE.md` (*Hard rules — pairing*, *— sync*: the leave bullet, the `with_write` + `block_on` sentences), `crates/grimoire-core/CLAUDE.md`, the spec's §2.8 note, the spike's §8.
 - [ ] PR linked to #761, auto-merge and auto-fix; #761's 6a line.
 
