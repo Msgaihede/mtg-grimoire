@@ -51,7 +51,7 @@ Three arrangements were put to Markus with that table: storage only; storage plu
 | `prepare_data_dir` | `split::convert`, then the corpus probe | The probe moves as `schema::replace_unreadable_corpus(data_dir) -> bool`; `prepare_data_dir` stays and is `split::convert` followed by it |
 | `swap_staging` | `sync::set_meta_opt`, `maintenance::K_FTS_REBUILD_PENDING` | Both move: the three `sync_meta` functions are carved out of `sync.rs` into a core `sync_meta` module (what `app_meta` was to `update`), with the key beside them. `sync` and `maintenance` re-export them |
 
-`src-tauri/src/schema.rs` becomes `pub use grimoire_core::schema::*;` plus those two functions. An item defined in a module shadows a glob import of the same name, so `crate::schema::prepare_database` is the desktop's and every other `crate::schema::…` is the core's. **Step 4 brings the launch passes' modules and `prepare_database` goes home; `prepare_data_dir` stays the desktop's as long as `split` does** (spec §2.3).
+`src-tauri/src/schema/mod.rs` — **not `schema.rs`: with the old path gone, git records the moved file as a rename** — is `pub use grimoire_core::schema::*;` plus those two functions. An item defined in a module shadows a glob import of the same name, so `crate::schema::prepare_database` is the desktop's and every other `crate::schema::…` is the core's. **Step 4 brings the launch passes' modules and `prepare_database` goes home; `prepare_data_dir` stays the desktop's as long as `split` does** (spec §2.3).
 
 A hook — the launch passes handed to the core as a parameter — was the other shape. It was not taken: 23 call sites would change, and the parameter would be deleted in step 4.
 
@@ -61,7 +61,7 @@ A module's tests move with it. A test that names a module still in `src-tauri` c
 
 | Module | Tests | Stay in `src-tauri` | Because they name |
 | --- | --- | --- | --- |
-| `schema` | 280 | 15, and two helpers | `split::convert`, `prepare_database`, `prepare_data_dir`, `deck_tokens`, `deck_todos`, `deck`, `tags::query`, `maintenance` |
+| `schema` | 280 | 17, and two helpers | `split::convert`, `prepare_database`, `prepare_data_dir`, `deck_tokens`, `deck_todos`, `deck`, `tags::query`, `maintenance` — fifteen directly, and two through a helper that calls the launch |
 | `sync_engine::capture` | 42 | 3 | `prepare_database`, `reconcile`, `scryfall::Migration` |
 | `errors` | 10 | 1 | `scryfall::ScryfallError` |
 | `db`, `filters`, `sorting`, `card_row`, `image_uri`, `feed::backoff` | 109 | 0 | — |
@@ -81,13 +81,13 @@ Every one of them comes home in the step that moves what it names.
 
 On the desktop both functions keep their arithmetic: `started.elapsed() >= timeout` is `Instant::now() >= started + timeout`.
 
-**Files are not behind `platform/` yet.** `schema` names `std::fs` in six functions (the corpus replace, the backup and its prune, the damage mark, the two probes). It compiles for a browser and fails there at run time. The spec's table gives files to the I/O step, which is where an OPFS arm has something to be written against; this step lists the sites in the record and leaves them.
+**Files are not behind `platform/` yet.** `schema` reaches the filesystem in seven functions (the corpus replace, the backup and its prune, the damage mark, the two probes). It compiles for a browser and fails there at run time. The spec's table gives files to the I/O step, which is where an OPFS arm has something to be written against; this step lists the sites in the record and leaves them.
 
 ## Global Constraints
 
 - **The desktop app must be unchanged, and no existing database may lose a row.** No rung, DDL constant, grain or statement in either ladder is edited: `schema.rs` is `git mv`'d and its diff is the two cuts above, visibility, and the test gate. `prepare_database` keeps its order statement for statement.
 - **No caller of a moved module is edited** — `src-tauri` re-exports. Two exceptions, both a path: the fixture `ingest`'s test reads moves with `card_row`, and a `?raw` or `include_str!` of a moved file names its new place.
-- **No test is deleted or weakened.** `#[test]` and `#[tokio::test]` attributes before: 3 231 under `src-tauri/src`, 131 in the core. After: the same 3 362, plus what this step adds for `platform` and `sync_meta`.
+- **No test is deleted or weakened.** `#[test]` and `#[tokio::test]` attributes before: 3 231 under `src-tauri/src`, 131 in the core. After: the same 3 362, plus what this step adds for `platform` and `sync_meta`. **As built: 3 366** — 2 810 and 556.
 - `grimoire-core` has no `tauri` dependency; `cfg(target_…)`, `SystemTime` and `Instant::now` appear only under its `src/platform/`. The fence is not weakened.
 - A dependency both members name is declared alike in both manifests.
 - **Never `cargo fmt --all`.** `cargo fmt -p mtg-grimoire -p grimoire-core`.
@@ -114,69 +114,70 @@ What no moved test exercises and a reader would notice first:
 
 **Produces:** `platform::clock::Tick { now() -> Tick, elapsed(&self) -> Duration }`; `platform::pause(Duration) -> bool`.
 
-- [ ] `Tick` in `clock.rs`, one `imp` per kind of host, beside `now_ms`
-- [ ] `pause.rs`, the same shape
-- [ ] `mod.rs`: the table's "a sleep" row lands with this step
-- [ ] A test for each: a tick's elapsed time does not go backwards and covers a pause; a native pause answers `true`
+- [x] `Tick` in `clock.rs`, one `imp` per kind of host, beside `now_ms`
+- [x] `pause.rs`, the same shape
+- [x] `mod.rs`: the table's "a sleep" row lands with this step
+- [x] A test for each: a tick's elapsed time does not go backwards and covers a pause; a native pause answers `true`
 
 ### Task 2 — the manifests
 
 **Files:** `crates/grimoire-core/Cargo.toml`, `src-tauri/Cargo.toml`.
 
-- [ ] Core: `unicode-normalization = "0.1"` with the comment that argues it (`schema::label_name_key` is its one caller); `[features] testing = []`; `[dev-dependencies] tempfile = "3"`
-- [ ] `src-tauri`: drop `unicode-normalization`; `[dev-dependencies] grimoire-core = { path = "../crates/grimoire-core", features = ["testing"] }`
+- [x] Core: `unicode-normalization = "0.1"` with the comment that argues it (`schema::label_name_key` is its one caller); `[features] testing = []`; `[dev-dependencies] tempfile = "3"`
+- [x] `src-tauri`: drop `unicode-normalization`; `[dev-dependencies] grimoire-core = { path = "../crates/grimoire-core", features = ["testing"] }`
 
 ### Task 3 — the moves that need no cut
 
 **Files:** `git mv` from `src-tauri/src/` to `crates/grimoire-core/src/`: `db.rs`, `filters.rs`, `sorting.rs`, `card_row.rs`, `image_uri.rs`, `feed/backoff.rs`, `scratch.rs`; `src-tauri/tests/fixtures/cards_sample.jsonl` to `crates/grimoire-core/tests/fixtures/`. New: `crates/grimoire-core/src/sync_meta.rs`.
 
-- [ ] `db.rs`: `lock_for` and `lock_background` through `Tick` and `pause`; its tests' `Instant::now()` through `Tick`
-- [ ] `sync_meta.rs`: `get_meta`, `set_meta`, `set_meta_opt` cut from `sync.rs` with their docs, and `K_FTS_REBUILD_PENDING` cut from `maintenance.rs` with its doc. `sync.rs` and `maintenance.rs` re-export them by name
-- [ ] `scratch.rs`: `path` becomes `pub`; the module is gated `any(test, feature = "testing")` in the core's `lib.rs`
-- [ ] `src-tauri/src/lib.rs`: each `pub mod x;` becomes `pub use grimoire_core::x;`, doc comments kept; `mod scratch;` becomes a `use`
-- [ ] `feed/mod.rs` on both sides: `backoff` is the core's now
-- [ ] `ingest.rs`'s fixture path, and `legalities.rs`'s mention of it
+- [x] `db.rs`: `lock_for` and `lock_background` through `Tick` and `pause`; its tests' `Instant::now()` through `Tick`
+- [x] `sync_meta.rs`: `get_meta`, `set_meta`, `set_meta_opt` cut from `sync.rs` with their docs, and `K_FTS_REBUILD_PENDING` cut from `maintenance.rs` with its doc. `sync.rs` and `maintenance.rs` re-export them by name
+- [x] `scratch.rs`: `path` becomes `pub`; the module is gated `any(test, feature = "testing")` in the core's `lib.rs`
+- [x] `src-tauri/src/lib.rs`: each `pub mod x;` becomes `pub use grimoire_core::x;`, doc comments kept; `mod scratch;` becomes a `use`
+- [x] `feed/mod.rs` on both sides: `backoff` is the core's now
+- [x] `ingest.rs`'s fixture path, and `legalities.rs`'s mention of it
 
 ### Task 4 — `schema`, `capture` and `errors`
 
-**Files:** `git mv` `schema.rs`, `sync_engine/capture.rs`, `errors.rs`. New in `src-tauri/src/`: `schema.rs`, `errors.rs` (the two remainders), `sync_engine/capture_tests.rs`.
+**Files:** `git mv` `schema.rs`, `sync_engine/capture.rs`, `errors.rs`. New in `src-tauri/src/`: `schema/mod.rs`, `errors/mod.rs` (the two remainders), `sync_engine/capture_tests.rs`.
 
-- [ ] Core `schema.rs`: `prepare_database`'s body up to and including `capture::install` becomes `pub fn bring_to_head`, with the half of the doc comment that is about it
-- [ ] Core `schema.rs`: `prepare_data_dir`'s body after the `split::convert` line becomes `pub fn replace_unreadable_corpus`
-- [ ] `swap_staging` names `crate::sync_meta`
-- [ ] `memory_pair` and the cross-crate helpers (`seed_card`, `deck`, `category`, and whatever the stay-behind tests turn out to need) gated `any(test, feature = "testing")` in a `schema::fixtures` module the core's own tests import
-- [ ] `pub(crate)` becomes `pub` for each of the eleven items `src-tauri` still names; the rest stay
-- [ ] `src-tauri/src/schema.rs`: the glob re-export, `prepare_database`, `prepare_data_dir`, and a `tests` module holding the fifteen stay-behind tests and the re-exported fixtures
-- [ ] **Diff the cut**: `bring_to_head`'s body followed by the remainder's is the original `prepare_database` body, statement for statement — checked by concatenating the two and diffing against `git show HEAD:src-tauri/src/schema.rs`
-- [ ] `errors.rs`: `kind_of` and `every_scryfall_failure_classifies` stay in a `src-tauri` remainder that re-exports the rest
-- [ ] `capture.rs`: the three stay-behind tests go to `src-tauri/src/sync_engine/capture_tests.rs`, with the helpers they use exposed through the feature
-- [ ] The core's `lib.rs` module map and crate doc; `sync_engine/mod.rs` on both sides
-- [ ] `schema`'s one test-side `Instant::now()` through `Tick`; the fence's "the sweep reached" list names a file from this step
+- [x] Core `schema.rs`: `prepare_database`'s body up to and including `capture::install` becomes `pub fn bring_to_head`, with the half of the doc comment that is about it
+- [x] Core `schema.rs`: `prepare_data_dir`'s body after the `split::convert` line becomes `pub fn replace_unreadable_corpus`
+- [x] `swap_staging` names `crate::sync_meta`
+- [x] `memory_pair` and the cross-crate helpers (`seed_card`, `deck`, `category`, and whatever the stay-behind tests turn out to need) gated `any(test, feature = "testing")` in a `schema::fixtures` module the core's own tests import
+- [x] `pub(crate)` becomes `pub` for each of the eleven items `src-tauri` still names; the rest stay
+- [x] `src-tauri/src/schema/mod.rs`: the glob re-export, `prepare_database`, `prepare_data_dir`, and a `tests` module holding the seventeen stay-behind tests and the re-exported fixtures
+- [x] **Diff the cut**: `bring_to_head`'s body followed by the remainder's is the original `prepare_database` body, statement for statement — checked by concatenating the two and comparing against `git show fb290538:src-tauri/src/schema.rs`: byte for byte, 131 lines
+- [x] `errors.rs`: `kind_of` and `every_scryfall_failure_classifies` stay in a `src-tauri` remainder that re-exports the rest
+- [x] `capture.rs`: the three stay-behind tests go to `src-tauri/src/sync_engine/capture_tests.rs`, with the helpers they use exposed through the feature
+- [x] The core's `lib.rs` module map and crate doc; `sync_engine/mod.rs` on both sides
+- [x] The fence's "the sweep reached" list names two files from this step. `schema`'s one test-side `Instant::now()` stayed in `src-tauri` with its test; **the fence found a second the plan had not** — `capture`'s `#[ignore]`d benchmark — which goes through `Tick`
+- [x] **Found by the suite, not planned**: `image_uri::is_allowed_host` widened to loopback under `cfg!(test)`, which is off in a dependency — ten `images` tests were served the placeholder. It follows the `testing` feature, and `platform::fence` gains `no_member_asks_for_the_test_scaffolding_outside_its_tests`, which reads every workspace manifest
 
 ### Task 5 — the fences that read Rust by path (a second agent, in parallel)
 
 **Files:** whatever in `src/`, `.storybook/`, `mobile/` and `scripts/` imports or reads one of the ten moved files.
 
-- [ ] Every `?raw` import, `readFileSync` and glob that names a moved file points at `crates/grimoire-core/src/…`; a path in prose is corrected too
-- [ ] `scripts/ci-route.test.mjs`, `scripts/coverage-rust.mjs`, `.storybook/fake/parity.test.ts`: read, and changed only if a moved file is named
-- [ ] `npm run test:run` for the touched suites; nothing that runs cargo
+- [x] Every `?raw` import, `readFileSync` and glob that names a moved file points at `crates/grimoire-core/src/…`; a path in prose is corrected too
+- [x] `scripts/ci-route.test.mjs`, `scripts/coverage-rust.mjs`, `.storybook/fake/parity.test.ts`: read, and changed only if a moved file is named
+- [x] `npm run test:run` for the touched suites; nothing that runs cargo
 
 ### Task 6 — the record
 
-- [ ] `crates/grimoire-core/CLAUDE.md`: what is here now, the `testing` feature, the two remainders and when each goes home, `platform`'s two new answers
-- [ ] `docs/reference/light-app.md` §6.2: what moved, what waits and why, what was measured, what is open
-- [ ] The spec's §2.8, dated; `platform/mod.rs`'s table
-- [ ] Every sentence elsewhere this makes false: `src-tauri/CLAUDE.md` (the scratch rule, the six-connections census's grep, `schema::` paths that name a file), the root `CLAUDE.md` if any
-- [ ] Issue #761: step 2 ticked with what it moved; steps 4 and 6 gain what was deferred; the fence item settled
+- [x] `crates/grimoire-core/CLAUDE.md`: what is here now, the `testing` feature, the two remainders and when each goes home, `platform`'s two new answers
+- [x] `docs/reference/light-app.md` §6.2: what moved, what waits and why, what was measured, what is open
+- [x] The spec's §2.8, dated; `platform/mod.rs`'s table
+- [x] Every sentence elsewhere this makes false: `src-tauri/CLAUDE.md` (the scratch rule, the six-connections census's grep, `schema::` paths that name a file), the root `CLAUDE.md` if any
+- [x] Issue #761: step 2 ticked with what it moved; steps 4 and 6 gain what was deferred; the fence item settled
 
 ### Task 7 — verify and ship
 
-- [ ] `cargo fmt -p mtg-grimoire -p grimoire-core --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`
-- [ ] `cargo test --workspace`; the test-attribute count against the baseline above
-- [ ] `npm run build`, `npm run lint`, `npm run test:run`; the card-scanner suite
-- [ ] The core for `wasm32-unknown-unknown`, build and clippy, with `CC_wasm32_unknown_unknown` pointed at `C:\Program Files\LLVM\bin\clang.exe`
-- [ ] `cargo tree -p mtg-grimoire -e features -i grimoire-core` without dev-dependencies: no `testing`
-- [ ] **The live pass.** Copy the main checkout's `src-tauri/target/debug/data` here with its app stopped. Before launching: `user_version` of both files, `count(*)` of every table in `user.db`, `PRAGMA foreign_key_check`, the names in `backups/`. Launch `tauri dev` under the `app` lock, search, open a deck, the collection and the wishlist. Stop it. The same four reads again: identical, and no new backup
+- [x] `cargo fmt -p mtg-grimoire -p grimoire-core --check`; `cargo clippy --workspace --all-targets --locked -- -D warnings`
+- [x] `cargo test --workspace`; the test-attribute count against the baseline above
+- [x] `npm run build`, `npm run lint`, `npm run test:run`. **The card-scanner suite was not run here**: nothing under `crates/card-scanner` changed, and CI's `rust` job runs it
+- [x] The core for `wasm32-unknown-unknown`, build and clippy, with `CC_wasm32_unknown_unknown` pointed at `C:\Program Files\LLVM\bin\clang.exe`
+- [x] `cargo tree -p mtg-grimoire -e features -i grimoire-core` without dev-dependencies: no `testing`
+- [x] **The live pass — which became an A/B, because the main checkout's data was at user schema v46.** A reopen that changes nothing was not on offer: this build owes that file thirteen rungs. So two byte copies, one launched under a binary built from `main` at `fb290538` and one under this branch's, each stopped 20 s after reaching v59, compared table by table and row by row; then `tauri dev` on a third copy, driven over CDP, with the launch's card sync left to finish. [light-app.md](../../reference/light-app.md) §6.2 has every figure
 - [ ] PR linked to #761, auto-merge armed; `ci-ok` green, including `core` on both targets — the Android compile runs only there
 
 ## What step 3 inherits
