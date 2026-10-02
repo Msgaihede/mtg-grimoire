@@ -228,6 +228,23 @@ Three things round one measured that this layer inherits rather than rediscovers
   installer; the mirror registers as one observer of it and the desktop is the only host that
   registers one.
 
+**Built 2026-10-02, and three things differ from the list above.**
+
+- **`core::State` is four of the twelve fields, not ten**: the connections, the data directory
+  and the fence. The Scryfall client, the image cache, the facet index, the sync flag and the
+  pending pairing offer are every host's too, and each is a type that has not moved — they
+  stay on the desktop's `AppState`, which wraps `State` and derefs to it, until the I/O and sync
+  steps bring them.
+- **The desktop registers three observers, not one.** The other windows' change mask has one
+  reader, and it emits only with two or more windows open — a browser is one tab and Android
+  one window — so it is the desktop's, as the mirror is. Live sync's wake is a third until the
+  sync step brings its reader. The core's hook carries the fence, which the core reads, and
+  nothing else. §2.1's "the change mask" among core state is superseded by this.
+- **`State`'s read connection is optional** — §6's one connection in a browser, given a shape.
+
+`EventSink` is the trait and a field on `State`; nothing in the core emits through it yet.
+[The step's plan](../plans/2026-10-02-light-app-core-step-3-state.md) has each reason.
+
 ### 2.7 CI
 
 A `core` job compiles `grimoire-core` for `x86_64-pc-windows-msvc`, `aarch64-linux-android` and
@@ -269,11 +286,17 @@ Each step is its own PR. **The light UI waits for none of them** (§9).
    that re-exports the rest, because each names code a later step moves.
    [The step's plan](../plans/2026-10-02-light-app-core-step-2-storage.md) has the table.
 3. **State** — the `AppState` split, `with_write`, the hook installer and its observers, `EventSink`.
+   **Built 2026-10-02, without `with_write`**: its body arms and settles the managed wishlists
+   and reconciles tokens around the caller's write, and those modules are step 4's. What landed
+   is `state::State`, `hooks` and `events` — new code, no moved file — and an `AppState` that
+   wraps the first. [The step's plan](../plans/2026-10-02-light-app-core-step-3-state.md) has
+   the table.
 4. **The domain cluster, atomically** — decks, collection, wishlist, search, card, the tag queries
    and the view-state modules: on the order of 120 000 lines. **And, since step 2 found they
    belong to it**: `reconcile`, `managed_wishlist`, `collection_source`,
    `sync_engine/{apply,baseline}`, and `schema::prepare_database` with the launch passes it
-   runs. Round one found the cluster mutually
+   runs. **And, since step 3**: `with_write`, `with_write_waiting` and the body they share, which
+   move with the three calls that kept them back. Round one found the cluster mutually
    recursive ("no leaf modules"), so it cannot go piecemeal. **It is done by a re-runnable script on
    an announced day**: it will touch every open branch, and a branch that merges `main` afterwards
    re-runs the script rather than resolving the move by hand.

@@ -16,11 +16,13 @@
 //!   the `core` job for `wasm32-unknown-unknown` and `aarch64-linux-android`, the `rust` job for
 //!   the desktop, where the tests run.
 //!
-//! **It is being filled a step at a time.** What is here is the leaves and the storage layer:
-//! the database, both schema ladders, and the modules that read only them. `src-tauri`
-//! re-exports each one at the path it always had, so `crate::schema` over there is this crate's
-//! `schema` and no caller changed. What moves next, and in what order, is the light-app spec's
-//! §2.8.
+//! **It is being filled a step at a time.** What is here is the leaves, the storage layer —
+//! the database, both schema ladders, and the modules that read only them — and the state a
+//! host holds over them: [`state::State`], the one update hook on its write connection
+//! ([`hooks`]) and the way out for an event ([`events`]). `src-tauri` re-exports each moved
+//! module at the path it always had, so `crate::schema` over there is this crate's `schema` and
+//! no caller changed; its `AppState` wraps a [`state::State`] and derefs to it, for the same
+//! reason. What moves next, and in what order, is the light-app spec's §2.8.
 //!
 //! **Two modules arrived without one function each**, because that function names code a later
 //! step moves: `schema`'s `prepare_database` (the launch's logged passes call the deck and
@@ -44,11 +46,17 @@ pub mod db;
 /// **The error log**: what failed, when, how often. The Scryfall classifier, `kind_of`, is
 /// still `src-tauri`'s.
 pub mod errors;
+/// **How an event leaves this crate**: one trait a host implements, given to the [`state`] it
+/// builds. Nothing here takes a window.
+pub mod events;
 /// **Reading a bulk feed a chunk at a time.** The framers, and the floor every ingest holds
 /// before it swaps.
 pub mod feed;
 /// **The card filters every list shares**, as SQL: `push_card_filters` and the FTS match.
 pub mod filters;
+/// **The one update hook on the write connection, and who it tells.** SQLite allows one per
+/// connection, so this crate owns the installer and a host registers observers.
+pub mod hooks;
 /// **The resolution rule under the image cache.** Two columns of `cards`, the precedence
 /// between them and one predicate over a string.
 pub mod image_uri;
@@ -66,6 +74,10 @@ pub mod scratch;
 pub mod slug;
 /// **The sort vocabulary and every price expression.**
 pub mod sorting;
+/// **What every host holds while it runs**: the connections, the data directory, the cross-file
+/// fence and the event sink. The half of the desktop's `AppState` with no reason to know about
+/// a window — as far as the extraction has got.
+pub mod state;
 /// **The sync engine's pure half** — the hybrid logical clock and the merge rules.
 pub mod sync_engine;
 /// **The `sync_meta` key–value store**, carved out of `src-tauri`'s `sync`.

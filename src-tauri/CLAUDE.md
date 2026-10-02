@@ -14,6 +14,11 @@ in its new file. **`schema` and `errors` moved too and still have a file here** 
 `pub use grimoire_core::x::*;` plus what could not go with it — `schema::prepare_database` and
 `prepare_data_dir`, `errors::kind_of` — so the ladders, the DDL, every `schema::` constant below
 and all but seventeen of the schema's tests are in `crates/grimoire-core/src/schema.rs`.
+**`AppState` wraps the core's `state::State` and derefs to it** (2026-10-02): `state.db`,
+`state.data_dir`, `state.fence` and `state.events` are that struct's fields, read here as they
+always were, and the read connection is `state.reader()` where a mutex is wanted —
+`AppState.db_read` in the prose below is that connection, whose field is private now. A new
+piece of state every host needs goes on `State`; one only this app needs goes on `AppState`.
 `Cargo.lock` and the `[profile.*]` blocks are at the root; the build tree is still
 `src-tauri/target`, pinned by `.cargo/config.toml`. ⚠️ **A worktree whose branch predates the
 workspace fails every cargo command** (`current package believes it's in a workspace when it's
@@ -214,8 +219,9 @@ feature.
   Scryfall's, but `reconcile::apply` writes it in the same transaction as the folds it records,
   and SQLite makes **no** atomicity guarantee across attached databases in WAL mode. Corpus-side,
   a crash between the two commits would leave a quantity doubled and nothing to say it had been.
-  `db::CrossFileFence` rides in the mirror's update hook (SQLite allows one per connection) and
-  `sync::with_write` reads it in a debug build; its blind spot is `WITHOUT ROWID` tables, which
+  `db::CrossFileFence` rides the write connection's one update hook (SQLite allows one per
+  connection; the core's `hooks::install` puts it there, ahead of the mirror and every other
+  observer) and `sync::with_write` reads it in a debug build; its blind spot is `WITHOUT ROWID` tables, which
   the hook does not fire for at all.
 - **A new migration step goes at the _bottom_ of the ladder, and takes the
   `CARDS_INDEXES` replay from the step below it.** `migrate` reads `user_version` **once**
@@ -1428,19 +1434,28 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   `run::render` is what `run::run_pass` renders every file through.
 - **There is one `update_hook`, on the one write connection, and it is the whole of how the
   mirror — and, since 2026-09-20, every other window — learns anything.**
-  `watch::install_hook` is installed on `AppState.db` from `setup`, and
+  **The installer is `grimoire-core`'s since 2026-10-02** — `hooks::install`, called by
+  `State::new` as `desktop::init_state` builds the state, before the write connection is ever
+  lent out — and
   every user-facing write in this crate goes through `sync::with_write` on that connection — so
   no command has to remember to tell the mirror anything, and no command added next year can
   forget to. `db_read` is `SQLITE_OPEN_READ_ONLY` and can never fire it; SQLite allows exactly
-  one update hook per handle, so a second `install_hook` **replaces** rather than adds. The
+  one update hook per handle, so a second install **replaces** rather than adds — which is why
+  **nothing here installs a hook of its own: whatever needs to hear about a write is a
+  `hooks::WriteObserver` added to `mirror::watch::observers`**. That list is the desktop's three,
+  in the order the hook has always called them: live sync's wake, the change mask, the mirror's
+  mask. The
   callback runs on the writer's thread with the write connection's mutex held: one `fetch_or` on
   an atomic and return. Nothing there may allocate, take a lock, or call back into the database —
   SQLite forbids the last one outright.
-  **The one hook now carries two masks**, which is exactly why it is one hook: `changes::Changes`
-  rides beside the mirror's `Mask` (`install_hook_with_changes`; `install_hook` delegates with a
-  throwaway `Changes`, since almost all of its callers are test fixtures), one bit per **user**
+  **The one hook carries two masks**, which is exactly why it is one hook: `changes::Changes`
+  rides beside the mirror's `Mask`, one bit per **user**
   table, and the commit hook rings its `Notify` only when a bit is set. `changes.rs` and
   [multi-window.md](../docs/reference/multi-window.md) carry the emitter.
+  `watch::install_hook` and `install_hook_with_changes` are the core's installer on a bare
+  connection and exist in test builds only (`#[cfg(test)]`) — called on the app's connection,
+  either would replace the hooks `State::new` installed; the first delegates with a throwaway
+  `Changes`.
   ⚠️ **And the hook has two blind spots, each of which a command has to cover by hand.**
   **`WITHOUT ROWID` tables never fire it at all** — `muted_tags`, `sync_devices`, `sync_state` and
   `device_names` are marked by the commands a reader's press reaches
@@ -1494,7 +1509,8 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
   mirror owes the same treatment.
 - **One folder, one installation.** The manifest's first line is `installation: <32 hex>`, this
   installation's name from `app_meta.mirror_installation` (`settings::K_INSTALLATION`, minted by
-  `ensure_installation` in `desktop::start` on the write connection *before* the hook, so the
+  `ensure_installation` in `desktop::init_state` on the write connection *before* the hook —
+  just above `State::new`, which installs it — so the
   mirror still never writes to the database). `run_pass` refuses before writing anything, and
   `set_root` refuses while choosing, when the folder's manifest names another installation — two
   computers on one Dropbox folder otherwise overwrote each other's `Collection`/`Wishlist` files

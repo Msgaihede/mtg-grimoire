@@ -7,9 +7,10 @@ a Worker later. The design is
 [light-app.md](../../docs/reference/light-app.md).
 
 **It is being filled a step at a time, and most of the engine is still in `src-tauri`.** What is
-here is what `src/lib.rs` declares: the leaves, and since 2026-10-02 the storage layer — `db`,
+here is what `src/lib.rs` declares: the leaves; since 2026-10-02 the storage layer — `db`,
 `schema` with both ladders, `sync_meta`, `filters`, `sorting`, `card_row`, `image_uri`, `errors`,
-`feed::backoff` and `sync_engine::capture`. Every rule in
+`feed::backoff` and `sync_engine::capture`; and, the same day, the state a host holds over it —
+`state`, `hooks` and `events`, which are new code rather than moved files. Every rule in
 [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a module binds that module wherever it
 lives — moving a file changes which crate compiles it and nothing about what it must do. **That
 file's database rules are this crate's now**: a schema rung, a grain, a capture spec is edited
@@ -55,12 +56,72 @@ and its caller answers `db::BUSY`. Neither browser arm has ever run — the crat
 
 HTTP, files, a sleep a future awaits and background work are named in `platform/mod.rs` with the
 step that brings each — an interface is written with its first caller, not ahead of it.
+(Background work was the state step's row and had no caller there: nothing in `state`, `hooks` or
+`events` spawns anything. It is the I/O step's.)
 **`schema` names `std::fs` directly** (the corpus it replaces, the backup before a climb, the
 damage mark): that compiles for a browser and fails there when called, and waits for the I/O
 step.
 
 **Most of the engine never asks for the time.** The domain modules use SQLite's `unixepoch()`
 and `date('now')` inside the statement that needs them, which is the same on every host.
+
+## State, the hook and events
+
+**A host builds one `state::State` and everything else is handed it.**
+`State::new(write, read, data_dir, events, observers)` takes connections the host opened and
+brought to head, installs the hooks on the write connection, and only then puts it behind its
+mutex. So there is no `State` whose cross-file fence is not riding.
+
+- **No shipped code installs a hook but `hooks::install`, and a host never calls it for its
+  app's connection** — `State::new` has. SQLite keeps one update hook, one commit hook and one
+  rollback hook per connection, and a second install **replaces** the first without a word:
+  `hooks::tests::a_second_install_replaces_the_first`. Whatever needs to hear about a write is a
+  `WriteObserver` in the list `State::new` is given. (Two of `src-tauri`'s tests put a raw hook
+  on a bare connection of their own — `reconcile` and `tags` — and the desktop's
+  `watch::install_hook` pair is `#[cfg(test)]`, so none of it can reach the app's.)
+- **The fence is ahead of every observer, on both hooks.** On the commit hook that is pinned —
+  `the_fence_has_settled_by_the_time_an_observer_hears_the_commit` — and on the update hook it
+  is not, because the bits a row leaves are private and no observer can ask for them.
+- **An observer runs inside SQLite's callback**, on the writer's thread with the write
+  connection's mutex held: an atomic, a lookup in a list built beforehand, a notify that cannot
+  block. Never a lock another thread holds for long, never a call back into the database.
+- **Observers are told in list order, on both hooks, and the order is a contract.** The
+  desktop's list is `mirror::watch::observers` — sync wake, change mask, mirror mask — which
+  gives the update hook and the commit hook the call order each has always had.
+- **The update hook has two blind spots, both pinned in `hooks`' tests**: a `WITHOUT ROWID`
+  table never reaches `row`, and neither does a bare `DELETE` on a table with no triggers and no
+  foreign key naming it. Both still reach `committed`. An observer that must not miss a write
+  listens for the commit.
+- **`read` is `None` on a host that can have only one connection** — a browser's storage
+  permits exactly one (spec §6). `State::reader()` is then the write connection's own mutex, and
+  `lock_db_read` takes it. ⚠️ **Nothing has run that way**: a read asked for while the same
+  thread holds the write connection is a lock taken twice, which the desktop's two connections
+  never notice. `reader()` is also what a caller passes on where it used to pass
+  `&state.db_read`; the field is private.
+- **`events::EventSink` is how an event leaves the crate, and nothing here emits yet.** A host
+  gives the state one sink; code with something to say calls `events::emit`. Never an
+  `AppHandle`, a window or a channel as a parameter. Its first callers arrive with the I/O step
+  (`run_sync`, the feeds) and the sync step (live sync), which still emit through the desktop's
+  window from `src-tauri`.
+
+**`State` is the every-host half of the desktop's `AppState` as far as the extraction has got.**
+`AppState` wraps it and derefs to it, so `state.db` over there is this struct's field. What
+`AppState` still declares, and when each leaves:
+
+| Field | Its type | Comes here with |
+| --- | --- | --- |
+| `syncing` | `AtomicBool`, `run_sync`'s flag | step 5 |
+| `client` | `scryfall::Client` | step 5 |
+| `images` | `images::Cache` | step 5 |
+| `index` | `index::lifecycle::IndexSlot` | step 5 |
+| `pairing` | `sync_pair::pairing::Pending` | step 6 |
+| `mirror`, `mirror_status`, `changes` | the mirror's and the other windows' | never: the desktop's |
+
+**`with_write` is still `src-tauri`'s, whole.** Its body arms and settles the managed wishlists
+and reconciles tokens around the caller's closure, and those modules are step 4's. It has no line
+to be cut at — the three calls sit between the lock and the fence's assertion — so it was not
+split: a write with no settle would be a second definition of a user-facing write. It reads
+`state.db` and `state.fence` through the deref and is byte for byte what it was.
 
 ## Moving a module here
 

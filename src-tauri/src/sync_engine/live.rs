@@ -93,6 +93,36 @@ pub fn current() -> LiveState {
     LiveState::from_u8(STATE.load(Ordering::Relaxed))
 }
 
+/// **Live sync's wake, as an observer of the write connection's commit hook** — the first of
+/// the desktop's three ([`crate::mirror::watch::observers`]), riding the core's one installer
+/// because SQLite allows one commit hook per connection.
+///
+/// A commit, not a row: `update_hook` does not fire for `WITHOUT ROWID` tables, and two of the
+/// synced tables are exactly that (`muted_tags`, and `device_names` since user schema v31). A
+/// row-level wake would silently never sync a mute or a rename.
+///
+/// **This says only "a transaction committed", and deciding is somebody else's job** — spec
+/// §6.3's "`commit_hook` wakes, the outbox decides". The decider is `outbox_has_work`, on the arm
+/// that receives this signal: `sync_ops WHERE pushed_at IS NULL`, one partial-index scan. That is
+/// what keeps the Scryfall ingest, the image cache, the price and tag feeds and every `error_log`
+/// row off the relay — none of them is a synced table — and it is what closes the loop a round
+/// trip would otherwise be, since `round_trip` ends by stamping `last_sync_at` on this very
+/// connection and so rings this bell itself.
+///
+/// ⚠️ **This comment described that gate for a day before the gate existed**, and the cost was a
+/// trip every three seconds for ever. If the sentence above is ever true again only of the
+/// design, delete it rather than leave it standing.
+///
+/// `notify_one` does not block and cannot fail, which is what a commit hook requires — and it
+/// must be `notify_one`, for the reason on [`spawn`].
+pub struct WriteWake(pub Arc<Notify>);
+
+impl grimoire_core::hooks::WriteObserver for WriteWake {
+    fn committed(&self) {
+        self.0.notify_one();
+    }
+}
+
 /// Start the manager. Returns immediately; the work is a detached task.
 ///
 /// ⚠️ **`writes` must be signalled with [`Notify::notify_one`] and never `notify_waiters`.**
@@ -613,7 +643,7 @@ async fn trip(app: &tauri::AppHandle, state: &Arc<AppState>, sched: &mut Schedul
 /// than a missed push, and answering `false` costs nothing a normal exit does not already
 /// forgive: the op stays `pushed_at IS NULL` and the next launch's ordinary sync tries again.
 pub fn anything_pending(state: &Arc<AppState>) -> bool {
-    unpushed(&state.db_read, std::time::Duration::ZERO)
+    unpushed(state.reader(), std::time::Duration::ZERO)
 }
 
 /// The one `count(*)` both gates are, over whichever connection the caller can afford and for
@@ -713,20 +743,22 @@ mod tests {
         let conn = crate::db::open_write(&dir).unwrap();
         let read = crate::db::open_read(&dir).unwrap();
         // Hooked up for the same reason every sibling fixture hooks it up: `sync::with_write`'s
-        // debug_assert reads the fence, and a throwaway `Notify` is all the new signature needs
-        // — nothing in these tests starts `spawn` or waits on it.
+        // debug_assert reads the fence `State::new` arms, and a throwaway `Notify` is all the
+        // observers need — nothing in these tests starts `spawn` or waits on it.
         let mirror = Arc::new(crate::mirror::watch::Mask::default());
-        let fence = Arc::new(crate::db::CrossFileFence::new());
-        crate::mirror::watch::install_hook(
-            &conn,
-            mirror.clone(),
-            fence.clone(),
-            Arc::new(Notify::new()),
-        );
+        let changes = Arc::new(crate::changes::Changes::new());
         Arc::new(AppState {
-            db: Mutex::new(conn),
-            db_read: Mutex::new(read),
-            data_dir: dir.clone(),
+            core: grimoire_core::state::State::new(
+                conn,
+                Some(read),
+                dir.clone(),
+                grimoire_core::events::silent(),
+                crate::mirror::watch::observers(
+                    mirror.clone(),
+                    changes.clone(),
+                    Arc::new(Notify::new()),
+                ),
+            ),
             syncing: AtomicBool::new(false),
             // Never called: `push_now` with no group answers `Ok(None)` before it would be.
             client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
@@ -734,8 +766,7 @@ mod tests {
             index: std::sync::RwLock::default(),
             mirror,
             mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
-            fence,
-            changes: Default::default(),
+            changes,
             pairing: Mutex::new(None),
         })
     }

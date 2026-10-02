@@ -31,7 +31,8 @@
 //! therefore 250 frames, and the receiving peer must react once, not 250 times.
 //! [`super::schedule::WRITE_DEBOUNCE_MS`] (3 s) waits out a local write and slides on every
 //! commit, so a transaction that keeps writing for a minute pushes once, at the end — armed off
-//! the mirror's own `commit_hook`, for the reason `db.rs`'s `CrossFileFence` doc gives: the
+//! the write connection's `commit_hook` ([`super::live::WriteWake`], an observer of the core's
+//! installer), for the reason `db.rs`'s `CrossFileFence` doc gives: the
 //! update hook the mirror uses does not fire for `WITHOUT ROWID` tables, and two of the thirteen
 //! synced ones are exactly that.
 //!

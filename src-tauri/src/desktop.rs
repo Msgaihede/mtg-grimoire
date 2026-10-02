@@ -852,11 +852,20 @@ pub fn run() {
 /// state a command reaches is in place, and every write it makes passes the hook. And the corpus
 /// integrity check that used to hold the launch runs behind it, on a thread of its own.
 fn start(app: &tauri::AppHandle) {
+    // The write-side half of live sync's wake. One `Arc` for the whole process: the
+    // commit hook `init_state` installs calls `notify_one` on it, through the
+    // `sync_engine::live::WriteWake` observer, and `sync_engine::live::spawn`'s `select!`
+    // wakes on the same handle — see the warning on `live::spawn` for why it must be
+    // `notify_one` and never `notify_waiters`. Created here rather than on `AppState`
+    // because nothing else needs to reach it: `init_state` and `live::spawn` are the whole
+    // of its life.
+    let writes = Arc::new(tokio::sync::Notify::new());
+
     // A refusal is drawn by the page, under a title bar that can still close the window, and
     // printed as well for a console that has one. It used to be returned from `setup`, which
     // Tauri turns into a panic: an escaped one-line message in a debug console, and in a release
     // build — no console at all — a window that simply vanished.
-    let state = match init_state(app) {
+    let state = match init_state(app, &writes) {
         Ok(state) => Arc::new(state),
         Err(message) => {
             eprintln!("{message}");
@@ -869,14 +878,6 @@ fn start(app: &tauri::AppHandle) {
     // The scanner's own state, beside `AppState` rather than inside it — it loads
     // lazily on the first status call and shares nothing but the data directory.
     app.manage(Arc::new(scanner::ScannerState::new(state.data_dir.clone())));
-
-    // The write-side half of live sync's wake. One `Arc` for the whole process: the
-    // commit hook installed below calls `notify_one` on it, and
-    // `sync_engine::live::spawn`'s `select!` wakes on the same handle — see the
-    // warning on `live::spawn` for why it must be `notify_one` and never
-    // `notify_waiters`. Created here rather than on `AppState` because nothing else
-    // needs to reach it: the two call sites below are the whole of its life.
-    let writes = Arc::new(tokio::sync::Notify::new());
 
     // Warm the facet index: ~767 ms of full table scan on its own thread and its own
     // read-only connection, so the window comes up now and the first searches answer
@@ -892,44 +893,21 @@ fn start(app: &tauri::AppHandle) {
 
     // The plain-text mirror, in two halves that must stay in this order.
     {
-        // First the hook, on `state.db` and **nowhere else**: that is the one
-        // connection every user-facing write in this crate goes through
-        // (`sync::with_write`), and `db_read` is opened read-only so it could never
-        // fire one. It is installed before the thread starts so that nothing written
-        // between here and the first pass can slip past unmarked — though the first
-        // pass is `Dirty::ALL` and would cover it anyway, which is what makes this
-        // ordering cheap insurance rather than a rule.
-        //
-        // The guard is bound rather than left a temporary so it is released before
-        // `spawn`, which is the lifetime it had before the block existed.
-        //
-        // The third argument is the cross-file fence, which arrived with the
-        // user/corpus split: the hook has to be able to tell the mirror which of the
-        // two databases a write landed in. The fifth is the other windows' mask
-        // (`crate::changes`), riding the same hook for the fence's reason — SQLite
-        // allows one update hook per connection.
-        let conn = db::lock_blocking(&state.db);
-        // The name the mirror stamps into its manifest, minted here, on this connection and
-        // before the hook, so the mirror itself never writes to the database — see
-        // `mirror::settings::K_INSTALLATION`. A failure leaves manifests unstamped, which is what
-        // every build before the stamp wrote.
-        if let Err(e) = mirror::settings::ensure_installation(&conn) {
-            eprintln!("the backup mirror could not name this installation: {e}");
-        }
-        mirror::watch::install_hook_with_changes(
-            &conn,
-            state.mirror.clone(),
-            state.fence.clone(),
-            writes.clone(),
-            state.changes.clone(),
-        );
-        drop(conn);
+        // First the hook, on `state.db` and **nowhere else** — and it is already there:
+        // `init_state` built the core's `State`, which installs the hook on the write
+        // connection before that connection is ever lent out, with the mirror's mask as one
+        // of its observers (`mirror::watch::observers`). That is the one connection every
+        // user-facing write in this crate goes through (`sync::with_write`), and the read
+        // connection is opened read-only so it could never fire one. Installed before the
+        // thread starts, so nothing written between there and the first pass can slip past
+        // unmarked — though the first pass is `Dirty::ALL` and would cover it anyway, which
+        // is what makes this ordering cheap insurance rather than a rule.
 
         // Then the thread. Detached and never fatal, exactly like the facet warm-up
         // above: it runs one full pass now — the whole of what makes the folder
         // correct after a crash — and then wakes two seconds after the reader stops
-        // editing. It reads through `db_read` and never takes the write connection, so
-        // no press it overlaps can be answered `db::BUSY` by it.
+        // editing. It reads through a connection of its own and never takes the write
+        // connection, so no press it overlaps can be answered `db::BUSY` by it.
         mirror::watch::spawn(state.clone());
 
         // The other windows' refresh — see `crate::changes`. After the hook, and the order
@@ -1233,7 +1211,14 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
 /// so the messages name the paths that were tried. Left unwrapped, the common case
 /// (both candidate folders unwritable) surfaces as SQLite's "unable to open database
 /// file", which says nothing about which folder or why.
-fn init_state(app: &tauri::AppHandle) -> Result<AppState, String> {
+///
+/// `writes` is live sync's wake, which [`start`] made and keeps: it is handed in because the
+/// write connection's hook is installed here, as the core's `State` is built, and the wake is
+/// one of the three observers that ride it.
+fn init_state(
+    app: &tauri::AppHandle,
+    writes: &Arc<tokio::sync::Notify>,
+) -> Result<AppState, String> {
     let exe_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(Path::to_path_buf));
@@ -1303,29 +1288,62 @@ fn init_state(app: &tauri::AppHandle) -> Result<AppState, String> {
         client.restore_penalty(until, scryfall::unix_now());
     }
 
-    Ok(AppState {
-        db: Mutex::new(conn),
-        db_read: Mutex::new(conn_read),
+    // The name the mirror stamps into its manifest, minted here, on this connection and
+    // **before the hook goes on it**, so the mirror itself never writes to the database and
+    // this one write of the launch's is heard by nobody — see
+    // `mirror::settings::K_INSTALLATION`. A failure leaves manifests unstamped, which is what
+    // every build before the stamp wrote.
+    if let Err(e) = mirror::settings::ensure_installation(&conn) {
+        eprintln!("the backup mirror could not name this installation: {e}");
+    }
+
+    // Clean, both of them: nothing has been written through the hook yet, so a clean mask is
+    // the truth — and the mirror's startup pass is `Dirty::ALL` regardless.
+    let mirror = Arc::new(mirror::watch::Mask::default());
+    let changes = Arc::new(crate::changes::Changes::new());
+
+    // **The hook goes on here**, inside `State::new`, before the write connection is behind its
+    // mutex: the cross-file fence, which is the core's own, and the desktop's three observers
+    // in the order the hook has always called them. SQLite allows one update hook per
+    // connection, so the core owns the installer and everything else that needs to hear about
+    // a write registers with it — see `grimoire_core::hooks`.
+    let core = grimoire_core::state::State::new(
+        conn,
+        Some(conn_read),
         data_dir,
+        Arc::new(WindowEvents(app.clone())),
+        mirror::watch::observers(mirror.clone(), changes.clone(), writes.clone()),
+    );
+
+    Ok(AppState {
+        core,
         syncing: AtomicBool::new(false),
         client,
         images,
-        // Cold, and built by `setup` the moment this state is in an `Arc` — see there for
+        // Cold, and built by `start` the moment this state is in an `Arc` — see there for
         // why the build cannot be started from in here.
         index: std::sync::RwLock::default(),
-        // Clean, and hooked up by `setup` for the index's reason: the hook holds a clone of
-        // this `Arc`, and there is no `Arc` until this value has been put in one. Nothing has
-        // been written yet either, so a clean mask is the truth — the startup pass is
-        // `Dirty::ALL` regardless.
-        mirror: Arc::new(mirror::watch::Mask::default()),
+        mirror,
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
-        // The mask's twin, and hooked up in the same call for the same reason: SQLite allows
-        // one update hook per connection, so the fence has to ride in the mirror's.
-        fence: Arc::new(db::CrossFileFence::new()),
-        // Clean, and hooked up in `start` beside the mirror's mask, for the mask's reason.
-        changes: Default::default(),
+        changes,
         pairing: Mutex::new(None),
     })
+}
+
+/// The desktop's [`grimoire_core::events::EventSink`]: an event the engine raises goes to every
+/// window, as `app.emit` sends one.
+///
+/// **Nothing calls it yet.** Every emit in this crate still names its `AppHandle` — the card
+/// sync, the three feeds and live sync each take one — and moves onto the sink with the module
+/// that makes it, as that module moves to the core. A dropped event is never worth failing
+/// anything over, here as at those call sites.
+struct WindowEvents(tauri::AppHandle);
+
+impl grimoire_core::events::EventSink for WindowEvents {
+    fn emit(&self, name: &str, payload: serde_json::Value) {
+        use tauri::Emitter;
+        let _ = self.0.emit(name, payload);
+    }
 }
 
 /// The startup message for "nowhere to put the database", naming both candidates.

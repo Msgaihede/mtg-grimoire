@@ -91,9 +91,9 @@ qrcode = { version = "0.14", default-features = false }
 
 # ── Desktop and Android ──────────────────────────────────────────────────────────────────────
 # `bundled` is libsqlite3-sys compiling sqlite3.c with the host's C compiler — right on Windows,
-# on Linux and through the NDK, and impossible for a browser. `hooks` is the update hook the
-# mirror and the change mask ride; it is here ahead of the code that installs it (the
-# extraction's step 3) so this crate asks for the same SQLite the desktop does.
+# on Linux and through the NDK, and impossible for a browser. `hooks` is the update, commit and
+# rollback hook `src/hooks.rs` installs on the write connection — the cross-file fence rides it,
+# and so does every observer a host registers.
 [target.'cfg(not(target_family = "wasm"))'.dependencies]
 rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 

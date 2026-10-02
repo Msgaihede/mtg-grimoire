@@ -2,13 +2,16 @@
 //!
 //! Three pieces, and the seam between them is an `AtomicU8`:
 //!
-//! * [`install_hook`] puts an `update_hook` on the **one write connection**. Every insert,
-//!   update and delete in this crate goes through [`crate::sync::with_write`] on that
+//! * The [`Mask`] is an **observer of the one update hook on the one write connection**. Every
+//!   insert, update and delete in this crate goes through [`crate::sync::with_write`] on that
 //!   connection, so the hook sees every user write with the table's name — and no command
 //!   has to remember to tell the mirror anything, nor can one added next year forget to.
-//!   **The same hook marks the other windows' mask too** ([`install_hook_with_changes`], and
-//!   [`crate::changes`] for why): SQLite allows one update hook per connection, so everything
-//!   that needs to hear about a row rides this one.
+//!   **The hook itself is `grimoire-core`'s** ([`grimoire_core::hooks`]): SQLite allows one
+//!   update hook per connection, so the core owns the installer and everything that needs to
+//!   hear about a row registers with it. The desktop registers three — [`observers`] is the
+//!   list, and `State::new` is handed it for the app's write connection. `install_hook` is the
+//!   same installer on a bare connection, under the name this module's tests have always
+//!   called it by; it exists in test builds only.
 //! * [`surface_of`] turns that table name into the surfaces it could have changed, or into
 //!   `None` for the great majority of tables that change nothing a reader's files show.
 //! * [`spawn`] starts the thread that watches the mask, waits for the writing to stop, and
@@ -32,6 +35,7 @@
 use crate::mirror::run::{DigestCache, Dirty, PassReport};
 use crate::mirror::settings;
 use crate::sync::AppState;
+use grimoire_core::hooks::WriteObserver;
 use rusqlite::Connection;
 
 use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
@@ -92,9 +96,9 @@ const WISHLIST_ONLY: Dirty = Dirty {
 /// schema 27 a write arrives as `("main", "decks")` or `("corpus", "cards")`, and taking only
 /// the table is correct because a table name is unique across the two files by
 /// [`crate::schema::TABLES`] — which `every_table_is_on_exactly_one_side` is what keeps
-/// true. The schema name is not wasted: [`install_hook`] passes it to
-/// [`crate::db::CrossFileFence`], which rides in this same callback because SQLite allows one
-/// update hook per connection.
+/// true. The schema name is not wasted: the installer passes it to
+/// [`crate::db::CrossFileFence`], which rides in the same callback ahead of every observer,
+/// because SQLite allows one update hook per connection.
 pub fn surface_of(table: &str) -> Option<Dirty> {
     match table {
         // **`deck_tokens` is an over-approximation and joins them anyway** (user schema v37).
@@ -244,11 +248,8 @@ fn dirty_of(bits: u8) -> Option<Dirty> {
 // The hook
 // ---------------------------------------------------------------------------------------
 
-/// Watch every write on `conn` and mark the mask.
-///
-/// **Install this on the write connection and nowhere else.** `db_read` is opened read-only
-/// and can never fire it; installing a second hook on a second connection would simply
-/// replace this one, because SQLite allows exactly one update hook per handle.
+/// **The mirror's half of the hook.** One row of `table` was written, so whichever surfaces it
+/// could have changed are marked — one `fetch_or`, and nothing for the great majority of tables.
 ///
 /// **A bare `DELETE FROM <table>` may not reach here.** SQLite's truncate optimisation empties
 /// a table without visiting rows, and the update hook is documented as not firing for it. The
@@ -257,9 +258,49 @@ fn dirty_of(bits: u8) -> Option<Dirty> {
 /// `ON DELETE CASCADE`. The tests at the bottom of this file are what keep that true, rather
 /// than a claim about SQLite's release notes.
 ///
-/// **This is [`install_hook_with_changes`] with a window mask nobody reads.** Every caller but
-/// the app's own startup is a test fixture, and none of them has a use for the cross-window
-/// refresh — so they keep this signature and the startup takes the other one.
+/// The schema name is ignored on purpose — see [`surface_of`].
+impl WriteObserver for Mask {
+    fn row(&self, _db: &str, table: &str) {
+        if let Some(d) = surface_of(table) {
+            self.mark(d);
+        }
+    }
+}
+
+/// The desktop's three riders on the write connection's hook, **in the order the hook has
+/// always called them**: live sync's wake, the other windows' change mask, the mirror's mask.
+///
+/// [`grimoire_core::hooks::install`] tells its observers in list order on both hooks, so this
+/// one list has to give two orders, and it does. A row is heard by the change mask and then
+/// the mirror's (the wake ignores rows); a commit is heard by the wake and then the change
+/// mask's bell (the mirror ignores commits). The fence is ahead of all three on both — it is
+/// the installer's own.
+///
+/// What [`grimoire_core::state::State::new`] is handed for the app's write connection, and what
+/// [`install_hook_with_changes`] installs on a bare one.
+pub fn observers(
+    mask: Arc<Mask>,
+    changes: Arc<crate::changes::Changes>,
+    writes: Arc<tokio::sync::Notify>,
+) -> Vec<Arc<dyn WriteObserver>> {
+    let wake: Arc<dyn WriteObserver> = Arc::new(crate::sync_engine::live::WriteWake(writes));
+    vec![wake, changes, mask]
+}
+
+/// Watch every write on `conn` and mark the mask.
+///
+/// **Install this on the write connection and nowhere else.** `db_read` is opened read-only
+/// and can never fire it; installing a second hook on a second connection would simply
+/// replace this one, because SQLite allows exactly one update hook per handle.
+///
+/// **This is [`install_hook_with_changes`] with a window mask nobody reads.** Every caller is
+/// a test with a bare connection in hand, and none of them has a use for the cross-window
+/// refresh. The app's own write connection is hooked by `State::new`, with [`observers`].
+///
+/// **Test builds only, and that is a fence.** Called on the app's write connection, this would
+/// replace the hooks `State::new` installed — with a fence nobody reads and without whichever
+/// observers the caller left out — and nothing would say so.
+#[cfg(test)]
 pub fn install_hook(
     conn: &Connection,
     mask: Arc<Mask>,
@@ -277,11 +318,11 @@ pub fn install_hook(
 
 /// [`install_hook`], plus the other windows' mask — see [`crate::changes`].
 ///
-/// **One function and not a second installer, for the fence's reason**: SQLite allows one
-/// update hook and one commit hook per connection, so a `changes` hook installed on its own
-/// would silently take the mirror's, the fence's and live sync's off. It is a parameter here
-/// rather than a change to [`install_hook`]'s signature because only the app's startup has a
-/// [`crate::sync::AppState`] whose `changes` somebody reads.
+/// **One installer and never a second, for the fence's reason**: SQLite allows one update hook
+/// and one commit hook per connection, so a hook installed on its own would silently take the
+/// mirror's, the fence's and live sync's off. The installer is the core's; this is it, handed
+/// the desktop's [`observers`]. Test builds only, for [`install_hook`]'s reason.
+#[cfg(test)]
 pub fn install_hook_with_changes(
     conn: &Connection,
     mask: Arc<Mask>,
@@ -289,79 +330,7 @@ pub fn install_hook_with_changes(
     writes: Arc<tokio::sync::Notify>,
     changes: Arc<crate::changes::Changes>,
 ) {
-    // **The fence rides in the mirror's hook because SQLite allows exactly one update hook
-    // per connection**, which is the rule stated two paragraphs up: a second `install_hook`
-    // replaces rather than adds, so a second *installer* would silently take this one off.
-    // That is why the two live in one function rather than in two.
-    let marker = fence.clone();
-    // The window mask rides here for the same reason, and at the hook's own price: one binary
-    // search and one `fetch_or`, no allocation and no lock — see `crate::changes::Changes::mark`.
-    let marking = changes.clone();
-    // The `Result` is `Err` only for a connection this crate never makes — one already lent
-    // out, or borrowed from a shared handle — so there is nothing to recover, and refusing to
-    // start the app over a mirror that will not notice edits would be the wrong trade. A
-    // failure here degrades to "the startup pass is the only pass", which is still a mirror.
-    if let Err(e) = conn.update_hook(Some(
-        move |_action: rusqlite::hooks::Action, db: &str, table: &str, _rowid: i64| {
-            marker.note(db);
-            marking.mark(db, table);
-            if let Some(d) = surface_of(table) {
-                mask.mark(d);
-            }
-        },
-    )) {
-        eprintln!("the backup mirror will not see live edits: {e}");
-    }
-    let settling = fence.clone();
-    let settling_writes = writes.clone();
-    let ringing = changes;
-    // Both of these fail for the one reason the update hook does, and with the same answer:
-    // a fence that could not be installed costs a diagnostic, never a launch.
-    let _ = conn.commit_hook(Some(move || {
-        if settling.settle() {
-            // Said out loud rather than asserted: this is a diagnostic on a user's machine
-            // and the write has already happened. `crate::sync::with_write` is where a debug
-            // build turns it into a failing test.
-            eprintln!(
-                "a transaction wrote to both the user database and the card database; \
-                 SQLite does not guarantee those commit together"
-            );
-        }
-        // **Live sync's wake, riding in the hook the fence already owns** — SQLite allows one
-        // commit hook per connection, so a second installer would take this one off.
-        //
-        // A commit, not a row: `update_hook` does not fire for `WITHOUT ROWID` tables, and two
-        // of the synced tables are exactly that (`muted_tags`, and `device_names`
-        // since user schema v31). A row-level wake would silently never sync a mute or a
-        // rename.
-        //
-        // **This says only "a transaction committed", and deciding is somebody else's job** —
-        // spec §6.3's "`commit_hook` wakes, the outbox decides". The decider is
-        // `sync_engine::live`'s `outbox_has_work`, on the arm that receives this signal:
-        // `sync_ops WHERE pushed_at IS NULL`, one partial-index scan. That is what keeps the
-        // Scryfall ingest, the image cache, the price and tag feeds and every `error_log` row
-        // off the relay — none of them is a synced table — and it is what closes the loop a
-        // round trip would otherwise be, since `round_trip` ends by stamping `last_sync_at` on
-        // this very connection and so rings this bell itself.
-        //
-        // ⚠️ **This comment described that gate for a day before the gate existed**, and the
-        // cost was a trip every three seconds for ever. If the sentence above is ever true
-        // again only of the design, delete it rather than leave it standing.
-        //
-        // `notify_one` does not block and cannot fail, which is what a commit hook requires.
-        settling_writes.notify_one();
-        // **The other windows' bell, riding the same hook for the same reason** — see
-        // `crate::changes`. Rung only when a user table was written, so a Scryfall ingest's
-        // corpus commits wake nothing.
-        if ringing.pending() {
-            ringing.ring();
-        }
-        // **Never true.** A commit hook that answered `true` would abort the commit, which
-        // would turn a diagnostic into data loss over a bug in this fence.
-        false
-    }));
-    let clearing = fence;
-    let _ = conn.rollback_hook(Some(move || clearing.clear()));
+    grimoire_core::hooks::install(conn, fence, observers(mask, changes, writes));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -491,8 +460,8 @@ fn watch(state: &AppState) {
     // the last session was closing. `Dirty::ALL`, because the mask cannot describe what
     // happened while the process was not running.
     //
-    // **The mask is taken first, and the order is the point.** `install_hook` runs before this
-    // thread starts, so anything written between the two is already marked — and a full render
+    // **The mask is taken first, and the order is the point.** The hook goes on as the state is
+    // built, before this thread starts, so anything written between the two is already marked — and a full render
     // covers it, so leaving it marked would buy nothing and cost a second full render two and a
     // quarter seconds later. Taken *before* rather than after because a write that lands while
     // the pass is running must stay marked: it may not be in the rows this pass read.
@@ -673,9 +642,16 @@ mod tests {
         let conn = crate::db::open_write(dir).unwrap();
         let read = crate::db::open_read(dir).unwrap();
         AppState {
-            db: std::sync::Mutex::new(conn),
-            db_read: std::sync::Mutex::new(read),
-            data_dir: dir.to_path_buf(),
+            // **No observers, on purpose**: this fixture has never hooked its connection, so
+            // nothing a test built on it writes marks the mask. `State::new` still arms the
+            // fence, which every other fixture's connection already carried.
+            core: grimoire_core::state::State::new(
+                conn,
+                Some(read),
+                dir.to_path_buf(),
+                grimoire_core::events::silent(),
+                Vec::new(),
+            ),
             syncing: std::sync::atomic::AtomicBool::new(false),
             // Never called: nothing in this module reaches the network or an image.
             client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
@@ -683,7 +659,6 @@ mod tests {
             index: std::sync::RwLock::default(),
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
-            fence: std::sync::Arc::new(crate::db::CrossFileFence::new()),
             changes: Default::default(),
             pairing: std::sync::Mutex::new(None),
         }
@@ -825,7 +800,7 @@ mod tests {
 
     /// The other windows' half of the hook, end to end: a user write through the hooked
     /// connection sets its table's bit **and** the commit rings — through
-    /// [`install_hook_with_changes`], which is the one the app's startup takes.
+    /// [`install_hook_with_changes`], which installs the list the app's startup hands `State::new`.
     #[test]
     fn a_user_write_through_the_hooked_connection_marks_the_window_mask_and_rings() {
         let conn = migrated_memory_db();
@@ -1372,7 +1347,7 @@ mod tests {
         conn.execute("DELETE FROM wishlist_folders", []).unwrap();
         assert!(
             mask.take().is_some_and(|d| d.wishlist),
-            "a bare DELETE FROM must still mark — see `install_hook`"
+            "a bare DELETE FROM must still mark — see `impl WriteObserver for Mask`"
         );
     }
 

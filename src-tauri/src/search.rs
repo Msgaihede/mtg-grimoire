@@ -3318,7 +3318,6 @@ mod tests {
     fn a_search_answers_while_an_ingest_holds_the_write_connection() {
         use crate::sync::lock_db_read;
         use std::sync::atomic::AtomicBool;
-        use std::sync::Mutex;
 
         let dir = crate::scratch::path("search-concurrent");
         let _ = std::fs::remove_dir_all(&dir);
@@ -3330,20 +3329,25 @@ mod tests {
         let read = crate::db::open_read(&dir).unwrap();
 
         // **Hooked up, so what these fixtures drive runs with the cross-file fence
-        // armed.** `crate::sync::with_write`'s `debug_assert` reads it, so a command
-        // that committed to both files fails its own test rather than printing a line
-        // nobody reads. The mask rides along because SQLite allows one update hook per
-        // connection, and nothing here looks at it.
+        // armed.** `State::new` installs it, `crate::sync::with_write`'s `debug_assert`
+        // reads it, so a command that committed to both files fails its own test rather
+        // than printing a line nobody reads. The desktop's three observers ride along as
+        // they do in the app, and nothing here looks at them: the wake is a throwaway,
+        // since nothing in this fixture starts `sync_engine::live`.
         let mirror = std::sync::Arc::new(crate::mirror::watch::Mask::default());
-        let fence = std::sync::Arc::new(crate::db::CrossFileFence::new());
-        // A throwaway notifier: nothing in this fixture starts `sync_engine::live`, so it
-        // only has to satisfy the hook's signature.
-        let writes = std::sync::Arc::new(tokio::sync::Notify::new());
-        crate::mirror::watch::install_hook(&write, mirror.clone(), fence.clone(), writes);
+        let changes = std::sync::Arc::new(crate::changes::Changes::new());
         let state = Arc::new(AppState {
-            db: Mutex::new(write),
-            db_read: Mutex::new(read),
-            data_dir: dir.clone(),
+            core: grimoire_core::state::State::new(
+                write,
+                Some(read),
+                dir.clone(),
+                grimoire_core::events::silent(),
+                crate::mirror::watch::observers(
+                    mirror.clone(),
+                    changes.clone(),
+                    Default::default(),
+                ),
+            ),
             syncing: AtomicBool::new(true),
             client: crate::scryfall::Client::new("http://127.0.0.1:1".into()),
             images: crate::images::Cache::new(dir.join("images")),
@@ -3353,8 +3357,7 @@ mod tests {
             mirror,
             mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
             pairing: std::sync::Mutex::new(None),
-            fence,
-            changes: Default::default(),
+            changes,
         });
 
         // Stands in for the ingest, which holds this exact lock for the length of a sync.

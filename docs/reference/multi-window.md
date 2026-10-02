@@ -121,10 +121,13 @@ download emits nothing.
 
 **It rides the existing hook rather than adding one.** SQLite allows exactly one update hook per
 connection, so a second `install_hook` would **replace** the mirror's rather than join it: the
-closure calls `changes.mark(db, table)` beside `marker.note(db)` and the mirror's own `mask.mark`.
-`install_hook_with_changes` is the full form and `install_hook` keeps its signature by delegating
-with a throwaway `Changes`, because almost every one of its callers is a test fixture with no use
-for the mask.
+hook calls `changes.mark(db, table)` after the fence's `note(db)` and before the mirror's own
+`mask.mark`. **Since 2026-10-02 the installer is `grimoire-core`'s** (`hooks::install`) and
+`Changes` is one of three observers the desktop registers with it — `mirror::watch::observers`
+is the list, and the app's write connection is hooked when `desktop::init_state` builds the
+core's `State`. The call order is what it was. `install_hook_with_changes` is that installer on
+a bare connection, and `install_hook` keeps its signature by delegating with a throwaway
+`Changes`, because every one of its callers is a test with no use for the mask.
 
 **The two blind spots, and a command marks by hand for each.**
 

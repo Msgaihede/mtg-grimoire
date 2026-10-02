@@ -166,8 +166,9 @@ pub fn open_read(data_dir: &Path) -> rusqlite::Result<Connection> {
 /// file), and this is what stops the second one being added by somebody who did not know.
 ///
 /// Two atomics and a `fetch_or` inside SQLite's own callback: no allocation, no lock, and
-/// nothing that could call back into the database — the same budget
-/// [`crate::mirror::watch::Mask`] works to, and for the same reason, since they share a hook.
+/// nothing that could call back into the database — the budget every
+/// [`crate::hooks::WriteObserver`] works to, and for the same reason, since they share a hook:
+/// [`crate::hooks::install`] is what puts this on a connection, ahead of the observers.
 ///
 /// # What it cannot see
 ///
@@ -178,8 +179,8 @@ pub fn open_read(data_dir: &Path) -> rusqlite::Result<Connection> {
 /// `oracle_taggings`, `oracle_tag_cards`, `cards_fts_idx` and `cards_fts_config`. **Six are on
 /// the user side** — `muted_tags`, `device_names`, `sync_devices` and `sync_state`, which a
 /// command marks by hand, and `price_snapshots` and `sync_peers`, which only the app writes; the
-/// census and its `sqlite_master` test are [`crate::changes::MARKED_BY_COMMAND`] and
-/// [`crate::changes::WRITTEN_BY_THE_APP`]. Two of the six are synced — `muted_tags` and, since
+/// census and its `sqlite_master` test are the desktop's `changes::MARKED_BY_COMMAND` and
+/// `changes::WRITTEN_BY_THE_APP` — `changes` is one of that host's observers and stays there. Two of the six are synced — `muted_tags` and, since
 /// user schema v31, `device_names` ([`crate::schema::SYNCED_TABLES`]). A transaction whose *only*
 /// corpus write is to one of the first twelve is invisible here, and `image_cache` is the
 /// likeliest candidate in the crate.
