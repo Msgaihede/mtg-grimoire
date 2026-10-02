@@ -94,6 +94,13 @@ and `date('now')` inside the statement that needs them, which is the same on eve
     `cfg(test)` is off while another crate's tests build. Helpers both sides need go in a
     `pub mod fixtures` at the **foot** of the file, below `mod tests`: `scripts/coverage-rust.mjs`
     counts everything from the first column-0 `#[cfg(test)]` down as test code.
+11. ⚠️ **Grep the module for `cfg!(test)` and `#[cfg(not(test))]` as well — a behaviour that
+    switches on `test` goes dark without a compile error.** `image_uri` allowed a loopback host
+    under `cfg!(test)`; moved, it refused, and ten of `src-tauri`'s `images` tests were served
+    the placeholder. Rule 10's gate is the fix, and anything it widens is then something the
+    `testing` feature ships if it leaks — say so beside it. Three `#[cfg(not(test))]` sites wait
+    in modules that have not moved: `bulk_undo.rs`, `sync_engine/entitlement.rs` and
+    `sync_engine/client.rs`.
 
 ## What a moved module left in `src-tauri`
 
@@ -113,8 +120,8 @@ opens a database calls it; what the desktop does after it is logged and left owi
 
 ⚠️ **A new user rung owes its `UNDO_V<N>` in two files while this lasts**: the constant goes in
 `schema::fixtures` here, at the head of every chain in this file's tests — and at the head of
-the one chain that stayed, in `src-tauri/src/schema/mod.rs`'s
-`migrate_the_real_database_to_v29`. That test is `#[ignore]`d, so nothing goes red for it.
+the two chains that stayed in `src-tauri/src/schema/mod.rs`. The v59 conversion test's goes red
+by itself. `migrate_the_real_database_to_v29`'s does not: that test is `#[ignore]`d.
 
 The other direction, once: `sync_meta` holds `K_FTS_REBUILD_PENDING`, which is
 `maintenance`'s flag, because `schema::swap_staging` clears it. `maintenance` re-exports it and
@@ -132,8 +139,18 @@ takes it back when it moves.
 - **The `testing` feature is test scaffolding and nothing a build ships**: `schema::memory_pair`,
   `schema::fixtures`, `sync_engine::capture::fixtures`, `scratch` and `CardRow::from_json`.
   `src-tauri` asks for it under `[dev-dependencies]` only, and resolver 2 leaves that out of
-  every build that is not a test. ⚠️ **Never name it on a host's `[dependencies]` line.**
-  `cargo tree -p mtg-grimoire -e features,normal -i grimoire-core` is the check.
+  every build that is not a test. ⚠️ **Never name it on a host's `[dependencies]` line, never
+  make it a default, never have another feature imply it — because one thing behind it is not
+  scaffolding**: `image_uri::is_allowed_host` lets a loopback host through under it, for the
+  image fetcher's mock server. Two things hold that, and only the second is complete:
+  `platform::fence` sweeps every workspace member's manifest as text (a
+  `[workspace.dependencies]` entry, a renamed dependency and a command-line `--features` all
+  pass it), and CI's `rust` job fails when
+  `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints
+  `feature "testing"`. **A new host owes that step its own package name.**
+- **`clippy --all-targets` and `cargo test` both turn `testing` on for the host's ordinary
+  library too**, so neither notices a non-test use of the scaffolding. `cargo check -p
+  mtg-grimoire --locked` is the build that ships; `npm run verify` and the `rust` job both run it.
 
 ## Commands
 

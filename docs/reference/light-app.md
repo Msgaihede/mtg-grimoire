@@ -440,7 +440,7 @@ import of the same name, so no caller changed.
   ladders and the capture triggers — every step of a launch that may stop it. The desktop's
   `prepare_database` is that call followed by the logged passes, which call `maintenance`,
   `managed_wishlist`, `deck_tokens` and `deck_meta`. **The two halves rejoin to the original
-  131-line body byte for byte**, checked by a script against `main`'s file.
+  130-line body byte for byte**, checked by a script against `main`'s file.
 - `prepare_data_dir` is `split::convert`, then `schema::replace_unreadable_corpus`.
 - `errors::kind_of` names `scryfall::ScryfallError` and waits for the I/O step.
 - **Named `x/mod.rs` rather than `x.rs` on purpose**: with the old path gone, git records
@@ -463,10 +463,17 @@ gates those on `any(test, feature = "testing")` and `src-tauri` asks for the fea
 - ⚠️ **One thing behind that feature is not scaffolding, and the suite found it**:
   `image_uri::is_allowed_host` lets a loopback host through under `cfg!(test)` so the image
   fetcher's tests can use a mock server. Moved, it refused, and ten `images` tests were served
-  the placeholder. It follows the feature now — so **`platform::fence` reads every workspace
-  member's manifest and refuses `testing` outside a `dev-dependencies` table**.
-  `cargo tree -p mtg-grimoire -e features,normal -i grimoire-core` answers `default` and nothing
-  else for the shipped binary.
+  the placeholder. It follows the feature now, which makes it the one thing behind `testing`
+  that would matter in a shipped build. **Two fences**: `platform::fence` sweeps every workspace
+  member's manifest and refuses the feature outside a `dev-dependencies` table — as text, so a
+  `[workspace.dependencies]` entry or a renamed dependency passes it — and CI's `rust` job fails
+  when `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints
+  `feature "testing"`, which no spelling passes. Today it prints `default` and nothing else.
+- **CI stopped compiling the host as it ships, and the review caught it.** `clippy
+  --all-targets` and `cargo test` both build test targets, so both switch `testing` on for the
+  app's ordinary library as well; a non-test use of `memory_pair` would have passed them and
+  first failed in `tauri build`. `cargo check -p mtg-grimoire --locked` is now the last line of
+  `lint:rust` and a step of the `rust` job — 14 to 36 s here, warm.
 
 **`platform/` gained a tick and a pause**, for `db::lock_for` and `lock_background`:
 `clock::Tick` (`Instant` natively, `Date.now()` in a browser) and `pause(Duration) -> bool`
@@ -532,8 +539,9 @@ row above is a debug build answering, not a timing.
 - **`db::lock_for` in a browser answers `BUSY` on its first contended attempt.** Right for one
   thread; whether one write connection in a Worker is the shape at all is step 3's.
 - **A new user rung owes its rewind constant in two files** while the launch tests stay behind:
-  `schema::fixtures` in the core, and the chain in `src-tauri/src/schema/mod.rs`'s
-  `migrate_the_real_database_to_v29`, which is `#[ignore]`d.
+  `schema::fixtures` in the core, and the two chains left in `src-tauri/src/schema/mod.rs` —
+  the v59 conversion test's, which goes red by itself, and
+  `migrate_the_real_database_to_v29`'s, which is `#[ignore]`d and does not.
 - **`scripts/coverage-rust.mjs` was not run**, again. It splits a file at its first column-0
   `#[cfg(test)]`; `schema::memory_pair` carried one and now carries
   `any(test, feature = "testing")`, so the staging functions below it count as shipped code for

@@ -25,9 +25,16 @@ name = "grimoire_core"
 
 [features]
 # **Test scaffolding other crates' tests may reach, and nothing a build ships.** It turns on
-# `schema::memory_pair`, `schema::fixtures` and `scratch` — which this crate's own tests get from
-# `cfg(test)` — for `src-tauri`'s tests, which ask for it under `[dev-dependencies]` only. A host's
-# ordinary dependency line must never name it.
+# `schema::memory_pair`, `schema::fixtures`, `sync_engine::capture::fixtures`, `scratch` and
+# `CardRow::from_json` — which this crate's own tests get from `cfg(test)` — for `src-tauri`'s
+# tests, which ask for it under `[dev-dependencies]` only.
+#
+# ⚠️ **One thing behind it is not scaffolding, and is why a host's ordinary dependency line must
+# never name it**: `image_uri::is_allowed_host` lets a loopback host through under it, so the
+# image fetcher's tests can use a mock server. On in a shipped build, that is an image fetcher
+# that accepts `http://127.0.0.1:…`. `platform::fence` reads the workspace's manifests for it and
+# CI's `rust` job asks `cargo tree`. Never make it a default feature, and never have another
+# feature imply it.
 testing = []
 
 [dependencies]

@@ -20,7 +20,7 @@
     "mobile:tauri": "tauri dev --config src-tauri/tauri.light.conf.json",
     "mobile:build": "tsc && vite build --config vite.mobile.config.ts",
     "lint": "eslint . --max-warnings 0",
-    "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core --check && cargo clippy --workspace --all-targets --locked -- -D warnings",
+    "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo check -p mtg-grimoire --locked",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage --testTimeout=30000",

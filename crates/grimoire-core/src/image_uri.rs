@@ -87,8 +87,12 @@ pub fn is_fetchable(uri: &str) -> bool {
 /// and its tests are still `src-tauri`'s, and a dependency's `cfg(test)` is off while another
 /// crate's tests build — with `cfg!(test)` alone every one of those fetch tests was served the
 /// placeholder. So the widening follows the feature that crate asks for under
-/// `[dev-dependencies]`, and `platform::fence` reads every workspace manifest to hold that no
-/// build but a test ever turns it on.
+/// `[dev-dependencies]`. **That makes this the one thing behind `testing` that is not
+/// scaffolding**: a host that named the feature on its ordinary dependency line would ship an
+/// image fetcher that accepts a loopback URI. Two things hold that it does not —
+/// `platform::fence` sweeps every workspace member's manifest, as text, and CI's `rust` job
+/// asks the resolver itself (`cargo tree -e features,normal,build`), which sees the spellings
+/// a text sweep cannot.
 pub fn is_allowed_host(uri: &str) -> bool {
     is_image_host(uri) || (cfg!(any(test, feature = "testing")) && is_loopback(uri))
 }

@@ -263,6 +263,33 @@ jobs:
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
+      # **The host as it ships, which nothing else in this job compiles** (2026-10-02). The
+      # step above and the one below both build test targets, and `src-tauri` asks for
+      # `grimoire-core`'s `testing` feature under `[dev-dependencies]` — so in both, the
+      # core's test scaffolding is switched on for the app's ordinary library too, and a
+      # non-test use of `schema::memory_pair` or `scratch::path` would pass them and first
+      # fail in `tauri build`, on a release tag. This is the build with no dev-dependencies
+      # in it.
+      - name: cargo check (the shipped feature set)
+        run: cargo check -p mtg-grimoire --locked
+
+      # **And the resolver's own answer to "is `testing` on in that build"**, because one thing
+      # behind the feature is not scaffolding: `image_uri::is_allowed_host` lets a loopback
+      # host through under it, for the image fetcher's mock server. `platform::fence` reads
+      # the workspace's manifests for the feature as text and several spellings pass a text
+      # sweep — a `[workspace.dependencies]` entry, a renamed dependency, a default feature
+      # that implies it. `cargo tree` sees them all.
+      - name: The shipped build links the core without its test scaffolding
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree=$(cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core --locked)
+          echo "$tree"
+          if echo "$tree" | grep -q 'feature "testing"'; then
+            echo "grimoire-core's 'testing' feature is on in a build that is not a test" >&2
+            exit 1
+          fi
+
       - name: cargo test
         run: cargo test --workspace --locked
 

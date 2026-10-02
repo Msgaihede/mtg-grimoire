@@ -173,6 +173,18 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `card-scanner`, per the bullet above.
   **`npm run verify` runs the same two as `lint:rust`** since 2026-09-27, after at least seven
   `style: cargo fmt` catch-up commits in eight weeks — CI ran both and `verify` ran neither.
+- **The `rust` job also compiles the host as it ships, in two steps after clippy**
+  (2026-10-02). `clippy --all-targets` and `cargo test` both build test targets, and
+  `src-tauri` asks for `grimoire-core`'s `testing` feature under `[dev-dependencies]` — so in
+  both, the core's test scaffolding is on for the app's ordinary library as well, and a
+  non-test use of it would pass them and first fail in `tauri build` on a release tag.
+  `cargo check -p mtg-grimoire --locked` is the build with no dev-dependencies in it, and
+  `npm run verify` runs the same line at the end of `lint:rust`. The step after it fails when
+  `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints
+  `feature "testing"`: one thing behind that feature is not scaffolding — the image fetcher
+  accepts a loopback host under it — and the resolver sees every spelling a text sweep of the
+  manifests cannot. **`release.yml` has neither step**; it builds what `main` holds, and
+  `ci-ok` gates `main`.
 
 ## `release.yml`
 

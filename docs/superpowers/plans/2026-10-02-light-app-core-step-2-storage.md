@@ -147,7 +147,7 @@ What no moved test exercises and a reader would notice first:
 - [x] `memory_pair` and the cross-crate helpers (`seed_card`, `deck`, `category`, and whatever the stay-behind tests turn out to need) gated `any(test, feature = "testing")` in a `schema::fixtures` module the core's own tests import
 - [x] `pub(crate)` becomes `pub` for each of the eleven items `src-tauri` still names; the rest stay
 - [x] `src-tauri/src/schema/mod.rs`: the glob re-export, `prepare_database`, `prepare_data_dir`, and a `tests` module holding the seventeen stay-behind tests and the re-exported fixtures
-- [x] **Diff the cut**: `bring_to_head`'s body followed by the remainder's is the original `prepare_database` body, statement for statement — checked by concatenating the two and comparing against `git show fb290538:src-tauri/src/schema.rs`: byte for byte, 131 lines
+- [x] **Diff the cut**: `bring_to_head`'s body followed by the remainder's is the original `prepare_database` body, statement for statement — checked by concatenating the two and comparing against `git show fb290538:src-tauri/src/schema.rs`: byte for byte, 130 lines
 - [x] `errors.rs`: `kind_of` and `every_scryfall_failure_classifies` stay in a `src-tauri` remainder that re-exports the rest
 - [x] `capture.rs`: the three stay-behind tests go to `src-tauri/src/sync_engine/capture_tests.rs`, with the helpers they use exposed through the feature
 - [x] The core's `lib.rs` module map and crate doc; `sync_engine/mod.rs` on both sides
@@ -176,7 +176,8 @@ What no moved test exercises and a reader would notice first:
 - [x] `cargo test --workspace`; the test-attribute count against the baseline above
 - [x] `npm run build`, `npm run lint`, `npm run test:run`. **The card-scanner suite was not run here**: nothing under `crates/card-scanner` changed, and CI's `rust` job runs it
 - [x] The core for `wasm32-unknown-unknown`, build and clippy, with `CC_wasm32_unknown_unknown` pointed at `C:\Program Files\LLVM\bin\clang.exe`
-- [x] `cargo tree -p mtg-grimoire -e features -i grimoire-core` without dev-dependencies: no `testing`
+- [x] `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core`: no `testing`
+- [x] **After review**: `clippy --all-targets` and `cargo test` both turn `testing` on for the host's ordinary library, so neither compiled the host as it ships. `cargo check -p mtg-grimoire --locked` joins `lint:rust` and the `rust` job, and the job asks `cargo tree` the question above on every run
 - [x] **The live pass — which became an A/B, because the main checkout's data was at user schema v46.** A reopen that changes nothing was not on offer: this build owes that file thirteen rungs. So two byte copies, one launched under a binary built from `main` at `fb290538` and one under this branch's, each stopped 20 s after reaching v59, compared table by table and row by row; then `tauri dev` on a third copy, driven over CDP, with the launch's card sync left to finish. [light-app.md](../../reference/light-app.md) §6.2 has every figure
 - [ ] PR linked to #761, auto-merge armed; `ci-ok` green, including `core` on both targets — the Android compile runs only there
 
