@@ -396,7 +396,7 @@ src-tauri/src/<module>/mod.rs` counts them:
 | `schema` | 7 of its tests | `split`, through that function or a converted fixture | never: `split` stays |
 | `ingest` (`src/ingest/mod.rs`) | 1 of its tests | `split::convert`, which builds that test's database | never: `split` stays |
 | `reset` | 1 test, `the_cache_sweep_unlinks_rather_than_follows` | a platform: it makes a symlink with a Windows call behind `#[cfg(windows)]`, which the fence keeps out of this crate's tests too | never |
-| `sync` (`src/sync/mod.rs`) | `AppState` and its `Deref`; `lock_db`, `lock_db_read`, `lock_plain` | the mirror's fields, the change mask, the pending pairing | never |
+| `sync` (`src/sync/mod.rs`) | `AppState` and its `Deref`; `lock_db`, `lock_db_read`, `lock_plain` | the mirror's fields and the change mask (the pending pairing offer was the third, until it moved to `State` with the sync step) | never |
 | `index` (`src/index/mod.rs`, `src/index/facets/mod.rs`) | the `facet_cards` command, and no test: every one moved, onto a fixture this crate builds at head | a window | never |
 | `images` (`src/images/mod.rs`) | `serve`, `respond`, `fail`, `not_ready`, `IMAGE_MAX_AGE`; `spawn_upkeep`; 7 tests | `tauri::http`, an `AppHandle`; a thread that sleeps | never: how a picture reaches a page, and when to wake for a pass, are a host's |
 | `sync_engine` (`src/sync_engine/mod.rs`) | `live`, the connection manager — its socket, its backoff timers, the exit push — and its tests | `tokio` tasks, a WebSocket and an `AppHandle` it emits `sync:live` and `sync:applied` through | never: how a host keeps a socket open is the host's; `schedule` is the half that decides, and it is here |

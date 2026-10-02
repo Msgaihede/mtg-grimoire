@@ -171,18 +171,41 @@ impl State {
 - [x] Every Rust gate and the frontend's build, lint and suite. **No A/B upgrade check against `main`'s binary**: nothing here touches a schema rung, a launch pass or a file, so there is no upgrade to compare.
 - [x] A live pass in `tauri dev` **against a mock relay on the loopback only** — never Markus's group: the dev copy was checked to be in no group and to hold no grant, its `relay_url` pointed at `127.0.0.1`, and its files copied aside and put back. A claim, a trip, a write and a second press during a slow trip, a departure during a slow trip, and the pairing commands. `docs/reference/sync.md` has the table.
 - [x] A fresh reviewer subagent (Opus, read-only) on the branch's diff. **No must-fix.** What it found and what was done: the departure test above; a press could wait two bounds rather than one (`lane_within` now shares one); a stretch waited invisibly to an ingest's batch loops (`db::lock_waiting`, which registers as an ask); the census missed a connection spelled any other way, and `impl` methods (it reads both now, and still counts 31 on `main`); and eleven passages and comments the step had made false.
-- [ ] Docs: `docs/reference/sync.md`, `docs/reference/light-app.md` §6.8, `src-tauri/CLAUDE.md` (*Hard rules — pairing*, *— sync*: the leave bullet, the `with_write` + `block_on` sentences), `crates/grimoire-core/CLAUDE.md`, the spec's §2.8 note, the spike's §8.
-- [ ] PR linked to #761, auto-merge and auto-fix; #761's 6a line.
+- [x] Docs: `docs/reference/sync.md`, `docs/reference/light-app.md` §6.8, `src-tauri/CLAUDE.md` (*Hard rules — pairing*, *— sync*: the leave bullet, the `with_write` + `block_on` sentences), `crates/grimoire-core/CLAUDE.md`, the spec's §2.8 note, the spike's §8.
+- [x] PR linked to #761, auto-merge and auto-fix; #761's 6a line. **Merged 2026-10-03 as #771.**
 
 ---
 
 # Part 6b — the move
 
-Branch `claude/light-app-core-step-6b`, from `main` once 6a has merged. Its tasks are written out when 6a lands, because what 6a's review changes decides them; what is known now:
+Branch `claude/light-app-core-step-6b`, from 6a's branch, with `main` merged in once 6a had. Done when the eight files compile in the core for all three targets, `src-tauri` keeps only `live.rs` and the wrappers, and every test the modules had passes where it now lives.
 
-- **`platform::http`** gains `Client::post`, `Request::body`, `Response::text`, and a per-request deadline honoured where the host has no socket to bound (`reqwest`'s wasm `timeout`). Two relay clients, as today: the sync client's (30 s per read) and the entitlement's (10 s).
-- **`platform`** gains a device's own name (`COMPUTERNAME` / `HOSTNAME` natively; a word in a browser) for `identity::mint_name`, and `pairing::now_ms` becomes `platform::clock::now_ms`.
-- **The test client** — one `reqwest::Client` memoised in the app and built per call in a test — is gated on the core's `testing` feature rather than on `cfg(test)`, which goes dark when another crate's tests link the core.
-- **Moved by `scripts/core-step-6b.mjs`**: `sync_engine/{client, entitlement, wire, schedule}`, `sync_pair/{identity, pairing}`, and the plain functions of `sync_engine/commands` (`read_status`, `review_count`, `read_review`, `supporter_status`, `entitled`, `begin_authorize`, `ensure_group`, the DTOs). `State` gains the pending offer.
-- **Stays**: `live.rs`'s connection manager and every `#[tauri::command]` wrapper; `share::publish`.
-- **Fences that read these files by path** move with them: `ipc.test.ts`'s `?raw` imports, the Rust tests that read `relay/src/*.ts` and `src/lib/*.json`.
+### Task 8: `platform` grows what the move needs
+
+**Files:** `crates/grimoire-core/src/platform/{http, device, sync, mod}.rs`
+
+- [x] `http`: `Client::post`, `Client::deadline(Duration)` — `reqwest`'s wasm `timeout` in a browser, **not applied natively**, where the connect and read bounds already end a request that stops answering — `Request::body(String)`, `Response::text()`, `Error::is_decode()`.
+- [x] `device::name()`: `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere; `None` in a browser, where `identity::mint_name` falls back to its word.
+- [x] `sync::Shared<T>` and its `Guard` — `Lock` with a value behind it, for the pending offer; `a_shared_value_is_changed_by_one_holder_at_a_time`.
+- [x] Commit: `feat(core): platform grows a POST, a text body, a browser's request deadline, a device's name and a shared value`.
+
+### Task 9: the move, by script
+
+**Files:** `scripts/core-step-6b.mjs`; the eight files; both module maps; `crates/grimoire-core/src/state.rs` (`State.pairing`); `src-tauri/src/sync/mod.rs` and the four places that build an `AppState`; both manifests; `src/lib/ipc.test.ts`; `scripts/core-step-6-census.mjs`; `crates/grimoire-core/src/platform/fence.rs`
+
+- [x] **Whole moves** (`git mv`): `sync_engine/{client.rs, client/tests.rs, entitlement.rs, wire.rs, schedule.rs}`, `sync_pair/{identity.rs, pairing.rs}`. **Split**: `sync_engine/commands.rs` — its reads to the core, its wrappers to `src-tauri/src/sync_engine/commands/mod.rs`; `pairing.rs`'s wrappers to `src-tauri/src/sync_pair/pairing/mod.rs`, each over a glob re-export.
+- [x] **Rewritten as it moves** (rule 15): every `reqwest` call onto `platform::http`, with `REQUEST_DEADLINE` — **120 s** for the client, whose pull is unpaged, **30 s** for the entitlement; `kind_of(&http::Error)`; `.status()` a `u16`; `include_str!` one directory deeper; `mint_name` onto `platform::device::name()`; pairing's `now_ms` onto `platform::clock` (23 test sites). **Nothing a request sends changed** — the modules' own `httpmock` tests moved unedited.
+- [x] Each `http()`'s fresh-client-per-call arm follows `any(test, feature = "testing")` (rule 11).
+- [x] `State.pairing: platform::sync::Shared<Option<Pending>>`; `AppState.pairing` gone; `sync_pairing_begin` runs on `sync::on_a_worker` and takes it there. `leave` and what the wrappers call made `pub`.
+- [x] `base64` moves to the core's manifest (one edge in `Cargo.lock`); the core's dev `tokio` gains `test-util`; the fence pins `src/sync_engine/client/tests.rs`; `ipc.test.ts` reads the moved client and joins both halves of the commands; the census reads full paths; `deck_tokens`' last test in `src-tauri` comes home.
+- [x] `cargo test --workspace`: core **2 954** passed and 5 ignored, desktop **460** and 1 — together one more than 6a's 3 413, the `Shared` test; nothing lost.
+- [x] **The WASM compile was red, and only it**: each `nothing_is_held_across_a_request` bounded its futures by `Send`, and a browser's request is a JavaScript promise that never is. **`platform::Sendable`** — `Send` natively, anything in a browser — is the bound now; a mutation (an `Rc` handed to the fence) is still refused natively.
+- [x] Commit: `refactor(core): the sync client, the entitlement and pairing move to the core`.
+
+### Task 10: verify, record, ship
+
+- [x] Every Rust gate, both clippies, the WASM build, `cargo check --locked`, no `testing` in the shipped tree; the frontend's build, lint and suite.
+- [x] The live pass of Task 7 again, on the moved code, against the loopback mock: a claim 12 ms, a trip 21 ms, a write during an 8 s trip 7 ms, a second press `BUSY` at 5 013 ms, the socket's own trip pushing the write, Leave waiting 6 428 ms behind the socket's trip and clearing, the pairing commands. The dev copy checked in no group before and after, and put back.
+- [ ] A fresh reviewer subagent (Opus, read-only) on the branch's diff.
+- [x] Docs: `crates/grimoire-core/CLAUDE.md` (the intro, `platform`'s table and bullets, the state's fields, the sync section, rule 11, the table of what stayed), `src-tauri/CLAUDE.md` (*pairing* and *sync*: where the files are, the pending offer, the fence's bound), `docs/reference/sync.md` (*Moved to the core*), `light-app.md` §6.9, the spec's §2.8 note, the root `CLAUDE.md` row.
+- [ ] PR linked to #761, auto-merge and auto-fix; #761's 6b line, and Step 6 ticked when it merges.

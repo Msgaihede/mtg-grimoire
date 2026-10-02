@@ -367,10 +367,13 @@ reaches the database a *stretch* at a time, and one async lock on `State`, the *
 sync operation running at a time. He chose that shape over a rewrite into plan / request /
 commit functions and over a separate browser trip; *Leave group* waits for the lane as it waited
 for the connection; and the step is two pull requests — restate in place, then move.
-**The first is built** (2026-10-03): none of the thirty-one holds a connection across a request,
-a press during a sync is still told the database is busy, and a reader's write during one is
-not. [The step's plan](../plans/2026-10-02-light-app-core-step-6-sync.md) has the tasks, and what
-a test that lands a write behind every stretch of a trip found.
+**The first merged** (2026-10-03, #771): none of the thirty-one holds a connection across a
+request, a press during a sync is still told the database is busy, and a reader's write during
+one is not. **The second is built the same day**: the client, the entitlement, `wire`,
+`schedule`, `identity`, pairing and the sync panel's reads are the core's, every relay request
+goes through `platform::http` with a deadline a browser honours, and the pending pairing offer
+is a field of `State`. Live sync's socket stays the desktop's. [The step's plan](../plans/2026-10-02-light-app-core-step-6-sync.md)
+has the tasks, and what a test that lands a write behind every stretch of a trip found.
 
 ### 2.9 Decided here, and deliberately left to the extraction's own plan
 

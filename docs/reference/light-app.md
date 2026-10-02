@@ -271,14 +271,15 @@ The engine is moving out of `src-tauri` into `crates/grimoire-core`, a crate wit
 dependency that the desktop, the Android host and the WASM host will all link (spec §2). The
 rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md);
 this section is what each step built and measured. **Nothing here runs on a phone or in a
-browser yet**: what exists is a crate the desktop links, compiled for two more targets. Five
+browser yet**: what exists is a crate the desktop links, compiled for two more targets. Six
 steps of seven have landed — the leaves, the storage layer, the state a host holds over it, and
 the domain: the decks, the collection, the wishlist and the search — and the whole of the
 fifth, in three parts: a request, a timer, a file, a lock and background work under
 `platform/`; the Scryfall client, the ingest and the reconciler over them; the card sync and
-the facet index that drive those; and the three feeds and the image cache. **The sixth has begun**:
-the sync client, the entitlement and pairing reach the database a stretch at a time, on a lane,
-and hold nothing across a request — restated where they are, ahead of their move.
+the facet index that drive those; and the three feeds and the image cache. **The sixth came in
+two**: the sync client, the entitlement and pairing were restated to reach the database a
+stretch at a time, on a lane, holding nothing across a request — and then moved. What is left
+is the seventh, the scanner's session.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -1490,8 +1491,65 @@ launch pass or a file. What a launch does is unchanged.
   over-count when the two share a second or the emitter's clock runs ahead; that is no wider
   than the bug already was.
 - **The lane's wait ends because every request does, and in a browser none has a deadline.**
-  The second part owes `platform::http` one.
+  The second part owes `platform::http` one. *(It has one: §6.9.)*
 - **`share::publish` still holds the connection for a whole publish.** It takes the lane first
   now, so it cannot interleave with a sync; a reader's write during an upload still waits.
 - **The second part**: `client`, `entitlement`, `wire`, `schedule`, `identity`, `pairing` and
-  the commands' plain functions move, with `platform::http`'s `POST`.
+  the commands' plain functions move, with `platform::http`'s `POST`. *(§6.9.)*
+
+### 6.9 Step 6, second part — the sync client, the entitlement and pairing move (2026-10-03)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-6-sync.md), Tasks 8 to 10.
+Measured on Windows 11, debug builds, on the branch's own tree over `main` at `dfce2194` (6a's
+merge).
+
+**Moved by `scripts/core-step-6b.mjs`**, the I/O step's scripts with another list:
+`sync_engine::{client, entitlement, wire, schedule}` and `sync_pair::{identity, pairing}` whole,
+every test of theirs with them, and `sync_engine::commands` split — the sync panel's reads to the
+core, the wrappers to `src-tauri/src/sync_engine/commands/mod.rs` over a glob re-export, as
+pairing's went to `src-tauri/src/sync_pair/pairing/mod.rs`. **`src-tauri` keeps `live.rs`**, the
+connection manager — a socket, `tokio` timers and two events emitted through a window — and is
+meant to: how a host keeps a socket open is the host's, and `schedule`, the half that decides
+when, is the core's. Git records all eight as renames.
+
+| | Before | Now |
+| --- | --- | --- |
+| A relay request | `reqwest` | `platform::http`'s new `post`, `body` and `text` |
+| Its bound in a browser | none | `Client::deadline`: **120 s** for the client, whose pull is unpaged, **30 s** for the entitlement — a whole-request bound, because `fetch` has no connect phase and no per-read one. Natively it is not applied: the connect and read bounds already end a request that stops answering |
+| The pending pairing offer | `AppState.pairing` | `State.pairing`, a `platform::sync::Shared` |
+| A device's default name | the environment, read in `identity` | `platform::device::name()`, `None` in a browser |
+| The relay clients' per-call test client | `cfg(test)` | `any(test, feature = "testing")`, because the desktop's sync tests link the core with the feature on and a dependency's `cfg(test)` is off |
+
+**Nothing a request sends changed**: the modules' own mock-relay tests moved unedited and pass
+where they now live. Core **2 954** passed and 5 ignored, desktop **460** and 1 — one more than
+6a's 3 413 between them, the `Shared` test, and none lost; clippy for the workspace and for
+`wasm32`; the WASM build; `cargo check --locked`; no `testing` in the shipped tree; the
+frontend's build, lint and suite.
+
+**What the move found: the fence that holds 6a's rule failed the WASM compile.** Each
+`nothing_is_held_across_a_request` handed its entry points' futures to `fn sendable<T: Send>`,
+and in a browser no future that awaits a request is `Send` — a `reqwest` response there is a
+JavaScript promise. Every native gate was green; the WASM clippy was red at every entry point.
+**`platform::Sendable`** is the bound now: `Send` natively, so the desktop's question is the one
+it was, and anything in a browser, where there is no other thread to send to. A mutation — an
+`Rc` handed to the fence — is still refused natively.
+
+**Driven in `tauri dev` again, against the loopback mock** — the dev copy in no group before and
+after, its files put back: a claim 12 ms; a trip 21 ms; a sticky note written during an 8 s trip
+**7 ms**; a second Sync now during it `BUSY` after 5 013 ms; the slow trip 8 014 ms, then the
+socket's own trip pushing the note (641 B); Leave group behind the socket's trip, waiting
+6 428 ms and then clearing the group and the grant; the pairing commands as before.
+
+**No upgrade check against `main`'s binary**, for 6a's reason: no schema rung, launch pass or
+file is touched.
+
+**Open after this step:**
+
+- **No browser has run a relay request.** The two deadlines are reasoned, not measured; the web
+  host's phase measures what a pull costs a Worker and starts from them.
+- **A web host needs its own socket.** `live.rs` is `tokio` tasks and `tokio-tungstenite`; the
+  browser's half — a `WebSocket`, or the polling spec §7 names — is phase 6's.
+- **The same-second baseline skip in `apply`** (§6.8) is being fixed on its own.
+- **`share::publish` still holds the connection for a whole publish** (§6.8), and stays the
+  desktop's.
+- **Step 7**: the scanner's session glue — and then the command table.

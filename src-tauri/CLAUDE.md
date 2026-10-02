@@ -1625,9 +1625,15 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
 spec §7.5 and §7.6. Four layers — `crypto`, `identity`, `invite`, `pairing` — and **the commands
 are not counted here**: this line said *nine* while there were eight, and `sync_group_leave` has
 since made nine right by accident. A count is a fact about a tree and every open branch has a
-different one; `grep '#\[tauri::command\]' src/sync_pair/pairing.rs` answers it. The whole record,
+different one; `grep '#\[tauri::command\]' src/sync_pair/pairing/mod.rs` answers it. The whole record,
 with the arithmetic behind the 105-character code and the crate pins, is
 [sync.md](../docs/reference/sync.md).
+
+**All four layers are `grimoire-core`'s since 2026-10-03** (the light app's step 6, second part):
+`crates/grimoire-core/src/sync_pair/`, re-exported here at the paths they always had, and every
+rule below binds them there. What is still here is the commands, in
+`src/sync_pair/pairing/mod.rs` over `pub use grimoire_core::sync_pair::pairing::*;` — and the
+departure they call is the core's `pairing::leave(&State)`.
 
 - **The six-digit comparison is not optional and there is no path around it.** `crypto::sas` is
   computed over the *derived* key and both public keys **in role order**, so a relay that
@@ -1801,7 +1807,9 @@ with the arithmetic behind the 105-character code and the crate pins, is
   *empty* manifest, so every device in it reads `blob: null, devices: []`. `client::check_keys`
   compares epochs first and does nothing on an equal one; without that guard every device in a
   healthy group concludes it was removed and dissolves the group on its next sync, all at once.
-- **The pending offer lives in `AppState.pairing` and never in SQLite.** An offer that survived
+- **The pending offer lives in the core's `State.pairing` and never in SQLite** (it was
+  `AppState.pairing` until the light app's step 6 moved pairing to the core; it is a
+  `platform::sync::Shared`, an async lock, on every host). An offer that survived
   a restart would be an invite a reader printed last month still being accepted today; it
   outlives the webview, which is what a reader who opens Settings twice needs, and dies with the
   process, which is what makes the token one-time in fact. It holds the derived pair key, which
@@ -1833,11 +1841,22 @@ A stack of layers and a handful of `#[tauri::command]`s — **counted here until
 layers and five commands", which the hosted relay had already made wrong by three**; a count is a
 fact about a tree and every open branch has a different one, so it is not written down. The whole
 record, with every measurement, is
-[sync.md](../docs/reference/sync.md). The binding rules:
+[sync.md](../docs/reference/sync.md).
+
+**Most of `sync_engine/` is `grimoire-core`'s since 2026-10-03** (the light app's step 6, second
+part): `apply`, `baseline`, `capture`, `hlc` and `merge` had gone in the domain step, and the
+client, the entitlement, `wire`, `schedule` and the sync panel's reads (`commands`) followed —
+files under `crates/grimoire-core/src/sync_engine/`, re-exported here at the paths they always
+had, and every rule below binds them there. **What is still here is `live.rs`**, the connection
+manager — its socket, its timers, its `sync:live` and `sync:applied` events, for good — and the
+commands, in `src/sync_engine/commands/mod.rs` over a glob re-export. **A relay request goes
+through `platform::http`** now, with a whole-request `deadline` a browser honours (120 s for the
+client, 30 s for the entitlement) and natively the connect and read bounds it always had. The
+binding rules:
 
 - ⚠️ **A sync operation reaches the database a stretch at a time, on a lane, and holds nothing
-  across a request** (2026-10-03, the light app's step 6). Every `async fn` in `client.rs`,
-  `entitlement.rs` and `pairing.rs` takes `db: &impl Store` (`grimoire_core::state`) and reads or
+  across a request** (2026-10-03, the light app's step 6). Every `async fn` in the core's
+  `client.rs`, `entitlement.rs` and `pairing.rs` takes `db: &impl Store` (`grimoire_core::state`) and reads or
   writes inside `db.with(|conn| …)`; a request is made between two stretches. It used to be
   `with_write(&state, |conn| runtime.block_on(run_once(conn)))` — the write connection held for a
   whole network round trip, every other writer told `db::BUSY` — and a browser has no thread to
@@ -1867,7 +1886,9 @@ record, with every measurement, is
     request any more.
   - **Three fences**: each entry point's future is checked `Send` by a function that is never
     called (`nothing_is_held_across_a_request`, in each of the three files) — a `MutexGuard`
-    across an `.await` is not; `clippy::await_holding_lock` refuses the same thing everywhere,
+    across an `.await` is not. It bounds by `platform::Sendable`, which is `Send` natively and
+    anything in a browser, where no request's future is `Send` and a `Send` bound fails the WASM
+    compile; `clippy::await_holding_lock` refuses the same thing everywhere,
     tests included; and `scripts/core-step-6-census.test.mjs` holds the eight files at no function
     that takes a connection and awaits with it, and none that calls `block_on`.
   A new sync command is `sync::on_a_worker(|| async { let lane = state.lane_for_press().await?;
