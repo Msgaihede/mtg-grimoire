@@ -14,6 +14,10 @@
 //! **[`with_write`] is the one definition of a user-facing write**, and it is here since the
 //! extraction's domain step brought the managed wishlist and the token reconcile its body calls.
 //!
+//! **[`Store`] and [`Lane`] are how a sync operation reaches the database** — a stretch at a
+//! time, with nothing held across a request, and one operation at a time. They are here since
+//! the sync step, ahead of the modules that use them, because the lane is a field of the state.
+//!
 //! **A host opens the connections; this does not.** Bringing the pair to head and running the
 //! launch's logged passes is [`crate::schema::prepare_database`], which is this crate's too —
 //! but the desktop converts a pre-27 single file first, with a module only it has, so what a
@@ -24,11 +28,14 @@ use crate::db::{self, CrossFileFence};
 use crate::events::EventSink;
 use crate::hooks::{self, WriteObserver};
 use crate::index::lifecycle::IndexSlot;
+use crate::platform::sync::{Held, Lock};
+use crate::platform::timer;
 use crate::scryfall;
 use rusqlite::Connection;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, Mutex, MutexGuard, RwLock};
+use std::time::Duration;
 
 /// The connections and what rides them.
 ///
@@ -70,6 +77,9 @@ pub struct State {
     /// The host's observers, kept for the one thing the hooks cannot tell them — see
     /// [`State::corpus_replaced`]. The hooks hold their own handles on the same list.
     observers: Vec<Arc<dyn WriteObserver>>,
+    /// One sync operation at a time — see [`State::lane`]. Private: what holding it buys is a
+    /// [`Lane`], and nothing else may be made of it.
+    lane: Lock,
 }
 
 impl State {
@@ -116,7 +126,49 @@ impl State {
             images,
             index: RwLock::default(),
             observers,
+            lane: Lock::new(),
         }
+    }
+
+    /// Wait for the lane: this operation's turn to sync, however long the one in flight takes.
+    ///
+    /// For an operation that owns its own wait — a background trip, the token the live socket
+    /// connects with, and **a departure**, which is the reader's instruction that this device be
+    /// out of its group and is promised always to work. First come, first served
+    /// ([`crate::platform::sync`]).
+    ///
+    /// **What makes the wait end is that every operation on the lane does**: each request one
+    /// makes is bounded, so the holder lets go in bounded time with the network gone.
+    pub async fn lane(&self) -> Lane<'_> {
+        Lane {
+            state: self,
+            _held: self.lane.lock().await,
+        }
+    }
+
+    /// The lane for a **press**: its turn within [`db::WRITE_LOCK_WAIT`], or [`db::BUSY`].
+    ///
+    /// What a press during a sync has always been told. A reader can press again, and five
+    /// seconds of "busy" is kinder than a button that freezes for the length of somebody else's
+    /// round trip — [`with_write`]'s own argument, one lock over.
+    pub async fn lane_for_press(&self) -> Result<Lane<'_>, String> {
+        self.lane_within(db::WRITE_LOCK_WAIT).await
+    }
+
+    /// [`State::lane_for_press`] with the bound as an argument, which a test passes short.
+    ///
+    /// **The connection is asked for inside the same bound, once, before the operation
+    /// starts** — the other half of what [`db::BUSY`] has always meant. The operation's own
+    /// stretches wait ([`Lane`]'s `with`), so this is the one place a press hears that the
+    /// connection is busy with something that is not a sync.
+    pub async fn lane_within(&self, bound: Duration) -> Result<Lane<'_>, String> {
+        let Some(lane) = timer::timeout(bound, self.lane()).await else {
+            return Err(db::BUSY.to_owned());
+        };
+        if db::lock_for(&self.db, bound).is_none() {
+            return Err(db::BUSY.to_owned());
+        }
+        Ok(lane)
     }
 
     /// Tell every observer the corpus was just replaced — [`WriteObserver::corpus_replaced`].
@@ -203,35 +255,35 @@ pub fn with_write<T>(
 }
 
 /// [`with_write`] that **waits for the write connection as long as it takes** instead of
-/// answering [`crate::db::BUSY`]. ⚠️ **The one sanctioned unbounded wait on [`State::db`], and a
-/// departure is the only press that earns it.**
+/// answering [`crate::db::BUSY`]. ⚠️ **The one sanctioned unbounded wait on [`State::db`], and
+/// what earns it is a stretch of a sync operation** — [`Lane`]'s `with` is its one caller.
 ///
-/// Every other press is optional: the reader can press again, and a five-second "busy" is kinder
-/// than a button that freezes for as long as whatever holds the connection. **Leaving a group is
-/// not optional in that sense** — `pairing::sync_group_leave` is the reader's instruction that
-/// this device be out of its group, the design promises that press always works (and
-/// `SyncPanel`'s `LEAVE_WARNING` names an unreachable relay as its only cost), and a sync trip
-/// (`sync_now`, `sync_engine::live`'s `trip`) holds this connection across its whole network round
-/// trip — so under [`with_write`] a Leave pressed during a slow trip failed with "the database is
-/// busy" (issue #546, item 7), which is a promise with a condition nobody wrote down.
+/// Every press is optional at its *start*: the reader can press again, and a five-second "busy"
+/// is kinder than a button that freezes for as long as whatever holds the connection —
+/// [`State::lane_for_press`] is where a sync operation asks that way. **A stretch in the middle
+/// of one is not optional.** It may be recording an answer the relay will not give twice — the
+/// grant behind a claim code that is now spent, the group a joining device has just been handed
+/// the key to, a rotation the relay has accepted — and turned away with "busy" it would leave
+/// the relay holding something this device never wrote down.
 ///
-/// **What makes the wait safe to have is that a trip always ends**: every relay request carries a
-/// 10 s connect and 30 s read timeout (`sync_engine::client`'s client, and `entitlement`'s at
-/// 10 s/10 s), so the holder gives the connection back in bounded time even with the network gone.
-/// **What makes it safe to *call*** is [`with_write`]'s reentrancy rule, which is sharper here:
-/// that one spends five seconds and answers BUSY against its own thread, where a same-thread call
-/// to this one **deadlocks** (std's `Mutex` may also panic on it). Nothing may call it holding a
-/// guard on `state.db`.
+/// **It was a departure's alone until the sync step** (issue #546, item 7): a trip held this
+/// connection across its whole network round trip, and a Leave pressed during a slow one failed
+/// with "the database is busy" under [`with_write`]. A trip holds the *lane* across its requests
+/// now, and the connection only for a stretch; a departure waits for the lane
+/// ([`State::lane`]) and its stretches wait here like any other.
+///
+/// **What makes the wait safe to have is that nothing holds the connection across a request any
+/// more**: what a stretch waits behind is local work — another stretch, a reader's write, one
+/// batch of an ingest. **What makes it safe to *call*** is [`with_write`]'s reentrancy rule,
+/// which is sharper here: that one spends five seconds and answers BUSY against its own thread,
+/// where a same-thread call to this one **deadlocks** (std's `Mutex` may also panic on it).
+/// Nothing may call it holding a guard on `state.db` — a caller that already holds the
+/// connection hands it to [`Lane::in_hand`] instead.
 ///
 /// **Everything else is [`with_write`]'s, because it is [`with_write`]'s body** — the managed
 /// wishlists armed and settled, the token reconcile, and the cross-file fence — and the lock is
 /// [`crate::db::lock_blocking`], which recovers a poisoned mutex exactly as
 /// [`crate::db::lock_for`] does.
-///
-/// ⚠️ **`pairing::sync_device_revoke` deliberately stays on [`with_write`].** A removal must
-/// reach the relay to mean anything and is refused without it, and its first step is a round trip
-/// of its own — so waiting out one trip to start another buys a reader nothing a second press
-/// would not, and freezes the button for the length of both.
 pub fn with_write_waiting<T>(
     state: &State,
     f: impl FnOnce(&Connection) -> Result<T, String>,
@@ -287,6 +339,85 @@ fn written<T>(
          commit together in WAL mode"
     );
     out
+}
+
+/// How a sync operation reaches the database: **inside [`Store::with`], and never across an
+/// `.await`**.
+///
+/// A trip used to be handed the write connection for its whole length, network requests
+/// included, by a caller that blocked a thread on it. A browser has no thread to block, and a
+/// lock held across an `.await` there is a lock nobody else can ever take. So what an operation
+/// reads or writes is a **stretch** — one closure, run to its end with the connection — and a
+/// request is made between two stretches with nothing held.
+///
+/// **What can land between two stretches is a reader's own write**, and nothing else: every
+/// sync operation holds the [`Lane`], so no second one interleaves. A function that reads two
+/// things that must agree — a baseline's rows and its horizon — reads them in one stretch.
+///
+/// **The fence is the compiler's.** A `MutexGuard` is not `Send`, so a future that keeps one
+/// across an `.await` is not either, and each entry point is checked by a function that is
+/// never called: `fn sendable<T: Send>(_: T) {}` over its future.
+pub trait Store {
+    /// Run `f` with the connection, to its end.
+    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String>;
+}
+
+/// A bare connection is a store whose stretches run back to back — what a test hands over, and
+/// why a test written against a connection did not change when its function stopped taking one.
+///
+/// ⚠️ **Tests only, and that is the fence's other half**: shipped code that handed a function
+/// the connection it holds would be the whole-operation lock again, with no lane.
+#[cfg(any(test, feature = "testing"))]
+impl Store for Connection {
+    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
+        f(self)
+    }
+}
+
+/// The lane, held: this operation's turn to sync, and **the app's [`Store`]**.
+///
+/// Built only by [`State::lane`] and [`State::lane_for_press`], so a stretch on the app's
+/// database is a stretch under the lane — [`Store`] is deliberately not implemented for
+/// [`State`]. Let go when it is dropped, which is also what a cancelled operation does.
+///
+/// **A stretch waits for the connection** ([`with_write_waiting`], which has the reason) and is
+/// a user-facing write like any other: the managed wishlists armed and settled, the token
+/// reconcile, the cross-file fence.
+pub struct Lane<'a> {
+    state: &'a State,
+    _held: Held<'a>,
+}
+
+impl<'a> Lane<'a> {
+    /// The state this lane is on.
+    pub fn state(&self) -> &'a State {
+        self.state
+    }
+
+    /// A connection the caller **already holds**, as a store.
+    ///
+    /// For an operation that still takes the connection for its whole length and asks a sync
+    /// function something on the way — the desktop's share publisher, which is not a sync
+    /// operation and mints its token through one. `with` there must not come back for the
+    /// connection: its caller has it. Built from the lane, so the lane is held.
+    pub fn in_hand<'c>(&self, conn: &'c Connection) -> InHand<'c> {
+        InHand(conn)
+    }
+}
+
+impl Store for Lane<'_> {
+    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
+        with_write_waiting(self.state, f)
+    }
+}
+
+/// [`Lane::in_hand`]'s store: the connection its caller holds, used where it stands.
+pub struct InHand<'c>(&'c Connection);
+
+impl Store for InHand<'_> {
+    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
+        f(self.0)
+    }
 }
 
 #[cfg(test)]
@@ -482,6 +613,150 @@ mod tests {
                 .execute("INSERT INTO notes (body) VALUES ('refused')", [])
                 .is_err(),
             "the read connection is opened read-only"
+        );
+    }
+
+    fn deck_names(conn: &Connection) -> Result<Vec<String>, String> {
+        let mut stmt = conn
+            .prepare("SELECT name FROM decks ORDER BY id")
+            .map_err(|e| e.to_string())?;
+        let rows = stmt
+            .query_map([], |r| r.get(0))
+            .map_err(|e| e.to_string())?;
+        rows.collect::<rusqlite::Result<_>>()
+            .map_err(|e| e.to_string())
+    }
+
+    fn add_deck(conn: &Connection, name: &str) -> Result<(), String> {
+        conn.execute(
+            "INSERT INTO decks (name, format_key, created_at, updated_at)
+             VALUES (?1, 'casual', 0, 0)",
+            [name],
+        )
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+    }
+
+    /// What a sync operation is shaped like: a stretch, something awaited, a stretch.
+    async fn two_stretches(db: &impl Store) -> Result<Vec<String>, String> {
+        db.with(|conn| add_deck(conn, "before the request"))?;
+        tokio::task::yield_now().await;
+        db.with(|conn| {
+            add_deck(conn, "behind it")?;
+            deck_names(conn)
+        })
+    }
+
+    /// One sync operation at a time: a second waits for the lane until the first lets go.
+    #[tokio::test]
+    async fn a_second_operation_waits_for_the_first() {
+        let state = Arc::new(over_memory(Vec::new()));
+        let first = state.lane().await;
+        let second = {
+            let state = state.clone();
+            tokio::spawn(async move {
+                let lane = state.lane().await;
+                lane.with(|conn| add_deck(conn, "second"))
+            })
+        };
+        for _ in 0..8 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !second.is_finished(),
+            "it ran beside the operation in flight"
+        );
+        first.with(|conn| add_deck(conn, "first")).unwrap();
+        drop(first);
+        second.await.unwrap().unwrap();
+        assert_eq!(
+            deck_names(&state.lock_db()).unwrap(),
+            ["first", "second"],
+            "in the order they asked"
+        );
+    }
+
+    /// A press does not queue behind a sync in flight for longer than its bound, and it is told
+    /// what a press during a sync has always been told. Nor does it start against a connection
+    /// that will not answer.
+    #[tokio::test]
+    async fn a_press_behind_a_sync_or_a_busy_connection_is_told_busy() {
+        let state = over_memory(Vec::new());
+        let bound = Duration::from_millis(40);
+        let in_flight = state.lane().await;
+        assert_eq!(
+            state.lane_within(bound).await.err().as_deref(),
+            Some(db::BUSY)
+        );
+        drop(in_flight);
+
+        let held = state.lock_db();
+        assert_eq!(
+            state.lane_within(bound).await.err().as_deref(),
+            Some(db::BUSY),
+            "the lane was free and the connection was not"
+        );
+        drop(held);
+
+        assert!(state.lane_within(bound).await.is_ok());
+        // And the refused presses left the lane free.
+        assert!(state.lane_within(bound).await.is_ok());
+    }
+
+    /// The lane is the app's store, a stretch at a time, and a trip over it can be sent to
+    /// another thread — which it could not be while it held the connection's guard.
+    #[tokio::test]
+    async fn an_operation_over_the_lane_holds_nothing_across_an_await() {
+        fn sendable<T: Send>(_: &T) {}
+        let state = over_memory(Vec::new());
+        let lane = state.lane().await;
+        let trip = two_stretches(&lane);
+        sendable(&trip);
+        assert_eq!(trip.await.unwrap(), ["before the request", "behind it"]);
+        assert!(std::ptr::eq(lane.state(), &state));
+    }
+
+    /// A stretch is a user-facing write: it goes through the one body every such write does,
+    /// which is what arms the managed wishlists on the connection.
+    #[tokio::test]
+    async fn a_stretch_is_a_user_facing_write() {
+        let armed = |conn: &Connection| -> Result<bool, String> {
+            conn.query_row(
+                "SELECT EXISTS(SELECT 1 FROM temp.sqlite_master WHERE name LIKE 'mw%')",
+                [],
+                |r| r.get(0),
+            )
+            .map_err(|e| e.to_string())
+        };
+        let state = over_memory(Vec::new());
+        assert!(!armed(&state.lock_db()).unwrap(), "nothing has written yet");
+        let lane = state.lane().await;
+        assert!(lane.with(armed).unwrap());
+        // A refusal is the closure's own, handed back as it was said.
+        assert_eq!(
+            lane.with(|_| Err::<(), _>("no".to_owned())).unwrap_err(),
+            "no"
+        );
+    }
+
+    /// A caller that already holds the connection runs its stretches on it where it stands —
+    /// coming back for the connection through the lane would be this thread waiting for itself.
+    #[tokio::test]
+    async fn a_connection_in_hand_is_used_where_it_stands() {
+        let state = over_memory(Vec::new());
+        let lane = state.lane().await;
+        let conn = state.lock_db();
+        let names = two_stretches(&lane.in_hand(&conn)).await.unwrap();
+        assert_eq!(names, ["before the request", "behind it"]);
+    }
+
+    /// A bare connection is a store too, in a test.
+    #[tokio::test]
+    async fn a_bare_connection_is_a_store_whose_stretches_run_back_to_back() {
+        let conn = crate::schema::memory_pair();
+        assert_eq!(
+            two_stretches(&conn).await.unwrap(),
+            ["before the request", "behind it"]
         );
     }
 }
