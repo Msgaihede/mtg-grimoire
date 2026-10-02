@@ -273,9 +273,10 @@ rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grim
 this section is what each step built and measured. **Nothing here runs on a phone or in a
 browser yet**: what exists is a crate the desktop links, compiled for two more targets. Four
 steps of seven have landed — the leaves, the storage layer, the state a host holds over it, and
-the domain: the decks, the collection, the wishlist and the search — and the first of the fifth
-step's three parts: a request, a timer and a file under `platform/`, and the Scryfall client,
-the ingest and the reconciler over them.
+the domain: the decks, the collection, the wishlist and the search — and two of the fifth
+step's three parts: a request, a timer, a file and background work under `platform/`; the
+Scryfall client, the ingest and the reconciler over them; and the card sync and the facet index
+that drive those.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -1111,3 +1112,136 @@ compared equal — and four things that were wrong anyway.
   needs and this machine did not have.
 - The card-scanner suite was not run locally: nothing under `crates/card-scanner` changed, and
   CI's `rust` job runs it.
+
+### 6.6 Step 5, second part — the state's last three fields, the facet index and the card sync (2026-10-02)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-5-io.md), Part 5b. Measured that
+day on Windows 11, debug builds, on the branch's own tree over `main` at `4b0bb2d3`.
+
+**The card sync took a window, and that was the whole of what kept it in `src-tauri`.** Of
+`sync.rs`'s 51 items, seven name the desktop and mean it — `AppState`, its `Deref`, four lock
+helpers and `status`. Nine more took a `tauri::AppHandle` for one purpose: to emit. So this part
+is a move with a small, regular rewrite inside it — a window becomes the state's event sink, an
+`Arc<AppState>` becomes an `Arc<State>`, and tauri's blocking pool becomes `platform::spawn`.
+
+| | Before, in `src-tauri` | Now, in the core | What stayed |
+| --- | --- | --- | --- |
+| `sync.rs` | 1 899 lines | 1 472, and `sync/run_tests.rs`, 391 | `sync/mod.rs`, 448: `AppState`, the lock helpers, `status`, five tests |
+| `index/mod.rs` | 1 097 | 1 068 | 14: the re-export and `pub mod facets;` |
+| `index/facets.rs` | 2 805 | 2 783 | `index/facets/mod.rs`, 31: the `facet_cards` command |
+| `index/lifecycle.rs` | 537 | 541 | nothing |
+| `collection_source`'s `with_write_owned` | its own file | in the core's `collection_source` | nothing; the desktop's file is gone |
+
+`crates/grimoire-core/src` went from 150 538 lines to 157 318 and `src-tauri/src` from 72 769 to
+66 801. One more interface joined `platform/` — `spawn`, 211 lines: `blocking(f).await` for
+synchronous work under an `async fn`, and `background(f)` for work nobody waits for. Natively the
+async runtime's blocking pool and a thread; **in a browser both run the work where it stands**,
+because a Worker has one thread and deferring to a microtask would only move the block while
+letting the caller think it had been taken off them.
+
+**Five things that are not a move:**
+
+- **`run_sync(state: Arc<State>, force)` — no window.** `sync:progress` and
+  `collection:reconciled` leave through `state.events`, and the desktop's sink forwards both to
+  every window, as `app.emit` did. Same names, same payloads — with one difference a page cannot
+  see: a payload reaches the sink as a `serde_json::Value`, so its keys are in alphabetical
+  order (`done, message, phase, total`) where the struct's own order was `phase, done, total,
+  message`.
+- **`State` holds `syncing`, `client` and `index`**, and `State::new` takes a sixth argument: the
+  client, which the host builds. `AppState.core` is an `Arc<State>` — a sync and an index build
+  each outlive the call that starts them — and `AppState` still derefs to it, so every
+  `state.client` on the desktop reads as it did.
+- **The mirror hears a swap as an observer.** `WriteObserver` gained `corpus_replaced`, defaulting
+  to nothing; `State::corpus_replaced()` tells every observer once, and `do_sync` calls it where it
+  called `note_mirror_after_swap`, which is gone. The alternative was an event name the desktop's
+  sink intercepts — a mirror rule inside a function called "emit".
+- **The core builds its own index fixture**, at head, through a new `schema::build_pair`
+  (`memory_pair`'s second half, on connections somebody else opened). The desktop's — an
+  `AppState` over a file `split` converted — went with its last caller.
+- **`status` stayed, alone**: it reads the image cache's failure count, and the cache is the
+  third part's. Nothing was hoisted to bring it.
+
+**`run_sync` has a test of its own for the first time.** While it took a window nothing in the
+suite could enter it — [text-mirror.md](text-mirror.md) carried that as an open item — so its
+pieces were tested and the function was not. `sync/run_tests.rs` runs it whole against a local
+mock Scryfall, with a sink that records and an observer that counts:
+
+| Test | What it pins |
+| --- | --- |
+| `a_first_sync_ingests_and_says_so_and_the_next_one_finds_nothing_new` | the phases in order, ending `done` with its message; the cards stored; the facet index warm afterwards; **one** `corpus_replaced`; then a forced second run that is a 304, emits `checking` and `done`, and tells no observer; then an unforced third inside the throttle, which asks nothing and says nothing |
+| `a_sync_that_repoints_a_copy_says_what_moved` | a migration row applied to an owned copy, and `collection:reconciled` emitted with its count |
+| `a_sync_whose_download_is_refused_says_so_and_swaps_nothing` | an `error` phase carrying the sentence, `last_error` and an `error_log` row written, the flag given back, no `last_check_at` to throttle on, and no `corpus_replaced` |
+
+**What was checked.**
+
+| | |
+| --- | --- |
+| The move, item by item | of `sync.rs`'s 78 items and tests, 56 byte-identical and 21 changed — each one on the script's replacement list — and one gone |
+| The script, re-run on a checkout from before the move | 13 files written and 4 removed, each identical to the tree's |
+| `#[test]` and `#[tokio::test]` attributes | 3 390 before, 3 398 after: 94 moved from `src-tauri` to the core, 8 are new (4 `spawn`, 1 `state`, 3 `sync::run_tests`) |
+| `cargo test --workspace` | core 2 414 passed and 4 ignored; desktop 978 passed and 2 ignored |
+| `cargo clippy --workspace --all-targets -- -D warnings`; `cargo check -p mtg-grimoire --locked` | clean |
+| `cargo build` and `clippy --lib -p grimoire-core --target wasm32-unknown-unknown` | clean |
+| `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` | no `testing` |
+| `Cargo.lock` | 653 packages before and after |
+| `npm run build`, `npm run lint`, `npm run test:run` | clean; 459 files, 12 916 tests |
+
+**An existing database, upgraded by `main`'s binary and by this branch's** — the check §6.5
+describes, on two fresh byte copies of the main checkout's dev data (user schema v46):
+
+| | `main` | This branch |
+| --- | --- | --- |
+| `user_version` reached | 59, after 1 432 ms | 59, after 1 336 ms |
+| Schema objects, tables, rows | 148, 33, 5 209 | 148, 33, 5 209 |
+| `foreign_key_check`, `integrity_check` | 0, `ok` | 0, `ok` |
+| `backups/user.v46.db` | 2 007 040 bytes | **byte-identical** |
+| The four files each launch downloaded | 78 689 871, 5 977 157, 12 973 147 and 28 824 447 bytes | **byte-identical, all four** |
+
+30 of the 33 tables are identical row for row; the other three differ in the same clock and the
+same random name as before. **Both launches ran a card sync** — this branch's through the moved
+`run_sync` — and the two downloads came out equal to the byte.
+
+**Then the window**, `tauri dev` over a copy with `corpus.db` deleted, with a listener on
+`sync:progress` installed in the page before the sync began:
+
+| | |
+| --- | --- |
+| Events the page received | 120: `downloading` 56, `ingesting` 60 over 89 s, `reclaiming` 2, `sets` 1, `done` 1 with "118,467 cards" — every one carrying `done`, `message`, `phase` and `total` |
+| The facet index | cold through the sync; ready on the first sample after `done` |
+| A forced `sync_run` afterwards | `updated: false`, and two events: `checking`, `done` |
+| An owned facet around a collection write | 273, 274 after one copy added, 273 after it was removed — `with_write_owned`, from the core |
+| The mirror after the swap | one full pass 3 s after `done`, with nothing else writing: 58 files compared, none rewritten — `corpus_replaced` reaching the desktop's mask |
+| Search, pressed | "118,467 cards", 30 of 30 images loaded |
+| `sync_status`; the app's stderr | 118 467 cards, not syncing, no error; nothing |
+
+**What a fresh reviewer found**, reading the diff against `main` with no cargo: no behaviour
+change on the desktop, and six things worth fixing.
+
+- **`spawn::blocking` started its work when first polled, not when called.** It was an
+  `async fn` around tokio's `spawn_blocking`, which is eager. Every caller awaits at once, so
+  nothing ran differently — but the interface promised less than what it replaced. It hands the
+  work over at the call now, and a test holds that.
+- **The desktop kept a fixture nothing called.** Every test that used the index's
+  `state_with_seeded_cards` moved; the copy left behind compiled, passed clippy under
+  `#[cfg(test)]`, and was dead.
+- **The move script ran `git mv` and then reset the index.** A run that stopped between the two
+  left a tree the script's own guard then called finished. It writes and removes files now, and
+  git infers the renames at commit.
+- **Nine comments the move made false** — `events.rs` saying nothing emits yet, `desktop.rs`
+  explaining a constraint that no longer exists, `ipc.ts` naming two paths that moved.
+- **A miscount**: five tests stayed in `sync/mod.rs`, not six — the sixth item is the fixture
+  they share.
+- **`run_sync` had no end-to-end test**, which is the table above.
+
+**Open after this part:**
+
+- **No browser arm has run**, `spawn`'s included. In a browser a panic inside `blocking` is a
+  panic in the caller, not an `Err(Lost)`: there is no pool to catch it.
+- **The index's build opens a second connection.** `lifecycle::build_now` calls `db::open_read`
+  so a full pass over `cards` never holds the connection every search waits on. A browser's
+  storage permits one (spec §6); the web host has to answer that, and nothing here does.
+- **A browser's sync runs its ingest on the caller.** Ninety seconds of SQLite, in the Worker,
+  with no message answered meanwhile. Whether that is acceptable, or the ingest has to yield, is
+  phase 5's to measure.
+- **`sync::status`, the three feeds and the image cache are still the desktop's** — the third
+  part. `AppState` keeps `images` and `pairing` until then and until step 6.

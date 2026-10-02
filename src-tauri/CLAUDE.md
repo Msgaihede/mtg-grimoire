@@ -22,10 +22,31 @@ part** (2026-10-02): `scryfall.rs`, `ingest.rs` and `reconcile.rs` are files und
 *Scryfall and the network* below binds them there. **What changed is how they reach the machine**:
 a request is `platform::http`, a sleep and a deadline are `platform::timer`, a file is
 `platform::files`, and the core's fence refuses `reqwest`, `tokio`, `std::fs` and `std::thread`
-anywhere else in what that crate ships. Nothing a request sends changed. `sync::run_sync`, which
-drives all three, is still this package's, as are the feeds, the image cache and the facet index's
-lifecycle — the step's second and third parts. `src/ingest/mod.rs` is the glob re-export and one
-test, which builds its database with `split`.
+anywhere else in what that crate ships. Nothing a request sends changed. `src/ingest/mod.rs` is
+the glob re-export and one test, which builds its database with `split`.
+
+**The card sync and the facet index followed them, in the step's second part** (2026-10-02).
+`sync::run_sync` and everything it drives are in `crates/grimoire-core/src/sync.rs`, and
+`index/` — `CardIndex`, the facet pass and the lifecycle — in `crates/grimoire-core/src/index/`.
+Every rule below about either still binds it there. Three things changed for a caller here:
+
+- **A sync takes no window.** `sync::run_sync(state.core.clone(), force)`: it is handed the
+  core's `State` and emits `sync:progress` and `collection:reconciled` through `state.events`,
+  which `desktop::WindowEvents` forwards to every window. Where this file says `do_sync` takes
+  an `AppHandle`, it took one.
+- **`AppState.core` is an `Arc<State>`, and `syncing`, `client` and `index` are its fields.**
+  `state.client`, `state.syncing` and `state.index` read as they always did, through the deref.
+  What is handed to the two things that outlive a call — `run_sync`, and
+  `index::lifecycle::spawn_build` — is `state.core`. A test that builds an `AppState` builds the
+  core with `State::new(…, client)` and wraps it.
+- **The mirror is told of a swapped corpus as an observer.** `sync::note_mirror_after_swap` is
+  gone: `do_sync` calls `State::corpus_replaced()` where the swap lands, and `Mask`'s
+  `WriteObserver::corpus_replaced` is `mark_all()`. The same moment, by a door the core can use.
+
+What is still here of `sync` is `src/sync/mod.rs`: `AppState`, the four lock helpers and
+`status` — which reads the image cache's failure count and goes home with the cache. Of `index`,
+the `facet_cards` command (`src/index/facets/mod.rs`). The feeds and the
+image cache are the step's third part.
 
 ⚠️ **Most of what this file is about is no longer in this package** (2026-10-02, the extraction's
 domain step). `deck`, `deck_meta`, `deck_tokens`, `deck_undo`, `collection`,
@@ -46,11 +67,11 @@ capture spec is edited there.
   wrapper in this package's `<module>/mod.rs`. A `pub(crate)` item in the core does not cross
   the glob, and the compile error names the wrapper, not the visibility.
 - **`sync::with_write` is the core's `state::with_write`**, re-exported under its old name; it
-  takes `&State`, which an `&AppState` derefs to. `collection_source::with_write_owned` is still
-  this package's, because the facet index's lifecycle is.
+  takes `&State`, which an `&AppState` derefs to. `collection_source::with_write_owned` is the
+  core's too, since the facet index's lifecycle is.
 - **A few functions stayed beside the wrappers**, each named in its file's own doc:
   `deck::bracket_reads` (it calls `combos`), `reset::clear_cache` (the image cache and the
-  feeds), `collection_source::with_write_owned`, `marketplace::set_marketplace_now` (the mirror),
+  feeds), `sync::status` (the image cache), `marketplace::set_marketplace_now` (the mirror),
   `import::read_import_file` (a path this app's dialog answered). `tags/` did not move at all:
   its queries take a type that sits in the feed engine, which the I/O step's third part moves.
   (`reconcile` waited the same way for `scryfall::Migration`, and went with it.)
