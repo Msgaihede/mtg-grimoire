@@ -78,8 +78,9 @@ an operation. Everything in §4 is about that.
 
 ## 3. What was measured
 
-The prototype is on `claude/light-app-core-step-6-spike`: the trait, both implementations, and
-`ack`, `post_ops` and `emit_baselines` restated over it, in place in `src-tauri`.
+The prototype was the trait, both implementations, and `ack`, `post_ops` and `emit_baselines`
+restated over it, in place in `src-tauri` — the first commit of what became
+`claude/light-app-core-step-6a`. Points 1 to 3 are that prototype's; point 4 is the step's.
 
 1. **The 87 tests in `client/tests.rs` pass with no edit**, over the three restated functions and
    the fourteen that still take a connection and call them (`cargo test -p mtg-grimoire --lib
@@ -117,7 +118,33 @@ The prototype is on `claude/light-app-core-step-6-spike`: the trait, both implem
    reads is inside the horizon and outside the rows, so the peer is handed neither the value nor —
    the horizon filtering it — the delta, with its cursor past both.
 
-**What the test does not show, and why it is shaped as it is.** Two things about `apply` decide
+4. ⚠️ **Found while building it, by the test the prototype was too small to have: a baseline
+   must not go out while something written since the trip read its outbox is still pending.**
+   `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` lands a write behind every stretch of
+   a *whole* trip — 19 of them — with a second trip behind it and a peer that pulls after each,
+   as a device with the doorbell does.
+
+   | The rule in `emit_baselines` | Result over 19 stretches |
+   | --- | --- |
+   | rows and horizon in one stretch, and nothing else | **red**: `3 here, 4 there` behind stretches 8 to 14 — every boundary between the push's outbox read and the baseline's rows |
+   | and none begun while an op above `through` is pending | green behind every one |
+
+   The write is in the baseline's rows and under its horizon, and not yet on the relay's log: it
+   goes out with the next trip, *behind* the baseline. A peer that pulls in between reads the claim
+   in one page and the op in the next, where no horizon filters it — a horizon is a filter on one
+   page and writes nothing (the baseline spec's §9.1) — and counts it on top of the claim that
+   already held it. **A card out of nothing, which is the one direction a baseline may never fail
+   in.** It could not happen while a trip held the connection from its push to its ack. The rule
+   that closes it is asked in the same stretch that reads the rows — `through` is the newest op
+   there was before the push read its outbox — so the answer is about exactly those rows; the
+   marker stays NULL, and the next trip, which that pending op has already asked for, pushes it
+   and emits behind it. An op an *earlier* refusal left pending holds nothing back, so what a
+   deferral stops is unchanged.
+
+   The mutation was run: with the rule switched off the test is red at those seven boundaries and
+   nowhere else.
+
+**What the tests do not show, and why they are shaped as they are.** Two things about `apply` decide
 what a baseline test can assert, and neither is this step's:
 
 - A peer that has **never held the row** meets a claim and a later delta as `max(Σ deltas, claim)`
@@ -129,8 +156,11 @@ what a baseline test can assert, and neither is this step's:
   same second the peer last heard from this device is lost on that peer. **Reproduced on code this
   branch did not touch**: the add and the edit in one second, *dev-a holds 3, dev-b holds 2,
   `skipped: 3`*; the add ten seconds earlier, *3 and 3*. It is a bug in `apply`, not in the trip,
-  and it is filed as its own task rather than fixed here. The test backdates its first add by ten
-  seconds to stand clear of it.
+  and it is filed as its own task rather than fixed here. Both tests backdate their first add by
+  ten seconds to stand clear of it. **The rule in point 4 turns a mid-trip write into this bug's
+  shape rather than into an over-count** when the two are in one second or the emitter's clock
+  runs ahead of its wall clock — the write and the baseline then share a page — which is no
+  wider than the bug already is for a trip that pushes an edit and a baseline together.
 
 ## 4. Every operation, by what may interleave
 
@@ -139,8 +169,8 @@ the rule for each is which reads must share a stretch:
 
 | Function | What must be one stretch | Why |
 | --- | --- | --- |
-| `emit_baselines` | `baseline::build` + `wall_ms` + `baseline::horizon`, per peer | §3's measurement |
-| `push` | each of: read the outbox; `stamp_pushed` for one chunk; `rebase` (already one transaction) | A write behind the outbox read is a row with a higher `seq`: not in this trip's snapshot, pushed by the next. `stamp_pushed` names `seq`s, and nothing a reader presses rewrites a `sync_ops` row. |
+| `emit_baselines` | whether anything above `through` is pending + `baseline::build` + `wall_ms` + `baseline::horizon`, per peer | §3's points 3 and 4 |
+| `push` | each of: read the outbox; `stamp_pushed` for one chunk; `rebase` (already one transaction) | A write behind the outbox read is a row with a higher `seq`: not in this trip's snapshot, pushed by the next — **and a baseline waits for it** (§3's point 4). `stamp_pushed` names `seq`s, and nothing a reader presses rewrites a `sync_ops` row. |
 | `pull` | everything behind the response — the watermarks, `apply_held`, the hold, the release, the cursor, both conversions, `last_op` before and after | It is one run of statements with no await in it already. The envelope loop has one await, `fetch_key_page`, at most once: asked before the loop instead, the loop is one stretch too. |
 | `ack` | the cursor and `last_acked`, read together; the mark written with the cursor that was *sent* | |
 
@@ -237,19 +267,43 @@ request is a JSON `POST` or carries a bearer, so each needs a preflight the rela
 today — and a socket ticket. `pull` is unpaged; what a page of tens of megabytes costs a Worker is
 the browser phase's measurement.
 
-## 8. Decided here, and left to Markus
+## 8. Decided here, and by Markus
 
-**Decided by the measurements above**: rows and horizon in one stretch; a stretch waits where a
-press's first ask is bounded; the lane is a type; `live.rs` and the wrappers stay; the pending
-offer is an async lock.
+**Decided by the measurements above**: rows and horizon in one stretch, with no baseline while a
+newer op is pending; a stretch waits where a press's first ask is bounded; the lane is a type;
+`live.rs` and the wrappers stay; the pending offer is an async lock.
 
-**His to decide**:
+**Decided by Markus, 2026-10-02** — each over the alternative beside it:
 
-1. **The shape** — stretches on a lane (prototyped, 87 tests unchanged), against a rewrite into
-   explicit plan / request / commit functions, against keeping the desktop's trip and writing the
-   browser's separately.
-2. **What "leaving is always possible" means once the lock is a lane** — wait for the lane as the
-   press waits for the connection today, with every request given a deadline on every host; or
-   give up on the lane after a bound and clear anyway, which needs every commit stretch of every
-   other operation to re-check that the group is still the one it started with.
-3. **How many pull requests** — restate in place and then move, or one.
+1. **The shape: stretches on a lane** — over a rewrite into explicit plan / request / commit
+   functions, and over keeping the desktop's trip and writing the browser's separately.
+2. **"Leaving is always possible" means the press waits for the lane**, as it waits for the
+   connection today, with every request given a deadline on every host — over giving up on the
+   lane after a bound and clearing anyway, which would need every commit stretch of every other
+   operation to re-check that the group is still the one it started with.
+3. **Two pull requests: restate in place, then move** — over three, and over one.
+
+## 9. What building it changed
+
+[The plan](../plans/2026-10-02-light-app-core-step-6-sync.md) is the step; this is what the
+restatement itself turned up that the three-function prototype had not.
+
+- **§3's point 4** — the baseline that waits. Found by the whole-trip test, which is the reason
+  to write one before trusting a prototype of three functions out of thirty-one.
+- **Clippy holds the same line the compiler does.** `clippy::await_holding_lock` is on by
+  default and `-D warnings` makes it an error in `npm run verify` and in CI: two of the lane's own
+  tests held the connection's guard across an `.await` on purpose and were refused. So a guard
+  across a request is caught twice — by `Send`, at each entry point that is checked, and by the
+  lint, everywhere, tests included.
+- **A press asks for the lane with a bound as well as for the connection.** §5's first point
+  kept a press's five seconds by asking for the connection once before it starts; a press that
+  met a *sync in flight* would still have queued for the whole of somebody else's round trip.
+  `State::lane_for_press` bounds both, and answers `db::BUSY` — what a press during a sync has
+  always been told. A background trip and a departure take `State::lane` and wait.
+- **`share::publish` hands the connection it holds back in as a store** (`Lane::in_hand`). It is
+  not a sync operation and still takes the connection for a whole publish; asking for its token
+  through the lane itself would be a thread waiting for a connection it already has. And
+  `impl Store for Connection` is a test build's only: shipped code that passed a function the
+  connection it holds would be the whole-operation lock again, with no lane.
+- **The census is a test.** `scripts/core-step-6-census.test.mjs` holds the eight files at no
+  function that takes a connection and awaits with it, and none that blocks a thread on a future.

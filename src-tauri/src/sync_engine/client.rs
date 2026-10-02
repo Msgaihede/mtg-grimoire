@@ -63,6 +63,7 @@ use crate::sync_pair::crypto;
 use crate::sync_pair::identity::{self, Group};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use grimoire_core::state::{Lane, Store};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 
@@ -449,35 +450,17 @@ pub struct Pushed {
 }
 
 // ---------------------------------------------------------------------------------------
-// The database, a stretch at a time (step 6's spike)
+// The database, a stretch at a time
 // ---------------------------------------------------------------------------------------
+//
+// Every `async fn` below takes `db: &impl Store` (`grimoire_core::state`) and reaches the
+// database inside `db.with(|conn| …)` — a *stretch* — with each request made between two of
+// them and nothing held. The app's store is the lane's guard, so one sync operation runs at a
+// time; what can land between two stretches is a reader's own write, and a function that
+// reads two things which must agree reads them in one stretch.
 
-/// How a trip reaches the database: **inside [`Store::with`], and never across an `.await`**.
-///
-/// A trip used to be handed the write connection for its whole length, network requests
-/// included. This is the restatement: what a function reads or writes is a *stretch* — one
-/// closure, run to its end with the connection — and a request is made between two of them with
-/// nothing held.
-pub trait Store {
-    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String>;
-}
-
-/// A bare connection is a store whose stretches run back to back — what every test here hands
-/// over, and why none of them changed.
-impl Store for Connection {
-    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
-        f(self)
-    }
-}
-
-/// The app's: each stretch takes the write connection for its own length and gives it back.
-impl Store for grimoire_core::state::State {
-    fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String> {
-        grimoire_core::state::with_write_waiting(self, f)
-    }
-}
-
-/// [`note`] as a stretch of its own.
+/// [`note`] as a stretch of its own. A row that could not be written is a row the log goes
+/// without, as it always was: `errors::record` answers nothing.
 fn say(db: &impl Store, operation: &str, kind: Kind, message: &str, detail: Option<&str>) {
     let _ = db.with(|conn| {
         note(conn, operation, kind, message, detail);
@@ -490,14 +473,25 @@ fn lapsed_in(db: &impl Store, what: &str) -> String {
     db.with(|conn| Ok(lapsed(conn, what))).unwrap_or_else(|e| e)
 }
 
-/// **The fence, and it is the compiler's**: a trip over the app's state is a future that can be
-/// sent to another thread, which it cannot be while it holds a `MutexGuard` — or a `&Connection`
-/// — across an `.await`. Never called.
+/// Who this device is, which group it is in and where its relay lives — what a function reads
+/// before its first request — or `None` when it is in no group.
+fn whereabouts(conn: &Connection) -> Result<Option<(String, Group, String)>, String> {
+    Ok(me(conn)?.map(|(device, group)| (device, group, entitlement::base(conn))))
+}
+
+/// **The fence, and it is the compiler's**: an operation over the lane is a future that can be
+/// sent to another thread, which it cannot be while it holds a `MutexGuard` — or a
+/// `&Connection` — across an `.await`. One line per entry point. Never called.
 #[allow(dead_code)]
-fn a_trip_holds_nothing_across_a_request(state: &grimoire_core::state::State) {
+fn nothing_is_held_across_a_request(lane: &Lane<'_>, rotation: &identity::Rotation) {
     fn sendable<T: Send>(_: T) {}
-    sendable(ack(state, "", ""));
-    sendable(emit_baselines(state, "", ""));
+    sendable(run_once(lane));
+    sendable(run_once_without_baselines(lane));
+    sendable(check_keys(lane));
+    sendable(publish_join(lane));
+    sendable(post_rotation(lane, rotation));
+    sendable(post_rendezvous(lane, "", "", ""));
+    sendable(get_rendezvous(lane, "", ""));
 }
 
 // ---------------------------------------------------------------------------------------
@@ -764,14 +758,14 @@ fn keys_url(base: &str, device: &str, group: &Group, at: Option<i64>) -> String 
 /// `base` is the caller's rather than read here, because [`pull`] already holds the one its trip
 /// was handed; the other callers pass [`entitlement::base`].
 async fn fetch_key_page(
-    conn: &Connection,
+    db: &impl Store,
     base: &str,
     device: &str,
     group: &Group,
 ) -> Result<KeyPage, String> {
     // `None` never comes back without `at`: the 404 it stands for is read only for an epoch asked
     // after, and any other 404 is a failure recorded below.
-    fetch_key_page_at(conn, base, device, group, None)
+    fetch_key_page_at(db, base, device, group, None)
         .await?
         .ok_or_else(|| "the relay answered 404 to a key check".to_owned())
 }
@@ -784,7 +778,7 @@ async fn fetch_key_page(
 /// **Every answer that parses latches [`RELAY_REMOVAL_STEP`]**, whichever caller asked: it is a
 /// fact about the relay, and this is the one place every `/keys` answer passes through.
 async fn fetch_key_page_at(
-    conn: &Connection,
+    db: &impl Store,
     base: &str,
     device: &str,
     group: &Group,
@@ -800,7 +794,7 @@ async fn fetch_key_page_at(
     {
         Ok(r) => r,
         Err(e) => {
-            note(conn, "keys", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "keys", kind_of(&e), &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
@@ -833,23 +827,27 @@ async fn fetch_key_page_at(
         } else {
             format!("the relay answered {status} to a key check")
         };
-        note(conn, "keys", Kind::Http, &message, Some(&url));
+        say(db, "keys", Kind::Http, &message, Some(&url));
         return Err(message);
     }
     let text = match response.text().await {
         Ok(t) => t,
         Err(e) => {
-            note(conn, "keys", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "keys", kind_of(&e), &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
     match serde_json::from_str::<KeyPage>(&text) {
         Ok(page) => {
-            latch_removal_step(conn, &page);
+            // A fact about the relay, kept in a stretch of its own.
+            let _ = db.with(|conn| {
+                latch_removal_step(conn, &page);
+                Ok(())
+            });
             Ok(Some(page))
         }
         Err(e) => {
-            note(conn, "keys", Kind::Parse, &e.to_string(), Some(&url));
+            say(db, "keys", Kind::Parse, &e.to_string(), Some(&url));
             Err(e.to_string())
         }
     }
@@ -861,12 +859,11 @@ async fn fetch_key_page_at(
 /// **It is not an epoch check and must never grow into one.** [`check_keys`] is the only thing
 /// entitled to conclude anything from an epoch, and it already runs on every sync; this answers
 /// the one narrower question [`publish_join`] has to ask before it publishes a roster.
-async fn relay_manifest(conn: &Connection) -> Result<Vec<String>, String> {
-    let Some((device, group)) = me(conn)? else {
+async fn relay_manifest(db: &impl Store) -> Result<Vec<String>, String> {
+    let Some((device, group, base)) = db.with(whereabouts)? else {
         return Err("this device is in no group".to_owned());
     };
-    let base = entitlement::base(conn);
-    Ok(fetch_key_page(conn, &base, &device, &group).await?.devices)
+    Ok(fetch_key_page(db, &base, &device, &group).await?.devices)
 }
 
 /// Ask the relay what epoch the group is on, and act on the answer.
@@ -901,42 +898,44 @@ async fn relay_manifest(conn: &Connection) -> Result<Vec<String>, String> {
 ///
 /// Answers the relay's epoch beside the outcome ([`KeyCheck::relay_epoch`]), which [`round_trip`]
 /// hands to [`pull`].
-pub async fn check_keys(conn: &Connection) -> Result<KeyCheck, String> {
+pub async fn check_keys(db: &impl Store) -> Result<KeyCheck, String> {
     // A device in no group has no key to check and no auth to check it with. It must make no
     // request at all: `/g//keys` is a URL, and one built from an empty group id would be sent.
-    let Some((device, group)) = me(conn)? else {
+    let Some((device, group, base)) = db.with(whereabouts)? else {
         return Ok(KeyCheck {
             outcome: KeyOutcome::Current,
             relay_epoch: None,
         });
     };
-    let base = entitlement::base(conn);
-    let page = fetch_key_page(conn, &base, &device, &group).await?;
+    let page = fetch_key_page(db, &base, &device, &group).await?;
     let answered = |outcome| KeyCheck {
         outcome,
         relay_epoch: Some(page.epoch),
     };
 
+    // **Against the group as it stood before the request**, which is the group as it stands:
+    // only a sync operation moves it, and this one holds the lane.
     if page.epoch <= group.epoch {
         return Ok(answered(KeyOutcome::Current));
     }
     let Some(blob) = &page.blob else {
-        removed(conn)?;
+        db.with(removed)?;
         return Ok(answered(KeyOutcome::Removed));
     };
     // **No walk once the newest answer has no blob**: the group as it stands has taken this device
     // off, and leaving deletes every key the walk could have collected.
     if page.epoch > group.epoch + 1
-        && catch_up(conn, &base, &device, page.epoch).await? == CatchUp::Removed
+        && catch_up(db, &base, &device, page.epoch).await? == CatchUp::Removed
     {
-        removed(conn)?;
+        db.with(removed)?;
         return Ok(answered(KeyOutcome::Removed));
     }
-    if let Err(message) = adopt_page(conn, &device, &page, blob, identity::adopt_epoch) {
-        let url = keys_url(&base, &device, &group, None);
-        note(conn, "keys", Kind::Parse, &message, Some(&url));
-        return Err(message);
-    }
+    db.with(|conn| {
+        adopt_page(conn, &device, &page, blob, identity::adopt_epoch).inspect_err(|message| {
+            let url = keys_url(&base, &device, &group, None);
+            note(conn, "keys", Kind::Parse, message, Some(&url));
+        })
+    })?;
     Ok(answered(KeyOutcome::Adopted))
 }
 
@@ -1001,19 +1000,20 @@ enum CatchUp {
 /// request itself met is still recorded by [`fetch_key_page_at`]; one of the blob's is not,
 /// because the newest may yet open and a row would then report a sync that worked.
 async fn catch_up(
-    conn: &Connection,
+    db: &impl Store,
     base: &str,
     device: &str,
     newest: i64,
 ) -> Result<CatchUp, String> {
-    let Some(start) = identity::group(conn).map_err(|e| e.to_string())? else {
+    let group_now = |conn: &Connection| identity::group(conn).map_err(|e| e.to_string());
+    let Some(start) = db.with(group_now)? else {
         return Ok(CatchUp::Newest);
     };
     for n in (start.epoch + 1)..newest {
-        let Some(group) = identity::group(conn).map_err(|e| e.to_string())? else {
+        let Some(group) = db.with(group_now)? else {
             return Ok(CatchUp::Newest);
         };
-        let page = match fetch_key_page_at(conn, base, device, &group, Some(n)).await {
+        let page = match fetch_key_page_at(db, base, device, &group, Some(n)).await {
             Ok(Some(page)) => page,
             Ok(None) => continue,
             Err(_) => return Ok(CatchUp::Newest),
@@ -1024,7 +1024,9 @@ async fn catch_up(
         let Some(blob) = &page.blob else {
             return Ok(CatchUp::Removed);
         };
-        if adopt_page(conn, device, &page, blob, identity::adopt_passing_epoch).is_err() {
+        let adopted =
+            db.with(|conn| adopt_page(conn, device, &page, blob, identity::adopt_passing_epoch));
+        if adopted.is_err() {
             return Ok(CatchUp::Newest);
         }
     }
@@ -1118,16 +1120,18 @@ fn adopt_page(
 /// off as a join, which is exactly what the latch exists to stop it doing, so a quiet fallback
 /// would be the downgrade under another name; the refusal is recorded like any other, nothing
 /// local moves, and the reader's press answers that the relay refused it.
-pub async fn post_rotation(conn: &Connection, rotation: &identity::Rotation) -> Result<(), String> {
+pub async fn post_rotation(db: &impl Store, rotation: &identity::Rotation) -> Result<(), String> {
     // Its own sentence rather than `identity`'s `NOT_IN_A_GROUP`, which is private to that
     // module: this is not the ordinary "you are in no group" refusal — `plan_rotation` has
     // already answered that one — but a group that went away between planning and publishing.
-    let Some(current) = identity::group(conn).map_err(|e| e.to_string())? else {
-        return Err(
-            "this device left its group before that key change could be published".to_owned(),
-        );
-    };
-    let base = entitlement::base(conn);
+    let (current, base) = db.with(|conn| {
+        let Some(current) = identity::group(conn).map_err(|e| e.to_string())? else {
+            return Err(
+                "this device left its group before that key change could be published".to_owned(),
+            );
+        };
+        Ok((current, entitlement::base(conn)))
+    })?;
     let auth = crypto::relay_auth(&current.group_key, &current.group_id, current.epoch);
     let url = format!("{base}/g/{}/rotate", current.group_id);
     let keys: serde_json::Map<String, serde_json::Value> = rotation
@@ -1156,7 +1160,7 @@ pub async fn post_rotation(conn: &Connection, rotation: &identity::Rotation) -> 
     {
         Ok(r) => r,
         Err(e) => {
-            note(conn, "rotate", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "rotate", kind_of(&e), &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
@@ -1164,7 +1168,7 @@ pub async fn post_rotation(conn: &Connection, rotation: &identity::Rotation) -> 
     if !(200..300).contains(&status) {
         let message =
             format!("the relay answered {status} to a key change, so nothing was removed");
-        note(conn, "rotate", Kind::Http, &message, Some(&url));
+        say(db, "rotate", Kind::Http, &message, Some(&url));
         return Err(message);
     }
     Ok(())
@@ -1197,12 +1201,12 @@ struct RendezvousPage {
 /// failure. The body is written by hand — this crate does not enable reqwest's `json` feature,
 /// the rule every other request in this file already follows.
 pub async fn post_rendezvous(
-    conn: &Connection,
+    db: &impl Store,
     rv: &str,
     slot: &str,
     blob: &str,
 ) -> Result<(), String> {
-    let base = entitlement::base(conn);
+    let base = db.with(|conn| Ok(entitlement::base(conn)))?;
     let url = format!("{base}/p/{rv}/{slot}");
     let body = serde_json::json!({ "blob": blob }).to_string();
     let response = match http()
@@ -1214,7 +1218,7 @@ pub async fn post_rendezvous(
     {
         Ok(r) => r,
         Err(e) => {
-            note(conn, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
@@ -1226,7 +1230,7 @@ pub async fn post_rendezvous(
         return Err(RENDEZVOUS_TAKEN.to_owned());
     }
     let message = format!("the relay answered {status} to a rendezvous post");
-    note(conn, "rendezvous", Kind::Http, &message, Some(&url));
+    say(db, "rendezvous", Kind::Http, &message, Some(&url));
     Err(message)
 }
 
@@ -1237,16 +1241,16 @@ pub async fn post_rendezvous(
 /// put an error in front of the reader on every tick before the pairing has had any chance to
 /// finish.
 pub async fn get_rendezvous(
-    conn: &Connection,
+    db: &impl Store,
     rv: &str,
     slot: &str,
 ) -> Result<Option<String>, String> {
-    let base = entitlement::base(conn);
+    let base = db.with(|conn| Ok(entitlement::base(conn)))?;
     let url = format!("{base}/p/{rv}/{slot}");
     let response = match http().get(&url).send().await {
         Ok(r) => r,
         Err(e) => {
-            note(conn, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
@@ -1256,20 +1260,20 @@ pub async fn get_rendezvous(
     }
     if !(200..300).contains(&status) {
         let message = format!("the relay answered {status} to a rendezvous poll");
-        note(conn, "rendezvous", Kind::Http, &message, Some(&url));
+        say(db, "rendezvous", Kind::Http, &message, Some(&url));
         return Err(message);
     }
     let text = match response.text().await {
         Ok(t) => t,
         Err(e) => {
-            note(conn, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
     let page: RendezvousPage = match serde_json::from_str(&text) {
         Ok(p) => p,
         Err(e) => {
-            note(conn, "rendezvous", Kind::Parse, &e.to_string(), Some(&url));
+            say(db, "rendezvous", Kind::Parse, &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
@@ -1320,9 +1324,14 @@ pub async fn get_rendezvous(
 /// commit: until it runs the device stands a trip behind. (Until `check_keys` tried itself, the
 /// adopt loop skipped this device, every candidate failed the AEAD and the device stalled at *N*
 /// for good.) This is `remove_device`'s order exactly.
-pub async fn publish_join(conn: &Connection) -> Result<(), String> {
-    let Ok(plan) = identity::plan_join(conn) else {
-        identity::set_roster_dirty(conn, true)?;
+pub async fn publish_join(db: &impl Store) -> Result<(), String> {
+    let owing = |conn: &Connection| identity::set_roster_dirty(conn, true);
+    // The plan, or the debt marked in the stretch that found there was none to make.
+    let plan = db.with(|conn| match identity::plan_join(conn) {
+        Ok(plan) => Ok(Some(plan)),
+        Err(_) => owing(conn).map(|()| None),
+    })?;
+    let Some(plan) = plan else {
         return Ok(());
     };
     // **One `/keys` read of its own rather than a value threaded down from `check_keys`.** That
@@ -1332,10 +1341,10 @@ pub async fn publish_join(conn: &Connection) -> Result<(), String> {
     // needing its own read anyway, so there would be two shapes and two behaviours to keep in
     // step. The cost is one GET per pairing, plus one per sync only while the debt is
     // outstanding — `round_trip` does not call this otherwise.
-    let Ok(known) = relay_manifest(conn).await else {
+    let Ok(known) = relay_manifest(db).await else {
         // Unreachable, refused, or a group with no membership at all — the common first
         // pairing. Nothing can be concluded about the group's roster, so nothing is published.
-        return identity::set_roster_dirty(conn, true);
+        return db.with(owing);
     };
     let mine: std::collections::HashSet<&str> =
         plan.keys.iter().map(|(id, _)| id.as_str()).collect();
@@ -1345,17 +1354,23 @@ pub async fn publish_join(conn: &Connection) -> Result<(), String> {
     // evicted. An empty `known` (a group that has claimed and never rotated answers
     // `devices: []`) is a subset of everything, which is what keeps the common case publishing.
     if !known.iter().all(|id| mine.contains(id.as_str())) {
-        return identity::set_roster_dirty(conn, true);
+        return db.with(owing);
     }
-    if post_rotation(conn, &plan).await.is_err() {
+    if post_rotation(db, &plan).await.is_err() {
         // Nothing committed, so the group is exactly as it was and the debt is recorded.
-        return identity::set_roster_dirty(conn, true);
+        return db.with(owing);
     }
+    // **The plan was made before two requests and is committed behind them**, against the same
+    // group and the same roster: both move only under the lane this operation holds.
+    //
     // `""` removes nobody: `commit_rotation`'s `DELETE … WHERE device_id = ?1` matches no row,
     // which is what a join wants. Its `baselined_at = NULL` sweep is wanted in full — a joining
-    // device needs every peer's last words carried across the epoch boundary.
-    identity::commit_rotation(conn, "", &plan)?;
-    identity::set_roster_dirty(conn, false)
+    // device needs every peer's last words carried across the epoch boundary. The commit and the
+    // cleared mark are one stretch, so no reader of the mark sees a committed join still owing.
+    db.with(|conn| {
+        identity::commit_rotation(conn, "", &plan)?;
+        identity::set_roster_dirty(conn, false)
+    })
 }
 
 // ---------------------------------------------------------------------------------------
@@ -1523,12 +1538,12 @@ const CLOCK_PINNED: &str = "this device's clock was once set more than a day ahe
 /// refusal after [`check_keys`] adopted, which means the relay's epoch and the manifest's
 /// disagree, or another rotation landed in the same breath. Recorded, and the next trip tries
 /// again from its own `/keys` check.
-fn stale_twice(conn: &Connection, url: &str) -> String {
+fn stale_twice(db: &impl Store, url: &str) -> String {
     let message = "the relay refused this device's changes as sealed under a group key it has \
                    moved past, even after this device caught up with the key change. They are \
                    kept here and offered again on the next sync."
         .to_owned();
-    note(conn, "push", Kind::Http, &message, Some(url));
+    say(db, "push", Kind::Http, &message, Some(url));
     message
 }
 
@@ -1738,8 +1753,8 @@ fn rebase(conn: &Connection, device: &str) -> Result<Rebase, String> {
 /// of an earlier one would carry its sender's watermark on every other device past the ops still
 /// waiting here, which would then be skipped as seen — and `Ok` answers with the deferral, so the
 /// trip goes on to pull and ack. Failing it held both back for as long as the refusal lasted.
-pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<Pushed, String> {
-    let Some((device, mut group)) = me(conn)? else {
+pub async fn push(db: &impl Store, base: &str, token: &str) -> Result<Pushed, String> {
+    let Some((device, mut group)) = db.with(me)? else {
         return Ok(Pushed::default());
     };
     let url = format!("{base}/g/{}/push", group.group_id);
@@ -1749,7 +1764,10 @@ pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<Pushed, 
 
     // Round again only after a rebase, which is the one thing that changes what the outbox reads.
     'outbox: loop {
-        let pending = unpushed(conn)?;
+        // **The outbox as it stands at this moment.** What the reader writes while these chunks
+        // are on their way is a row with a higher `seq`: not in this list, and so neither sent nor
+        // stamped by this trip. The next one carries it.
+        let pending = db.with(unpushed)?;
         let seqs: Vec<i64> = pending.iter().map(|(seq, _)| *seq).collect();
         let ops: Vec<Op> = pending.into_iter().map(|(_, op)| op).collect();
         let mut offset = 0usize;
@@ -1759,38 +1777,40 @@ pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<Pushed, 
             offset += chunk.len();
             if chunk.len() == 1 && wire::oversized(chunk) {
                 let op = &chunk[0];
-                note(
-                    conn,
-                    "push",
-                    Kind::Other,
-                    &unsendable(op, "your other devices"),
-                    Some(&op.uid),
-                );
-                stamp_pushed(conn, taken)?;
+                db.with(|conn| {
+                    note(
+                        conn,
+                        "push",
+                        Kind::Other,
+                        &unsendable(op, "your other devices"),
+                        Some(&op.uid),
+                    );
+                    stamp_pushed(conn, taken)
+                })?;
                 continue;
             }
-            let mut landed = post_ops(conn, base, token, &group, &device, chunk).await;
+            let mut landed = post_ops(db, base, token, &group, &device, chunk).await;
             if matches!(landed, Err(Refusal::Stale)) {
                 if caught_up {
-                    return Err(stale_twice(conn, &url));
+                    return Err(stale_twice(db, &url));
                 }
                 caught_up = true;
                 let gone = Pushed {
                     sent,
                     deferred: None,
                 };
-                if check_keys(conn).await?.outcome == KeyOutcome::Removed {
+                if check_keys(db).await?.outcome == KeyOutcome::Removed {
                     return Ok(gone);
                 }
-                let Some((_, adopted)) = me(conn)? else {
+                let Some((_, adopted)) = db.with(me)? else {
                     return Ok(gone);
                 };
                 group = adopted;
-                landed = post_ops(conn, base, token, &group, &device, chunk).await;
+                landed = post_ops(db, base, token, &group, &device, chunk).await;
             }
             match landed {
                 Ok(()) => {}
-                Err(Refusal::Stale) => return Err(stale_twice(conn, &url)),
+                Err(Refusal::Stale) => return Err(stale_twice(db, &url)),
                 Err(Refusal::Failed(message)) => return Err(message),
                 Err(Refusal::Deferred(deferral)) => {
                     return Ok(Pushed {
@@ -1804,7 +1824,7 @@ pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<Pushed, 
                     let found = if rebased {
                         Rebase::StillAhead
                     } else {
-                        rebase(conn, &device)?
+                        db.with(|conn| rebase(conn, &device))?
                     };
                     if found == Rebase::Done {
                         rebased = true;
@@ -1815,7 +1835,7 @@ pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<Pushed, 
                     } else {
                         CLOCK_STILL_AHEAD
                     };
-                    note(conn, "push", Kind::Http, message, Some(&url));
+                    say(db, "push", Kind::Http, message, Some(&url));
                     return Ok(Pushed {
                         sent,
                         deferred: Some(Deferral::ClockAhead),
@@ -1825,7 +1845,7 @@ pub async fn push(conn: &Connection, base: &str, token: &str) -> Result<Pushed, 
 
             // Only now, and one chunk at a time: a run that dies between two chunks has handed the
             // first over and is honest about it.
-            stamp_pushed(conn, taken)?;
+            db.with(|conn| stamp_pushed(conn, taken))?;
             sent += chunk.len();
         }
         return Ok(Pushed {
@@ -1967,17 +1987,26 @@ fn clock_sentence(conn: &Connection, device: &str, ahead_ms: i64) -> String {
 /// **Every envelope recorded is recorded once per hold**, not once per pull: a held page comes back
 /// on every trip, and [`Hold::noted`] is what a later pull behind the same hold asks first.
 pub async fn pull(
-    conn: &Connection,
+    db: &impl Store,
     base: &str,
     token: &str,
     relay_epoch: Option<i64>,
 ) -> Result<Pulled, String> {
-    let Some((device, group)) = me(conn)? else {
+    // One stretch: who this is, where its cursor stands, and what an earlier pull behind the
+    // same hold already recorded.
+    let stood = db.with(|conn| {
+        let Some((device, group)) = me(conn)? else {
+            return Ok(None);
+        };
+        let cursor: i64 = get_state(conn, PULL_CURSOR)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(0);
+        let recorded = read_hold(conn).map(|h| h.noted).unwrap_or_default();
+        Ok(Some((device, group, cursor, recorded)))
+    })?;
+    let Some((device, group, cursor, recorded)) = stood else {
         return Ok(Pulled::default());
     };
-    let cursor: i64 = get_state(conn, PULL_CURSOR)
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
     let url = format!(
         "{base}/g/{}/pull?since={cursor}&device={device}",
         group.group_id
@@ -1990,301 +2019,313 @@ pub async fn pull(
     {
         Ok(r) => r,
         Err(e) => {
-            note(conn, "pull", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "pull", kind_of(&e), &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
     let status = response.status().as_u16();
     if status == 401 {
-        return Err(lapsed(conn, "a pull"));
+        return Err(lapsed_in(db, "a pull"));
     }
     if !(200..300).contains(&status) {
         let message = format!("the relay answered {status} to a pull");
-        note(conn, "pull", Kind::Http, &message, Some(&url));
+        say(db, "pull", Kind::Http, &message, Some(&url));
         return Err(message);
     }
     let text = match response.text().await {
         Ok(t) => t,
         Err(e) => {
-            note(conn, "pull", kind_of(&e), &e.to_string(), Some(&url));
+            say(db, "pull", kind_of(&e), &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
     let page: PullPage = match serde_json::from_str(&text) {
         Ok(p) => p,
         Err(e) => {
-            note(conn, "pull", Kind::Parse, &e.to_string(), Some(&url));
+            say(db, "pull", Kind::Parse, &e.to_string(), Some(&url));
             return Err(e.to_string());
         }
     };
 
-    let mut opened: Vec<(&Envelope, Vec<Op>)> = Vec::new();
-    let mut unreadable = 0usize;
-    let mut behind = false;
-    // Sender → the stamp of its earliest batch in this page that only a newer build can read.
-    let mut unparsed: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
-    // What an earlier pull behind the same hold already recorded, and what this one met.
-    let recorded = read_hold(conn).map(|h| h.noted).unwrap_or_default();
-    let mut met: Vec<(String, i64, i64)> = Vec::new();
     // The relay's epoch as this pull knows it, and whether this pull has asked `/keys` itself —
-    // `Some(true)` for an answer, `Some(false)` for an ask that failed. Once per pull.
+    // `Some(true)` for an answer, `Some(false)` for an ask that failed. **Once per pull, and
+    // ahead of the page rather than at the envelope that calls for it**: it is the one request
+    // the page's reading makes, and asked here everything below is a single stretch. Which
+    // envelopes hold and which are stepped over comes out the same — the answer only ever raises
+    // the epoch in hand, and an envelope at or below the old one was held either way.
     let mut relay = relay_epoch;
     let mut asked: Option<bool> = None;
-    for envelope in &page.envelopes {
-        let failure = if envelope.epoch > group.epoch {
-            if asked.is_none() && relay.is_none_or(|r| envelope.epoch > r) {
-                let fresh = fetch_key_page(conn, base, &device, &group).await;
-                asked = Some(fresh.is_ok());
-                if let Ok(fresh) = fresh {
-                    relay = Some(relay.map_or(fresh.epoch, |r| r.max(fresh.epoch)));
-                }
-            }
-            if relay.is_some_and(|r| envelope.epoch <= r) || asked != Some(true) {
-                behind = true;
-                BEHIND_A_ROTATION.to_owned()
-            } else {
-                NO_SUCH_ROTATION.to_owned()
-            }
-        } else {
-            let held = if envelope.epoch < group.epoch {
-                identity::group_at(conn, &group, envelope.epoch).map_err(|e| e.to_string())?
-            } else {
-                None
-            };
-            match wire::open_batch(held.as_ref().unwrap_or(&group), envelope) {
-                Ok(batch) => {
-                    opened.push((envelope, batch));
-                    continue;
-                }
-                Err(e) => {
-                    // Opened, so a member of the group sealed it, and an op in it says a newer
-                    // build did. See the doc above; `Malformed` falls through and is stepped over.
-                    if let WireError::Newer(_) = e {
-                        unparsed
-                            .entry(envelope.device.as_str())
-                            .and_modify(|first| *first = (*first).min(at_of(envelope)))
-                            .or_insert(at_of(envelope));
-                    }
-                    e.to_string()
-                }
-            }
-        };
-        unreadable += 1;
-        let (ms, ctr) = at_of(envelope);
-        let this = (envelope.device.clone(), ms, ctr);
-        if !recorded.contains(&this) {
-            let detail = if envelope.epoch > group.epoch {
-                format!(
-                    "{} at epoch {}; this device is at {}, the relay at {}",
-                    envelope.device,
-                    envelope.epoch,
-                    group.epoch,
-                    relay.map_or("an epoch it did not say".to_owned(), |r| r.to_string())
-                )
-            } else {
-                envelope.device.clone()
-            };
-            note(conn, "pull", Kind::Parse, &failure, Some(&detail));
-        }
-        met.push(this);
-    }
-    let unread_newer = !unparsed.is_empty();
-
-    // Sender → the stamp of its earliest batch carrying an op stamped too far ahead of this
-    // device's clock that `apply` would not skip, and the furthest such stamp, which is what the
-    // sentence says.
-    let wall = wall_ms(conn)?;
-    let applied = watermarks(conn)?;
-    let mut ahead: std::collections::BTreeMap<&str, ((i64, i64), i64)> = Default::default();
-    for (envelope, batch) in opened.iter().map(|(e, b)| (*e, b)) {
-        let Some(furthest) = batch
-            .iter()
-            .filter(|op| {
-                op.at.device != device
-                    && applied
-                        .get(&op.at.device)
-                        .is_none_or(|seen| (op.at.ms, op.at.ctr) > *seen)
-            })
-            .map(|op| op.at.ms)
-            .filter(|&ms| hlc::too_far_ahead(ms, wall))
-            .max()
-        else {
-            continue;
-        };
-        let at = at_of(envelope);
-        ahead
-            .entry(envelope.device.as_str())
-            .and_modify(|(first, most)| {
-                *first = (*first).min(at);
-                *most = (*most).max(furthest);
-            })
-            .or_insert((at, furthest));
-    }
-    for (sender, (first, furthest)) in &ahead {
-        let this = ((*sender).to_owned(), first.0, first.1);
-        if !recorded.contains(&this) {
-            note(
-                conn,
-                "pull",
-                Kind::Other,
-                &clock_sentence(conn, sender, furthest - wall),
-                Some(sender),
-            );
-        }
-        met.push(this);
-    }
-
-    // Sender → the stamp of its earliest batch in the page: where a clock hold's block sits, since
-    // it holds every batch of its sender.
-    let mut earliest: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
-    for (envelope, _) in &opened {
-        earliest
-            .entry(envelope.device.as_str())
-            .and_modify(|first| *first = (*first).min(at_of(envelope)))
-            .or_insert(at_of(envelope));
-    }
-
-    // **A sender's batches stamped at or after one only a newer build can read wait with the
-    // cursor**, or they would carry its watermark past the held ops, which the re-delivery would
-    // then skip as seen — by stamp, not page position, so earlier ones are safe. **A sender held
-    // for its clock waits whole** (the doc above says why by device). A `Malformed` batch holds
-    // nothing and keeps nothing back: it is stepped over.
-    let mut ops: Vec<Op> = Vec::new();
-    let mut held_behind = 0usize;
-    let mut held_clock = 0usize;
-    for (envelope, mut batch) in opened {
-        let at = at_of(envelope);
-        let sender = envelope.device.as_str();
-        if unparsed.get(sender).is_some_and(|first| at >= *first) {
-            held_behind += batch.len();
-        } else if ahead.contains_key(sender) {
-            held_clock += batch.len();
-        } else {
-            ops.append(&mut batch);
-        }
-    }
-
-    let (mut report, mut blocks) = apply::apply_held(conn, &ops, apply::Waiting::Hold)?;
-    // Held behind a newer build's batch, which is what `held_newer` counts — and a block of the
-    // hold's, at the first such batch, unless `apply` holds its sender earlier still. A sender held
-    // for its clock is deferred and a block the same way, at its earliest batch, and counted in no
-    // class of `apply`'s.
-    report.held_newer += held_behind;
-    report.deferred += held_behind + held_clock;
-    let firsts = unparsed.iter().map(|(device, at)| (*device, *at)).chain(
-        ahead
-            .keys()
-            .filter_map(|device| earliest.get(device).map(|at| (*device, *at))),
-    );
-    for (device, at) in firsts {
-        blocks
-            .entry(device.to_owned())
-            .and_modify(|first| *first = (*first).min(at))
-            .or_insert(at);
-    }
-    // **The cursor moves to the page head only when nothing here can still apply** — the relay
-    // answers only rows above it, and `apply` keeps no copy of what it held, so stepping past a
-    // held op loses it and every later op of its device in this page for good. Holding is what
-    // makes the relay hand the page back, and `sync_peers` is what makes that re-delivery safe:
-    // what applied is skipped and what was held applies once, when it can. The ack follows the
-    // cursor, so the relay keeps the held rows. Spec 2026-09-27 §3.3, in order — **the kind a
-    // hold records is the one that will outlast the others**, since that is the one the panel has
-    // to explain:
-    //
-    // 1. `behind` a key rotation the relay has reached — held, as it always was; the next trip's
-    //    `check_keys` brings the key, so it records no kind at all.
-    // 2. A newer schema's held group, or a batch that opened, did not parse and says a newer
-    //    build sealed it — held, with no bound, until this device updates. Nothing but the reader
-    //    resolves it, so it names the hold over a clock or a wait beside it.
-    // 3. A batch stamped more than `hlc::MAX_AHEAD_MS` ahead of this device's clock — held until
-    //    the clock comes within the bound, which time does on its own. Over a wait, because a wait
-    //    is bounded shorter still: its count simply starts once the clock hold has cleared.
-    // 4. A group waiting on a parent — held until [`WAITING_PULLS`] pulls spanning
-    //    [`WAITING_SECS`] have found the same blocks ([`Hold::blocks`]), then released: the page
-    //    is applied once more with [`apply::Waiting::Release`], which drops and records the group
-    //    and applies what sat behind it, and the cursor moves.
-    // 5. Otherwise — every group applied, skipped, moot or dropped — the cursor moves and any
-    //    hold is cleared.
-    let advance = if behind {
-        false
-    } else if report.held_newer > 0 || unread_newer {
-        note_hold(conn, "newer", blocks, met)?;
-        false
-    } else if held_clock > 0 {
-        note_hold(conn, "clock", blocks, met)?;
-        false
-    } else if report.held_waiting > 0 {
-        let hold = note_hold(conn, "waiting", blocks, met.clone())?;
-        if hold.pulls >= WAITING_PULLS && now_secs(conn)? - hold.since >= WAITING_SECS {
-            let (released, still) = apply::apply_held(conn, &ops, apply::Waiting::Release)?;
-            // What the first pass applied or consumed is below its watermark now and skipped
-            // here, so these add without counting anything twice.
-            report.applied += released.applied;
-            report.resurrected += released.resurrected;
-            report.cycles_broken += released.cycles_broken;
-            report.moot += released.moot;
-            report.dropped += released.dropped;
-            report.held_waiting = released.held_waiting;
-            report.held_newer = released.held_newer;
-            report.deferred = released.deferred;
-            // **A release can uncover a newer group.** Collateral takes its block's class, so
-            // a device that pushed a waiting child from an older build and then a newer
-            // build's op behind it reports the newer op as waiting until the release attempts
-            // it — and a release that then advanced would lose it.
-            if released.held_newer > 0 {
-                note_hold(conn, "newer", still, met)?;
-                false
-            } else {
-                clear_hold(conn)?;
-                true
-            }
-        } else {
-            false
-        }
-    } else {
-        clear_hold(conn)?;
-        true
+    let ahead = |envelope: &Envelope| {
+        envelope.epoch > group.epoch && relay.is_none_or(|r| envelope.epoch > r)
     };
-    let mut converted = false;
-    if advance {
-        set_state(conn, PULL_CURSOR, &page.cursor.to_string()).map_err(|e| e.to_string())?;
-        // **Both conversions below are captured, so whatever they write is a new `sync_ops`
-        // row** — which is how [`RelayOutcome::changed`] hears about it: neither counts in `apply`'s
-        // report, and only one answers a count at all.
-        let before = last_op(conn)?;
-        // **User schema v52's art picks convert here on a paired device, and only behind a pull
-        // that read everything.** A conversion before this device has heard its group can insert
-        // an entry a peer already derived and has edited since, under a later stamp, and revert
-        // the edit on every device — `deck_tokens::convert_legacy_picks_at_launch` has the
-        // scenario. So the launch pass leaves a paired device's picks alone until this has run
-        // once, and this runs behind every pull after, which converts a v51 peer's pick on the
-        // pull that brings it. **Not behind a held pull**, whatever held it: an envelope held at
-        // an epoch, or a group held for a newer schema or a parent, may be exactly the peer's
-        // entries and clears the gate waits for. **Captured**, because `apply` has returned and
-        // `capture::suppressed` with it; and logged rather than returned, because the pull
-        // itself has landed and a pick left owing is retried behind the next one.
-        if let Err(e) = crate::deck_tokens::convert_legacy_picks_after_pull(conn) {
-            eprintln!(
-                "the decks' pre-v52 token art picks could not be converted after a pull: \
-                 {e}\nThey are tried again behind the next pull."
-            );
+    if page.envelopes.iter().any(ahead) {
+        let fresh = fetch_key_page(db, base, &device, &group).await;
+        asked = Some(fresh.is_ok());
+        if let Ok(fresh) = fresh {
+            relay = Some(relay.map_or(fresh.epoch, |r| r.max(fresh.epoch)));
         }
-        // **User schema v53's net, behind the same pulls and for the same reasons**: a v52
-        // peer's theory card arrives filed in a live pile, and this refiles it into the plan's
-        // pile of that name, captured, on the pull that brings it
-        // (`deck_meta::refile_stray_theory_cards`).
-        if let Err(e) = crate::deck_meta::refile_stray_theory_cards_after_pull(conn) {
-            eprintln!(
-                "the plans' cards filed in the actual list's categories could not be refiled \
-                 after a pull: {e}\nThey are tried again behind the next pull."
-            );
-        }
-        converted = last_op(conn)? != before;
     }
-    Ok(Pulled {
-        unreadable,
-        report,
-        converted,
+
+    // **From here to the end is one stretch**: the page is opened, measured against this
+    // device's clock and watermarks, applied, and the cursor moved or held — against one state
+    // of the database, with the conversions that follow an advancing pull behind it.
+    db.with(|conn| {
+        let mut opened: Vec<(&Envelope, Vec<Op>)> = Vec::new();
+        let mut unreadable = 0usize;
+        let mut behind = false;
+        // Sender → the stamp of its earliest batch in this page that only a newer build can read.
+        let mut unparsed: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
+        // What this pull met, beside what an earlier one behind the same hold already recorded.
+        let mut met: Vec<(String, i64, i64)> = Vec::new();
+        for envelope in &page.envelopes {
+            let failure = if envelope.epoch > group.epoch {
+                if relay.is_some_and(|r| envelope.epoch <= r) || asked != Some(true) {
+                    behind = true;
+                    BEHIND_A_ROTATION.to_owned()
+                } else {
+                    NO_SUCH_ROTATION.to_owned()
+                }
+            } else {
+                let held = if envelope.epoch < group.epoch {
+                    identity::group_at(conn, &group, envelope.epoch).map_err(|e| e.to_string())?
+                } else {
+                    None
+                };
+                match wire::open_batch(held.as_ref().unwrap_or(&group), envelope) {
+                    Ok(batch) => {
+                        opened.push((envelope, batch));
+                        continue;
+                    }
+                    Err(e) => {
+                        // Opened, so a member of the group sealed it, and an op in it says a newer
+                        // build did. See the doc above; `Malformed` falls through and is stepped over.
+                        if let WireError::Newer(_) = e {
+                            unparsed
+                                .entry(envelope.device.as_str())
+                                .and_modify(|first| *first = (*first).min(at_of(envelope)))
+                                .or_insert(at_of(envelope));
+                        }
+                        e.to_string()
+                    }
+                }
+            };
+            unreadable += 1;
+            let (ms, ctr) = at_of(envelope);
+            let this = (envelope.device.clone(), ms, ctr);
+            if !recorded.contains(&this) {
+                let detail = if envelope.epoch > group.epoch {
+                    format!(
+                        "{} at epoch {}; this device is at {}, the relay at {}",
+                        envelope.device,
+                        envelope.epoch,
+                        group.epoch,
+                        relay.map_or("an epoch it did not say".to_owned(), |r| r.to_string())
+                    )
+                } else {
+                    envelope.device.clone()
+                };
+                note(conn, "pull", Kind::Parse, &failure, Some(&detail));
+            }
+            met.push(this);
+        }
+        let unread_newer = !unparsed.is_empty();
+
+        // Sender → the stamp of its earliest batch carrying an op stamped too far ahead of this
+        // device's clock that `apply` would not skip, and the furthest such stamp, which is what the
+        // sentence says.
+        let wall = wall_ms(conn)?;
+        let applied = watermarks(conn)?;
+        let mut ahead: std::collections::BTreeMap<&str, ((i64, i64), i64)> = Default::default();
+        for (envelope, batch) in opened.iter().map(|(e, b)| (*e, b)) {
+            let Some(furthest) = batch
+                .iter()
+                .filter(|op| {
+                    op.at.device != device
+                        && applied
+                            .get(&op.at.device)
+                            .is_none_or(|seen| (op.at.ms, op.at.ctr) > *seen)
+                })
+                .map(|op| op.at.ms)
+                .filter(|&ms| hlc::too_far_ahead(ms, wall))
+                .max()
+            else {
+                continue;
+            };
+            let at = at_of(envelope);
+            ahead
+                .entry(envelope.device.as_str())
+                .and_modify(|(first, most)| {
+                    *first = (*first).min(at);
+                    *most = (*most).max(furthest);
+                })
+                .or_insert((at, furthest));
+        }
+        for (sender, (first, furthest)) in &ahead {
+            let this = ((*sender).to_owned(), first.0, first.1);
+            if !recorded.contains(&this) {
+                note(
+                    conn,
+                    "pull",
+                    Kind::Other,
+                    &clock_sentence(conn, sender, furthest - wall),
+                    Some(sender),
+                );
+            }
+            met.push(this);
+        }
+
+        // Sender → the stamp of its earliest batch in the page: where a clock hold's block sits, since
+        // it holds every batch of its sender.
+        let mut earliest: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
+        for (envelope, _) in &opened {
+            earliest
+                .entry(envelope.device.as_str())
+                .and_modify(|first| *first = (*first).min(at_of(envelope)))
+                .or_insert(at_of(envelope));
+        }
+
+        // **A sender's batches stamped at or after one only a newer build can read wait with the
+        // cursor**, or they would carry its watermark past the held ops, which the re-delivery would
+        // then skip as seen — by stamp, not page position, so earlier ones are safe. **A sender held
+        // for its clock waits whole** (the doc above says why by device). A `Malformed` batch holds
+        // nothing and keeps nothing back: it is stepped over.
+        let mut ops: Vec<Op> = Vec::new();
+        let mut held_behind = 0usize;
+        let mut held_clock = 0usize;
+        for (envelope, mut batch) in opened {
+            let at = at_of(envelope);
+            let sender = envelope.device.as_str();
+            if unparsed.get(sender).is_some_and(|first| at >= *first) {
+                held_behind += batch.len();
+            } else if ahead.contains_key(sender) {
+                held_clock += batch.len();
+            } else {
+                ops.append(&mut batch);
+            }
+        }
+
+        let (mut report, mut blocks) = apply::apply_held(conn, &ops, apply::Waiting::Hold)?;
+        // Held behind a newer build's batch, which is what `held_newer` counts — and a block of the
+        // hold's, at the first such batch, unless `apply` holds its sender earlier still. A sender held
+        // for its clock is deferred and a block the same way, at its earliest batch, and counted in no
+        // class of `apply`'s.
+        report.held_newer += held_behind;
+        report.deferred += held_behind + held_clock;
+        let firsts = unparsed.iter().map(|(device, at)| (*device, *at)).chain(
+            ahead
+                .keys()
+                .filter_map(|device| earliest.get(device).map(|at| (*device, *at))),
+        );
+        for (device, at) in firsts {
+            blocks
+                .entry(device.to_owned())
+                .and_modify(|first| *first = (*first).min(at))
+                .or_insert(at);
+        }
+        // **The cursor moves to the page head only when nothing here can still apply** — the relay
+        // answers only rows above it, and `apply` keeps no copy of what it held, so stepping past a
+        // held op loses it and every later op of its device in this page for good. Holding is what
+        // makes the relay hand the page back, and `sync_peers` is what makes that re-delivery safe:
+        // what applied is skipped and what was held applies once, when it can. The ack follows the
+        // cursor, so the relay keeps the held rows. Spec 2026-09-27 §3.3, in order — **the kind a
+        // hold records is the one that will outlast the others**, since that is the one the panel has
+        // to explain:
+        //
+        // 1. `behind` a key rotation the relay has reached — held, as it always was; the next trip's
+        //    `check_keys` brings the key, so it records no kind at all.
+        // 2. A newer schema's held group, or a batch that opened, did not parse and says a newer
+        //    build sealed it — held, with no bound, until this device updates. Nothing but the reader
+        //    resolves it, so it names the hold over a clock or a wait beside it.
+        // 3. A batch stamped more than `hlc::MAX_AHEAD_MS` ahead of this device's clock — held until
+        //    the clock comes within the bound, which time does on its own. Over a wait, because a wait
+        //    is bounded shorter still: its count simply starts once the clock hold has cleared.
+        // 4. A group waiting on a parent — held until [`WAITING_PULLS`] pulls spanning
+        //    [`WAITING_SECS`] have found the same blocks ([`Hold::blocks`]), then released: the page
+        //    is applied once more with [`apply::Waiting::Release`], which drops and records the group
+        //    and applies what sat behind it, and the cursor moves.
+        // 5. Otherwise — every group applied, skipped, moot or dropped — the cursor moves and any
+        //    hold is cleared.
+        let advance = if behind {
+            false
+        } else if report.held_newer > 0 || unread_newer {
+            note_hold(conn, "newer", blocks, met)?;
+            false
+        } else if held_clock > 0 {
+            note_hold(conn, "clock", blocks, met)?;
+            false
+        } else if report.held_waiting > 0 {
+            let hold = note_hold(conn, "waiting", blocks, met.clone())?;
+            if hold.pulls >= WAITING_PULLS && now_secs(conn)? - hold.since >= WAITING_SECS {
+                let (released, still) = apply::apply_held(conn, &ops, apply::Waiting::Release)?;
+                // What the first pass applied or consumed is below its watermark now and skipped
+                // here, so these add without counting anything twice.
+                report.applied += released.applied;
+                report.resurrected += released.resurrected;
+                report.cycles_broken += released.cycles_broken;
+                report.moot += released.moot;
+                report.dropped += released.dropped;
+                report.held_waiting = released.held_waiting;
+                report.held_newer = released.held_newer;
+                report.deferred = released.deferred;
+                // **A release can uncover a newer group.** Collateral takes its block's class, so
+                // a device that pushed a waiting child from an older build and then a newer
+                // build's op behind it reports the newer op as waiting until the release attempts
+                // it — and a release that then advanced would lose it.
+                if released.held_newer > 0 {
+                    note_hold(conn, "newer", still, met)?;
+                    false
+                } else {
+                    clear_hold(conn)?;
+                    true
+                }
+            } else {
+                false
+            }
+        } else {
+            clear_hold(conn)?;
+            true
+        };
+        let mut converted = false;
+        if advance {
+            set_state(conn, PULL_CURSOR, &page.cursor.to_string()).map_err(|e| e.to_string())?;
+            // **Both conversions below are captured, so whatever they write is a new `sync_ops`
+            // row** — which is how [`RelayOutcome::changed`] hears about it: neither counts in `apply`'s
+            // report, and only one answers a count at all.
+            let before = last_op(conn)?;
+            // **User schema v52's art picks convert here on a paired device, and only behind a pull
+            // that read everything.** A conversion before this device has heard its group can insert
+            // an entry a peer already derived and has edited since, under a later stamp, and revert
+            // the edit on every device — `deck_tokens::convert_legacy_picks_at_launch` has the
+            // scenario. So the launch pass leaves a paired device's picks alone until this has run
+            // once, and this runs behind every pull after, which converts a v51 peer's pick on the
+            // pull that brings it. **Not behind a held pull**, whatever held it: an envelope held at
+            // an epoch, or a group held for a newer schema or a parent, may be exactly the peer's
+            // entries and clears the gate waits for. **Captured**, because `apply` has returned and
+            // `capture::suppressed` with it; and logged rather than returned, because the pull
+            // itself has landed and a pick left owing is retried behind the next one.
+            if let Err(e) = crate::deck_tokens::convert_legacy_picks_after_pull(conn) {
+                eprintln!(
+                    "the decks' pre-v52 token art picks could not be converted after a pull: \
+                 {e}\nThey are tried again behind the next pull."
+                );
+            }
+            // **User schema v53's net, behind the same pulls and for the same reasons**: a v52
+            // peer's theory card arrives filed in a live pile, and this refiles it into the plan's
+            // pile of that name, captured, on the pull that brings it
+            // (`deck_meta::refile_stray_theory_cards`).
+            if let Err(e) = crate::deck_meta::refile_stray_theory_cards_after_pull(conn) {
+                eprintln!(
+                    "the plans' cards filed in the actual list's categories could not be refiled \
+                 after a pull: {e}\nThey are tried again behind the next pull."
+                );
+            }
+            converted = last_op(conn)? != before;
+        }
+        Ok(Pulled {
+            unreadable,
+            report,
+            converted,
+        })
     })
 }
 
@@ -2406,10 +2447,25 @@ const BASELINE_CLOCK_AHEAD: &str = "the relay refused a device's first sync as s
 /// moves ops, not rows — and the relay would refuse the chunk carrying it after taking the ones
 /// before it, which the next trip then pushes again. Recorded once a trip
 /// ([`BASELINE_WAITS_FOR_THE_CLOCK`]), and it goes once real time reaches the row.
+///
+/// ⚠️ **And none is begun while anything written since this trip read its outbox is still
+/// pending** — `through` is the newest op there was when it did. A baseline's rows hold such a
+/// write and its horizon covers it, but the op itself is not on the relay's log yet: it goes out
+/// with the *next* trip, behind the baseline. A peer that pulls in between reads the claim in one
+/// page and the op in the next, where no horizon filters it — the horizon is a filter on one
+/// page and writes nothing — and counts it on top of the claim that already held it. A card out
+/// of nothing, which is the one direction a baseline may never fail in (the baseline spec's
+/// §8.2). **It could not happen while a trip held the connection from its push to its ack**; a
+/// reader's write can land between the two now, and so can the conversions behind this trip's own
+/// pull. Nothing is recorded: the marker stays NULL, and the next trip — which that pending op
+/// has already asked for — pushes it and emits behind it, where the horizon covers only what the
+/// log holds. An op an *earlier* refusal left pending does not hold a baseline back; what a
+/// deferral stops is [`Deferral::stops_baselines`]', as it always was.
 async fn emit_baselines(
     db: &impl Store,
     base: &str,
     token: &str,
+    through: i64,
 ) -> Result<(usize, usize), String> {
     let Some((device, group)) = db.with(me)? else {
         return Ok((0, 0));
@@ -2423,13 +2479,30 @@ async fn emit_baselines(
         // device's ops are already inside the rows; a write landing between the two reads is
         // inside the horizon and outside the rows, so the peer would be handed neither its
         // value nor — the horizon filtering it — its delta. Lost, with nothing to say so.
-        let (mut ops, wall, horizon) = db.with(|conn| {
-            Ok((
+        //
+        // **And the question whether anything newer is pending is asked in that same stretch**,
+        // so the answer is about exactly the rows that were read.
+        let read = db.with(|conn| {
+            let newer: bool = conn
+                .query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sync_ops WHERE pushed_at IS NULL AND seq > ?1)",
+                    [through],
+                    |r| r.get(0),
+                )
+                .map_err(|e| e.to_string())?;
+            if newer {
+                return Ok(None);
+            }
+            Ok(Some((
                 baseline::build(conn, &device)?,
                 wall_ms(conn)?,
                 baseline::horizon(conn, &device)?,
-            ))
+            )))
         })?;
+        // **Every peer's baseline is these same rows**, so what holds one back holds them all.
+        let Some((mut ops, wall, horizon)) = read else {
+            break;
+        };
         // A device holding nothing has still answered the question, so the marker is stamped
         // and the peer is not asked again next minute. There is no envelope to send: an empty
         // batch is `WireError::Empty`, deliberately, because a relay row holding no ops is a
@@ -2536,8 +2609,8 @@ async fn emit_baselines(
 /// Answers `Ok(None)` when there is nothing to do: **no entitlement**, or no group. That is the
 /// state every existing installation is in, and it is not an error. (It used to read "no relay
 /// URL"; the address is compiled in now and "sync is off" has moved onto the grant.)
-pub async fn run_once(conn: &Connection) -> Result<Option<RelayOutcome>, String> {
-    round_trip(conn, true).await
+pub async fn run_once(db: &impl Store) -> Result<Option<RelayOutcome>, String> {
+    round_trip(db, true).await
 }
 
 /// The same round trip **with no baseline emission**: push, pull, ack.
@@ -2555,8 +2628,8 @@ pub async fn run_once(conn: &Connection) -> Result<Option<RelayOutcome>, String>
 /// ops must reach the relay before the epoch moves, or the devices that *stay* cannot read them.
 /// Only the emission is dropped, and the peers that need one are baselined by the very next
 /// ordinary sync — which the revocation has just re-armed for every device that remains.
-pub async fn run_once_without_baselines(conn: &Connection) -> Result<Option<RelayOutcome>, String> {
-    round_trip(conn, false).await
+pub async fn run_once_without_baselines(db: &impl Store) -> Result<Option<RelayOutcome>, String> {
+    round_trip(db, false).await
 }
 
 /// The body both of the above share. `baselines` is the only difference between them.
@@ -2579,8 +2652,8 @@ pub async fn run_once_without_baselines(conn: &Connection) -> Result<Option<Rela
 /// grant, which is the same silence a device in no group answers with, and a membership that
 /// ended while this device happened to be unpaired must still clear itself rather than wait for a
 /// pairing.
-async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOutcome>, String> {
-    let keys = check_keys(conn).await?;
+async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutcome>, String> {
+    let keys = check_keys(db).await?;
     if keys.outcome == KeyOutcome::Removed {
         return Ok(None);
     }
@@ -2596,28 +2669,32 @@ async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOu
     // reached a second way. A race between two devices publishing at once is settled by
     // `/rotate`'s 409 on a non-advancing epoch; the loser's `plan_join` is stale and its next
     // `check_keys` adopts what won.
-    if identity::roster_is_dirty(conn)? && me(conn)?.is_some() {
-        let _ = publish_join(conn).await;
+    if db.with(|conn| Ok(identity::roster_is_dirty(conn)? && me(conn)?.is_some()))? {
+        let _ = publish_join(db).await;
     }
-    let Some(token) = entitlement::access_token(conn).await? else {
+    let Some(token) = entitlement::access_token(db).await? else {
         return Ok(None);
     };
-    if me(conn)?.is_none() {
+    let Some((_, _, base)) = db.with(whereabouts)? else {
         return Ok(None);
-    }
-    let base = entitlement::base(conn);
+    };
     // **A push the relay keeps refusing is deferred and the trip goes on** ([`Deferral`]): the
     // pull and the ack below do not depend on this device having been heard, and holding them
     // back with it stopped the device reading its group — and, for a full log, stopped the relay
     // compacting the very log that was full.
-    let pushed = push(conn, &base, &token).await?;
+    // **The newest op there is before the push reads its outbox** — what [`emit_baselines`]
+    // measures "written since" against. Read ahead of the push rather than by it, so an op is
+    // either at or below this and in the outbox the push reads, or above it and the baseline's
+    // to wait for.
+    let through = db.with(last_op)?;
+    let pushed = push(db, &base, &token).await?;
     let mut outcome = RelayOutcome {
         pushed: pushed.sent,
         ..RelayOutcome::default()
     };
     // A push refused as `stale_epoch` asks `/keys` again, and the answer can be the removal
     // notice: then there is nothing left to sync to, exactly as when `check_keys` above says so.
-    if me(conn)?.is_none() {
+    if db.with(me)?.is_none() {
         return Ok(None);
     }
     // **The relay's epoch from the check above goes down to the pull**, which is what tells an
@@ -2625,7 +2702,7 @@ async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOu
     // that never happened. A rotation published since — `publish_join` above, or one adopted by
     // the push — moved this device's own epoch with it, and an envelope at or below that is not
     // ahead at all; one above it makes the pull ask again.
-    let pulled = pull(conn, &base, &token, keys.relay_epoch).await?;
+    let pulled = pull(db, &base, &token, keys.relay_epoch).await?;
     outcome.unreadable = pulled.unreadable;
     // **What this trip applied, and nothing it was handed again.** A held cursor re-delivers the
     // same page on every trip, and what this trip applied is part of `changed`, which fires
@@ -2638,20 +2715,14 @@ async fn round_trip(conn: &Connection, baselines: bool) -> Result<Option<RelayOu
     // refusal part of the way through and push its first chunks again on every trip
     // ([`Deferral::stops_baselines`]).
     if baselines && !pushed.deferred.is_some_and(Deferral::stops_baselines) {
-        let (ops, history) = emit_baselines(conn, &base, &token).await?;
+        let (ops, history) = emit_baselines(db, &base, &token, through).await?;
         outcome.baseline_ops = ops;
         outcome.baseline_history = history;
     }
-    ack(conn, &base, &token).await?;
-    set_state(
-        conn,
-        LAST_SYNC_AT,
-        &conn
-            .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
-            .map_err(|e| e.to_string())?
-            .to_string(),
-    )
-    .map_err(|e| e.to_string())?;
+    ack(db, &base, &token).await?;
+    db.with(|conn| {
+        set_state(conn, LAST_SYNC_AT, &now_secs(conn)?.to_string()).map_err(|e| e.to_string())
+    })?;
     Ok(Some(outcome))
 }
 

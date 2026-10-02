@@ -2024,7 +2024,7 @@ mod tests {
                 // what an `AppState` looks like before the first pass.
                 mirror,
                 mirror_status: std::sync::Mutex::new(crate::mirror::watch::LastPass::default()),
-                pairing: std::sync::Mutex::new(None),
+                pairing: tokio::sync::Mutex::new(None),
                 changes,
             }),
             dir,

@@ -102,7 +102,8 @@ impl State {
 | `publish_join` | `plan_join` (and the dirty mark when it refuses); `relay_manifest`; `post_rotation`; **one** stretch for `commit_rotation` + clearing the mark |
 | `push` | `me`; per round: read the outbox; per chunk: `post_ops`, then `stamp_pushed`; `rebase` is one stretch |
 | `pull` | `me` + cursor + the hold's `noted`; the request; **the `/keys` ask moves ahead of the envelope loop** (asked when any envelope is above the epoch in hand — the same condition, once per pull); then **one** stretch from `group_at` per envelope to `last_op` |
-| `round_trip` | each `me`, `roster_is_dirty` and the closing `LAST_SYNC_AT` is a stretch; everything else is the callee's |
+| `round_trip` | each `me`, `roster_is_dirty` and the closing `LAST_SYNC_AT` is a stretch; `through` — the newest op there is — is read ahead of the push; everything else is the callee's |
+| `emit_baselines(db, base, token, through)` | per peer, **one**: whether an op above `through` is pending, the rows, the clock, the horizon. Pending, and no baseline is begun this trip (Task 3 found it) |
 
 - [ ] Restate, function by function, compiling as it goes (`cargo check -p mtg-grimoire --tests`).
 - [ ] `sendable` over `run_once`, `run_once_without_baselines`, `check_keys`, `publish_join`, `post_rotation`, `post_rendezvous`, `get_rendezvous` taking a `&Lane`.
@@ -112,10 +113,10 @@ impl State {
 
 **Files:** Test: `src-tauri/src/sync_engine/client/tests.rs`
 
-- [ ] `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` — `dev-a` holds a card and has it pending; behind stretch *n* of `run_once`, for every *n*, the reader adds a copy; a second `run_once` follows. Everything the mock relay was pushed, in order, is applied to a `dev-b` that pulls it as one log. Assert `dev-b` holds what `dev-a` holds, `dev-a`'s outbox is empty, and no op was stamped pushed that the relay was never sent.
-- [ ] The same with a page to pull (`dev-b`'s edit of the same row in the mock's `/pull`), asserting both devices end equal.
-- [ ] Run; a red here is a stretch boundary in the wrong place — fix the boundary, not the test.
-- [ ] Commit: `refactor(sync): the client reaches the database a stretch at a time`.
+- [x] `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` — `dev-a` holds a card, pending, and owes `dev-b` a baseline; behind stretch *n* of `run_once`, for every *n*, the reader adds a copy; a second `run_once` follows. `dev-b` pulls after each trip and applies what the mock relay was pushed, in order. Assert `dev-b` holds what `dev-a` holds, `dev-a`'s outbox is empty and the baseline's marker is set.
+- [x] `a_write_anywhere_beside_a_pull_is_counted_once_on_both_devices` — the same with a page to pull (`dev-b`'s own copy of the same row), asserting both devices end at four.
+- [x] Run; a red here is a stretch boundary in the wrong place — fix the boundary, not the test. **It was red**: `3 here, 4 there` behind every stretch between the push's outbox read and the baseline's rows. The fix is `emit_baselines`' `through` (above), and the mutation — the rule switched off — is red at exactly those boundaries.
+- [x] Both tests add their first copies "ten seconds ago": a baseline op stamped at or below the watermark the peer already holds is skipped by `apply`, which is a bug of its own and not this step's (the spike's §3).
 
 ### Task 4: the entitlement over `Store`
 
@@ -144,12 +145,12 @@ impl State {
 | Function | Stretches |
 | --- | --- |
 | `accept` | `ensure` + `base`; the request; the pending offer is memory |
-| `confirm` | one: `ensure`, `room_for`, the group; the request; **one**: `found_group` / `join_group` + `add_device` — the name written is the one the roster holds *now*; then `publish_join` |
+| `confirm` | `ensure`, `room_for` and the group, each where its statement stood, so every refusal comes in the order it did; the request; **one**: `ensure` again, `found_group` / `join_group` + `add_device` — the name written is the one this device holds *now*; then `publish_join` |
 | `poll` | `ensure`; the request; `respond` or `complete` as one stretch |
 | `remove_device` | `entitled`; the trip; one: the dirty mark, `removal_step`, the plan; `post_rotation`; `commit_rotation` |
 | `leave_group_now` | one: the in-a-group check, `removal_step`, the plan; `post_rotation`; **one**: `leave_group` + `entitlement::clear` |
 
-**The wrappers**: `spawn_blocking`, a current-thread runtime, and `block_on(async { pending → lane → the function })`. A press takes `lane_for_press`; `sync_group_leave` takes `lane`. `sync_pairing_cancel` takes the pending lock alone.
+**The wrappers**: `sync::on_a_worker(|| async { pending → lane → the function })` — a blocking worker with a runtime of its own, written once in `src-tauri/src/sync/mod.rs`. A press takes `lane_for_press`; `sync_group_leave` takes `lane`. `sync_pairing_cancel` takes the pending lock alone, and is an `async fn` for it: an async lock is awaited, and `blocking_lock` panics on the runtime's own thread.
 
 - [ ] Write `leaving_waits_for_an_operation_in_flight_and_then_clears` first: hold the lane, start `leave_group_now` behind `state.lane()`, assert the group is still there, release, assert it is gone and the grant with it.
 - [ ] Restate; `sendable` over the five entry points.

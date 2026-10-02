@@ -666,7 +666,7 @@ mod tests {
             mirror: Arc::new(Mask::default()),
             mirror_status: std::sync::Mutex::new(LastPass::default()),
             changes: Default::default(),
-            pairing: std::sync::Mutex::new(None),
+            pairing: tokio::sync::Mutex::new(None),
         }
     }
 

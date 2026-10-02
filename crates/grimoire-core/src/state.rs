@@ -681,7 +681,7 @@ mod tests {
     /// that will not answer.
     #[tokio::test]
     async fn a_press_behind_a_sync_or_a_busy_connection_is_told_busy() {
-        let state = over_memory(Vec::new());
+        let state = Arc::new(over_memory(Vec::new()));
         let bound = Duration::from_millis(40);
         let in_flight = state.lane().await;
         assert_eq!(
@@ -690,13 +690,25 @@ mod tests {
         );
         drop(in_flight);
 
-        let held = state.lock_db();
+        // Something else has the connection: another thread, as a reader's write would be.
+        let (holding, held) = std::sync::mpsc::channel::<()>();
+        let (let_go, wait) = std::sync::mpsc::channel::<()>();
+        let holder = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let _conn = state.lock_db();
+                holding.send(()).unwrap();
+                let _ = wait.recv();
+            })
+        };
+        held.recv().unwrap();
         assert_eq!(
             state.lane_within(bound).await.err().as_deref(),
             Some(db::BUSY),
             "the lane was free and the connection was not"
         );
-        drop(held);
+        drop(let_go);
+        holder.join().unwrap();
 
         assert!(state.lane_within(bound).await.is_ok());
         // And the refused presses left the lane free.
@@ -741,12 +753,21 @@ mod tests {
 
     /// A caller that already holds the connection runs its stretches on it where it stands —
     /// coming back for the connection through the lane would be this thread waiting for itself.
-    #[tokio::test]
-    async fn a_connection_in_hand_is_used_where_it_stands() {
+    ///
+    /// Driven the way that caller drives it: a thread that holds the connection and blocks on
+    /// the future. An `async fn` holding the guard across an `.await` is the thing the lane
+    /// exists to end, and clippy's `await_holding_lock` refuses it in a test too.
+    #[test]
+    fn a_connection_in_hand_is_used_where_it_stands() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap();
         let state = over_memory(Vec::new());
-        let lane = state.lane().await;
+        let lane = runtime.block_on(state.lane());
         let conn = state.lock_db();
-        let names = two_stretches(&lane.in_hand(&conn)).await.unwrap();
+        let names = runtime
+            .block_on(two_stretches(&lane.in_hand(&conn)))
+            .unwrap();
         assert_eq!(names, ["before the request", "behind it"]);
     }
 

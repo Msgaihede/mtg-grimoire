@@ -78,7 +78,13 @@ pub struct AppState {
     ///
     /// It holds the derived pair key, which is the other reason it is here and not in SQLite:
     /// nothing this side of a completed pairing has any business surviving a crash.
-    pub pairing: Mutex<Option<crate::sync_pair::pairing::Pending>>,
+    ///
+    /// **An async lock, because it is held across a request** — an `accept`, a `confirm` and a
+    /// `poll` each keep it while they talk to the relay's rendezvous, and that is what two things
+    /// rest on: a Cancel waits behind the request in flight and so wins, and two polls — two
+    /// windows with Settings open — cannot both find the offer unspent and both complete it.
+    /// **Taken before the lane, never after.**
+    pub pairing: tokio::sync::Mutex<Option<crate::sync_pair::pairing::Pending>>,
 }
 
 /// **What keeps every reader of `state.db` unedited.** `AppState` is named in seventy-odd files
@@ -90,6 +96,31 @@ impl std::ops::Deref for AppState {
     fn deref(&self) -> &State {
         &self.core
     }
+}
+
+/// Run a sync operation on a blocking worker, with a runtime of its own to drive it.
+///
+/// **Still a worker, though nothing in the operation holds the connection across a request any
+/// more.** A stretch is SQLite work, and a wait for the connection when a reader's write has it:
+/// blocking, both, and so kept off the async runtime's own threads. What the worker no longer
+/// does is keep every other writer out for the length of a network round trip.
+///
+/// The outer `Err` is the worker itself failing — a panic in the operation — and each caller
+/// words that for its own press.
+pub async fn on_a_worker<T, F, Fut>(work: F) -> Result<Result<T, String>, tauri::Error>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Result<T, String>>,
+    T: Send + 'static,
+{
+    tauri::async_runtime::spawn_blocking(move || {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .map_err(|e| e.to_string())?;
+        runtime.block_on(work())
+    })
+    .await
 }
 
 /// Lock the database, recovering from a poisoned mutex.
@@ -126,7 +157,10 @@ pub(crate) fn lock_db_read(state: &State) -> MutexGuard<'_, Connection> {
     state.lock_db_read()
 }
 
-/// [`with_write`] and [`with_write_waiting`] — the one definition of a user-facing write —
-/// are `grimoire-core`'s since the extraction's domain step, re-exported at the names every
-/// caller here knows them by. They take `&State`, which an `&AppState` derefs to.
-pub(crate) use grimoire_core::state::{with_write, with_write_waiting};
+/// [`with_write`] — the one definition of a user-facing write — is `grimoire-core`'s since the
+/// extraction's domain step, re-exported at the name every caller here knows it by. It takes
+/// `&State`, which an `&AppState` derefs to.
+///
+/// Its waiting twin is not re-exported any more: its one caller is a stretch of a sync operation,
+/// through the lane (`grimoire_core::state::Lane`), and a departure takes the lane like the rest.
+pub(crate) use grimoire_core::state::with_write;

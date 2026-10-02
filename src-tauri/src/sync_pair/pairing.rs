@@ -26,6 +26,7 @@ use crate::sync_engine::entitlement;
 use crate::sync_pair::crypto;
 use crate::sync_pair::identity;
 use crate::sync_pair::invite::{Invite, QrMatrix};
+use grimoire_core::state::{Lane, Store};
 use rusqlite::Connection;
 use serde::Serialize;
 use std::sync::Arc;
@@ -222,11 +223,11 @@ pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, 
 /// the post fails — the code was answered already, or the relay could not be reached — nothing
 /// local exists to half-undo, and a reader whose paste failed can simply try again.
 pub async fn accept(
-    conn: &Connection,
+    db: &impl Store,
     pending: &mut Option<Pending>,
     code: &str,
 ) -> Result<Handshake, String> {
-    let me = identity::ensure(conn).map_err(err)?;
+    let me = db.with(|conn| identity::ensure(conn).map_err(err))?;
     let inv = Invite::decode(code).map_err(err)?;
     let pair_key = crypto::pair_key(
         &me.keypair.secret,
@@ -255,7 +256,7 @@ pub async fn accept(
     blob.extend_from_slice(&sealed);
 
     let rv = crypto::rendezvous_id(&inv.token);
-    client::post_rendezvous(conn, &rv, "join", &blob_encode(&blob)).await?;
+    client::post_rendezvous(db, &rv, "join", &blob_encode(&blob)).await?;
 
     *pending = Some(Pending {
         initiator: false,
@@ -362,11 +363,8 @@ const DEFAULT_PEER_NAME: &str = "Paired device";
 ///
 /// The cost, stated plainly: a freshly paired device draws *Supporting since …* after its first
 /// relay call rather than the instant the digits match.
-pub async fn confirm(
-    conn: &Connection,
-    pending: &mut Option<Pending>,
-) -> Result<SealedKey, String> {
-    let me = identity::ensure(conn).map_err(err)?;
+pub async fn confirm(db: &impl Store, pending: &mut Option<Pending>) -> Result<SealedKey, String> {
+    let me = db.with(|conn| identity::ensure(conn).map_err(err))?;
     let p = pending.as_ref().ok_or(NOTHING_IN_FLIGHT)?;
     if p.spent {
         return Err(ALREADY_USED.to_owned());
@@ -386,7 +384,7 @@ pub async fn confirm(
     // token whatever this build does, and what the check buys is that a reader meets the limit
     // at the press rather than at a sync three minutes later. It excludes `peer_id`, so
     // re-running the ceremony with a device already in the group is never what fills it.
-    identity::room_for(conn, &peer_id)?;
+    db.with(|conn| identity::room_for(conn, &peer_id))?;
 
     // **The candidate group, computed but not written.** `Some` is this device's group exactly
     // as it stands right now — sealing its *current* epoch, never one a rotation might move it
@@ -394,7 +392,10 @@ pub async fn confirm(
     // for `identity::group` to read, so the values `identity::create_group` would mint are
     // reproduced here instead of minted by calling it, because that call also *writes* them, and
     // a write ahead of the post is exactly the ordering step 2's doc above exists to rule out.
-    let existing = identity::group(conn).map_err(err)?;
+    //
+    // **Read before the request and written back behind it**, which is safe for one reason:
+    // only a sync operation moves a group, and this one holds the lane from here to the commit.
+    let existing = db.with(|conn| identity::group(conn).map_err(err))?;
     let founding = existing.is_none();
     let group = match existing {
         Some(g) => g,
@@ -438,23 +439,33 @@ pub async fn confirm(
 
     // **Posted before anything commits.** A failed post ends this call right here, and nothing
     // above has written to the database — the candidate group was a local value, not a row.
-    client::post_rendezvous(conn, &rv, "offer", &encoded).await?;
+    client::post_rendezvous(db, &rv, "offer", &encoded).await?;
 
     // Founding is the one moment this device knows the whole group, so it seeds the view the key
     // history reads (`identity::found_group`); otherwise it re-writes the group it already holds.
-    if founding {
-        identity::found_group(conn, &group, &me).map_err(err)?;
-    } else {
-        identity::join_group(conn, &group.group_id, group.epoch, &group.group_key, &me)
-            .map_err(err)?;
-    }
-    identity::add_device(
-        conn,
-        &peer_id,
-        &peer_public,
-        peer_name.as_deref().unwrap_or(DEFAULT_PEER_NAME),
-    )
-    .map_err(err)?;
+    //
+    // **One stretch, and it waits for the connection rather than answering that it is busy**:
+    // the relay now holds a key sealed to the joiner, and on a founding device that key and its
+    // group exist nowhere but in this function. The group and the joiner go on the roster
+    // together, so nothing reads a group whose second device is missing.
+    db.with(|conn| {
+        // This device as it stands *now*: a rename pressed while the request was out is the
+        // name the roster should carry, and `ensure` never mints a second identity.
+        let me = identity::ensure(conn).map_err(err)?;
+        if founding {
+            identity::found_group(conn, &group, &me).map_err(err)?;
+        } else {
+            identity::join_group(conn, &group.group_id, group.epoch, &group.group_key, &me)
+                .map_err(err)?;
+        }
+        identity::add_device(
+            conn,
+            &peer_id,
+            &peer_public,
+            peer_name.as_deref().unwrap_or(DEFAULT_PEER_NAME),
+        )
+        .map_err(err)
+    })?;
 
     if let Some(p) = pending.as_mut() {
         p.spent = true;
@@ -462,7 +473,7 @@ pub async fn confirm(
 
     // Best effort: see the doc above and `client::publish_join`'s own for why a refusal here is
     // recorded rather than raised.
-    let _ = client::publish_join(conn).await;
+    let _ = client::publish_join(db).await;
 
     Ok(SealedKey {
         sealed_key: encoded,
@@ -566,7 +577,7 @@ pub fn complete(
 /// `respond` and `complete` keep their bodies exactly as they were before this existed — this is
 /// their only caller now, and the tests that drive them directly still do.
 pub async fn poll(
-    conn: &Connection,
+    db: &impl Store,
     pending: &mut Option<Pending>,
     now_ms: i64,
 ) -> Result<PairingProgress, String> {
@@ -596,11 +607,11 @@ pub async fn poll(
         });
     }
 
-    let me = identity::ensure(conn).map_err(err)?;
+    let me = db.with(|conn| identity::ensure(conn).map_err(err))?;
     if initiator {
-        poll_initiator(conn, pending, &me).await
+        poll_initiator(db, pending, &me).await
     } else {
-        poll_joiner(conn, pending, &me).await
+        poll_joiner(db, pending, &me).await
     }
 }
 
@@ -654,7 +665,7 @@ fn complete_progress() -> PairingProgress {
 /// The initiator is waiting for an answer, has one and is waiting on the reader's press of
 /// Confirm, or has already pressed it.
 async fn poll_initiator(
-    conn: &Connection,
+    db: &impl Store,
     pending: &mut Option<Pending>,
     me: &identity::Identity,
 ) -> Result<PairingProgress, String> {
@@ -672,10 +683,10 @@ async fn poll_initiator(
     let rv = p.rv.clone();
     // `p`'s borrow ends here — `respond` below needs `pending` mutably.
 
-    match client::get_rendezvous(conn, &rv, "join").await? {
+    match client::get_rendezvous(db, &rv, "join").await? {
         None => Ok(waiting_progress()),
         Some(blob) => {
-            let handshake = respond(conn, pending, &blob)?;
+            let handshake = db.with(|conn| respond(conn, pending, &blob))?;
             Ok(compare_progress(handshake.sas))
         }
     }
@@ -684,7 +695,7 @@ async fn poll_initiator(
 /// The joiner has not seen a key yet, or has and is done — [`complete`] runs at most once per
 /// `Pending`, guarded by the same `spent` flag [`confirm`] sets on the initiator's side.
 async fn poll_joiner(
-    conn: &Connection,
+    db: &impl Store,
     pending: &mut Option<Pending>,
     me: &identity::Identity,
 ) -> Result<PairingProgress, String> {
@@ -696,10 +707,12 @@ async fn poll_joiner(
     let rv = p.rv.clone();
     // `p`'s borrow ends here — `complete` below needs `pending` mutably.
 
-    match client::get_rendezvous(conn, &rv, "offer").await? {
+    match client::get_rendezvous(db, &rv, "offer").await? {
         None => Ok(compare_progress(sas)),
         Some(blob) => {
-            complete(conn, pending, &blob)?;
+            // One stretch: the group this device is in, the cap, the join and the roster row,
+            // all read and written against one state of the database.
+            db.with(|conn| complete(conn, pending, &blob))?;
             // **Set only after `complete` succeeds, and read on every later poll before this
             // reaches the relay again.** Without it, a poll that landed after some *other* event
             // rotated the group (a peer's removal, a departure) would re-run `complete` with this
@@ -769,14 +782,19 @@ fn from_hex16(s: &str) -> Option<[u8; 16]> {
 // The commands
 // ---------------------------------------------------------------------------------------
 //
-// Each takes the write connection through `sync::with_write`, so a sync in flight answers
-// `BUSY` like every other write here — `identity::ensure` writes on a database that has never
-// paired, so even `status` is a write path.
+// **A press that talks to the relay takes two things, in this order: the pending offer and
+// the lane.** The offer's lock is held for the whole call — a request included — which is what
+// makes a Cancel wait and win, and what keeps two polls from completing one offer twice. The
+// lane is `State::lane_for_press`: a sync in flight answers `BUSY` after five seconds, like
+// every other press here, and a departure alone waits (`State::lane`).
+//
+// **A press that only reads or writes the database** — the status, a begin, a rename — takes
+// the write connection through `sync::with_write` as it always did. `identity::ensure` writes
+// on a database that has never paired, so even `status` is a write path.
 //
 // ⚠️ **`with_write` must not be called while holding a guard on `state.db`.** It is a bounded
 // `try_lock` loop, so a reentrant call spends the whole `WRITE_LOCK_WAIT` failing against its
-// own thread and then answers `BUSY` against itself. The `state.pairing` guard is a *different*
-// mutex and is safe to hold across it — it is taken first, below.
+// own thread and then answers `BUSY` against itself.
 
 use crate::sync::{self, AppState};
 use crate::sync_engine::commands;
@@ -820,7 +838,7 @@ pub async fn sync_pairing_status(
 pub async fn sync_pairing_begin(state: tauri::State<'_, Arc<AppState>>) -> Result<Offer, String> {
     let state = state.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let mut pending = sync::lock_plain(&state.pairing);
+        let mut pending = state.pairing.blocking_lock();
         sync::with_write(&state, |conn| begin(conn, &mut pending))
     })
     .await
@@ -830,25 +848,17 @@ pub async fn sync_pairing_begin(state: tauri::State<'_, Arc<AppState>>) -> Resul
 /// Read an offer on the joining device: derives the key, posts the answer to the relay, and
 /// answers the six digits.
 ///
-/// **On the blocking pool with a runtime of its own**, [`sync_device_revoke`]'s exact shape:
-/// [`accept`] is `async` now that it posts to the relay, the write connection is behind a
-/// `Mutex`, a guard on it cannot cross an `await` on a multi-threaded runtime, and
-/// `spawn_blocking` moves the whole trip to a thread where `block_on` is legal.
+/// On a worker ([`sync::on_a_worker`]), under the pending offer and then the lane.
 #[tauri::command]
 pub async fn sync_pairing_accept(
     state: tauri::State<'_, Arc<AppState>>,
     code: String,
 ) -> Result<Handshake, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut pending = sync::lock_plain(&state.pairing);
-        sync::with_write(&state, |conn| {
-            runtime.block_on(accept(conn, &mut pending, &code))
-        })
+    sync::on_a_worker(move || async move {
+        let mut pending = state.pairing.lock().await;
+        let lane = state.lane_for_press().await?;
+        accept(&lane, &mut pending, &code).await
     })
     .await
     .map_err(|e| format!("could not read that pairing code: {e}"))?
@@ -857,20 +867,16 @@ pub async fn sync_pairing_accept(
 /// The reader says the digits matched: the group key is sealed, posted to the relay, and only
 /// then committed. Answers the sealed group key.
 ///
-/// **On the blocking pool with a runtime of its own**, for [`sync_pairing_accept`]'s reason:
-/// [`confirm`] is `async` now that it posts to the relay before it commits anything.
+/// On a worker, under the pending offer and then the lane, as [`sync_pairing_accept`] is.
 #[tauri::command]
 pub async fn sync_pairing_confirm(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<SealedKey, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut pending = sync::lock_plain(&state.pairing);
-        sync::with_write(&state, |conn| runtime.block_on(confirm(conn, &mut pending)))
+    sync::on_a_worker(move || async move {
+        let mut pending = state.pairing.lock().await;
+        let lane = state.lane_for_press().await?;
+        confirm(&lane, &mut pending).await
     })
     .await
     .map_err(|e| format!("could not finish pairing: {e}"))?
@@ -878,36 +884,36 @@ pub async fn sync_pairing_confirm(
 
 /// What the panel asks every 1.5 seconds while a pairing is in flight. See [`poll`].
 ///
-/// **On the blocking pool with a runtime of its own**, [`sync_device_revoke`]'s exact shape: the
-/// write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
-/// multi-threaded runtime, and `spawn_blocking` moves the whole trip to a thread where
-/// `block_on` is legal. `now` is read here, on the IPC thread, rather than inside the closure —
-/// it needs no connection, and reading it before the write lock is taken is one fewer thing the
-/// lock is held for.
+/// On a worker, under the pending offer and then the lane, as [`sync_pairing_accept`] is.
+/// `now` is read here, on the IPC thread, before either is waited for.
+///
+/// **A poll that meets a sync in flight is told `BUSY` like any press**, and the panel's query
+/// asks again a second and a half later — which is what it did before, when the trip held the
+/// connection.
 #[tauri::command]
 pub async fn sync_pairing_poll(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<PairingProgress, String> {
     let state = state.inner().clone();
     let now = now_ms();
-    tauri::async_runtime::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut pending = sync::lock_plain(&state.pairing);
-        sync::with_write(&state, |conn| {
-            runtime.block_on(poll(conn, &mut pending, now))
-        })
+    sync::on_a_worker(move || async move {
+        let mut pending = state.pairing.lock().await;
+        let lane = state.lane_for_press().await?;
+        poll(&lane, &mut pending, now).await
     })
     .await
     .map_err(|e| format!("could not check the pairing's progress: {e}"))?
 }
 
 /// Throw away whatever is in flight.
-#[tauri::command(async)]
-pub fn sync_pairing_cancel(state: tauri::State<'_, Arc<AppState>>) {
-    cancel(&mut sync::lock_plain(&state.inner().pairing));
+///
+/// **It waits for the pending offer and nothing else** — not the lane, not the connection — so a
+/// Cancel pressed while an accept or a confirm is talking to the relay lands the moment that
+/// request ends, and is what the offer is left as.
+#[tauri::command]
+pub async fn sync_pairing_cancel(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
+    cancel(&mut *state.inner().pairing.lock().await);
+    Ok(())
 }
 
 /// Rename a device on the roster.
@@ -964,51 +970,48 @@ pub async fn sync_device_rename(
 ///
 /// What a removal still cannot do is take back what the removed device already synced. No server
 /// can, and §12.3 says so.
-async fn remove_device(conn: &Connection, device_id: &str) -> Result<(), String> {
-    if !commands::entitled(conn) {
+async fn remove_device(db: &impl Store, device_id: &str) -> Result<(), String> {
+    if !db.with(|conn| Ok(commands::entitled(conn)))? {
         return Err(identity::NO_MEMBERSHIP.to_owned());
     }
-    let _ = client::run_once_without_baselines(conn)
+    let _ = client::run_once_without_baselines(db)
         .await
         .map_err(|e| format!("{COULD_NOT_COLLECT} {e}"))?;
-    // After the round trip, which is what pays the debt when it can.
-    if identity::roster_is_dirty(conn)? {
-        return Err(JOIN_NOT_PUBLISHED.to_owned());
-    }
-    // **Two epochs ahead once the relay has said it takes that** — the join/removal marker
-    // (`identity::REMOVAL_STEP`). The round trip above has just read `/keys`, so the answer is
-    // as fresh as it can be; a relay that has never advertised `removalStep` is still sent the
-    // `+1` its `/rotate` accepts, and once it has, it cannot talk this device back down.
-    let plan = identity::plan_rotation_by(conn, device_id, client::removal_step(conn))?;
-    client::post_rotation(conn, &plan).await?;
-    identity::commit_rotation(conn, device_id, &plan)
+    // **One stretch: the debt, the step and the plan, read against one roster.**
+    let plan = db.with(|conn| {
+        // After the round trip, which is what pays the debt when it can.
+        if identity::roster_is_dirty(conn)? {
+            return Err(JOIN_NOT_PUBLISHED.to_owned());
+        }
+        // **Two epochs ahead once the relay has said it takes that** — the join/removal marker
+        // (`identity::REMOVAL_STEP`). The round trip above has just read `/keys`, so the answer
+        // is as fresh as it can be; a relay that has never advertised `removalStep` is still sent
+        // the `+1` its `/rotate` accepts, and once it has, it cannot talk this device back down.
+        identity::plan_rotation_by(conn, device_id, client::removal_step(conn))
+    })?;
+    client::post_rotation(db, &plan).await?;
+    // **Planned before the request and committed behind it, against the same roster**: a device
+    // joins or leaves only under the lane this removal holds.
+    db.with(|conn| identity::commit_rotation(conn, device_id, &plan))
 }
 
 /// Remove a device and rotate the group key. See [`remove_device`] for the order.
 ///
-/// **On the blocking pool with a runtime of its own**, for `sync_engine::commands::sync_now`'s
-/// reason: the write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
-/// multi-threaded runtime, and `spawn_blocking` moves the whole trip to a thread where a
-/// `block_on` is legal and the guard never has to be `Send`.
+/// On a worker ([`sync::on_a_worker`]), under the lane.
 ///
-/// **Bounded by [`sync::with_write`], where [`sync_group_leave`] waits — on purpose.** A removal
-/// means nothing until the relay accepts it and opens with a round trip of its own, so waiting out
-/// a sync trip only to start another buys nothing a second press would not; *busy* after five
-/// seconds is the kinder answer. `sync::with_write_waiting`'s doc has the whole argument.
+/// **A press's lane, where [`sync_group_leave`] waits — on purpose.** A removal means nothing
+/// until the relay accepts it and opens with a round trip of its own, so waiting out a sync in
+/// flight only to start another buys nothing a second press would not; *busy* after five seconds
+/// is the kinder answer.
 #[tauri::command]
 pub async fn sync_device_revoke(
     state: tauri::State<'_, Arc<AppState>>,
     device_id: String,
 ) -> Result<(), String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        sync::with_write(&state, |conn| {
-            runtime.block_on(remove_device(conn, &device_id))
-        })
+    sync::on_a_worker(move || async move {
+        let lane = state.lane_for_press().await?;
+        remove_device(&lane, &device_id).await
     })
     .await
     .map_err(|e| format!("could not remove that device: {e}"))?
@@ -1043,14 +1046,11 @@ pub async fn sync_device_revoke(
 /// has not yet pushed it keeps — the rows are already in its own database. Nor is there a
 /// membership check: a removal is refused without one because it must reach the other devices to
 /// mean anything, and a departure means something locally whether or not it publishes.
-async fn leave_group_now(conn: &Connection) -> Result<(), String> {
+async fn leave_group_now(db: &impl Store) -> Result<(), String> {
     // **A device in no group has nothing to leave, and that is the one refusal.** It is not a
     // failure of the press so much as an answer to it, and it is the only thing between here and
     // the clear below.
-    if identity::group(conn).map_err(|e| e.to_string())?.is_none() {
-        return Err(identity::NOT_IN_A_GROUP.to_owned());
-    }
-
+    //
     // **Everything from here is best effort, planning included, and that breadth is the
     // feature.** The reader asked that leaving always be possible, and a chain that gave up on
     // its first `?` is only *usually* possible: `plan_departure` reads every peer's public key
@@ -1067,36 +1067,40 @@ async fn leave_group_now(conn: &Connection) -> Result<(), String> {
     // to every device that stays, this device leaving is this device removed, and it holds every
     // key they must now forget. With no round trip in front of it, the step is whatever the last
     // sync's `/keys` answer latched — which is `+1`, and still accepted, until one has.
-    if let Ok(plan) = identity::plan_departure_by(conn, client::removal_step(conn)) {
-        let _ = client::post_rotation(conn, &plan).await;
+    let plan = db.with(|conn| {
+        if identity::group(conn).map_err(|e| e.to_string())?.is_none() {
+            return Err(identity::NOT_IN_A_GROUP.to_owned());
+        }
+        Ok(identity::plan_departure_by(conn, client::removal_step(conn)).ok())
+    })?;
+    if let Some(plan) = plan {
+        let _ = client::post_rotation(db, &plan).await;
     }
 
-    identity::leave_group(conn)?;
-    entitlement::clear(conn)
+    // **One stretch: the group and the grant go together**, so nothing reads a device that has
+    // left its group and still holds a credential for it.
+    db.with(|conn| {
+        identity::leave_group(conn)?;
+        entitlement::clear(conn)
+    })
 }
 
 /// Leave the group. See [`leave_group_now`] for the order and why the last step is unconditional.
 ///
-/// **On the blocking pool with a runtime of its own**, for [`sync_device_revoke`]'s reason: the
-/// write connection is behind a `Mutex`, a guard on it cannot cross an `await` on a
-/// multi-threaded runtime, and `spawn_blocking` moves the whole trip to a thread where a
-/// `block_on` is legal.
+/// On a worker ([`sync::on_a_worker`]), under the lane.
 ///
-/// **[`sync::with_write_waiting`] and never [`sync::with_write`]** (issue #546, item 7). A sync trip
-/// holds the write connection across its whole round trip, so under the bounded wait a Leave
-/// pressed during a slow trip answered *the database is busy* — and "always possible" had a
+/// **[`State::lane`] and never [`State::lane_for_press`]** (issue #546, item 7). A sync in flight
+/// holds the lane for its whole round trip, so under a press's bounded wait a Leave pressed during
+/// a slow trip would answer *the database is busy* — and "always possible" would have a
 /// condition. This press waits the trip out instead, which is bounded because every request in a
-/// trip is; that helper's doc says why a departure is the one press that earns it.
+/// trip is, and its own stretches wait for the connection as every stretch does.
 #[tauri::command]
 pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<(), String> {
     let state = state.inner().clone();
     let marks = state.clone();
-    let out = tauri::async_runtime::spawn_blocking(move || {
-        let runtime = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .map_err(|e| e.to_string())?;
-        sync::with_write_waiting(&state, |conn| runtime.block_on(leave_group_now(conn)))
+    let out = sync::on_a_worker(move || async move {
+        let lane = state.lane().await;
+        leave_group_now(&lane).await
     })
     .await;
     // **Three marks, because the update hook hears none of what a departure writes.**
@@ -1113,6 +1117,18 @@ pub async fn sync_group_leave(state: tauri::State<'_, Arc<AppState>>) -> Result<
         marks.changes.mark_table(table);
     }
     out.map_err(|e| format!("could not leave that group: {e}"))?
+}
+
+/// **The fence, and it is the compiler's** — `sync_engine::client`'s has the reason. Never
+/// called.
+#[allow(dead_code)]
+fn nothing_is_held_across_a_request(lane: &Lane<'_>, pending: &mut Option<Pending>) {
+    fn sendable<T: Send>(_: T) {}
+    sendable(accept(lane, &mut *pending, ""));
+    sendable(confirm(lane, &mut *pending));
+    sendable(poll(lane, &mut *pending, 0));
+    sendable(remove_device(lane, ""));
+    sendable(leave_group_now(lane));
 }
 
 #[cfg(test)]
@@ -2868,5 +2884,85 @@ mod tests {
                 Some("1800000000")
             );
         }
+    }
+
+    // -----------------------------------------------------------------------------------
+    // The lane
+    // -----------------------------------------------------------------------------------
+
+    /// A device in a group of two with a membership, as the app holds it: a `State` over
+    /// files, pointed at a relay on localhost.
+    fn in_a_group_on_the_lane(
+        name: &str,
+        server: &httpmock::MockServer,
+    ) -> (Arc<grimoire_core::state::State>, String) {
+        let (state, _dir) = grimoire_core::state::fixtures::on_files(name, "http://127.0.0.1:1");
+        let group = {
+            let conn = state.lock_db();
+            let me = identity::ensure(&conn).unwrap();
+            identity::create_group(&conn, &me).unwrap();
+            identity::add_device(&conn, "deadbeef", &[7u8; 32], "Phone").unwrap();
+            client::set_state(&conn, client::RELAY_URL, &server.base_url()).unwrap();
+            let expires: i64 = conn
+                .query_row("SELECT unixepoch()", [], |r| r.get::<_, i64>(0))
+                .unwrap()
+                + 12 * 60 * 60;
+            entitlement::store_grant(&conn, "access-1", "refresh-1", expires).unwrap();
+            identity::group(&conn).unwrap().unwrap().group_id
+        };
+        (state, group)
+    }
+
+    /// **Leaving waits for the sync operation in flight, and then it clears — whatever that
+    /// operation was doing.** This is "always possible" as it stands since a trip stopped
+    /// holding the connection: the press queues behind the lane, where it used to queue behind
+    /// the write lock, and is never told the database is busy.
+    ///
+    /// **What makes it red**: a departure that takes a press's lane (it would be told `BUSY`
+    /// after five seconds of a slow trip), or one that takes no lane at all — the group would be
+    /// gone under an operation that is about to write it back.
+    #[tokio::test]
+    async fn leaving_waits_for_an_operation_in_flight_and_then_clears() {
+        let server = MockServer::start_async().await;
+        let (state, group) = in_a_group_on_the_lane("leaving-waits-for-the-lane", &server);
+        let rotate = server.mock(|when, then| {
+            when.method(POST).path(format!("/g/{group}/rotate"));
+            then.status(200).body("{}");
+        });
+        let in_a_group = |state: &grimoire_core::state::State| {
+            identity::group(&state.lock_db()).unwrap().is_some()
+        };
+
+        let in_flight = state.lane().await;
+        let leaving = {
+            let state = state.clone();
+            tokio::spawn(async move {
+                let lane = state.lane().await;
+                leave_group_now(&lane).await
+            })
+        };
+        for _ in 0..16 {
+            tokio::task::yield_now().await;
+        }
+        assert!(
+            !leaving.is_finished(),
+            "it left beside the operation in flight"
+        );
+        assert!(
+            in_a_group(&state),
+            "the group went while an operation held the lane"
+        );
+        assert_eq!(rotate.calls(), 0, "it published from behind the lane");
+
+        drop(in_flight);
+        leaving.await.unwrap().expect("left");
+
+        rotate.assert();
+        assert!(!in_a_group(&state), "the group survived the departure");
+        assert_eq!(
+            entitlement::refresh_secret(&state.lock_db()),
+            None,
+            "the grant survived the departure"
+        );
     }
 }
