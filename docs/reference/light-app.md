@@ -209,9 +209,11 @@ purpose; the phase that owns the surface owns the fix.
 - A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
   nothing.
 - Two rows of one printing get one accessible name; the desktop wall folds them into one tile.
-- `DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
-  the `live` list; and `facesOf` now exists twice (the desktop's lives in a module that imports
-  the store).
+- `facesOf` now exists twice (the desktop's lives in a module that imports the store). **The
+  other two halves of this bullet closed in phase 3's step 3.4 (2026-10-03)**: `DeckPage` keyed
+  its own query and always read the `live` list. It now asks through `deckDetailQuery`
+  (`src/features/decks/deckQuery.ts`), the key `useDeck` itself reads under, and opens on the
+  list the deck remembers (`lastVariant` where it keeps a plan) with a Theory / Actual switch.
 - The wall's list semantics count rows rather than cards; no test scrolls a long wall to its end.
 - In landscape the bars stop short of the screen's edge beside a cutout — the shell pads the
   root by the side insets. Whether the bars should bleed with their content inset is a device
