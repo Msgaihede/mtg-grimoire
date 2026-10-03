@@ -68,23 +68,6 @@ pub struct AppState {
     /// [`crate::changes`]. An `Arc` for [`AppState::mirror`]'s reason: the update hook on `db`
     /// holds a clone of it for the life of the process, as a second observer.
     pub changes: Arc<crate::changes::Changes>,
-    /// A pairing in flight, if there is one.
-    ///
-    /// **In memory rather than in the database, deliberately**, and it is the same argument
-    /// [`AppState::mirror_status`] makes one field up: an offer that survived a restart would
-    /// be an invite a reader printed last month still being accepted today. It outlives the
-    /// webview, which is what a reader who opens Settings twice needs, and dies with the
-    /// process, which is what makes the pairing token one-time in fact.
-    ///
-    /// It holds the derived pair key, which is the other reason it is here and not in SQLite:
-    /// nothing this side of a completed pairing has any business surviving a crash.
-    ///
-    /// **An async lock, because it is held across a request** — an `accept`, a `confirm` and a
-    /// `poll` each keep it while they talk to the relay's rendezvous, and that is what two things
-    /// rest on: a Cancel waits behind the request in flight and so wins, and two polls — two
-    /// windows with Settings open — cannot both find the offer unspent and both complete it.
-    /// **Taken before the lane, never after.**
-    pub pairing: tokio::sync::Mutex<Option<crate::sync_pair::pairing::Pending>>,
 }
 
 /// **What keeps every reader of `state.db` unedited.** `AppState` is named in seventy-odd files

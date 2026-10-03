@@ -81,8 +81,9 @@ import startviewRsCore from "../../crates/grimoire-core/src/startview.rs?raw";
 import startviewRsDesktop from "../../src-tauri/src/startview/mod.rs?raw";
 import stickyNotesRsCore from "../../crates/grimoire-core/src/sticky_notes.rs?raw";
 import stickyNotesRsDesktop from "../../src-tauri/src/sticky_notes/mod.rs?raw";
-import syncClientRs from "../../src-tauri/src/sync_engine/client.rs?raw";
-import syncCommandsRs from "../../src-tauri/src/sync_engine/commands.rs?raw";
+import syncClientRs from "../../crates/grimoire-core/src/sync_engine/client.rs?raw";
+import syncCommandsRsCore from "../../crates/grimoire-core/src/sync_engine/commands.rs?raw";
+import syncCommandsRsDesktop from "../../src-tauri/src/sync_engine/commands/mod.rs?raw";
 import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
 import upcomingSetsRsCore from "../../crates/grimoire-core/src/upcoming_sets.rs?raw";
 import upcomingSetsRsDesktop from "../../src-tauri/src/upcoming_sets/mod.rs?raw";
@@ -96,9 +97,11 @@ import wishlistOptimizeRsCore from "../../crates/grimoire-core/src/wishlist_opti
 import wishlistOptimizeRsDesktop from "../../src-tauri/src/wishlist_optimize/mod.rs?raw";
 // The scanner's sources. All but one are in the `card-scanner` crate rather than under
 // `src-tauri/src` — the detector is a library with a CLI of its own, and the shapes the page
-// reads are declared there — and `src-tauri/src/scanner.rs` is the app's own commands, with the
-// stored prefs and tray beside them.
-import scannerRs from "../../src-tauri/src/scanner.rs?raw";
+// reads are declared there — and the app's own `scanner` is two files since the extraction's
+// seventh step: the session glue, the stored prefs and tray in the core, the commands in
+// `src-tauri`, joined below as `scannerRs`.
+import scannerRsCore from "../../crates/grimoire-core/src/scanner.rs?raw";
+import scannerRsDesktop from "../../src-tauri/src/scanner/mod.rs?raw";
 import sessionRs from "../../crates/card-scanner/src/session.rs?raw";
 import resolveRs from "../../crates/card-scanner/src/resolve.rs?raw";
 import filtersRs from "../../crates/card-scanner/src/filters.rs?raw";
@@ -164,12 +167,14 @@ const newPrintingsRs = newPrintingsRsCore + "\n" + newPrintingsRsDesktop;
 const priceHistoryRs = priceHistoryRsCore + "\n" + priceHistoryRsDesktop;
 const recentCardsRs = recentCardsRsCore + "\n" + recentCardsRsDesktop;
 const resetRs = resetRsCore + "\n" + resetRsDesktop;
+const scannerRs = scannerRsCore + "\n" + scannerRsDesktop;
 const searchRs = searchRsCore + "\n" + searchRsDesktop;
 const setCompletionRs = setCompletionRsCore + "\n" + setCompletionRsDesktop;
 const shelffoldsRs = shelffoldsRsCore + "\n" + shelffoldsRsDesktop;
 const stackhideRs = stackhideRsCore + "\n" + stackhideRsDesktop;
 const startviewRs = startviewRsCore + "\n" + startviewRsDesktop;
 const stickyNotesRs = stickyNotesRsCore + "\n" + stickyNotesRsDesktop;
+const syncCommandsRs = syncCommandsRsCore + "\n" + syncCommandsRsDesktop;
 const upcomingSetsRs = upcomingSetsRsCore + "\n" + upcomingSetsRsDesktop;
 const valueHistoryRs = valueHistoryRsCore + "\n" + valueHistoryRsDesktop;
 const wishlistFoldersRs = wishlistFoldersRsCore + "\n" + wishlistFoldersRsDesktop;

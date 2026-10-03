@@ -204,6 +204,24 @@ JSON in a header. The table carries a `bytes` kind for them; Tauri accepts no ra
 so that host's adapter carries the same payload base64-encoded — a transport detail of the host,
 invisible above the `Core` seam (§4.6).
 
+**Built 2026-10-03, the reads first.** Markus chose the machinery and the 88 read commands now,
+the rest as the light app's pages ask for them, and a `macro_rules!` table —
+`crates/grimoire-core/src/commands.rs`, `grimoire_core::dispatch(&state, name, args, body)`. Three
+departures from the sketch above, each smaller than it reads. **The kinds are `read`, `write`,
+`owned`, `task` and `bytes`** — `task` for the sketch's `async` because it names what the host
+does with one (await it where it stands), not because the macro could not take the keyword; it
+could. **No `#[serde(default)]` is spelled**: serde already reads an absent `Option` field as
+`None`, which is the whole of what an omitted optional argument needed. **And the argument fence
+is a Rust test rather than `ipc.test.ts`**: `src-tauri`'s `command_table` compares each entry's
+arguments with its desktop wrapper's parameters, by name, order and type. That reaches the page's
+spelling only where `ipc.test.ts` already pins the wrapper against `ipc.ts` — and **14 of the 88
+reads are named nowhere in that file**, eight of them with arguments (`card_holdings`,
+`card_meld_parts`, `deck_pull_plan`, `deck_undo_state`, `search_marks`, `tag_resolve`,
+`wishlist_folder_summary`, `wishlist_optimize_plan`), so for those the chain from the table to
+the page has no link. The parity test lists 16 desktop-only commands with a reason each and
+everything else not yet in the table by name. [light-app.md](../../reference/light-app.md)
+§6.11 is the record.
+
 ### 2.5 `platform/`
 
 Four small interfaces, two implementations each, chosen by `cfg` in exactly one module:
@@ -367,10 +385,20 @@ reaches the database a *stretch* at a time, and one async lock on `State`, the *
 sync operation running at a time. He chose that shape over a rewrite into plan / request /
 commit functions and over a separate browser trip; *Leave group* waits for the lane as it waited
 for the connection; and the step is two pull requests — restate in place, then move.
-**The first is built** (2026-10-03): none of the thirty-one holds a connection across a request,
-a press during a sync is still told the database is busy, and a reader's write during one is
-not. [The step's plan](../plans/2026-10-02-light-app-core-step-6-sync.md) has the tasks, and what
-a test that lands a write behind every stretch of a trip found.
+**The first merged** (2026-10-03, #771): none of the thirty-one holds a connection across a
+request, a press during a sync is still told the database is busy, and a reader's write during
+one is not. **The second is built the same day**: the client, the entitlement, `wire`,
+`schedule`, `identity`, pairing and the sync panel's reads are the core's, every relay request
+goes through `platform::http` with a deadline a browser honours, and the pending pairing offer
+is a field of `State`. Live sync's socket stays the desktop's. [The step's plan](../plans/2026-10-02-light-app-core-step-6-sync.md)
+has the tasks, and what a test that lands a write behind every stretch of a trip found. **It
+merged the same day, #772.**
+
+**Step 7 was decided and built on 2026-10-03.** Markus chose the whole glue over moving only what
+names no engine — so `card-scanner` is a dependency of the core, measured clean for wasm32 first
+(its `bundled` SQLite is not in a browser's tree at all) and still unable to *run* there until §8's
+seam — and the scanner's state as a field of `State` rather than a struct each host keeps beside
+it. [Its plan](../plans/2026-10-03-light-app-core-step-7-scanner.md) has the rest.
 
 ### 2.9 Decided here, and deliberately left to the extraction's own plan
 

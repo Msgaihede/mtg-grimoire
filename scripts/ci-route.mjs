@@ -15,8 +15,9 @@
 // derives that census from the sources on every run, so it cannot rot the way the sentence did.
 //
 // **`core` is the narrow one** (2026-10-02). It compiles `crates/grimoire-core` for the two
-// targets `rust` never builds, so it reads that crate and what every cargo build in the
-// workspace shares — the root manifest, the lockfile, cargo's config, the pinned toolchain —
+// targets `rust` never builds, so it reads that crate, `card-scanner` (a dependency of the
+// engine's since the scanner's session glue moved, 2026-10-03), and what every cargo build in
+// the workspace shares — the root manifest, the lockfile, cargo's config, the pinned toolchain —
 // and nothing under `src-tauri/`, which the engine does not depend on. Its native compile and
 // its tests are `rust`'s, so everything that routes to `core` routes to `rust` as well.
 //
@@ -39,7 +40,8 @@ const RUST_SIDE = ["frontend", "rust"];
 
 /**
  * Those two and `core`, for what the engine's other two targets are built from: the
- * `grimoire-core` crate itself, and the files every cargo build in the workspace shares.
+ * `grimoire-core` crate itself, `card-scanner` beside it, and the files every cargo build in the
+ * workspace shares.
  */
 const CORE_SIDE = [...RUST_SIDE, "core"];
 
@@ -182,10 +184,11 @@ export const ARMS = [
   // The `card-scanner` crate: a separate cargo package, excluded from the workspace on purpose,
   // that `src-tauri` takes as a path dependency. `rust` compiles it into the app and runs its
   // own suite, and `frontend` reads eight of its `.rs` files as text (`ipc.test.ts`'s mirror
-  // rows) and lints `crates/*/scripts/**/*.mjs`. **Not `core`**: the engine does not depend on
-  // it. The day it does — the scanner's session glue is the extraction's last step — this arm
-  // gains `core` in the same commit.
-  { match: ["crates/*"], jobs: RUST_SIDE },
+  // rows) and lints `crates/*/scripts/**/*.mjs`. **And `core`, since the extraction's seventh
+  // step**: the engine depends on it for the scanner's session glue, so a change here is a
+  // change to what the engine compiles for a browser and a phone — which this arm said it would
+  // gain on that day, and does.
+  { match: ["crates/*"], jobs: CORE_SIDE },
 
   // Anything unrecognised runs every build job, `core` among them. This is the fail-safe that
   // makes the lists above safe to be wrong in the cheap direction: a new root config, a new

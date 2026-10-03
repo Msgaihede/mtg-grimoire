@@ -1,6 +1,6 @@
 //! One frame in, one verdict out — the per-frame pipeline both callers share.
 //!
-//! The debug server (`bin/serve.rs`) and the app (`src-tauri/src/scanner.rs`) each hand a
+//! The debug server (`bin/serve.rs`) and the app (`grimoire-core`'s `scanner.rs`) each hand a
 //! JPEG and a [`FrameOptions`] to a [`Session`] and get a [`Verdict`] back. Everything that
 //! decides a frame lives here once: the detector sweep, the quad lock, the rectification from
 //! the lock's quad, the descriptor and the search, the two readers and their cadence, the

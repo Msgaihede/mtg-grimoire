@@ -98,7 +98,7 @@ export function cameraSentence(err: unknown): { name: string; message: string } 
 }
 
 /**
- * The three file names, mirroring `src-tauri/src/scanner.rs`'s `BUNDLE_FILE`,
+ * The three file names, mirroring `crates/grimoire-core/src/scanner.rs`'s `BUNDLE_FILE`,
  * `DETECTION_MODEL` and `RECOGNITION_MODEL` — the sentences below name what a reader has to
  * put on disk, and they were three loose literals across two functions before this.
  */

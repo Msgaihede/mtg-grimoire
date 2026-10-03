@@ -1672,7 +1672,7 @@ export interface FakePending {
 
 /**
  * Pairing's three tables and the offer in flight — `sync_identity`, `sync_group`,
- * `sync_devices` and `AppState.pairing`.
+ * `sync_devices` and the core's `State.pairing`.
  *
  * **There is no cryptography here and this file does not pretend there is.** The workbench has
  * no X25519, no HKDF, no relay and no QR encoder, so the six digits are derived from the code

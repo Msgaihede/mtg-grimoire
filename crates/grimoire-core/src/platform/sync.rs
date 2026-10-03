@@ -59,6 +59,43 @@ impl Lock {
     }
 }
 
+/// A value an `async fn` may hold across an `.await`: a [`Lock`] that guards something.
+///
+/// The pending pairing offer is the one: an accept, a confirm and a poll each keep it while they
+/// talk to the relay, which is what makes a Cancel wait and win, and what stops two polls from
+/// completing one offer twice. First come, first served, like the rest of this module.
+#[derive(Debug, Default)]
+pub struct Shared<T>(tokio::sync::Mutex<T>);
+
+/// A [`Shared`], held. Let go when it is dropped.
+#[derive(Debug)]
+pub struct Guard<'a, T>(tokio::sync::MutexGuard<'a, T>);
+
+impl<T> Shared<T> {
+    pub fn new(value: T) -> Shared<T> {
+        Shared(tokio::sync::Mutex::new(value))
+    }
+
+    /// Wait for the value.
+    pub async fn lock(&self) -> Guard<'_, T> {
+        Guard(self.0.lock().await)
+    }
+}
+
+impl<T> std::ops::Deref for Guard<'_, T> {
+    type Target = T;
+
+    fn deref(&self) -> &T {
+        &self.0
+    }
+}
+
+impl<T> std::ops::DerefMut for Guard<'_, T> {
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -119,5 +156,28 @@ mod tests {
             task.await.unwrap();
         }
         assert_eq!(most.load(Ordering::SeqCst), 1);
+    }
+
+    /// A shared value is held by one at a time across an `.await`, and what each holder
+    /// wrote is what the next one reads — eight increments that each yield between the read
+    /// and the write lose none.
+    #[tokio::test]
+    async fn a_shared_value_is_changed_by_one_holder_at_a_time() {
+        let shared = Arc::new(Shared::new(0usize));
+        let tasks: Vec<_> = (0..8)
+            .map(|_| {
+                let shared = shared.clone();
+                tokio::spawn(async move {
+                    let mut held = shared.lock().await;
+                    let seen = *held;
+                    tokio::task::yield_now().await;
+                    *held = seen + 1;
+                })
+            })
+            .collect();
+        for task in tasks {
+            task.await.unwrap();
+        }
+        assert_eq!(*shared.lock().await, 8);
     }
 }

@@ -91,6 +91,13 @@ capture spec is edited there.
 - **A new command is two edits in two crates**: the function in the core's file, `pub`, and the
   wrapper in this package's `<module>/mod.rs`. A `pub(crate)` item in the core does not cross
   the glob, and the compile error names the wrapper, not the visibility.
+  **And one decision since 2026-10-03, which `cargo test` will ask for**: the core's command
+  table (`grimoire_core::dispatch`, what the light app's hosts call) has the command, or
+  `src/command_table.rs` lists it as desktop-only with a reason, or as not yet in the table.
+  `every_registered_command_is_in_the_table_or_on_one_list` reads `generate_handler!` and goes red
+  for a command in none of the three; a command in the table must take exactly its wrapper's
+  arguments. See [`crates/grimoire-core/CLAUDE.md`](../crates/grimoire-core/CLAUDE.md), *The
+  command table*.
 - **`sync::with_write` is the core's `state::with_write`**, re-exported under its old name; it
   takes `&State`, which an `&AppState` derefs to. `collection_source::with_write_owned` is the
   core's too, since the facet index's lifecycle is.
@@ -1625,9 +1632,15 @@ with the measurements: [text-mirror.md](../docs/reference/text-mirror.md).
 spec §7.5 and §7.6. Four layers — `crypto`, `identity`, `invite`, `pairing` — and **the commands
 are not counted here**: this line said *nine* while there were eight, and `sync_group_leave` has
 since made nine right by accident. A count is a fact about a tree and every open branch has a
-different one; `grep '#\[tauri::command\]' src/sync_pair/pairing.rs` answers it. The whole record,
+different one; `grep '#\[tauri::command\]' src/sync_pair/pairing/mod.rs` answers it. The whole record,
 with the arithmetic behind the 105-character code and the crate pins, is
 [sync.md](../docs/reference/sync.md).
+
+**All four layers are `grimoire-core`'s since 2026-10-03** (the light app's step 6, second part):
+`crates/grimoire-core/src/sync_pair/`, re-exported here at the paths they always had, and every
+rule below binds them there. What is still here is the commands, in
+`src/sync_pair/pairing/mod.rs` over `pub use grimoire_core::sync_pair::pairing::*;` — and the
+departure they call is the core's `pairing::leave(&State)`.
 
 - **The six-digit comparison is not optional and there is no path around it.** `crypto::sas` is
   computed over the *derived* key and both public keys **in role order**, so a relay that
@@ -1801,7 +1814,9 @@ with the arithmetic behind the 105-character code and the crate pins, is
   *empty* manifest, so every device in it reads `blob: null, devices: []`. `client::check_keys`
   compares epochs first and does nothing on an equal one; without that guard every device in a
   healthy group concludes it was removed and dissolves the group on its next sync, all at once.
-- **The pending offer lives in `AppState.pairing` and never in SQLite.** An offer that survived
+- **The pending offer lives in the core's `State.pairing` and never in SQLite** (it was
+  `AppState.pairing` until the light app's step 6 moved pairing to the core; it is a
+  `platform::sync::Shared`, an async lock, on every host). An offer that survived
   a restart would be an invite a reader printed last month still being accepted today; it
   outlives the webview, which is what a reader who opens Settings twice needs, and dies with the
   process, which is what makes the token one-time in fact. It holds the derived pair key, which
@@ -1833,11 +1848,22 @@ A stack of layers and a handful of `#[tauri::command]`s — **counted here until
 layers and five commands", which the hosted relay had already made wrong by three**; a count is a
 fact about a tree and every open branch has a different one, so it is not written down. The whole
 record, with every measurement, is
-[sync.md](../docs/reference/sync.md). The binding rules:
+[sync.md](../docs/reference/sync.md).
+
+**Most of `sync_engine/` is `grimoire-core`'s since 2026-10-03** (the light app's step 6, second
+part): `apply`, `baseline`, `capture`, `hlc` and `merge` had gone in the domain step, and the
+client, the entitlement, `wire`, `schedule` and the sync panel's reads (`commands`) followed —
+files under `crates/grimoire-core/src/sync_engine/`, re-exported here at the paths they always
+had, and every rule below binds them there. **What is still here is `live.rs`**, the connection
+manager — its socket, its timers, its `sync:live` and `sync:applied` events, for good — and the
+commands, in `src/sync_engine/commands/mod.rs` over a glob re-export. **A relay request goes
+through `platform::http`** now, with a whole-request `deadline` a browser honours (120 s for the
+client, 30 s for the entitlement) and natively the connect and read bounds it always had. The
+binding rules:
 
 - ⚠️ **A sync operation reaches the database a stretch at a time, on a lane, and holds nothing
-  across a request** (2026-10-03, the light app's step 6). Every `async fn` in `client.rs`,
-  `entitlement.rs` and `pairing.rs` takes `db: &impl Store` (`grimoire_core::state`) and reads or
+  across a request** (2026-10-03, the light app's step 6). Every `async fn` in the core's
+  `client.rs`, `entitlement.rs` and `pairing.rs` takes `db: &impl Store` (`grimoire_core::state`) and reads or
   writes inside `db.with(|conn| …)`; a request is made between two stretches. It used to be
   `with_write(&state, |conn| runtime.block_on(run_once(conn)))` — the write connection held for a
   whole network round trip, every other writer told `db::BUSY` — and a browser has no thread to
@@ -1867,8 +1893,10 @@ record, with every measurement, is
     request any more.
   - **Three fences**: each entry point's future is checked `Send` by a function that is never
     called (`nothing_is_held_across_a_request`, in each of the three files) — a `MutexGuard`
-    across an `.await` is not; `clippy::await_holding_lock` refuses the same thing everywhere,
-    tests included; and `scripts/core-step-6-census.test.mjs` holds the eight files at no function
+    across an `.await` is not. It bounds by `platform::Sendable`, which is `Send` natively and
+    anything in a browser, where no request's future is `Send` and a `Send` bound fails the WASM
+    compile; `clippy::await_holding_lock` refuses the same thing everywhere,
+    tests included; and `scripts/core-step-6-census.test.mjs` holds the files it names at no function
     that takes a connection and awaits with it, and none that calls `block_on`.
   A new sync command is `sync::on_a_worker(|| async { let lane = state.lane_for_press().await?;
   … })`: still a blocking worker, because a stretch is SQLite work, and no longer one that keeps
@@ -3197,6 +3225,14 @@ Details and every measurement: [docs/reference/image-cache.md](../docs/reference
 The whole record, including the pipeline the crate implements:
 [docs/reference/card-scanner.md](../docs/reference/card-scanner.md) — §9 and §10 are this side.
 
+**The session glue is `grimoire-core`'s since 2026-10-03** (the light app's step 7):
+`crates/grimoire-core/src/scanner.rs` holds the session and its lazy load, the lease, the asset
+load order, the prefs, the tray, the tray's commit and the capture writer, and every rule below
+about any of them binds it there. **What is still here is `src/scanner/mod.rs`**, under
+`pub use grimoire_core::scanner::*;`: the assets `build.rs` embeds, the raw request body a frame
+and a capture arrive in, the twelve commands, and the eight tests of that body. Both crates take
+`card-scanner` as a path dependency with the same two features.
+
 - **`card-scanner` is a `path` dependency and deliberately not a workspace member** — the root
   `Cargo.toml` excludes it by name, because a path dependency under a workspace root joins it
   otherwise — so its three tools keep building into `crates/card-scanner/target/`. **A run from
@@ -3230,13 +3266,16 @@ The whole record, including the pipeline the crate implements:
   a path is. **Loading is lazy on the first command and never runs again** — a file placed
   afterwards needs an app restart, and the page must not offer a Reload that cannot mean anything.
 - **`cfg(scanner_assets)` is on only when all three of `scanner-assets/card-hashes.bin`,
-  `text-detection.rten` and `text-recognition.rten` exist** — `build.rs` decides, `scanner.rs`
-  `include_bytes!`s under it. A bundle embedded without its models, or the reverse, is a
+  `text-detection.rten` and `text-recognition.rten` exist** — `build.rs` decides,
+  `scanner/mod.rs` `include_bytes!`s under it (`../../scanner-assets/`, one directory deeper
+  since the move). A bundle embedded without its models, or the reverse, is a
   half-shipped scanner. Two rules hold it: `rerun-if-changed` names the directory and only the
   files **present**, because a path that does not exist reruns the script on every build — the
   tracked `scanner-assets/README.md` is what keeps the directory there; and the embedded
-  bytes reach `load` as an `Embedded` argument, never a `cfg!` inside it, so both arms compile and
-  are tested in every build. `npm run scanner:assets` fills the directory from the
+  bytes reach the core's `load` as an `Embedded` value, never a `cfg!` inside it, so both arms
+  compile and are tested in every build — **and the core's fence keeps the `cfg` here**:
+  `scanner::compiled()` asks it, and `desktop::start` hands the answer to
+  `state.scanner.carry(…)` once, above `app.manage`, before any command can reach the state. `npm run scanner:assets` fills the directory from the
   `scanner-bundle-v<FORMAT_VERSION>` release and `release.yml` fails a leg without them; a dev
   checkout that never ran it embeds nothing, which is expected.
   [card-scanner.md](../docs/reference/card-scanner.md) §10.
@@ -3266,12 +3305,18 @@ The whole record, including the pipeline the crate implements:
   117 k-row read there queues every search behind it. It opens `corpus.db` **directly** rather
   than through `db::open_read`, because `Reference::load_labels` reads an unqualified
   `FROM cards` — the corpus has to be `main` and there is nothing on the user side to attach.
-- **The scanner's state is `app.manage`d beside `AppState`, not a field inside it.** It is
-  optional, and shares nothing with the rest of the app but the data
-  directory and that one read. **The session touches neither database; the reader's scanner
+- **The scanner's state is the core's `State.scanner`, reached through `AppState` — and this
+  reverses what this bullet said until 2026-10-03**, which was that it was `app.manage`d beside
+  `AppState` and not a field of it, because it is optional and shares nothing with the rest of
+  the app but the data directory and that one read. All of that is still true; what changed is
+  that the light app's command table reaches everything through one handle, so Markus chose the
+  field. It is built **empty** from the data directory by `State::new` and loads lazily, so a
+  reader who never opens the scanner pays for nothing, and the commands take
+  `State<Arc<AppState>>` alone — `state.scanner.admit(…)`, and the `Arc<AppState>` moved into
+  `spawn_blocking` asks `state.scanner.ensure()` there. **The session touches neither database; the reader's scanner
   prefs and review tray are two `app_meta` rows in `user.db`** (2026-09-15) — `scanner_prefs` and
-  `scanner_tray`, each one JSON value written whole — which is why `scanner_prefs`,
-  `scanner_tray` and their setters take `AppState` and answer before the session has loaded. The
+  `scanner_tray`, each one JSON value written whole — which is why `scanner_prefs` and
+  `scanner_tray` answer before the session has loaded. The
   setters go through `sync::with_write`, so they answer `db::BUSY` during a sync and the page
   keeps its rows and retries; `set_scanner_tray` refuses more than 5,000 rows or a row under one
   copy before it writes. **The tray's commit is `scanner_tray_commit`, and it writes the
@@ -3286,7 +3331,8 @@ The whole record, including the pipeline the crate implements:
   **no `error_log` source**. The scanner's commands are registered in `desktop.rs`'s
   `generate_handler!`, not `lib.rs`.
 - **One window scans at a time, so every command that _uses_ the scanner takes the calling
-  `WebviewWindow` and admits on a lease** (2026-09-20) — the four session commands, `scanner_hold`
+  `WebviewWindow` and admits its label on the core's lease** (2026-09-20; the lease keeps its time
+  on `platform::clock::Tick` since it moved) — the four session commands, `scanner_hold`
   (the mounted view's heartbeat) and all three prefs/tray **writes**; the three reads and
   `scanner_elsewhere` take nothing. A refusal is `scanner::OPEN_ELSEWHERE`, matched by the page
   against that exact sentence. ⚠️ **An admission holds the lease until its command _settles_**,
@@ -3316,4 +3362,4 @@ The whole record, including the pipeline the crate implements:
 | [sync.md](../docs/reference/sync.md) | `sync_pair/`, `sync_engine/` and the user-schema rungs sync owns, v29 to v31 — the pairing protocol step by step and the six digits; then the eighteen synced tables, how a row is named across devices, the three SQLite facts the capture triggers' shape follows from, §7.3's five rules against the test that proves each, the envelope measured, the relay's endpoints, and what is not built |
 | [text-mirror.md](../docs/reference/text-mirror.md) | `mirror/` — the layout, the dirty map, why the pruner reads a manifest instead of guessing, what a pass costs measured, and the bugs still open |
 | [multi-window.md](../docs/reference/multi-window.md) | `changes.rs`, `window.rs`'s `open_new` and the scanner's lease — why a second *process* stays refused, the commit-driven mask and both of the update hook's blind spots, the emitter's locked take, and the live pass behind every figure |
-| [card-scanner.md](../docs/reference/card-scanner.md) | `scanner.rs` and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, §9's first commands, the raw body and lazy asset load, and §10's embedded assets and their load order, the filters mask, Fast and Exact, `decision_seq`, the `app_meta` tray and the synthetic evaluation |
+| [card-scanner.md](../docs/reference/card-scanner.md) | `scanner` (the core's session glue and this package's commands) and the crate behind it — the pipeline and every measurement, the three evidence tiers and their weights, both tracker verdicts, the debug server, §9's first commands, the raw body and lazy asset load, and §10's embedded assets and their load order, the filters mask, Fast and Exact, `decision_seq`, the `app_meta` tray and the synthetic evaluation |

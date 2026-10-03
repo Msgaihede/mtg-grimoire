@@ -271,14 +271,17 @@ The engine is moving out of `src-tauri` into `crates/grimoire-core`, a crate wit
 dependency that the desktop, the Android host and the WASM host will all link (spec §2). The
 rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md);
 this section is what each step built and measured. **Nothing here runs on a phone or in a
-browser yet**: what exists is a crate the desktop links, compiled for two more targets. Five
-steps of seven have landed — the leaves, the storage layer, the state a host holds over it, and
+browser yet**: what exists is a crate the desktop links, compiled for two more targets. All
+seven steps have landed — the leaves, the storage layer, the state a host holds over it, and
 the domain: the decks, the collection, the wishlist and the search — and the whole of the
 fifth, in three parts: a request, a timer, a file, a lock and background work under
 `platform/`; the Scryfall client, the ingest and the reconciler over them; the card sync and
-the facet index that drive those; and the three feeds and the image cache. **The sixth has begun**:
-the sync client, the entitlement and pairing reach the database a stretch at a time, on a lane,
-and hold nothing across a request — restated where they are, ahead of their move.
+the facet index that drive those; and the three feeds and the image cache. **The sixth came in
+two**: the sync client, the entitlement and pairing were restated to reach the database a
+stretch at a time, on a lane, holding nothing across a request — and then moved. **The seventh**
+moved the scanner's session glue, and with it `card-scanner` became a dependency of the core.
+**The command table came last** — `grimoire_core::dispatch`, the one entry point the light app's
+hosts call, with its read commands in it and the rest on an explicit list until a page asks.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -1490,8 +1493,243 @@ launch pass or a file. What a launch does is unchanged.
   over-count when the two share a second or the emitter's clock runs ahead; that is no wider
   than the bug already was.
 - **The lane's wait ends because every request does, and in a browser none has a deadline.**
-  The second part owes `platform::http` one.
+  The second part owes `platform::http` one. *(It has one: §6.9.)*
 - **`share::publish` still holds the connection for a whole publish.** It takes the lane first
   now, so it cannot interleave with a sync; a reader's write during an upload still waits.
 - **The second part**: `client`, `entitlement`, `wire`, `schedule`, `identity`, `pairing` and
-  the commands' plain functions move, with `platform::http`'s `POST`.
+  the commands' plain functions move, with `platform::http`'s `POST`. *(§6.9.)*
+
+### 6.9 Step 6, second part — the sync client, the entitlement and pairing move (2026-10-03)
+
+[The plan](../superpowers/plans/2026-10-02-light-app-core-step-6-sync.md), Tasks 8 to 10.
+Measured on Windows 11, debug builds, on the branch's own tree over `main` at `dfce2194` (6a's
+merge).
+
+**Moved by `scripts/core-step-6b.mjs`**, the I/O step's scripts with another list:
+`sync_engine::{client, entitlement, wire, schedule}` and `sync_pair::{identity, pairing}` whole,
+every test of theirs with them, and `sync_engine::commands` split — the sync panel's reads to the
+core, the wrappers to `src-tauri/src/sync_engine/commands/mod.rs` over a glob re-export, as
+pairing's went to `src-tauri/src/sync_pair/pairing/mod.rs`. **`src-tauri` keeps `live.rs`**, the
+connection manager — a socket, `tokio` timers and two events emitted through a window — and is
+meant to: how a host keeps a socket open is the host's, and `schedule`, the half that decides
+when, is the core's. Git records all eight as renames.
+
+| | Before | Now |
+| --- | --- | --- |
+| A relay request | `reqwest` | `platform::http`'s new `post`, `body` and `text` |
+| Its bound in a browser | none | `Client::deadline`: **120 s** for the client, whose pull is unpaged, **30 s** for the entitlement — a whole-request bound, because `fetch` has no connect phase and no per-read one. Natively it is not applied: the connect and read bounds already end a request that stops answering |
+| The pending pairing offer | `AppState.pairing` | `State.pairing`, a `platform::sync::Shared` |
+| A device's default name | the environment, read in `identity` | `platform::device::name()`, `None` in a browser |
+| The relay clients' per-call test client | `cfg(test)` | `any(test, feature = "testing")`, because the desktop's sync tests link the core with the feature on and a dependency's `cfg(test)` is off |
+
+**Nothing a request sends changed**: the modules' own mock-relay tests moved with their mock
+expectations unedited and pass where they now live — the only edits are paths: a fixture's in
+the client's tests, and the clock's at pairing's 23 `now_ms` sites — and a fresh reviewer
+compared all eight requests old against new. Core **2 954** passed and 5 ignored, desktop **460** and 1 — one more than
+6a's 3 413 between them, the `Shared` test, and none lost; clippy for the workspace and for
+`wasm32`; the WASM build; `cargo check --locked`; no `testing` in the shipped tree; the
+frontend's build, lint and suite.
+
+**What the move found: the fence that holds 6a's rule failed the WASM compile.** Each
+`nothing_is_held_across_a_request` handed its entry points' futures to `fn sendable<T: Send>`,
+and in a browser no future that awaits a request is `Send` — a `reqwest` response there is a
+JavaScript promise. Every native gate was green; the WASM clippy was red at every entry point.
+**`platform::Sendable`** is the bound now: `Send` natively, so the desktop's question is the one
+it was, and anything in a browser, where there is no other thread to send to. A mutation — an
+`Rc` handed to the fence — is still refused natively.
+
+**Driven in `tauri dev` again, against the loopback mock** — the dev copy in no group before and
+after, its files put back: a claim 12 ms; a trip 21 ms; a sticky note written during an 8 s trip
+**7 ms**; a second Sync now during it `BUSY` after 5 013 ms; the slow trip 8 014 ms, then the
+socket's own trip pushing the note (641 B); Leave group behind the socket's trip, waiting
+6 428 ms and then clearing the group and the grant; the pairing commands as before.
+
+**No upgrade check against `main`'s binary**, for 6a's reason: no schema rung, launch pass or
+file is touched.
+
+**Open after this step:**
+
+- **No browser has run a relay request.** The two deadlines are reasoned, not measured; the web
+  host's phase measures what a pull costs a Worker and starts from them.
+- **A web host needs its own socket.** `live.rs` is `tokio` tasks and `tokio-tungstenite`; the
+  browser's half — a `WebSocket`, or the polling spec §7 names — is phase 6's.
+- **The same-second baseline skip in `apply`** (§6.8) is being fixed on its own.
+- **`share::publish` still holds the connection for a whole publish** (§6.8), and stays the
+  desktop's.
+- **Step 7**: the scanner's session glue — and then the command table. *(§6.10.)*
+
+**6b merged the same day, #772**, its `core` job green on wasm32 and Android — the first
+Android compile of the relay client and pairing, and of the `Sendable` bound above.
+
+### 6.10 Step 7 — the scanner's session glue (2026-10-03)
+
+[The plan](../superpowers/plans/2026-10-03-light-app-core-step-7-scanner.md). Measured on
+Windows 11, debug builds, on the branch's own tree over `main` at `91e5bc59` (6b's merge).
+
+**Measured before it was decided.** With `card-scanner` (`corpus`, `ocr`) added to the core for an
+experiment, the core checked clean for wasm32 in **27 s** and built in **68 s**, and
+`cargo tree --target wasm32-unknown-unknown -i libsqlite3-sys` printed nothing: the crate's
+`rusqlite` asks for `bundled`, and in a browser build that names a package that is not in the
+tree. Android cannot be compiled here (no NDK); the `core` job is its first compile. **Running the
+session in a browser is still impossible** — the crate keeps `std::thread::scope` and `Instant`,
+which panic there — and nothing calls it there before phase 7 (spec §8).
+
+**Markus chose the whole glue, and its state as a field of `State`.** The other two answers on
+the table were moving only what names no engine (prefs, tray, lease), and deferring the step to
+phase 7. The field reverses the desktop's documented choice — the scanner's state was
+`app.manage`d beside `AppState` because it is optional and shares nothing but the data directory
+— because the command table that comes next reaches everything through one handle.
+
+**Moved by `scripts/core-step-7.mjs`**, the 6b script's shape with a split inside the tests module
+as well (`rs-items.mjs`'s `inner`):
+
+| | Now |
+| --- | --- |
+| The session and its lazy load, the lease, the asset load order, prefs, tray, the tray's commit, the capture writer, and 34 tests | `crates/grimoire-core/src/scanner.rs` |
+| The assets `build.rs` embeds, the three request headers and the raw-body parsing, the 12 commands, and the 8 tests of that body | `src-tauri/src/scanner/mod.rs`, under `pub use grimoire_core::scanner::*;` |
+| The scanner's state | `State.scanner`, built empty by `State::new` from the data directory — no new argument |
+| What the binary embeds | the desktop's `scanner::compiled()` — the only place `cfg(scanner_assets)` is asked — handed once to `state.scanner.carry(…)` above `app.manage`, so no command reaches the state before it is said |
+| The lease's clock | `platform::clock::Tick`, which grew `==`, `+ Duration` and `saturating_duration_since` |
+| The asset and capture files | `platform::files`, which grew a whole-file `read` |
+| The model pair | read through `files` and handed to `TitleReader::from_bytes`, with `TitleReader::load`'s sentences kept word for word — a test now pins that the refusal still names both files |
+| A `card-scanner` change in CI | runs the `core` job too |
+
+**Nothing a command answers changed**: the same twelve names, arguments, refusals and sentences,
+and the page is untouched. All 42 of the module's tests pass where they now live; core **2 989**
+and desktop **426**, which is 6b's 3 414 and the `Tick` test, none lost; clippy for the workspace
+and for `wasm32`; the wasm build; `cargo check --locked`; no `testing` in the shipped tree; the
+frontend's build and lint, and its suite but one: `ScannerPage.test.tsx`'s refused-camera test
+timed out a 1 s `findByText` at 1.46 s under the full run's load and passed 40/40 three times
+alone — the branch touches no frontend code but `ipc.test.ts`'s import.
+
+**A fresh reviewer read the branch and found no must-fix** — every command, every test, the
+fence, the router and `read_models`' sentences checked against the old code. What it found was
+prose the move had made false, the CI docs above all (`crates/*` "never runs `core`"), and a
+claim here that every module the spec named had moved: `share/snapshot` and `share/cache` were
+on §2.3's list and on no step's.
+
+**The live pass came after the merge, the same day.** It could not run before #773 merged:
+Markus's own portable build was running from Explorer, and a dev build launched beside it only
+opens a window in that app — the single-instance guard keys on the identifier, not the build — so
+driving the scanner's commands would have driven his real data. (A static check stood in: every
+one of the twelve commands asks for `State<Arc<AppState>>`, which `desktop::start` manages, and no
+`ScannerState` is managed or asked for anywhere.) Once he had closed it: `tauri dev`, debug build,
+`main` at `49162fd2`, CDP through the page's own `ipc`, with the published `scanner-bundle-v3`
+assets (5.5 + 2.5 + 9.7 MB, downloaded with his say-so) placed in the dev data folder's
+`scanner/` — so the load took the **file** path, the one this step rewrote onto `platform::files`
+and `read_models`, and the build embedded nothing.
+
+| | Measured |
+| --- | --- |
+| `scanner_status`, first | **1 555 ms**, the lazy load: bundle and both models `source: "file"`, `loaded: true`; **118 467 labels** from `corpus.db` |
+| `scanner_status`, second | 2 ms — loaded once |
+| A real card through `scanner_frame` | Counterspell, MH2 267: its cached 672×936 picture on a dark 1280×960 table, eight frames. Four corners every frame; the exact printing top from the second (distance 40); `wants_detail` on the sixth, and the seventh carried the detail image through `DETAIL_HEADER`'s two-JPEG body; **resolved to MH2 267 on the seventh**. 179–317 ms a frame |
+| Two windows | the first held the scanner; 178 ms later the second was told `elsewhere`, its hold refused in exactly *The scanner is open in another window.*, its status answered; **admitted 11 879 ms later** — the first window's 10 s heartbeat and the 2 s lease after its last beat |
+| Prefs, tray, commit | prefs read and written back; a tray row of none refused in *A tray row needs at least one copy.*; one row stored and read back; `scanner_tray_commit` — `added: 1`, the card owned 0 → 1 and the tray empty, one write |
+| Capture | `live-<epoch>.jpg` and its sidecar under `data/scanner/scans/`, the sidecar's `Æther Vial` intact through the ASCII escape |
+
+The first try at the two-window row was a probe error, not the lease's: a heartbeat on
+`setInterval` first fires at 500 ms, and the second window asked at 182 ms, while the scanner was
+genuinely free. Holding once, awaited, before the second window asks is what the row above
+measures. Afterwards the dev copy's `user.db` was put back from a copy taken first, the assets and
+the capture deleted, and the app launched once more so the mirror's startup pass re-rendered the
+seven Collection files the commit had written.
+
+**No upgrade check against `main`'s binary**: no schema rung, launch pass or file changed. The two
+`app_meta` rows are read and written by the same functions, now in the core.
+
+**Open after this step:**
+
+- **The command table** (`core::dispatch`), with a name-parity test against `generate_handler!` —
+  the last item of phase 2.
+- **The scanner in a browser** is phase 7's: the crate's threads and clock need a seam, and the
+  assets a download (spec §8).
+- ~~A live pass of the Scanner view over the moved glue~~ — run the same day, above.
+
+### 6.11 The command table — the machinery and the reads (2026-10-03)
+
+[The plan](../superpowers/plans/2026-10-03-light-app-core-command-table.md); spec §2.4. Measured on
+Windows 11, debug builds.
+
+**Surveyed first.** A script read every `#[tauri::command]` under `src-tauri/src` and what its
+body touches: **257** registered commands, of which about 199 are thin wrappers — one core call
+inside a read of the read connection (89), a write (93) or an owned write (17) — 13 reach a
+network or the sync lane, 13 are status reads and housekeeping, and about 30 name the desktop.
+**Markus chose the machinery and the reads first**, the rest joining as the light app's pages ask
+for them, and **a `macro_rules!` table** over a hand-written match.
+
+**What exists.** `crates/grimoire-core/src/commands.rs`: the `commands!` block, one line per
+command — kind, name, the module whose items its body names, the arguments, the body — and
+`grimoire_core::dispatch(&state, name, args, body)`, which parses the arguments (camelCase, an
+absent `Option` read as `None`), runs the body as its kind says, and answers JSON. **88 reads**:
+the survey's 89 less the two that start a picture fetch (`prefetch_images`, `prewarm_collection`
+— tasks, not reads) and plus `card_holdings`, which a word in its doc comment had excluded. They
+were drafted from the wrappers by `scripts/core-command-table.mjs` — each body is its wrapper's,
+the connection renamed — and five were written by hand: `marketplace_feed_status` (a block),
+`error_log_list` (in `desktop.rs`, calling `errors`), and three whose inline `mod commands`
+renamed what it imported.
+
+| Kind | Runs | In the table |
+| --- | --- | --- |
+| `read` | blocking pool, the read connection | 88 |
+| `write` | blocking pool, `state::with_write` | 0 — proven by the kinds' own test table |
+| `owned` | blocking pool, `collection_source::with_write_owned` | 0 — the same |
+| `task` | awaited where it stands, with the `Arc<State>` | 0 — the same |
+| `bytes` | blocking pool, with the call's raw body | 0 — the same |
+
+**The fence**, `src-tauri/src/command_table.rs`, three tests: every one of the 257 registered
+commands is in the table, on `DESKTOP_ONLY` (16, each with its reason — windows, the updater, the
+file dialogs, the mirror, the launch, the socket) or on `NOT_YET` (153), and in only one; nothing
+on either list or in the table is a command the app does not register; and every table entry takes
+exactly its wrapper's arguments, by name, in order and by type. **Both were mutated and went red** — a
+renamed argument and a name taken off `NOT_YET`. **The arguments test found something the day it
+was written**: its first version told Tauri's own parameters apart by *name*, and dropped
+`price_movers`' `window`, a span of time; it reads their `tauri::` *type* now.
+
+**Tests**: the table's own five and the fence's four.
+
+- **Every kind through its arm**, and the two that look alike told apart: over a warm facet
+  index, an `owned` write publishes the index again and a `write` leaves it — the one thing
+  `with_write_owned` adds. **A read answers while another thread holds the write connection**, so
+  a `read` arm that took the writer's would time out.
+- **Each refusal in words**: no such command, arguments that do not parse, snake_case where
+  camelCase is the wire, a body where none belongs and none where one does.
+- **Four real reads through `dispatch`, compared with their functions' own answers** over rows
+  that tell a wrong answer from a right one: three decks, the third with four history rows, asked
+  for its two newest — an entry that swapped its two integers would answer the second deck's one
+  row, and one that dropped the limit all four; `deck_get` with its optional marketplace left out;
+  a read with no arguments; `combos_for_card`.
+- **No name declared twice**, and the fence's arguments test compares **types** as well as names,
+  normalised to what they name (`crate::sorting::Marketplace` is `Marketplace`).
+- **`dispatch` holds nothing across an `.await`** — checked over the real table and over the
+  kinds' own, whose arms the real table does not expand yet.
+
+**Each was mutated and went red**: the `owned` arm swapped for plain `with_write`, and
+`deck_audit_list`'s two arguments swapped. Clippy for the workspace and for `wasm32`, and the WASM
+build, are clean with all 88 arms in one `async fn`.
+
+**A fresh reviewer compared all 88 entries with their wrappers by hand and found none that answers
+differently.** What it found was tests proving less than they said — the first version of the
+reads test passed on an empty database whatever the bodies did, the kinds test could not tell
+`owned` from `write`, and the fence compared argument names and not types — all closed above.
+
+**Nothing on the desktop changed**: its wrappers are untouched and do not call `dispatch`, so
+there is no live pass to make and no upgrade to compare. **Nothing has called `dispatch` from a
+real host yet** — that is phases 4 and 5.
+
+**Open after this:**
+
+- **Phase 2's seven steps and its table are built.** What #761's phase 2 list still holds is not
+  extraction: a decision (moving `target/` to the repository root, on an announced day), a check
+  only the first release under the workspace can make (`release.yml` finding its bundles), and
+  two standing rules (a new user rung's `UNDO_V<N>` in two files; the `testing` feature off every
+  host's `[dependencies]`).
+- The writes, tasks and bytes commands join the table as phase 3's pages ask for them — one line
+  in `commands!`, one name off `NOT_YET`.
+- **A sixth kind, before five of the reads on `NOT_YET` can join**: `combos_status`,
+  `oracle_tags_status`, `art_tags_status`, `sync_status` and `facet_cards` take the `State` rather
+  than a connection, and the table has no kind for "the blocking pool, the `Arc<State>`, no body" —
+  `task` runs where it stands and `bytes` needs a body.
+- **The chain from the table to the page is unpinned for 14 of the 88 reads**, which
+  `ipc.test.ts` names nowhere — eight of them with arguments (the spec's §2.4 note lists them).
+- `share/snapshot` and `share/cache`, which the spec listed and no step moved.

@@ -45,6 +45,16 @@ name = "grimoire_core"
 testing = []
 
 [dependencies]
+# The card scanner, for `scanner`'s session glue (the extraction's seventh step). Declared as
+# `src-tauri` declares it — a plain path dependency on a standalone package the workspace
+# excludes on purpose (the root `Cargo.toml` says why), with the app's two features: `corpus` for
+# the labels out of `corpus.db`, `ocr` for the two readers. **It was measured on wasm32 before it
+# came here** — the core with it checks and builds clean, and libsqlite3-sys is not in that tree
+# at all, so the crate's `bundled` asks nothing of a browser build; Android is CI's `core` job to
+# compile, as for everything here. **It does not yet run in a browser** —
+# the crate's own threads and `Instant` panic there — and nothing calls it there before the light
+# app's phase 7 gives them a seam.
+card-scanner = { path = "../card-scanner", features = ["corpus", "ocr"] }
 # What makes two label names the same name. `deck_labels` is one global list since schema v21
 # and its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode
 # lowercase, then NFC again - so "Cafe" spelled with a precomposed e-acute, with a combining
@@ -99,6 +109,12 @@ x25519-dalek = { version = "3", features = ["static_secrets", "getrandom"] }
 # draws its own 24 bytes through `crypto::random_bytes`. So the line is a subtraction.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 hkdf = "0.12"
+# The sealed envelope as a JSON string. **base64url and not hex**: the relay stores ciphertext
+# as TEXT in a Durable Object, and hex would be twice the bytes over the wire and against the
+# 2 MB per-row cap where base64 is four thirds; URL-safe so the blob can be a path segment
+# later without anything having to escape it. `default-features = false` drops `std`; `alloc`
+# is the whole API `Engine::encode`/`decode` needs.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # Random bytes for the group key, the group id, the device id, the pairing token and every
 # nonce. `fill` is the whole API this uses, and it is spelled the same in 0.3 and 0.4 — so the
 # pin follows whichever major `x25519-dalek` resolved, and moving it is a one-word edit with no
@@ -163,4 +179,4 @@ tempfile = "3"
 # `scryfall`'s tests answer from a local mock server, and never from Scryfall.
 httpmock = "0.8"
 # `#[tokio::test]`, for the tests of what is async here.
-tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "test-util"] }

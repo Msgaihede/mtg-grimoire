@@ -65,6 +65,10 @@ pub mod collection;
 pub mod collection_alloc;
 pub mod collection_folders;
 pub mod collection_source;
+/// **The command table**: one declaration per command a host with no window answers, and
+/// [`dispatch`], which answers one by name — what the light app's hosts call the engine through.
+pub mod commands;
+pub use commands::dispatch;
 /// **Commander Spellbook's combos**: the feed streamed into `combos` over its own
 /// [`platform::http`] client, and the two questions asked of it — which combos a pile of
 /// printings holds, and which combos name one card.
@@ -136,6 +140,9 @@ pub mod recent_cards;
 /// behind the capture guard, because every device derives them for itself.
 pub mod reconcile;
 pub mod reset;
+/// **The scanner's session glue**: the `card-scanner` session behind a lazy load, the one-window
+/// lease, the reader's scanner prefs and review tray. `State.scanner` holds it.
+pub mod scanner;
 /// **Every table, both ladders and the staging swaps.** `bring_to_head` is the half of a launch
 /// that may stop it; `prepare_database` is that and the half that is logged and left owing.
 pub mod schema;

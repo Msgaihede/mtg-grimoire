@@ -83,20 +83,11 @@ pub(crate) const PLACEHOLDER: &str = "This device";
 /// never stop a device minting an identity, so it falls back to a word rather than returning an
 /// error.
 fn mint_name() -> String {
-    // `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere, read straight out of the environment
-    // rather than through a `hostname` crate — one string read once per install is not worth a
-    // dependency with a `gethostname` call behind it.
-    //
-    // **`HOSTNAME` is a shell variable on Linux and macOS and is usually not exported to a
-    // process**, so `FALLBACK_DESKTOP` is the ordinary answer there rather than the exceptional
-    // one. That is the honest trade for a portable Windows app: Windows puts `COMPUTERNAME` in
-    // every process's environment, and nobody has ever run a Linux build of this.
-    const HOST_VAR: &str = if cfg!(windows) {
-        "COMPUTERNAME"
-    } else {
-        "HOSTNAME"
-    };
-    let name = std::env::var(HOST_VAR)
+    // `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere — [`crate::platform::device::name`],
+    // which has the reasons. **`HOSTNAME` is usually not exported to a process**, so
+    // `FALLBACK_DESKTOP` is the ordinary answer on Linux and macOS rather than the exceptional
+    // one, and it is the only answer in a browser, which is told no such thing.
+    let name = crate::platform::device::name()
         .map(|v| tidy(&v))
         .unwrap_or_default();
     if name.is_empty() {
@@ -2753,7 +2744,7 @@ mod tests {
 
         assert_eq!((JOIN_STEP, REMOVAL_STEP), (1, 2));
         assert!(
-            include_str!("../../../relay/src/groupauth.ts")
+            include_str!("../../../../relay/src/groupauth.ts")
                 .contains(&format!("export const REMOVAL_STEP = {REMOVAL_STEP};")),
             "relay/src/groupauth.ts's REMOVAL_STEP is not this one"
         );

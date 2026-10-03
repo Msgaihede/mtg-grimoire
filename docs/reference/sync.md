@@ -213,10 +213,12 @@ not be a return to something.
 
 ### The pending offer is in memory and never in SQLite
 
-`AppState.pairing`, a `tokio::sync::Mutex<Option<Pending>>` — **an async lock since 2026-10-03,
-held across the request an `accept`, a `confirm` or a `poll` makes**, so a Cancel waits behind
-it and wins and two polls cannot both complete one offer; taken before the sync lane, never
-after. An offer that survived a restart would be an
+`State.pairing` in `grimoire-core`, a `platform::sync::Shared<Option<Pending>>` — **an async
+lock since 2026-10-03, held across the request an `accept`, a `confirm` or a `poll` makes**, so a
+Cancel waits behind it and wins and two polls cannot both complete one offer; taken before the
+sync lane, never after. (It was the desktop's `AppState.pairing`, a `tokio::sync::Mutex`, for the
+step that made it async, and moved to the core with pairing.) An offer that survived a restart
+would be an
 invite a reader printed last month still being accepted today. It outlives the webview, which is
 what a reader who opens Settings twice needs, and dies with the process — which is what makes
 the token one-time in fact rather than in the documentation. `Pending` holds the derived pair
@@ -3309,8 +3311,13 @@ an edit made in the second the peer last heard from this device is lost on that 
 
 **And the compiler holds the rule itself.** A future that keeps a `MutexGuard` across an
 `.await` is not `Send`; `nothing_is_held_across_a_request`, in each of the three files, hands
-every entry point's future to `fn sendable<T: Send>(_: T)` and is never called.
-`clippy::await_holding_lock` refuses the same in every function, tests included.
+every entry point's future to `fn sendable<T: platform::Sendable>(_: T)` and is never called.
+`clippy::await_holding_lock` refuses the same in every function, tests included. **The bound was
+`Send` until the move**, and the move made it fail the WASM compile at every entry point: a
+browser's request is a JavaScript promise, and no future that awaits one is `Send`. `Sendable` is
+`Send` on a native build and anything in a browser, where there is no other thread — so the
+question the fence asks of the desktop did not change, and a mutation (an `Rc` handed to it) is
+still refused natively.
 
 ### Driven in the shipped window
 
@@ -3329,6 +3336,34 @@ the real relay.**
 | Leave group, pressed 1 s into a 6 s trip | waited **5 016 ms**, then `/rotate` 3 ms behind the pull's answer; no group, no grant |
 | `sync_pairing_begin`, `poll` ×2, `cancel`, `poll` | 16 ms; *waiting*, *waiting*; done; *idle* |
 | Each refusal on a device in no group | in words, in 2–3 ms |
+
+### Moved to the core
+
+**The same day, the code above left `src-tauri`** (the light app's step 6, second part, by
+`scripts/core-step-6b.mjs`): `sync_engine::{client, entitlement, wire, schedule, commands}` and
+`sync_pair::{identity, pairing}` are files under `crates/grimoire-core/src/`, re-exported in
+`src-tauri` at the paths they always had. What stayed is `sync_engine::live` — the socket, its
+timers and the two events it emits through a window — and every `#[tauri::command]`, in
+`sync_engine/commands/mod.rs` and `sync_pair/pairing/mod.rs`. These changed on the way, and
+nothing a request sends did — a reviewer compared all eight requests, old against new, route,
+verb, headers and body:
+
+| What | Was | Is |
+| --- | --- | --- |
+| A relay request | `reqwest`, directly | `platform::http`: natively the same connect and read bounds; in a browser a whole-request `deadline` — **120 s** for the client (whose pull is unpaged), **30 s** for the entitlement — because `fetch` has no other bound and a request that never ended would be a Leave that never ran |
+| The pending offer | `AppState.pairing`, a `tokio::sync::Mutex` | `State.pairing`, a `platform::sync::Shared` — the same lock, on every host |
+| A device's default name | `COMPUTERNAME` / `HOSTNAME` read in `identity` | `platform::device::name()`; `None` in a browser, where `mint_name` falls back to its word |
+| The relay clients' per-call test client | `cfg(test)` | `cfg(any(test, feature = "testing"))`, because the desktop's sync tests link the core with `testing` on, and a dependency's `cfg(test)` is off |
+| A client that cannot be built | `reqwest`'s builder `.unwrap_or_default()`, a client with no timeouts | `platform::http::Client::new`'s `expect`, as every other client in the core has panicked since the I/O step — unreachable with a fixed configuration, and a panic beats a client with no bounds |
+| `client::kind_of` | an `is_status()` arm answering `Http` | gone: only `error_for_status` builds that error, and neither file ever called it |
+| `sync_pairing_begin` | `spawn_blocking` and the offer's `blocking_lock` | `sync::on_a_worker` and `.lock().await`, as the other pairing presses are — one runtime per press |
+
+The same pass in `tauri dev` against the loopback mock, on the moved code: a claim 12 ms; a trip
+21 ms; a sticky note written during an 8 s trip **7 ms**; a second Sync now during it `db::BUSY`
+after **5 013 ms**; the slow trip 8 014 ms, then the socket's own trip pushing the note (641 B);
+Leave group pressed behind the socket's trip, waiting **6 428 ms** and then clearing the group and
+the grant; the pairing commands as before. The dev copy was in no group before and after, and its
+files were put back.
 
 ## Schema — user v30
 

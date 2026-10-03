@@ -38,7 +38,12 @@ pub fn now_secs() -> i64 {
 /// the rounding alone can overstate a wait by a millisecond. `db::lock_for` gives up a little
 /// soon; `scryfall`'s pacing gate, the second caller, would send a little soon — which is why
 /// the web host should give this arm `performance.now()` before it paces anything.
-#[derive(Debug, Clone, Copy)]
+///
+/// **Two ticks can be compared and a tick can be moved forward**, which is what the scanner's
+/// one-window lease needs: it keeps the tick its holder last settled at and asks how long ago
+/// that was *as of* a tick it is handed, so its tests can say "two seconds later" without
+/// sleeping for two seconds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Tick(imp::Tick);
 
 impl Tick {
@@ -49,6 +54,21 @@ impl Tick {
     /// How long ago this tick was taken. Never negative.
     pub fn elapsed(&self) -> std::time::Duration {
         imp::elapsed(&self.0)
+    }
+
+    /// How long after `earlier` this tick was taken — zero when it was not after it at all.
+    pub fn saturating_duration_since(&self, earlier: Tick) -> std::time::Duration {
+        imp::since(&self.0, &earlier.0)
+    }
+}
+
+/// This tick, `by` later. Natively it is `Instant`'s own addition, which panics past the end of
+/// what the platform can count — a span no caller has.
+impl std::ops::Add<std::time::Duration> for Tick {
+    type Output = Tick;
+
+    fn add(self, by: std::time::Duration) -> Tick {
+        Tick(imp::later(self.0, by))
     }
 }
 
@@ -136,6 +156,14 @@ mod imp {
     pub fn elapsed(tick: &Tick) -> Duration {
         tick.elapsed()
     }
+
+    pub fn since(later: &Tick, earlier: &Tick) -> Duration {
+        later.saturating_duration_since(*earlier)
+    }
+
+    pub fn later(tick: Tick, by: Duration) -> Tick {
+        tick + by
+    }
 }
 
 #[cfg(target_family = "wasm")]
@@ -162,6 +190,14 @@ mod imp {
 
     pub fn elapsed(tick: &Tick) -> Duration {
         Duration::from_millis(u64::try_from(now_ms().saturating_sub(*tick)).unwrap_or(0))
+    }
+
+    pub fn since(later: &Tick, earlier: &Tick) -> Duration {
+        Duration::from_millis(u64::try_from(later.saturating_sub(*earlier)).unwrap_or(0))
+    }
+
+    pub fn later(tick: Tick, by: Duration) -> Tick {
+        tick.saturating_add(super::whole_ms(by))
     }
 }
 
@@ -234,5 +270,22 @@ mod tests {
             second >= std::time::Duration::from_millis(20),
             "a 20 ms pause measured as {second:?}"
         );
+    }
+
+    /// A tick moved forward is that much after the one it came from, and never before it — the
+    /// arithmetic the scanner's lease asks of two ticks without waiting between them.
+    #[test]
+    fn a_tick_moved_forward_measures_that_much_after_its_origin() {
+        let t0 = Tick::now();
+        let two = std::time::Duration::from_secs(2);
+        let later = t0 + two;
+        assert_eq!(later.saturating_duration_since(t0), two);
+        assert_eq!(
+            t0.saturating_duration_since(later),
+            std::time::Duration::ZERO,
+            "an earlier tick is no time after a later one"
+        );
+        assert_eq!(t0 + std::time::Duration::ZERO, t0);
+        assert_ne!(later, t0);
     }
 }

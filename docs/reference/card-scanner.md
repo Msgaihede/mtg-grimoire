@@ -1968,6 +1968,12 @@ canary for the whole scrape.
 is optional, and the only thing it shares with the rest of the app is the data directory and one
 read of `corpus.db`.
 
+**Since 2026-10-03 that is history** (the light app's step 7,
+[light-app.md](light-app.md) §6.10): the session glue is `crates/grimoire-core/src/scanner.rs`,
+the state is the core's `State.scanner` — built empty, still lazy — and `src-tauri/src/scanner/mod.rs`
+keeps the embedded assets, the raw request body and the commands. Everything below about the
+load order, the lease, the prefs and the tray still holds, in the core's file.
+
 **Assets were files in `data/scanner/` and nothing downloaded them — until 2026-09-15.** A
 release build now carries all three inside the binary, and a file here *overrides* the embedded
 copy rather than being the only source; §10 has the load order, the workflow that publishes the
@@ -2029,7 +2035,7 @@ app's own command is always callable. No `error_log` source: the page shows the 
 
 **Those four are the ones §9 shipped, and the module has more now** — the filters push, the prefs
 and tray pair with the tray's commit (§10), and the lease's two (below). **Do not count them from
-this page**: `grep '#\[tauri::command\]' src-tauri/src/scanner.rs` answers it, and a count is a
+this page**: `grep '#\[tauri::command\]' src-tauri/src/scanner/mod.rs` answers it, and a count is a
 fact about a tree that every open branch disagrees about.
 
 **One body shape: the JPEG raw, and what travels with it in a header.** `scanner_frame` takes
@@ -2461,7 +2467,9 @@ file present, and **never a path that does not exist**, which would rerun the sc
 build; the tracked `src-tauri/scanner-assets/README.md` is what keeps the directory there
 (`.gitignore` takes `src-tauri/scanner-assets/*` and re-includes the README). Proven by running the
 script with `tauri_build::build()` stubbed through none, two of three (no cfg) and all three.
-`scanner.rs` then `include_bytes!`s the three under the cfg.
+`scanner.rs` then `include_bytes!`s the three under the cfg — `src-tauri/src/scanner/mod.rs`
+since the session glue moved to the core, which hands what it embeds to `State.scanner.carry` as
+the app starts.
 
 **Load order, per asset, first hit wins: a file in `data/scanner/`, then the embedded copy, then
 absent.** `Asset` gained `source: "file" | "embedded" | "absent"`. An embedded asset reports

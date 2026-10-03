@@ -203,9 +203,11 @@ describe("the arms", () => {
     ["crates/grimoire-core/src/deck.rs", T, T, T, F, F],
     ["crates/grimoire-core/src/schema.rs", T, T, T, F, F],
     ["crates/grimoire-core/Cargo.toml", T, T, T, F, F],
-    ["crates/card-scanner/src/session.rs", T, T, F, F, F],
-    ["crates/card-scanner/Cargo.lock", T, T, F, F, F],
-    ["crates/card-scanner/.cargo/config.toml", T, T, F, F, F],
+    // `core` since the extraction's seventh step, when the engine took the crate for the
+    // scanner's session glue.
+    ["crates/card-scanner/src/session.rs", T, T, T, F, F],
+    ["crates/card-scanner/Cargo.lock", T, T, T, F, F],
+    ["crates/card-scanner/.cargo/config.toml", T, T, T, F, F],
     ["share-worker/wrangler.jsonc", T, T, T, F, T],
     ["relay/src/index.ts", T, T, T, F, T],
     ["some/new/thing.txt", T, T, T, F, T],
