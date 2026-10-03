@@ -14,7 +14,8 @@ import { ipcError } from "@/lib/ipc";
 import { PRESS_SOFT } from "@/lib/motion";
 import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
-import { copyToClipboard, downloadText } from "./browserFiles";
+import { saveText } from "@/lib/core/files";
+import { copyToClipboard } from "./browserFiles";
 import { usePhoneTransferPrefs } from "./prefs";
 
 /**
@@ -55,8 +56,9 @@ const ACTION = cn(
  * the same choices (the golden suite's writers, unchanged). **What is the phone's own** is the
  * drawing — every control 44px, the formats as a wrapping row of chips — where the choices are
  * remembered (`usePhoneTransferPrefs`, per surface, opening on the desktop's own defaults), and
- * where the text goes: `navigator.clipboard` and a browser download (`browserFiles.ts`, the
- * stand-in for the host seam phases 4 and 5 own).
+ * where the text goes: `navigator.clipboard` (`browserFiles.ts`), and a file through
+ * `@/lib/core/files`'s `saveText` — the system's save dialog on the Android host, a download in a
+ * browser (phase 4, step 4.3).
  *
  * **A bottom sheet below 640px** — the action sheet's shape: the format, the fields and the two
  * buttons fit a thumb's reach, and the preview is a disclosure that opens shut, the desktop's
@@ -139,13 +141,16 @@ function Body({
     if (notReady) return;
     setError(null);
     const name = `${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`;
-    try {
-      downloadText(name, text);
-      setDone(`Downloading ${name}.`);
-    } catch (e) {
-      setDone(null);
-      setError(`Couldn't save that export — ${ipcError(e)}`);
-    }
+    setDone(null);
+    // A browser downloads (`handed`); the Android host opens the system's save dialog and says
+    // whether the reader kept a file. A cancelled dialog is nothing to report.
+    saveText(name, text).then(
+      (saved) => {
+        if (saved === "saved") setDone(`Saved ${name}.`);
+        else if (saved === "handed") setDone(`Downloading ${name}.`);
+      },
+      (e: unknown) => setError(`Couldn't save that export — ${ipcError(e)}`),
+    );
   };
 
   return (

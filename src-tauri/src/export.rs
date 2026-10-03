@@ -17,19 +17,9 @@
 use crate::file_dialog;
 use std::path::Path;
 
-/// The name the save dialog opens with: the last component of what the page suggested, or
-/// `None` for nothing usable.
-///
-/// **The page may suggest a name and never a place.** `ExportDialog` sends `Ramp.txt`; a page
-/// that sent `..\..\Startup\x.bat` would, through the dialog's file-name box, be choosing the
-/// folder the dialog opens in — so everything up to the last separator goes, both separators on
-/// every platform, because the name is a Windows name wherever this is compiled. The reader still
-/// confirms or changes it in a window the page cannot drive, so this is not the fence; it keeps
-/// the one string the page still sends from carrying a path into that window at all.
-pub fn suggested_name(raw: &str) -> Option<&str> {
-    let name = raw.rsplit(['/', '\\']).next().unwrap_or(raw).trim();
-    (!name.is_empty() && name != "." && name != "..").then_some(name)
-}
+/// The name the save dialog opens with — the core's since the light app's Android host answers
+/// the same command (phase 4). See [`grimoire_core::import::suggested_name`].
+pub use grimoire_core::import::suggested_name;
 
 /// Ask the reader where to save `contents` — the OS save dialog, opened with `file_name` — and
 /// write it there. Answers whether a file was written: `false` is Cancel, which is not a failure.

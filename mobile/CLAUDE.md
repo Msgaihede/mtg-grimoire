@@ -79,16 +79,20 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
   called, how a file is picked, where a card image is served from. The one user-agent read the
   phone face's graph reaches today is that seam's own — `src/lib/images.ts`'s `imageOrigin`,
   which picks a URL's origin and decides nothing a page draws.
-- **Files are the one exception, and it is a stand-in until a host owns it** (step 3.6). How a
-  file is picked and saved belongs below `@/lib/core` too, but phase 3 adds no command and no
-  seam, so `phone/transfer/browserFiles.ts` answers with the web host's own APIs — an
-  `<input type="file">`, a `Blob` download, `navigator.clipboard` — on every install alike. It
-  feature-detects an API and asks nothing about the install; when phases 4 and 5 give `Core` a
-  file seam, that module is what moves behind it. Do not grow a second one beside it.
+- **Saving a file is below `@/lib/core` since phase 4** (step 4.3): `@/lib/core/files`'s
+  `saveText` answers `"saved"`/`"cancelled"` on the Android host — which answers the desktop's own
+  `export_save_file` with the system's save dialog — and `"handed"` in a browser, which downloads.
+  **Picking is the one thing that needed no seam**: Android's WebView answers an
+  `<input type="file">` with the system picker and hands the page a `File` for the `content://`
+  document, so `phone/transfer/browserFiles.ts` keeps the read, the decode and the clipboard, on
+  every install alike. Do not grow a second file module beside either.
 - **What only one host has arrives from the host, in a form both understand**: Android's back
-  gesture as History navigation, a cutout as the `env()` safe-area insets — the phone shell's bars
-  paint to the screen's edges and inset their content, and the page between them is inset on the
-  sides. Never a banner one install draws and the other does not.
+  gesture as History navigation (Tauri's shell sends it to the WebView's `goBack()` while there is
+  an entry to go back to, so the phone router's pushes are what it walks), and the bars, a cutout
+  and the keyboard as a page that is simply smaller — the Android host pads its content view by
+  all three (step 4.3), so `env(safe-area-inset-*)` reads 0 there, and in a browser that has a
+  cutout the phone shell's own `env()` insets do the work. Never a banner one install draws and
+  the other does not.
 
 ## The edition
 
@@ -330,6 +334,15 @@ and the `mtgimg` protocol over the core's `images::answer`.
   holds each one** — run it after any `tauri android init`, and put the edits back rather than
   deleting the assertion. Regenerate from `mobile/`, never the repository root: the CLI picks the
   project by the directory it starts in, and from the root it finds the desktop's.
+- **Three plugins, granted to the page not at all** (step 4.3): `dialog` and `fs` answer the
+  desktop's `export_save_file` and `import_pick_file` inside `core_call` (`src-tauri/src/files.rs`
+  here) — the system's save dialog and picker, a `content://` document opened by the fs plugin,
+  and no URI ever crossing to the page — and `opener` takes every `http(s)` link that is not one of
+  the app's pages to the system browser (`navigation.rs`'s guard), so a deck note's link never
+  replaces the app. `capabilities/light.json` stays `core:default` alone.
+- **The insets are the host's**: `MainActivity.kt` pads the content view by the system bars, the
+  cutout and the keyboard, draws light icons on both bars, and the window's ground behind them is
+  the web manifest's colour (`themes.xml`, `colors.xml`). `host.test.ts` holds all of it.
 - **Never commit a keystore.** `src-tauri/.gitignore` here ignores `*.jks` and `*.keystore`, and
   `gen/android`'s own ignores `key.properties`. Signing is undecided (Markus, 2026-10-03: a
   debug-signed APK until a real phone has run it).

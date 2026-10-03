@@ -1496,6 +1496,46 @@ pub fn decode(bytes: &[u8]) -> ImportFile {
 /// dialog moved here.
 pub const DECKLIST_EXTENSIONS: [&str; 4] = ["txt", "dec", "dek", "csv"];
 
+/// The cap and the decode, over anything readable — a file the desktop opened by path, or a
+/// document the light app's Android host opened by its `content://` URI. Moved here from
+/// `src-tauri`'s `import` with the Android host (phase 4), which reads a picked file through the
+/// same bound.
+pub fn read_bounded(mut reader: impl std::io::Read) -> Result<ImportFile, String> {
+    use std::io::Read as _;
+
+    // **A bounded read rather than a `metadata()` check.** `take(MAX + 1)` then a length test is
+    // the whole of it — one byte over the limit is read and refused, and nothing larger is ever
+    // in memory, which keeps what the fence was for: a 200 MB file the reader pointed at by
+    // mistake costs a megabyte, not two hundred.
+    let mut bytes = Vec::new();
+    reader
+        .by_ref()
+        .take(MAX_IMPORT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| format!("That file could not be read — {e}"))?;
+    if bytes.len() as u64 > MAX_IMPORT_BYTES {
+        return Err(format!(
+            "That file is over {} MB. A decklist is text; this reads at most 1 MB.",
+            MAX_IMPORT_BYTES / 1_000_000
+        ));
+    }
+    Ok(decode(&bytes))
+}
+
+/// The name the save dialog opens with: the last component of what the page suggested, or
+/// `None` for nothing usable.
+///
+/// **The page may suggest a name and never a place.** `ExportDialog` sends `Ramp.txt`; a page
+/// that sent `..\..\Startup\x.bat` would, through the dialog's file-name box, be choosing the
+/// folder the dialog opens in — so everything up to the last separator goes, both separators on
+/// every platform, because the name is a Windows name wherever this is compiled. The reader still
+/// confirms or changes it in a window the page cannot drive, so this is not the fence; it keeps
+/// the one string the page still sends from carrying a path into that window at all.
+pub fn suggested_name(raw: &str) -> Option<&str> {
+    let name = raw.rsplit(['/', '\\']).next().unwrap_or(raw).trim();
+    (!name.is_empty() && name != "." && name != "..").then_some(name)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
