@@ -19,8 +19,9 @@ deliberately**: no screenshots are stored.
   deliberately leaves unanswered goes in its `ABSENT` map with a reason**, and the map is held
   exact: an entry the fake has since answered, or Rust has since dropped, fails too. It compares
   **names only** — arguments and payload shapes are still `ipc.ts`'s mirror and the stories'.
-- **`main.ts` aliases four specifiers**, listed in `fake/aliases.ts` — `@tauri-apps/api/core`, `@tauri-apps/api/event`,
-  `@tauri-apps/api/window` and `@/lib/images` — to `.storybook/fake/`. **The fake sits _under_
+- **`main.ts` aliases four specifiers**, listed in `fake/aliases.ts` — `@tauri-apps/api/core`,
+  `@tauri-apps/api/event`, `@tauri-apps/api/window` and `@/lib/images` — to `.storybook/fake/`.
+  **The fake sits _under_
   `src/lib/ipc.ts`, not in place of it**, and that is the point: `ipc.ts` is a hand-written mirror
   of the Rust structs and is exactly the thing that can drift, so a fake beneath it means every
   story exercises the mirror too. Aliasing `ipc.ts` itself would story the components against a

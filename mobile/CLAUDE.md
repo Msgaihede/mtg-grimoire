@@ -57,8 +57,10 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
 
 - **`phone/fence.test.ts`'s second arm is the fence**, because a resemblance kept by hand is N
   decisions that happen to agree today. It sweeps every `.ts`, `.tsx`, `.css` and `.html` under
-  `mobile/` — tests included, itself excluded — for `navigator.userAgent`, `userAgentData`,
-  `navigator.platform`, `isTauri`, `__TAURI`, `isAndroid`, `isWebTarget` and `display-mode`.
+  `mobile/` — tests included, itself excluded — for `userAgent` (the bare word, so a destructure
+  or a bracket read asks it too), `userAgentData`, `navigator.platform` (however `navigator` is
+  reached for it), `isTauri`, `__TAURI`, `isAndroid`, `isWebTarget`, `display-mode` and
+  `@tauri-apps/plugin-os`.
   **It reads comments too**, so a source file may not name one even in prose; this file may,
   because the sweep does not read Markdown.
 - **`import.meta.env.MODE === "fake"` is not a probe.** It is which *build* this is, replaced at
@@ -86,6 +88,11 @@ Anything in `src/` whose import graph does not reach `@/lib/store`, `@/App`,
 other than through `@/lib/core`. **`phone/fence.test.ts`'s first arm walks the graph from every
 file under `mobile/phone/` and enforces it.**
 
+- **It reads every way a module is reached**: `from`, a bare `import`, `import("…")`, a
+  root-absolute specifier, and `import.meta.glob`, which is an import of every file it matches. An
+  `import()` of anything but a literal is **refused** — what it loads is decided at runtime — and
+  comments are stripped by a pass that knows a string and a regex from code, so a comment opener
+  inside one cannot swallow the imports below it.
 - **A refusal prints the whole trail**, from the phone file to the thing it reached, because the
   offending edge is usually between two files in `src/` and the last hop alone does not say
   which phone file has to change. **Do not weaken the fence to make it pass.**
@@ -197,14 +204,19 @@ failure behind each at its own site:
 - **An empty container means the tree crashed, not that it is slow.** A throw in a render or an
   effect unwinds React to nothing; a longer timeout waits on a tree that is not coming. Look for
   the error.
-- **`src/lib/layers.test.ts` and `src/lib/motion.test.ts` read `mobile/` too**, so a z-index here
-  comes from `LAYER` and a text field here wears no press recipe. **`src/lib/tokens.test.ts` does
-  not** — it counts exactly one `MotionConfig` in the program, and the phone face rightly mounts
-  its own — so its other sweeps stop at `src/`: the retired colour classes, a transition with no
-  reduced-motion opt-out, the two `motion` APIs the shipped CSP disables. Follow those by hand;
-  [`src/CLAUDE.md`](../src/CLAUDE.md) has each.
-- **Storybook's globs stop at `src/`**, so there are no stories for phone UI. `CardTile` is in
-  `src/` and has one; the phone face's workbench is `mobile:dev`.
+- **`src/lib/layers.test.ts`, `src/lib/motion.test.ts` and `src/lib/tokens.test.ts` read `mobile/`
+  too**, so a z-index here comes from `LAYER`, a text field here wears no press recipe, and the
+  token sweeps hold here as in `src/`: no retired colour class, no transition without its
+  reduced-motion opt-out, neither `motion` API the shipped CSP disables. **`tokens.test.ts` counts
+  one `MotionConfig` per face** — `App.tsx`'s and `phone/PhoneApp.tsx`'s — so a third, in a page or
+  a sheet, is refused. [`src/CLAUDE.md`](../src/CLAUDE.md) has each rule.
+- **Phone UI is storied where it lives**: Storybook's story glob, `.storybook/preview.css`'s
+  Tailwind sources and `src/stories.test.tsx`'s module glob all reach `mobile/`, so a
+  `phone/X.stories.tsx` is in the catalogue and its `play` runs in the suite. Box a story to a phone
+  (`Shell.stories.tsx` is 360 wide, with an 800px story beside it) and swallow link presses in the
+  decorator — a tab is a real link, and a press would move the workbench's own frame. A wall's item
+  over a fixture printing is `wallItem` in `.storybook/fake/fixtures.ts`. `mobile:dev` is still
+  the workbench for a whole page over the fake.
 
 ## Not here yet
 

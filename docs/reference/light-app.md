@@ -187,8 +187,9 @@ repository, so Vite watches all of it, and Windows refuses a watch on a file a c
 writing. `vite.mobile.config.ts` now keeps the watcher out of every build output under the root,
 **and that was driven the same way it was found**: the server was left up through the second
 `verify` of §2.3, cargo's run over that crate included, and was still listening when it ended.
-**The base config ignores `src-tauri` only, so the desktop's and the share viewer's dev servers
-have the same exposure** — outside this branch, and flagged rather than fixed.
+**The base config ignored `src-tauri` only, so the desktop's and the share viewer's dev servers
+had the same exposure** — flagged here, and fixed by #760: `vite.watch.ts` is the list every
+server takes from the base config, and the light config's own copy was dropped in phase 3.
 
 ## 5. Open, and where each belongs
 
@@ -248,16 +249,24 @@ purpose; the phase that owns the surface owns the fix.
 
 ### The fences
 
-- `fence.test.ts`'s import walk cannot see `import.meta.glob`, a template-literal `import()` or
-  a root-absolute specifier; none exists under `mobile/` today. Its comment stripper is not
-  string-aware either: a `/*` inside a string or a regex literal would swallow the text after it,
-  import edges included. No reachable file has one.
-- `vite.mobile.config.ts` restates Storybook's four fake aliases by hand, with nothing holding
-  the two lists together.
-- Its probe sweep is literal about spelling — a destructured `userAgent`, a bracket access or
-  `@tauri-apps/plugin-os` would pass — and reads `.ts`, `.tsx`, `.css` and `.html` only.
-- `src/lib/tokens.test.ts` still stops at `src/`: it counts exactly one `MotionConfig`, and the
-  phone face rightly mounts its own.
+**Closed in phase 3, step 3.8** — each with a case in `fence.test.ts` that runs it on a tree with
+the weld or the probe in it:
+
+- The import walk sees `import.meta.glob` (every file a pattern matches is an edge), a
+  root-absolute specifier, and a template-literal `import()` — followed when nothing is
+  interpolated, **refused** when something is, as is an `import()` of any non-literal. The comment
+  stripper is string- and regex-aware; its guesses (a `/` after a token, an apostrophe in JSX
+  text) are bounded to their line and can only leave prose in, never take an import out.
+- The probe sweep asks for the question rather than one spelling: the bare word `userAgent`,
+  `navigator.platform` by dot, bracket or destructure, and `@tauri-apps/plugin-os`. It still reads
+  `.ts`, `.tsx`, `.css` and `.html` only.
+- `vite.mobile.config.ts` and `.storybook/main.ts` read the fake's four aliases from one list,
+  `.storybook/fake/aliases.ts`. The light config's own watch list is gone: the base config has
+  carried `vite.watch.ts`'s for every server since #760, which also closed §4's closing sentence.
+- `src/lib/tokens.test.ts` reads `mobile/` and counts one `MotionConfig` per face. Nothing under
+  `mobile/` broke any of its sweeps.
+- Storybook's story glob, `preview.css`'s Tailwind sources and `src/stories.test.tsx`'s module
+  glob reach `mobile/`; `Phone/Shell`, `Phone/TabBar` and `Phone/CardWall` are the first stories.
 
 ### The dev window
 
