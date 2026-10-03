@@ -37,11 +37,19 @@ with the date, the build and the width of each figure.
 - **Every component is drawn only at the widths it was designed for.** That is the whole lesson of
   the phone layout removed on 2026-09-27: desktop components bent down to 360px. Do not add a
   narrow branch to a desktop page, and do not stretch a phone page past 1024.
+- **Inside the phone face, the tab bar becomes a rail from 600px wide** (`TabBar.tsx`), by the width
+  alone — the band between 600 and 1024 is a portrait tablet or a phone on its side, and on the
+  phone on its side the bar cost the wall its only row. Decided 2026-10-03; light-app.md §7.8 has
+  the widths.
 - **Both faces are whole apps with their own providers, and they share one `queryClient`**
   (`@/lib/query`), so what one face read is still in the cache when a resize draws the other.
   **A crossing unmounts the whole face it leaves.** The destination and the open card survive
   it; filter state does not, and neither does anything half-typed on the desktop face — a note,
-  an import's text, a rename.
+  an import's text, a rename. **That is accepted, not overlooked** (2026-10-03,
+  [light-app.md](../docs/reference/light-app.md) §7.8): holding the crossing while a field has
+  focus would draw the desktop UI below its floor — the one thing this page forbids — and freeze
+  every resize for a caret in an empty search box, because the app has no signal for *unsaved*
+  that covers a controlled input and the note editor alike.
 - **`FaceBoundary` stands between a face that threw and a blank page**, keyed by the face so a
   failure in one does not follow the reader into the other. A lazy chunk that never arrives —
   offline, or a deploy that renamed it before a resize crossed the floor — is the ordinary way
@@ -57,8 +65,10 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
 
 - **`phone/fence.test.ts`'s second arm is the fence**, because a resemblance kept by hand is N
   decisions that happen to agree today. It sweeps every `.ts`, `.tsx`, `.css` and `.html` under
-  `mobile/` — tests included, itself excluded — for `navigator.userAgent`, `userAgentData`,
-  `navigator.platform`, `isTauri`, `__TAURI`, `isAndroid`, `isWebTarget` and `display-mode`.
+  `mobile/` — tests included, itself excluded — for `userAgent` (the bare word, so a destructure
+  or a bracket read asks it too), `userAgentData`, `navigator.platform` (however `navigator` is
+  reached for it), `isTauri`, `__TAURI`, `isAndroid`, `isWebTarget`, `display-mode` and
+  `@tauri-apps/plugin-os`.
   **It reads comments too**, so a source file may not name one even in prose; this file may,
   because the sweep does not read Markdown.
 - **`import.meta.env.MODE === "fake"` is not a probe.** It is which *build* this is, replaced at
@@ -68,8 +78,9 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
   phone face's graph reaches today is that seam's own — `src/lib/images.ts`'s `imageOrigin`,
   which picks a URL's origin and decides nothing a page draws.
 - **What only one host has arrives from the host, in a form both understand**: Android's back
-  gesture as History navigation, a cutout as the `env()` safe-area insets — the phone shell pads
-  by all four. Never a banner one install draws and the other does not.
+  gesture as History navigation, a cutout as the `env()` safe-area insets — the phone shell's bars
+  paint to the screen's edges and inset their content, and the page between them is inset on the
+  sides. Never a banner one install draws and the other does not.
 
 ## The edition
 
@@ -82,6 +93,19 @@ panel and `LIGHT_SETTINGS` for the light edition's. The phone face's Settings re
 `LIGHT_SETTINGS` directly, because it *is* the light edition. A chord for a view outside the
 edition is **inert** — the digits do not move between editions.
 
+- **The light app never stands on a view outside its edition, and two things hold it.** A page
+  asks the shell `useReaches(view)` (`src/lib/reach.ts`) and hides a control whose only job is to
+  go somewhere this window does not draw — the collection's *Open a shared collection* is the
+  first. And `useDesktopPlace` refuses any store move onto such a view: the store goes back to
+  the URL's place and history is not touched.
+- **`Ctrl+Shift+N` is the full edition's alone.** In the light edition the press is left to
+  whatever owns the window — in a browser, its own private-window chord.
+- **`F1` is left to the browser on purpose.** The map's only mount is the caption row, which this
+  edition does not draw, and mounting it elsewhere is not worth it yet: its catalogue lists chords
+  the edition makes inert, and in a browser tab the digit chords it would teach are, in most
+  browsers, the tab switcher's before the page sees them (not measured here). The light edition's
+  keyboard story is the web host's (phase 5).
+
 ## What the phone face may import
 
 Anything in `src/` whose import graph does not reach `@/lib/store`, `@/App`,
@@ -89,6 +113,11 @@ Anything in `src/` whose import graph does not reach `@/lib/store`, `@/App`,
 other than through `@/lib/core`. **`phone/fence.test.ts`'s first arm walks the graph from every
 file under `mobile/phone/` and enforces it.**
 
+- **It reads every way a module is reached**: `from`, a bare `import`, `import("…")`, a
+  root-absolute specifier, and `import.meta.glob`, which is an import of every file it matches. An
+  `import()` of anything but a literal is **refused** — what it loads is decided at runtime — and
+  comments are stripped by a pass that knows a string and a regex from code, so a comment opener
+  inside one cannot swallow the imports below it.
 - **A refusal prints the whole trail**, from the phone file to the thing it reached, because the
   offending edge is usually between two files in `src/` and the last hop alone does not say
   which phone file has to change. **Do not weaken the fence to make it pass.**
@@ -136,7 +165,12 @@ failure behind each at its own site:
   CDP script, are one press, and the second is replaced rather than pushed.
 - **A card is written with `replaceState`, never pushed.** There it is a modal over a page, so it
   is written onto the entry it was opened over; opening and closing one must not grow history, or
-  Back would reopen a card the reader closed.
+  Back would reopen a card the reader closed. **The entry is marked `OVERLAID`** (`routes.ts`), so
+  the phone face can tell this card from one a reader arrived on by a link.
+- **A card the phone face pushed is closed with a Back, not a replace.** Its entry carries the
+  phone router's `PUSHED`, which promises the same page directly beneath; renamed instead, one
+  place had two entries and the next Back showed nothing. A step to another card keeps the mark.
+- **A store move onto a view the edition does not draw is refused** — see *The edition* above.
 - **The open card crosses the 1024px floor in both directions.** It is in the grammar, both faces
   read it, and the phone's sheet asks under the desktop modal's own query key — so the face a
   resize draws paints the card from the cache.
@@ -166,6 +200,13 @@ failure behind each at its own site:
   its own entries in history state), and a replace when it is not — a reader who arrived on the
   card's own link has nothing of the app's beneath them, and a Back there would leave it. Closing
   by pushing again left the card one Back beneath the page it was closed over.
+- **A desktop overlay is taken over as the phone face mounts** (`adoptOverlay`): the entry is split
+  into the page and a marked push of the card, without moving the address bar, so Back closes a
+  sheet the desktop face opened. An unmarked card — a link — is left to `back`'s rule above.
+- **The history marks live in `routes.ts`, both faces read them, and their promise is one
+  sentence**: an entry marked `PUSHED` that carries a card has the same place without the card
+  directly beneath it. Neither face may write a card onto a marked page.
+
 - **A step to another printing of the open card is a link that _replaces_** —
   `linkTo(place, { replace: true })`. The sheet is one place however many printings the reader
   steps through, so Back closes it from whichever printing they ended on; the replaced entry keeps
@@ -209,14 +250,19 @@ failure behind each at its own site:
 - **An empty container means the tree crashed, not that it is slow.** A throw in a render or an
   effect unwinds React to nothing; a longer timeout waits on a tree that is not coming. Look for
   the error.
-- **`src/lib/layers.test.ts` and `src/lib/motion.test.ts` read `mobile/` too**, so a z-index here
-  comes from `LAYER` and a text field here wears no press recipe. **`src/lib/tokens.test.ts` does
-  not** — it counts exactly one `MotionConfig` in the program, and the phone face rightly mounts
-  its own — so its other sweeps stop at `src/`: the retired colour classes, a transition with no
-  reduced-motion opt-out, the two `motion` APIs the shipped CSP disables. Follow those by hand;
-  [`src/CLAUDE.md`](../src/CLAUDE.md) has each.
-- **Storybook's globs stop at `src/`**, so there are no stories for phone UI. `CardTile` is in
-  `src/` and has one; the phone face's workbench is `mobile:dev`.
+- **`src/lib/layers.test.ts`, `src/lib/motion.test.ts` and `src/lib/tokens.test.ts` read `mobile/`
+  too**, so a z-index here comes from `LAYER`, a text field here wears no press recipe, and the
+  token sweeps hold here as in `src/`: no retired colour class, no transition without its
+  reduced-motion opt-out, neither `motion` API the shipped CSP disables. **`tokens.test.ts` counts
+  one `MotionConfig` per face** — `App.tsx`'s and `phone/PhoneApp.tsx`'s — so a third, in a page or
+  a sheet, is refused. [`src/CLAUDE.md`](../src/CLAUDE.md) has each rule.
+- **Phone UI is storied where it lives**: Storybook's story glob, `.storybook/preview.css`'s
+  Tailwind sources and `src/stories.test.tsx`'s module glob all reach `mobile/`, so a
+  `phone/X.stories.tsx` is in the catalogue and its `play` runs in the suite. Box a story to a phone
+  (`Shell.stories.tsx` is 360 wide, with an 800px story beside it) and swallow link presses in the
+  decorator — a tab is a real link, and a press would move the workbench's own frame. A wall's item
+  over a fixture printing is `wallItem` in `.storybook/fake/fixtures.ts`. `mobile:dev` is still
+  the workbench for a whole page over the fake.
 
 ## Not here yet
 

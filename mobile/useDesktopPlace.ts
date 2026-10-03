@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { isLightView, LIGHT_START } from "@/lib/edition";
 import { useAppStore } from "@/lib/store";
-import { parsePlace, placeHref, type Place } from "./routes";
+import { isOverlaid, isPushed, OVERLAID, parsePlace, placeHref, type Place } from "./routes";
 
 type DesktopWhere = Pick<
   ReturnType<typeof useAppStore.getState>,
@@ -9,8 +9,9 @@ type DesktopWhere = Pick<
 >;
 
 /** Where the desktop store says the reader is, as a {@link Place}: the view, the deck open in
- *  it, and the card open over it. A view the light edition does not draw — a shared binder,
- *  reached from the collection — reads as the start view: the URL has no word for it. */
+ *  it, and the card open over it. A view the light edition does not draw reads as the start view
+ *  — the URL has no word for one — though the adapter never lets the store rest on one: see
+ *  `refuse` below. */
 function placeOf(where: DesktopWhere): Place {
   const view = isLightView(where.activeView) ? where.activeView : LIGHT_START;
   return {
@@ -53,13 +54,30 @@ function apply(place: Place): void {
  * refused write is swallowed: the URL is one step behind, and the next write the browser accepts
  * puts it right.
  */
-function write(how: "push" | "replace", href: string): void {
+function write(how: "push" | "replace", href: string, state: unknown = null): void {
   try {
-    if (how === "push") window.history.pushState(null, "", href);
-    else window.history.replaceState(null, "", href);
+    if (how === "push") window.history.pushState(state, "", href);
+    else window.history.replaceState(state, "", href);
   } catch {
     // Refused. Nothing to report and nothing to retry — see above.
   }
+}
+
+/**
+ * The state a replace leaves on the entry, by the vocabulary `routes.ts` defines.
+ *
+ * **A card opened onto an entry marks it `OVERLAID`**: the card is over the page this entry
+ * already was, so the phone face — if a resize hands it this entry — knows nothing of its own is
+ * beneath and splits it before drawing the sheet (`phone/router.ts`'s `adoptOverlay`). Without the
+ * mark it could not tell this card from one a reader arrived on by a link.
+ *
+ * **A step from one card to another keeps whatever the entry carried**, the phone router's mark
+ * included: what is beneath an entry does not change when its card does. **A card closed off an
+ * overlaid entry drops the mark**, which was about the card. Anything else is kept as it was.
+ */
+function stateFor(current: unknown, hadCard: boolean, hasCard: boolean): unknown {
+  if (hasCard) return hadCard ? current : OVERLAID;
+  return isOverlaid(current) ? null : current;
 }
 
 /**
@@ -119,13 +137,31 @@ export function useDesktopPlace(): void {
 
     const unsubscribe = useAppStore.subscribe((state, previous) => {
       if (following) return;
+
+      // **The light app never stands on a view its edition does not draw.** The desktop's pages
+      // can still ask for one — the collection's way into a shared binder is the one such press
+      // today, and the shell hides it (`useReaches`) — and the URL has no word for it: written,
+      // the address bar said `/search` over a binder no rail row lit, and a reload, a resize or
+      // Forward landed on Search. So the press is refused rather than spelled: the store goes
+      // back to the place the URL still names, and history is not touched.
+      if (!isLightView(state.activeView)) {
+        following = true;
+        try {
+          apply(here());
+        } finally {
+          following = false;
+        }
+        return;
+      }
+
       const moved =
         state.activeView !== previous.activeView || state.openDeckId !== previous.openDeckId;
       if (!moved && state.selectedCardId === previous.selectedCardId) return;
 
       // Whatever card the store holds *after* the change, so a move that closed one — and
       // `setActiveView` always does — is written without it.
-      const href = placeHref(placeOf(state));
+      const next = placeOf(state);
+      const href = placeHref(next);
       // Equal when a change lands on the place the URL already names — writing then would add a
       // second entry for one place.
       if (href === window.location.pathname + window.location.search) return;
@@ -136,11 +172,32 @@ export function useDesktopPlace(): void {
           pushed = false;
         });
         write("push", href);
-      } else {
-        // A later write of the same press — or the card alone, which is never an entry: opening
-        // and closing one must not grow history, or Back would reopen a card the reader closed.
-        write("replace", href);
+        return;
       }
+
+      const current = here();
+      const entry: unknown = window.history.state;
+      // **A card the phone face pushed is closed by going back to the entry beneath it.** That
+      // entry is this same page — `routes.ts`'s `PUSHED` promises it — so a replace here would
+      // leave two entries for one place, and the reader's next Back would show nothing at all.
+      // The `popstate` that lands is followed like any other, and finds the store already there.
+      if (
+        next.cardId === null &&
+        current.cardId !== null &&
+        isPushed(entry) &&
+        placeHref({ ...current, cardId: null }) === href
+      ) {
+        try {
+          window.history.back();
+        } catch {
+          write("replace", href, entry);
+        }
+        return;
+      }
+
+      // A later write of the same press — or the card alone, which is never an entry: opening
+      // and closing one must not grow history, or Back would reopen a card the reader closed.
+      write("replace", href, stateFor(entry, current.cardId !== null, next.cardId !== null));
     });
 
     return () => {

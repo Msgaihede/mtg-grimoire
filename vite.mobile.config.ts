@@ -1,6 +1,6 @@
-import { fileURLToPath } from "node:url";
 import { defineConfig, mergeConfig, type Plugin } from "vite";
 import base from "./vite.config.ts";
+import { FAKE_ALIASES } from "./.storybook/fake/aliases.ts";
 
 /** The light app's document, from the repository root. */
 const ENTRY = "mobile/index.html";
@@ -62,26 +62,10 @@ function lightEntry(): Plugin {
 }
 
 /**
- * The Storybook fake, under the real `ipc.ts` — the same four aliases `.storybook/main.ts`
- * declares, for the same reason: the fake sits *under* the hand-written mirror, so the light app
- * in a plain browser exercises the mirror too. `mergeConfig` puts these ahead of the base
- * config's `@` alias, and `@/lib/images` has to be tried before that prefix.
- */
-const fake = (name: string) =>
-  fileURLToPath(new URL(`./.storybook/fake/${name}`, import.meta.url));
-
-const FAKE_ALIASES = [
-  { find: /^@tauri-apps\/api\/core$/, replacement: fake("core.ts") },
-  { find: /^@tauri-apps\/api\/event$/, replacement: fake("event.ts") },
-  { find: /^@tauri-apps\/api\/window$/, replacement: fake("window.ts") },
-  { find: /^@\/lib\/images$/, replacement: fake("images.ts") },
-];
-
-/**
  * The two Tauri plugins the app imports, kept **out of the dependency optimizer** in fake mode.
  *
  * Each of them imports `@tauri-apps/api/core` from inside `node_modules`, and the optimizer
- * applies the alias above while it pre-bundles them. Spelled root-relative, that replacement is
+ * applies the fake's alias while it pre-bundles them. Spelled root-relative, that replacement is
  * not a path the optimizer can load — it reads `/.storybook/…` off the drive's root — and the
  * dev server **exits** during "bundling dependencies", a few seconds after it printed its URL
  * (driven 2026-10-01: a blank page and `ERR_CONNECTION_REFUSED` on every dependency). Spelled
@@ -95,6 +79,11 @@ const FAKE_UNBUNDLED = ["@tauri-apps/plugin-clipboard-manager", "@tauri-apps/plu
 export default defineConfig(({ mode }) =>
   mergeConfig(base, {
     plugins: [lightEntry()],
+    // The Storybook fake, under the real `ipc.ts` — **the four aliases `.storybook/main.ts`
+    // declares, read from the one list both use**, for its reason: the fake sits *under* the
+    // hand-written mirror, so the light app in a plain browser exercises the mirror too.
+    // `mergeConfig` puts these ahead of the base config's `@` alias, and `@/lib/images` has to be
+    // tried before that prefix.
     resolve: mode === "fake" ? { alias: FAKE_ALIASES } : {},
     optimizeDeps: mode === "fake" ? { exclude: FAKE_UNBUNDLED } : {},
     build: {
@@ -104,25 +93,11 @@ export default defineConfig(({ mode }) =>
     },
     // Not 1420 (`tauri dev`), not 5174 (the share viewer), not 6006 (Storybook).
     //
-    // **The watcher is kept out of every build output under the root.** The root is the whole
-    // repository, so Vite watches all of it, and a watch taken on a file a compiler is still
-    // writing is refused on Windows with `EBUSY` — which chokidar raises as an unhandled error
-    // and the server dies of. Driven 2026-10-01: this server, left up while `npm run verify`
-    // ran, exited on `crates/card-scanner/target/…/sqlite3.o` the moment cargo reached that
-    // crate, having already reloaded the page once for `dist/index.html`. `mergeConfig` appends
-    // to the base config's own entry (`src-tauri`), it does not replace it.
-    server: {
-      port: 5175,
-      strictPort: true,
-      watch: {
-        ignored: [
-          "**/crates/**/target/**",
-          "**/dist/**",
-          "**/dist-mobile/**",
-          "**/dist-share/**",
-          "**/storybook-static/**",
-        ],
-      },
-    },
+    // **No `watch` of its own.** The base config's `server.watch.ignored` is `vite.watch.ts`'s list,
+    // which keeps the watcher out of every build output under the root — the `EBUSY` this server
+    // died of on 2026-10-01 (`docs/reference/light-app.md` §4) — and `mergeConfig` carries it
+    // here. This config restated those five globs until the base config grew the list for every
+    // server; a second copy appended over the first changed nothing but what could drift.
+    server: { port: 5175, strictPort: true },
   }),
 );
