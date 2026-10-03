@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { BackupPanel } from "@/features/settings/BackupPanel";
 import { CachePanel } from "@/features/settings/CachePanel";
 import { DangerZonePanel } from "@/features/settings/DangerZonePanel";
@@ -15,6 +15,8 @@ import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import { UpdatePanel } from "@/features/settings/UpdatePanel";
 import {
   PANELS,
+  groupsOf,
+  panelsOf,
   visiblePanels,
   type BadgeId,
   type GroupId,
@@ -24,6 +26,7 @@ import { useDangerZone, useLocalCache } from "@/features/settings/useDataReset";
 import { useHiddenTags } from "@/features/settings/useHiddenTags";
 import { SettingsSection } from "@/features/settings/panelChrome";
 import { count } from "@/lib/counts";
+import { useEdition } from "@/lib/edition";
 import { holdInView } from "@/lib/holdInView";
 import { ipc } from "@/lib/ipc";
 import { REVIEW_KEY } from "@/lib/query";
@@ -64,9 +67,12 @@ export function imageFailureLine(failures: number | undefined): string {
  * and this is the other half of that bargain: the narrowing lives here, beside the panels. **An
  * `includes` over the panels' own keys and never `word in PANELS`**, `isWidgetKind`'s reason —
  * `in` walks the prototype and would take `"constructor"` for a panel.
+ *
+ * **Asked of the panels this edition draws**, so a hand-off naming one the edition leaves out is a
+ * word this page has no panel for, and is dropped like any other.
  */
-function asPanelId(word: string): PanelId | null {
-  return (Object.keys(PANELS) as string[]).includes(word) ? (word as PanelId) : null;
+function asPanelId(word: string, panels: readonly PanelId[]): PanelId | null {
+  return (panels as readonly string[]).includes(word) ? (word as PanelId) : null;
 }
 
 /**
@@ -130,13 +136,25 @@ function asPanelId(word: string): PanelId | null {
  */
 export function SettingsPage({ update }: { update: Update }) {
   /**
+   * **Which panels exist here is the edition's answer, and this page is its one reader among the
+   * pages** — spec §3.1 names it. The full edition answers every panel, so nothing below differs
+   * there; the light edition answers its reduced list (`LIGHT_SETTINGS`, with each panel's reason),
+   * and the rail loses every group left with nothing in it.
+   */
+  const edition = useEdition();
+  // Memoised on the edition's own list, which is a module constant, so the hand-off effect below
+  // can list `panels` without re-running on every render.
+  const panels = useMemo(() => panelsOf(edition.settings), [edition.settings]);
+  const groups = groupsOf(panels);
+  /**
    * Which rail entry is current, and what is in the search box.
    *
    * `updates` is where a reader lands, and it is the group the ribbon's gold button points at —
    * "there is a new version" is the one thing that sends somebody to this page without their
-   * having chosen to come.
+   * having chosen to come. **It is the rail's first entry, and the first entry is what is read**:
+   * an edition without `Updates` lands on whichever entry it draws first.
    */
-  const [group, setGroup] = useState<GroupId>("updates");
+  const [group, setGroup] = useState<GroupId>(() => groups[0] ?? "updates");
   const [query, setQuery] = useState("");
   /**
    * The page's own root, so that picking a group can put the reader back at the top of it.
@@ -178,7 +196,7 @@ export function SettingsPage({ update }: { update: Update }) {
    */
   const pendingPanel = useAppStore((s) => s.pendingSettingsPanel);
   const clearPendingPanel = useAppStore((s) => s.clearPendingSettingsPanel);
-  const askedPanel = pendingPanel === null ? null : asPanelId(pendingPanel);
+  const askedPanel = pendingPanel === null ? null : asPanelId(pendingPanel, panels);
   const askedGroup = askedPanel === null ? null : PANELS[askedPanel].group;
   if (askedGroup !== null && (group !== askedGroup || query !== "")) {
     setGroup(askedGroup);
@@ -188,13 +206,13 @@ export function SettingsPage({ update }: { update: Update }) {
   useEffect(() => {
     if (pendingPanel === null) return;
     clearPendingPanel();
-    const panel = asPanelId(pendingPanel);
+    const panel = asPanelId(pendingPanel, panels);
     if (panel === null) return;
     const section = root.current?.querySelector(`#${panel}-heading`)?.closest("section");
     if (section === null || section === undefined || root.current === null) return;
     releaseHold.current?.();
     releaseHold.current = holdInView(section, [root.current]);
-  }, [pendingPanel, clearPendingPanel]);
+  }, [pendingPanel, clearPendingPanel, panels]);
   useEffect(
     () => () => {
       releaseHold.current?.();
@@ -250,7 +268,7 @@ export function SettingsPage({ update }: { update: Update }) {
     errors: log.entries.length,
   };
 
-  const visible = visiblePanels(group, query);
+  const visible = visiblePanels(group, query, panels);
   const shown = (id: PanelId) => visible.includes(id);
 
   /**
@@ -293,6 +311,7 @@ export function SettingsPage({ update }: { update: Update }) {
         query={query}
         onQuery={setQuery}
         badges={badges}
+        groups={groups}
       />
 
       {/* **`flex-[999_1_480px]`, and the 999 is load-bearing rather than a joke.** The rail runs
