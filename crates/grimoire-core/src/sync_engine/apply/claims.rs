@@ -30,8 +30,10 @@ struct InPage {
     horizon: Horizon,
     /// `Some` while the emission is active: the ledger's record of it, or a fresh one.
     record: Option<Record>,
-    /// `Some` while it is inert and is the very emission this device completed: the record `take`
-    /// kept (§5), read for containment and nothing else.
+    /// `Some` while it is inert and the ledger still holds a record of it — the completed one
+    /// `take` kept, or one it superseded whose claims had written rows (§5) — read for containment
+    /// and nothing else. Complete or not: containment asks what a claim *wrote*, never whether its
+    /// emission was whole.
     done: Option<Record>,
 }
 
@@ -46,6 +48,10 @@ pub(super) struct Decided {
     pub skip: BTreeSet<usize>,
     /// Page indices that go to the fold whatever `seen` and the older horizon rules say.
     pub keep: BTreeSet<usize>,
+    /// The union of the horizons the page's ops carry with no reference, or with one stripped at
+    /// the door — the older rules' horizon, which `apply_in`'s `inside` asks. Built here, once, so
+    /// a covered put [`decide`] leaves to those rules is judged against the very union they use.
+    pub older: Horizon,
     emissions: BTreeMap<Key, InPage>,
     /// Claims this page consumed without writing.
     passed: Vec<(Key, u32)>,
@@ -83,9 +89,17 @@ pub(super) fn claim(op: &Op) -> Option<&Emission> {
 ///
 /// **Containment, across every row:** a covered put is skipped when the page carries its row's
 /// claim, from an emission covering it, that has already *written* the row — read from the
-/// active emission's record, or, for a page handed back after the emission completed, from the
-/// record `take` kept. An inert emission serves containment and nothing else: a covered put it
-/// cannot prove written is left to the older rules, because an inert emission drops nothing.
+/// active emission's record, or, for a page handed back once the emission is inert, from whatever
+/// record of it the ledger still holds: the completed one `take` kept, or a half-sent one it
+/// superseded. An inert emission serves containment and nothing else: a covered put it cannot
+/// prove written is left to the older rules, because an inert emission drops nothing.
+///
+/// **And a put an older claim in the page already carries is left to the older rules too**
+/// (amended 2026-10-03, after the final review). Where the horizon of an op with no reference —
+/// an older emitter's baseline, or one stripped at the door — covers the put, `main`'s `inside`
+/// drops it, because that claim carries it; sent down the op path beside an active emission
+/// instead, it bypassed `inside` and was counted on top of the row the older claim built — 4 where
+/// `main` answers 2.
 pub(super) fn decide(
     conn: &Connection,
     ops: &[Op],
@@ -123,6 +137,15 @@ pub(super) fn decide(
             out.strip.insert(i);
         }
     }
+    // The older rules' horizon: every op the caller will judge as one with no reference.
+    for (i, op) in ops.iter().enumerate() {
+        if op.emission.is_some() && !out.strip.contains(&i) {
+            continue;
+        }
+        if let Some(h) = &op.horizon {
+            out.older.absorb(h);
+        }
+    }
     // Active or inert, against the marks as they stood before the page (§6).
     for ((emitter, id), page) in out.emissions.iter_mut() {
         let taken = emission::taken(conn, emitter).map_err(sql)?;
@@ -134,8 +157,9 @@ pub(super) fn decide(
             page.record =
                 Some(held.unwrap_or_else(|| Record::new(*id, page.n, page.since, page.resumed)));
         } else {
-            // Inert. The very emission this device completed keeps its record for containment.
-            page.done = held.filter(Record::complete);
+            // Inert. A record the ledger still holds serves containment — the completed one, or a
+            // superseded one whose claims wrote rows here; only its `wrote` set is ever read.
+            page.done = held;
         }
     }
     let gap = emission::gap_open(conn).map_err(sql)?;
@@ -223,6 +247,8 @@ pub(super) fn decide(
             out.skip.insert(i);
         } else if !active {
             continue; // an inert emission drops nothing: the older rules judge the put
+        } else if out.older.covers(&op.at) {
+            continue; // an older claim in the page carries it, and `inside` drops it as `main` does
         } else if row_here(conn, &op.table, &op.uid)?
             || named_here(conn, &op.table, &op.uid)?
             || retired(conn, &op.table, &op.uid)?

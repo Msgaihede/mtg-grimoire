@@ -4,8 +4,9 @@
 //! **Every mark is a `sync_state` key, and none of them is `sync_peers`.** A claim is a statement
 //! about a row, not a place in its emitter's stream, so what remembers that it was consumed is a
 //! ledger of its own: per emitter, the emissions in flight and the indices consumed from each,
-//! beside the completed one whose record [`take`] keeps for a page handed back after it; the
-//! generation it has wholly taken; and what complete emissions carried into this device's rows.
+//! beside the completed one whose record [`take`] keeps for a page handed back after it, and any
+//! of its generation that the completed one superseded while their claims had written rows here;
+//! the generation it has wholly taken; and what complete emissions carried into this device's rows.
 //! A gap — the watermark or the cursor passing an op this device never applied — clears every
 //! taken mark and what each record says its claims *passed*, keeps what they *wrote*, and marks
 //! each record as from before the gap ([`open_gap`]), so the next emission from every emitter is
@@ -41,10 +42,11 @@ const RECORDS: &str = "emission@";
 const CARRIED: &str = "carried@";
 /// `retired@<table>/<uid>` = the survivor's uid: a row merged here into another ([`retire`]).
 const RETIRED: &str = "retired@";
-/// How many emissions are remembered per emitter — those in flight, and the completed one whose
-/// record [`take`] keeps, which takes one of the slots; any of them may be marked as from before a
-/// gap ([`Record::before_gap`]). An emission older than these is one a newer emission of the same
-/// emitter has superseded or will.
+/// How many emissions are remembered per emitter — those in flight, the completed one whose record
+/// [`take`] keeps, and the superseded ones it keeps for containment, each taking a slot; any of
+/// them may be marked as from before a gap ([`Record::before_gap`]). **Past the bound a record
+/// whose claims wrote nothing goes first** ([`bound`]): `wrote` is the only evidence that a put a
+/// claim carried is inside a row here, so the records that hold some are the last to go.
 pub const RECORDS_PER_EMITTER: usize = 4;
 
 fn get(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
@@ -175,8 +177,9 @@ impl Ranges {
     }
 }
 
-/// One emission as this device has consumed it (§5): in flight, or — the one record [`take`]
-/// keeps — completed, for a page handed back after it; and either one perhaps from before a gap.
+/// One emission as this device has consumed it (§5): in flight; completed, the one record [`take`]
+/// keeps for a page handed back after it; or superseded by that one while its claims had written
+/// rows here, kept for containment alone — and any of them perhaps from before a gap.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     pub id: Stamp,
@@ -229,21 +232,40 @@ pub fn taken(conn: &Connection, emitter: &str) -> rusqlite::Result<Option<Stamp>
 }
 
 /// The emissions of `emitter` this device remembers, newest first: those in flight, the completed
-/// one [`take`] kept, and any marked as from before a gap.
+/// one [`take`] kept and the superseded ones it kept beside it, and any marked as from before a gap.
 pub fn records(conn: &Connection, emitter: &str) -> rusqlite::Result<Vec<Record>> {
     Ok(get(conn, &format!("{RECORDS}{emitter}"))?
         .and_then(|v| serde_json::from_str(&v).ok())
         .unwrap_or_default())
 }
 
-/// Store `record`, replacing one of the same `id`, keeping the newest [`RECORDS_PER_EMITTER`].
+/// Store `record`, replacing one of the same `id`, within the bound ([`bound`]).
 pub fn keep(conn: &Connection, emitter: &str, record: Record) -> rusqlite::Result<()> {
     let mut all = records(conn, emitter)?;
     all.retain(|r| r.id != record.id);
+    let stored = record.id;
     all.push(record);
-    all.sort_by_key(|r| std::cmp::Reverse(r.id));
+    put(
+        conn,
+        &format!("{RECORDS}{emitter}"),
+        &json(&bound(all, stored))?,
+    )
+}
+
+/// An emitter's records cut to [`RECORDS_PER_EMITTER`], newest first. **A record whose claims
+/// wrote nothing goes first**, oldest first, and only then a record that wrote — `wrote` is the
+/// only evidence that a put a claim carried is inside a row here, and a page handed back with that
+/// put and no record to prove it counts it again (the final review's C1). A record from before a
+/// gap keeps its `wrote` set, so it is kept over an empty one as well.
+///
+/// **`stored`, the record just written, ranks with the ones that wrote** whatever it holds. It is
+/// an emission's progress: one whose claims all passed so far would otherwise be cut the moment
+/// it was stored, and an emission pulled over several pages would never be whole.
+fn bound(mut all: Vec<Record>, stored: Stamp) -> Vec<Record> {
+    all.sort_by_key(|r| std::cmp::Reverse((r.id == stored || !r.wrote.is_empty(), r.id)));
     all.truncate(RECORDS_PER_EMITTER);
-    put(conn, &format!("{RECORDS}{emitter}"), &json(&all)?)
+    all.sort_by_key(|r| std::cmp::Reverse(r.id));
+    all
 }
 
 /// The upgrade boundary (§10), minted on the first call and never moved after: a day past this
@@ -270,13 +292,23 @@ pub fn cut(conn: &Connection) -> rusqlite::Result<Stamp> {
 }
 
 /// An emission wholly consumed (§5, §8): its generation is taken, every OTHER record of the
-/// emitter at or below that generation goes, and — only where `carry`, every claim having written
-/// its row — what its horizon names is carried here: each device's `carried@` raised to the
-/// horizon's entry, this device's own excepted.
+/// emitter at or below that generation goes — but one of the same generation whose claims wrote a
+/// row here — and, only where `carry`, every claim having written its row, what its horizon names
+/// is carried here: each device's `carried@` raised to the horizon's entry, this device's own
+/// excepted.
 ///
 /// **Its own record is kept.** A page handed back after the emission completed still carries the
 /// covered puts its claims carried; the first delivery dropped them and no watermark rose, so that
 /// record's `wrote` set is the only evidence they are inside rows here (§5, §6's inert row).
+///
+/// **So is a record it supersedes in its own generation whose claims wrote a row** (amended
+/// 2026-10-03, after the final review). A half-sent emission whose claim built a row dropped the
+/// puts it carried exactly as a whole one does, and a page handed back with one of them after the
+/// newer emission completed — whose own claim for the row passed, the row being held here by then
+/// — found nothing to prove the put inside the row: 4 where 2 is right. Kept for containment
+/// alone: its generation is taken, so it is inert and never taken itself, and a gap that clears the
+/// mark marks it as from before the gap, which is never taken either. A record of an older
+/// generation still goes.
 pub fn take(
     conn: &Connection,
     emitter: &str,
@@ -294,11 +326,16 @@ pub fn take(
         put(conn, &key, &show(record.since))?;
     }
     let mut all = records(conn, emitter)?;
-    all.retain(|r| r.since > record.since);
+    all.retain(|r| {
+        r.id != record.id
+            && (r.since > record.since || (r.since == record.since && !r.wrote.is_empty()))
+    });
     all.push(record.clone());
-    all.sort_by_key(|r| std::cmp::Reverse(r.id));
-    all.truncate(RECORDS_PER_EMITTER);
-    put(conn, &format!("{RECORDS}{emitter}"), &json(&all)?)?;
+    put(
+        conn,
+        &format!("{RECORDS}{emitter}"),
+        &json(&bound(all, record.id))?,
+    )?;
     if !carry {
         return Ok(());
     }
@@ -555,6 +592,86 @@ mod tests {
             None,
             "this device carries nothing of its own"
         );
+    }
+
+    /// The final review's C1 ruling: a record of the taken emission's own generation whose claims
+    /// wrote a row is kept beside it, for containment alone — it is the only evidence that a put
+    /// its claim carried is inside that row. One that wrote nothing still goes, and so does one of
+    /// an older generation.
+    #[test]
+    fn taking_an_emission_keeps_a_record_of_its_generation_whose_claims_wrote() {
+        let conn = db();
+        let mut older_generation = Record::new((1, 0), 2, (0, 0), false);
+        older_generation.wrote.insert(0);
+        keep(&conn, "dev-a", older_generation).unwrap();
+        let mut half_sent = Record::new((2, 0), 2, (1, 0), false);
+        half_sent.wrote.insert(0);
+        keep(&conn, "dev-a", half_sent.clone()).unwrap();
+        let mut passed_only = Record::new((3, 0), 2, (1, 0), false);
+        passed_only.passed.insert(0);
+        keep(&conn, "dev-a", passed_only).unwrap();
+
+        let mut done = Record::new((4, 0), 1, (1, 0), false);
+        done.passed.insert(0);
+        take(&conn, "dev-a", &done, &Horizon::default(), false, None).unwrap();
+        assert_eq!(taken(&conn, "dev-a").unwrap(), Some((1, 0)));
+        assert_eq!(
+            records(&conn, "dev-a").unwrap(),
+            vec![done, half_sent],
+            "the half-sent record that wrote stays, untouched; the rest go"
+        );
+    }
+
+    /// The final review's ruling on the bound: past [`RECORDS_PER_EMITTER`] a record whose claims
+    /// wrote nothing goes first, and only then the oldest that wrote — and the record just stored
+    /// is never the first to go, or an emission pulled over several pages would never be whole.
+    #[test]
+    fn the_ledger_evicts_a_record_that_wrote_nothing_first() {
+        let conn = db();
+        let ids = || -> Vec<i64> {
+            records(&conn, "dev-a")
+                .unwrap()
+                .iter()
+                .map(|r| r.id.0)
+                .collect()
+        };
+        let record = |ms: i64, wrote: bool| {
+            let mut r = Record::new((ms, 0), 2, (1, 0), false);
+            if wrote {
+                r.wrote.insert(0);
+            } else {
+                r.passed.insert(0);
+            }
+            r
+        };
+        for ms in 1..=4 {
+            keep(&conn, "dev-a", record(ms, ms != 3)).unwrap();
+        }
+        keep(&conn, "dev-a", record(5, false)).unwrap();
+        assert_eq!(
+            ids(),
+            vec![5, 4, 2, 1],
+            "3 wrote nothing, and went before 1"
+        );
+        keep(&conn, "dev-a", record(6, false)).unwrap();
+        assert_eq!(
+            ids(),
+            vec![6, 4, 2, 1],
+            "the one stored stays; 5 wrote nothing"
+        );
+        keep(&conn, "dev-a", record(7, true)).unwrap();
+        assert_eq!(ids(), vec![7, 4, 2, 1]);
+        keep(&conn, "dev-a", record(8, true)).unwrap();
+        assert_eq!(ids(), vec![8, 7, 4, 2], "every one wrote: the oldest goes");
+
+        // A record from before a gap keeps its `wrote` set, so it is kept as one that wrote.
+        open_gap(&conn).unwrap();
+        keep(&conn, "dev-a", record(9, false)).unwrap();
+        keep(&conn, "dev-a", record(10, false)).unwrap();
+        assert_eq!(ids(), vec![10, 8, 7, 4]);
+        assert!(records(&conn, "dev-a").unwrap()[1..]
+            .iter()
+            .all(|r| r.before_gap));
     }
 
     /// Spec §8: an emission with any claim passed is taken but carries nothing — a held row's

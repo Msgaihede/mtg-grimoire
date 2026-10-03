@@ -776,7 +776,9 @@ enum Class {
     Dropped,
     /// Held because the client held its sender back — for its clock, or behind a batch only a
     /// newer build can read — and passed it in so the claim containing it waits too (design
-    /// 2026-10-03 §5). The client counts these itself, so no class of the report does.
+    /// 2026-10-03 §5). Only a group that carries a claim is held this way. The client counts the
+    /// held-back ops themselves, so no class of the report does — not this one, and not `Newer` or
+    /// `Waiting` where another op's block gives the group that class instead.
     HeldBack,
 }
 
@@ -832,8 +834,9 @@ pub fn apply_with(conn: &Connection, ops: &[Op], waiting: Waiting) -> Result<App
 }
 
 /// [`apply_held`], with the ops the client held back — a sender held for its clock, or behind a
-/// batch only a newer build can read. They are never applied: they hold their rows' groups, so a
-/// claim that contains such an op can never land ahead of it (design 2026-10-03 §5).
+/// batch only a newer build can read. They are never applied, and never counted in the report:
+/// each holds its row's group where that group carries a claim, so a claim that contains such an
+/// op can never land ahead of it (design 2026-10-03 §5), and holds nothing anywhere else.
 pub fn apply_page(
     conn: &Connection,
     ops: &[Op],
@@ -912,16 +915,10 @@ fn apply_in(
     //
     // Only the first op of each baseline batch carries one (§9), and a page can hold two
     // batches, so whatever is found is unioned. **The horizon of an emission this design
-    // decides is its own business, never the older rules'.**
-    let mut horizon = Horizon::default();
-    for op in ops {
-        if op.emission.is_some() {
-            continue;
-        }
-        if let Some(h) = &op.horizon {
-            horizon.absorb(h);
-        }
-    }
+    // decides is its own business, never the older rules'**: the union is of the ops with no
+    // reference, or one stripped above. `decide` built it, and asked it of every put it left to
+    // these rules, so the two can never disagree about it.
+    let horizon: &Horizon = &decided.older;
 
     // 1. Everything already seen, and everything this device wrote itself — after what `decide`
     //    consumed or kept, which no rule here overrides.
@@ -947,16 +944,35 @@ fn apply_in(
 
     // 2. One group per logical row, in an order that puts parents first.
     //
-    // The client's held-back ops join the groups they belong to, never applied: each sender is
-    // blocked at its earliest op this device has not applied, so every group naming one holds.
+    // **The client's held-back ops join only a group that carries a claim**, never applied:
+    // each sender is blocked at its earliest such op, so every group it joins holds — and the
+    // claim containing a held put cannot land ahead of it, which is the 6-for-3 the hold exists
+    // for (§5). **Anywhere else a held-back op joins nothing and holds nothing** (amended
+    // 2026-10-03, after the final review): it used to join every group of its row, and another
+    // sender's ordinary op there waited with it — and that sender's later ops, as collateral —
+    // for as long as the client held the first: up to a day on a clock hold, and until an upgrade
+    // behind a newer build's batch. Ops with no reference keep `main`'s rules, and `main` held
+    // nothing back. An ordinary op that shares a group with a claim and a held-back op still waits
+    // with them.
+    //
     // A held-back claim joins nothing — a claim blocks nothing (§5), and a put that lands ahead
     // of the claim containing it is §6's ordinary case. A reference on any other op is malformed
     // and is taken off here, as `decide` takes it off a page op: every check below asks the field,
     // and an op still carrying one would hold nothing, land its delta, raise no watermark — and
     // apply a second time when its sender is released.
+    let claimed: BTreeSet<(&str, &str)> = fresh
+        .iter()
+        .filter(|op| claims::claim(op).is_some())
+        .map(|op| (op.table.as_str(), op.uid.as_str()))
+        .collect();
     let held_back_ops: Vec<Op> = held_back
         .iter()
-        .filter(|op| claims::claim(op).is_none() && !mine(op) && !seen(op))
+        .filter(|op| {
+            claims::claim(op).is_none()
+                && !mine(op)
+                && !seen(op)
+                && claimed.contains(&(op.table.as_str(), op.uid.as_str()))
+        })
         .map(|op| Op {
             emission: None,
             ..op.clone()
@@ -998,6 +1014,10 @@ fn apply_in(
     // device and in practice once. Each round rolls its own work back, so only the last one
     // commits.
     let cap = groups.len().min(8);
+    // Seeded from the held-back ops that joined a group, and from nothing else: unseeded, the
+    // first round would write the claim's group with the held op in it. One that joined nothing is
+    // in no group, so a block of its own would hold no group of this page — the client holds its
+    // sender's cursor itself.
     let mut blocked: Blocks = BTreeMap::new();
     for op in &held_back_ops {
         match blocked.get(op.at.device.as_str()) {
@@ -1031,8 +1051,18 @@ fn apply_in(
         blocked = found;
     }
 
+    // **A held-back op is counted in no class, whatever its group became** — the client counts
+    // what it held back itself (`held_behind`, `held_clock`), so a count here is the same op twice.
+    // A group is one row, and every held-back op of that row is in it.
+    let mut held_back_in: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for op in &held_back_ops {
+        *held_back_in
+            .entry((op.table.as_str(), op.uid.as_str()))
+            .or_default() += 1;
+    }
     for d in &committed {
-        let n = d.group.ops.len();
+        let row = (d.group.table, d.group.ops[0].uid.as_str());
+        let n = d.group.ops.len() - held_back_in.get(&row).copied().unwrap_or(0);
         match d.class {
             Class::Newer => report.held_newer += n,
             Class::Waiting => report.held_waiting += n,

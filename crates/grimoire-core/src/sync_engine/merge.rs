@@ -61,6 +61,13 @@ impl Horizon {
 /// `id` is one tick of the emitter's clock as `[ms, ctr]`, unique per device and ordering its
 /// emissions; `i` is the op's index in the emission, from 0. `n`, `since` and `resumed` ride the
 /// first op of every chunk, as the horizon does, because each chunk is pulled on its own.
+///
+/// ⚠️ **`id` and `i` are required fields**, with no `#[serde(default)]`: a build on this one that
+/// meets an `emission` object without either fails to parse the op — and so the whole envelope,
+/// which is one batch. So a future build that renames or drops either one must also raise the op
+/// `schema` that `wire::seal_batch` stamps (the user schema version): an older peer then reads the
+/// batch as `WireError::Newer` and holds it for an update, where otherwise it is `Malformed` and
+/// stepped over, its ops lost. Only `Op.emission` itself is optional on the wire.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Emission {
     pub id: (i64, i64),

@@ -1194,11 +1194,17 @@ fn a_held_back_put_holds_the_claim_for_its_row() {
 /// Spec §3: a reference on an op that is no claim is malformed, and is judged absent on every path
 /// — a held-back op's included. c's `+1` carries a stray reference while the client holds c back,
 /// beside a's `+1` on the same row in the page. Read by its field rather than as a claim, the
-/// held-back op held nothing: both deltas landed, no watermark rose for c's, and c's released
-/// `+1` applied a second time (5 where 4 is right). Its sender already holds a watermark below
-/// it, which the hold must leave where it is.
+/// held-back op was applied with no watermark rising for it, and c's released `+1` applied a second
+/// time (5 where 4 is right). Its sender already holds a watermark below it, which must stay where
+/// it is.
+///
+/// **The expectation changed under the final review's I1 ruling** (2026-10-03). The page carries
+/// no claim for bolt, so c's held-back op joins no group and holds nothing: a's `+1` applies at
+/// once — this test used to pin it held, at (0, 2) — and `apply` answers no block for c, whose
+/// cursor the client holds itself. c's op is still not applied and raises no watermark, and the
+/// release still applies each `+1` once.
 #[test]
-fn a_held_back_op_with_a_stray_reference_holds_its_row_and_applies_once_when_released() {
+fn a_held_back_op_with_a_stray_reference_is_not_applied_and_applies_once_when_released() {
     let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
     let (mut ma, mut mc) = (0, 0);
     set_clock(&a, STAMP);
@@ -1225,29 +1231,85 @@ fn a_held_back_op_with_a_stray_reference_holds_its_row_and_applies_once_when_rel
     let (report, held) = apply_page(&b, &from_a, &put, Waiting::Hold).unwrap();
     assert_eq!(
         (report.applied, copies(&b, "bolt")),
-        (0, 2),
-        "the held-back op did not hold its row: {report:?}"
+        (1, 3),
+        "a's +1 alone lands: {report:?}"
     );
+    let a_now = (from_a[0].at.ms, from_a[0].at.ctr);
+    assert!(a_now > a_mark, "{a_now:?} over {a_mark:?}");
     assert_eq!(
         (watermark(&b, "dev-a"), watermark(&b, "dev-c")),
-        (a_mark, c_mark),
-        "a hold moved a watermark"
+        (a_now, c_mark),
+        "the held-back op moved its sender's watermark"
     );
-    assert_eq!(held.get("dev-c"), Some(&(put[0].at.ms, put[0].at.ctr)));
+    assert_eq!(held.get("dev-c"), None, "{held:?}");
 
     apply(&b, &page(&[&from_a, &put])).unwrap();
     assert_eq!(copies(&b, "bolt"), 4, "each +1 once");
 }
 
+/// The test above where the held-back op does join a group (the final review's I1 ruling keeps
+/// it to one that carries a claim): c's `+1` with a stray reference meets e's claim for bolt, which
+/// a gap here makes the floor of the row b holds. The reference is taken off before the op is
+/// grouped; left on, `held_by`, `blocks_of` and `advance_watermarks` each passed over the op, so the
+/// claim's group was written with c's `+1` in it, no watermark rose for it, and the release
+/// applied it a second time.
+#[test]
+fn a_held_back_op_with_a_stray_reference_holds_the_claim_for_its_row() {
+    let (a, b, c, e) = (
+        paired("dev-a"),
+        paired("dev-b"),
+        paired("dev-c"),
+        paired("dev-e"),
+    );
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    for peer in [&b, &c, &e] {
+        apply(peer, &seed).unwrap();
+    }
+    step(&c, "bolt", 1, SECOND + 1);
+    let mut put = since(&c, &mut mc);
+    assert_eq!(put.len(), 1, "{put:?}");
+    put[0].emission = Some(crate::sync_engine::merge::Emission {
+        id: (put[0].at.ms + 1, 0),
+        i: 0,
+        n: Some(1),
+        since: Some((0, 0)),
+        resumed: false,
+    });
+    let from_e = whole(&e, "dev-e");
+    emission::open_gap(&b).unwrap();
+
+    let (_, held) = apply_page(&b, &from_e, &put, Waiting::Hold).unwrap();
+    assert_eq!(
+        copies(&b, "bolt"),
+        2,
+        "the claim's group was written with the held-back op in it"
+    );
+    assert!(held.contains_key("dev-c"), "{held:?}");
+
+    apply(&b, &page(&[&from_e, &put])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3, "c's +1 once, under e's floor");
+}
+
 /// Design 2026-10-03 §5: a held-back op is never applied, so it neither drags this device's clock
 /// — `observe` reads only what this pass met fresh — nor moves its sender's watermark. c's `+1` is
 /// stamped years ahead of b's clock, behind an earlier op of c's that b applied.
+///
+/// **Under the final review's I1 ruling** (2026-10-03) the op joins only a group that carries a
+/// claim, so on a page with none `apply` answers no block for c — this test used to expect one —
+/// and the client holds c's cursor itself. The second delivery puts e's claim for bolt beside it,
+/// which the op joins and holds: the case where it is grouped, and where `observe` must still leave
+/// it out.
 #[test]
 fn a_held_back_op_moves_neither_the_clock_nor_its_senders_watermark() {
-    let (b, c) = (paired("dev-b"), paired("dev-c"));
+    let (b, c, e) = (paired("dev-b"), paired("dev-c"), paired("dev-e"));
     let mut mc = 0;
     real_stash(&c, "bolt", 2);
-    apply(&b, &since(&c, &mut mc)).unwrap();
+    let first = since(&c, &mut mc);
+    apply(&b, &first).unwrap();
+    apply(&e, &first).unwrap();
     let mark = watermark(&b, "dev-c");
     set_clock(&c, STAMP);
     step(&c, "bolt", 1, SECOND);
@@ -1267,7 +1329,22 @@ fn a_held_back_op_moves_neither_the_clock_nor_its_senders_watermark() {
         "a held-back op moved its watermark"
     );
     assert_eq!(copies(&b, "bolt"), 2);
-    assert!(held.contains_key("dev-c"), "{held:?}");
+    assert!(!held.contains_key("dev-c"), "{held:?}");
+
+    // A gap makes e's claim the floor of the row b holds, so it goes to the fold and c's op joins it.
+    emission::open_gap(&b).unwrap();
+    let (_, held) = apply_page(&b, &whole(&e, "dev-e"), &ahead, Waiting::Hold).unwrap();
+    assert!(held.contains_key("dev-c"), "the op held no claim: {held:?}");
+    assert!(
+        clock() < STAMP,
+        "a held-back op in a group dragged the clock"
+    );
+    assert_eq!(
+        watermark(&b, "dev-c"),
+        mark,
+        "a held-back op in a group moved its watermark"
+    );
+    assert_eq!(copies(&b, "bolt"), 2);
 }
 
 /// §14 row 13, the apply half: a group dropped and recorded opens the gap; the next emission
@@ -2653,5 +2730,146 @@ fn a_retired_uid_a_row_wears_again_is_still_passed_under_a_gap() {
         (held, record.passed.contains(em.i)),
         (1, true),
         "the claim for a retired uid a row wears again was floored under the gap: {record:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The final review — two over-counts and the held-back stall (2026-10-03)
+// ---------------------------------------------------------------------------------------------
+
+/// Final review C1. a's first emission is pulled a chunk at a time, and b's first page carries a's
+/// outbox beside the chunk for bolt: the claim builds bolt, and a's insert is dropped as carried by
+/// it. a's whole second emission then comes in the same page, handed back twice. It completes on
+/// the first and is taken — and `take` used to drop every other record of the generation, the
+/// half-sent first emission's with it, whose `wrote` set was the only evidence that a's insert is
+/// inside bolt here. The second emission's claim for bolt passed, the row being held here, so on
+/// the second hand-back nothing proved the insert inside the row, and the older rules applied it
+/// on top: 4 where 2 is right.
+#[test]
+fn a_half_sent_emission_superseded_while_its_page_is_held_counts_its_carried_put_once() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    stash(&a, "bolt", 2, 1_700_000_000);
+    stash(&a, "opt", 1, 1_700_000_100);
+    let half = emit(&a, "dev-a", 1);
+    let first = page(&[&outbox(&a), &chunk_of(&half, "bolt")]);
+    apply(&b, &first).unwrap();
+    assert_eq!(copies(&b, "bolt"), 2, "the half-sent emission's claim");
+
+    let again = page(&[&first, &whole(&a, "dev-a")]);
+    apply(&b, &again).unwrap();
+    assert_eq!((copies(&b, "bolt"), copies(&b, "opt")), (2, 1));
+    assert!(
+        emission::taken(&b, "dev-a").unwrap().is_some(),
+        "the whole second emission was not taken"
+    );
+    apply(&b, &again).unwrap();
+    assert_eq!(copies(&b, "bolt"), 2);
+}
+
+/// Final review C2, a regression against `main`. An older build's baseline of a's — no references,
+/// as an older emitter sends one, or as one stripped at the cut — comes beside the insert its
+/// horizon covers, and `main`'s `inside` drops the insert: its claim builds bolt at 2. The page
+/// comes back with e's emission, which covers the insert too, and whose claim for bolt passes on
+/// the row held here. `decide` sent the insert down the op path, which bypasses `inside`, and it
+/// was counted on top of the claim that already carried it: 4 where `main` answers 2.
+#[test]
+fn a_put_an_older_emitters_claim_carried_is_not_counted_again_beside_a_newer_emission() {
+    let (a, b, e) = (paired("dev-a"), paired("dev-b"), paired("dev-e"));
+    stash(&a, "bolt", 2, 1_700_000_000);
+    let put = outbox(&a);
+    apply(&e, &put).unwrap();
+    let mut old = whole(&a, "dev-a");
+    for op in &mut old {
+        op.emission = None;
+    }
+    let first = page(&[&put, &old]);
+    apply(&b, &first).unwrap();
+    assert_eq!(copies(&b, "bolt"), 2);
+
+    apply(&b, &page(&[&first, &whole(&e, "dev-e")])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 2, "main's answer");
+}
+
+/// Final review I1: a held-back op joins only a group that carries a claim. c's `+1` on bolt is
+/// held back by b's client, and a's `+1` on the same row comes fresh beside it with no claim in the
+/// page; a's lands, and so does a's later op on another row, and c's applies once when its sender
+/// is released. A held-back op used to join every group of its row, so a's `+1` waited with it —
+/// and every later op of a's, as collateral — for as long as the client held c: up to a day on a
+/// clock hold, and until an upgrade behind a newer build's batch. Ops with no reference keep
+/// `main`'s rules, and `main` never held anything back.
+#[test]
+fn a_held_back_op_on_a_row_with_no_claim_holds_no_other_senders_op() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&c, &seed).unwrap();
+    step(&c, "bolt", 1, SECOND + 1);
+    let put = since(&c, &mut mc);
+    step(&a, "bolt", 1, SECOND + 2);
+    stash(&a, "opt", 1, SECOND + 3);
+    let from_a = since(&a, &mut ma);
+    assert_eq!(from_a.len(), 2, "{from_a:?}");
+
+    let (report, held) = apply_page(&b, &from_a, &put, Waiting::Hold).unwrap();
+    assert_eq!(
+        (report.applied, copies(&b, "bolt"), copies(&b, "opt")),
+        (2, 3, 1),
+        "a held-back op on a row with no claim held another sender's ops: {report:?}"
+    );
+    let last = from_a.last().unwrap();
+    assert_eq!(watermark(&b, "dev-a"), (last.at.ms, last.at.ctr));
+    assert!(
+        held.is_empty(),
+        "the client holds c itself; apply holds nothing here: {held:?}"
+    );
+
+    apply(&b, &page(&[&from_a, &put])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 4, "each +1 once");
+}
+
+/// Final review m2: a held-back op is counted in no class of `apply`'s report, whatever its group
+/// becomes — the client counts it itself (`held_behind`, `held_clock`), so a count here is the
+/// same op twice. c's held-back `+1` joins the group of e's claim for bolt, beside y's `+1`; y is a
+/// newer build's device, held at an earlier op on a table this build does not know, so the group is
+/// held as newer. It holds three ops, and two of them are `apply`'s: the report said 3 newer for
+/// that group, 4 in all, where 2 and 3 are right.
+#[test]
+fn a_held_back_op_in_a_group_held_as_newer_is_counted_in_no_class() {
+    let (b, c, e, y) = (
+        paired("dev-b"),
+        paired("dev-c"),
+        paired("dev-e"),
+        paired("dev-y"),
+    );
+    let (mut mc, mut me, mut my) = (0, 0, 0);
+    real_stash(&e, "bolt", 2);
+    let seed = since(&e, &mut me);
+    apply(&c, &seed).unwrap();
+    apply(&y, &seed).unwrap();
+    step(&c, "bolt", 1, 1_700_000_000);
+    let put = since(&c, &mut mc);
+    stash(&y, "opt", 1, 1_700_000_000);
+    step(&y, "bolt", 1, 1_700_000_001);
+    let mut from_y = since(&y, &mut my);
+    assert_eq!(from_y.len(), 2, "{from_y:?}");
+    from_y[0].table = "future_table".to_owned();
+    for op in &mut from_y {
+        op.schema = Some(crate::schema::USER_SCHEMA_VERSION + 1);
+    }
+    let claims = whole(&e, "dev-e");
+
+    let (report, _) = apply_page(&b, &page(&[&claims, &from_y]), &put, Waiting::Hold).unwrap();
+    assert_eq!(
+        rows(&b, "bolt"),
+        0,
+        "the claim landed ahead of the put it waits on"
+    );
+    assert_eq!(
+        (report.held_newer, report.deferred),
+        (3, 3),
+        "y's two ops and e's claim, and not c's held-back op: {report:?}"
     );
 }

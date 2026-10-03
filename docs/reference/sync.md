@@ -1865,13 +1865,18 @@ grouped, `settle` after the committed pass — and nothing there reads or writes
   first: each emission's `id`, `n`, `since`, `resumed`, and two sets of index ranges — **wrote**
   (the claim built, merged or floored its row) and **passed** (consumed and wrote nothing: a held
   row's claim, a moot one, one dropped and recorded). A claim whose index is in either set is
-  skipped as seen. Four records an emitter (`emission::RECORDS_PER_EMITTER`).
+  skipped as seen. Four records an emitter (`emission::RECORDS_PER_EMITTER`), and **past four a
+  record whose claims wrote nothing goes first**, oldest first — `wrote` is the only evidence that
+  a put a claim carried is inside a row here — though never the record being stored, which is an
+  emission's progress (`the_ledger_evicts_a_record_that_wrote_nothing_first`).
 - **decided with its row.** A group is one row and holds as a whole (`held_by` asks every op in
   it), so a claim beside a put that is held is held with it, unconsumed, and comes back with it.
   The claim itself blocks nothing (`a_claim_held_mid_emission_lands_once_and_holds_nothing_else`).
 - **taken** when every index of one emission is consumed: `taken@<device id>` becomes its `since`,
-  and every *other* record of that emitter at or below it goes. A newer emission completing
-  supersedes an older one left half-sent.
+  and every *other* record of that emitter at or below it goes — **but one of the same generation
+  whose claims wrote a row, which stays for containment alone** (the final review's, below). A
+  newer emission completing supersedes an older one left half-sent; it does not erase what that
+  one's claims built.
 
 Two kinds of claim have their reference stripped and are left to `main`'s rules (a third, an
 emission named before the upgrade cut, is below): this device's own emission,
@@ -1890,7 +1895,7 @@ because one page can hold an emission from before an emitter's rejoin and one fr
 | The emitter's generation, as this device holds it | The emission is |
 | --- | --- |
 | no `taken@` mark, or `since` above it | **active** |
-| `since` at or below the mark | **inert**: every claim skipped as seen with no database work, its horizon left out of the page's union so it drops no put, its indices not tracked — except that the completed emission whose record `take` kept still serves containment |
+| `since` at or below the mark | **inert**: every claim skipped as seen with no database work, its horizon left out of the page's union so it drops no put, its indices not tracked — except that any record of it the ledger still holds, complete or not, still serves containment: the completed one `take` kept, or a half-sent one it superseded whose claims wrote |
 
 **Inert is the baseline design's cheap exit with its premise checked**: a taken generation means
 this device consumed one whole emission of it and has read every op the emitter logged since, and
@@ -1921,7 +1926,11 @@ and this device has a **gap**, when ops it never applied are. There the floor is
 from an emission whose horizon covers it, that has already *written* the row — a re-delivery of a
 page whose claim built, merged or floored the row the first time
 (`a_whole_active_page_handed_back_writes_nothing_the_second_time`). The evidence is the page and the
-record, per row, where the narrow fix kept a device-wide absorbed mark.
+record, per row, where the narrow fix kept a device-wide absorbed mark. **And a covered put an older
+claim in the same page carries is left to `main`'s rules** — where the horizon of an op with no
+reference, or one stripped at the door, covers it, `inside` drops it as it always did, before the
+op path is asked. `claims::decide` builds that union once (`Decided::older`) and `apply_in` judges
+`inside` against the same one.
 
 #### A gap: what clears the taken marks, and what closes it
 
@@ -2017,9 +2026,10 @@ the design while it ran — each now in the spec, the code and a test:
   reference is malformed, and with one left on, `held_by`, `blocks_of` and `advance_watermarks` —
   each of which passes over an op carrying the field — let its group be written with no watermark
   rising, and a later release applied it a second time
-  (`a_held_back_op_with_a_stray_reference_holds_its_row_and_applies_once_when_released`). A
-  held-back *claim* joins nothing: a claim blocks nothing, and a put that lands ahead of the claim
-  containing it is the row table's ordinary case.
+  (`a_held_back_op_with_a_stray_reference_holds_the_claim_for_its_row`, and
+  `a_held_back_op_with_a_stray_reference_is_not_applied_and_applies_once_when_released` on a row
+  with no claim). A held-back *claim* joins nothing: a claim blocks nothing, and a put that lands
+  ahead of the claim containing it is the row table's ordinary case.
 - **A claim never builds a uid this device merged into another, in either direction**, and the
   write path asks again. `apply` merges one uid into another in two places — a grain match
   (`adopt_uid`) that renames the row it finds, or keeps its own lower uid and **absorbs** the
@@ -2065,9 +2075,49 @@ the design while it ran — each now in the spec, the code and a test:
   held for its clock, or behind one only a newer build can read, used to be taken out of the page —
   and a third device's claim that contained one of its puts landed first; released, the put counted
   again (the 6-for-3). Now each such batch enters `apply` with its ops marked held, so they hold
-  their rows' groups, and **each opened batch goes to exactly one of the two lists** — an op passed
-  as both is grouped twice. The client counts them itself (`report.deferred`), and the cursor
-  decision is unchanged: a non-empty `held_back` already holds the page as `"clock"` or `"newer"`.
+  the groups of their rows that carry a claim (narrowed by the final review, below), and **each
+  opened batch goes to exactly one of the two lists** — an op passed as both is grouped twice. The
+  client counts them itself (`report.deferred`, and `held_newer` for a batch behind a newer one), so
+  no class of `apply`'s report counts one, whatever its group becomes — a group held as newer used
+  to count it a second time (`a_held_back_op_in_a_group_held_as_newer_is_counted_in_no_class`). The
+  cursor decision is unchanged: a non-empty `held_back` already holds the page as `"clock"` or
+  `"newer"`.
+
+**The final review**, over the whole branch, found two over-counts and a stall, each reproduced red
+before it was fixed (2026-10-03, debug, Windows):
+
+- **A half-sent emission superseded while its page is held counted its carried put twice — 4 where
+  2 is right.** `a`'s first emission is pulled a chunk at a time, and `b`'s first page carries
+  `a`'s outbox beside the chunk for bolt: the claim builds bolt and `a`'s insert is dropped as
+  carried by it. `a`'s whole second emission comes in the same page, handed back twice; it completes
+  on the first, and `take` dropped every other record of the generation, the half-sent one's with
+  it. Its `wrote` set was the only evidence the insert is inside bolt, and the second emission's
+  claim for bolt passed on the row now held here, so the second hand-back sent the insert to the
+  older rules unseen. Reachable through a quota refusal mid-baseline beside a held page, or a full
+  re-read after a rejoin. **Fixed**: `take` keeps a same-generation record whose claims wrote, for
+  containment alone; the inert branch of `decide` reads any record it finds, complete or not; and
+  the bound evicts a record that wrote nothing first
+  (`a_half_sent_emission_superseded_while_its_page_is_held_counts_its_carried_put_once`,
+  `taking_an_emission_keeps_a_record_of_its_generation_whose_claims_wrote`). Each of the two code
+  halves, reverted alone, reads 4 again.
+- **A put an older baseline in the same page already carried was counted again beside a newer
+  emission — 4 where `main` answers 2**, a regression against `main`. An older build's baseline of
+  `a`'s — no references, as an older emitter sends one, or stripped at the cut — comes beside the
+  insert its horizon covers, and `inside` drops it: the claim builds bolt at 2. The page comes back
+  with `e`'s emission, which covers the insert too and whose claim for bolt passes on the held row,
+  and `decide` sent the insert down the op path, which bypasses `inside`. **Fixed**: `decide` builds
+  the older rules' horizon union itself, and a covered put it covers is left to those rules before
+  the op path is asked
+  (`a_put_an_older_emitters_claim_carried_is_not_counted_again_beside_a_newer_emission`).
+- **A held-back op stalled other senders' ordinary ops.** It joined every group of its row, so
+  another sender's ordinary op there held with it, and that sender's later ops as collateral, for as
+  long as the client held the first — up to a day on a clock hold, and until an upgrade behind a
+  newer build's batch — against the rule that an op with no reference keeps `main`'s rules.
+  **Fixed**: a held-back op joins only a group that carries a claim, which is all the 6-for-3 needs,
+  and anywhere else joins nothing and holds nothing
+  (`a_held_back_op_on_a_row_with_no_claim_holds_no_other_senders_op`; the 6-for-3's own two tests
+  stay green). An ordinary op that shares a group with a claim and a held-back op still waits with
+  them.
 
 #### Older builds, and the upgrade cut
 
@@ -4142,6 +4192,15 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   about 100 B, per merge `apply` makes, for the life of the install. A survivor deleted later still
   passes every claim for the uid retired into it — an under-count only, and it never rebuilds a row
   the group deleted.
+- **The gap never closes in a mixed-version group** (found at the final review, read off the
+  code). It closes once every roster device this one holds a watermark for is taken again, and only
+  a referenced emission is ever taken — so an older-build peer on the roster, whose ops this device
+  has applied, holds it open for as long as it runs an older build, and every active emission from
+  an upgraded peer floors the rows held here meanwhile. That is `main`'s behaviour — `main` floors
+  with every claim its watermark does not skip as seen — so it is never below it; what is lost is
+  the held-row arm's pass, so a floor can take back a removal made here in the window before it
+  lands (the item above on a resumed emission, or any during a gap), until the last device is
+  updated. No test pins it.
 - **A joiner's partial roster can close the gap early** (found reviewing the generation's
   identity change, read off the code). A device that has just joined knows only itself and its
   initiator until it adopts a manifest, so `close_gap_if_whole` can find every roster peer taken
@@ -4156,11 +4215,20 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   page held for another reason is handed back with the same envelope until the cursor moves past
   it, clearing every `taken@` again each time. Conservative — floors, never an over-count — and
   strictly early: the cursor has not passed the envelope while the page is held.
-- **The ledger is four emissions deep** (`RECORDS_PER_EMITTER`, read off the code). A page handed
-  back after four newer emissions of one emitter would find no record of the one it carries and
-  count its covered puts again; and a record from before a gap that `keep` evicts, then sees
-  re-delivered, comes back as a fresh one that can be taken and close the gap. Each needs more than
-  four of one emitter's emissions recorded here at once.
+- **The ledger keeps four records an emitter, and a record that wrote can still be evicted**
+  (`RECORDS_PER_EMITTER`, read off the code after the final review's fix). This item used to say
+  a page needed four newer emissions behind it to lose its record; one supersession was enough,
+  because `take` dropped every other record of its generation — the final review's C1, fixed
+  above. Now a record whose claims wrote a row is kept until four newer records that also wrote, or
+  are being stored, push it out: records that wrote nothing go first, and a record from before a gap
+  keeps its `wrote` set and ranks with them. **What it still costs**: a page handed back that
+  carries an emission whose record was pushed out — after four more emissions of one emitter that
+  each wrote here, which takes a first contact or a gap for each, since a held row's claim writes
+  nothing otherwise — finds no record and counts the puts that emission carried again; the likely
+  road is a full re-read after `forget_log_position`. And a record of an *older* generation is still
+  dropped by `take`: a half-sent emission from before the emitter rejoined loses its evidence when
+  one from after it is taken, which a resumed emission's floor normally covers, since its own claim
+  for the row writes.
 - **A row whose last copy goes is deleted before its fields are written, so a field that cannot be
   written no longer stops the group** (found at the `update_row` change, read off the code and
   unmeasured). `update_row` now decides every counter before it writes anything, and on

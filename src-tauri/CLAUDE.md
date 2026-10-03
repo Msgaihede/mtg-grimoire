@@ -2014,7 +2014,10 @@ binding rules:
   claim on a row held here under its uid writes nothing** unless its emission `resumed` or this
   device has a `gap`, when it floors; a covered put there takes the op path, and **is skipped by
   containment once its row's claim has written the row** — on a page handed back after the
-  emission completed too, which is why `emission::take` keeps the completed emission's record.
+  emission completed too, which is why `emission::take` keeps the completed emission's record,
+  **and every record of its generation it supersedes whose claims wrote a row**: `wrote` is the
+  only evidence a carried put is inside a row here, so the inert branch reads any record it finds,
+  and past `RECORDS_PER_EMITTER` a record that wrote nothing is evicted first.
   **`resumed` is the emitter's generation speaking** — `sync_state`'s `logging_since`, the
   `sync_clock` stamp at which its capture last turned on, and `logging_resumed` beside it (sent
   as `since` and `resumed` on every chunk's head). `identity::found_group` mints one, and
@@ -2043,11 +2046,15 @@ binding rules:
   from owes the same `emission::open_gap` call**. No baseline begins while anything is pending
   (the stretch bullet above), and the client passes the batches it holds back into
   `apply::apply_page` as held. There a held-back *claim* is left out altogether — a claim blocks
-  nothing — and every other held-back op is stripped of any stray reference before it is grouped.
-  `carried@<device>` rises only from a wholly written emission that is not from before a gap —
-  over-covering a horizon loses a put. `update_row` writes nothing, `updated_at` included, when
-  nothing changed. Ops with no emission, and emissions named at or below the upgrade cut
-  (`emissions_since`), keep `main`'s rules.
+  nothing — and every other held-back op is stripped of any stray reference before it is grouped,
+  **joins only a group that carries a claim**, holds nothing anywhere else, and is counted in no
+  class of the report (the client counts it). `carried@<device>` rises only from a wholly written
+  emission that is not from before a gap — over-covering a horizon loses a put. `update_row` writes
+  nothing, `updated_at` included, when nothing changed. Ops with no emission, and emissions named at
+  or below the upgrade cut (`emissions_since`), keep `main`'s rules — `decide` leaves a covered put
+  that such an op's horizon covers to `inside`, even beside an active emission — **except that an
+  ordinary op sharing a group with a claim and a held-back op waits with them**, and its sender's
+  later ops as collateral, for as long as the client holds the held-back op's sender.
 - **`sync_peers` is a watermark, and the client holds its cursor only for what can still
   resolve.** Advancing the watermark past an op that may still apply loses it; applying the ops
   above it while holding it adds their counter deltas twice on a re-delivery. So `apply` holds a
