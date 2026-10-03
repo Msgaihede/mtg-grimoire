@@ -5,6 +5,7 @@ import { FOCUS } from "@/lib/focus";
 import type { Shelf } from "@/lib/shelves";
 import { PRESS, PRESS_SOFT } from "@/lib/motion";
 import { cn } from "@/lib/utils";
+import { linkTo } from "./router";
 
 /**
  * The phone's shelf chrome: a heading, an empty shelf, and the path row above the wall.
@@ -15,6 +16,13 @@ import { cn } from "@/lib/utils";
  * `ShelfGlyph`, the peek, `headingLevel`, the `›` of a path — so one cabinet reads as one cabinet
  * on both faces.
  */
+
+/**
+ * A shut heading peeks at one card fewer than the desktop's {@link PEEK_LIMIT}: at 360px the
+ * heading also carries its way in and, for a deck's shelf, its way to the deck, and a fourth
+ * thumbnail is the figures' last words — which say something, where the peek only decorates.
+ */
+const PHONE_PEEK_LIMIT = PEEK_LIMIT - 1;
 
 /** A 44px icon control at the heading's right end — Open, and nothing else that would compete. */
 const ICON_CONTROL = cn(
@@ -35,7 +43,7 @@ export function PhoneShelfHeading({
   shelf: Shelf;
   /** Already formatted — `12 cards · $40.10`, `Locked · 3 cards`, `3 of 42 cards`. */
   stat: string;
-  /** Up to `PEEK_LIMIT` card ids, drawn only while the shelf is shut. */
+  /** Card ids, drawn only while the shelf is shut — the first `PHONE_PEEK_LIMIT` of them. */
   peek: readonly { cardId: string }[];
   onToggle: () => void;
   /**
@@ -103,7 +111,7 @@ export function PhoneShelfHeading({
             </span>
             {shelf.collapsed && peek.length > 0 && (
               <span aria-hidden className="flex flex-none items-center pl-0.5">
-                {peek.slice(0, PEEK_LIMIT).map((card, i) => (
+                {peek.slice(0, PHONE_PEEK_LIMIT).map((card, i) => (
                   <PeekThumb key={`${i}:${card.cardId}`} cardId={card.cardId} first={i === 0} />
                 ))}
               </span>
@@ -206,5 +214,24 @@ export function PathRow<F extends { id: number; name: string }>({
         })}
       </ol>
     </nav>
+  );
+}
+
+/**
+ * A heading's way to a deck — a deck's group in the collection, a deck's managed list on the
+ * wishlist. **A link**: it changes the URL, so it is a real `<a href>` (the router's rule), drawn
+ * as a small pill in a 44px target so it reads as a destination beside the heading's own press.
+ */
+export function DeckLink({ deckId, name }: { deckId: number; name: string }) {
+  return (
+    <a
+      {...linkTo({ view: "decks", deckId, cardId: null })}
+      aria-label={`Open the deck ${name}`}
+      className={cn("flex h-11 flex-none items-center rounded-md px-1", FOCUS)}
+    >
+      <span className="rounded-full border border-border px-2 text-[0.6875rem] leading-5 text-dim">
+        Deck
+      </span>
+    </a>
   );
 }
