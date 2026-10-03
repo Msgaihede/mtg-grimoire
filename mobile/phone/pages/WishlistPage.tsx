@@ -4,7 +4,7 @@ import { FOLD_PAUSED_REASON } from "@/features/shelves/ShelfToolbar";
 import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import { ManagedFolderNote } from "@/features/wishlist/ManagedFolderNote";
 import { managedEmptySentence } from "@/features/wishlist/managed";
-import { useWishlist } from "@/features/wishlist/useWishlist";
+import { useWishlist, WISHLIST_TRAY } from "@/features/wishlist/useWishlist";
 import { useWishlistFolders } from "@/features/wishlist/useWishlistFolders";
 import { WishlistSummaryHeader } from "@/features/wishlist/WishlistSummary";
 import {
@@ -19,12 +19,13 @@ import {
 import { buildFolderTree, trailOf } from "@/lib/folderTree";
 import { layoutShelves } from "@/lib/shelfLayout";
 import { visibleShelves, type Shelf } from "@/lib/shelves";
+import { CabinetFilters } from "../CabinetFilters";
 import type { WallItem } from "../CardWall";
 import { wishItem } from "../items";
 import { linkTo } from "../router";
 import { DeckLink, EmptyShelfBox, PathRow, PhoneShelfHeading } from "../ShelfParts";
 import { NO_ITEMS, ShelfWall } from "../ShelfWall";
-import { DimNote, ReadError, useMore } from "./parts";
+import { DimNote, NextPageRefused, ReadError, useMore } from "./parts";
 
 /** What the top of the cabinet is called — the desktop breadcrumb's word. */
 const ROOT = "Wishlist";
@@ -45,6 +46,10 @@ const NO_PEEK: readonly { cardId: string }[] = [];
  *
  * **One tile per wish**, keyed by the wish: two wishes for one card in two folders are two tiles,
  * and the chin's mark says the card is wished for again elsewhere.
+ *
+ * **Filtered as the collection is** (`CabinetFilters`), through the sheet with the desktop bar's
+ * own cells for this list (`WISHLIST_TRAY`): no price, finish or condition, because a wish
+ * carries none of the three questions those cells ask.
  */
 export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
   const stored = useShelfFolds("wishlist").folds;
@@ -196,13 +201,7 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
         ? (folderById.get(managedHere.parentId)?.name ?? managedHere.name)
         : managedHere.name;
 
-  const pathRow =
-    folderId === null ? null : (
-      <div className="shrink-0 px-3">
-        <PathRow root={ROOT} trail={trail} onOpen={openFolder} />
-      </div>
-    );
-  // It scrolls with the wall, above the figures: the path row is the one thing that stays put.
+  // It scrolls with the wall, above the figures: the line and the path row are what stay put.
   const note =
     managedHere === null || managedHere.managedDeckId === null ? null : (
       <div className="pt-3">
@@ -212,14 +211,36 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
         />
       </div>
     );
+  const totals = countTotals(wishlist.counts);
+  // The line and, standing in a folder, the way out of it — one band that stays put while the
+  // wall scrolls. Drawn over every answer below, so a filter that matched nothing can be undone.
+  const line = (
+    <CabinetFilters
+      surface={wishlist}
+      label="Search your wishlist"
+      tray={WISHLIST_TRAY}
+      sortRows={wishlist.sortRows}
+      total={totals?.wishes}
+      below={
+        folderId === null ? undefined : <PathRow root={ROOT} trail={trail} onOpen={openFolder} />
+      }
+    />
+  );
   const top = (
     <>
-      {pathRow}
+      {line}
       {note !== null && <div className="shrink-0 px-3">{note}</div>}
     </>
   );
 
-  if (query.isLoadingError) return <ReadError>Your wishlist could not be read.</ReadError>;
+  if (query.isLoadingError) {
+    return (
+      <>
+        {top}
+        <ReadError>Your wishlist could not be read.</ReadError>
+      </>
+    );
+  }
   if (countsQuery.isError && wishlist.counts === undefined) {
     return (
       <>
@@ -249,7 +270,7 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
 
   return (
     <>
-      {pathRow}
+      {line}
       <ShelfWall
         label="Your wishlist"
         sections={sections ?? []}
@@ -258,10 +279,7 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
           <>
             {note}
             <div className="pt-3 pb-1">
-              <WishlistSummaryHeader
-                totals={countTotals(wishlist.counts)}
-                marketplace={marketplace}
-              />
+              <WishlistSummaryHeader totals={totals} marketplace={marketplace} />
             </div>
           </>
         }
@@ -270,6 +288,7 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
         onOpen={onOpen}
         onNearEnd={more}
         resetKey={wishlist.queryKeyString}
+        footer={<NextPageRefused query={query} />}
       />
     </>
   );

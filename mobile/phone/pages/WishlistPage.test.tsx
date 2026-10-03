@@ -198,6 +198,55 @@ describe("Wishlist", () => {
     expect(within(unsorted).queryByRole("button", { name: /^Orcish Bowmasters/ })).toBeNull();
   });
 
+  it("narrows the cabinet through the Filters sheet, offering the wishlist's own cells", async () => {
+    renderPhone(<PhoneFace />, { path: "/wishlist" });
+    const wall = await cabinet();
+    await within(wall).findByRole("list", { name: "Not sorted" }, SETTLE);
+
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
+    const sheet = await screen.findByRole("dialog", { name: "Filters" });
+    expect(within(sheet).getByRole("heading", { name: "Needs review" })).toBeInTheDocument();
+    // A wish asks none of these: no price band on its wire, no copy's finish or grade.
+    for (const absent of ["Price (USD)", "Finish", "Condition", "Owned", "Printings"]) {
+      expect(within(sheet).queryByRole("heading", { name: absent })).toBeNull();
+    }
+
+    await userEvent.click(
+      within(within(sheet).getByRole("group", { name: "Rarity" })).getByRole("button", {
+        name: /Mythic/,
+      }),
+    );
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Show / }));
+
+    expect(screen.getByRole("button", { name: "Filters — 1 active" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Remove filter — Rarity/ })).toBeInTheDocument();
+    await waitFor(
+      () =>
+        expect(within(wall).queryByRole("button", { name: "Sol Ring, any printing" })).toBeNull(),
+      SETTLE,
+    );
+  });
+
+  it("searches the wishlist from its own box", async () => {
+    renderPhone(<PhoneFace />, { path: "/wishlist" });
+    const wall = await cabinet();
+    await within(wall).findByRole("button", { name: "Sol Ring, any printing" }, SETTLE);
+
+    await userEvent.type(
+      screen.getByRole("searchbox", { name: "Search your wishlist" }),
+      "ragavan",
+    );
+
+    await waitFor(
+      () =>
+        expect(within(wall).queryByRole("button", { name: "Sol Ring, any printing" })).toBeNull(),
+      SETTLE,
+    );
+    expect(
+      within(wall).getByRole("button", { name: "Ragavan, Nimble Pilferer, MH2 138, Foil" }),
+    ).toBeInTheDocument();
+  });
+
   it("says so when the wishlist is empty", async () => {
     renderPhone(<PhoneFace />, { path: "/wishlist", fake: { seed: "empty" } });
     expect(
