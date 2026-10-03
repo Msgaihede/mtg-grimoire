@@ -46,3 +46,42 @@ export function tileWidthFor(width: number, columns: number): number {
 export function rowHeightFor(tileWidth: number): number {
   return Math.round(tileWidth * CARD_HEIGHT_PER_WIDTH) + CHIN_HEIGHT - CHIN_RISE + GAP;
 }
+
+/**
+ * The shelved wall's chrome rows, in px — the phone's own heights, never the desktop's
+ * `shelfLayout.rowHeight()` (48 / 40 / 108), which are sized for a pointer and a 40px heading.
+ *
+ * - **A heading is 56**: a 48px control — a thumb's target, not a pointer's — and 8px above it,
+ *   which is what parts one shelf's last row of cards from the next shelf's name.
+ * - **A label is 40**: `ShelfLabel`'s own `h-10`, drawn as it is on the desktop.
+ * - **An empty shelf is 56**: a 44px dashed box and the wall's 12px gap under it.
+ */
+export const SHELF_HEADING_PX = 56;
+export const SHELF_LABEL_PX = 40;
+export const SHELF_EMPTY_PX = 56;
+
+/**
+ * How far one level of nesting moves a heading right. **Headings only**: the tiles under a nested
+ * shelf are drawn at the wall's full width, because one column count serves every shelf and a
+ * phone has no width to give up to an indent — the desktop's 32px a level, three levels deep,
+ * would take a 360px wall to one column. The heading's indent, its path and its heading level
+ * say where the shelf sits.
+ */
+export const SHELF_INDENT_PX = 12;
+
+/** One row of a shelved wall's height: its chrome's, or a row of tiles at `tileRowHeight`. */
+export function shelfRowHeight(
+  kind: "label" | "heading" | "tiles" | "empty",
+  tileRowHeight: number,
+): number {
+  switch (kind) {
+    case "label":
+      return SHELF_LABEL_PX;
+    case "heading":
+      return SHELF_HEADING_PX;
+    case "empty":
+      return SHELF_EMPTY_PX;
+    case "tiles":
+      return tileRowHeight;
+  }
+}

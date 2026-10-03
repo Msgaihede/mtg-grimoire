@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { CardSummary, CollectionRow, DeckCard, WishRow } from "@/lib/ipc";
+import { collectionTiles } from "@/features/collection/collectionWall";
+import { tileKeyOf } from "@/lib/tileKey";
 import { collectionItem, deckCardItem, searchItem, wishItem } from "./items";
 
 /** A printing sold both ways — which is most of them, and the one a wall leaves unmarked. */
@@ -62,38 +64,58 @@ const entry = (over: Partial<CollectionRow> = {}): CollectionRow =>
     cardId: "card-1",
     name: "Lightning Bolt",
     setCode: "lea",
-    setName: null,
+    setName: "Limited Edition Alpha",
     collectorNumber: "161",
     rarity: "common",
     finish: "foil",
+    condition: "NM",
     quantity: 2,
     unitPrice: 4,
+    folderId: null,
     ...over,
   }) as CollectionRow;
 
+/** The tile one row folds into — the collection wall's grain, which is what the phone draws. */
+const tileOf = (over: Partial<CollectionRow> = {}) => collectionTiles([entry(over)])[0];
+
 describe("collectionItem", () => {
-  it("keys on the row, because one printing can be two rows", () => {
-    expect(collectionItem(entry(), "usd").key).toBe("9");
+  it("keys on the tile, which is the printing, the finish and the folder — never the row", () => {
+    const [one, other] = collectionTiles([
+      entry({ id: 9, condition: "NM" }),
+      entry({ id: 10, condition: "LP", quantity: 1 }),
+    ]).map((tile) => collectionItem(tile, "usd"));
+    // Two grades of one printing in one finish and one folder are one tile, counting both.
+    expect(other).toBeUndefined();
+    expect(one.key).toBe(tileKeyOf("card-1", "foil", null));
+    expect(one.count).toBe(3);
   });
 
   it("marks a foil copy and leaves a plain one unmarked", () => {
-    expect(collectionItem(entry(), "usd").finish).toBe("foil");
-    expect(collectionItem(entry({ finish: "nonfoil" }), "usd").finish).toBeNull();
+    expect(collectionItem(tileOf(), "usd").finish).toBe("foil");
+    expect(collectionItem(tileOf({ finish: "nonfoil" }), "usd").finish).toBeNull();
   });
 
   it("names a foil copy and a plain one of one printing differently", () => {
-    expect(collectionItem(entry(), "usd").pressLabel).toBe("Lightning Bolt, LEA 161, Foil");
-    expect(collectionItem(entry({ finish: "nonfoil" }), "usd").pressLabel).toBe(
+    expect(collectionItem(tileOf(), "usd").pressLabel).toBe("Lightning Bolt, LEA 161, Foil");
+    expect(collectionItem(tileOf({ finish: "nonfoil" }), "usd").pressLabel).toBe(
       "Lightning Bolt, LEA 161",
     );
   });
 
   it("leaves the count out of the name, because the wall writes it", () => {
-    expect(collectionItem(entry({ quantity: 4 }), "usd").pressLabel).not.toMatch(/cop/);
+    expect(collectionItem(tileOf({ quantity: 4 }), "usd").pressLabel).not.toMatch(/cop/);
   });
 
-  it("names a card the corpus has forgotten rather than drawing nothing", () => {
-    expect(collectionItem(entry({ name: null }), "usd").name).toBe("Unknown card");
+  it("names a card the corpus has forgotten by its printing rather than drawing nothing", () => {
+    expect(collectionItem(tileOf({ name: null }), "usd").name).toBe("LEA 161");
+  });
+
+  it("carries the set's name for the chin's tooltip", () => {
+    expect(collectionItem(tileOf(), "usd").chin).toEqual({
+      setCode: "lea",
+      collectorNumber: "161",
+      printingTitle: "Limited Edition Alpha",
+    });
   });
 });
 
