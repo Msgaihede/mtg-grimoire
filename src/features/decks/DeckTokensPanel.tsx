@@ -160,6 +160,7 @@ import {
   isHandAdded,
   tokenArtName,
   tokenEntryName,
+  TOKENS_HEADING,
   type DeckTokenView,
   type TokenEntryRef,
 } from "./deckTokens";
@@ -177,14 +178,11 @@ import {
 } from "./tokenCaret";
 import type { DeckTokens } from "./useDeckTokens";
 
-/**
- * The area's name, in one place because three things say it: the region's `aria-label`, the
- * disclosure's visible text, and every test and story that addresses either.
- *
- * **`&` rather than `and`**, which is the deck editor's own house style for a pair of nouns in a
- * heading (`Categories & labels`), and the ampersand is what a reader scans past.
- */
-export const TOKENS_HEADING = "Tokens & Emblems";
+// The area's name lives in `deckTokens.ts` since 2026-10-03, so the history's sentences
+// (`auditText.ts`) can say it without reaching this component — and through it the app store,
+// which the light app's phone face may not reach. Re-exported, so every caller that has always
+// imported it from here still does.
+export { TOKENS_HEADING } from "./deckTokens";
 
 /**
  * Whether the band's wall is on screen — the band open, over a read that answered at least one

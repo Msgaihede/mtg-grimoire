@@ -61,7 +61,7 @@ import {
 import type { MenuAction, MenuItem } from "@/components/menu/types";
 import { buildCardMenu, type CardMenuDeps, type CardMenuTarget } from "@/features/card/cardMenu";
 import { plural } from "@/lib/counts";
-import { FINISH_LABEL, parseFinishes } from "@/lib/finish";
+import { FINISH_LABEL } from "@/lib/finish";
 import type {
   DeckCard,
   DeckCategory,
@@ -83,8 +83,9 @@ import { noteTitle, notesForCard } from "./deckNotes";
 // "quickAddShort is not a function"; tsc refuses the program outright (TS1149). It is
 // `folderTree.ts` beside `FolderTree.tsx` a second time.
 import { quickAddBlock, quickAddShort, type QuickAddTarget } from "./quickCollection";
-import { commanderIneligibility } from "./validation/commanders";
-import { companionIssues } from "./validation/companions";
+// The rules a deck card's rows are greyed by — moved to a leaf on 2026-10-03 so the light app's
+// phone face asks them too, rather than a second spelling of each.
+import { ALREADY_HERE, finishChoices, REGULAR, zoneClaims } from "./deckCardRules";
 
 /**
  * The card a right-click on a deck row is about, as `CardMenuTarget` describes it.
@@ -111,16 +112,6 @@ export function deckCardTarget(card: DeckCard): CardMenuTarget {
   };
 }
 
-/**
- * What a row says when the card is already in the pile it names.
- *
- * Two rows are greyed by it — the card's own category under `Category`, and a zone row on the
- * card that fills it — and both are the same statement, so it is one string. Only the first
- * **draws** it, since 2026-08-17: a zone row greys wordlessly, for the reason on
- * {@link zoneItem}. Not a *refusal* in `validation/`'s sense: nothing is wrong with the card,
- * there is simply nothing for the press to write.
- */
-const ALREADY_HERE = "already here";
 
 /**
  * What a per-row write may answer: nothing, or the promise of its outcome — which is what lets a
@@ -938,68 +929,19 @@ export function deckCardNoteRows(
  * longer what it is greyed *with*; only `Category` still draws that string.
  */
 function zoneItems(card: DeckCard, deps: DeckCardMenuDeps): MenuItem[] {
-  const { spec } = deps;
-  if (spec === null) return [];
-  const items: MenuItem[] = [];
-
-  const commander = deps.categories.find((c) => c.kind === "commander");
-  if (spec.requiresCommander && spec.commanderRule !== null && commander !== undefined) {
-    items.push(
-      zoneItem(
-        "set-commander",
-        "Set as commander",
-        Crown,
-        card.categoryId === commander.id
-          ? ALREADY_HERE
-          : commanderIneligibility(card, spec.commanderRule, spec),
-        () => deps.moveTo(card, commander.id),
-      ),
-    );
-  }
-
-  const companion = deps.categories.find((c) => c.kind === "companion");
-  if (spec.allowsCompanion && companion !== undefined) {
-    items.push(
-      zoneItem(
-        "set-companion",
-        "Set as companion",
-        UserRound,
-        card.categoryId === companion.id ? ALREADY_HERE : companionRefusal(card, deps),
-        () => deps.moveTo(card, companion.id),
-      ),
-    );
-  }
-  return items;
+  // The presence and the refusal are `deckCardRules.ts`' `zoneClaims` — the one spelling of both,
+  // which the light app's phone face reads too; what is this menu's is the icon and the silence.
+  return zoneClaims(card, deps.categories, deps.cards, deps.spec).map((claim) =>
+    zoneItem(
+      `set-${claim.zone}`,
+      claim.label,
+      claim.zone === "commander" ? Crown : UserRound,
+      claim.refusal,
+      () => deps.moveTo(card, claim.categoryId),
+    ),
+  );
 }
 
-/**
- * Why this card cannot be the deck's companion, in the validation panel's own words, or `null`.
- *
- * **Judged as one copy, and against the deck with this row taken out** — which is the deck the
- * reader would have if they pressed the row. The row's removal matters because a companion is
- * not part of the starting deck its own condition is checked against. The copy count matters
- * because `companionIssues` also counts the zone: a four-of judged as itself would be refused
- * with "you have 4 companions", which is a reason the *deck* is wrong rather than a reason this
- * card cannot be a companion, and greying the row on it would tell the reader that Lutri is not
- * a companion.
- *
- * **The consequence is that a 4-of gets a live row whose press makes a deck the panel refuses**,
- * with `companion-count`, the moment the four copies land in the zone. That is the right place
- * for it — this menu answers "may this card be your companion" and the panel answers "is this
- * deck legal", and the second question is not one a row can ask before it is pressed. It is also
- * a state a reader reaches by every other route: dragging a 4-of onto the Companion pile does
- * exactly the same thing.
- *
- * Inactive categories are filtered out for `engine.ts`' reason: a switched-off pile counts
- * toward nothing, so a condition judged against one would be judged against cards that are not
- * in the deck.
- */
-function companionRefusal(card: DeckCard, deps: DeckCardMenuDeps): string | null {
-  if (deps.spec === null) return null;
-  const deck = deps.cards.filter((row) => row.id !== card.id && row.categoryActive);
-  const issues = companionIssues([{ ...card, quantity: 1 }], deck, deps.spec);
-  return issues.find((issue) => issue.severity === "error")?.message ?? null;
-}
 
 /**
  * One zone row: live, or greyed — and **greyed silently**, which is this menu's one row that
@@ -1108,28 +1050,7 @@ function finishItem(card: DeckCard, deps: DeckCardMenuDeps): MenuItem {
   };
 }
 
-/**
- * The finishes this printing can be **played** in, as this menu's values.
- *
- * `nonfoil` becomes `null`, which is the one spelling of the regular copy that reaches
- * `deck_cards.finish` — see `DeckFinish`. A printing whose `finishes` column is empty or
- * unreadable answers `[null]`, so the row greys: unknown is not a choice to offer.
- */
-function finishChoices(finishes: string | null): DeckFinish[] {
-  const listed = parseFinishes(finishes);
-  if (listed.length === 0) return [null];
-  return listed.map((f) => (f === "nonfoil" ? null : f));
-}
 
-/**
- * What the app calls a nonfoil copy **in the deck editor**, and it is deliberately not
- * `FINISH_LABEL.nonfoil`.
- *
- * "Set as nonfoil" is not a thing anybody says. The collection's picker is choosing between
- * three named finishes and `Nonfoil` is the right word there; here the reader is toggling one
- * card back off foil, and the opposite of foil is a regular card.
- */
-const REGULAR = "Regular";
 
 /**
  * The label choices, as rows.

@@ -1,7 +1,7 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAppStore } from "@/lib/store";
-import { placeHref } from "./routes";
+import { OVERLAID, PUSHED, placeHref } from "./routes";
 import { useDesktopPlace } from "./useDesktopPlace";
 
 const PRISTINE = useAppStore.getState();
@@ -217,7 +217,9 @@ describe("useDesktopPlace", () => {
       act(() => useAppStore.getState().setSelectedCardId("x"));
 
       expect(replaceState).toHaveBeenCalledTimes(1);
-      expect(replaceState).toHaveBeenCalledWith(null, "", searchWith("x"));
+      // Marked as an overlay, so a phone face handed this entry by a resize can tell it from a
+      // card a reader arrived on by a link — see "across the floor" below.
+      expect(replaceState).toHaveBeenCalledWith(OVERLAID, "", searchWith("x"));
       expect(pushState).not.toHaveBeenCalled();
       expect(url()).toBe(searchWith("x"));
     });
@@ -298,6 +300,109 @@ describe("useDesktopPlace", () => {
       expect(pushState).not.toHaveBeenCalled();
       expect(replaceState).not.toHaveBeenCalled();
       expect(url()).toBe(SEARCH);
+    });
+  });
+
+  describe("refusing a view the light edition does not draw", () => {
+    it("puts the store back on the URL's place, and writes no history", () => {
+      // The collection's way into a shared binder is a `setActiveView("shared")`. The URL has no
+      // word for that view: spelled, it was `/search` over a binder, and a reload landed there.
+      window.history.replaceState(null, "", "/collection");
+      renderHook(() => useDesktopPlace());
+      const pushState = vi.spyOn(window.history, "pushState");
+      const replaceState = vi.spyOn(window.history, "replaceState");
+
+      act(() => useAppStore.getState().setActiveView("shared"));
+
+      expect(useAppStore.getState().activeView).toBe("collection");
+      expect(pushState).not.toHaveBeenCalled();
+      expect(replaceState).not.toHaveBeenCalled();
+      expect(url()).toBe("/collection");
+    });
+
+    it("keeps the deck and the card the URL names", () => {
+      // `setActiveView` parks the open deck and closes the card on its way out; the way back has
+      // to hand both back, or a refused press would still have cost the reader their place.
+      const there = placeHref({ view: "decks", deckId: 7, cardId: CARD });
+      window.history.replaceState(null, "", there);
+      renderHook(() => useDesktopPlace());
+
+      act(() => useAppStore.getState().setActiveView("home"));
+
+      expect(useAppStore.getState().activeView).toBe("decks");
+      expect(useAppStore.getState().openDeckId).toBe(7);
+      expect(useAppStore.getState().selectedCardId).toBe(CARD);
+      expect(url()).toBe(there);
+    });
+  });
+
+  /**
+   * The two faces' history meets on one entry whenever a resize crosses the floor with a card
+   * open, and `routes.ts`'s marks are what each face leaves for the other.
+   */
+  describe("across the floor", () => {
+    /** The next `popstate`. jsdom makes a traversal a task of its own, as a browser does. */
+    const popped = (): Promise<void> =>
+      new Promise((resolve) => window.addEventListener("popstate", () => resolve(), { once: true }));
+
+    it("closes a card the phone face pushed by going back, not by a replace", async () => {
+      // The phone face opened the card with a push over the page; a resize then drew this face.
+      // A replace would leave two entries for one place, and the next Back would show nothing.
+      window.history.replaceState(null, "", SEARCH);
+      window.history.pushState(PUSHED, "", searchWith(CARD));
+      renderHook(() => useDesktopPlace());
+      expect(useAppStore.getState().selectedCardId).toBe(CARD);
+      const entries = window.history.length;
+      const pushState = vi.spyOn(window.history, "pushState");
+      const replaceState = vi.spyOn(window.history, "replaceState");
+
+      const landed = popped();
+      act(() => useAppStore.getState().setSelectedCardId(null));
+      await act(() => landed);
+
+      expect(url()).toBe(SEARCH);
+      expect(useAppStore.getState().selectedCardId).toBeNull();
+      expect(pushState).not.toHaveBeenCalled();
+      expect(replaceState).not.toHaveBeenCalled();
+      // The card's entry is ahead of the reader now, for Forward — not beneath them for Back.
+      expect(window.history.length).toBe(entries);
+    });
+
+    it("keeps the phone router's mark on a step from one card to another", () => {
+      // What is beneath the entry is still the page, so a later close is still a Back.
+      window.history.replaceState(null, "", SEARCH);
+      window.history.pushState(PUSHED, "", searchWith(CARD));
+      renderHook(() => useDesktopPlace());
+      const replaceState = vi.spyOn(window.history, "replaceState");
+
+      act(() => useAppStore.getState().setSelectedCardId("y"));
+
+      expect(replaceState).toHaveBeenCalledWith(PUSHED, "", searchWith("y"));
+    });
+
+    it("closes a card on an entry nobody marked by a replace, as before", () => {
+      // A link straight to a card: nothing of the app's is beneath it, so a Back would leave.
+      window.history.replaceState(null, "", searchWith(CARD));
+      renderHook(() => useDesktopPlace());
+      const goBack = vi.spyOn(window.history, "back");
+      const replaceState = vi.spyOn(window.history, "replaceState");
+
+      act(() => useAppStore.getState().setSelectedCardId(null));
+
+      expect(goBack).not.toHaveBeenCalled();
+      expect(replaceState).toHaveBeenCalledWith(null, "", SEARCH);
+    });
+
+    it("drops its own overlay mark when the card it opened closes", () => {
+      window.history.replaceState(null, "", SEARCH);
+      renderHook(() => useDesktopPlace());
+      act(() => useAppStore.getState().setSelectedCardId(CARD));
+      expect(window.history.state).toEqual(OVERLAID);
+
+      act(() => useAppStore.getState().setSelectedCardId(null));
+
+      expect(url()).toBe(SEARCH);
+      expect(window.history.state).toBeNull();
     });
   });
 });

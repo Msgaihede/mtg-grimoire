@@ -200,14 +200,12 @@ describe("the card sheet", () => {
 
 // Decks — the gallery and a deck — are `decks.test.tsx`'s.
 
-describe("Scanner and Settings", () => {
+// The Collection and the Wishlist have suites of their own since steps 3.2 and 3.3 —
+// `CollectionPage.test.tsx` and `WishlistPage.test.tsx`. Settings has one since step 3.7 —
+// `SettingsPage.test.tsx`.
+describe("Scanner", () => {
   it("says what is coming, and opens no camera", () => {
     renderPhone(<PhoneFace />, { path: "/scanner" });
     expect(screen.getByText(/The scanner arrives in a later phase/)).toBeInTheDocument();
-  });
-
-  it("names the edition", () => {
-    renderPhone(<PhoneFace />, { path: "/settings" });
-    expect(screen.getByText(/light edition/i)).toBeInTheDocument();
   });
 });

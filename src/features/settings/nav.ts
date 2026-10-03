@@ -274,6 +274,27 @@ export const GROUP_ORDER = Object.keys(GROUPS) as GroupId[];
 export const PANEL_ORDER = Object.keys(PANELS) as PanelId[];
 
 /**
+ * The panels an edition draws, in drawing order — `Edition.settings` read out.
+ *
+ * `null` is every panel, which is the full edition's answer, so a panel added to {@link PANELS}
+ * is drawn there with nothing else to change. A list is filtered rather than trusted for order:
+ * drawing order is this file's alone, and an edition only says *which*.
+ */
+export function panelsOf(entries: readonly PanelId[] | null): PanelId[] {
+  return entries === null ? PANEL_ORDER : PANEL_ORDER.filter((id) => entries.includes(id));
+}
+
+/**
+ * The rail's entries for a set of panels, in rail order: **a group with no panel drawn is no
+ * entry at all**, because an entry is a destination and one that draws nothing is a place a
+ * reader can be sent to and find empty — the rail's own `Not here yet` argument. Over every panel
+ * this is {@link GROUP_ORDER} itself.
+ */
+export function groupsOf(panels: readonly PanelId[]): GroupId[] {
+  return GROUP_ORDER.filter((group) => panels.some((id) => PANELS[id].group === group));
+}
+
+/**
  * Everything a query is matched against for one panel: its group's label, its own title, and
  * its keywords, lowercased and joined.
  *
@@ -320,8 +341,15 @@ export function searching(query: string): boolean {
  * `Updates` group a question, so the answer is drawn wherever it lives and the rail shows no
  * entry as current for as long as the box has words in it. Picking a group is what clears the
  * query — see `SettingsNav` — so the two states never both apply.
+ *
+ * `panels` is what the edition draws ({@link panelsOf}), in drawing order: a query finds only a
+ * panel that is on the page to be found.
  */
-export function visiblePanels(group: GroupId, query: string): PanelId[] {
-  if (searching(query)) return PANEL_ORDER.filter((id) => matches(id, query));
-  return PANEL_ORDER.filter((id) => PANELS[id].group === group);
+export function visiblePanels(
+  group: GroupId,
+  query: string,
+  panels: readonly PanelId[] = PANEL_ORDER,
+): PanelId[] {
+  if (searching(query)) return panels.filter((id) => matches(id, query));
+  return panels.filter((id) => PANELS[id].group === group);
 }

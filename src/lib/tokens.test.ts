@@ -8,21 +8,25 @@ import css from "@/index.css?raw";
 /**
  * The same trick, for the two files the mount sweep at the bottom of this file reads.
  * `App.tsx` is under `SOURCES`' glob already, but `.storybook/preview.tsx` is not — the glob
- * below is scoped to `/src/**`, on purpose, so the stylesheet's Tailwind scan does not also
- * sweep the workbench's own source — and a second `?raw` import is what the top of this file
- * already reaches for rather than `node:fs`.
+ * below is scoped to the app's two source roots, on purpose, and leaves the workbench's own
+ * source out — and a second `?raw` import is what the top of this file already reaches for
+ * rather than `node:fs`.
  */
 import appSource from "@/App.tsx?raw";
 import previewSource from "../../.storybook/preview.tsx?raw";
 
 /**
- * Every source file in the app, as text, for the sweep below.
+ * Every source file in the app, as text, for the sweep below — **the desktop's `src/` and the
+ * light app's `mobile/`**, which is the same program drawn as a second face. Until phase 3 this
+ * stopped at `src/`, because the one-`MotionConfig` count below would have found the phone face's
+ * own and gone red; the count now knows about both faces, so every other sweep here covers
+ * `mobile/` too rather than being followed there by hand.
  *
  * The stylesheet is in the sweep too, and not only the components: Tailwind's scanner reads
  * prose as eagerly as code, so a class named in a *comment* is a class the build emits a
  * rule for — which is how a retired name goes on looking alive in `dist/`.
  */
-const SOURCES = import.meta.glob<string>("/src/**/*.{ts,tsx,css}", {
+const SOURCES = import.meta.glob<string>(["/src/**/*.{ts,tsx,css}", "/mobile/**/*.{ts,tsx,css}"], {
   query: "?raw",
   import: "default",
   eager: true,
@@ -150,6 +154,18 @@ describe("reduced motion", () => {
 const MOTION_CONFIG_TAG = /<MotionConfig\b[^>]*>/g;
 
 /**
+ * **Where a `MotionConfig` is mounted: once per face, at that face's root.**
+ *
+ * The desktop's is `App.tsx`'s — which the light app's desktop face mounts whole, so that face
+ * has no second one. The phone face is a whole app with providers of its own (`mobile/CLAUDE.md`)
+ * and mounts its own in `PhoneApp`. **The two never nest**: `mobile/LightApp.tsx` draws one face
+ * or the other, never both, and mounts no `MotionConfig` above them. A third mount anywhere is
+ * what the count below refuses — inside either face it would override the reader's preference for
+ * its whole subtree.
+ */
+const MOTION_CONFIG_MOUNTS = ["/mobile/phone/PhoneApp.tsx", "/src/App.tsx"];
+
+/**
  * The two `motion` APIs the shipped CSP silently disables, assembled from pieces.
  *
  * Both halves of that assembly earn themselves. A guard that spells its banned string matches
@@ -170,23 +186,27 @@ describe("motion vocabulary", () => {
    * first would override it for its whole subtree, silently, and only for the readers who
    * cannot watch it working correctly for everyone else.
    *
-   * Sibling mounts of the *same* rule are fine and one exists: `.storybook/preview.tsx` carries
-   * one so the workbench matches the app. This sweep is `/src/**` and does not see it.
+   * Sibling mounts of the *same* rule are fine, and two exist: the phone face's, which
+   * {@link MOTION_CONFIG_MOUNTS} names, and `.storybook/preview.tsx`'s, so the workbench matches the
+   * app — which this sweep does not read.
    *
    * The `.test.` skip is the transition sweep's, for the transition sweep's reason — a test
    * that mounts a `MotionConfig` to assert on one is not shipping a second provider.
    */
-  it("mounts exactly one MotionConfig, and it is the reader's preference", () => {
+  it("mounts exactly one MotionConfig per face, and each is the reader's preference", () => {
     expect(Object.keys(SOURCES).length).toBeGreaterThan(20);
+    // Both roots, or the count below could be met by one face twice over a glob that lost the other.
+    expect(Object.keys(SOURCES).some((path) => path.startsWith("/mobile/"))).toBe(true);
 
-    const tags: string[] = [];
+    const tags: [path: string, tag: string][] = [];
     for (const [path, source] of Object.entries(SOURCES)) {
       if (path.includes(".test.")) continue;
-      for (const match of source.matchAll(MOTION_CONFIG_TAG)) tags.push(`${path}: ${match[0]}`);
+      for (const match of source.matchAll(MOTION_CONFIG_TAG)) tags.push([path, match[0]]);
     }
 
-    expect(tags).toHaveLength(1);
-    expect(tags[0]).toContain('reducedMotion="user"');
+    // One a face, each in the file named for it — not two in one file, not one in a page.
+    expect(tags.map(([path]) => path).sort()).toEqual(MOTION_CONFIG_MOUNTS);
+    for (const [path, tag] of tags) expect(`${path}: ${tag}`).toContain('reducedMotion="user"');
   });
 
   /**

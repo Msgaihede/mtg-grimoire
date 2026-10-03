@@ -15,7 +15,7 @@
 import { plural } from "@/lib/counts";
 import { finishLabel } from "@/lib/finish";
 import type { DeckAuditEntry, DeckAuditKind } from "@/lib/ipc";
-import { TOKENS_HEADING } from "./DeckTokensPanel";
+import { TOKENS_HEADING } from "./deckTokens";
 import { listName } from "./listNames";
 import { managedWishlistHistoryLabel } from "./managedWishlist";
 import { gameLabel } from "./useFormatSpecs";
