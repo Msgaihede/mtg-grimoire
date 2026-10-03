@@ -65,9 +65,12 @@ measured, one subsection per step).
   edits in the collection and the wishlist; add to a deck, the collection or the wishlist from the
   card sheet; deck notes and to-do lists edited. Each through the command the desktop already
   calls, with the desktop's undo where it has one.
-- [ ] **3.6 — Import and export on the phone face.** The collection's and a deck's, through the
+- [x] **3.6 — Import and export on the phone face.** The collection's and a deck's, through the
   existing parsers and writers; a file arrives through `<input type=file>` and leaves as a
-  download, which the host seams answer on each install.
+  download, which the host seams answer on each install. Built on `phase3/transfer`
+  (light-app.md §7.6): a deck's from its page's foot, the collection's as `CollectionTransfer`
+  for 3.2's header to mount; the file seam is `phone/transfer/browserFiles.ts`, a stand-in until
+  phases 4 and 5.
 - [x] **3.7 — Light Settings, on both faces.** The edition grows its Settings entries (spec §3.1:
   `SettingsPage`'s entry list is the edition's second reader): sync and pairing, the supporter
   block, card data and the optional feeds, the image cache, marketplace, the danger zone.

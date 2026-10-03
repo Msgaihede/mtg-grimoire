@@ -2020,3 +2020,98 @@ phone's Settings reports through its own mutation and the status read but not th
 (`AppShell` is that hook's one caller); the Mana Pool row is still offered in a browser, which spec
 §4 says it should not be (the host-capability question is phase 5's); and the Sync panel's
 *Scan a code* asks for a camera on a host that may not grant one — phase 6's, with sync itself.
+
+### 7.6 Step 3.6 — import and export on the phone (2026-10-03)
+
+**Import and export are the desktop's own decisions in sheets drawn for a finger.** Nothing that
+turns a list into cards or cards into a list was written twice: the parser, the resolver press,
+the four planners, the destinations' second steps, the seven writers and the field registry are
+the ones the desktop dialogs use, and the golden fence (`src/features/transfer/__golden__/`) is
+untouched. What the phone owns is the drawing, where its choices are remembered, and the file.
+
+**On the deck page** the foot grows a joined pair — the desktop's mirror glyphs, 44px each, drawn
+without their words because at 360px `Add cards` needs the room; the names (`Import cards into this
+deck`, `Export this deck`) carry the meaning.
+
+- **Import** is a full-window sheet (`phone/transfer/ImportSheet.tsx`). Its first step is the
+  phone's: a 16px monospaced box that fills the width, the line and card counts as they are typed,
+  `Choose a file…` (a 44px button pressing a hidden `<input type="file">`), the Windows-1252
+  notice under a file that needed it, and a full-width `Preview`. **The second step is the
+  desktop's** — `DeckPreviewBody`, the deck preview with its tally, its unmatched lines, Merge or
+  Replace and the "I own these" box — under a touch floor set from the container (every button and
+  every `<label>` at least 44px, every text box 16px), the filters sheet's arrangement. The import
+  lands in the list the page is showing, and the preview's own sentence (`9 cards imported.`) is
+  said in the page's receipt line, where the deck's undo is offered as for any other write: over
+  the fake, `deck_import_commit` files a step and `Undo` appeared.
+- **Export** is a bottom sheet (`ExportSheet.tsx`): the seven formats as 44px chips that wrap, the
+  fields this format and this surface share as 44px checkbox rows in two columns, the Arena and
+  inactive-pile boxes where they apply, the desktop's three omission lines word for word, the text
+  behind a `Show decklist (N lines)` disclosure that opens shut, and `Copy` / `Download` at the
+  foot. The subject, the cards and the file name are the editor's `exportSubject` — the whole list
+  on screen, switched-off piles included and left to the format — so a phone export of a deck is
+  titled, filled and named as the desktop's `Export deck` is.
+
+**`CollectionTransfer`** (`phone/transfer/CollectionTransfer.tsx`) is the collection's pair, with
+its words, built self-contained because step 3.2 is rewriting the Collection page: the same two
+sheets over the collection destination, and the desktop's `UndoNotice` under the pair — the
+collection preview files its undo ticket in `@/lib/bulkUndo` as it does on the desktop, so a phone
+import reads `Imported 4 cards into your collection.` with `Undo`. Export sweeps whatever `filters`
+the host hands it through `useExportScope` (the wall it draws, the desktop's rule), gated on the
+sheet being open; with none it sweeps the whole collection, says `N cards in your collection` and
+draws no box to widen what is already everything. A host that already draws the collection's undo
+notice passes `undoNotice={false}`. **It is mounted nowhere yet**: the collection header takes it
+at merge.
+
+**The file seam is a browser stand-in, and every install draws it the same way.** The spec puts
+file open and save below `Core` (§3.5); phase 3 adds no command and no host seam, so
+`phone/transfer/browserFiles.ts` answers with the web host's own APIs: a picked `File`, read and
+decoded; a `Blob` handed to an `<a download>` and its URL released a task later; and
+`navigator.clipboard.writeText`, which rejects where the browser offers none rather than claiming
+a copy. It is not in `src/lib/`, because the desktop cannot share it — its whole rule (issue #545)
+is that no file handle reaches the page. When phases 4 and 5 seam it, this module is what moves.
+
+- **The decode follows `import.rs`'s order** — a UTF-8 mark, a UTF-16 mark, valid UTF-8, then
+  Windows-1252 — and refuses a file over the megabyte in that file's own sentence before reading a
+  byte. **The Windows-1252 step is the backend's 32-entry table, not `TextDecoder`**: Node's decoder
+  reads that label as Latin-1 and turned `0x92` into a C1 control rather than `’`, which the seam's
+  own test caught. A browser gets it right; a table cannot disagree with itself between engines.
+- **A download cannot say whether it landed.** The desktop's `saveExport` answers whether a file
+  was written; a download is handed to the browser and the sheet says `Downloading <name>.`, which
+  is all it knows.
+- **A WebView may not honour `<a download>` at all** — an Android host is phase 4's to answer, with
+  the system picker; nothing here asks which it is running in.
+
+**The choices are remembered per surface for the session** (`phone/transfer/prefs.ts`), in a phone
+store that opens on the desktop store's own values — both now read `@/features/transfer/prefs`,
+so a first export of the collection is CSV on either face and an import's condition opens on
+`Not set`. A crossing of the 1024px floor loses only a choice made since launch.
+
+**What moved in `src/`**, each with the old names kept so no desktop caller or test changed:
+
+- `transfer/prefs.ts` — `ExportPrefs`, `ImportDefaults` and their opening values, which
+  `useAppStore` now opens on (and re-exports `ExportPrefs`).
+- `export/useExportModel.ts` — the field intersection, the two row filters, the text and the count
+  lines, out of `ExportDialog`'s body, which now draws from it.
+- `import/useImportSource.ts` — the paste, a file's encoding note, the parse, the one resolve press
+  and the step machine, out of `ImportDialog`'s body; `resolveLinesOf` is the line shape the
+  resolver takes. `ImportDialog` itself is store-free now (its one weld was `useImport` taking
+  `DEFAULT_VARIANT` through `useDeck`), though the phone draws its own first step.
+- `destinations/CollectionPreviewBody.tsx` and `DeckPreviewBody.tsx` — the two steps, taking the
+  import's fallbacks as props; `CollectionPreview.tsx` and `DeckPreview.tsx` are now the desktop's
+  store-reading wrappers and re-export the rest. The deck step reads its deck through `useDeckCore`.
+  `deckIntoWith.ts` binds the deck descriptor to either step.
+- `decks/deckExport.ts` — `exportSubject` and `exportFileName`, re-exported from `DeckEditor`.
+
+**Not done**: the wishlist's import and export (its preview reads the store the same way and splits
+the same way — 3.3's); a new deck from a list (`NewDeckPreview` still reads the store, and the
+gallery has no import entry on the phone); a pile's own `Export cards…` and `Import cards…` (the
+editor's category heading menu); reading a list from the clipboard (a read permission the app has
+never asked for). The desktop previews' own controls — the radios, the commander candidates, the
+dropdowns — are the desktop's sizes inside rows floored to 44px.
+
+Driven at 360 and 800 wide over the `starter` seed (Vite on port 5181, headless Chromium 141 on
+Linux with touch emulation): the deck page's foot, the import sheet's paste and preview steps, an
+import landing with its receipt and `Undo`, the export sheet shut and open on CSV; and
+`CollectionTransfer` mounted in a scratch root over the collection page — its pair, the collection
+preview, the undo notice after an import, and the export sheet. `scrollWidth` equalled the
+viewport on every one.
