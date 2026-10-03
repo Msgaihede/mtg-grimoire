@@ -356,7 +356,7 @@ async fn connect_once(
             // decides.** The wake is deliberately indiscriminate — one signal per transaction,
             // whatever it wrote — so *this* is the only place that can tell a user edit from
             // everything else that commits on this connection, and without it the loop does not
-            // close: [`client::round_trip`] ends by stamping `LAST_SYNC_AT`, that commit rings
+            // close: `client::round_trip` ends by stamping `LAST_SYNC_AT`, that commit rings
             // this bell, and an ungated arm would schedule the next trip three seconds later,
             // for ever. The same gate is what keeps the Scryfall ingest's one commit per 2 000
             // rows, every image-cache flush, every price and tag ingest and every `error_log`
@@ -752,7 +752,6 @@ mod tests {
             mirror,
             mirror_status: Mutex::new(crate::mirror::watch::LastPass::default()),
             changes,
-            pairing: tokio::sync::Mutex::new(None),
         })
     }
 

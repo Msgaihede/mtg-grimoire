@@ -1325,7 +1325,6 @@ fn init_state(
         mirror,
         mirror_status: Mutex::new(mirror::watch::LastPass::default()),
         changes,
-        pairing: tokio::sync::Mutex::new(None),
     })
 }
 

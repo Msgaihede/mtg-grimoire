@@ -2,8 +2,8 @@
 //!
 //! **Everything here is a pure function of an explicit `now_ms`**, so the debounces, the
 //! single-flight rule and the backoff are testable without a socket, a relay or a timer. The
-//! part that does I/O is [`super::live`], and it is deliberately thin: this is where a bug
-//! would live.
+//! part that does I/O is `src-tauri`'s `sync_engine::live` — the connection manager, which is the desktop's because it
+//! is `tokio` tasks and a socket — and it is deliberately thin: this is where a bug would live.
 
 /// How long a `head` frame waits before its round trip, so a burst becomes one trip.
 ///
@@ -164,7 +164,7 @@ pub fn backoff_ms(attempt: u32, jitter: f64) -> u64 {
     base + (base as f64 * jitter.clamp(0.0, 1.0)) as u64
 }
 
-/// Why a socket stopped — the only thing [`super::live`] decides for itself.
+/// Why a socket stopped — the only thing `live` decides for itself.
 ///
 /// **The classification is the socket's and every consequence is here.** The reconnect rules
 /// were written inline in that loop where no test could reach them, and they were wrong: a 4001
@@ -179,7 +179,7 @@ pub enum Disconnect {
     Closed,
     /// The connection, the upgrade or a write failed.
     Failed,
-    /// The socket reached [`super::live`]'s age limit and was replaced on purpose.
+    /// The socket reached `live`'s age limit and was replaced on purpose.
     Aged,
 }
 

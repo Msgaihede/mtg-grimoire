@@ -1691,6 +1691,7 @@ dependencies = [
 name = "grimoire-core"
 version = "0.39.0"
 dependencies = [
+ "base64 0.22.1",
  "bytes",
  "chacha20poly1305",
  "flate2",
@@ -2617,7 +2618,6 @@ dependencies = [
 name = "mtg-grimoire"
 version = "0.39.0"
 dependencies = [
- "base64 0.22.1",
  "card-scanner",
  "flate2",
  "futures-util",

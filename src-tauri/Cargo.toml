@@ -52,12 +52,6 @@ sha2 = "0.10"
 # Random bytes for the mirror's installation name (`mirror::settings`). The same major the core
 # asks for, which follows whichever one `x25519-dalek` resolved — `cargo tree -d` is the check.
 getrandom = "0.4"
-# The sealed envelope as a JSON string. **base64url and not hex**: the relay stores ciphertext
-# as TEXT in a Durable Object, and hex would be twice the bytes over the wire and against the
-# 2 MB per-row cap where base64 is four thirds; URL-safe so the blob can be a path segment
-# later without anything having to escape it. `default-features = false` drops `std`; `alloc`
-# is the whole API `Engine::encode`/`decode` needs.
-base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 
 # **`image` was here too and is gone as of 2026-08-31.** It decoded whatever a reader picked as
 # a custom deck cover and re-encoded it to WEBP; custom covers were removed in favour of the

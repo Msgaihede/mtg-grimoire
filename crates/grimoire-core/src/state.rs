@@ -7,9 +7,8 @@
 //!
 //! **It is the every-host half as far as the extraction has got.** The Scryfall client, the
 //! facet index, the sync-in-flight flag and the image cache are here since the I/O step
-//! brought the card sync, the index's lifecycle and the cache. The pending pairing offer is
-//! every host's too, and is still a field of the desktop's `AppState` — its type has not
-//! moved here yet, and arrives with the sync step.
+//! brought the card sync, the index's lifecycle and the cache, and the pending pairing offer
+//! since the sync step brought its type.
 //!
 //! **[`with_write`] is the one definition of a user-facing write**, and it is here since the
 //! extraction's domain step brought the managed wishlist and the token reconcile its body calls.
@@ -29,7 +28,7 @@ use crate::events::EventSink;
 use crate::hooks::{self, WriteObserver};
 use crate::index::lifecycle::IndexSlot;
 use crate::platform::clock::Tick;
-use crate::platform::sync::{Held, Lock};
+use crate::platform::sync::{Held, Lock, Shared};
 use crate::platform::timer;
 use crate::scryfall;
 use rusqlite::Connection;
@@ -81,6 +80,19 @@ pub struct State {
     /// One sync operation at a time — see [`State::lane`]. Private: what holding it buys is a
     /// [`Lane`], and nothing else may be made of it.
     lane: Lock,
+    /// A pairing in flight, if there is one.
+    ///
+    /// **In memory and never in the database, deliberately**: an offer that survived a restart
+    /// would be an invite a reader printed last month still being accepted today. It outlives a
+    /// page, which is what a reader who opens Settings twice needs, and dies with the process,
+    /// which is what makes the pairing token one-time in fact. It holds the derived pair key,
+    /// which is the other reason it is not a table.
+    ///
+    /// **An async lock, held across the request** an accept, a confirm or a poll makes: a Cancel
+    /// waits behind it and wins, and two polls cannot both find the offer unspent and complete
+    /// it. **Taken before the lane, never after.** It was a field of the desktop's `AppState`
+    /// until the sync step brought its type here.
+    pub pairing: Shared<Option<crate::sync_pair::pairing::Pending>>,
 }
 
 impl State {
@@ -128,6 +140,7 @@ impl State {
             index: RwLock::default(),
             observers,
             lane: Lock::new(),
+            pairing: Shared::new(None),
         }
     }
 
@@ -361,7 +374,8 @@ fn written<T>(
 ///
 /// **The fence is the compiler's.** A `MutexGuard` is not `Send`, so a future that keeps one
 /// across an `.await` is not either, and each entry point is checked by a function that is
-/// never called: `fn sendable<T: Send>(_: T) {}` over its future.
+/// never called: `fn sendable<T: platform::Sendable>(_: T) {}` over its future — `Send` on a
+/// native build, and no question in a browser, where no request's future is `Send` at all.
 pub trait Store {
     /// Run `f` with the connection, to its end.
     fn with<R>(&self, f: impl FnOnce(&Connection) -> Result<R, String>) -> Result<R, String>;

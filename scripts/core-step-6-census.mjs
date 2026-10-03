@@ -9,16 +9,22 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { split, inner, code as blank } from "./lib/rs-items.mjs";
 
-/** The eight files the sync client, the entitlement and pairing are, under `src-tauri/src`. */
+/**
+ * The files the sync client, the entitlement and pairing are, from the repository's root: in the
+ * core since the sync step's second part, but for the connection manager and the two modules'
+ * command wrappers, which are the desktop's.
+ */
 export const FILES = [
-  "sync_engine/client.rs",
-  "sync_engine/entitlement.rs",
-  "sync_engine/live.rs",
-  "sync_engine/schedule.rs",
-  "sync_engine/commands.rs",
-  "sync_engine/wire.rs",
-  "sync_pair/identity.rs",
-  "sync_pair/pairing.rs",
+  "crates/grimoire-core/src/sync_engine/client.rs",
+  "crates/grimoire-core/src/sync_engine/entitlement.rs",
+  "src-tauri/src/sync_engine/live.rs",
+  "crates/grimoire-core/src/sync_engine/schedule.rs",
+  "crates/grimoire-core/src/sync_engine/commands.rs",
+  "src-tauri/src/sync_engine/commands/mod.rs",
+  "crates/grimoire-core/src/sync_engine/wire.rs",
+  "crates/grimoire-core/src/sync_pair/identity.rs",
+  "crates/grimoire-core/src/sync_pair/pairing.rs",
+  "src-tauri/src/sync_pair/pairing/mod.rs",
 ];
 
 /** A test module, or the scaffolding behind the `testing` feature: not shipped. */
@@ -65,7 +71,7 @@ function functionsOf(items, owner = "") {
 export function census(root) {
   const files = [];
   for (const name of FILES) {
-    const source = readFileSync(`${root}/src-tauri/src/${name}`, "utf8").replace(/\r\n/g, "\n");
+    const source = readFileSync(`${root}/${name}`, "utf8").replace(/\r\n/g, "\n");
     const items = split(source).items;
     const shipped = items.filter((it) => !isTestModule(it));
     const tests = items.find((it) => it.kind === "mod" && it.name === "tests");

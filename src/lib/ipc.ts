@@ -39,7 +39,7 @@
  * `PassReport`                                   — `src-tauri/src/mirror/run.rs`
  * `TagTerms`                                     — `crates/grimoire-core/src/filters.rs`
  * `PairingStatus`/`PairingOffer`/`PairingHandshake`/`PairingSealedKey`/
- * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `src-tauri/src/sync_pair/pairing.rs`,
+ * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `crates/grimoire-core/src/sync_pair/pairing.rs`,
  *                                                  `.../identity.rs`, `.../invite.rs`
  * `DeckFolderPane`                                — `crates/grimoire-core/src/deckpane.rs`
  * `ShareRow`/`ShareFields`                        — `src-tauri/src/share/commands.rs`

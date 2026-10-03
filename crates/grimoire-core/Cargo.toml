@@ -99,6 +99,12 @@ x25519-dalek = { version = "3", features = ["static_secrets", "getrandom"] }
 # draws its own 24 bytes through `crypto::random_bytes`. So the line is a subtraction.
 chacha20poly1305 = { version = "0.10", default-features = false, features = ["alloc"] }
 hkdf = "0.12"
+# The sealed envelope as a JSON string. **base64url and not hex**: the relay stores ciphertext
+# as TEXT in a Durable Object, and hex would be twice the bytes over the wire and against the
+# 2 MB per-row cap where base64 is four thirds; URL-safe so the blob can be a path segment
+# later without anything having to escape it. `default-features = false` drops `std`; `alloc`
+# is the whole API `Engine::encode`/`decode` needs.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # Random bytes for the group key, the group id, the device id, the pairing token and every
 # nonce. `fill` is the whole API this uses, and it is spelled the same in 0.3 and 0.4 — so the
 # pin follows whichever major `x25519-dalek` resolved, and moving it is a one-word edit with no
@@ -163,4 +169,4 @@ tempfile = "3"
 # `scryfall`'s tests answer from a local mock server, and never from Scryfall.
 httpmock = "0.8"
 # `#[tokio::test]`, for the tests of what is async here.
-tokio = { version = "1", features = ["macros", "rt", "sync"] }
+tokio = { version = "1", features = ["macros", "rt", "sync", "test-util"] }

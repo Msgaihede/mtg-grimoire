@@ -12,12 +12,12 @@
 //! IPC boundary as a string because they are what a *person* compares, and everything else that
 //! crosses is either a public key or a sealed blob.
 //!
-//! [`crypto`] and [`invite`] are `grimoire-core`'s, re-exported here beside the two layers that
-//! have not moved yet.
+//! **All four are `grimoire-core`'s** since the sync step's second part, re-exported here at
+//! the paths they always had. What is still this crate's is [`pairing`]'s
+//! `#[tauri::command]` wrappers, beside a glob re-export of the core's module of that name.
 
 pub use grimoire_core::sync_pair::crypto;
-pub mod identity;
+pub use grimoire_core::sync_pair::identity;
 pub use grimoire_core::sync_pair::invite;
-/// It is `#[tauri::command]`s over `AppState`, so it is the webview's IPC surface rather than a
-/// piece of the protocol.
+/// The webview's IPC surface over the core's state machine.
 pub mod pairing;

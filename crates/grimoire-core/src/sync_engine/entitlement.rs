@@ -77,12 +77,14 @@
 //! caller that now needs it: a reader whose pledge lapsed while nobody was watching must still
 //! read "connect again", never "sync is broken".
 
+use crate::platform::http;
+use crate::state::{Lane, Store};
 use crate::sync_engine::client;
 use crate::sync_pair::{crypto, identity};
-use grimoire_core::state::{Lane, Store};
 use rusqlite::Connection;
 use serde::de::DeserializeOwned;
 use serde::Deserialize;
+use std::time::Duration;
 
 /// The relay's address. **Real, and committed to a public repository on purpose.**
 ///
@@ -560,29 +562,40 @@ fn now(conn: &Connection) -> Result<i64, String> {
 /// flaking: one static client, `httpmock`'s pooled ports, and a runtime per `#[tokio::test]`.
 /// Fixing one of a matched pair and leaving the other is how the survivor gets diagnosed from
 /// scratch in six months.
-#[cfg(not(test))]
-fn http() -> reqwest::Client {
+#[cfg(not(any(test, feature = "testing")))]
+fn http() -> http::Client {
     use std::sync::OnceLock;
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    static CLIENT: OnceLock<http::Client> = OnceLock::new();
     CLIENT.get_or_init(build_http).clone()
 }
 
 /// See [`http`]: a test build takes a fresh client so nothing is shared across runtimes.
-#[cfg(test)]
-fn http() -> reqwest::Client {
+#[cfg(any(test, feature = "testing"))]
+fn http() -> http::Client {
     build_http()
 }
 
 /// The one place this client's shape is written down. **Its read timeout is 10 seconds, not
 /// the relay client's 30**, which is the whole reason the two exist separately.
-fn build_http() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent(crate::scryfall::USER_AGENT)
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .read_timeout(std::time::Duration::from_secs(10))
-        .build()
-        .unwrap_or_default()
+fn build_http() -> http::Client {
+    http::Client::new(&http::Config {
+        user_agent: crate::scryfall::USER_AGENT,
+        connect_timeout: Some(Duration::from_secs(10)),
+        read_timeout: Some(Duration::from_secs(10)),
+    })
+    .deadline(REQUEST_DEADLINE)
 }
+
+/// **The whole of a request, where the host has no socket to bound one** — a browser, whose
+/// `fetch` has neither a connect phase nor a per-read timeout. The sync lane is held across
+/// every request this module makes and a departure waits for the lane, so a request that never
+/// ended would be a Leave that never ran. Natively it is not applied: the connect and read
+/// bounds above already end a request that stops answering
+/// ([`crate::platform::http::Client::deadline`]).
+///
+/// **Thirty seconds**: these are one small JSON body each way, and the client's own read bound is
+/// ten.
+const REQUEST_DEADLINE: Duration = Duration::from_secs(30);
 
 /// This device's id, the `device` field every request here now carries (spec §4.2).
 ///
@@ -638,7 +651,7 @@ struct Refusal {
 
 /// A refusal's body, or [`Refusal::default`] when none arrived or it did not parse — see
 /// [`Refusal`] for why a missing body is still a refusal rather than an error of its own.
-async fn refusal_of(response: reqwest::Response) -> Refusal {
+async fn refusal_of(response: http::Response) -> Refusal {
     let text = response.text().await.unwrap_or_default();
     serde_json::from_str(&text).unwrap_or_default()
 }
@@ -700,7 +713,7 @@ async fn post_for_grant<T: DeserializeOwned>(
         .send()
         .await
         .map_err(|e| e.to_string())?;
-    let status = response.status().as_u16();
+    let status = response.status();
     if status == 401 {
         // **Only the one code is special**, and anything else — no body, the relay's own bare
         // `{"error":"unauthorized"}`, a code a newer relay invents — is `Refused`, which is what
@@ -1069,7 +1082,7 @@ pub async fn claim(db: &impl Store, code: &str) -> Result<(), String> {
 /// **The fence, and it is the compiler's** — `client`'s has the reason. Never called.
 #[allow(dead_code)]
 fn nothing_is_held_across_a_request(lane: &Lane<'_>) {
-    fn sendable<T: Send>(_: T) {}
+    fn sendable<T: crate::platform::Sendable>(_: T) {}
     sendable(access_token(lane));
     sendable(claim(lane, ""));
 }
@@ -2384,7 +2397,7 @@ mod tests {
     #[test]
     fn the_membership_ended_marker_is_the_one_the_relay_stamps() {
         assert_eq!(MEMBERSHIP_ENDED, "membership_ended");
-        let relay = include_str!("../../../relay/src/claim.ts");
+        let relay = include_str!("../../../../relay/src/claim.ts");
         assert!(
             relay.contains(&format!("\"{MEMBERSHIP_ENDED}\"")),
             "relay/src/claim.ts does not spell {MEMBERSHIP_ENDED:?}"

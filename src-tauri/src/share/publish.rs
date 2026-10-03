@@ -272,7 +272,8 @@ pub fn refusal(status: u16, body: &str, what: &str) -> String {
 /// **Its own, and neither Scryfall's nor the relay's.** The share Worker is a third host: it
 /// must not spend Scryfall's pacing budget and must not join its 429 lockout, which is the rule
 /// `marketplace_feed`, `combos` and [`client`] already follow. Memoised for the life of the
-/// process, [`client::post_ops`]' shape — that file's `cfg(test)` arm exists for an `httpmock`
+/// process, the sync client's shape (`client::post_ops`) — that file's test arm,
+/// `any(test, feature = "testing")` since it moved to the core, exists for an `httpmock`
 /// suite, and the one this file grew on 2026-09-28 drives only the viewer, whose client is
 /// [`viewer_client`] and built per open, so there is still nothing here for a per-test client to
 /// fix. **The viewer must never borrow this one**: it follows reqwest's default redirects to any

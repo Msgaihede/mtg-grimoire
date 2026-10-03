@@ -510,14 +510,15 @@ mod tests {
     fn nothing_outside_platform_names_the_network_the_disk_or_a_thread() {
         let files = all_sources();
         let tests = test_only(&files);
-        // The two files that are test code throughout were found by reading their parents,
+        // The files that are test code throughout were found by reading their parents,
         // and nothing that ships was taken for one.
         assert_eq!(
             tests,
             [
                 "src/scratch.rs",
                 "src/sync/run_tests.rs",
-                "src/sync_engine/apply/tests.rs"
+                "src/sync_engine/apply/tests.rs",
+                "src/sync_engine/client/tests.rs"
             ],
             "a module declared behind a test gate"
         );

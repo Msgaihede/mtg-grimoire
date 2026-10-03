@@ -6,7 +6,7 @@
 //! every 60 s while the window has focus, push 2 s after the write mask goes quiet — and named
 //! a reason the alternative, a WebSocket, was not built: a socket opened **from the page** would
 //! need the CSP widened. That was true and was not the obstacle it looked like, because the
-//! socket that shipped is opened from **this process**, not from the page: [`super::live`]'s
+//! socket that shipped is opened from **this process**, not from the page: `src-tauri`'s `sync_engine::live`'s
 //! connection manager holds a `tokio-tungstenite` client alongside the `reqwest` connection to
 //! the relay this file already made.
 //! ⚠️ **Neither of those is "under" the CSP, and the phrasing this doc carried for a day said
@@ -31,13 +31,13 @@
 //! therefore 250 frames, and the receiving peer must react once, not 250 times.
 //! [`super::schedule::WRITE_DEBOUNCE_MS`] (3 s) waits out a local write and slides on every
 //! commit, so a transaction that keeps writing for a minute pushes once, at the end — armed off
-//! the write connection's `commit_hook` ([`super::live::WriteWake`], an observer of the core's
+//! the write connection's `commit_hook` (`live::WriteWake`, an observer of the core's
 //! installer), for the reason `db.rs`'s `CrossFileFence` doc gives: the
 //! update hook the mirror uses does not fire for `WITHOUT ROWID` tables, and two of the thirteen
 //! synced ones are exactly that.
 //!
 //! **That hook fires for every transaction, so the debounce is armed only after the outbox has
-//! been asked** — `sync_ops WHERE pushed_at IS NULL`, in [`super::live`]'s `outbox_has_work`.
+//! been asked** — `sync_ops WHERE pushed_at IS NULL`, in `live`'s `outbox_has_work`.
 //! Spec §6.3 states it as two halves and both are load-bearing: without the second, [`run_once`]
 //! stamping [`LAST_SYNC_AT`] at the end of every trip would arm the debounce that runs the next
 //! trip, for ever, and the Scryfall ingest's commit per 2 000 rows would ring the relay's
@@ -47,7 +47,7 @@
 //!
 //! What is lost against instant delivery is nothing measurable in practice: "within a few
 //! seconds, always" is the design's own bar (spec §2), and the two debounces above are what holds
-//! the request count down without missing it. See [`super::live`] for the connection manager
+//! the request count down without missing it. See `src-tauri`'s `sync_engine::live` for the connection manager
 //! itself — when it opens a socket, the jittered reconnect backoff, and the protocol ping that
 //! keeps a hibernating socket alive for free.
 //!
@@ -58,7 +58,7 @@
 //! stretches. A trip used to be handed the write connection for its whole length by a caller that
 //! blocked a thread on it, which kept every other writer out for the length of a round trip and
 //! cannot be done at all where there is one thread. The app's store is the guard of the sync
-//! *lane* (`grimoire_core::state::Lane`): one sync operation at a time, which is what the
+//! *lane* (`crate::state::Lane`): one sync operation at a time, which is what the
 //! held connection used to give by accident.
 //!
 //! **What can land between two stretches is a reader's own write**, and three places are shaped
@@ -69,6 +69,8 @@
 //! is `docs/superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md`.
 
 use crate::errors::{self, Kind, Source};
+use crate::platform::http;
+use crate::state::{Lane, Store};
 use crate::sync_engine::apply::{self, ApplyReport};
 use crate::sync_engine::baseline;
 use crate::sync_engine::capture;
@@ -80,9 +82,9 @@ use crate::sync_pair::crypto;
 use crate::sync_pair::identity::{self, Group};
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
-use grimoire_core::state::{Lane, Store};
 use rusqlite::{Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
+use std::time::Duration;
 
 /// The `sync_state` key holding the relay's base URL — now a **test/dev override with no UI**,
 /// read by [`entitlement::base`], which falls back to the compiled-in [`entitlement::RELAY_BASE`].
@@ -470,7 +472,7 @@ pub struct Pushed {
 // The database, a stretch at a time
 // ---------------------------------------------------------------------------------------
 //
-// Every `async fn` below takes `db: &impl Store` (`grimoire_core::state`) and reaches the
+// Every `async fn` below takes `db: &impl Store` (`crate::state`) and reaches the
 // database inside `db.with(|conn| …)` — a *stretch* — with each request made between two of
 // them and nothing held. The app's store is the lane's guard, so one sync operation runs at a
 // time; what can land between two stretches is a reader's own write, and a function that
@@ -498,10 +500,11 @@ fn whereabouts(conn: &Connection) -> Result<Option<(String, Group, String)>, Str
 
 /// **The fence, and it is the compiler's**: an operation over the lane is a future that can be
 /// sent to another thread, which it cannot be while it holds a `MutexGuard` — or a
-/// `&Connection` — across an `.await`. One line per entry point. Never called.
+/// `&Connection` — across an `.await`. One line per entry point. Never called. A native build's
+/// question only: in a browser no request is `Send` ([`crate::platform::Sendable`]).
 #[allow(dead_code)]
 fn nothing_is_held_across_a_request(lane: &Lane<'_>, rotation: &identity::Rotation) {
-    fn sendable<T: Send>(_: T) {}
+    fn sendable<T: crate::platform::Sendable>(_: T) {}
     sendable(run_once(lane));
     sendable(run_once_without_baselines(lane));
     sendable(check_keys(lane));
@@ -566,7 +569,7 @@ fn me(conn: &Connection) -> Result<Option<(String, Group)>, String> {
 /// the same thing on `windows-latest` three times in twenty runs while `ubuntu-22.04` passed
 /// every time.
 ///
-/// The cause is this static outliving what it is connected to. One `reqwest::Client` for the
+/// The cause is this static outliving what it is connected to. One client for the
 /// whole test binary keeps idle keep-alive connections, `httpmock` pools its servers and hands
 /// a port that one test finished with to another test, and the next request down a socket the
 /// far end has already reset fails before it can carry a status. **`#[tokio::test]` compounds
@@ -582,38 +585,53 @@ fn me(conn: &Connection) -> Result<Option<(String, Group)>, String> {
 /// it removes the only thing being shared across runtimes.
 ///
 /// Re-measured after this change: **0 failures in 60 runs** (p ≈ 0.002 against a 10% rate).
-#[cfg(not(test))]
-fn http() -> reqwest::Client {
+#[cfg(not(any(test, feature = "testing")))]
+fn http() -> http::Client {
     use std::sync::OnceLock;
-    static CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+    static CLIENT: OnceLock<http::Client> = OnceLock::new();
     CLIENT.get_or_init(build_http).clone()
 }
 
 /// See [`http`]: a test build takes a fresh client so nothing is shared across runtimes.
-#[cfg(test)]
-fn http() -> reqwest::Client {
+#[cfg(any(test, feature = "testing"))]
+fn http() -> http::Client {
     build_http()
 }
 
 /// The one place the client's shape is written down, so the two arms above cannot drift on a
 /// timeout the way two copies of a builder would.
-fn build_http() -> reqwest::Client {
-    reqwest::Client::builder()
-        .user_agent(crate::scryfall::USER_AGENT)
-        .connect_timeout(std::time::Duration::from_secs(10))
-        .read_timeout(std::time::Duration::from_secs(30))
-        .build()
-        .unwrap_or_default()
+fn build_http() -> http::Client {
+    http::Client::new(&http::Config {
+        user_agent: crate::scryfall::USER_AGENT,
+        connect_timeout: Some(Duration::from_secs(10)),
+        read_timeout: Some(Duration::from_secs(30)),
+    })
+    .deadline(REQUEST_DEADLINE)
 }
 
+/// **The whole of a request, where the host has no socket to bound one** — a browser, whose
+/// `fetch` has neither a connect phase nor a per-read timeout. The sync lane is held across
+/// every request this module makes and a departure waits for the lane, so a request that never
+/// ended would be a Leave that never ran. Natively it is not applied: the connect and read
+/// bounds above already end a request that stops answering
+/// ([`crate::platform::http::Client::deadline`]).
+///
+/// **Two minutes, and nobody has measured a browser against it.** A pull is unpaged and can
+/// answer tens of megabytes after a large import; the web host's phase measures what a page
+/// costs a Worker, and this is the number it starts from.
+const REQUEST_DEADLINE: Duration = Duration::from_secs(120);
+
 /// Classify a transport failure, so the four call sites agree about what it was.
-fn kind_of(err: &reqwest::Error) -> Kind {
+///
+/// **There is no `Http` arm for a transport failure.** `reqwest`'s `is_status` is true only for
+/// an error made by `error_for_status`, which nothing here calls — a status is read off the
+/// response and recorded as `Kind::Http` where it is — so the arm never fired and did not come
+/// with the move to `platform::http`.
+fn kind_of(err: &http::Error) -> Kind {
     if err.is_timeout() {
         Kind::Timeout
     } else if err.is_decode() {
         Kind::Parse
-    } else if err.is_status() {
-        Kind::Http
     } else {
         Kind::Other
     }
@@ -805,7 +823,7 @@ async fn fetch_key_page_at(
     let url = keys_url(base, device, group, at);
     let response = match http()
         .get(&url)
-        .header("authorization", format!("Bearer {auth}"))
+        .header("authorization", &format!("Bearer {auth}"))
         .send()
         .await
     {
@@ -815,7 +833,7 @@ async fn fetch_key_page_at(
             return Err(e.to_string());
         }
     };
-    let status = response.status().as_u16();
+    let status = response.status();
     if !(200..300).contains(&status) {
         if status == 404 && at.is_some() {
             let body = response.text().await.unwrap_or_default();
@@ -1170,7 +1188,7 @@ pub async fn post_rotation(db: &impl Store, rotation: &identity::Rotation) -> Re
     let response = match http()
         .post(&url)
         .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {auth}"))
+        .header("authorization", &format!("Bearer {auth}"))
         .body(body)
         .send()
         .await
@@ -1181,7 +1199,7 @@ pub async fn post_rotation(db: &impl Store, rotation: &identity::Rotation) -> Re
             return Err(e.to_string());
         }
     };
-    let status = response.status().as_u16();
+    let status = response.status();
     if !(200..300).contains(&status) {
         let message =
             format!("the relay answered {status} to a key change, so nothing was removed");
@@ -1239,7 +1257,7 @@ pub async fn post_rendezvous(
             return Err(e.to_string());
         }
     };
-    let status = response.status().as_u16();
+    let status = response.status();
     if status == 204 {
         return Ok(());
     }
@@ -1271,7 +1289,7 @@ pub async fn get_rendezvous(
             return Err(e.to_string());
         }
     };
-    let status = response.status().as_u16();
+    let status = response.status();
     if status == 404 {
         return Ok(None);
     }
@@ -1464,7 +1482,7 @@ async fn post_ops(
     let response = http()
         .post(&url)
         .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {token}"))
+        .header("authorization", &format!("Bearer {token}"))
         .body(body)
         .send()
         .await;
@@ -1475,7 +1493,7 @@ async fn post_ops(
             return Err(Refusal::Failed(e.to_string()));
         }
     };
-    let status = response.status().as_u16();
+    let status = response.status();
     if status == 401 {
         return Err(Refusal::Failed(lapsed_in(db, "a push")));
     }
@@ -2030,7 +2048,7 @@ pub async fn pull(
     );
     let response = match http()
         .get(&url)
-        .header("authorization", format!("Bearer {token}"))
+        .header("authorization", &format!("Bearer {token}"))
         .send()
         .await
     {
@@ -2040,7 +2058,7 @@ pub async fn pull(
             return Err(e.to_string());
         }
     };
-    let status = response.status().as_u16();
+    let status = response.status();
     if status == 401 {
         return Err(lapsed_in(db, "a pull"));
     }
@@ -2391,7 +2409,7 @@ pub async fn ack(db: &impl Store, base: &str, token: &str) -> Result<(), String>
     let response = match http()
         .post(&url)
         .header("content-type", "application/json")
-        .header("authorization", format!("Bearer {token}"))
+        .header("authorization", &format!("Bearer {token}"))
         .body(body)
         .send()
         .await
@@ -2402,7 +2420,7 @@ pub async fn ack(db: &impl Store, base: &str, token: &str) -> Result<(), String>
             return Err(e.to_string());
         }
     };
-    let status = response.status().as_u16();
+    let status = response.status();
     if status == 401 {
         return Err(lapsed_in(db, "an ack"));
     }
