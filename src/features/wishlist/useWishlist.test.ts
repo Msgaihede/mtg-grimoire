@@ -236,6 +236,19 @@ describe("the shelves it asks for", () => {
     expect(setShelfFolds).not.toHaveBeenCalled();
   });
 
+  /** The light app's phone face folds in place: a caller's folds replace the stored ones — the
+   *  stored map shuts `Ordered`, the caller's opens the deck's list and says nothing of `Ordered`,
+   *  which therefore reads its default — and nothing is written. */
+  it("builds the shelves from the folds a caller passes, in place of the stored ones", async () => {
+    shelfFolds.mockResolvedValue({ collection: {}, wishlist: { "1": true } });
+    const mine = { "9": false };
+    const { result } = renderHook(() => useWishlist({ folds: mine }), { wrapper });
+
+    await waitFor(() => expect(lastQuery().shelves).toEqual([0, 1, 2, 3, 9]));
+    expect(result.current.folds).toBe(mine);
+    expect(setShelfFolds).not.toHaveBeenCalled();
+  });
+
   it("is filtering for a chip as well as for text", async () => {
     const { result } = renderHook(() => useWishlist(), { wrapper });
     act(() => result.current.toggleRarity("rare"));

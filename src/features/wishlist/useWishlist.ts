@@ -193,8 +193,19 @@ export function activeFilterCount(f: WishlistFilterState): number {
  *   measurement behind it. **There is no `flattenLocally` beside it**, which `useReviewHandoff`'s
  *   sweep was handed until Flatten went: the root's shelves already hold every wish, so a review
  *   hand-off needs the filter and the root and nothing else (`WishlistPage` has the consume site).
+ * @param options.folds The folds the shelves are built from, **in place of the stored ones** —
+ *   `useCollection`'s option of the same name and for its reason: the light app's phone face folds
+ *   a shelf in place without writing `app_meta`. Every caller that passes nothing, the desktop page
+ *   included, gets `useShelfFolds("wishlist")`'s. Held still by the caller (a `useMemo`), and
+ *   `setFold` / `setMany` still write the stored folds whichever was passed.
  */
-export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boolean } = {}) {
+export function useWishlist({
+  initialNeedsReview,
+  folds: foldsOverride,
+}: {
+  initialNeedsReview?: boolean;
+  folds?: Readonly<Record<string, boolean>>;
+} = {}) {
   // Which marketplace this list quotes — an input to the query and part of its key, because
   // it decides what a Cost cell contains and not merely how it is written.
   const { marketplace } = useMarketplace();
@@ -290,7 +301,9 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
    * `staleTime: Infinity`, and an answer arriving late re-keys the read rather than wasting one.
    */
   const folderList = useWishlistFolderList();
-  const { folds, setFold, setMany } = useShelfFolds("wishlist");
+  const stored = useShelfFolds("wishlist");
+  const { setFold, setMany } = stored;
+  const folds = foldsOverride ?? stored.folds;
   const shelfFolders = useMemo(() => folderList.folders.map(toShelfFolder), [folderList.folders]);
   const filtering =
     activeFilterCount({

@@ -13,7 +13,6 @@ import { ArrowDown, ArrowUp, Eraser, FolderInput, TrendingDown, Trash2 } from "l
 import { AnimatePresence, motion } from "motion/react";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
-import { Figure, FigureRow } from "@/components/Figure";
 import { UndoNotice } from "@/components/UndoNotice";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
@@ -39,7 +38,7 @@ import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { SearchCardDrag } from "@/features/search/searchCardDrag";
 import { FilterBar, StatedFiltersLine, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
 import { FilterQuickBar } from "@/features/search/FilterQuickBar";
-import { count, plural } from "@/lib/counts";
+import { plural } from "@/lib/counts";
 import { useDragRecord } from "@/lib/dndTarget";
 import { readFolderDrag, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
@@ -62,7 +61,7 @@ import {
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
-import { formatPrice, pricesAsOf } from "@/lib/prices";
+import { pricesAsOf } from "@/lib/prices";
 import { layoutShelves } from "@/lib/shelfLayout";
 import { buildShelves, visibleShelves, type Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
@@ -75,6 +74,7 @@ import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { refreshCardSearches } from "@/lib/searchMarks";
 import { ManagedFolderNote } from "./ManagedFolderNote";
+import { WishlistSummaryHeader } from "./WishlistSummary";
 import { managedEmptySentence, managedIds, userWishFolders } from "./managed";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
 import { WishlistSearchPanel } from "./WishlistSearchPanel";
@@ -100,6 +100,7 @@ import {
   foldChanges,
   foldFor,
   foldedForDrag,
+  folderFigures,
   isBand,
   keepNewFolder,
   newFolderShelf,
@@ -109,6 +110,7 @@ import {
   shelfOfWish,
   shelfStat,
   shelfTable,
+  subtotalsOf,
   type ShelfFigures,
 } from "./wishShelfPlan";
 
@@ -208,28 +210,6 @@ type Panel =
   | { kind: "clearFolder"; folderId: number }
   | null;
 
-/** What a folder's heading reads — the recursive total, summed by {@link subtotalsOf}. */
-interface FolderTotals {
-  wishes: number;
-  copies: number;
-  cost: number;
-  unpriced: number;
-}
-
-/**
- * A folder the summary has no row for.
- *
- * **Not a defensive default — the ordinary answer for an empty folder.**
- * `wishlist_folder_summary` is a `GROUP BY` over `wishlist_entries`, so a folder holding no
- * wishes emits no row at all, and a card fed a raw `Map.get` would render `undefined` figures
- * over exactly the folder whose whole job on this screen is to be empty.
- *
- * **It is the answer for a folder the summary skipped, and never for a summary that has not
- * answered yet.** The two are one `Map.get` miss apart and mean opposite things — see the
- * `summaryQuery.isPending` branch at the wall below, which is what keeps them apart.
- */
-const NO_WISHES: FolderTotals = { wishes: 0, copies: 0, cost: 0, unpriced: 0 };
-
 /** No rows on a shelf — one identity, so `rowsOf` hands `WishlistGrid` a stable array. */
 const NO_ROWS: readonly WishRow[] = [];
 /** No thumbnails — a shelf the counts have not reached yet. */
@@ -280,41 +260,6 @@ function wishTarget(row: WishRow, cardId: string): CardMenuTarget {
     // for the drag beside it: a menu add is filed by what the card does.
     typeLine: row.typeLine,
   };
-}
-
-/**
- * Every folder's numbers **with its sub-folders' added in**, indexed by folder id.
- *
- * `wishlist_folder_summary` answers *direct* counts — this folder's own wishes, never the ones
- * nested under it — and says so at its own type, because SQL that walked the tree would be a
- * second implementation of the arithmetic `buildFolderTree` already does for `FolderNode.count`.
- * This is that arithmetic, over four fields instead of one: a folder card handed a raw lookup
- * would draw `0 wishes` over a drawer holding twelve in two sub-folders, and the reader would
- * only catch it by opening the drawer.
- *
- * The whole tree in one pass rather than a sum per card, because a node's total is its children's
- * totals and a per-card recursion would recompute every level of the cabinet once per level.
- */
-function subtotalsOf(
-  nodes: readonly FolderNode<WishlistFolder>[],
-  direct: ReadonlyMap<number, FolderTotals>,
-): ReadonlyMap<number, FolderTotals> {
-  const out = new Map<number, FolderTotals>();
-  const visit = (node: FolderNode<WishlistFolder>): FolderTotals => {
-    const own = direct.get(node.folder.id) ?? NO_WISHES;
-    const total = { ...own };
-    for (const child of node.children) {
-      const under = visit(child);
-      total.wishes += under.wishes;
-      total.copies += under.copies;
-      total.cost += under.cost;
-      total.unpriced += under.unpriced;
-    }
-    out.set(node.folder.id, total);
-    return total;
-  };
-  for (const node of nodes) visit(node);
-  return out;
 }
 
 /**
@@ -1747,16 +1692,8 @@ export function WishlistPage() {
 
   /** A folder's unfiltered figures, recursive — `null` for Not sorted and before the summary. */
   const figuresOf = useCallback(
-    (shelf: Shelf): ShelfFigures | null => {
-      if (shelf.kind === "unfiled" || folders.summaryQuery.isPending) return null;
-      const total = subtotals.get(shelf.id) ?? NO_WISHES;
-      return {
-        wishes: total.wishes,
-        copies: total.copies,
-        cost: total.cost > 0 ? total.cost : null,
-        unpriced: total.unpriced,
-      };
-    },
+    (shelf: Shelf): ShelfFigures | null =>
+      folderFigures(shelf, folders.summaryQuery.isPending ? null : subtotals),
     [folders.summaryQuery.isPending, subtotals],
   );
 
@@ -2234,7 +2171,7 @@ export function WishlistPage() {
           under it would be a subheading repeating its own heading. */}
       <h2 className="sr-only">Wishlist</h2>
 
-      <FigureRow
+      <WishlistSummaryHeader
         // The band's far end, where they used to sit beside the filter row — see `FigureRow`,
         // which is where the placement is argued, and `CollectionPage`, whose twin this is.
         //
@@ -2295,29 +2232,9 @@ export function WishlistPage() {
             />
           </div>
         }
-      >
-        {/* **Both figures count the whole wall** (spec §3.6) — this level and every shelf below it,
-            shut ones included — summed from the per-shelf counts, never from the rows loaded. */}
-        <Figure label="Cards" value={totals === null ? "—" : count(totals.wishes)} />
-        {/* The one number this view exists for, in the currency the reader picked, with how old
-            the prices are and whose. An unpriced wish is left out of the sum and counted in the
-            note — never quoted at another marketplace's rate.
-
-            **It read `Still to buy` until 2026-09-08 and was summed over the copies each wish was
-            still short of.** Both went with the owned count: this list compares itself to the
-            collection nowhere, so what it can honestly total is what it *asks for* rather than
-            what is left to get.
-
-            Etched printings have no EUR price in Scryfall's data at all — `eur_etched` is
-            documented and absent — so on Cardmarket a wish for one is left out of this sum
-            and counted in the note rather than quoted at the nonfoil rate. */}
-        <Figure
-          label={`Total cost (${currency.toUpperCase()})`}
-          value={totals === null || totals.wishes === 0 ? "—" : formatPrice(totals.value, currency)}
-          note={totals !== null && totals.unpriced > 0 ? `${totals.unpriced} unpriced` : undefined}
-          title={pricesAsOf(marketplace)}
-        />
-      </FigureRow>
+        totals={totals}
+        marketplace={marketplace}
+      />
 
       {/* The same row the search, the Tags page and the collection draw, over this page's own
           hook — see `FilterBar`, whose prop is a structural `FilterSurface` that `useWishlist`
