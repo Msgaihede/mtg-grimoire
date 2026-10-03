@@ -7,19 +7,20 @@ import {
   subtotalsOf,
   tilesByShelf,
 } from "@/features/collection/collectionWall";
-import { useCollection } from "@/features/collection/useCollection";
+import { COLLECTION_TRAY, useCollection } from "@/features/collection/useCollection";
 import { useCollectionFolders } from "@/features/collection/useCollectionFolders";
 import { FOLD_PAUSED_REASON } from "@/features/shelves/ShelfToolbar";
 import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import { buildFolderTree, trailOf } from "@/lib/folderTree";
 import { layoutShelves, type ShelfSection } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
+import { CabinetFilters } from "../CabinetFilters";
 import type { WallItem } from "../CardWall";
 import { collectionItem } from "../items";
 import { linkTo } from "../router";
 import { EmptyShelfBox, PathRow, PhoneShelfHeading } from "../ShelfParts";
 import { NO_ITEMS, ShelfWall } from "../ShelfWall";
-import { DimNote, ReadError, useMore } from "./parts";
+import { DimNote, NextPageRefused, ReadError, useMore } from "./parts";
 
 /** What the top of the cabinet is called — the desktop breadcrumb's word. */
 const ROOT = "Collection";
@@ -42,8 +43,11 @@ const ROOT = "Collection";
  * `mobile:tauri` shares the desktop's database — a fold pressed on a phone must not re-fold the
  * reader's desktop.
  *
- * No filters yet: the page header has room for a `Filters` control, and the desktop hook already
- * owns every filter a sheet would set.
+ * **Filtered as Search is**: the box and one `Filters` button on a line that stays put, the
+ * filters that are on stated under it, and the sheet behind the button drawing the desktop bar's
+ * own cells for this list (`COLLECTION_TRAY`) with its own sorts. A filter suspends folding, as on
+ * the desktop: every shelf with a match is drawn open, and a heading's press says why it does not
+ * fold.
  */
 export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
   const stored = useShelfFolds("collection").folds;
@@ -177,18 +181,33 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
     [],
   );
 
-  const pathRow =
-    folderId === null ? null : (
-      <div className="shrink-0 px-3">
-        <PathRow root={ROOT} trail={trail} onOpen={openFolder} />
-      </div>
-    );
+  // The line and, standing in a folder, the way out of it — one band that stays put while the
+  // wall scrolls. Drawn over every answer below, so a filter that matched nothing can be undone.
+  const top = (
+    <CabinetFilters
+      surface={collection}
+      label="Search your collection"
+      tray={COLLECTION_TRAY}
+      sortRows={collection.sortRows}
+      total={figures?.totalCards}
+      below={
+        folderId === null ? undefined : <PathRow root={ROOT} trail={trail} onOpen={openFolder} />
+      }
+    />
+  );
 
-  if (query.isLoadingError) return <ReadError>Your collection could not be read.</ReadError>;
+  if (query.isLoadingError) {
+    return (
+      <>
+        {top}
+        <ReadError>Your collection could not be read.</ReadError>
+      </>
+    );
+  }
   if (countsError !== null && counts === null) {
     return (
       <>
-        {pathRow}
+        {top}
         <ReadError>Your collection's shelves could not be read.</ReadError>
       </>
     );
@@ -200,7 +219,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
   if (nothing) {
     return (
       <>
-        {pathRow}
+        {top}
         <DimNote>
           {filtering
             ? "No cards match."
@@ -216,7 +235,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
 
   return (
     <>
-      {pathRow}
+      {top}
       <ShelfWall
         label="Your collection"
         sections={sections ?? []}
@@ -224,6 +243,13 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
         header={
           <div className="pt-3 pb-1">
             <CollectionSummaryHeader summary={figures} marketplace={marketplace} />
+            {/* The shelves still say what they hold; it is the whole-level figures that are
+                missing, and an em dash for ever would say nothing about why. */}
+            {collection.figuresRefused && (
+              <p role="alert" className="pt-2 text-sm text-destructive">
+                Your collection's figures could not be read.
+              </p>
+            )}
           </div>
         }
         renderHeading={renderHeading}
@@ -231,6 +257,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
         onOpen={onOpen}
         onNearEnd={more}
         resetKey={collection.scrollKey}
+        footer={<NextPageRefused query={query} />}
       />
     </>
   );

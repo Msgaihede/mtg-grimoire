@@ -221,9 +221,12 @@ failure behind each at its own site:
   cabinets, the deck editor — comes to the owner as built options before it is built, in phase 3,
   under the `frontend-design` skill like all UI here.
 - **Scanner and Settings are placeholders**: a sentence each, no camera and no permission asked.
-- **The Collection and Wishlist walls draw open shelves only** — the desktop hooks fetch the
-  cards of the shelves the reader has left open, and the wall draws them as one run with no
-  heading, no fold and no way into a folder. **Search has its filters** (`phone/search/
+- **The Collection is the cabinet** (`phone/ShelfWall.tsx`, `pages/CollectionPage.tsx`): headed
+  shelves laid out from the counts, folded in place by a press the page holds rather than stores,
+  a folder opened as a level with a path row out, and 3.1's sheet over `useCollection`. **The
+  Wishlist wall still draws open shelves only** — the desktop hook fetches the shelves the reader
+  has left open, and the wall draws them as one run with no heading, no fold and no way into a
+  folder. **Search has its filters** (`phone/search/
   FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
   and everything else in a sheet that is page state rather than a place in the URL.
 - **Nothing on the phone face writes.**

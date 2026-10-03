@@ -168,7 +168,8 @@ export function PathRow<F extends { id: number; name: string }>({
   return (
     <nav
       aria-label={`${root} folders`}
-      className="flex items-center gap-1 border-b border-border py-1"
+      // No rule of its own: it is drawn in the line's band, under the box, which has one.
+      className="flex items-center gap-1"
     >
       <button
         type="button"

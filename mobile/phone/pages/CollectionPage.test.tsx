@@ -219,6 +219,88 @@ describe("Collection", () => {
     list.mockRestore();
   });
 
+  it("narrows the cabinet through the Filters sheet, offering the collection's own cells", async () => {
+    renderPhone(<PhoneFace />, { path: "/collection" });
+    const wall = await cabinet();
+    await within(wall).findByRole("list", { name: "Not sorted" }, SETTLE);
+
+    await userEvent.click(screen.getByRole("button", { name: "Filters" }));
+    const sheet = await screen.findByRole("dialog", { name: "Filters" });
+    // The copy's own questions are here; the card search's that a binder cannot ask are not.
+    expect(within(sheet).getByRole("group", { name: "Condition" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("heading", { name: "Needs review" })).toBeInTheDocument();
+    expect(within(sheet).getByRole("heading", { name: "Price (USD)" })).toBeInTheDocument();
+    expect(within(sheet).queryByRole("heading", { name: "Owned" })).toBeNull();
+    expect(within(sheet).queryByRole("heading", { name: "Printings" })).toBeNull();
+
+    await userEvent.click(
+      within(within(sheet).getByRole("group", { name: "Finish" })).getByRole("button", {
+        name: "Etched",
+      }),
+    );
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Show / }));
+
+    // One kind on: the badge says so, the line states it, and the wall holds the etched copies.
+    expect(screen.getByRole("button", { name: "Filters — 1 active" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^Remove filter — Finish/ })).toBeInTheDocument();
+    await waitFor(
+      () =>
+        expect(
+          within(wall).queryByRole("button", { name: "Lightning Bolt, 2X2 117, 4 copies" }),
+        ).toBeNull(),
+      SETTLE,
+    );
+    expect(
+      within(wall).getByRole("button", { name: "Lightning Bolt, STA 105, Etched, 2 copies" }),
+    ).toBeInTheDocument();
+  });
+
+  it("searches the collection from its own box", async () => {
+    renderPhone(<PhoneFace />, { path: "/collection" });
+    const wall = await cabinet();
+
+    await userEvent.type(
+      screen.getByRole("searchbox", { name: "Search your collection" }),
+      "tarmogoyf",
+    );
+
+    await waitFor(
+      () =>
+        expect(within(wall).queryByRole("button", { name: /^Lightning Bolt, 2X2 117/ })).toBeNull(),
+      SETTLE,
+    );
+    expect(within(wall).getByRole("button", { name: /^Tarmogoyf, FUT 153/ })).toBeInTheDocument();
+  });
+
+  it("says a refused next page at the end of the wall, and Try again asks for it again", async () => {
+    renderPhone(<PhoneFace />, { path: "/collection", fake: { seed: "large" } });
+    const wall = await cabinet();
+    await within(wall).findByRole("list", { name: "Not sorted" }, SETTLE);
+    const real = ipc.collectionList;
+    let refusing = true;
+    const list = vi.spyOn(ipc, "collectionList").mockImplementation(async (query) => {
+      if (refusing) throw new Error("database is locked");
+      return real(query);
+    });
+
+    fireEvent.scroll(wall, { target: { scrollTop: 1_000_000 } });
+
+    const retry = await screen.findByRole("button", { name: "Try again" }, SETTLE);
+    expect(screen.getByText("The next cards could not be read.")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).toBeNull();
+    const asked = list.mock.calls.length;
+
+    refusing = false;
+    await userEvent.click(retry);
+
+    await waitFor(
+      () => expect(screen.queryByRole("button", { name: "Try again" })).toBeNull(),
+      SETTLE,
+    );
+    expect(list.mock.calls.length).toBeGreaterThan(asked);
+    list.mockRestore();
+  });
+
   it("says so when the collection is empty", async () => {
     renderPhone(<PhoneFace />, { path: "/collection", fake: { seed: "empty" } });
     expect(

@@ -11,8 +11,8 @@ import type { WallItem } from "./CardWall";
  * does nothing is a stop a screen reader lands on and a press that answers nobody. Without
  * `onPress`, `CardTile` draws the art in a plain box, and the no-art frame says the name.
  *
- * The shelved wall's tile, written once beside `CardWall` rather than inside it; the flat wall
- * draws the same composition inline.
+ * Both walls draw it — `CardWall`'s flat rows and `ShelfWall`'s shelves — so a tile is one
+ * composition wherever a list of cards is drawn on the phone.
  */
 export function WallTile({
   item,
@@ -37,8 +37,8 @@ export function WallTile({
       onPress={item.cardId === null ? undefined : () => onOpen(item)}
       overlay={
         copies === null ? undefined : (
-          // The tag as it is, placed by its own `className` — `CardWall`'s reason: a backed chip
-          // around a filled, slanted banner is the square box on art that reads as a button.
+          // The tag as it is, placed by its own `className`: it is a filled, slanted banner already,
+          // and a backed chip around it is the square box on art that reads as something to press.
           <CountTag count={item.count} title={copies} className="absolute bottom-1 left-1" />
         )
       }
