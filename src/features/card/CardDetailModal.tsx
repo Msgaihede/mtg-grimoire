@@ -100,6 +100,7 @@ import { copyFinish, copyOption, finishRefusal } from "./copyEdit";
 import { ownsArrowKeys } from "./arrowKeys";
 import { useOptionalAddCardToDeck } from "./cardMenu";
 import { cardDetailKey } from "./cardDetailKey";
+import { cardHoldingsKey, cardPrintingsKey, HOLDINGS_KEY } from "./cardKeys";
 import { CardModalArt } from "./CardModalArt";
 import { CardModalControls } from "./CardModalControls";
 import { CardModalPrintings } from "./CardModalPrintings";
@@ -309,22 +310,6 @@ export function artistOf(
  *  reader knows. Pointed at the constant because two literals holding one decision drift the
  *  first time either moves — which is `useDeck`'s rule at the app's other one-press add. */
 const MODAL_CONDITION = MENU_CONDITION;
-
-/**
- * The **In your grimoire** figures, under `["card", …]` beside this file's other two card reads.
- *
- * **`["card"]` and not one of the three roots the answer is derived from, because no key can be
- * under all three.** `invalidateQueries` matches by key *prefix*, so a key rooted at
- * `["collection"]` is refreshed by a collection write and missed by a wish; one rooted at
- * `["decks"]` is missed by both. The old block sidestepped this by being **three** queries, one
- * under each root — that is what it cost to have the app's existing invalidation vocabulary
- * reach it, and folding them into one read gives the property up. {@link useHoldingsFreshness}
- * is what replaces it.
- *
- * The bare prefix is what a caller invalidates: only one oracle card is ever mounted here, and a
- * key naming the card would have to be rebuilt at every site that settles a write.
- */
-const HOLDINGS_KEY = ["card", "holdings"] as const;
 
 /**
  * Refetch the grimoire figures whenever **any** write in the app has finished.
@@ -943,7 +928,7 @@ function Body({
    * the printings **modal** names the backend's ceiling instead because it filters client-side.
    */
   const printings = useQuery({
-    queryKey: ["card", "printings", oracleId, marketplace.id],
+    queryKey: cardPrintingsKey(oracleId, marketplace.id),
     queryFn: oracleId === null ? skipToken : () => ipc.cardPrintings(oracleId, marketplace.id),
   });
 
@@ -984,7 +969,7 @@ function Body({
    * these are counts, and nothing about them moves when the setting does.
    */
   const holdings = useQuery({
-    queryKey: [...HOLDINGS_KEY, oracleId],
+    queryKey: cardHoldingsKey(oracleId),
     queryFn: oracleId === null ? skipToken : () => ipc.cardHoldings(oracleId),
   });
   useHoldingsFreshness();

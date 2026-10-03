@@ -6,7 +6,7 @@
  * was written out character for character nine times — which is the shape of thing that reads
  * as one rule until two surfaces on one screen disagree about it.
  *
- * **`SearchPage`'s `countOf` is not a caller and must not become one.** Its condition is
+ * **`countOf` (`features/search/resultCount.ts`) is not a caller and must not become one.** Its condition is
  * `total === 1 && !capped`, because the backend stops counting at 5 000 and `5,000+ card` must
  * never print. That is a rule about a capped count rather than about English.
  */

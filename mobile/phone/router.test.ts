@@ -221,6 +221,20 @@ describe("linkTo", () => {
     expect(window.history.length).toBe(before + 1);
   });
 
+  it("replaces the entry on a plain press when asked to, and keeps its mark", () => {
+    // The card sheet's printings: a step to another printing is not a Back step.
+    window.history.replaceState({ pushed: true }, "", "/search?card=a");
+    const before = window.history.length;
+    const other: Place = { view: "search", deckId: null, cardId: "b" };
+    render(createElement("a", linkTo(other, { replace: true }), "Other printing"));
+
+    fireEvent.click(screen.getByRole("link", { name: "Other printing" }));
+
+    expect(url()).toBe("/search?card=b");
+    expect(window.history.length).toBe(before);
+    expect(window.history.state).toEqual({ pushed: true });
+  });
+
   it.each(["ctrlKey", "metaKey", "shiftKey", "altKey"] as const)(
     "leaves a press with %s held to the browser",
     (modifier) => {

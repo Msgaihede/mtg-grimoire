@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useWishlist } from "@/features/wishlist/useWishlist";
 import { CardWall, type WallItem } from "../CardWall";
 import { wishItem } from "../items";
-import { DimNote, ReadError, useMore } from "./parts";
+import { DimNote, NextPageRefused, ReadError, useMore } from "./parts";
 
 /**
  * The wishes on the wishlist's **open shelves**, read-only — `CollectionPage`'s note, one table
@@ -10,7 +10,7 @@ import { DimNote, ReadError, useMore } from "./parts";
  */
 export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
   const wishlist = useWishlist();
-  const { query, marketplace, counts } = wishlist;
+  const { query, marketplace, counts, countsQuery } = wishlist;
   const items = useMemo(
     () => wishlist.rows.map((row) => wishItem(row, marketplace.currency)),
     [wishlist.rows, marketplace.currency],
@@ -22,7 +22,20 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
 
   // `counts` is one row per shelf that holds a wish, folded ones included: no rows there is an
   // empty wishlist, and rows there with nothing on the wall is a wishlist this view cannot open.
-  // Until it has answered, neither sentence is known to be true and neither is said.
+  // Until it has answered, neither sentence is known to be true and neither is said — and if it
+  // never will, that is said instead of an empty page.
+  if (
+    !query.isPending &&
+    items.length === 0 &&
+    counts === undefined &&
+    countsQuery.isLoadingError
+  ) {
+    return (
+      <ReadError>
+        Nothing is on your open shelves, and the rest of your wishlist could not be counted.
+      </ReadError>
+    );
+  }
   if (!query.isPending && items.length === 0 && counts !== undefined) {
     return counts.length === 0 ? (
       <DimNote>Nothing on your wishlist yet.</DimNote>
@@ -40,6 +53,7 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
       onOpen={onOpen}
       onNearEnd={more}
       resetKey={wishlist.queryKeyString}
+      footer={<NextPageRefused query={query} />}
     />
   );
 }
