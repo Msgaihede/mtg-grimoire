@@ -1608,12 +1608,32 @@ prose the move had made false, the CI docs above all (`crates/*` "never runs `co
 claim here that every module the spec named had moved: `share/snapshot` and `share/cache` were
 on §2.3's list and on no step's.
 
-**No live pass this step, and why.** Markus's own portable build was running from Explorer, and
-a dev build launched beside it only opens a window in that app — the single-instance guard keys on
-the identifier, not the build — so driving the scanner's commands would have driven his real
-data. What a live pass would have caught that the compiler cannot is a command asking for a
-managed state that is no longer managed; every one of the twelve asks for `State<Arc<AppState>>`,
-which `desktop::start` manages, and no `ScannerState` is managed or asked for anywhere.
+**The live pass came after the merge, the same day.** It could not run before #773 merged:
+Markus's own portable build was running from Explorer, and a dev build launched beside it only
+opens a window in that app — the single-instance guard keys on the identifier, not the build — so
+driving the scanner's commands would have driven his real data. (A static check stood in: every
+one of the twelve commands asks for `State<Arc<AppState>>`, which `desktop::start` manages, and no
+`ScannerState` is managed or asked for anywhere.) Once he had closed it: `tauri dev`, debug build,
+`main` at `49162fd2`, CDP through the page's own `ipc`, with the published `scanner-bundle-v3`
+assets (5.5 + 2.5 + 9.7 MB, downloaded with his say-so) placed in the dev data folder's
+`scanner/` — so the load took the **file** path, the one this step rewrote onto `platform::files`
+and `read_models`, and the build embedded nothing.
+
+| | Measured |
+| --- | --- |
+| `scanner_status`, first | **1 555 ms**, the lazy load: bundle and both models `source: "file"`, `loaded: true`; **118 467 labels** from `corpus.db` |
+| `scanner_status`, second | 2 ms — loaded once |
+| A real card through `scanner_frame` | Counterspell, MH2 267: its cached 672×936 picture on a dark 1280×960 table, eight frames. Four corners every frame; the exact printing top from the second (distance 40); `wants_detail` on the sixth, and the seventh carried the detail image through `DETAIL_HEADER`'s two-JPEG body; **resolved to MH2 267 on the seventh**. 179–317 ms a frame |
+| Two windows | the first held the scanner; 178 ms later the second was told `elsewhere`, its hold refused in exactly *The scanner is open in another window.*, its status answered; **admitted 11 879 ms later** — the first window's 10 s heartbeat and the 2 s lease after its last beat |
+| Prefs, tray, commit | prefs read and written back; a tray row of none refused in *A tray row needs at least one copy.*; one row stored and read back; `scanner_tray_commit` — `added: 1`, the card owned 0 → 1 and the tray empty, one write |
+| Capture | `live-<epoch>.jpg` and its sidecar under `data/scanner/scans/`, the sidecar's `Æther Vial` intact through the ASCII escape |
+
+The first try at the two-window row was a probe error, not the lease's: a heartbeat on
+`setInterval` first fires at 500 ms, and the second window asked at 182 ms, while the scanner was
+genuinely free. Holding once, awaited, before the second window asks is what the row above
+measures. Afterwards the dev copy's `user.db` was put back from a copy taken first, the assets and
+the capture deleted, and the app launched once more so the mirror's startup pass re-rendered the
+seven Collection files the commit had written.
 
 **No upgrade check against `main`'s binary**: no schema rung, launch pass or file changed. The two
 `app_meta` rows are read and written by the same functions, now in the core.
@@ -1624,8 +1644,7 @@ which `desktop::start` manages, and no `ScannerState` is managed or asked for an
   the last item of phase 2.
 - **The scanner in a browser** is phase 7's: the crate's threads and clock need a seam, and the
   assets a download (spec §8).
-- **A live pass of the Scanner view** over the moved glue, the next time the app lock can be
-  taken with nothing else running.
+- ~~A live pass of the Scanner view over the moved glue~~ — run the same day, above.
 
 ### 6.11 The command table — the machinery and the reads (2026-10-03)
 
