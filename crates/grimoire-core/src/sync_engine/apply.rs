@@ -941,14 +941,20 @@ fn apply_in(
     // The client's held-back ops join the groups they belong to, never applied: each sender is
     // blocked at its earliest op this device has not applied, so every group naming one holds.
     // A held-back claim joins nothing — a claim blocks nothing (§5), and a put that lands ahead
-    // of the claim containing it is §6's ordinary case — and a reference on any other op is
-    // malformed and judged as none, so `claim` is the test rather than the field.
-    let held: Vec<&Op> = held_back
+    // of the claim containing it is §6's ordinary case. A reference on any other op is malformed
+    // and is taken off here, as `decide` takes it off a page op: every check below asks the field,
+    // and an op still carrying one would hold nothing, land its delta, raise no watermark — and
+    // apply a second time when its sender is released.
+    let held_back_ops: Vec<Op> = held_back
         .iter()
         .filter(|op| claims::claim(op).is_none() && !mine(op) && !seen(op))
+        .map(|op| Op {
+            emission: None,
+            ..op.clone()
+        })
         .collect();
     let mut grouped: Vec<&Op> = fresh.clone();
-    grouped.extend(held.iter().copied());
+    grouped.extend(held_back_ops.iter());
     let mut groups = group(&grouped);
     groups.sort_by_key(|g| {
         (
@@ -984,7 +990,7 @@ fn apply_in(
     // commits.
     let cap = groups.len().min(8);
     let mut blocked: Blocks = BTreeMap::new();
-    for op in &held {
+    for op in &held_back_ops {
         match blocked.get(op.at.device.as_str()) {
             Some((at, _)) if *at <= op.at => {}
             _ => {
@@ -2541,8 +2547,9 @@ fn advance_watermarks(
 }
 
 mod claims;
+mod rehome;
+
 #[cfg(test)]
 mod emission_tests;
-mod rehome;
 #[cfg(test)]
 mod tests;

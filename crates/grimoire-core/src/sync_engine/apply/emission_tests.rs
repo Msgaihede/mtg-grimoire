@@ -1167,6 +1167,85 @@ fn a_held_back_put_holds_the_claim_for_its_row() {
     );
 }
 
+/// Spec §3: a reference on an op that is no claim is malformed, and is judged absent on every path
+/// — a held-back op's included. c's `+1` carries a stray reference while the client holds c back,
+/// beside a's `+1` on the same row in the page. Read by its field rather than as a claim, the
+/// held-back op held nothing: both deltas landed, no watermark rose for c's, and c's released
+/// `+1` applied a second time (5 where 4 is right). Its sender already holds a watermark below
+/// it, which the hold must leave where it is.
+#[test]
+fn a_held_back_op_with_a_stray_reference_holds_its_row_and_applies_once_when_released() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&c, &seed).unwrap();
+    stash(&c, "opt", 1, SECOND);
+    apply(&b, &since(&c, &mut mc)).unwrap();
+    let (a_mark, c_mark) = (watermark(&b, "dev-a"), watermark(&b, "dev-c"));
+    step(&c, "bolt", 1, SECOND + 1);
+    let mut put = since(&c, &mut mc);
+    assert_eq!(put.len(), 1, "{put:?}");
+    put[0].emission = Some(crate::sync_engine::merge::Emission {
+        id: (put[0].at.ms + 1, 0),
+        i: 0,
+        n: Some(1),
+        since: Some((0, 0)),
+        resumed: false,
+    });
+    step(&a, "bolt", 1, SECOND + 2);
+    let from_a = since(&a, &mut ma);
+
+    let (report, held) = apply_page(&b, &from_a, &put, Waiting::Hold).unwrap();
+    assert_eq!(
+        (report.applied, copies(&b, "bolt")),
+        (0, 2),
+        "the held-back op did not hold its row: {report:?}"
+    );
+    assert_eq!(
+        (watermark(&b, "dev-a"), watermark(&b, "dev-c")),
+        (a_mark, c_mark),
+        "a hold moved a watermark"
+    );
+    assert_eq!(held.get("dev-c"), Some(&(put[0].at.ms, put[0].at.ctr)));
+
+    apply(&b, &page(&[&from_a, &put])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 4, "each +1 once");
+}
+
+/// Design 2026-10-03 §5: a held-back op is never applied, so it neither drags this device's clock
+/// — `observe` reads only what this pass met fresh — nor moves its sender's watermark. c's `+1` is
+/// stamped years ahead of b's clock, behind an earlier op of c's that b applied.
+#[test]
+fn a_held_back_op_moves_neither_the_clock_nor_its_senders_watermark() {
+    let (b, c) = (paired("dev-b"), paired("dev-c"));
+    let mut mc = 0;
+    real_stash(&c, "bolt", 2);
+    apply(&b, &since(&c, &mut mc)).unwrap();
+    let mark = watermark(&b, "dev-c");
+    set_clock(&c, STAMP);
+    step(&c, "bolt", 1, SECOND);
+    let ahead = since(&c, &mut mc);
+    assert!(ahead.iter().all(|op| op.at.ms >= STAMP), "{ahead:?}");
+    let clock = || -> i64 {
+        b.query_row("SELECT ms FROM sync_clock WHERE id = 1", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert!(clock() < STAMP);
+
+    let (_, held) = apply_page(&b, &[], &ahead, Waiting::Hold).unwrap();
+    assert!(clock() < STAMP, "a held-back op dragged the clock");
+    assert_eq!(
+        watermark(&b, "dev-c"),
+        mark,
+        "a held-back op moved its watermark"
+    );
+    assert_eq!(copies(&b, "bolt"), 2);
+    assert!(held.contains_key("dev-c"), "{held:?}");
+}
+
 /// §14 row 13, the apply half: a group dropped and recorded opens the gap; the next emission
 /// floors a row held here; the gap closes when the roster is taken again.
 #[test]
