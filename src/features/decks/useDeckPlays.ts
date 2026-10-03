@@ -1,7 +1,7 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ipc } from "@/lib/ipc";
-import { opened } from "./useDeck";
+import { opened } from "./deckQuery";
 
 /** Stable identity for "no answer yet, and none coming" — a disabled query on both hooks reads
  *  this, so a consumer's `useMemo` over the set does not see a new identity every render. */

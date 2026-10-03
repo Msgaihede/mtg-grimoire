@@ -33,7 +33,7 @@ import type { Finish } from "@/lib/finish";
 import { ipc, type DeckVariant, type TokenEntryKey } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { writeFailure, type Write } from "@/lib/writes";
-import { DEFAULT_VARIANT, opened } from "./useDeck";
+import { DEFAULT_VARIANT, opened } from "./deckQuery";
 import {
   deckTokenViews,
   type DeckTokenRow,

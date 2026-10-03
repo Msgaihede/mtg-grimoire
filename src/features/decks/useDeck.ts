@@ -26,6 +26,17 @@ import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
 import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
 import { defaultPileFor } from "./defaultCategory";
 import { sameDeckSlot } from "./deckWalk";
+import {
+  DEFAULT_CATEGORY_NAME,
+  DEFAULT_VARIANT,
+  deckDetailQuery,
+  opened,
+} from "./deckQuery";
+
+// Re-exported so every caller that has always imported these from here keeps doing so — they moved
+// to `deckQuery.ts`, which reaches no store, so the phone face can read a deck through the same
+// key without this file's writes coming with it.
+export { DEFAULT_CATEGORY_NAME, DEFAULT_VARIANT, opened } from "./deckQuery";
 
 /**
  * What a re-file did — the quick zones' `Auto` for a card already in the deck.
@@ -48,41 +59,6 @@ const NONE: readonly DeckCard[] = [];
 /** The same, for the two lists a deck read now also answers with. */
 const NO_CATEGORIES: readonly DeckCategory[] = [];
 const NO_LABELS: readonly DeckLabel[] = [];
-
-/**
- * The variant every surface that has no opinion reads.
- *
- * Schema v8 gave every deck two lists — `live`, what is sleeved up, and `theory`, what it is
- * being built toward — and this is the one the app meant by "the deck" before the column
- * existed. It is a **default argument** rather than a constant now: a caller with a Live/Theory
- * control passes what the reader chose, and a caller that has none (the sidebar's drop target,
- * the card pane) gets the deck as it stands.
- *
- * Exported so every deck hook in this folder defaults to the same word from the same place.
- */
-export const DEFAULT_VARIANT: DeckVariant = "live";
-
-/**
- * What an add is filed under when the caller names no category.
- *
- * `deck_add_card` takes either an explicit `categoryId` — a drop onto a column the reader
- * pointed at — or a **name** to find-or-create. The surfaces that have no column to point at
- * (the docked panel's Add button, the sidebar's Decks drop target) send a name, and this is
- * that name: the v8 migration's own word for the pile it put every legacy main-deck row in, so
- * a deck that predates categories and one made since agree about where a plain add goes.
- *
- * **A fence now rather than the usual answer.** `autoCategoryFor` files an add that names no
- * category (see {@link useDeck}'s `addCard`), and every surface in the app hands this hook a
- * type line to file by — so this word is what is left for a caller that has neither a category
- * nor a type line, which is a shape the app does not currently produce. It is kept because the
- * alternative is filing such a card under `UNCATEGORIZED`, and "the caller told us nothing" and
- * "the card's type line is unrecognised" are different states that should not land in one pile.
- *
- * Exported for two readers: `useDeckMeta` has to know which piles are *nobody's choice* before
- * it is allowed to empty them, and a second copy of this string there would be a second place
- * to keep one word.
- */
-export const DEFAULT_CATEGORY_NAME = "Main deck";
 
 /** One category slot, as every write here addresses it: by what it *is*, never by the
  *  `deck_cards.id` the answer carries. A stale row id is the difference between emptying the
@@ -278,23 +254,6 @@ function unanchorPane(wrote: WrittenRow, departure: PaneDeparture | null): void 
 }
 
 /**
- * The open deck's id, or a refusal.
- *
- * Every write below is reachable only from an editor, which is only mounted for a deck that
- * is open — so this throw is a fence rather than a path. It throws instead of silently doing
- * nothing because a mutation that resolves without writing is a stepper that looks like it
- * worked, and the rejection lands in the mutation's error state, which the editor already
- * renders.
- *
- * Exported because every deck hook in this folder takes a nullable id for the same reason —
- * the view mounts whether or not a deck is open — and one fence is one sentence to keep.
- */
-export function opened(id: number | null): number {
-  if (id === null) throw new Error("No deck is open.");
-  return id;
-}
-
-/**
  * What one printing *does*, for the rule that files it — or nothing at all.
  *
  * `oracle_tags_for_printings` over a single id, which is the shape every add here has: the
@@ -391,7 +350,8 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
   // heading beside it named something else.
   const { marketplace } = useMarketplace();
 
-  const detailKey = ["decks", "detail", id, variant, marketplace.id];
+  const detailRead = deckDetailQuery(id, variant, marketplace.id);
+  const detailKey = detailRead.queryKey;
 
   /**
    * The pile `decks.default_category_id` names on **this** list, or `null` for Auto — what an
@@ -408,10 +368,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
    * that has gone answers Auto; `deck_add_card` then refuses it in words.
    */
   const defaultPileOf = async (deckId: number): Promise<number | null> => {
-    const detail = await queryClient.fetchQuery({
-      queryKey: ["decks", "detail", deckId, variant, marketplace.id],
-      queryFn: () => ipc.deckGet(deckId, variant, marketplace.id),
-    });
+    const detail = await queryClient.fetchQuery(deckDetailQuery(deckId, variant, marketplace.id));
     if (detail === null || detail.deck.defaultCategoryId === AUTO_CATEGORY) return null;
     const livePiles =
       variant === "theory"
@@ -424,11 +381,7 @@ export function useDeck(id: number | null, variant: DeckVariant = DEFAULT_VARIAN
     return pile === AUTO_CATEGORY ? null : pile;
   };
 
-  const query = useQuery({
-    queryKey: detailKey,
-    queryFn: () => ipc.deckGet(opened(id), variant, marketplace.id),
-    enabled: id !== null,
-  });
+  const query = useQuery(detailRead);
 
   /**
    * Rewrite one category slot in the cached answer, or drop it — addressed by the slot rather

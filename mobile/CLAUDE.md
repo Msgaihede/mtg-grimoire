@@ -113,8 +113,12 @@ file under `mobile/phone/` and enforces it.**
 ## Navigation is the URL
 
 `routes.ts` is the one grammar and the one place the two faces agree on a spelling: a view, a
-deck under Decks, and `?card=<id>` over any of them. `parsePlace` is total — a path that names
-nothing opens on the start view — and `placeHref` is the only thing that spells a place out.
+deck under Decks, `?folder=<id>` on the deck gallery, and `?card=<id>` over any of them. **The
+folder is the phone's alone** — the desktop gallery keeps its drawer in the page, so the desktop
+face neither reads nor writes it, and a crossing drops it like any other filter state. It is an
+optional field of `Place`, absent rather than `null` at the top level, so every place spelled
+before it is still whole. `parsePlace` is total — a path that names nothing opens on the start
+view — and `placeHref` is the only thing that spells a place out.
 
 - **The phone face has its own router**, `phone/router.ts`, hand-written over the History API with
   no dependency: `usePlace`, `navigate`, `back`, `linkTo`.
@@ -150,9 +154,10 @@ failure behind each at its own site:
 - **A control that changes the URL is a real link, not a button** — `<a {...linkTo(place)}>`, with
   a real `href`, so a middle click, "open in new tab" and "copy link" work and a screen reader
   hears *link*. The router takes **only an unmodified primary click that nothing else has
-  handled**; every other press is the browser's. The tabs, the Settings control, a deck's row in
-  the gallery and a deck's way back to it are all links. **A card tile is not**: a card opens a
-  sheet over the page it is on, and `CardTile`'s control is a button by design.
+  handled**; every other press is the browser's. The tabs, the Settings control, a deck's cover
+  and a folder's row in the gallery, a folder's way up and a deck's way back to it are all
+  links. **A card tile is not**, and neither is a card's row on a deck page: a card opens a sheet
+  over the page it is on, and `CardTile`'s control is a button by design.
 - **A card is a place here, and opening one is a push** — which is what lets Android's back
   gesture close the sheet. The two faces differ on this on purpose: a sheet over a phone page is
   something a reader leaves with Back, a modal over a desktop page is not.
