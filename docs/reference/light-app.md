@@ -1989,3 +1989,34 @@ page draws them all, unfolded.
 Driven at 360 and 800 wide over the `starter` seed's decks 1, 2 and 4, in headless Chromium 141 on
 Linux with touch emulation: nothing scrolls sideways — the page, the action sheet, the add search,
 the card sheet and Deck settings.
+
+### 7.7 Step 3.7 — light Settings, on both faces (2026-10-03)
+
+**The edition grew its Settings entries**: `Edition.settings`, `null` for every panel (the full
+edition, so it cannot fall behind a new panel) and `LIGHT_SETTINGS` for the light one — `prices`,
+`sync`, `review`, `hidden-tags`, `theory-marks`, `labels`, `cache`, `errors`, `danger`. Left out:
+`updates` and `backup` by the spec's name, `data-folder` (a path a browser or a phone cannot
+open) and `start-view` (a light install opens where its URL says). `edition.ts` carries each
+reason. `SettingsPage` is the edition's second reader, as spec §3.1 grants; `nav.ts` grew
+`panelsOf` and `groupsOf`, and a rail entry with no panel in it is not drawn.
+
+- **The desktop face** lands on the first entry it draws (`Card data`, where the full edition's
+  is `Updates`), searches only what it draws, and drops a hand-off naming a panel it leaves out.
+  The full edition is unchanged; no existing test was edited.
+- **The phone face** lists the same six groups as 52px rows; one opens at a time, its panels drawn
+  beneath it by the desktop's own components, its row pinned while they scroll. The group is not
+  in the URL, so Back leaves Settings from an open group as from a closed one. No search box.
+- **`SyncPanel` was welded** through `@/lib/externalLinks` (the plugin-opener, for *Connect
+  Patreon*). It is now `SyncPanelBody`, which takes `openLink`, and a one-line `SyncPanel` that
+  hands it `openExternal`; the phone face hands it a `window.open` until the host seam for opening
+  a link exists (phases 4 and 5).
+- **Driven in Chromium over the fake** (`mobile:dev` on port 5176): every group opened at 360 wide
+  with no sideways scroll (`scrollWidth` 360 for each), the Clear collection dialog over the
+  window rather than the list, the sync group at 800 in a `max-w-2xl` column, and the desktop
+  face at 1280×800 with six rail entries and `dropbox` matching nothing.
+
+**Open**: the phone face mounts no `useMarketplaceProgress`, so a price feed refreshed from the
+phone's Settings reports through its own mutation and the status read but not the progress event
+(`AppShell` is that hook's one caller); the Mana Pool row is still offered in a browser, which spec
+§4 says it should not be (the host-capability question is phase 5's); and the Sync panel's
+*Scan a code* asks for a camera on a host that may not grant one — phase 6's, with sync itself.

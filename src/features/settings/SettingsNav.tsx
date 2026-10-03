@@ -105,7 +105,7 @@ const ENTRY = cn(
  * `container-type: inline-size` — which is what every `@container` in this app compiles to —
  * applies **layout containment**, and a layout-contained box is the containing block for every
  * `position: fixed` descendant under it, exactly as a `transform` is. Settings panels mount
- * their dialogs **inline** — `DangerZonePanel.tsx:169` and `SyncPanel.tsx:1527` each render a
+ * their dialogs **inline** — `DangerZonePanel.tsx:169` and `SyncPanelBody.tsx:1518` each render a
  * `<ConfirmDialog>` in the middle of their own markup, and `Dialog.tsx:333` is the bare
  * `fixed inset-0` scrim underneath it, with no `createPortal` anywhere in this app. So a
  * container box wrapped around the page would size every settings scrim and every settings
@@ -122,6 +122,7 @@ export function SettingsNav({
   query,
   onQuery,
   badges,
+  groups = GROUP_ORDER,
 }: {
   /** The current group. Not marked current while `query` has words in it. */
   group: GroupId;
@@ -131,6 +132,12 @@ export function SettingsNav({
   onQuery: (query: string) => void;
   /** What each badge stands for. Zero draws no badge at all. */
   badges: Readonly<Record<BadgeId, number>>;
+  /**
+   * The entries to draw, in rail order — `nav.ts`'s `groupsOf` over the panels the edition
+   * draws, so a group with nothing in it is no entry. Every group when left out, which is the
+   * full edition's rail.
+   */
+  groups?: readonly GroupId[];
 }): JSX.Element {
   // Asked once rather than per entry: it is the same answer six times, and asking it here is
   // also what puts the rule in one place a reader can find.
@@ -210,7 +217,7 @@ export function SettingsNav({
       </label>
 
       <ul className={LIST}>
-        {GROUP_ORDER.map((id) => {
+        {groups.map((id) => {
           const meta = GROUPS[id];
           // **Zero draws no badge at all**, rather than a `0` — a count is a thing worth looking
           // at, and six entries each carrying a nought is a rail that always looks like it is

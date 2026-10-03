@@ -76,8 +76,11 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
 `src/lib/edition.ts`. The desktop shell reads an `Edition` from context — which rail rows to draw,
 whether to draw the caption, which view chords act — and the full edition is the default, so the
 desktop app provides nothing and `DesktopFace` provides `LIGHT_EDITION`. **A page never reads the
-edition, and nothing under `src/` asks where it is running**; `AppShell` is its one reader. A
-chord for a view outside the edition is **inert** — the digits do not move between editions.
+edition, and nothing under `src/` asks where it is running**; `AppShell` is one reader, and
+`SettingsPage` the other spec §3.1 names — `Edition.settings` is its entry list, `null` for every
+panel and `LIGHT_SETTINGS` for the light edition's. The phone face's Settings reads
+`LIGHT_SETTINGS` directly, because it *is* the light edition. A chord for a view outside the
+edition is **inert** — the digits do not move between editions.
 
 ## What the phone face may import
 
@@ -220,17 +223,20 @@ failure behind each at its own site:
 - **The phone pages are a skeleton.** Each real page — the filters sheet, the card sheet, the two
   cabinets, the deck editor — comes to the owner as built options before it is built, in phase 3,
   under the `frontend-design` skill like all UI here.
-- **Scanner and Settings are placeholders**: a sentence each, no camera and no permission asked.
+- **Scanner is a placeholder**: a sentence, no camera and no permission asked. Settings is the
+  light edition's groups as rows, each opening the desktop's own panels beneath it (step 3.7).
 - **The Collection and Wishlist walls draw open shelves only** — the desktop hooks fetch the
   cards of the shelves the reader has left open, and the wall draws them as one run with no
   heading, no fold and no way into a folder. **Search has its filters** (`phone/search/
   FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
   and everything else in a sheet that is page state rather than a place in the URL.
-- **The phone face writes decks, and nothing else yet** (step 3.5a, light-app.md §7.5). Every write
-  is the desktop editor's own mutation through `useDeckCore` — `useDeck` without the app store — so
-  a write here and one on the desktop are the same command with the same invalidations; the undo a
-  receipt offers is the desktop's (`useDeckUndo`), and only where the backend journals one. The
-  collection's and the wishlist's entry writes, and the card sheet's adds to them, are step 3.5b.
+- **The phone face writes decks and Settings, and nothing else yet.** Deck writes (step 3.5a,
+  light-app.md §7.5) are the desktop editor's own mutations through `useDeckCore` — `useDeck`
+  without the app store — so a write here and one on the desktop are the same command with the
+  same invalidations; the undo a receipt offers is the desktop's (`useDeckUndo`), and only where
+  the backend journals one. Settings' panels make the desktop's own writes (a marketplace, a
+  clear, a label). The collection's and the wishlist's entry writes, and the card sheet's adds to
+  them, are step 3.5b.
 - **No Android host, no WASM host, no service worker** — `public/light.webmanifest` is the whole
   of the PWA so far — **and no sync on a light install**: the phone face runs none and draws the
   mana line at rest. `mobile:tauri` is the desktop binary, not a light host.
