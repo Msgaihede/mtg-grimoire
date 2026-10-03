@@ -3725,7 +3725,7 @@ relay to disagree about a size the client cuts under.
 
 | Test | What it lands | Red when |
 | --- | --- | --- |
-| `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` | a copy added behind each of a trip's 19 stretches, a second trip, a peer that pulls after each | a baseline goes out over a pending write: `3 here, 4 there` behind 7 of the 19 (the mutation was run) |
+| `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` | a copy added behind each of a trip's stretches, counted by the test as it runs, a second trip, a peer that pulls after each | a baseline goes out over a pending write: `3 here, 4 there` behind 7 of the 19 (the mutation was run) |
 | `a_write_anywhere_beside_a_pull_is_counted_once_on_both_devices` | the same, with a peer's own copy of that row in the page | the write and the apply disagree about a counter |
 | `a_write_anywhere_in_a_baselines_emission_reaches_the_peer` | a copy added behind each stretch of one emission | the rows and the horizon are read apart: `3 here, 2 there` |
 | `leaving_waits_out_an_operation_in_flight_where_a_press_is_told_busy` | the command's own departure (`pairing::leave`) behind a held lane, on a paused clock, for ten of a press's bounds | it takes a press's lane: red, the mutation was run |
