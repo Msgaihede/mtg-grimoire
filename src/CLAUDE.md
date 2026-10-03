@@ -1270,7 +1270,8 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   `src/lib/tokens.test.ts` is the only thing that catches it.
 - **`<MotionConfig reducedMotion="user">` is mounted once, in `App.tsx`** — not `main.tsx`,
   which nothing in the suite or Storybook loads. Motion ships `reducedMotion: "never"`, so that
-  line is load-bearing rather than decorative.
+  line is load-bearing rather than decorative. The light app's phone face mounts the one other, in
+  `mobile/phone/PhoneApp.tsx`; `tokens.test.ts` holds the pair, one per face.
 - **It only reduces positional keys, which is a trap with a live example.** `marginBottom` is
   **not** among them, so the deck stack's 293px reflow would have travelled at full speed.
   **Any `motion` animation of a non-positional property needs its own `useReducedMotion()`
