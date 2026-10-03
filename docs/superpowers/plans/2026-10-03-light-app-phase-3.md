@@ -55,7 +55,7 @@ measured, one subsection per step).
 - [x] **3.2 — Collection** (#791, merged 2026-10-03). The cabinet: folders and shelves as headed groups, every shelf
   openable (deck groups and `Recently removed` included), the collection's figures, filters
   through the same sheet over `useCollection`. Two rows of one printing get two names.
-- [x] **3.3 — Wishlist.** The cabinet and its folders, the managed wishlist as a read, the
+- [x] **3.3 — Wishlist** (#792, merged 2026-10-03). The cabinet and its folders, the managed wishlist as a read, the
   `elsewhere` mark; a wish with no card to open is not a button that does nothing.
 - [x] **3.4 — Decks, read** (#787, merged 2026-10-03). The gallery with covers and folders; the deck page as one column —
   the commander first, then each stack (category) one above another with its count and its cards,
