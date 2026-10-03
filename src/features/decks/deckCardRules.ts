@@ -146,7 +146,8 @@ export function zoneClaims(
       zone: "companion",
       label: "Set as companion",
       categoryId: companion.id,
-      refusal: card.categoryId === companion.id ? ALREADY_HERE : companionRefusal(card, cards, spec),
+      refusal:
+        card.categoryId === companion.id ? ALREADY_HERE : companionRefusal(card, cards, spec),
     });
   }
   return claims;
