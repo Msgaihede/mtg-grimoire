@@ -11,7 +11,7 @@ import {
 } from "@/lib/ipc";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { autoCategoryFor, UNCATEGORIZED } from "./autoCategory";
-import { DEFAULT_CATEGORY_NAME, DEFAULT_VARIANT, opened } from "./useDeck";
+import { DEFAULT_CATEGORY_NAME, DEFAULT_VARIANT, opened } from "./deckQuery";
 
 /** Stable identities for "not loaded yet", so a consumer's `useMemo` does not re-run on every
  *  render of a panel that is still waiting. */

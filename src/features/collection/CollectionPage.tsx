@@ -29,7 +29,6 @@ import {
   FilterBar,
   StatedFiltersLine,
   type FilterLabels,
-  type TrayCell,
 } from "@/features/search/FilterBar";
 import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
@@ -122,7 +121,7 @@ import {
 import { PickCopies, type CopyChoice } from "./PickCopies";
 import { ShareFolderMenu, shareTargetFor } from "./ShareFolderMenu";
 import { pinnedFolders } from "./PinnedFolders";
-import { useCollection, type Collection } from "./useCollection";
+import { COLLECTION_TRAY, useCollection, type Collection } from "./useCollection";
 import {
   useCollectionFolders,
   useSetCollectionFolder,
@@ -449,30 +448,6 @@ function focusedElement(): HTMLElement | null {
   return document.activeElement instanceof HTMLElement ? document.activeElement : null;
 }
 
-/**
- * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
- *
- * The card search's printing cells — `border` among them, since a copy has its printing's frame —
- * then the three only a collection can ask: what the copy *is*, what state it is in, and whether a
- * sync left a question against it. **`finish` is the first of those three and not the card
- * search's**, although both trays name it: here it asks which finish this copy is, where the card
- * search asks which finishes the printing was published in (`FilterBar`'s finish cell carries
- * both readings). The absences are each a fact
- * about the list rather than an omission — there is no **Owned** pair because every row here is a
- * copy the reader has, no **All printings** because these *are* their printings, and no **Decks**
- * because that cell is the deck editor's Collection tab and asks about one deck.
- */
-const COLLECTION_TRAY: readonly TrayCell[] = [
-  "set",
-  "format",
-  "rarity",
-  "type",
-  "border",
-  "price",
-  "finish",
-  "condition",
-  "needsReview",
-];
 
 export function CollectionPage() {
   // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.

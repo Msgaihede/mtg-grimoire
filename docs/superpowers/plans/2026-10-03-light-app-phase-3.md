@@ -44,7 +44,7 @@ measured, one subsection per step).
 
 ## Steps
 
-- [ ] **3.1 — Search and the card sheet.** The sticky line (the box and one `Filters` button with
+- [x] **3.1 — Search and the card sheet** (#785, merged 2026-10-03). The sticky line (the box and one `Filters` button with
   the active count), the stated filters under it, and the filters sheet over the desktop's own
   `useCardSearch`: sort, format, colours and `Exact`, mana value, rarity, type, border, finish,
   owned, set, price, printings — faceted by `facets.ts` exactly as the desktop's tray is. The card
@@ -52,12 +52,12 @@ measured, one subsection per step).
   tags (oracle and art, with "never fetched" its own sentence) and the combos row's four states.
   Phase 1's leftovers closed here: a wall's refused next page says so and offers `Try again`;
   `facesOf` lives once. The `Open on …` rows wait for the host seams (phases 4 and 5).
-- [ ] **3.2 — Collection.** The cabinet: folders and shelves as headed groups, every shelf
+- [x] **3.2 — Collection.** The cabinet: folders and shelves as headed groups, every shelf
   openable (deck groups and `Recently removed` included), the collection's figures, filters
   through the same sheet over `useCollection`. Two rows of one printing get two names.
 - [ ] **3.3 — Wishlist.** The cabinet and its folders, the managed wishlist as a read, the
   `elsewhere` mark; a wish with no card to open is not a button that does nothing.
-- [ ] **3.4 — Decks, read.** The gallery with covers and folders; the deck page as one column —
+- [x] **3.4 — Decks, read.** The gallery with covers and folders; the deck page as one column —
   the commander first, then each stack (category) one above another with its count and its cards,
   the side rail last (validation, the bracket estimate, notes and to-do lists, tokens). Actual and
   Theory both readable; the deck query shared with the desktop's.

@@ -89,6 +89,7 @@ export function ShelfWall({
   onOpen,
   onNearEnd,
   resetKey,
+  footer,
 }: {
   /** What the wall is, for a screen reader: "Your collection", "Your wishlist". */
   label: string;
@@ -109,6 +110,12 @@ export function ShelfWall({
   /** Changes when this is a different list — a level, a filter, a sort — and sends the wall to
    *  its top. */
   resetKey: string;
+  /**
+   * Drawn after the last shelf, inside the scroller — `CardWall.footer`'s contract, and for its
+   * reason: the rows are absolutely placed, so anything in their box's own flow would be drawn
+   * under the first one. A page's `NextPageRefused` is what goes here.
+   */
+  footer?: ReactNode;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   const [measure, width] = useElementWidth<HTMLDivElement>();
@@ -274,6 +281,7 @@ export function ShelfWall({
           );
         })}
       </div>
+      {footer}
     </div>
   );
 }

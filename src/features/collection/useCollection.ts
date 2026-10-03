@@ -19,6 +19,7 @@ import {
   type ColorFilter,
   type ColorKey,
 } from "@/features/search/useCardSearch";
+import type { TrayCell } from "@/features/search/filterOptions";
 import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import type { Border } from "@/lib/border";
 import { CONDITIONS, type Condition } from "@/lib/conditions";
@@ -43,6 +44,33 @@ import { applySort, type SortDir, type SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { countsById, shelfFolderOf } from "./collectionShelfModel";
 import { useCollectionFolderList } from "./useCollectionFolders";
+
+/**
+ * Which of `FilterBar`'s tray cells the collection offers, in the order it draws them — on the
+ * desktop's bar and the light app's phone sheet alike, which is why it lives beside the hook that
+ * owns every one of them rather than in either page (moved here 2026-10-03).
+ *
+ * The card search's printing cells — `border` among them, since a copy has its printing's frame —
+ * then the three only a collection can ask: what the copy *is*, what state it is in, and whether a
+ * sync left a question against it. **`finish` is the first of those three and not the card
+ * search's**, although both trays name it: here it asks which finish this copy is, where the card
+ * search asks which finishes the printing was published in (`FilterBar`'s finish cell carries
+ * both readings). The absences are each a fact
+ * about the list rather than an omission — there is no **Owned** pair because every row here is a
+ * copy the reader has, no **All printings** because these *are* their printings, and no **Decks**
+ * because that cell is the deck editor's Collection tab and asks about one deck.
+ */
+export const COLLECTION_TRAY: readonly TrayCell[] = [
+  "set",
+  "format",
+  "rarity",
+  "type",
+  "border",
+  "price",
+  "finish",
+  "condition",
+  "needsReview",
+];
 
 /**
  * Rows per request. The backend clamps at 500 and defaults to this; a collection is
@@ -971,6 +999,16 @@ export function useCollection({
      * held level's wall: the one frame this hook exists to rule out.
      */
     figures,
+    /**
+     * Whether the read behind {@link figures} was refused, while there is no figure to show for
+     * it — `countsError`'s companion, for the one page that has to know.
+     *
+     * **An empty wall cannot say which empty it is without the figures**: no rows on the open
+     * shelves is an empty collection *or* one whose copies are all on folded shelves, and only
+     * the whole-level count tells them apart. The phone face's collection page says neither
+     * sentence when this is set, and says the read failed instead of drawing nothing.
+     */
+    figuresRefused: held === null && summary.isLoadingError,
     /** The rows of the level on screen, in wall order. */
     rows,
     /** Rows matching the filters at the level on screen, counted in full. `0` until the first page
