@@ -9,8 +9,9 @@
 //! [`frame_payload`] and `capture_payload` read the two and refuse a JSON body in words. A frame
 //! may carry a second JPEG behind the first, the same video frame at the camera's own resolution
 //! for the title and collector reads, and [`DETAIL_HEADER`] says where the first one ends. And the
-//! `#[tauri::command]`s, each of which admits the calling webview's label on the core's lease —
-//! see `LEASE` and `OPEN_ELSEWHERE` there for which commands take it and why.
+//! `#[tauri::command]`s — every one that uses the scanner admits the calling webview's label on
+//! the core's lease, and the status, `scanner_elsewhere` and the two reads take nothing; the
+//! core's module doc, with `LEASE` and `OPEN_ELSEWHERE`, says which and why.
 
 pub use grimoire_core::scanner::*;
 
@@ -244,7 +245,8 @@ pub async fn scanner_set_filters(
 }
 
 /// Whether another window holds the scanner. Asked by a second window's Scanner view, once a
-/// second while the answer is yes. Takes nothing — see the module doc for the commands that do.
+/// second while the answer is yes. Takes nothing — the core's module doc names the commands that
+/// do.
 #[tauri::command]
 pub fn scanner_elsewhere(state: tauri::State<'_, Arc<AppState>>, webview: tauri::Webview) -> bool {
     state.scanner.elsewhere(webview.label())

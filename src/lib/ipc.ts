@@ -45,7 +45,7 @@
  * `ShareRow`/`ShareFields`                        — `src-tauri/src/share/commands.rs`
  * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
  * `ScannerCaptured`/`ScannerPrefs`/
- * `ScannerTrayRow`/`ScannerTrayChoice`             — `src-tauri/src/scanner.rs`
+ * `ScannerTrayRow`/`ScannerTrayChoice`             — `crates/grimoire-core/src/scanner.rs`
  * `ScannerOptions`/`ScannerVerdict`/`ScannerFrameSize`/
  * `ScannerStages`/`ScannerStanding`/`ScannerTracked`/
  * `ScannerCollectorTry`/`ScannerCollector`/`ScannerOcr`/
@@ -7419,14 +7419,14 @@ export interface ScannerOptions {
 }
 
 /**
- * Where an asset came from — `AssetSource` in `src-tauri/src/scanner.rs`, lowercased.
+ * Where an asset came from — `AssetSource` in `crates/grimoire-core/src/scanner.rs`, lowercased.
  *
  * The load order, first hit wins: a file in `data/scanner/`, then the copy compiled into the
  * binary, then nothing. `file` also covers a file that is there and did not parse.
  */
 export type ScannerAssetSource = "file" | "embedded" | "absent";
 
-/** One file the scanner needs, and whether it is there — `Asset` in `src-tauri/src/scanner.rs`. */
+/** One file the scanner needs, and whether it is there — `Asset` in `crates/grimoire-core/src/scanner.rs`. */
 export interface ScannerAsset {
   /** The file the load looked at in `data/scanner/` — named even for an embedded or absent one. */
   path: string;
@@ -7438,7 +7438,7 @@ export interface ScannerAsset {
 }
 
 /**
- * What `scanner_status` answers — `ScannerStatus` in `src-tauri/src/scanner.rs`.
+ * What `scanner_status` answers — `ScannerStatus` in `crates/grimoire-core/src/scanner.rs`.
  *
  * The three assets are separate because they fail separately and the sentences differ: no
  * bundle means nothing can be named, no models mean the OCR tiers stand down and the
@@ -7453,7 +7453,7 @@ export interface ScannerStatus {
 }
 
 /**
- * What a captured frame is filed with — `Sidecar` in `src-tauri/src/scanner.rs`.
+ * What a captured frame is filed with — `Sidecar` in `crates/grimoire-core/src/scanner.rs`.
  *
  * Every field is a **string** rather than the number it reads as: this is a note written
  * beside a JPEG for a person grading the dataset later, and a missing figure is an empty
@@ -7467,7 +7467,7 @@ export interface ScannerSidecar {
   distance: string;
 }
 
-/** Where the capture landed — `Captured` in `src-tauri/src/scanner.rs`. */
+/** Where the capture landed — `Captured` in `crates/grimoire-core/src/scanner.rs`. */
 export interface ScannerCaptured {
   saved: string;
 }
@@ -7833,7 +7833,7 @@ export interface ScannerVerdict {
 }
 
 /**
- * How the reader last left the scanner — `ScannerPrefs` in `src-tauri/src/scanner.rs`, one
+ * How the reader last left the scanner — `ScannerPrefs` in `crates/grimoire-core/src/scanner.rs`, one
  * `app_meta` row. **camelCase**, unlike every scanner struct above it: it is this app's stored
  * preference and not the detector's JSON, so it follows the rest of this file. `filters` keeps
  * the crate's snake case inside it.

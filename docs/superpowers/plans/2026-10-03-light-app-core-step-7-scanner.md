@@ -42,7 +42,7 @@
 1. **The embedded assets reach the load.** A release build carries the bundle and the models in the binary; the core cannot ask `cfg(scanner_assets)`. Pinned by `ScannerState::carry`, called above `app.manage` in `desktop::start`, and by the load-order tests that hand `Embedded` in.
 2. **The model pair's sentences.** `TitleReader::load` read its files inside the crate; the core reads them through `platform::files` and keeps the sentence — pinned by `the_models_load_as_a_pair_from_one_place`'s new assertion that the refusal names both files.
 3. **The lease's clock.** `Instant` became `Tick`; the lease's tests move unedited but for the type.
-4. **A command still asking for the old managed state** would fail at run time with "state not managed" — the script refuses `ScannerState>` in the desktop's half, and the live pass drives the commands.
+4. **A command still asking for the old managed state** would fail at run time with "state not managed" — the script refuses `ScannerState>` in the desktop's half, and every command's managed type was checked against what `desktop::start` manages (the live pass that would have driven them could not run — Task 3).
 
 ---
 
@@ -65,8 +65,8 @@
 
 ### Task 3: verify, record, ship
 
-- [x] Every Rust gate, the WASM build, `--locked`, no `testing` in the shipped tree: core 2 989 and desktop 426 — 6b's 3 414 and the `Tick` test, none lost. The frontend's build, lint and suite.
+- [x] Every Rust gate, the WASM build, `--locked`, no `testing` in the shipped tree: core 2 989 and desktop 426 — 6b's 3 414 and the `Tick` test, none lost. The frontend's build and lint; its suite **12 918 of 12 919** — `ScannerPage.test.tsx`'s refused-camera test timed out a 1 s `findByText` at 1.46 s under the full run's load, and passed 40/40 three times alone. The branch changes no frontend code but `ipc.test.ts`'s import.
 - [ ] A live pass in `tauri dev`: the Scanner view's commands answer, and a second window is refused. **Not run**: Markus's own portable build was open, and a dev build beside it only opens a window in that app. Probes are written (`7-live-1.js`, `7-live-hold.js`, `7-live-2.js` in the session's scratchpad). In its place, a static check: all twelve commands ask for `State<Arc<AppState>>`, which is managed, and no `ScannerState` is managed or asked for.
-- [ ] A fresh reviewer subagent (Opus, read-only) on the branch's diff.
+- [x] A fresh reviewer subagent (Opus, read-only) on the branch's diff. **No must-fix.** It checked the embedded assets' path to the load and that no command can run before `carry`, `Tick`'s two arms, the file rewrites, `read_models`' sentences byte for byte against `TitleReader::load`, all twelve commands against the old file, all 42 tests (the only body changes `Instant` → `Tick` and the one new assertion), the fence, the router, `ipc.test.ts` and the lockfile. Its should-fixes were prose the move had made false — `.github/CLAUDE.md` and `ci-and-releases.md` still saying `crates/*` never runs `core`, comments in `desktop.rs`, `ipc.ts`, `verdictText.ts` and `card-scanner`'s `session.rs` naming the old file, and this crate's `CLAUDE.md` claiming every planned module had moved when the spec also named `share/snapshot` and `share/cache` — and seven nits; all fixed.
 - [x] Docs: `crates/grimoire-core/CLAUDE.md`, `src-tauri/CLAUDE.md` (*Card scanner*), `docs/reference/card-scanner.md` §9–§10, `docs/reference/light-app.md` §6.10, the spec's §2.8 note, the root `CLAUDE.md` row.
 - [ ] PR linked to #761, auto-merge and auto-fix; #761's step 7 line.

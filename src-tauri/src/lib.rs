@@ -165,8 +165,9 @@ pub use grimoire_core::reconcile;
 /// **Settings' four clears.** `clear_collection`, `clear_wishlist` and `clear_decks` are
 /// `&Connection` in and a DTO out; `clear_cache` takes [`images`]' byte cache as well.
 pub mod reset;
-/// **The card scanner, and its stored preferences and review tray.** See `scanner`'s own doc for
-/// the request body and the asset load order. Its commands are registered in `desktop.rs`.
+/// **The card scanner's commands**, over a glob re-export of `grimoire-core`'s `scanner` — whose
+/// doc has the asset load order, the lease, the prefs and the tray; this module's has the request
+/// body and the embedded assets. Its commands are registered in `desktop.rs`.
 pub mod scanner;
 /// **`grimoire-core`'s schema, and the two launch functions that could not move with it** —
 /// `prepare_database` and `prepare_data_dir`. See the module doc for where the cut is.

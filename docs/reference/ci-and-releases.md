@@ -48,7 +48,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router itself → **every job**;
   **`crates/*` → `frontend` and `rust`** (declared 2026-09-08 — it is what
   the fail-safe below was already doing for the `card-scanner` crate, whose `.rs` files
-  `ipc.test.ts` reads as text and whose `scripts/*.mjs` `eslint .` lints), **with
+  `ipc.test.ts` reads as text and whose `scripts/*.mjs` `eslint .` lints) **and `core` since
+  2026-10-03**, when the engine took `card-scanner` as a dependency, **with
   `crates/grimoire-core/**` above it → `frontend`, `rust` and `core`** (2026-10-02);
   prose and editor/release bookkeeping → neither; and **anything unrecognised → every**
   build job, `storybook` and `core` included.
@@ -221,9 +222,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   Windows compile and the native tests are the `rust` job's, through `--workspace`. There is
   no `dist/` stub and no Node, because the core has no `tauri-build`.
   **Its routing is narrower than `rust`'s**: the crate itself, the workspace's root files and
-  the pinned toolchain, plus the gate and the fail-safe — and not `src-tauri/**` or
-  `card-scanner`, which the engine does not depend on. The scanner's session glue is the
-  extraction's last step; the day it moves, `crates/*` gains `core`. Every arm that sets
+  the pinned toolchain, the gate and the fail-safe, and `crates/*` — `card-scanner`, which the
+  engine depends on since the scanner's session glue moved on 2026-10-03, the day that arm gained
+  `core` as it said it would — and never `src-tauri/**`, which the engine does not depend on.
+  Both legs therefore compile `card-scanner`, `ocrs`, `rten` and `image` too. Every arm that sets
   `core` sets `rust` too, and `ci-route.test.mjs` holds the router to that.
   **None of the job's own details were measured on it when this was written; its first run is
   the PR that adds it.** They are the removed `wasm` and `android` jobs' (the first attempt,

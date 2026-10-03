@@ -48,9 +48,10 @@ testing = []
 # The card scanner, for `scanner`'s session glue (the extraction's seventh step). Declared as
 # `src-tauri` declares it — a plain path dependency on a standalone package the workspace
 # excludes on purpose (the root `Cargo.toml` says why), with the app's two features: `corpus` for
-# the labels out of `corpus.db`, `ocr` for the two readers. **It compiles for all three targets**
-# and was measured on wasm32 before it came here: libsqlite3-sys is not in that tree at all, so
-# the crate's `bundled` asks nothing of a browser build. **It does not yet run in a browser** —
+# the labels out of `corpus.db`, `ocr` for the two readers. **It was measured on wasm32 before it
+# came here** — the core with it checks and builds clean, and libsqlite3-sys is not in that tree
+# at all, so the crate's `bundled` asks nothing of a browser build; Android is CI's `core` job to
+# compile, as for everything here. **It does not yet run in a browser** —
 # the crate's own threads and `Instant` panic there — and nothing calls it there before the light
 # app's phase 7 gives them a seam.
 card-scanner = { path = "../card-scanner", features = ["corpus", "ocr"] }

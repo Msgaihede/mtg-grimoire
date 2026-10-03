@@ -20,10 +20,12 @@ card sync, and `index/`, the facet index with its lifecycle; and the three feeds
 parts and both are here** (2026-10-03): `state::Store` and the lane, then the relay's client,
 the entitlement, the wire format, the socket's schedule, the sync panel's reads, and pairing
 with the identity under it. **And the scanner's session glue arrived with the seventh step**
-(2026-10-03), `scanner`, which takes `card-scanner` as a dependency — so every module the
-extraction planned to move has moved. `share/`, the mirror, the updater, live sync's connection
-manager (`sync_engine::live`, `tokio` tasks and a socket) and the scanner's raw request body and
-embedded assets are the desktop's for good.
+(2026-10-03), `scanner`, which takes `card-scanner` as a dependency — so every module on the
+seven steps' lists has moved. **One thing the spec's §2.3 named did not**: `share/snapshot` and
+`share/cache` were to move and were on no step's list, so they are still `src-tauri`'s, in
+`share/` with its publisher — a decision nobody has taken yet, not one taken against them. The
+mirror, the updater, live sync's connection manager (`sync_engine::live`, `tokio` tasks and a
+socket) and the scanner's raw request body and embedded assets are the desktop's for good.
 Every rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a
 module binds that module wherever it lives — moving a file changes which crate compiles it and
 nothing about what it must do. **That file's database and deck rules are this crate's now**: a
@@ -410,7 +412,7 @@ src-tauri/src/<module>/mod.rs` counts them:
 | `sync` (`src/sync/mod.rs`) | `AppState` and its `Deref`; `lock_db`, `lock_db_read`, `lock_plain` | the mirror's fields and the change mask (the pending pairing offer was the third, until it moved to `State` with the sync step) | never |
 | `index` (`src/index/mod.rs`, `src/index/facets/mod.rs`) | the `facet_cards` command, and no test: every one moved, onto a fixture this crate builds at head | a window | never |
 | `images` (`src/images/mod.rs`) | `serve`, `respond`, `fail`, `not_ready`, `IMAGE_MAX_AGE`; `spawn_upkeep`; 7 tests | `tauri::http`, an `AppHandle`; a thread that sleeps | never: how a picture reaches a page, and when to wake for a pass, are a host's |
-| `scanner` (`src/scanner/mod.rs`) | `compiled()` and the three `include_bytes!` it reads; the three request headers, `frame_payload`, `split_detail`, `capture_payload`; 8 tests | `cfg(scanner_assets)`, which `build.rs` sets and this crate's fence refuses; `tauri::ipc::InvokeBody` and `HeaderMap` | never: what a binary embeds and how bytes cross a host's IPC are the host's — the Android host carries a frame base64 (spec §2.4) |
+| `scanner` (`src/scanner/mod.rs`) | `compiled()` and the three `include_bytes!` it reads; the three request headers, `FramePayload`, `frame_payload`, `split_detail`, `capture_payload`; 8 tests | `cfg(scanner_assets)`, which `build.rs` sets and this crate's fence refuses; `tauri::ipc::InvokeBody` and `HeaderMap` | never: what a binary embeds and how bytes cross a host's IPC are the host's — the Android host carries a frame base64 (spec §2.4) |
 | `sync_engine` (`src/sync_engine/mod.rs`) | `live`, the connection manager — its socket, its backoff timers, the exit push — and its tests | `tokio` tasks, a WebSocket and an `AppHandle` it emits `sync:live` and `sync:applied` through | never: how a host keeps a socket open is the host's; `schedule` is the half that decides, and it is here |
 | `maintenance` | 9 tests — nothing of its code | a database `split` converted | never |
 | `import` | `read_import_file`, two helpers and 5 tests | a path the desktop's file dialog answered | never: a host reads its own file |

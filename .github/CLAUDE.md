@@ -22,9 +22,11 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   **`crates/grimoire-core/**` → `frontend`, `rust` and `core`** (2026-10-02), on an arm that
   must stay **above** `crates/*` — first match wins, and that arm would take the engine's tree
   and skip the one job that exists for it;
-  **`crates/*` → the same two as `src-tauri/**`** (the `card-scanner` package is compiled by
-  `rust`, and `frontend` reads eight of its `.rs` files as text for `ipc.test.ts` and lints its
-  `scripts/*.mjs`) — **and neither tree runs `core`**, because the engine depends on neither;
+  **`crates/*` → `frontend`, `rust` and `core`** (the `card-scanner` package is compiled by
+  `rust`, `frontend` reads eight of its `.rs` files as text for `ipc.test.ts` and lints its
+  `scripts/*.mjs`, and **`core` since 2026-10-03**, when the engine took the crate for the
+  scanner's session glue) — while **`src-tauri/**` never runs `core`**, because the engine does
+  not depend on the desktop;
   frontend sources, `.storybook/**`, the npm lockfile, configs and `.nvmrc` →
   `frontend` and `storybook`; **`scripts/` because `eslint .` lints it** → `frontend` alone;
   `rust-toolchain.toml` and `.github/actions/rust-toolchain/` → `frontend`, `rust` and `core`,

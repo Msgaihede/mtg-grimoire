@@ -710,8 +710,9 @@ pub fn run() {
             sync_pair::pairing::sync_device_rename,
             sync_pair::pairing::sync_device_revoke,
             sync_pair::pairing::sync_group_leave,
-            // The scanner, its prefs and its tray. The session's state is managed separately
-            // below — see scanner.rs; the prefs and the tray are `app_meta` rows on `AppState`.
+            // The scanner, its prefs and its tray. The session's state is the core's
+            // `State.scanner`, reached through `AppState`; the prefs and the tray are `app_meta`
+            // rows. See the core's `scanner` module.
             scanner::scanner_status,
             // Whether another window holds the scanner — one window scans at a time, on a lease
             // renewed by the open view's heartbeat, its frames and every tray or prefs write —
@@ -937,7 +938,8 @@ fn start(app: &tauri::AppHandle) {
     app.manage(updater.clone());
 
     // **The page mounts the app on this line**, so everything a command can reach must already
-    // be managed above it — `AppState`, the scanner's state, the updater — and the mirror's hook
+    // be managed above it — `AppState` (the scanner's state with it, told what this binary
+    // embeds), the updater — and the mirror's hook
     // must already be on the write connection. What follows is background work that reports
     // through its own events and polls, exactly as it did when the window waited for it.
     startup::settle(app, startup::StartupStatus::Ready);

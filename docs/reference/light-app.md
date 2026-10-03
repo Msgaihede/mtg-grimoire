@@ -1597,7 +1597,15 @@ as well (`rs-items.mjs`'s `inner`):
 and the page is untouched. All 42 of the module's tests pass where they now live; core **2 989**
 and desktop **426**, which is 6b's 3 414 and the `Tick` test, none lost; clippy for the workspace
 and for `wasm32`; the wasm build; `cargo check --locked`; no `testing` in the shipped tree; the
-frontend's build, lint and suite.
+frontend's build and lint, and its suite but one: `ScannerPage.test.tsx`'s refused-camera test
+timed out a 1 s `findByText` at 1.46 s under the full run's load and passed 40/40 three times
+alone — the branch touches no frontend code but `ipc.test.ts`'s import.
+
+**A fresh reviewer read the branch and found no must-fix** — every command, every test, the
+fence, the router and `read_models`' sentences checked against the old code. What it found was
+prose the move had made false, the CI docs above all (`crates/*` "never runs `core`"), and a
+claim here that every module the spec named had moved: `share/snapshot` and `share/cache` were
+on §2.3's list and on no step's.
 
 **No live pass this step, and why.** Markus's own portable build was running from Explorer, and
 a dev build launched beside it only opens a window in that app — the single-instance guard keys on
