@@ -1400,3 +1400,82 @@ fn a_claim_passed_before_a_gap_floors_after_it_and_takes_nothing() {
         "an emission recorded before the gap closed it"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Task 7 — a row nothing changed keeps its modification time (spec §9, §14 row 21)
+// ---------------------------------------------------------------------------------------------
+
+fn updated_at(conn: &Connection, card: &str) -> i64 {
+    conn.query_row(
+        "SELECT updated_at FROM collection_entries WHERE card_id = ?1",
+        [card],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// An op whose only field loses to a later edit made here changes nothing.
+#[test]
+fn an_op_whose_every_field_lost_leaves_updated_at_alone() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    stash(&a, "bolt", 2, 1_700_000_000);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    a.execute("UPDATE collection_entries SET notes = 'old'", [])
+        .unwrap();
+    let older = since(&a, &mut ma);
+    set_clock(&b, STAMP);
+    b.execute("UPDATE collection_entries SET notes = 'newer'", [])
+        .unwrap();
+    b.execute("UPDATE collection_entries SET updated_at = 1600000000", [])
+        .unwrap();
+    apply(&b, &older).unwrap();
+    assert_eq!(
+        (note(&b, "bolt"), updated_at(&b, "bolt")),
+        ("newer".to_owned(), 1_600_000_000)
+    );
+}
+
+/// A floor equal to what is here changes nothing either.
+#[test]
+fn a_claim_that_changes_nothing_leaves_updated_at_alone() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    stash(&a, "bolt", 2, 1_700_000_000);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute("UPDATE collection_entries SET updated_at = 1600000000", [])
+        .unwrap();
+    emission::start_logging(&a).unwrap();
+    emission::start_logging(&a).unwrap(); // resumed: the claim floors this held row
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    assert_eq!(
+        (copies(&b, "bolt"), updated_at(&b, "bolt")),
+        (2, 1_600_000_000)
+    );
+}
+
+/// ...and a deck keeps its place in the gallery, which sorts by `decks.updated_at`.
+#[test]
+fn a_deck_a_claim_changed_nothing_on_keeps_its_place_in_the_gallery() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    a.execute(
+        "INSERT INTO decks (name, created_at, updated_at) VALUES ('Krenko', 1700000000, 1700000000)",
+        [],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute("UPDATE decks SET updated_at = 1600000000", [])
+        .unwrap();
+    emission::start_logging(&a).unwrap();
+    emission::start_logging(&a).unwrap();
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    let at: i64 = b
+        .query_row(
+            "SELECT updated_at FROM decks WHERE name = 'Krenko'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(at, 1_600_000_000);
+}

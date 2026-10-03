@@ -2231,30 +2231,44 @@ fn update_row(
     parents: &BTreeMap<&'static str, Sql>,
     uid: &str,
 ) -> Result<String, String> {
+    // **A column that already holds the value is not written.** `updates` answers every field
+    // the incoming ops *won*, and a claim — a whole row — wins every field this device never
+    // edited, so without this a claim equal to the row would still write it and stamp it now.
+    //
+    // The comparison is `Value`'s own, storage class and all, so it can only be wrong in the
+    // safe direction: an equal value that reads back as another class (`2` against `2.0`, `'5'`
+    // against `5`) is written, exactly as every column was before this, and costs a stamp
+    // rather than an edit. It never skips a value that differs.
     let pairs = updates(spec, g, combined, parents);
-    if !pairs.is_empty() || meta.timestamps {
-        let mut sets: Vec<String> = pairs
-            .iter()
-            .enumerate()
-            .map(|(i, (c, _))| format!("{c} = ?{}", i + 1))
-            .collect();
-        if meta.timestamps {
-            sets.push("updated_at = unixepoch()".to_owned());
-        }
-        let mut vals: Vec<Sql> = pairs.into_iter().map(|(_, v)| v).collect();
-        let hole = vals.len() + 1;
-        vals.push(Sql::Text(uid.to_owned()));
-        conn.execute(
-            &format!(
-                "UPDATE {} SET {} WHERE sync_uid = ?{hole}",
-                meta.table,
-                sets.join(", ")
-            ),
-            rusqlite::params_from_iter(vals.iter()),
-        )
-        .map_err(|e| e.to_string())?;
-    }
+    let pairs: Vec<(String, Sql)> = if pairs.is_empty() {
+        pairs
+    } else {
+        let cols: Vec<&str> = pairs.iter().map(|(c, _)| c.as_str()).collect();
+        let current: Vec<Sql> = conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM {} WHERE sync_uid = ?1",
+                    cols.join(", "),
+                    meta.table
+                ),
+                [uid],
+                |r| (0..cols.len()).map(|i| r.get::<_, Sql>(i)).collect(),
+            )
+            .map_err(|e| e.to_string())?;
+        pairs
+            .into_iter()
+            .zip(current)
+            .filter(|((_, new), old)| new != old)
+            .map(|(pair, _)| pair)
+            .collect()
+    };
 
+    // §8.2 per counter: deltas apply to what this device holds, and a claim can only raise that
+    // floor. A counter that ends where it stands is no change (design 2026-10-03 §9). Every
+    // counter is decided before anything is written, so the one `UPDATE` below carries the
+    // fields and the counters together — or, on `Floor::DeleteAtZero`, nothing is written
+    // before the row goes.
+    let mut counter_sets: Vec<(&str, i64)> = Vec::new();
     for (name, floor) in meta.counters {
         let delta = g.resolved.counters.get(*name).copied().unwrap_or(0);
         let claim = g.resolved.claims.get(*name).copied();
@@ -2282,14 +2296,7 @@ fn update_row(
             Some(c) => (current + delta).max(c),
             None => current + delta,
         };
-        match floor {
-            Floor::Clamp => {
-                conn.execute(
-                    &format!("UPDATE {} SET {name} = ?1 WHERE sync_uid = ?2", meta.table),
-                    rusqlite::params![next.max(0), uid],
-                )
-                .map_err(|e| e.to_string())?;
-            }
+        let value = match floor {
             Floor::DeleteAtZero if next <= 0 => {
                 conn.execute(
                     &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
@@ -2298,15 +2305,46 @@ fn update_row(
                 .map_err(|e| e.to_string())?;
                 return Ok(uid.to_owned());
             }
-            Floor::DeleteAtZero => {
-                conn.execute(
-                    &format!("UPDATE {} SET {name} = ?1 WHERE sync_uid = ?2", meta.table),
-                    rusqlite::params![next, uid],
-                )
-                .map_err(|e| e.to_string())?;
-            }
+            Floor::Clamp => next.max(0),
+            Floor::DeleteAtZero => next,
+        };
+        if value != current {
+            counter_sets.push((name, value));
         }
     }
+
+    // **Nothing changed, nothing written** — not even `updated_at`. A row stamped now by an
+    // apply that changed nothing is claimed at now by this device's next baseline, beating
+    // genuinely newer edits made between (the baseline design §10.2), and jumps to the top of the
+    // deck gallery, which sorts by it. It is also a row write the update hook reports, so the
+    // mirror and every other window would refresh for nothing.
+    if pairs.is_empty() && counter_sets.is_empty() {
+        return Ok(uid.to_owned());
+    }
+    let mut sets: Vec<String> = Vec::new();
+    let mut vals: Vec<Sql> = Vec::new();
+    for (c, v) in pairs {
+        vals.push(v);
+        sets.push(format!("{c} = ?{}", vals.len()));
+    }
+    for (name, value) in counter_sets {
+        vals.push(Sql::Integer(value));
+        sets.push(format!("{name} = ?{}", vals.len()));
+    }
+    if meta.timestamps {
+        sets.push("updated_at = unixepoch()".to_owned());
+    }
+    vals.push(Sql::Text(uid.to_owned()));
+    conn.execute(
+        &format!(
+            "UPDATE {} SET {} WHERE sync_uid = ?{}",
+            meta.table,
+            sets.join(", "),
+            vals.len()
+        ),
+        rusqlite::params_from_iter(vals.iter()),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(uid.to_owned())
 }
 
