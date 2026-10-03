@@ -1662,17 +1662,37 @@ renamed what it imported.
 commands is in the table, on `DESKTOP_ONLY` (16, each with its reason — windows, the updater, the
 file dialogs, the mirror, the launch, the socket) or on `NOT_YET` (153), and in only one; nothing
 on either list or in the table is a command the app does not register; and every table entry takes
-exactly its wrapper's arguments, by name and in order. **Both were mutated and went red** — a
+exactly its wrapper's arguments, by name, in order and by type. **Both were mutated and went red** — a
 renamed argument and a name taken off `NOT_YET`. **The arguments test found something the day it
 was written**: its first version told Tauri's own parameters apart by *name*, and dropped
 `price_movers`' `window`, a span of time; it reads their `tauri::` *type* now.
 
-**Tests**: the table's own four — every kind through its arm, each refusal in words (no such
-command, arguments that do not parse, snake_case where camelCase is the wire, a body where none
-belongs and none where one does), three real reads through `dispatch` against what their functions
-answer, and no name declared twice — and the fence's three. `dispatch`'s future is checked
-`Sendable`. Clippy for the workspace and for `wasm32`, and the WASM build, are clean with all 88
-arms in one `async fn`.
+**Tests**: the table's own five and the fence's four.
+
+- **Every kind through its arm**, and the two that look alike told apart: over a warm facet
+  index, an `owned` write publishes the index again and a `write` leaves it — the one thing
+  `with_write_owned` adds. **A read answers while another thread holds the write connection**, so
+  a `read` arm that took the writer's would time out.
+- **Each refusal in words**: no such command, arguments that do not parse, snake_case where
+  camelCase is the wire, a body where none belongs and none where one does.
+- **Four real reads through `dispatch`, compared with their functions' own answers** over rows
+  that tell a wrong answer from a right one: three decks, the third with four history rows, asked
+  for its two newest — an entry that swapped its two integers would answer the second deck's one
+  row, and one that dropped the limit all four; `deck_get` with its optional marketplace left out;
+  a read with no arguments; `combos_for_card`.
+- **No name declared twice**, and the fence's arguments test compares **types** as well as names,
+  normalised to what they name (`crate::sorting::Marketplace` is `Marketplace`).
+- **`dispatch` holds nothing across an `.await`** — checked over the real table and over the
+  kinds' own, whose arms the real table does not expand yet.
+
+**Each was mutated and went red**: the `owned` arm swapped for plain `with_write`, and
+`deck_audit_list`'s two arguments swapped. Clippy for the workspace and for `wasm32`, and the WASM
+build, are clean with all 88 arms in one `async fn`.
+
+**A fresh reviewer compared all 88 entries with their wrappers by hand and found none that answers
+differently.** What it found was tests proving less than they said — the first version of the
+reads test passed on an empty database whatever the bodies did, the kinds test could not tell
+`owned` from `write`, and the fence compared argument names and not types — all closed above.
 
 **Nothing on the desktop changed**: its wrappers are untouched and do not call `dispatch`, so
 there is no live pass to make and no upgrade to compare. **Nothing has called `dispatch` from a
@@ -1687,4 +1707,10 @@ real host yet** — that is phases 4 and 5.
   host's `[dependencies]`).
 - The writes, tasks and bytes commands join the table as phase 3's pages ask for them — one line
   in `commands!`, one name off `NOT_YET`.
+- **A sixth kind, before five of the reads on `NOT_YET` can join**: `combos_status`,
+  `oracle_tags_status`, `art_tags_status`, `sync_status` and `facet_cards` take the `State` rather
+  than a connection, and the table has no kind for "the blocking pool, the `Arc<State>`, no body" —
+  `task` runs where it stands and `bytes` needs a body.
+- **The chain from the table to the page is unpinned for 14 of the 88 reads**, which
+  `ipc.test.ts` names nowhere — eight of them with arguments (the spec's §2.4 note lists them).
 - `share/snapshot` and `share/cache`, which the spec listed and no step moved.

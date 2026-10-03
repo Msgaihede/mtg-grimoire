@@ -77,13 +77,15 @@ pub enum Kind {
     Bytes,
 }
 
-/// One row of [`TABLE`]: a command's name, its kind and its argument names as declared — the
-/// snake_case names of the desktop wrapper's parameters, which the parity test compares.
+/// One row of [`TABLE`]: a command's name, its kind, and its arguments' names and types as
+/// declared — the desktop wrapper's own parameters, which the parity test compares with both.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Entry {
     pub name: &'static str,
     pub kind: Kind,
     pub args: &'static [&'static str],
+    /// Each argument's type as written, beside [`Entry::args`].
+    pub types: &'static [&'static str],
 }
 
 /// What a call names that the table does not have.
@@ -93,8 +95,7 @@ pub fn no_such(name: &str) -> String {
 
 /// A command's arguments, read from the call's JSON — `null` and an absent object both read as
 /// no arguments, since a call to a command that takes none may send either.
-#[doc(hidden)]
-pub fn parse<T: DeserializeOwned>(name: &str, args: Value) -> Result<T, String> {
+pub(crate) fn parse<T: DeserializeOwned>(name: &str, args: Value) -> Result<T, String> {
     let args = if args.is_null() {
         Value::Object(serde_json::Map::new())
     } else {
@@ -104,21 +105,18 @@ pub fn parse<T: DeserializeOwned>(name: &str, args: Value) -> Result<T, String> 
 }
 
 /// A command's answer, as the JSON a host hands back.
-#[doc(hidden)]
-pub fn answer<T: serde::Serialize>(name: &str, answer: T) -> Result<Value, String> {
+pub(crate) fn answer<T: serde::Serialize>(name: &str, answer: T) -> Result<Value, String> {
     serde_json::to_value(answer).map_err(|e| format!("{name}: its answer did not serialize: {e}"))
 }
 
 /// Work on the blocking pool that did not come back — a panic in it, natively.
-#[doc(hidden)]
-pub fn lost(name: &str, e: Lost) -> String {
+pub(crate) fn lost(name: &str, e: Lost) -> String {
     format!("{name}: the work behind it failed: {e}")
 }
 
 /// Every kind but `bytes` refuses a call that carries a body: a host that sent one has called
 /// the wrong command, and dropping the bytes would hide that.
-#[doc(hidden)]
-pub fn no_body(name: &str, body: &Option<Vec<u8>>) -> Result<(), String> {
+pub(crate) fn no_body(name: &str, body: &Option<Vec<u8>>) -> Result<(), String> {
     match body {
         Some(_) => Err(format!("{name} takes no raw body.")),
         None => Ok(()),
@@ -126,8 +124,11 @@ pub fn no_body(name: &str, body: &Option<Vec<u8>>) -> Result<(), String> {
 }
 
 /// A `bytes` command's body, or the refusal for a call that carried none.
-#[doc(hidden)]
-pub fn needs_body(name: &str, body: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
+///
+/// Only a `bytes` entry calls it, and the real table has none yet — the kinds' own test table is
+/// its caller until the scanner's frame joins.
+#[allow(dead_code)]
+pub(crate) fn needs_body(name: &str, body: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
     body.ok_or_else(|| format!("{name} needs a raw body."))
 }
 
@@ -216,6 +217,7 @@ macro_rules! commands {
                 name: stringify!($name),
                 kind: kind!($kind),
                 args: &[$(stringify!($arg)),*],
+                types: &[$(stringify!($ty)),*],
             }
         ),*];
 
@@ -572,6 +574,14 @@ mod tests {
         }
     }
 
+    /// **The same fence over the kinds' own table** — the real table's `dispatch` expands only
+    /// the `read` arm, so a lock held across an `.await` in any other arm would go unseen there.
+    #[allow(dead_code)]
+    fn every_kind_holds_nothing_across_a_call(state: &Arc<State>) {
+        fn sendable<T: crate::platform::Sendable>(_: T) {}
+        sendable(kinds::dispatch(state, "", Value::Null, None));
+    }
+
     #[tokio::test]
     async fn every_kind_answers_through_its_own_arm() {
         let (state, _dir) =
@@ -580,6 +590,12 @@ mod tests {
             let state = state.clone();
             async move { kinds::dispatch(&state, name, args, body).await }
         };
+        // A warm facet index, so `owned` and `write` can be told apart: the one thing an owned
+        // write does that a plain one does not is publish the index again with its `owned`
+        // dimension re-read.
+        crate::index::lifecycle::build_now(&state).expect("an index over the fixture");
+        let index = || crate::index::lifecycle::current(&state).expect("a warm index");
+        let built = index();
         assert_eq!(
             call(
                 "meta_write",
@@ -588,6 +604,10 @@ mod tests {
             )
             .await,
             Ok(Value::Null)
+        );
+        assert!(
+            Arc::ptr_eq(&built, &index()),
+            "a plain write left the index alone"
         );
         assert_eq!(
             call("meta_read", json!({ "key": "probe" }), None).await,
@@ -601,6 +621,10 @@ mod tests {
             )
             .await,
             Ok(Value::Null)
+        );
+        assert!(
+            !Arc::ptr_eq(&built, &index()),
+            "an owned write publishes the index again"
         );
         assert_eq!(
             call("meta_read", json!({ "key": "probe" }), None).await,
@@ -627,6 +651,38 @@ mod tests {
             ]
         );
         assert_eq!(kinds::TABLE[4].args, ["offset"]);
+        assert_eq!(kinds::TABLE[4].types, ["usize"]);
+    }
+
+    /// **A read holds the read connection and never the writer's**: answered while another
+    /// thread holds the write connection, where a read arm that took the writer's would wait for
+    /// it — and in a browser, with one connection, that is the same mutex anyway.
+    #[tokio::test]
+    async fn a_read_answers_while_the_write_connection_is_held() {
+        let (state, _dir) =
+            crate::state::fixtures::on_files("commands-reader", "http://127.0.0.1:1");
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (done_tx, done_rx) = std::sync::mpsc::channel::<()>();
+        let holder = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let _writer = state.lock_db();
+                held_tx.send(()).expect("the test is listening");
+                let _ = done_rx.recv();
+            })
+        };
+        held_rx.recv().expect("the writer is held");
+        let answer = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            kinds::dispatch(&state, "meta_read", json!({ "key": "probe" }), None),
+        )
+        .await;
+        done_tx.send(()).expect("the holder is waiting");
+        holder.join().expect("the holder let go");
+        assert_eq!(
+            answer.expect("the read waited for the write connection"),
+            Ok(Value::Null)
+        );
     }
 
     /// Every way a call can be wrong is a sentence, and none of them is a panic.
@@ -653,36 +709,103 @@ mod tests {
         assert!(none.contains("needs a raw body"), "{none}");
     }
 
-    /// **The real table answers what the functions answer**, through the wire's own spelling — a
-    /// read with no arguments, one whose arguments are camelCase, and one with an optional
-    /// argument left out, which `ipc.ts` does rather than sending `null`.
+    /// **The real table answers what the functions answer**, through the wire's own spelling —
+    /// over rows that tell a wrong answer from a right one. Three decks, the third with four
+    /// history rows: asked for the third deck's two newest, an entry that swapped its two
+    /// integers would answer the second deck's one row, and one that dropped the limit all four.
+    /// A read with no arguments, and one with its optional argument left out, as `ipc.ts` leaves
+    /// one out rather than sending `null`.
     #[tokio::test]
     async fn the_reads_answer_what_their_functions_answer() {
         let (state, _dir) =
             crate::state::fixtures::on_files("commands-reads", "http://127.0.0.1:1");
-        let expected_zoom = json!(crate::zoom::stored(&state.lock_db_read()));
-        assert_eq!(
-            dispatch(&state, "card_zoom", Value::Null, None).await,
-            Ok(expected_zoom)
-        );
+        let third = {
+            let conn = state.lock_db();
+            let deck = |name: &str| {
+                crate::deck::create_deck(
+                    &conn,
+                    &crate::deck::DeckInput {
+                        name: name.into(),
+                        ..Default::default()
+                    },
+                )
+                .expect("a deck")
+                .id
+            };
+            let ids = [deck("First"), deck("Second"), deck("Third")];
+            for n in 0..3 {
+                crate::deck_audit::record(
+                    &conn,
+                    ids[2],
+                    "live",
+                    "deck",
+                    None,
+                    &json!({ "field": "probe", "n": n }),
+                    0,
+                )
+                .expect("a history row");
+            }
+            ids[2]
+        };
+        assert_ne!(third, 2, "the swap below has to land on a different deck");
+
+        let expected = json!(crate::deck_audit::list(&state.lock_db_read(), third, 2).unwrap());
+        assert_eq!(expected.as_array().map(Vec::len), Some(2));
         assert_eq!(
             dispatch(
                 &state,
                 "deck_audit_list",
-                json!({ "deckId": 1, "limit": 5 }),
+                json!({ "deckId": third, "limit": 2 }),
                 None
             )
             .await,
-            Ok(json!([]))
+            Ok(expected)
         );
-        let combos = dispatch(
-            &state,
-            "combos_for_card",
-            json!({ "oracleId": "none", "ownedOnly": false, "limit": 5, "offset": 0 }),
-            None,
+
+        let expected = json!(crate::deck::get_deck(
+            &state.lock_db_read(),
+            third,
+            "live",
+            crate::sorting::Marketplace::from_opt(None),
         )
-        .await;
-        assert!(combos.is_ok(), "{combos:?}");
+        .unwrap());
+        assert_eq!(
+            dispatch(
+                &state,
+                "deck_get",
+                json!({ "id": third, "variant": "live" }),
+                None
+            )
+            .await,
+            Ok(expected)
+        );
+
+        let expected = json!(crate::zoom::stored(&state.lock_db_read()));
+        assert_eq!(
+            dispatch(&state, "card_zoom", Value::Null, None).await,
+            Ok(expected)
+        );
+
+        let expected = json!(crate::combos::card_combos(
+            &state.lock_db_read(),
+            "none",
+            None,
+            None,
+            false,
+            5,
+            0
+        )
+        .unwrap());
+        assert_eq!(
+            dispatch(
+                &state,
+                "combos_for_card",
+                json!({ "oracleId": "none", "ownedOnly": false, "limit": 5, "offset": 0 }),
+                None,
+            )
+            .await,
+            Ok(expected)
+        );
     }
 
     #[test]

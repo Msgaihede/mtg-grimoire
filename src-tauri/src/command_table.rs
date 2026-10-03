@@ -268,10 +268,34 @@ fn sources() -> Vec<String> {
     out
 }
 
-/// The parameter names `name`'s `#[tauri::command]` wrapper takes, less the ones Tauri fills in
-/// itself — the state, the window, the request, the app, each a `tauri::` type — which leaves
-/// the names a page sends.
-fn wrapper_args(sources: &[String], name: &str) -> Vec<String> {
+/// A type as text, compared on what it names rather than where from: whitespace dropped and every
+/// path cut to its last segment, so the table's `crate::sorting::Marketplace` and a wrapper's
+/// `Marketplace` are one type, while `Option<String>` and `Option<Marketplace>` are two.
+fn normalise(ty: &str) -> String {
+    let compact: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut out = String::new();
+    let mut segment = String::new();
+    let mut chars = compact.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if ch.is_alphanumeric() || ch == '_' {
+            segment.push(ch);
+        } else if ch == ':' && chars.peek() == Some(&':') {
+            chars.next();
+            segment.clear();
+        } else {
+            out.push_str(&segment);
+            segment.clear();
+            out.push(ch);
+        }
+    }
+    out.push_str(&segment);
+    out
+}
+
+/// The parameters `name`'s `#[tauri::command]` wrapper takes, as `(name, type)`, less the ones
+/// Tauri fills in itself — the state, the window, the request, the app, each a `tauri::` type —
+/// which leaves what a page sends.
+fn wrapper_args(sources: &[String], name: &str) -> Vec<(String, String)> {
     let needle = format!("fn {name}(");
     let mut found = Vec::new();
     for text in sources {
@@ -317,7 +341,7 @@ fn wrapper_args(sources: &[String], name: &str) -> Vec<String> {
                         let filled = ty.contains("tauri::")
                             || ["AppHandle", "Webview", "WebviewWindow"].contains(&ty);
                         if !filled {
-                            names.push(pname.to_owned());
+                            names.push((pname.to_owned(), normalise(ty)));
                         }
                     }
                     current.clear();
@@ -370,6 +394,10 @@ fn every_registered_command_is_in_the_table_or_on_one_list() {
     );
 }
 
+/// **By name, in order, and by type.** The names are the wire; the types are what the wire is
+/// read as — `Option<String>` where the wrapper takes `Option<Marketplace>` would refuse a value
+/// the desktop reads as TCGplayer, and an `i64` where it takes a `u32` would let a negative
+/// limit through.
 #[test]
 fn every_command_in_the_table_takes_its_wrappers_arguments() {
     let sources = sources();
@@ -377,12 +405,33 @@ fn every_command_in_the_table_takes_its_wrappers_arguments() {
         .iter()
         .filter_map(|entry| {
             let wrapper = wrapper_args(&sources, entry.name);
-            let table: Vec<_> = entry.args.iter().map(|a| a.to_string()).collect();
+            let table: Vec<_> = entry
+                .args
+                .iter()
+                .zip(entry.types)
+                .map(|(arg, ty)| (arg.to_string(), normalise(ty)))
+                .collect();
             (wrapper != table)
                 .then(|| format!("{}: wrapper {wrapper:?}, table {table:?}", entry.name))
         })
         .collect();
     assert!(mismatched.is_empty(), "{mismatched:#?}");
+}
+
+#[test]
+fn a_type_is_compared_on_what_it_names_and_not_where_from() {
+    assert_eq!(
+        normalise("Option < crate::sorting::Marketplace >"),
+        "Option<Marketplace>"
+    );
+    assert_eq!(
+        normalise("Vec<grimoire_core::collection::CollectionImportItem>"),
+        "Vec<CollectionImportItem>"
+    );
+    assert_ne!(
+        normalise("Option<String>"),
+        normalise("Option<Marketplace>")
+    );
 }
 
 /// The reasons are the list's whole point: one left blank is a decision nobody wrote down.

@@ -329,10 +329,12 @@ the fence between them (light-app spec §2.4; [light-app.md](../../docs/referenc
 - **The name and the arguments are the desktop wrapper's, exactly** — they are the wire. The
   arguments arrive camelCase (`rename_all`, as Tauri renames a wrapper's own), and an absent
   `Option` is `None`, which is what `ipc.ts` relies on when it leaves one out.
-  `every_command_in_the_table_takes_its_wrappers_arguments` compares the two by name and in
-  order; **it found `price_movers`' `window` argument the day it was written**, which a filter by
-  parameter *name* had dropped as a window — Tauri's own parameters are told apart by their
-  `tauri::` type, never their name.
+  `every_command_in_the_table_takes_its_wrappers_arguments` compares the two by name, in order
+  **and by type** (each normalised to what it names, so `crate::sorting::Marketplace` is
+  `Marketplace` — an `Option<String>` where the wrapper takes `Option<Marketplace>` would refuse
+  a value the desktop reads as TCGplayer); **it found `price_movers`' `window` argument the day it
+  was written**, which a filter by parameter *name* had dropped as a window — Tauri's own
+  parameters are told apart by their `tauri::` type, never their name.
 - **The body is the wrapper's own body**, its connection named `conn` — so a command answers the
   same on every host. A name the body's module imported **privately** does not cross the entry's
   glob, so it is imported at the top of `commands.rs` (`Marketplace`, `CardFilters`,
@@ -342,7 +344,11 @@ the fence between them (light-app spec §2.4; [light-app.md](../../docs/referenc
   `owned` (`collection_source::with_write_owned`), `task` (awaited where it stands, bound to the
   `Arc<State>`), `bytes` (blocking pool, with the call's raw body). **Only `read` is in the table
   so far**; the other four are proven by `commands::tests::kinds`, a table of its own — an arm of
-  the macro nothing expands is an arm nothing has compiled.
+  the macro nothing expands is an arm nothing has compiled. **The two that look alike are told
+  apart there**: over a warm facet index an `owned` write publishes the index again and a `write`
+  leaves it, and a `read` answers while another thread holds the write connection. A sixth kind —
+  the blocking pool with the `Arc<State>` and no body — is owed before the five `NOT_YET` reads
+  that take the `State` rather than a connection can join (`combos_status` and its siblings).
 - **Every refusal is a sentence**: a name the table does not have, arguments that do not parse
   (the field serde misses is named, camelCase), a raw body sent to a command that takes none, and
   none sent to a `bytes` one.

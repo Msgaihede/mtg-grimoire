@@ -41,7 +41,7 @@ Every `#[tauri::command]` under `src-tauri/src`, read by script with what its bo
 1. **An argument whose name or case differs from the wrapper's** — a host's call refused. Pinned by `every_command_in_the_table_takes_its_wrappers_arguments` and by the kinds test's camelCase/snake_case pair.
 2. **A desktop command nobody placed** — the lists stop describing the app. Pinned by `every_registered_command_is_in_the_table_or_on_one_list`.
 3. **A kind nothing in the real table uses** — macro code nothing compiles. Pinned by `commands::tests::kinds`.
-4. **A body that answers differently from its wrapper** — drafted from the wrapper itself, and three reads checked through `dispatch` against their functions.
+4. **A body that answers differently from its wrapper** — drafted from the wrapper itself, compared with it by hand by a fresh reviewer (all 88), and four reads checked through `dispatch` against their functions over rows a swapped or dropped argument cannot fake.
 
 ---
 
@@ -71,7 +71,7 @@ Every `#[tauri::command]` under `src-tauri/src`, read by script with what its bo
 
 ### Task 4: verify, record, ship
 
-- [ ] Every Rust gate, both clippies, the WASM build; lint over the new script.
-- [ ] A fresh reviewer subagent (Opus, read-only).
+- [x] Every Rust gate, both clippies, the WASM build; lint over the new script.
+- [x] A fresh reviewer subagent (Opus, read-only). **No must-fix**: it compared all 88 entries with their wrappers by hand and found none that answers differently. Its should-fixes were tests that proved less than they said — the reads test passed on an empty database whatever the bodies did (now four reads against their functions over rows that tell a swapped or dropped argument apart), the kinds test could not tell `owned` from `write` or a read on the writer's connection (now over a warm index, and with the writer held on another thread), and the fence compared names and not types (now both). Each new claim was mutated and went red. The spec note's two wrong claims (`async` "a keyword"; `ipc.test.ts` reaching every entry) are corrected, the helpers the macro calls are crate-private, and the kinds' arms are fenced `Sendable` too.
 - [x] Docs: `crates/grimoire-core/CLAUDE.md` (*The command table*), `src-tauri/CLAUDE.md` (a new command's third decision), `docs/reference/light-app.md` §6.11, the spec's §2.4 note, the root `CLAUDE.md` row.
 - [ ] PR linked to #761 once step 7's #773 has merged, auto-merge and auto-fix; #761's table line.
