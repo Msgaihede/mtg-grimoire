@@ -111,10 +111,6 @@ fn copies(conn: &Connection, card: &str) -> i64 {
     .unwrap()
 }
 
-#[allow(
-    dead_code,
-    reason = "read by the row table's scenarios, which arrive next"
-)]
 fn rows(conn: &Connection, card: &str) -> i64 {
     conn.query_row(
         "SELECT count(*) FROM collection_entries WHERE card_id = ?1",
@@ -466,5 +462,98 @@ fn this_devices_own_emission_handed_back_writes_nothing_and_leaves_no_mark() {
         ledger(&b),
         0,
         "a device keeps no record of its own emission"
+    );
+}
+
+/// Where `conn`'s watermark for `device` stands, as `(ms, ctr)`.
+fn watermark(conn: &Connection, device: &str) -> (i64, i64) {
+    conn.query_row(
+        "SELECT last_ms, last_ctr FROM sync_peers WHERE device_id = ?1",
+        [device],
+        |r| Ok((r.get(0)?, r.get(1)?)),
+    )
+    .unwrap()
+}
+
+/// Spec §5: a claim never moves `sync_peers`. Row 3's shape, where the binder's copy is claimed
+/// at an `updated_at` above a's last ordinary op; then an ordinary op of a's stamped between the
+/// two. Had the claim raised the watermark, that op would be skipped as seen and lost: the fast
+/// `updated_at` of §1, costing the ops its emitter logged below it.
+#[test]
+fn a_claim_never_moves_its_emitters_watermark() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    let binder = folder(&a, "Binder", 1_700_000_000);
+    file_in(&a, "bolt", 2, binder, SECOND + 10);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    stash(&a, "opt", 1, SECOND);
+    let first = since(&a, &mut ma);
+    let last = first.last().unwrap().at.clone();
+    apply(&b, &first).unwrap();
+
+    let claims = whole(&a, "dev-a");
+    let bolt = claims
+        .iter()
+        .find(|op| op.fields.get("card_id").and_then(|v| v.as_str()) == Some("bolt"))
+        .unwrap()
+        .at
+        .clone();
+    assert!(
+        bolt > last,
+        "the claim is stamped above a's last ordinary op"
+    );
+    apply(&b, &claims).unwrap();
+    assert_eq!(copies(&b, "bolt"), 2);
+    assert_eq!(
+        watermark(&b, "dev-a"),
+        (last.ms, last.ctr),
+        "a claim moved its emitter's watermark"
+    );
+
+    set_clock(&a, STAMP + 5_000);
+    step(&a, "opt", 1, SECOND);
+    let between = since(&a, &mut ma);
+    assert!(
+        !between.is_empty() && between.iter().all(|op| op.at > last && op.at < bolt),
+        "{between:?}"
+    );
+    let report = apply(&b, &between).unwrap();
+    assert_eq!(
+        (report.applied, report.skipped, copies(&b, "opt")),
+        (between.len(), 0, 2),
+        "{report:?}"
+    );
+}
+
+/// Spec §5: a claim is never collateral of its emitter's held op by stamp. a's copy filed in a
+/// binder the page does not carry holds dev-a at its stamp; a's claim for an unrelated row,
+/// stamped above it, lands all the same, and the copy alone waits.
+#[test]
+fn a_claim_above_its_emitters_held_op_is_not_held_with_it() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    stash(&a, "opt", 1, SECOND + 10);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    set_clock(&a, STAMP);
+    let binder = folder(&a, "Binder", SECOND);
+    file_in(&a, "bolt", 2, binder, SECOND);
+    let filed: Vec<Op> = since(&a, &mut ma)
+        .into_iter()
+        .filter(|op| op.table == "collection_entries")
+        .collect();
+    assert_eq!(filed.len(), 1, "{filed:?}");
+    let claim = chunk_of(&emit(&a, "dev-a", 1), "opt");
+    assert!(
+        claim[0].at > filed[0].at,
+        "the claim is stamped above the held op"
+    );
+
+    let report = apply(&b, &page(&[&filed, &claim])).unwrap();
+    assert_eq!(report.held_waiting, 1, "{report:?}");
+    assert_eq!(
+        (rows(&b, "bolt"), copies(&b, "opt")),
+        (0, 1),
+        "the claim was held as collateral of its emitter's waiting op: {report:?}"
     );
 }
