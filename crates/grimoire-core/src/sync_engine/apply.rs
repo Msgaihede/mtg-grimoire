@@ -81,6 +81,7 @@
 //! | Any reason, and an op in it was sealed by a **newer** schema ([`Op::schema`]) | held · newer | yes, with no bound | no — the panel says it |
 //! | An unknown parent, from a same or older schema | held · waiting | yes, until [`Waiting::Release`] | when released |
 //! | An unknown table, or a row this database cannot build, from a same or older schema | dropped | no | yes |
+//! | The row of an op the client held back — its sender held for its clock, or behind a batch only a newer build can read ([`apply_page`]) | held · back | yes, while the client holds the sender | no — the client counts it |
 //! | Collateral: a later op of a held device | its block's | — | — |
 //!
 //! **Moot is asked first**, because a deleted parent is a fact about this device that no
@@ -764,13 +765,17 @@ enum Class {
     Moot,
     /// Consumed and recorded: nothing that can arrive will let it apply.
     Dropped,
+    /// Held because the client held its sender back — for its clock, or behind a batch only a
+    /// newer build can read — and passed it in so the claim containing it waits too (design
+    /// 2026-10-03 §5). The client counts these itself, so no class of the report does.
+    HeldBack,
 }
 
 impl Class {
-    /// Whether the group holds its device — the two classes that go to [`blocks_of`] and keep
+    /// Whether the group holds its device — the three classes that go to [`blocks_of`] and keep
     /// the watermark below them. The other two are consumed.
     fn holds(self) -> bool {
-        matches!(self, Class::Newer | Class::Waiting)
+        matches!(self, Class::Newer | Class::Waiting | Class::HeldBack)
     }
 }
 
@@ -786,9 +791,10 @@ struct Deferral<'a> {
 type Blocks = BTreeMap<String, (Hlc, Class)>;
 
 /// What a committed pass left held: each held device, at the stamp of its first held op as
-/// `(ms, ctr)`. **This is what a client's hold is a hold on** — `client::pull` stores it in
-/// `pull_hold`, and a block it has not seen before starts the waiting bound over, so a wait that
-/// has run its course cannot take a new one down with it.
+/// `(ms, ctr)`, and each held claim under `<emitter>#<id ms>.<id ctr>#<index>`, at its own stamp.
+/// **This is what a client's hold is a hold on** — `client::pull` stores it in `pull_hold`, and a
+/// block it has not seen before starts the waiting bound over, so a wait that has run its course
+/// cannot take a new one down with it.
 pub type Held = BTreeMap<String, (i64, i64)>;
 
 /// One row's worth of incoming ops, folded, with the ops kept for the watermark.
@@ -816,6 +822,21 @@ pub fn apply_with(conn: &Connection, ops: &[Op], waiting: Waiting) -> Result<App
     apply_held(conn, ops, waiting).map(|(report, _)| report)
 }
 
+/// [`apply_held`], with the ops the client held back — a sender held for its clock, or behind a
+/// batch only a newer build can read. They are never applied: they hold their rows' groups, so a
+/// claim that contains such an op can never land ahead of it (design 2026-10-03 §5).
+pub fn apply_page(
+    conn: &Connection,
+    ops: &[Op],
+    held_back: &[Op],
+    waiting: Waiting,
+) -> Result<(ApplyReport, Held), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let out = capture::suppressed(&tx, || apply_in(&tx, ops, held_back, waiting))?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// [`apply_with`], answering as well which devices the committed pass left held, and where —
 /// the one caller that needs it is the client, which holds its cursor on exactly those.
 pub fn apply_held(
@@ -823,15 +844,13 @@ pub fn apply_held(
     ops: &[Op],
     waiting: Waiting,
 ) -> Result<(ApplyReport, Held), String> {
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let out = capture::suppressed(&tx, || apply_in(&tx, ops, waiting))?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(out)
+    apply_page(conn, ops, &[], waiting)
 }
 
 fn apply_in(
     conn: &Connection,
     ops: &[Op],
+    held_back: &[Op],
     waiting: Waiting,
 ) -> Result<(ApplyReport, Held), String> {
     let mut report = ApplyReport::default();
@@ -918,7 +937,19 @@ fn apply_in(
     }
 
     // 2. One group per logical row, in an order that puts parents first.
-    let mut groups = group(&fresh);
+    //
+    // The client's held-back ops join the groups they belong to, never applied: each sender is
+    // blocked at its earliest op this device has not applied, so every group naming one holds.
+    // A held-back claim joins nothing — a claim blocks nothing (§5), and a put that lands ahead
+    // of the claim containing it is §6's ordinary case — and a reference on any other op is
+    // malformed and judged as none, so `claim` is the test rather than the field.
+    let held: Vec<&Op> = held_back
+        .iter()
+        .filter(|op| claims::claim(op).is_none() && !mine(op) && !seen(op))
+        .collect();
+    let mut grouped: Vec<&Op> = fresh.clone();
+    grouped.extend(held.iter().copied());
+    let mut groups = group(&grouped);
     groups.sort_by_key(|g| {
         (
             meta_of(g.table).map_or(u8::MAX, |m| m.order),
@@ -953,6 +984,14 @@ fn apply_in(
     // commits.
     let cap = groups.len().min(8);
     let mut blocked: Blocks = BTreeMap::new();
+    for op in &held {
+        match blocked.get(op.at.device.as_str()) {
+            Some((at, _)) if *at <= op.at => {}
+            _ => {
+                blocked.insert(op.at.device.clone(), (op.at.clone(), Class::HeldBack));
+            }
+        }
+    }
     let mut committed: Vec<Deferral> = Vec::new();
     for round in 0..=cap {
         conn.execute_batch("SAVEPOINT sync_pass")
@@ -984,6 +1023,7 @@ fn apply_in(
             Class::Waiting => report.held_waiting += n,
             Class::Moot => report.moot += n,
             Class::Dropped => report.dropped += n,
+            Class::HeldBack => {}
         }
     }
     report.deferred = report.held_newer + report.held_waiting;
@@ -1010,10 +1050,25 @@ fn apply_in(
     observe(conn, fresh.iter().map(|o| &o.at).max())?;
     // Read off the pass that committed, as the watermarks were: at the round cap the blocks the
     // last round found are not the ones it honoured.
-    let held: Held = blocks_of(&committed, &Blocks::new())
+    let mut held: Held = blocks_of(&committed, &Blocks::new())
         .into_iter()
         .map(|(device, (at, _))| (device, (at.ms, at.ctr)))
         .collect();
+    // **A held claim is a block of its own** (design 2026-10-03 §5), keyed by its emission and
+    // index and never by its emitter, whose stream it says nothing about. A device id is 32 hex
+    // and never holds a `#`, so no key meets a device's, and the client's per-device merge never
+    // touches one; a new held claim is a new block and restarts the waiting bound, and one that
+    // resolves drops out.
+    for d in committed.iter().filter(|d| d.class.holds()) {
+        for op in &d.group.ops {
+            if let Some(em) = claims::claim(op) {
+                held.insert(
+                    format!("{}#{}.{}#{}", op.at.device, em.id.0, em.id.1, em.i),
+                    (op.at.ms, op.at.ctr),
+                );
+            }
+        }
+    }
     Ok((report, held))
 }
 

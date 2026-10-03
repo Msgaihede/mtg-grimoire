@@ -3,10 +3,13 @@
 //!
 //! **Every mark is a `sync_state` key, and none of them is `sync_peers`.** A claim is a statement
 //! about a row, not a place in its emitter's stream, so what remembers that it was consumed is a
-//! ledger of its own: per emitter, the emissions in flight and the indices consumed from each;
-//! the generation it has wholly taken; and what complete emissions carried into this device's
-//! rows. A gap — the watermark or the cursor passing an op this device never applied — clears
-//! the ledger, so the next emission from every emitter is read whole.
+//! ledger of its own: per emitter, the emissions in flight and the indices consumed from each,
+//! beside the completed one whose record [`take`] keeps for a page handed back after it; the
+//! generation it has wholly taken; and what complete emissions carried into this device's rows.
+//! A gap — the watermark or the cursor passing an op this device never applied — clears every
+//! taken mark and what each record says its claims *passed*, keeps what they *wrote*, and marks
+//! each record as from before the gap ([`open_gap`]), so the next emission from every emitter is
+//! read whole and only one recorded after the gap can be taken.
 //!
 //! **A value that does not parse reads as absent.** Absent makes an emission active, which is
 //! more work and never less correctness, so a hand-edited or truncated mark costs a re-read,
@@ -32,8 +35,10 @@ pub const CUT: &str = "emissions_since";
 const TAKEN: &str = "taken@";
 const RECORDS: &str = "emission@";
 const CARRIED: &str = "carried@";
-/// How many in-flight emissions are remembered per emitter. An emission older than these is
-/// one a newer emission of the same emitter has superseded or will.
+/// How many emissions are remembered per emitter — those in flight, and the completed one whose
+/// record [`take`] keeps, which takes one of the slots; any of them may be marked as from before a
+/// gap ([`Record::before_gap`]). An emission older than these is one a newer emission of the same
+/// emitter has superseded or will.
 pub const RECORDS_PER_EMITTER: usize = 4;
 
 fn get(conn: &Connection, key: &str) -> rusqlite::Result<Option<String>> {
@@ -154,7 +159,8 @@ impl Ranges {
     }
 }
 
-/// One emission in flight, as this device has consumed it (§5).
+/// One emission as this device has consumed it (§5): in flight, or — the one record [`take`]
+/// keeps — completed, for a page handed back after it; and either one perhaps from before a gap.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Record {
     pub id: Stamp,
@@ -168,6 +174,11 @@ pub struct Record {
     /// Claims consumed without writing: a held row's claim, a moot one, one dropped and recorded.
     #[serde(default)]
     pub passed: Ranges,
+    /// Recorded before a gap [`open_gap`] opened: its `wrote` set still stands and still serves
+    /// containment, its `passed` set was cleared so those claims are decided again, and it is
+    /// **never taken**, so only an emission recorded after the gap can close it (§7).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub before_gap: bool,
 }
 
 impl Record {
@@ -179,6 +190,7 @@ impl Record {
             resumed,
             wrote: Ranges::default(),
             passed: Ranges::default(),
+            before_gap: false,
         }
     }
 
@@ -200,7 +212,8 @@ pub fn taken(conn: &Connection, emitter: &str) -> rusqlite::Result<Option<Stamp>
         .and_then(parse))
 }
 
-/// The emissions of `emitter` in flight here, newest first.
+/// The emissions of `emitter` this device remembers, newest first: those in flight, the completed
+/// one [`take`] kept, and any marked as from before a gap.
 pub fn records(conn: &Connection, emitter: &str) -> rusqlite::Result<Vec<Record>> {
     Ok(get(conn, &format!("{RECORDS}{emitter}"))?
         .and_then(|v| serde_json::from_str(&v).ok())
@@ -305,15 +318,39 @@ pub fn carried(conn: &Connection) -> rusqlite::Result<BTreeMap<String, Stamp>> {
     Ok(out)
 }
 
-/// A gap (§7): every `taken@` and `emission@` mark goes, and the floor opens.
+/// A gap (§7): every `taken@` mark goes and the floor opens — **and what claims wrote stays.**
+///
+/// Each record of every emitter keeps its `wrote` set and loses its `passed` set, and is marked
+/// [`Record::before_gap`]. A written claim stays consumed: flooring it again could only take back
+/// what this device did to its row since, and the record is the only evidence that the covered
+/// puts the first delivery dropped as carried are inside that row — no watermark rose for them,
+/// so a page handed back across the gap with the record gone floored the row and sent those puts
+/// down the op path beside it, §8.1's 5 read as 10. A passed claim wrote nothing, so it is decided
+/// again, and on a row held here it now floors. A before-gap record is never taken, so the gap
+/// closes only on emissions recorded after it.
 pub fn open_gap(conn: &Connection) -> rusqlite::Result<()> {
     conn.execute(
-        "DELETE FROM sync_state WHERE key GLOB ?1 OR key GLOB ?2",
-        params![format!("{TAKEN}*"), format!("{RECORDS}*")],
+        "DELETE FROM sync_state WHERE key GLOB ?1",
+        [format!("{TAKEN}*")],
     )?;
+    let emitters: Vec<String> = conn
+        .prepare("SELECT key FROM sync_state WHERE key GLOB ?1")?
+        .query_map([format!("{RECORDS}*")], |r| r.get::<_, String>(0))?
+        .map(|key| key.map(|k| k[RECORDS.len()..].to_owned()))
+        .collect::<rusqlite::Result<_>>()?;
+    for emitter in emitters {
+        let mut all = records(conn, &emitter)?;
+        for record in &mut all {
+            record.passed = Ranges::default();
+            record.before_gap = true;
+        }
+        put(conn, &format!("{RECORDS}{emitter}"), &json(&all)?)?;
+    }
     put(conn, GAP, "1")
 }
 
+/// Whether this device has a gap open (§7) — while it does, an active claim floors a row held
+/// here.
 pub fn gap_open(conn: &Connection) -> rusqlite::Result<bool> {
     Ok(get(conn, GAP)?.is_some())
 }
@@ -531,19 +568,38 @@ mod tests {
         assert_eq!(cut(&synced).unwrap(), first, "the cut does not move");
     }
 
+    /// Spec §7 as amended: a gap clears every taken mark and every record's `passed` set, and keeps
+    /// every record with its `wrote` set, marked as from before the gap.
     #[test]
-    fn a_gap_clears_the_marks_and_closes_once_the_roster_is_taken_again() {
+    fn a_gap_clears_the_taken_marks_keeps_what_claims_wrote_and_closes_once_the_roster_is_taken_again(
+    ) {
         let conn = db();
-        let done = Record::new((2, 0), 1, (1, 0), false);
+        let mut done = Record::new((2, 0), 2, (1, 0), false);
+        done.wrote.insert(0);
+        done.passed.insert(1);
         take(&conn, "dev-a", &done, &Horizon::default(), true, None).unwrap();
-        keep(&conn, "dev-a", Record::new((6, 0), 1, (5, 0), false)).unwrap();
+        let mut flight = Record::new((6, 0), 3, (5, 0), false);
+        flight.passed.insert(0);
+        flight.wrote.insert(2);
+        keep(&conn, "dev-a", flight).unwrap();
         put(&conn, "absorbed@dev-a", "4:0").unwrap();
         put(&conn, LOGGING_SINCE, "3:0").unwrap();
 
         open_gap(&conn).unwrap();
         assert!(gap_open(&conn).unwrap());
         assert_eq!(taken(&conn, "dev-a").unwrap(), None);
-        assert!(records(&conn, "dev-a").unwrap().is_empty());
+        let kept: Vec<(Stamp, Ranges, Ranges, bool)> = records(&conn, "dev-a")
+            .unwrap()
+            .into_iter()
+            .map(|r| (r.id, r.wrote, r.passed, r.before_gap))
+            .collect();
+        assert_eq!(
+            kept,
+            vec![
+                ((6, 0), Ranges(vec![(2, 2)]), Ranges::default(), true),
+                ((2, 0), Ranges(vec![(0, 0)]), Ranges::default(), true),
+            ]
+        );
         assert_eq!(
             value(&conn, "absorbed@dev-a").as_deref(),
             Some("4:0"),

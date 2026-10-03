@@ -143,11 +143,13 @@ A claim that carries an `emission` reference is, in `apply_in`:
 - **never judged by `seen`**, never counted by `advance_watermarks`, and never a device block in
   `blocks_of`. Its stamp is a statement about a row, not a place in a stream. This alone closes the
   two halves, the sparse op ahead, the first-contact parent and the fast-clock chunk.
-- **consumed once.** `sync_state` keeps, per emitter, the emissions in flight —
-  `emission@<device id>`: each one's `id`, `n`, `since`, `resumed`, and two sets of index ranges:
-  **wrote** (the claim built, merged or floored its row) and **passed** (consumed and wrote nothing —
-  §6's held-row arm, a moot claim, one dropped and recorded); the newest four emissions at most. A
-  claim whose index is in either set is skipped as seen.
+- **consumed once.** `sync_state` keeps, per emitter, the emissions in flight and the completed one
+  whose record is kept when it is taken (below) — `emission@<device id>`: each one's `id`, `n`,
+  `since`, `resumed`, and two sets of index ranges: **wrote** (the claim built, merged or floored its
+  row) and **passed** (consumed and wrote nothing — §6's held-row arm, a moot claim, one dropped and
+  recorded); the newest four emissions at most, **the kept completed record taking one of the four**.
+  A claim whose index is in either set is skipped as seen. A record a gap found is marked as from
+  before it (§7).
 - **decided together with its row.** Groups are one per row and a group already holds as a whole
   (`held_by` asks every op in it), so a claim beside a put that is held — by a device block, a missing
   parent, a newer schema — is held with it, not consumed, and comes back with it. The claim itself
@@ -157,7 +159,8 @@ A claim that carries an `emission` reference is, in `apply_in`:
   marked held, so they hold their rows' groups. The claim that contains such a put can no longer land
   ahead of it, which is the third review's 6-for-3 closed at its root. (A batch only a newer build can
   parse has no ops to pass; §6's containment rule and §8's horizon cover it.)
-- **taken** when every index of one emission is consumed: `taken@<device id>` becomes that
+- **taken** when every index of one emission is consumed — unless its record is from before a gap,
+  which is never taken (§7): `taken@<device id>` becomes that
   emission's `since`, every other record of that emitter whose `since` is at or below it is
   dropped, and its own record is kept. A page handed back after the emission completed still
   carries the covered puts its claims carried; the first delivery dropped them and no watermark
@@ -184,9 +187,14 @@ because one page can hold an emission from before an emitter's rejoin and one fr
 
 **Why inert is exact.** A taken generation means this device consumed one whole emission of it and
 has read every op the emitter logged since — §7 clears the mark the moment that stops being true.
-Everything such a claim says is already here through the log; applying it could only take back what
-happened since. This is the baseline design's cheap exit with its premise checked rather than
-guessed: "this device has heard everything since", asked of the generation, never of a stamp.
+Everything such a claim says is already here, through the log or through that emission's own
+claims; applying it could only take back what happened since. **The premise has one qualifier**: a
+covered put the taken emission's first delivery dropped as carried is here only *inside* the row its
+claim wrote. It raised no watermark, so nothing in the log says it is here, and a page handed back
+with it reads it as unseen. The record kept when the emission was taken (§5) is what serves
+containment for those puts — each is skipped where its row's claim wrote here. This is the baseline
+design's cheap exit with its premise checked rather than guessed: "this device has heard everything
+since", asked of the generation, never of a stamp.
 
 **An active claim, and the covered puts beside it, by the row:**
 
@@ -218,10 +226,11 @@ and `+1` there both survive (4); a note lands at its own stamp; an edit whose cl
 chunk takes the op path without waiting for it; and a held put whose row's claim wrote nothing is
 applied once when it is released.
 
-## 7. A gap clears the marks and opens the floor
+## 7. A gap clears the taken marks, keeps what claims wrote, and opens the floor
 
 A taken generation promises that this device has read everything since. Anything that breaks the
-promise clears **every** `taken@` and `emission@` mark and sets the **gap** — `sync_state`'s `gap`:
+promise clears **every** `taken@` mark, clears what each `emission@` record says its claims
+*passed* while keeping what they *wrote* (below), and sets the **gap** — `sync_state`'s `gap`:
 
 | The gap | Where it is opened |
 | --- | --- |
@@ -231,12 +240,32 @@ promise clears **every** `taken@` and `emission@` mark and sets the **gap** — 
 
 While the gap is open, an active emission floors the rows held here (§6). **It closes when every
 device on this group's roster that this one holds a watermark for has a `taken@` mark again** —
-every emitter's state has then reached this device whole since the gap. The roster and not
+from an emission recorded after the gap, so every emitter's state has then reached this device
+whole since it. The roster and not
 `sync_peers` alone, because a watermark outlives its group (sync.md *A cursor is a place in one
 group's log*): a device that moved groups holds watermarks for peers that will never emit to it
 again, and would keep its gap open for good. Each gap is a place where the watermark — or the cursor —
 passed an op this device never applied. A source that drops every time keeps the gap open and every
 emission active and flooring: the narrow fix's behaviour, never below it.
+
+**A gap keeps what claims wrote** (amended 2026-10-03, after Task 5's review; this section first
+cleared every `emission@` record too). Each record survives the gap with its **wrote** set, loses
+its **passed** set, and is marked as from before the gap:
+
+- **A written claim stays consumed.** Flooring it again could only take back what this device has
+  done to its row since. And its record is the only evidence that the covered puts its first
+  delivery dropped as carried are inside that row, since they raised no watermark: with the record
+  cleared, a page handed back across the gap read its emission as new, the claim floored the row it
+  had built, and the carried puts took the op path beside it — §8.1's 5 read `max(5 + 1 + 4, 5)`,
+  10. A page comes back that way whenever it carries an outbox, a whole emission, a dropped group
+  and a held group — the drop opens the gap and the hold hands the page back — and on any full
+  re-read after `forget_log_position`.
+- **A passed claim is decided again.** It wrote nothing, so nothing of it is taken back; on a row
+  held here, with the gap open, it now floors, which is the one road for what the gap may have cost
+  that row.
+- **A record from before the gap is never taken**, and so raises no `carried@`. Taking it would
+  close a gap no emission since has repaired, so the gap closes only on emissions recorded after
+  it.
 
 ## 8. An emitter's horizon names what it took in through claims
 

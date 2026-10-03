@@ -58,7 +58,7 @@ fn sql(e: rusqlite::Error) -> String {
 }
 
 /// The reference `op` carries as a claim: a baseline op's, and never another op's (§3).
-fn claim(op: &Op) -> Option<&Emission> {
+pub(super) fn claim(op: &Op) -> Option<&Emission> {
     op.emission.as_ref().filter(|_| op.baseline)
 }
 
@@ -161,6 +161,18 @@ pub(super) fn decide(
             out.kept.push((key, em.i, op.table.clone(), op.uid.clone()));
         }
     }
+    // Containment's evidence, by row: every claim the page carries for it, with its emission and
+    // index. Built once, so a page of covered puts asks a map per put rather than scanning the
+    // page for each.
+    let mut claims_of: BTreeMap<(&str, &str), Vec<(Key, u32)>> = BTreeMap::new();
+    for op in ops {
+        if let Some(em) = claim(op) {
+            claims_of
+                .entry((op.table.as_str(), op.uid.as_str()))
+                .or_default()
+                .push(((op.at.device.clone(), em.id), em.i));
+        }
+    }
     // §6: a put an active emission's horizon covers, by its row — and, for containment only, one a
     // completed emission handed back covers.
     for (i, op) in ops.iter().enumerate() {
@@ -179,19 +191,18 @@ pub(super) fn decide(
         // Containment: the page's claim for this row, from an emission that covers the put, has
         // already written the row — a page handed back after the claim built, merged or floored.
         // Asked of claims alone, so a reference on an ordinary op never stands in for one.
-        let written = ops.iter().any(|c| {
-            c.table == op.table
-                && c.uid == op.uid
-                && claim(c).is_some_and(|em| {
-                    let key: Key = (c.at.device.clone(), em.id);
-                    covering.contains(&&key)
+        let written = claims_of
+            .get(&(op.table.as_str(), op.uid.as_str()))
+            .is_some_and(|claims| {
+                claims.iter().any(|(key, index)| {
+                    covering.contains(&key)
                         && out
                             .emissions
-                            .get(&key)
+                            .get(key)
                             .and_then(|p| p.record.as_ref().or(p.done.as_ref()))
-                            .is_some_and(|r| r.wrote.contains(em.i))
+                            .is_some_and(|r| r.wrote.contains(*index))
                 })
-        });
+            });
         let active = covering
             .iter()
             .any(|k| out.emissions.get(*k).is_some_and(|p| p.record.is_some()));
@@ -241,7 +252,9 @@ pub(super) fn settle(
         }
     }
     for (key, record) in records {
-        if record.complete() {
+        // A record from before a gap is never taken (§7): its `wrote` set stood across the gap,
+        // and taking it would close a gap no emission since has repaired.
+        if record.complete() && !record.before_gap {
             // §8: carried only where every claim wrote its row.
             let carry = record.passed.is_empty();
             emission::take(conn, &key.0, &record, &d.emissions[key].horizon, carry, me)
@@ -249,6 +262,14 @@ pub(super) fn settle(
         } else {
             emission::keep(conn, &key.0, record).map_err(sql)?;
         }
+    }
+    // §7: a group dropped and recorded is an op the watermark passed and this device never
+    // applied. Opened after the taken marks above, so a pass that drops a claim leaves its
+    // emitter untaken even when the drop was that emission's last index.
+    if committed.iter().any(|x| x.class == Class::Dropped) {
+        emission::open_gap(conn).map_err(sql)?;
+    } else {
+        emission::close_gap_if_whole(conn).map_err(sql)?;
     }
     Ok(())
 }
@@ -258,23 +279,17 @@ fn row_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
     let Some(meta) = meta_of(table) else {
         return Ok(false);
     };
-    conn.query_row(
-        &format!(
-            "SELECT EXISTS(SELECT 1 FROM {} WHERE sync_uid = ?1)",
-            meta.table
-        ),
-        [uid],
-        |r| r.get(0),
-    )
+    conn.prepare_cached(&format!(
+        "SELECT EXISTS(SELECT 1 FROM {} WHERE sync_uid = ?1)",
+        meta.table
+    ))
+    .and_then(|mut stmt| stmt.query_row([uid], |r| r.get(0)))
     .map_err(sql)
 }
 
 /// Whether this device's own op log names the row — it held it, and perhaps deleted it.
 fn named_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
-    conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM sync_ops WHERE tbl = ?1 AND uid = ?2)",
-        [table, uid],
-        |r| r.get(0),
-    )
-    .map_err(sql)
+    conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM sync_ops WHERE tbl = ?1 AND uid = ?2)")
+        .and_then(|mut stmt| stmt.query_row([table, uid], |r| r.get(0)))
+        .map_err(sql)
 }

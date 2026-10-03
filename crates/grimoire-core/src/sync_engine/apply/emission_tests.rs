@@ -1066,11 +1066,258 @@ fn an_emission_whose_claims_passed_on_held_rows_carries_nothing() {
     let (a, b) = (paired("dev-a"), paired("dev-b"));
     stash(&a, "bolt", 2, 1_700_000_000);
     apply(&b, &outbox(&a)).unwrap();
-    apply(&b, &whole(&a, "dev-a")).unwrap();
+    let rebaseline = whole(&a, "dev-a");
+    apply(&b, &rebaseline).unwrap();
     assert!(emission::taken(&b, "dev-a").unwrap().is_some());
     assert_eq!(
         emission::carried(&b).unwrap(),
         std::collections::BTreeMap::new(),
         "a claim that wrote nothing carried its horizon"
+    );
+    let bolt = rebaseline
+        .iter()
+        .find(|op| op.fields.get("card_id").and_then(|v| v.as_str()) == Some("bolt"))
+        .and_then(|op| op.emission.as_ref())
+        .unwrap()
+        .i;
+    assert!(
+        emission::records(&b, "dev-a").unwrap()[0]
+            .passed
+            .contains(bolt),
+        "the held row's claim is recorded as passed"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task 6 — held-back ops and the gap (spec §5, §7, §14 rows 10, 13)
+// ---------------------------------------------------------------------------------------------
+
+/// §14 row 10 — the third review's 6-for-3. c's +1 reaches b only later (its client holds c
+/// back); e took it in through a's claim, never as an op, and e's claim for the row comes first.
+#[test]
+fn a_held_back_put_and_a_claim_that_contains_it_count_it_once() {
+    for resumed in [false, true] {
+        let (a, b, c, e) = (
+            paired("dev-a"),
+            paired("dev-b"),
+            paired("dev-c"),
+            paired("dev-e"),
+        );
+        let (mut ma, mut mc) = (0, 0);
+        set_clock(&a, STAMP);
+        stash(&a, "bolt", 2, SECOND);
+        let seed = since(&a, &mut ma);
+        apply(&b, &seed).unwrap();
+        apply(&c, &seed).unwrap();
+        step(&c, "bolt", 1, SECOND + 1);
+        let put = since(&c, &mut mc);
+        apply(&a, &put).unwrap();
+        apply(&e, &page(&[&seed, &put, &whole(&a, "dev-a")])).unwrap();
+        assert_eq!(copies(&e, "bolt"), 3);
+        if resumed {
+            emission::start_logging(&e).unwrap();
+            emission::start_logging(&e).unwrap();
+        }
+        let from_e = whole(&e, "dev-e");
+        apply_page(&b, &from_e, &put, Waiting::Hold).unwrap();
+        apply_page(&b, &page(&[&put, &from_e]), &[], Waiting::Hold).unwrap();
+        assert_eq!(copies(&b, "bolt"), 3, "resumed {resumed}");
+    }
+}
+
+/// Row 10's first delivery, which the test above cannot tell apart: the page comes back with e's
+/// claim in it, and the record e's emission kept when it was taken already contains the released
+/// put, so the count ends at 3 whether or not the put held the claim. What this pins is the hold
+/// itself — the put the client held back holds its row's group: the floor waits, the row is
+/// untouched, the emission is not taken, and what `apply` answers names the held sender and the
+/// claim.
+#[test]
+fn a_held_back_put_holds_the_claim_for_its_row() {
+    let (a, b, c, e) = (
+        paired("dev-a"),
+        paired("dev-b"),
+        paired("dev-c"),
+        paired("dev-e"),
+    );
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&c, &seed).unwrap();
+    step(&c, "bolt", 1, SECOND + 1);
+    let put = since(&c, &mut mc);
+    apply(&a, &put).unwrap();
+    apply(&e, &page(&[&seed, &put, &whole(&a, "dev-a")])).unwrap();
+    emission::start_logging(&e).unwrap();
+    emission::start_logging(&e).unwrap();
+    let from_e = whole(&e, "dev-e");
+
+    let (_, held) = apply_page(&b, &from_e, &put, Waiting::Hold).unwrap();
+    assert_eq!(
+        copies(&b, "bolt"),
+        2,
+        "the claim landed ahead of the put it contains"
+    );
+    assert_eq!(emission::taken(&b, "dev-e").unwrap(), None);
+    assert_eq!(held.get("dev-c"), Some(&(put[0].at.ms, put[0].at.ctr)));
+    assert!(
+        held.keys().any(|k| k.starts_with("dev-e#")),
+        "the held claim answered no block of its own: {held:?}"
+    );
+}
+
+/// §14 row 13, the apply half: a group dropped and recorded opens the gap; the next emission
+/// floors a row held here; the gap closes when the roster is taken again.
+#[test]
+fn a_dropped_group_opens_the_gap_and_the_next_emission_floors() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute(
+        "INSERT INTO sync_devices (device_id, public_key, name, added_at)
+         VALUES ('dev-a', x'00', 'dev-a', 0)",
+        [],
+    )
+    .unwrap();
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    assert!(emission::taken(&b, "dev-a").unwrap().is_some());
+
+    stash(&a, "x", 1, SECOND);
+    let mut future = since(&a, &mut ma);
+    future[0].table = "future_table".to_owned();
+    let report = apply(&b, &future).unwrap();
+    assert_eq!(report.dropped, 1, "{report:?}");
+    assert!(emission::gap_open(&b).unwrap());
+    assert_eq!(emission::taken(&b, "dev-a").unwrap(), None);
+
+    b.execute(
+        "UPDATE collection_entries SET quantity = 1 WHERE card_id = 'bolt'",
+        [],
+    )
+    .unwrap();
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    assert_eq!(
+        copies(&b, "bolt"),
+        2,
+        "a gap opens the floor (design §6, §11)"
+    );
+    assert!(
+        !emission::gap_open(&b).unwrap(),
+        "the roster was taken again"
+    );
+}
+
+/// Put `device` on `conn`'s roster, so a gap waits for it to be taken again (spec §7).
+fn on_roster(conn: &Connection, device: &str) {
+    conn.execute(
+        "INSERT INTO sync_devices (device_id, public_key, name, added_at)
+         VALUES (?1, x'00', ?1, 0)",
+        [device],
+    )
+    .unwrap();
+}
+
+/// A claim held alone is a block of its own in what `apply` answers — keyed by its emission and
+/// its index, never by its emitter, so it holds nothing of the emitter's stream and no device
+/// block absorbs it; a new held claim is a new block, which is what restarts the client's
+/// waiting bound (design 2026-10-03 §5).
+#[test]
+fn a_claim_held_alone_is_a_block_of_its_own_in_what_apply_answers() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    set_clock(&a, STAMP);
+    let binder = folder(&a, "Binder", SECOND);
+    file_in(&a, "bolt", 2, binder, SECOND);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    let claim = chunk_of(&emit(&a, "dev-a", 1), "bolt");
+
+    let (report, held) = apply_held(&b, &claim, Waiting::Hold).unwrap();
+    assert_eq!(report.held_waiting, 1, "{report:?}");
+    let em = claim[0].emission.as_ref().unwrap();
+    assert_eq!(
+        held,
+        Held::from([(
+            format!("dev-a#{}.{}#{}", em.id.0, em.id.1, em.i),
+            (claim[0].at.ms, claim[0].at.ctr),
+        )]),
+        "a held claim answered no block, or one that names its emitter"
+    );
+}
+
+/// Spec §7 as amended (a gap keeps what claims wrote): §8.1's page — a's outbox and the emission
+/// whose claim carries it — handed back across a gap. The claim that built the row is still
+/// consumed and the puts it carried are still inside the row. With the records cleared, the
+/// claim floored the row the first delivery built and the carried puts took the op path beside
+/// it: `max(5 + 1 + 4, 5)`, 10. The emission was recorded before the gap, so it is never taken
+/// and the gap stays open.
+#[test]
+fn a_page_handed_back_across_a_gap_counts_what_its_claim_carried_once() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    // A watermark for dev-a, and dev-a on the roster, so the gap has an emitter to wait for.
+    stash(&a, "opt", 1, 1_700_000_000);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    on_roster(&b, "dev-a");
+    stash(&a, "bolt", 1, 1_700_000_000);
+    a.execute(
+        "UPDATE collection_entries SET quantity = 5 WHERE card_id = 'bolt'",
+        [],
+    )
+    .unwrap();
+    let first = page(&[&since(&a, &mut ma), &whole(&a, "dev-a")]);
+    apply(&b, &first).unwrap();
+    assert_eq!(copies(&b, "bolt"), 5);
+
+    emission::open_gap(&b).unwrap();
+    apply(&b, &first).unwrap();
+    assert_eq!(copies(&b, "bolt"), 5, "§8.1 across a gap");
+    assert_eq!(
+        emission::taken(&b, "dev-a").unwrap(),
+        None,
+        "an emission recorded before the gap was taken"
+    );
+    assert!(
+        emission::gap_open(&b).unwrap(),
+        "an emission recorded before the gap closed it"
+    );
+}
+
+/// Spec §7 as amended: a claim that PASSED on a held row before a gap is decided again after it
+/// — the gap is the one time a held row may lack what the log should have brought — and floors.
+/// Its emission was recorded before the gap, so it is never taken and cannot close the gap.
+#[test]
+fn a_claim_passed_before_a_gap_floors_after_it_and_takes_nothing() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    on_roster(&b, "dev-a");
+    let rebaseline = whole(&a, "dev-a");
+    apply(&b, &rebaseline).unwrap();
+    assert!(emission::taken(&b, "dev-a").unwrap().is_some());
+
+    emission::open_gap(&b).unwrap();
+    b.execute(
+        "UPDATE collection_entries SET quantity = 1 WHERE card_id = 'bolt'",
+        [],
+    )
+    .unwrap();
+    apply(&b, &rebaseline).unwrap();
+    assert_eq!(
+        copies(&b, "bolt"),
+        2,
+        "a claim passed before the gap did not floor after it"
+    );
+    assert_eq!(
+        emission::taken(&b, "dev-a").unwrap(),
+        None,
+        "an emission recorded before the gap was taken"
+    );
+    assert!(
+        emission::gap_open(&b).unwrap(),
+        "an emission recorded before the gap closed it"
     );
 }
