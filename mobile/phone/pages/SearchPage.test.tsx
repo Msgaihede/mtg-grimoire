@@ -202,18 +202,19 @@ describe("a refused next page", () => {
 });
 
 describe("a figure that cannot be read over an empty wall", () => {
-  it("is said on the collection, rather than a page with nothing on it", async () => {
+  it("is said on the collection, under shelves that still say what they hold", async () => {
     renderPhone(<PhoneFace />, { path: "/scanner" });
-    // Everything off the open shelves — `pages.test.tsx` names the rows — so the wall is empty
-    // and only the figure could say whether the collection is.
+    // Everything off the open shelves, so only the deck groups — shut — hold anything. Since the
+    // cabinet (step 3.2) the shelf counts say that, and the figure alone is what is missing.
     await ipc.collectionRemoveMany([1, 2, 3, 6, 8, 9, 10, 11, 12]);
     registerCommands({ collection_summary: refused() });
 
     await userEvent.click(tab("Collection"));
 
     expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      /the rest of your collection could not be counted/,
+      "Your collection's figures could not be read.",
     );
+    expect(screen.getByRole("heading", { name: "Not sorted" })).toBeInTheDocument();
     expect(screen.queryByText("Nothing in your collection yet.")).toBeNull();
   });
 

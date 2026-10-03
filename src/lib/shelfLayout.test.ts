@@ -5,8 +5,10 @@ import {
   SHELF_HEADING_HEIGHT,
   SHELF_LABEL_HEIGHT,
   anchorPlan,
+  fillShelves,
   layoutHeight,
   layoutShelves,
+  loadedShelves,
   rowHeight,
   rowOfTile,
   rowStartOf,
@@ -457,5 +459,46 @@ describe("anchorPlan", () => {
   it("rounds room up to whole pixels, so the offset it needs is always inside the page", () => {
     expect(anchorPlan({ rowTop: 100.4, target: 300, viewport: VIEW, content: 1000, room: true }))
       .toEqual({ scrollTop: 0, padStart: 200, padEnd: 0 });
+  });
+});
+
+describe("loadedShelves and fillShelves", () => {
+  const a = shelf(1);
+  const b = shelf(2);
+  const shut = shelf(3, { collapsed: true });
+  const tiles: Record<number, string[]> = { 1: ["a1", "a2", "a3"], 2: ["b1"], 3: ["stale"] };
+  const tilesOf = (id: number) => tiles[id] ?? [];
+
+  it("lays a shelf out at its count or what has loaded, whichever is larger", () => {
+    const loaded = loadedShelves(
+      [
+        { shelf: a, tileCount: 2 },
+        { shelf: b, tileCount: 4 },
+      ],
+      tilesOf,
+    );
+    expect(loaded.map((s) => s.section.tileCount)).toEqual([3, 4]);
+  });
+
+  it("draws nothing a collapsed shelf still holds", () => {
+    const [loaded] = loadedShelves([{ shelf: shut, tileCount: 0 }], tilesOf);
+    expect(loaded.tiles).toEqual([]);
+  });
+
+  it("puts each loaded tile in its slot, leaves holes for pages not landed, and finds the frontier", () => {
+    // Shelf 1 is counted at five with three loaded; shelf 2's one tile still lands at slot 5.
+    const filled = fillShelves(
+      loadedShelves(
+        [
+          { shelf: a, tileCount: 5 },
+          { shelf: b, tileCount: 1 },
+        ],
+        tilesOf,
+      ),
+      2,
+    );
+    expect(filled.slots).toEqual(["a1", "a2", "a3", undefined, undefined, "b1"]);
+    expect(filled.frontier).toBe(6);
+    expect(filled.layout.totalTiles).toBe(6);
   });
 });

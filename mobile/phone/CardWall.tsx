@@ -1,11 +1,10 @@
 import { useEffect, useEffectEvent, useLayoutEffect, useRef, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
-import { CardTile } from "@/components/CardTile";
 import type { ChinPrinting } from "@/components/CardChin";
-import { CountTag } from "@/components/CountTag";
 import type { Finish } from "@/lib/finish";
 import { useElementWidth } from "@/lib/useElementWidth";
 import { columnsFor, GAP, rowHeightFor, tileWidthFor } from "./wall";
+import { WallTile } from "./WallTile";
 
 /** One tile's worth of facts — what every list on the phone face is turned into. */
 export interface WallItem {
@@ -133,35 +132,9 @@ export function CardWall({
             className="absolute left-0 top-0 flex w-full"
             style={{ transform: `translateY(${row.start}px)`, height: rowHeight, gap: GAP }}
           >
-            {items.slice(row.index * columns, row.index * columns + columns).map((item) => {
-              const copies = item.count > 1 ? `${item.count} copies` : null;
-              return (
-                <CardTile
-                  key={item.key}
-                  className="min-w-0 flex-1"
-                  cardId={item.cardId}
-                  name={item.name}
-                  rarity={item.rarity}
-                  chin={item.chin}
-                  finish={item.finish}
-                  money={item.money}
-                  pressLabel={copies === null ? item.pressLabel : `${item.pressLabel}, ${copies}`}
-                  onPress={() => onOpen(item)}
-                  overlay={
-                    copies === null ? undefined : (
-                      // The tag as it is, placed by its own `className`: it is a filled, slanted
-                      // banner already, and a backed chip around it is the square box on art that
-                      // reads as something to press.
-                      <CountTag
-                        count={item.count}
-                        title={copies}
-                        className="absolute bottom-1 left-1"
-                      />
-                    )
-                  }
-                />
-              );
-            })}
+            {items.slice(row.index * columns, row.index * columns + columns).map((item) => (
+              <WallTile key={item.key} item={item} onOpen={onOpen} className="min-w-0 flex-1" />
+            ))}
             {/* A short last row keeps its tiles the width of the rows above it. */}
             {Array.from(
               { length: columns - Math.min(columns, items.length - row.index * columns) },

@@ -8,7 +8,8 @@ beforeAll(installLayout);
 
 const item = (n: number, over: Partial<WallItem> = {}): WallItem => ({
   key: `k${n}`,
-  cardId: null,
+  // A card to open: a tile with none is no control at all (`WallTile`), which one case below holds.
+  cardId: `card-${n}`,
   name: `Card ${n}`,
   rarity: "common",
   chin: { setCode: "lea", collectorNumber: String(n) },
@@ -26,6 +27,20 @@ const noop = () => undefined;
 const tile = (n: number) => screen.queryByRole("button", { name: `Card ${n}, LEA ${n}` });
 
 describe("the wall's tiles", () => {
+  it("draws a card with nothing to open as a tile that is no control", () => {
+    render(
+      <CardWall
+        label="Wall"
+        items={[item(0), item(1, { cardId: null })]}
+        onOpen={noop}
+        resetKey="a"
+      />,
+    );
+    expect(tile(0)).toBeInTheDocument();
+    expect(tile(1)).toBeNull();
+    expect(screen.getAllByText("Card 1").length).toBeGreaterThan(0);
+  });
+
   it("draws a tile for every card of a short list, two to a row", () => {
     render(<CardWall label="Wall" items={many(3)} onOpen={noop} resetKey="a" />);
     const wall = screen.getByRole("list", { name: "Wall" });

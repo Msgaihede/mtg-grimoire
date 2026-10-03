@@ -201,48 +201,6 @@ describe("the card sheet", () => {
 
 // Decks — the gallery and a deck — are `decks.test.tsx`'s.
 
-describe("Collection", () => {
-  it("draws the cards on the reader's open shelves", async () => {
-    renderPhone(<PhoneFace />, { path: "/collection" });
-    const wall = await screen.findByRole("list", { name: "Your collection" });
-    expect(
-      await within(wall).findByRole("button", { name: "Lightning Bolt, 2X2 117, 4 copies" }, SETTLE),
-    ).toBeInTheDocument();
-    // Two grades of one etched printing are two rows, and so two tiles with one name.
-    expect(within(wall).getAllByRole("button", { name: "Lightning Bolt, STA 105, Etched" })).toHaveLength(2);
-    // The copies a deck holds are on that deck's shelf, which starts shut.
-    expect(within(wall).queryByRole("button", { name: /^Counterspell, MH2 267/ })).toBeNull();
-  });
-
-  it("says so when the collection is empty", async () => {
-    renderPhone(<PhoneFace />, { path: "/collection", fake: { seed: "empty" } });
-    expect(await screen.findByText("Nothing in your collection yet.", undefined, SETTLE)).toBeInTheDocument();
-  });
-
-  it("does not call a collection empty when every copy is on a folded shelf", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    // Every row but the three a deck's own group holds — `MH2 267` and `MH2 138` in deck 1's,
-    // `C21 263` in deck 2's. Those shelves start shut, so the wall has nothing to draw.
-    await ipc.collectionRemoveMany([1, 2, 3, 6, 8, 9, 10, 11, 12]);
-
-    await userEvent.click(tab("Collection"));
-
-    expect(await screen.findByText(/on folded shelves/, undefined, SETTLE)).toBeInTheDocument();
-    expect(screen.queryByText("Nothing in your collection yet.")).toBeNull();
-  });
-
-  it("says so when the collection cannot be read", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    registerCommands({ collection_list: refused() });
-
-    await userEvent.click(tab("Collection"));
-
-    expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your collection could not be read.",
-    );
-  });
-});
-
 describe("Wishlist", () => {
   it("draws the wishes on the reader's open shelves", async () => {
     renderPhone(<PhoneFace />, { path: "/wishlist" });

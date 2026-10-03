@@ -52,7 +52,7 @@ measured, one subsection per step).
   tags (oracle and art, with "never fetched" its own sentence) and the combos row's four states.
   Phase 1's leftovers closed here: a wall's refused next page says so and offers `Try again`;
   `facesOf` lives once. The `Open on …` rows wait for the host seams (phases 4 and 5).
-- [ ] **3.2 — Collection.** The cabinet: folders and shelves as headed groups, every shelf
+- [x] **3.2 — Collection.** The cabinet: folders and shelves as headed groups, every shelf
   openable (deck groups and `Recently removed` included), the collection's figures, filters
   through the same sheet over `useCollection`. Two rows of one printing get two names.
 - [ ] **3.3 — Wishlist.** The cabinet and its folders, the managed wishlist as a read, the
@@ -61,7 +61,7 @@ measured, one subsection per step).
   the commander first, then each stack (category) one above another with its count and its cards,
   the side rail last (validation, the bracket estimate, notes and to-do lists, tokens). Actual and
   Theory both readable; the deck query shared with the desktop's.
-- [ ] **3.5 — Writes.** Quantities, categories, labels, printings and finishes in a deck; entry
+- [ ] **3.5 — Writes.** *3.5a, the deck writes, merged as #790 (2026-10-03); 3.5b — the collection's and the wishlist's — follows.* Quantities, categories, labels, printings and finishes in a deck; entry
   edits in the collection and the wishlist; add to a deck, the collection or the wishlist from the
   card sheet; deck notes and to-do lists edited. Each through the command the desktop already
   calls, with the desktop's undo where it has one.
@@ -69,12 +69,12 @@ measured, one subsection per step).
   existing parsers and writers; a file arrives through `<input type=file>` and leaves as a
   download, which the host seams answer on each install. Built on `phase3/transfer`
   (light-app.md §7.6): a deck's from its page's foot, the collection's as `CollectionTransfer`
-  for 3.2's header to mount; the file seam is `phone/transfer/browserFiles.ts`, a stand-in until
+  in the collection's figures band; the file seam is `phone/transfer/browserFiles.ts`, a stand-in until
   phases 4 and 5.
-- [x] **3.7 — Light Settings, on both faces.** The edition grows its Settings entries (spec §3.1:
+- [x] **3.7 — Light Settings, on both faces** (#788, merged 2026-10-03). The edition grows its Settings entries (spec §3.1:
   `SettingsPage`'s entry list is the edition's second reader): sync and pairing, the supporter
   block, card data and the optional feeds, the image cache, marketplace, the danger zone.
-- [ ] **3.8 — What phase 1 left, and the measurements.** Stories for phone UI (Storybook's globs
+- [x] **3.8 — What phase 1 left, and the measurements** (#789, merged 2026-10-03). Stories for phone UI (Storybook's globs
   reach `mobile/`); `src/lib/tokens.test.ts` reads `mobile/`; the desktop face below its 700px
   height floor measured in a browser; the tablet rail decided; the shared binder and
   `Ctrl+Shift+N` in the light edition; the two history warts across the floor; a crossing that

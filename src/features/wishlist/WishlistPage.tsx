@@ -50,6 +50,7 @@ import {
   flattenFolders,
   folderDescendants,
   folderLevel,
+  trailOf,
   type FolderNode,
 } from "@/lib/folderTree";
 import {
@@ -279,41 +280,6 @@ function wishTarget(row: WishRow, cardId: string): CardMenuTarget {
     // for the drag beside it: a menu add is filed by what the card does.
     typeLine: row.typeLine,
   };
-}
-
-/**
- * The trail from the root down to the folder the reader is standing in — **without the root**,
- * which the breadcrumb prepends itself because `null` is a destination rather than a folder.
- *
- * Walked up through `parentId` and then reversed, because that is the only direction the flat
- * rows can be read in. Two shapes of broken input are resolved rather than trusted, and both
- * resolve **towards the root**: a `parentId` naming a folder this list does not carry — one
- * another surface deleted between the two reads — ends the walk there, so the folder draws as
- * though it sat at the top level; and a cycle, which the backend refuses outright and which only
- * corruption could produce, terminates on the visited set. That is `buildFolderTree`'s own rule
- * applied to the other half of the tree, and it is the rule because the alternative strands the
- * reader: a trail that gave up would leave them inside a folder with no way back out.
- *
- * A `folderId` naming nothing at all answers the empty trail, which is the same rule seen from
- * the bottom — the reader reads as standing at the root, which is where the wishes of a deleted
- * folder have just gone.
- */
-function trailOf(
-  folders: readonly WishlistFolder[],
-  folderId: number | null,
-): readonly WishlistFolder[] {
-  const byId = new Map(folders.map((folder) => [folder.id, folder]));
-  const trail: WishlistFolder[] = [];
-  const seen = new Set<number>();
-  let at = folderId;
-  while (at !== null && !seen.has(at)) {
-    seen.add(at);
-    const folder = byId.get(at);
-    if (folder === undefined) break;
-    trail.unshift(folder);
-    at = folder.parentId;
-  }
-  return trail;
 }
 
 /**

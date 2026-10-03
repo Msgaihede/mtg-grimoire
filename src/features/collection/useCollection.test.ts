@@ -589,6 +589,25 @@ describe("useCollection", () => {
   });
 
   /**
+   * **A caller's own folds replace the stored ones, and nothing is written** — the light app's
+   * phone face, which folds a shelf in place without touching `app_meta`. The stored map shuts
+   * `3`; the caller's opens the deck group and says nothing about `3`, so `3` reads its default.
+   */
+  it("builds the shelves from the folds a caller passes, in place of the stored ones", async () => {
+    collectionFolderList.mockResolvedValue([
+      folder(3),
+      folder(20, { kind: "deck", deckId: 1, name: "Mono-Red Aggro" }),
+    ]);
+    shelfFolds.mockResolvedValue({ collection: { "3": true }, wishlist: {} });
+    const mine = { "20": false };
+    const { result } = renderHook(() => useCollection({ folds: mine }), { wrapper });
+
+    await waitFor(() => expect(lastQuery().shelves).toEqual([UNFILED_SHELF, 3, 20]));
+    expect(result.current.folds).toBe(mine);
+    expect(setShelfFolds).not.toHaveBeenCalled();
+  });
+
+  /**
    * **Review Focus 4 at the hook: a filter suspends collapse, and clearing it restores every
    * fold without writing one.** The stored map is read, never rewritten, so Reset all is the
    * whole of the way back.
