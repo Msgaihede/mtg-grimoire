@@ -4,21 +4,21 @@
 
 **Goal:** a baseline claim changes a row only where the row is missing something no log will bring, changes it exactly once, never lands ahead of a put it contains, and costs a device that already holds everything nothing.
 
-**Architecture:** a claim names its emission (`Op::emission`: id, index, and on each chunk's head the count, the emitter's generation and whether it resumed). A receiver keeps a ledger in `sync_state` — consumed indices per emission, a `taken@` mark per emitter, a `gap` flag, `carried@` marks — in a new `sync_engine::emission` module, and decides each page in a new `apply::claims` submodule called from two seams in `apply_in`. Claims never touch `sync_peers`. The emitter mints the emission in the stretch that reads its rows; the client passes the batches it holds back into `apply` as held ops.
+**Architecture:** a claim names its emission (`Op::emission`: id, index, and on each chunk's head the count, the emitter's generation and whether it resumed). A receiver keeps a ledger in `sync_state` — consumed indices per emission, a `taken@` mark per emitter, a `gap` flag, `carried@` marks, an upgrade cut — in a new `sync_engine::emission` module, and decides each page in a new `apply::claims` submodule called from two seams in `apply_in`; an emission it will not decide (named before the upgrade cut, or with no head in the page) has its reference stripped at the door and keeps `main`'s rules. Claims never touch `sync_peers`. The emitter mints the emission in the stretch that reads its rows; the client passes the batches it holds back into `apply` as held ops.
 
 **Tech Stack:** Rust (rusqlite, serde, serde_json), the `grimoire-core` and `mtg-grimoire` crates, cargo tests over two-to-four real in-memory databases.
 
-**Spec:** `docs/superpowers/specs/2026-10-03-baseline-claim-emissions-design.md` (revision 2). Read it first; every task cites its sections.
+**Spec:** `docs/superpowers/specs/2026-10-03-baseline-claim-emissions-design.md` (revision 3). Read it first; every task cites its sections.
 
 ## Global Constraints
 
-- **Preconditions.** Tasks 1–7 start only after the rewritten narrow fix (`fix/sync-baseline-claim-skipped-as-seen`) is merged into `main`. Tasks 8–9 start only after #761 step 6b (the sync client's move into `crates/grimoire-core`) is merged. Before each, `git fetch origin` and merge `origin/main` into the branch — **merge, never rebase**.
+- **Base: `main`.** The narrow fix (`fix/sync-baseline-claim-skipped-as-seen`, local, `597d19d6`) is **not** merged and none of its code is taken; its scenarios are ported (Tasks 5, 8) and its record goes into `sync.md` (Task 11). #761 step 6b has merged: the client, `wire` and `identity` are in `crates/grimoire-core`. Before each task, `git fetch origin` and merge `origin/main` into the branch — **merge, never rebase**.
 - Work in a worktree off a fresh `main` (`superpowers:using-git-worktrees`, then the `worktree-setup` skill: `npm install` inside it).
-- **No schema rung.** Every new mark is a `sync_state` key: `logging_since`, `logging_resumed`, `gap`, `taken@<device>`, `emission@<device>`, `carried@<device>`.
+- **No schema rung.** Every new mark is a `sync_state` key: `logging_since`, `logging_resumed`, `gap`, `emissions_since`, `taken@<device>`, `emission@<device>`, `carried@<device>`.
 - **Every new wire key is `#[serde(default, skip_serializing_if = …)]`.** An ordinary op serialises byte for byte as before; nothing on the wire is `deny_unknown_fields`.
 - **Claims never read or write `sync_peers`**, never create a device block, and are never held as collateral by stamp (spec §5).
 - **§8.2's never-held under-count stays exactly as it is** — `a_claim_and_a_later_delta_on_a_row_never_held_still_undercount` in `apply/tests.rs` is not edited.
-- **Ops without an `emission` reference keep the narrow fix's rules unchanged** (spec §10). Do not edit the narrow fix's arms in `apply_in`; route around them.
+- **Ops without an `emission` reference — and ops whose reference is stripped at the door — keep `main`'s rules unchanged** (spec §10). `apply/tests.rs` stays green as it stands.
 - **Never `cargo fmt --all`** (it rewrites `crates/card-scanner`). Format with `cargo fmt -p grimoire-core` and `cargo fmt -p mtg-grimoire`.
 - **Never run two `npm run verify` at once**, in this worktree or across worktrees.
 - `npm run verify` before every commit; commit messages `feat:`/`fix:`/`test:`/`docs:` ending with `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`.
@@ -39,21 +39,19 @@
 | File | Responsibility |
 | --- | --- |
 | `crates/grimoire-core/src/sync_engine/merge.rs` | **Modify.** `Emission` struct; `Op::emission` field |
-| `crates/grimoire-core/src/sync_engine/emission.rs` | **Create.** The ledger: clock tick, generation minting, `Ranges`, `Record`, `taken@`, `emission@`, `carried@`, `gap` |
+| `crates/grimoire-core/src/sync_engine/emission.rs` | **Create.** The ledger: clock tick, generation minting, the upgrade cut, `Ranges`, `Record`, `taken@`, `emission@`, `carried@`, `gap` |
 | `crates/grimoire-core/src/sync_engine/mod.rs` | **Modify.** `pub mod emission;` |
 | `crates/grimoire-core/src/sync_engine/baseline.rs` | **Modify.** `number`, `head`; `horizon` reads `carried@` |
 | `crates/grimoire-core/src/sync_engine/apply/claims.rs` | **Create.** `decide` (before grouping) and `settle` (after the committed pass) |
-| `crates/grimoire-core/src/sync_engine/apply.rs` | **Modify.** `mod claims`; `apply_page`; `Class::HeldBack`; seams in `apply_in`; claims out of `held_by`, `blocks_of`, `advance_watermarks`; `update_row` (Task 7) |
+| `crates/grimoire-core/src/sync_engine/apply.rs` | **Modify.** `mod claims`; `apply_page`; `Class::HeldBack`; the seams in `apply_in`; claims out of `held_by`, `blocks_of`, `advance_watermarks`; `update_row` (Task 7) |
 | `crates/grimoire-core/src/sync_engine/apply/emission_tests.rs` | **Create.** Every apply-level scenario of spec §14, with its own fixtures |
-| `crates/grimoire-core/src/sync_engine/apply/tests.rs` | **Modify.** `emission: None` in two `Op` literals; the two owed tests' `#[ignore]` reasons |
-| `crates/grimoire-core/src/sync_engine/capture.rs` | **Modify.** `emission: None` in `op_from_row` |
-| `src-tauri/src/sync_engine/mod.rs` | **Modify (until 6b moves it).** Re-export `emission` |
-| the moved `sync_pair/identity.rs` | **Modify (Task 8).** Mint the generation; keep it on leave; open the gap on forget |
-| the moved `sync_engine/client.rs` and `client/tests.rs` | **Modify (Task 9).** Emission head and numbering; nothing pending; held-back batches into `apply`; the unreadable gap |
-| the moved `sync_engine/wire.rs` | **Modify (Tasks 1, 9).** `emission: None` in test literals; the size test |
-| `docs/reference/sync.md`, `docs/superpowers/specs/2026-08-29-sync-baseline-design.md`, `src-tauri/CLAUDE.md` | **Modify (Task 10).** The record, the amendment, the binding rule |
+| `crates/grimoire-core/src/sync_engine/apply/tests.rs`, `capture.rs`, `wire.rs`, `sync_pair/identity.rs` (all under `crates/grimoire-core/src/`) | **Modify (Task 1).** `emission: None` in every `Op` literal |
+| `crates/grimoire-core/src/sync_pair/identity.rs` | **Modify (Task 9).** Mint the generation; keep it on leave; open the gap on forget |
+| `crates/grimoire-core/src/sync_engine/client.rs` and `client/tests.rs` | **Modify (Task 10).** The emission minted and headed; nothing pending; held-back batches into `apply_page`; the unreadable gap |
+| `crates/grimoire-core/src/sync_engine/wire.rs` | **Modify (Task 10).** The size test |
+| `docs/reference/sync.md`, `docs/superpowers/specs/2026-08-29-sync-baseline-design.md`, `src-tauri/CLAUDE.md` | **Modify (Task 11).** The record (the narrow fix's included), the amendment, the binding rule |
 
-**Why the scenarios get their own test file:** `apply/tests.rs` is the narrow fix's file and changes under every sync branch. `emission_tests.rs` copies the half-dozen fixtures it needs, so this work merges without touching that file's body.
+**Why the scenarios get their own test file:** `apply/tests.rs` changes under every sync branch. `emission_tests.rs` copies the handful of fixtures it needs, so this work merges without touching that file's body.
 
 ---
 
@@ -61,16 +59,16 @@
 
 **Files:**
 - Modify: `crates/grimoire-core/src/sync_engine/merge.rs`
-- Modify: every `Op { … }` literal — find them with `grep -rn "schema: None\|schema: Some" crates src-tauri/src --include=*.rs` (on `main` at `dfce2194` they were in `merge.rs`, `baseline.rs`, `capture.rs`, `apply/tests.rs` ×2, `wire.rs` ×2, `sync_pair/identity.rs`)
+- Modify: every `Op { … }` literal — find them with `grep -rn "schema: None\|schema: Some" crates src-tauri/src --include=*.rs` (before 6b they were in `merge.rs`, `baseline.rs`, `capture.rs`, `apply/tests.rs` ×2, `wire.rs` ×2, `sync_pair/identity.rs`)
 - Test: `crates/grimoire-core/src/sync_engine/merge.rs` (its `tests` module)
 
 **Interfaces:**
 - Produces: `pub struct merge::Emission { pub id: (i64, i64), pub i: u32, pub n: Option<u32>, pub since: Option<(i64, i64)>, pub resumed: bool }` and `pub emission: Option<Emission>` on `merge::Op`.
 
-- [ ] **Step 1: Confirm the preconditions**
+- [ ] **Step 1: Bring the branch up to `main`**
 
-Run: `git fetch origin && git log origin/main --oneline -30`
-Expected: the narrow fix's merge is there (its commit subject begins `fix(sync): a covered put`). If it is not, stop: this plan builds on it.
+Run: `git fetch origin && git merge origin/main && git ls-files | grep -E "sync_engine/client.rs|sync_pair/identity.rs"`
+Expected: both under `crates/grimoire-core/src/` (6b has moved them).
 
 - [ ] **Step 2: Write the failing tests** — append to `merge.rs`'s `mod tests`:
 
@@ -179,14 +177,14 @@ git commit -m "feat(sync): a baseline op can name its emission on the wire"
 **Files:**
 - Create: `crates/grimoire-core/src/sync_engine/emission.rs`
 - Modify: `crates/grimoire-core/src/sync_engine/mod.rs` (add `pub mod emission;` and a line in the module doc's list)
-- Modify: `src-tauri/src/sync_engine/mod.rs` (add `pub use grimoire_core::sync_engine::emission;` beside the other re-exports — skip if 6b has already restructured that file)
 - Test: `emission.rs`'s own `mod tests`
 
 **Interfaces:**
 - Consumes: `merge::Horizon`.
 - Produces (all in `crate::sync_engine::emission`):
   - `pub type Stamp = (i64, i64);`
-  - `pub const LOGGING_SINCE, LOGGING_RESUMED, GAP: &str; pub const RECORDS_PER_EMITTER: usize = 4;`
+  - `pub const LOGGING_SINCE, LOGGING_RESUMED, GAP, CUT: &str; pub const RECORDS_PER_EMITTER: usize = 4;`
+  - `pub fn cut(&Connection) -> rusqlite::Result<Stamp>` — the upgrade boundary (spec §10), minted on first call
   - `pub struct Begun { pub id: Stamp, pub since: Stamp, pub resumed: bool }`
   - `pub fn tick(&Connection) -> rusqlite::Result<Stamp>`
   - `pub fn begin(&Connection) -> rusqlite::Result<Begun>`
@@ -197,7 +195,7 @@ git commit -m "feat(sync): a baseline op can name its emission on the wire"
   - `pub fn taken(&Connection, emitter: &str) -> rusqlite::Result<Option<Stamp>>`
   - `pub fn records(&Connection, emitter: &str) -> rusqlite::Result<Vec<Record>>`
   - `pub fn keep(&Connection, emitter: &str, record: Record) -> rusqlite::Result<()>`
-  - `pub fn take(&Connection, emitter: &str, record: &Record, horizon: &Horizon, me: Option<&str>) -> rusqlite::Result<()>`
+  - `pub fn take(&Connection, emitter: &str, record: &Record, horizon: &Horizon, carry: bool, me: Option<&str>) -> rusqlite::Result<()>` — `carry` is whether every claim of the emission wrote (spec §8)
   - `pub fn carried(&Connection) -> rusqlite::Result<BTreeMap<String, Stamp>>`
   - `pub fn open_gap(&Connection) -> rusqlite::Result<()>`, `pub fn gap_open(&Connection) -> rusqlite::Result<bool>`, `pub fn close_gap_if_whole(&Connection) -> rusqlite::Result<()>`
 
@@ -300,7 +298,7 @@ mod tests {
             );
         }
         let done = Record::new((2, 0), 1, (1, 0), false);
-        take(&conn, "dev-a", &done, &horizon, Some("dev-b")).unwrap();
+        take(&conn, "dev-a", &done, &horizon, true, Some("dev-b")).unwrap();
 
         assert_eq!(taken(&conn, "dev-a").unwrap(), Some((1, 0)));
         let left: Vec<Stamp> = records(&conn, "dev-a").unwrap().iter().map(|r| r.id).collect();
@@ -311,11 +309,45 @@ mod tests {
         assert_eq!(c.get("dev-b"), None, "this device carries nothing of its own");
     }
 
+    /// Spec §8: an emission with any claim passed is taken but carries nothing — a held row's
+    /// claim wrote nothing, so that row does not hold what the horizon names.
+    #[test]
+    fn an_emission_with_a_passed_claim_is_taken_and_carries_nothing() {
+        let conn = db();
+        let mut horizon = Horizon::default();
+        horizon.seen.insert(
+            "dev-c".to_owned(),
+            Hlc { ms: 900, ctr: 0, device: "dev-c".to_owned() },
+        );
+        let done = Record::new((2, 0), 1, (1, 0), false);
+        take(&conn, "dev-a", &done, &horizon, false, None).unwrap();
+        assert_eq!(taken(&conn, "dev-a").unwrap(), Some((1, 0)));
+        assert!(carried(&conn).unwrap().is_empty());
+    }
+
+    /// Spec §10: the cut is minted once — a day past this device's clock where it has synced
+    /// before, zero where it never has — and never moves after.
+    #[test]
+    fn the_upgrade_cut_is_minted_once() {
+        let fresh = db();
+        assert_eq!(cut(&fresh).unwrap(), (0, 0), "nothing older could have synced here");
+
+        let synced = db();
+        synced
+            .execute("INSERT INTO sync_peers (device_id, last_ms, last_ctr) VALUES ('dev-a', 1, 0)", [])
+            .unwrap();
+        synced.execute("UPDATE sync_clock SET ms = 5000000000000", []).unwrap();
+        let first = cut(&synced).unwrap();
+        assert_eq!(first, (5_000_000_000_000 + crate::sync_engine::hlc::MAX_AHEAD_MS, i64::MAX));
+        synced.execute("UPDATE sync_clock SET ms = 9000000000000", []).unwrap();
+        assert_eq!(cut(&synced).unwrap(), first, "the cut does not move");
+    }
+
     #[test]
     fn a_gap_clears_the_marks_and_closes_once_the_roster_is_taken_again() {
         let conn = db();
         let done = Record::new((2, 0), 1, (1, 0), false);
-        take(&conn, "dev-a", &done, &Horizon::default(), None).unwrap();
+        take(&conn, "dev-a", &done, &Horizon::default(), true, None).unwrap();
         keep(&conn, "dev-a", Record::new((6, 0), 1, (5, 0), false)).unwrap();
         put(&conn, "absorbed@dev-a", "4:0").unwrap();
         put(&conn, LOGGING_SINCE, "3:0").unwrap();
@@ -335,7 +367,7 @@ mod tests {
         .unwrap();
         close_gap_if_whole(&conn).unwrap();
         assert!(gap_open(&conn).unwrap(), "dev-a has not been taken again");
-        take(&conn, "dev-a", &done, &Horizon::default(), None).unwrap();
+        take(&conn, "dev-a", &done, &Horizon::default(), true, None).unwrap();
         close_gap_if_whole(&conn).unwrap();
         assert!(!gap_open(&conn).unwrap(), "dev-z is on no roster and holds nothing open");
     }
@@ -393,6 +425,9 @@ pub const LOGGING_SINCE: &str = "logging_since";
 pub const LOGGING_RESUMED: &str = "logging_resumed";
 /// Present while this device has a gap (§7).
 pub const GAP: &str = "gap";
+/// The upgrade boundary (§10): an emission named at or below it is judged as an older build
+/// judged it.
+pub const CUT: &str = "emissions_since";
 const TAKEN: &str = "taken@";
 const RECORDS: &str = "emission@";
 const CARRIED: &str = "carried@";
@@ -577,14 +612,39 @@ pub fn keep(conn: &Connection, emitter: &str, record: Record) -> rusqlite::Resul
     put(conn, &format!("{RECORDS}{emitter}"), &json(&all)?)
 }
 
+/// The upgrade boundary (§10), minted on the first call and never moved after: a day past this
+/// device's clock where it holds any watermark — an older build may have applied an emission in a
+/// page held across the upgrade — and zero where it holds none. A value that does not parse is
+/// minted again, later, which only widens the old path.
+pub fn cut(conn: &Connection) -> rusqlite::Result<Stamp> {
+    if let Some(held) = get(conn, CUT)?.as_deref().and_then(parse) {
+        return Ok(held);
+    }
+    let peers: i64 = conn.query_row("SELECT count(*) FROM sync_peers", [], |r| r.get(0))?;
+    let cut = if peers == 0 {
+        (0, 0)
+    } else {
+        let now: i64 = conn.query_row(
+            "SELECT max(ms, cast(unixepoch('subsec') * 1000 AS INTEGER)) FROM sync_clock WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )?;
+        (now.saturating_add(super::hlc::MAX_AHEAD_MS), i64::MAX)
+    };
+    put(conn, CUT, &show(cut))?;
+    Ok(cut)
+}
+
 /// An emission wholly consumed (§5, §8): its generation is taken, every record of the emitter at
-/// or below that generation goes, and what its horizon names is carried here — each device's
-/// `carried@` raised to the horizon's entry, this device's own excepted.
+/// or below that generation goes, and — only where `carry`, every claim having written its row —
+/// what its horizon names is carried here: each device's `carried@` raised to the horizon's entry,
+/// this device's own excepted.
 pub fn take(
     conn: &Connection,
     emitter: &str,
     record: &Record,
     horizon: &Horizon,
+    carry: bool,
     me: Option<&str>,
 ) -> rusqlite::Result<()> {
     let key = format!("{TAKEN}{emitter}");
@@ -598,6 +658,9 @@ pub fn take(
     let mut all = records(conn, emitter)?;
     all.retain(|r| r.since > record.since);
     put(conn, &format!("{RECORDS}{emitter}"), &json(&all)?)?;
+    if !carry {
+        return Ok(());
+    }
     for (device, at) in &horizon.seen {
         if Some(device.as_str()) == me {
             continue;
@@ -814,11 +877,10 @@ git commit -m "feat(sync): number a baseline's ops and name what claims carried 
 - Create: `crates/grimoire-core/src/sync_engine/apply/claims.rs`
 - Create: `crates/grimoire-core/src/sync_engine/apply/emission_tests.rs`
 - Modify: `crates/grimoire-core/src/sync_engine/apply.rs`
-- Modify: `crates/grimoire-core/src/sync_engine/apply/tests.rs` (only the two owed tests' `#[ignore]` reasons)
 
 **Interfaces:**
 - Consumes: `emission::*` (Task 2), `baseline::{number, head, horizon, build}` (Task 3), `merge::Emission`.
-- Produces: `pub(super) fn claims::decide(conn: &Connection, ops: &[Op], me: Option<&str>, seen: &dyn Fn(&Op) -> bool) -> Result<claims::Decided, String>` with public fields `skip: BTreeSet<usize>` and `keep: BTreeSet<usize>`; `pub(super) fn claims::settle(conn: &Connection, d: &Decided, committed: &[Deferral], me: Option<&str>) -> Result<(), String>`. In this task `decide` keeps every active claim (the row table is Task 5).
+- Produces: `pub(super) fn claims::decide(conn: &Connection, ops: &[Op], me: Option<&str>, seen: &dyn Fn(&Op) -> bool) -> Result<claims::Decided, String>` with public fields `strip`, `skip` and `keep`, each a `BTreeSet<usize>` of page indices; `pub(super) fn claims::settle(conn: &Connection, d: &Decided, committed: &[Deferral], me: Option<&str>) -> Result<(), String>`. In this task `decide` keeps every active claim (the row table is Task 5).
 
 - [ ] **Step 1: Create the scenario file with its fixtures and this task's failing tests**
 
@@ -828,9 +890,8 @@ git commit -m "feat(sync): number a baseline's ops and name what claims carried 
 //! The baseline claim design's scenarios —
 //! `docs/superpowers/specs/2026-10-03-baseline-claim-emissions-design.md` §14.
 //!
-//! **Its own fixtures, on purpose.** `apply/tests.rs` belongs to the narrow fix and changes under
-//! every sync branch; the handful of helpers here are copied so this file merges without
-//! touching that one.
+//! **Its own fixtures, on purpose.** `apply/tests.rs` changes under every sync branch; the
+//! handful of helpers here are copied so this file merges without touching that one.
 
 use super::*;
 use crate::sync_engine::{baseline, capture, emission};
@@ -1170,22 +1231,46 @@ fn a_taken_mark_that_does_not_parse_leaves_the_emission_active() {
     apply(&b, &whole(&a, "dev-a")).unwrap();
     assert_eq!(copies(&b, "bolt"), 2);
 }
-```
 
-In `apply/tests.rs`, change the two owed tests' `#[ignore]` reasons — their claims carry no emission, so they now describe an older emitter:
+/// §14 row 28 — the upgrade boundary (spec §10). An older build applied a page holding a newer
+/// emitter's emission, ignoring its references, and recorded nothing; the page comes back after
+/// the upgrade, behind a first apply that brought nothing of that emitter's. Read as active, its
+/// covered puts would go down the op path into a row the old build built from the claim: 5.
+#[test]
+fn a_page_an_older_build_applied_writes_nothing_again_after_the_upgrade() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    stash(&a, "c1", 1, 1_700_000_000);
+    a.execute("UPDATE collection_entries SET quantity = 3", []).unwrap();
+    let page_ = page(&[&outbox(&a), &whole(&a, "dev-a")]);
 
-```rust
-#[ignore = "owed for an emitter older than the claim emissions design: a baseline pulled in two halves loses the claims its first half's watermark passes"]
-```
+    // The older build's apply: the same page with its references ignored, and nothing recorded.
+    let mut unreferenced = page_.clone();
+    for op in &mut unreferenced {
+        op.emission = None;
+    }
+    apply(&b, &unreferenced).unwrap();
+    assert_eq!(copies(&b, "c1"), 3);
+    b.execute(
+        "DELETE FROM sync_state
+          WHERE key = 'emissions_since' OR key GLOB 'emission@*' OR key GLOB 'taken@*'",
+        [],
+    )
+    .unwrap();
+    b.execute("UPDATE collection_entries SET quantity = 2", []).unwrap();
 
-```rust
-#[ignore = "owed for an emitter older than the claim emissions design: a sparse op pulled ahead of its baseline puts the watermark above the row's claim"]
+    // The first apply under this build holds nothing of a's, and mints the cut.
+    stash(&c, "opt", 1, 1_700_000_000);
+    apply(&b, &outbox(&c)).unwrap();
+
+    let again = apply(&b, &page_).unwrap();
+    assert_eq!((again.applied, copies(&b, "c1")), (0, 2), "{again:?}");
+}
 ```
 
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `cargo test -p grimoire-core --lib sync_engine::apply::emission_tests`
-Expected: compiles; the first four and `a_claim_held_mid_emission…` and `a_taken_generations…` FAIL (1 row of 3; 0 for 5; `deferred: 1`; `opt` 0; `opt` 0 behind the held claim; `applied` 1); the three Review Focus tests may pass already — they pin behaviour this task must keep.
+Expected: compiles; the first four and `a_claim_held_mid_emission…` and `a_taken_generations…` FAIL (1 row of 3; 0 for 5; `deferred: 1`; `opt` 0; `opt` 0 behind the held claim; `applied` 1). The three Review Focus tests and `a_page_an_older_build_applied…` may pass already, because `main` ignores references — they pin behaviour this task must keep, and the last one goes red (5) if the cut is left out of Step 3.
 
 - [ ] **Step 3: Write `claims.rs`** (this task keeps every active claim; Task 5 adds the row table)
 
@@ -1221,6 +1306,10 @@ struct InPage {
 /// What [`decide`] settled before any group is formed.
 #[derive(Default)]
 pub(super) struct Decided {
+    /// Page indices whose reference is stripped at the door, so they are judged as an op with none:
+    /// an emission named at or below the upgrade cut (§10), and a claim whose head is not in the
+    /// page.
+    pub strip: BTreeSet<usize>,
     /// Page indices consumed without being applied.
     pub skip: BTreeSet<usize>,
     /// Page indices that go to the fold whatever `seen` and the older horizon rules say.
@@ -1236,10 +1325,11 @@ fn sql(e: rusqlite::Error) -> String {
     e.to_string()
 }
 
-/// Decide a page's claims (spec §5, §6).
+/// Decide a page's claims (spec §5, §6, §10).
 ///
-/// A claim whose chunk head is not in the page — `n` and `since` absent on every op of its
-/// emission — is left undecided, and the older rules judge it as an op with no reference.
+/// An emission named at or below the upgrade cut, and a claim whose chunk head is not in the page
+/// — `n` and `since` absent on every op of its emission — are marked to be stripped: the caller
+/// takes their reference off and `main`'s rules judge them as ops with none.
 pub(super) fn decide(
     conn: &Connection,
     ops: &[Op],
@@ -1248,6 +1338,7 @@ pub(super) fn decide(
 ) -> Result<Decided, String> {
     let _ = seen; // read by Task 5's covered-put arm
     let mut out = Decided::default();
+    let cut = emission::cut(conn).map_err(sql)?;
     for op in ops {
         let (Some(em), Some(h)) = (&op.emission, &op.horizon) else {
             continue;
@@ -1255,6 +1346,9 @@ pub(super) fn decide(
         let (Some(n), Some(since)) = (em.n, em.since) else {
             continue;
         };
+        if em.id <= cut {
+            continue;
+        }
         out.emissions
             .entry((op.at.device.clone(), em.id))
             .or_insert(InPage {
@@ -1264,6 +1358,13 @@ pub(super) fn decide(
                 horizon: h.clone(),
                 record: None,
             });
+    }
+    for (i, op) in ops.iter().enumerate() {
+        if let Some(em) = &op.emission {
+            if !out.emissions.contains_key(&(op.at.device.clone(), em.id)) {
+                out.strip.insert(i);
+            }
+        }
     }
     // Active or inert, against the marks as they stood before the page (§6).
     for ((emitter, id), page) in out.emissions.iter_mut() {
@@ -1336,7 +1437,10 @@ pub(super) fn settle(
     }
     for (key, record) in records {
         if record.complete() {
-            emission::take(conn, &key.0, &record, &d.emissions[key].horizon, me).map_err(sql)?;
+            // §8: carried only where every claim wrote its row.
+            let carry = record.passed.is_empty();
+            emission::take(conn, &key.0, &record, &d.emissions[key].horizon, carry, me)
+                .map_err(sql)?;
         } else {
             emission::keep(conn, &key.0, record).map_err(sql)?;
         }
@@ -1355,27 +1459,50 @@ pub(super) fn settle(
 
 (the same filter on `d.group.ops` in `blocks_of`, and on `g.ops` in `advance_watermarks`).
 
-(b) **Horizons of claims with a reference are this design's, not the older rules'.** In `apply_in`, in the loop that absorbs every op's `horizon` (and, after the narrow fix, its per-emitter map), skip them first:
+(b) **Decide at the door, then filter.** In `apply_in`, replace everything from `let watermarks = read_watermarks(conn)?;` through the loop that builds `fresh` with the code below. It keeps `main`'s rules for every op `decide` leaves alone; move `main`'s existing comments on the horizon (spec §9.1) and on dropping this device's own ops onto the matching lines here rather than deleting them:
 
 ```rust
+    let watermarks = read_watermarks(conn)?;
+    let mine = |op: &Op| me.as_deref() == Some(op.at.device.as_str());
+    let seen = |op: &Op| {
+        watermarks
+            .get(&op.at.device)
+            .is_some_and(|w| stamp(op) <= *w)
+    };
+
+    // **Claims that name their emission are decided here, before any older rule sees them**
+    // (design 2026-10-03 §5, §6, §10). What `decide` marks to skip or keep is final, and an op it
+    // marks to strip loses its reference here, so everything below judges it as `main` always did.
+    let decided = claims::decide(conn, ops, me.as_deref(), &seen)?;
+    let stripped: Vec<Op>;
+    let ops: &[Op] = if decided.strip.is_empty() {
+        ops
+    } else {
+        stripped = ops
+            .iter()
+            .enumerate()
+            .map(|(i, op)| {
+                let mut op = op.clone();
+                if decided.strip.contains(&i) {
+                    op.emission = None;
+                }
+                op
+            })
+            .collect();
+        &stripped
+    };
+
+    // The horizon of an emission this design decides is its own business, never the older rules'.
+    let mut horizon = Horizon::default();
     for op in ops {
         if op.emission.is_some() {
             continue;
         }
         if let Some(h) = &op.horizon {
-```
+            horizon.absorb(h);
+        }
+    }
 
-(c) **Decide before grouping.** After the `mine` and `seen` closures are defined and before the loop that builds `fresh`:
-
-```rust
-    // Claims that name their emission are decided here, before any older rule sees them
-    // (design 2026-10-03 §5, §6): what this marks to skip or keep is final.
-    let decided = claims::decide(conn, ops, me.as_deref(), &seen)?;
-```
-
-and make the loop that builds `fresh` enumerate and consult it first, leaving the narrow fix's own arms below untouched:
-
-```rust
     let mut fresh: Vec<&Op> = Vec::new();
     for (i, op) in ops.iter().enumerate() {
         if decided.skip.contains(&i) {
@@ -1386,11 +1513,16 @@ and make the loop that builds `fresh` enumerate and consult it first, leaving th
             fresh.push(op);
             continue;
         }
-        // ...the narrow fix's arms, exactly as merged...
+        let inside = op.kind == Kind::Put && !op.baseline && horizon.covers(&op.at);
+        if mine(op) || seen(op) || inside {
+            report.skipped += 1;
+        } else {
+            fresh.push(op);
+        }
     }
 ```
 
-(d) **Settle after the committed pass.** Directly after `advance_watermarks(conn, &groups, &committed)?;`:
+(c) **Settle after the committed pass.** Directly after `advance_watermarks(conn, &groups, &committed)?;`:
 
 ```rust
     claims::settle(conn, &decided, &committed, me.as_deref())?;
@@ -1399,7 +1531,7 @@ and make the loop that builds `fresh` enumerate and consult it first, leaving th
 - [ ] **Step 5: Run the scenarios and the whole apply suite**
 
 Run: `cargo test -p grimoire-core --lib sync_engine::apply`
-Expected: every test in `emission_tests` PASSES; every test in `apply/tests.rs` still passes (its claims carry no emission and take the narrow fix's path); the two owed tests stay ignored.
+Expected: every test in `emission_tests` PASSES; every test in `apply/tests.rs` still passes as it stands (its claims carry no emission and take `main`'s path).
 
 - [ ] **Step 6: Commit**
 
@@ -1422,11 +1554,13 @@ git commit -m "feat(sync): a claim that names its emission is consumed once and 
 - Consumes: Task 4's `decide`/`settle`; `super::meta_of`; `emission::gap_open`, `emission::start_logging`, `emission::keep_logging_mark`.
 - Produces: `decide` now implements spec §6's row table and the containment rule.
 
+**If a ported scenario (rows 24–27) fails after Step 3**, it is a finding about the design, not a fixture to adjust: stop and report it with the numbers, as the narrow fix's reviews were reported.
+
 - [ ] **Step 1: Write the failing tests** — append to `emission_tests.rs`:
 
 ```rust
 // ---------------------------------------------------------------------------------------------
-// Task 5 — the row table (spec §6, §14 rows 5–9, 11–12, 15, 18, 22)
+// Task 5 — the row table (spec §6, §14 rows 5–9, 11–12, 15, 18, 22, 24–27)
 // ---------------------------------------------------------------------------------------------
 
 /// Moves a device's whole op log a minute into the past, so a claim stamped from a row's
@@ -1682,7 +1816,7 @@ fn leave_edit_repair(clock_ahead: bool) -> (i64, String) {
     (copies(&b, "bolt"), note(&b, "bolt"))
 }
 
-/// §14 row 12, the apply half (the identity half is Task 8).
+/// §14 row 12, the apply half (the identity half is Task 9).
 #[test]
 fn a_device_back_from_time_out_of_a_group_brings_what_it_did_there() {
     for clock_ahead in [false, true] {
@@ -1781,12 +1915,115 @@ fn an_emission_from_before_a_rejoin_is_inert_beside_one_from_after_it() {
     assert_eq!(copies(&b, "bolt"), 4);
     assert!(emission::taken(&b, "dev-a").unwrap() > first);
 }
+
+/// §14 row 24 — the narrow fix's review-7 double count: `a` hears `c`'s `+1` only through `e`'s
+/// claim, adds a copy and re-baselines; `b` meets `c`'s `+1`, `a`'s and `a`'s emission without
+/// `e`'s. Then every device reads the rest of the log.
+#[test]
+fn a_put_one_emitter_took_in_through_anothers_claim_counts_once_everywhere() {
+    let (a, b, c, e) = (paired("dev-a"), paired("dev-b"), paired("dev-c"), paired("dev-e"));
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    for peer in [&b, &c, &e] {
+        apply(peer, &seed).unwrap();
+    }
+    step(&c, "bolt", 1, SECOND);
+    let y = since(&c, &mut mc);
+    apply(&e, &y).unwrap();
+    apply(&a, &whole(&e, "dev-e")).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let p = since(&a, &mut ma);
+    apply(&b, &page(&[&y, &p, &whole(&a, "dev-a")])).unwrap();
+    for peer in [&a, &c, &e] {
+        apply(peer, &page(&[&y, &p])).unwrap();
+    }
+    assert_eq!(
+        [copies(&a, "bolt"), copies(&b, "bolt"), copies(&c, "bolt"), copies(&e, "bolt")],
+        [4, 4, 4, 4]
+    );
+}
+
+/// §14 row 25 — review 7's removal: `b` meets `c`'s `-1` inside `e`'s horizon beside a chunk
+/// carrying only another card's claim, then `a`'s `+1` and re-baseline from before `a` heard of
+/// the removal.
+#[test]
+fn a_removal_beside_a_chunk_of_another_cards_claim_is_never_floored_over() {
+    let (a, b, c, e) = (paired("dev-a"), paired("dev-b"), paired("dev-c"), paired("dev-e"));
+    let (mut ma, mut mc, mut me) = (0, 0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    for peer in [&b, &c, &e] {
+        apply(peer, &seed).unwrap();
+    }
+    stash(&e, "opt", 1, SECOND);
+    let from_e = since(&e, &mut me);
+    apply(&a, &from_e).unwrap();
+    apply(&b, &from_e).unwrap();
+    step(&c, "bolt", -1, SECOND);
+    let removed = since(&c, &mut mc);
+    apply(&e, &removed).unwrap();
+    let e_chunks = emit(&e, "dev-e", 1);
+    apply(&b, &page(&[&removed, &chunk_of(&e_chunks, "opt")])).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    apply(&a, &removed).unwrap();
+    assert_eq!((copies(&a, "bolt"), copies(&b, "bolt")), (2, 2));
+}
+
+/// §14 row 26 — a `+1` re-baseline, then a `-1` one.
+#[test]
+fn a_rebaseline_with_a_copy_added_then_one_with_it_removed_end_where_they_began() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3);
+    step(&a, "bolt", -1, SECOND);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    assert_eq!((copies(&a, "bolt"), copies(&b, "bolt")), (2, 2));
+}
+
+/// §14 row 27, first half — a third device's new row, inside the emitter's horizon.
+#[test]
+fn a_third_devices_new_row_inside_the_horizon_lands() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    stash(&c, "opt", 1, 1_700_000_000);
+    let from_c = outbox(&c);
+    apply(&a, &from_c).unwrap();
+    apply(&b, &page(&[&from_c, &whole(&a, "dev-a")])).unwrap();
+    assert_eq!(copies(&b, "opt"), 1);
+}
+
+/// §14 row 27, second half — an emitter behind this device, on another row, still brings its edit.
+#[test]
+fn an_emitter_behind_this_device_on_another_row_still_brings_its_edit() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    stash(&c, "opt", 1, 1_700_000_000);
+    apply(&b, &since(&c, &mut mc)).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3);
+}
 ```
 
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `cargo test -p grimoire-core --lib sync_engine::apply::emission_tests`
-Expected: the new tests FAIL — e.g. the tombstone face `(3, 0)`, the `-1` `(2, 3)`, `+1` each side `(4, 3)`, the note `"mine"`, the later-chunk edit `2`, the removal `(1, 2)`, the grain twin `4`; Task 4's tests still pass.
+Expected: the new tests FAIL — e.g. the tombstone face `(3, 0)`, the `-1` `(2, 3)`, `+1` each side `(4, 3)`, the note `"mine"`, the later-chunk edit `2`, the removal `(1, 2)`, the grain twin `4`, the `+1`-then-`-1` re-baseline `2` at its first assertion; Task 4's tests still pass.
 
 - [ ] **Step 3: Implement the row table** — in `claims.rs`, add the imports `use super::meta_of;` and `use crate::sync_engine::merge::Kind;`, remove the `let _ = seen;` line, add a `gap` read after the active/inert loop:
 
@@ -2296,20 +2533,55 @@ git commit -m "fix(sync): an apply that changes nothing leaves a row's updated_a
 
 ---
 
-### Task 8: The generation is minted where capture turns on (after 6b)
+### Task 8: The narrow fix's remaining fences, ported
 
 **Files:**
-- Modify: the moved `identity.rs` — `git ls-files | grep 'sync_pair/identity.rs'` (before 6b: `src-tauri/src/sync_pair/identity.rs`)
+- Test: `crates/grimoire-core/src/sync_engine/apply/emission_tests.rs`
+- Read (never merge, never check out): the narrow fix's `crates/grimoire-core/src/sync_engine/apply/tests.rs` at `597d19d6` — `git show 597d19d6:crates/grimoire-core/src/sync_engine/apply/tests.rs` — its section *A claim the horizon relies on*
+
+**Interfaces:**
+- Consumes: Tasks 4–7, and `emission_tests.rs`' fixtures.
+- Produces: tests only.
+
+Every scenario that section holds, other than the ones Tasks 4–5 already wrote (`a_baseline_pulled_in_two_halves…`, `a_sparse_op_pulled_ahead…`, the decrement, the concurrent add, the later note, the later chunk, the third device's new row, the emitter behind, `a_claim_and_a_later_delta_on_a_row_never_held_still_undercount`) and `a_claim_an_older_build_applied_is_not_applied_again` (Task 4's upgrade-boundary test replaces it), is an end state this design must reach too — spec §14 row 29.
+
+- [ ] **Step 1: Port them**, one test per scenario, under a heading `// Task 8 — the narrow fix's fences (spec §14 row 29)`, by these rules and no others:
+  - Keep each scenario's setup line for line. Their `paired`, `since`, `outbox`, `stash`, `step`, `set_clock`, `copies`, `qty`, `SECOND` and `STAMP` are the same as this file's.
+  - **Their `emission(conn, device)` becomes `whole(conn, device)`**, and their `chunk_for(&ops, card)` becomes `chunk_of(&chunks, card)` over `let chunks = emit(conn, device, 1);`. **Where they build one emission and use it twice** — a page handed back, or a chunk and the rest of the same emission — build it once and reuse the `Vec`. A second `whole` mints a second emission, and that is a different scenario.
+  - Keep every assertion on `copies`, `rows`, `qty`, `note` and `folder_of`, and every assertion that a page handed back applies nothing (`report.applied == 0`).
+  - Drop every assertion on `absorbed_of`, `mark_of`, `peers`, `forget_marks`/`ready`, and on any report field but `applied` — those are the narrow fix's own mechanism. Drop its "this fixture proves nothing" guards that read those marks.
+  - Keep the name; replace the doc comment with one line naming the scenario and `597d19d6`.
+  - A test left with no assertion is not ported; name it in the commit message.
+
+- [ ] **Step 2: Run them**
+
+Run: `cargo test -p grimoire-core --lib sync_engine::apply::emission_tests`
+Expected: PASS. **A ported scenario that fails is a finding about this design** — do not adjust it. Stop and report it with its numbers.
+
+- [ ] **Step 3: Commit**
+
+```bash
+cargo fmt -p grimoire-core
+git add crates/grimoire-core/src/sync_engine/apply/emission_tests.rs
+git commit -m "test(sync): the narrow fix's fences, ported to claims that name their emission"
+```
+
+---
+
+### Task 9: The generation is minted where capture turns on
+
+**Files:**
+- Modify: `crates/grimoire-core/src/sync_pair/identity.rs`
 - Test: that file's `mod tests`
 
 **Interfaces:**
 - Consumes: `emission::{start_logging, keep_logging_mark, open_gap, begin, gap_open, taken}` (Task 2), reached as `crate::sync_engine::emission`.
 - Produces: `found_group` and `join_group` (from no group) mint a generation; `leave_group` keeps it; `forget_log_position` opens the gap.
 
-- [ ] **Step 1: Confirm 6b has landed**
+- [ ] **Step 1: Bring the branch up to `main`**
 
-Run: `git fetch origin && git merge origin/main && git ls-files | grep -E 'sync_pair/identity.rs|sync_engine/client.rs'`
-Expected: the paths 6b moved them to. If both are still under `src-tauri/src/`, check #761: if 6b is not merged, stop here and leave Tasks 8–9 for after it.
+Run: `git fetch origin && git merge origin/main`
+Expected: a clean merge (or one whose conflicts you resolve and test).
 
 - [ ] **Step 2: Write the failing tests** — append to `identity.rs`'s `mod tests` (its `db()` and `ensure` fixtures):
 
@@ -2437,11 +2709,11 @@ git commit -m "feat(sync): a device mints a generation when capture turns on, an
 
 ---
 
-### Task 9: The client — emission head, nothing pending, held-back batches, the unreadable gap (after 6b)
+### Task 10: The client — emission head, nothing pending, held-back batches, the unreadable gap
 
 **Files:**
-- Modify: the moved `client.rs` (`emit_baselines`, `pull`, `round_trip`) and `client/tests.rs`
-- Modify: the moved `wire.rs` (`mod tests`)
+- Modify: `crates/grimoire-core/src/sync_engine/client.rs` (`emit_baselines`, `pull`, `round_trip`) and `crates/grimoire-core/src/sync_engine/client/tests.rs`
+- Modify: `crates/grimoire-core/src/sync_engine/wire.rs` (`mod tests`)
 
 **Interfaces:**
 - Consumes: `emission::{begin, open_gap, Begun}`, `baseline::{number, head}`, `apply::apply_page`, `merge::Emission`.
@@ -2656,7 +2928,7 @@ and to `wire.rs`'s `mod tests`, beside `a_full_batch_is_far_below_the_two_megaby
 - [ ] **Step 2: Run them to see them fail**
 
 Run: `cargo test --workspace sync_engine::client::tests::a_baseline_waits sync_engine::client::tests::every_baseline_op_names sync_engine::client::tests::a_clock_held sync_engine::client::tests::an_envelope_stepped sync_engine::wire::tests::a_full_batch_of_claims -- --nocapture`
-Expected: the four client tests FAIL (a baseline pushed; no `emission`; `bolt` built; the gap closed); the wire test PASSES and prints the row size — record it for Task 10.
+Expected: the four client tests FAIL (a baseline pushed; no `emission`; `bolt` built; the gap closed); the wire test PASSES and prints the row size — record it for Task 11.
 
 - [ ] **Step 3: Implement**
 
@@ -2690,7 +2962,7 @@ Expected: the four client tests FAIL (a baseline pushed; no `emission`; `bolt` b
         };
 ```
 
-Remove the `through` parameter from `emit_baselines` and from its call in `round_trip`; rewrite the function's ⚠️ doc paragraph to say no baseline begins while anything is pending, and why (design §5).
+Remove the `through` parameter from `emit_baselines`, its argument in `round_trip`'s call, and `round_trip`'s `let through = db.with(last_op)?;` (keep `last_op` itself if `pull` still calls it); rewrite the function's ⚠️ doc paragraph to say no baseline begins while anything is pending, and why (design §5).
 
 (b) **Leave out the unsendable rows before numbering.** After the `too_far_ahead` check, replace everything up to the chunk loop with:
 
@@ -2794,22 +3066,24 @@ git commit -m "feat(sync): the client sends emissions, waits on anything pending
 
 ---
 
-### Task 10: The record, the amendment, the rule — and the whole build
+### Task 11: The record, the amendment, the rule — and the whole build
 
 **Files:**
 - Modify: `docs/reference/sync.md`
 - Modify: `docs/superpowers/specs/2026-08-29-sync-baseline-design.md`
 - Modify: `src-tauri/CLAUDE.md`
 
-- [ ] **Step 1: `sync.md`** — add a section after the narrow fix's *A covered put is dropped only where its claim is what brings it*, titled **"A claim names its emission"**, holding:
+- [ ] **Step 1: `sync.md`** — add a section after *A held op holds the watermark*, titled **"A claim names its emission"**, holding:
   - the rule in the spec's words (§5, §6's two tables, §7's gap sources, §8, §9), with the `sync_state` keys;
-  - §1's measured table, and the wire test's printed row size from Task 9 Step 2 (`debug`, Windows, the date);
+  - §1's measured table, and the wire test's printed row size from Task 10 Step 2 (`debug`, Windows, the date);
+  - **the narrow fix's record, ported as history**: from `git show 597d19d6:docs/reference/sync.md`, its section *A claim the horizon relies on is not judged by the watermark* — the eight rounds, each review's counterexample and the experiment tables — condensed into a subsection *Why no receiver-side rule could trust a claim*, said in the past tense, naming `597d19d6` as the branch that holds the code, and ending on review 7's finding that a horizon says what an emitter applied and not what its rows hold;
+  - the upgrade cut (§10) and its day;
   - the older-build table (§10);
-  - in *What is still owed*: strike the bullet *"A baseline op is still judged by a watermark that is about a stream it is not in"* with `~~…~~` and a dated line saying what closed it; add one bullet per spec §11 residual, each naming its scenario and, where one exists, its pinning test (`a_rebroadcast_takes_back_nothing_this_device_did_since`'s untaken delete).
+  - in *What is still owed*: add one bullet per spec §11 residual, each naming its scenario and, where one exists, its pinning test (`a_rebroadcast_takes_back_nothing_this_device_did_since`'s untaken delete). If `main`'s list carries a bullet about a baseline op judged by the watermark, strike it with `~~…~~` and a dated line saying what closed it.
 
 - [ ] **Step 2: The baseline design** — add `### 9.3 Amended 2026-10-03: a claim names its emission` after §9.2, two paragraphs: claims leave `sync_peers`; generations replace §10.2's cheap exit (and §11's "B skips it in the first filter"); link the new spec. Append to §10.2's ⚠️ sentence: "Replaced by a generation — the claim emissions design."
 
-- [ ] **Step 3: `src-tauri/CLAUDE.md`** — in *Hard rules — sync*, after the narrow fix's bullet, add:
+- [ ] **Step 3: `src-tauri/CLAUDE.md`** — in *Hard rules — sync*, after the bullet *A pushed op is kept, never pruned*, add:
 
 ```markdown
 - **A claim that names its emission is never judged by `sync_peers` and never moves it**
@@ -2822,7 +3096,9 @@ git commit -m "feat(sync): the client sends emissions, waits on anything pending
   row. **Every gap clears the marks** — `forget_log_position`, an envelope stepped over as
   unreadable, a group dropped or released — and **a new place a gap can come from owes the same
   call**. No baseline begins while anything is pending, and the client passes the batches it holds
-  back into `apply_page` as held. Ops with no emission keep the narrow fix's rules.
+  back into `apply_page` as held. `carried@` rises only from an emission every claim of which
+  wrote — over-covering a horizon loses a put. Ops with no emission, and emissions named at or
+  below the upgrade cut (`emissions_since`), keep `main`'s rules.
 ```
 
 - [ ] **Step 4: Run the whole build**

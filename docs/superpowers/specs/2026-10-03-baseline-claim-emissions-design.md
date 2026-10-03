@@ -1,11 +1,13 @@
 # A claim carries its own idempotence: emissions and generations — design
 
 **Date:** 2026-10-03 · **Status:** approved approach ("Emission id + generation", held rows exact in
-every generation), spec for review — **revision 2**, after the narrow fix dropped its op path
-**Builds on** [the pairing baseline design](2026-08-29-sync-baseline-design.md) §8–§11 and on the
-narrow fix on `fix/sync-baseline-claim-skipped-as-seen` as it is being rewritten (§13).
-**Lands after** that fix and after [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761)
-step 6b, which moves the sync client into `crates/grimoire-core`.
+every generation), spec for review — **revision 3**: it builds on `main`, because the narrow fix
+will not merge (§13)
+**Builds on** [the pairing baseline design](2026-08-29-sync-baseline-design.md) §8–§11, on `main`
+after [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761) step 6b (the sync client is
+in `crates/grimoire-core`). **The narrow fix was handed to this design** after eight review rounds on
+`fix/sync-baseline-claim-skipped-as-seen` (local, HEAD `597d19d6`, never merged); its scenarios are
+this design's fences (§14), and its record is history to port (§13).
 
 **Goal:** a baseline op — a *claim* — changes a row on a device only where the row is missing
 something no log will bring, changes it exactly once, and never lands ahead of a put it already
@@ -30,7 +32,11 @@ review then traced a **double count, 6 for 3**: a receiver's client holds one se
 or behind a newer build) while a third device's claim for the row lands first — and that claim
 already *contains* the held put, which its emitter took in through another device's claim. Released,
 the put took the op path into a row that held it. The op path was dropped (Markus, 2026-10-03), and
-with it the fix for the held-row shapes, which come to this design.
+with it the fix for the held-row shapes, which come to this design. **Its seventh review then found
+the root**: `baseline::horizon` says what an emitter *applied*, not what its rows *hold*, so an
+emitter that took a third device's `+1` in through another emitter's claim sends a claim holding an
+op its horizon does not cover — four devices at 4 and one at 5. Every receiver-side "trust this
+claim" rule failed for that reason, and the narrow fix was handed over whole.
 
 Measured — the first block on `623f0ccc` over `main` at `dfce2194`, debug, Windows, as throwaway
 probes; the second by the narrow fix's rounds (sync.md, *A covered put is dropped only where its
@@ -77,7 +83,8 @@ claim should write nothing, and an order in which a claim can never land ahead o
 | A taken generation's claims are **inert**. An untaken one's are **active**, and decide per row (§6's table) | §6 |
 | On a row held here, an active claim **writes nothing** unless the emission resumed or this device has a **gap** | §6, §7 |
 | A covered put on a row a claim has **already written** is skipped on a re-delivery | §6 |
-| An emitter's horizon names what it took in through **complete** emissions | §8 |
+| An emitter's horizon names what it took in through emissions **wholly written** here | §8 |
+| An emission named before this build first applied here is **judged as an older build judged it** | §10 |
 | The tombstone face takes the op path; `update_row` stops stamping a row nothing changed | §6, §9 |
 
 ## 3. The wire: an emission reference on every claim
@@ -233,10 +240,14 @@ emission active and flooring: the narrow fix's behaviour, never below it.
 A horizon says, per device, how far that device's ops are already inside the emitter's rows — and
 the rows also hold what came in through claims, which never raised `sync_peers`. So the emitter keeps
 `carried@<device id>` in `sync_state`, raised to an emission's horizon entry for every device it
-names **when that emission becomes taken** — whole, so every row it carried has landed — and
-`baseline::horizon` reports `max(sync_peers, carried)` for each device. A partial emission raises
-nothing: its rows are not all here, and a horizon that named its puts would drop them for rows that
-lack them. What this closes is a grain twin meeting a third device's put the emitter carried in
+names **when that emission becomes taken and every one of its claims wrote its row** — so every
+row it carried holds what its horizon says — and `baseline::horizon` reports `max(sync_peers,
+carried)` for each device. **Over-covering is the dangerous direction**: a horizon that names a put
+some row of the emitter lacks makes a receiver drop that put for a row it builds from the claim, and
+the put is lost. So a partial emission raises nothing, and nor does a whole one with any claim
+*passed* — a row held here, whose claim wrote nothing, holds what this device's log brought and no
+more. Under-covering costs nothing worse than a put taking the op path beside a claim that `max`
+already absorbs. What this closes is a grain twin meeting a third device's put the emitter carried in
 through a claim — counted on top of the twin's own value where every other device took the `max` —
 and the newer-build batch §5 cannot pass to `apply`, which then finds its row's claim covered and
 already written.
@@ -259,11 +270,24 @@ the update hook reports, so the mirror and every other window refresh for nothin
 | Pair | What happens |
 | --- | --- |
 | this emitter → an older receiver | the `emission` field is ignored; claims are judged by `at` exactly as they are today, with today's losses |
-| an older emitter → this receiver | no `emission` field: the narrow fix's rules as it ships — every covered put dropped, the claim a floor let past the watermark by `Owed`, the absorbed mark and its cut. They stay for this case alone |
+| an older emitter → this receiver | no `emission` field: `main`'s rules, unchanged — judged by the watermark on `at`, a covered put dropped as inside. Today's losses, including the original same-second `+1`, stay for this pair alone |
 | both on this build | everything above |
 
 A mixed group is never worse than it is today, and the gains are between upgraded devices. No rung:
-every mark is a `sync_state` key, as the absorbed marks are.
+every mark is a `sync_state` key.
+
+**The upgrade boundary.** An older build of *this* device may already have applied an emission that
+carries references — a newer emitter's, in a page its cursor then held across the upgrade. It
+ignored the references, applied the claims by the old rules and dropped the covered puts as inside,
+recording nothing. Handed that page again, this build would find no record, read the claims as
+active, and send those puts down the op path into rows the old build had already built from the
+claims — **5 where 2 is right**, the narrow fix's own measurement of the same boundary. So the first
+apply under this build on a database that holds any `sync_peers` row stores a **cut** in
+`sync_state` — `emissions_since`, `max(wall, sync_clock.ms) + hlc::MAX_AHEAD_MS` — and an emission
+whose `id` is at or below it has its reference **stripped at the door**: it is judged exactly as an
+older build judged it. A database with no `sync_peers` row, which no older build has synced, gets a
+cut of zero. What it costs is a day: for up to `MAX_AHEAD_MS` after the upgrade, a re-baseline from
+an upgraded emitter behaves as today.
 
 ## 11. What this does not do
 
@@ -275,6 +299,9 @@ every mark is a `sync_state` key, as the absorbed marks are.
 - **A third device's delete, applied here, and a later active claim for that row** resurrect the row
   here only — `sync_gone` records parent tables alone, so nothing remembers a deleted
   `collection_entries` row. Inside an active emission only.
+- **For a day after the upgrade** (§10's cut), emissions named before it are judged as today.
+- **An older emitter's baselines keep today's losses**, the original same-second `+1` among them,
+  until it is updated.
 - **A device that resumed before this build** sends `since: 0` and no `resumed`, so its first
   emission after the upgrade writes nothing on rows held elsewhere; edits it made while out of a group
   before the upgrade, and never re-emitted, stay where they are.
@@ -286,24 +313,25 @@ every mark is a `sync_state` key, as the absorbed marks are.
 | --- | --- |
 | The baseline design §9.1: the horizon is a filter on one batch and never a watermark write | unchanged — the horizon still only filters, claims write no watermark, and `carried` feeds an emitter's own horizon, never `sync_peers` (§5, §8) |
 | §8.2's accepted under-count for a row never held is not fixed by accident | §6's last row keeps the drop, and the under-count's test stays as written |
-| The sync client moves to `crates/grimoire-core` in #761 step 6b | every client line — the `chunk[0]` keys, the pending check, the held sender's ops passed to `apply`, the unreadable gap — lands after 6b, on the moved file (§13) |
+| The sync client moves to `crates/grimoire-core` in #761 step 6b | 6b has merged; every client line — the `chunk[0]` keys, the pending check, the held sender's ops passed to `apply`, the unreadable gap — is written against the moved file (§13) |
 | Decide by experiment | §1's table is measured; every row of it and of the narrow fix's matrix becomes a red test before any code moves (§14) |
 
 ## 13. Sequencing, and where the code goes
 
-1. **The narrow fix merges** as it is being rewritten — every covered put dropped, `Owed`, the
-   absorbed mark spent per emitter, the cut. This design keeps all of it for claims with no reference
-   (§10) and replaces it for claims with one.
-2. **#761 step 6b moves** `client`, `wire`, `identity` and the rest into `crates/grimoire-core`.
-3. **This lands on a fresh `main`** — merged, never rebased — touching:
+1. **The narrow fix does not merge.** Its branch stays as a record (local, `597d19d6`); nothing
+   of its code is taken — no `Owed`, no absorbed mark, no `absorbed_since` cut. What is taken is its
+   scenarios (§14) and its record of eight review rounds, ported into `sync.md` as the history behind
+   this design.
+2. **#761 step 6b has moved** `client`, `wire` and `identity` into `crates/grimoire-core`.
+3. **This lands on `main`** — merged, never rebased — touching:
 
-| File (after 6b) | Change |
+| File | Change |
 | --- | --- |
 | `crates/grimoire-core/src/sync_engine/merge.rs` | `Op::emission` and its struct |
-| `crates/grimoire-core/src/sync_engine/baseline.rs` | mint the emission `id`, number the sendable ops; `horizon` reads `carried` |
-| the moved `client.rs` | the `chunk[0]` keys beside the horizon; the oversized test ahead of numbering; no emission while anything is pending; every batch it holds back and could open passed to `apply` as held; the gap where `pull` counts `unreadable` |
-| the moved `identity.rs` | mint `logging_since` and `resumed` in `found_group` and in `join_group` from no group; keep `logging_since` in `leave_group`, writing `0` where there is none; open the gap in `forget_log_position` |
-| `crates/grimoire-core/src/sync_engine/apply.rs` | §5–§7: consumption, groups holding whole, held ops from the client, taken, active and inert, the row table, containment, the gap; `carried` when an emission is taken |
+| `crates/grimoire-core/src/sync_engine/baseline.rs` | number the sendable ops and head each chunk; `horizon` reads `carried` |
+| `crates/grimoire-core/src/sync_engine/client.rs` | the emission minted in the read stretch; the `chunk[0]` keys beside the horizon; the oversized test ahead of numbering; no emission while anything is pending; every batch it holds back and could open passed to `apply` as held; the gap where `pull` steps an envelope over |
+| `crates/grimoire-core/src/sync_pair/identity.rs` | mint `logging_since` and `resumed` in `found_group` and in `join_group` from no group; keep `logging_since` in `leave_group`, writing `0` where there is none; open the gap in `forget_log_position` |
+| `crates/grimoire-core/src/sync_engine/apply.rs` | §5–§7, §10: the cut and the stripped reference, consumption, groups holding whole, held ops from the client, taken, active and inert, the row table, containment, the gap; `carried` when a wholly written emission is taken |
 | `crates/grimoire-core/src/sync_engine/apply.rs` (`update_row`) | §9 |
 | `docs/reference/sync.md`, the baseline design §9–§11, `src-tauri/CLAUDE.md` | the record, the amendment, the binding rule |
 
@@ -314,8 +342,8 @@ databases as `apply/tests.rs` does. Each row that turns on the generation is wri
 that matters — untaken (first contact, and `since: 0` after the upgrade), taken, resumed, and
 during a gap:
 
-1. A baseline pulled in two halves reaches a device that held nothing — 3 of 3 (un-ignored).
-2. A sparse op pulled ahead of its baseline costs nothing — 5 (un-ignored).
+1. A baseline pulled in two halves reaches a device that held nothing — 3 of 3.
+2. A sparse op pulled ahead of its baseline costs nothing — 5.
 3. A first-contact parent below the watermark lands with its child on the first delivery.
 4. A later chunk, the sender's clock fast, a row with no op — lands.
 5. The tombstone face — 3 on both.
@@ -341,14 +369,34 @@ during a gap:
     on the trip that pushes it.
 17. A row left out as unsendable does not keep its emission from being taken.
 18. A grain twin and a third device's put the emitter carried in through a claim: `max`, on every
-    device; `carried` rises only when an emission is taken.
-19. An op with no `emission` is judged exactly as the narrow fix judges it — its whole matrix green.
+    device; `carried` rises only when an emission is taken with every claim written, and never from
+    one whose claim on a held row passed.
+19. An op with no `emission` is judged exactly as `main` judges it — `apply/tests.rs` green as it
+    stands.
 20. An ordinary op serialises byte for byte as before; an op carrying the field round-trips; a
     hand-written op without it reads as `None`.
 21. A claim that changes nothing, and an ordinary op whose every field lost, leave `updated_at` as it
     was — and a deck's place in the gallery with it.
 22. §8.1's first pairing applied twice is 5; §8.2's never-held under-count is still 2.
 23. A full 200-op chunk with references stays under `wire::BATCH_BYTES`, measured and recorded.
+24. **The narrow fix's review-7 double count**: four devices; `a` hears `c`'s `+1` only through `e`'s
+    claim, then adds a copy and re-baselines; `b` meets `c`'s `+1`, `a`'s and `a`'s emission without
+    `e`'s — 4 on every device.
+25. **Its removal taken in through a claim**: `b` meets `c`'s `-1` inside `e`'s horizon beside a chunk
+    carrying another card's claim, then `a`'s `+1` and re-baseline from before it heard of the
+    removal — 2 on both.
+26. A `+1` re-baseline followed by a `-1` re-baseline — 2, where `main` ends right and the narrow fix
+    ended at 3.
+27. A third device's new row inside the horizon lands; an emitter behind this device on another row
+    still brings its edit.
+28. **The upgrade boundary**: a page an older build applied — claims and the puts it dropped inside
+    them — handed back after the upgrade, behind a first apply that brought nothing of its emitter's,
+    writes nothing again over a copy removed between (2, not 5); and a database with no `sync_peers`
+    row gets no cut.
+29. **Every other end state the narrow fix's section asserted** (`apply/tests.rs` at `597d19d6`,
+    *A claim the horizon relies on*): each scenario ported with its emission referenced, keeping its
+    assertions on copies, rows, notes and folders and on nothing applied by a page handed back, and
+    dropping those on that fix's own marks.
 
 Then the rest of `apply/tests.rs`, `cargo test --workspace` and `npm run verify`; and a live
 two-device pass over a loopback mock relay that pairs, removes a copy on one device while the other
