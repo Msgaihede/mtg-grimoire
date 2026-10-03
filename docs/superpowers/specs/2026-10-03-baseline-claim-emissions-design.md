@@ -111,10 +111,17 @@ ever to send (`wire::oversized` on a chunk of one), and an index that never arri
 emission from ever being taken (§5). So the oversized test moves ahead of numbering — asked of the
 op as a chunk of one, horizon and emission reference included — and `n` counts what is sent.
 
-**Size.** `{"id":[ms,ctr],"i":1234}` is about 30 bytes on every claim and the `chunk[0]` keys about
-50 — some 6 KB on a full 200-op chunk, against the 186 299 B measured for one (sync.md *The
-baseline, measured*) and `wire::BATCH_BYTES` of 512 KiB. The chunk cut is measured with the
-references on, and §14 re-measures a full chunk.
+**Size, measured** (amended 2026-10-03, after Task 10; this paragraph first estimated about 30
+bytes a claim and some 6 KB a chunk, and both were low). A reference as it is serialised —
+`,"emission":{"id":[1759000000000,4],"i":199}` — is **about 44 B of plaintext on every claim**,
+and the `chunk[0]` keys about 40 more; sealed and base64'd, the references come to **about
+11.6 KB on a full 200-op chunk**. `wire`'s
+`a_full_batch_of_claims_with_references_is_far_below_the_cap` printed **205 398 B** as a stored
+row for 200 claims with references, against **189 499 B** for 200 ordinary ops on the same run
+(`a_full_batch_is_far_below_the_two_megabyte_row_cap`) — debug, Windows. The rest of the 15 899 B
+between them, about 4.3 KB, is `"baseline":true`, which every claim carried before this design.
+All of it is far under the 2 MB row cap, the relay's `MAX_SEALED_CHARS` and `wire::BATCH_BYTES`
+of 512 KiB. The chunk cut is measured with the references on (§14 row 23).
 
 ## 4. The generation: when a device last began logging, and whether it resumed
 
@@ -206,7 +213,7 @@ since", asked of the generation, never of a stamp.
 | **here, under the claim's uid** | **op path**: applied as the delta it is, at its own stamp | **passed — writes nothing**, unless the emission `resumed` or this device has an open gap (§7), when it is a **floor** over the op path: `max(local + Σ deltas, claim)` |
 | not here under its uid, and **this device's own `sync_ops` names it** (it held and deleted it) | **op path** — the tombstone face | **builds** the row: `insert_row`'s `max(Σ deltas, claim)`, existence decided by add-wins at the puts' own stamps |
 | not here under its uid, **a grain twin under another uid** | **dropped**: the claim carries it, and the two rows are independent — §8's `max`, never a sum | **merges** by `max`, adopting `min(uid)` as today |
-| **merged here into another row, in either direction** (`retired@`) — whether or not a row wears the uid again | **op path** — main's rules, where it finds no row | **passed — never builds, never floors** |
+| **merged here into another row, in either direction** (`retired@`) — whether or not a row wears the uid again | **op path** — `main`'s rules, either way: applied to the row that wears the uid again where one does; where none does, a sparse edit finds no row and is dropped, as it always was | **passed — never builds, never floors** |
 | **not here at all**, never held | **dropped**: the claim carries it | **builds** — §8.2's accepted under-count, unchanged |
 
 **Why a row merged here into another is passed** (amended 2026-10-03, Task 8b and the ruling on
@@ -457,7 +464,8 @@ during a gap:
 21. A claim that changes nothing, and an ordinary op whose every field lost, leave `updated_at` as it
     was — and a deck's place in the gallery with it.
 22. §8.1's first pairing applied twice is 5; §8.2's never-held under-count is still 2.
-23. A full 200-op chunk with references stays under `wire::BATCH_BYTES`, measured and recorded.
+23. A full 200-op chunk with references stays under `wire::BATCH_BYTES`, measured and recorded
+    (§3 has the figures).
 24. **The narrow fix's review-7 double count**: four devices; `a` hears `c`'s `+1` only through `e`'s
     claim, then adds a copy and re-baselines; `b` meets `c`'s `+1`, `a`'s and `a`'s emission without
     `e`'s — 4 on every device.

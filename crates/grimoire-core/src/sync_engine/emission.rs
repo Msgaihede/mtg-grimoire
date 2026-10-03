@@ -366,7 +366,8 @@ pub fn open_gap(conn: &Connection) -> rusqlite::Result<()> {
 }
 
 /// Whether this device has a gap open (§7) — while it does, an active claim floors a row held
-/// here.
+/// here. Open from [`open_gap`] until [`close_gap_if_whole`] finds every roster peer it holds a
+/// watermark for taken again.
 pub fn gap_open(conn: &Connection) -> rusqlite::Result<bool> {
     Ok(get(conn, GAP)?.is_some())
 }

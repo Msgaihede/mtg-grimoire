@@ -680,7 +680,10 @@ enum Why {
     UnknownParent { table: &'static str, uid: String },
     /// The row could not be written: a `NOT NULL`, `CHECK` or `UNIQUE` failure, or a grain
     /// match that would move a row onto a uid another row wears. The constraint's own words,
-    /// kept for the record, where they were once discarded.
+    /// kept for the record, where they were once discarded. **Or a claim's row was merged here
+    /// into another one** and the group would build it again beside the survivor — refused by
+    /// the write path, in [`MERGED_AWAY`]'s words rather than a constraint's (design 2026-10-03
+    /// §6).
     Unbuildable(String),
     /// Not decided yet, because what the page does to the group is only known once other groups
     /// have landed. Two things answer it (spec 2026-09-27 §3.3):
@@ -2062,15 +2065,23 @@ fn write_group<'a>(
     // the mark too late for it. With a gap open, or a resumed emission, `decide` then sends the
     // claim to the fold as the floor of a row it saw here; the group finds no row by grain or by
     // uid, and would build the merged-away uid beside the survivor, counting its copies twice.
-    // Refused instead, inside the group's savepoint: dropped and recorded, which `settle` records
-    // as the claim passed, and the drop opens the gap.
+    // Refused instead, inside the group's savepoint, as a `Why::Unbuildable` that `classify` reads
+    // like any other: **dropped and recorded** where no op of the group was sealed by a newer
+    // schema — `settle` records the claim passed, and the drop opens the gap — and **held as
+    // newer** where one was, the claim left unconsumed for the page that comes back after this
+    // device upgrades, when `decide` finds the mark this page wrote and passes it.
     //
     // **The group's other ops go with it.** Its covered puts are sparse in practice — an edit of
     // the row on its emitter — and `main` drops those too, for finding no row. A *full* insert
-    // put in such a group would be dropped here where `main` might build it, but no well-formed
-    // page reaches that: only a row's creator sends its insert, once, and this device held the row
-    // before the page, so a re-sent insert is below the creator's watermark and never reaches a
-    // group.
+    // put in such a group would be dropped here where `main` might build it, and that is
+    // unreachable in practice: only a row's creator sends its insert, once, and this device held
+    // the row before the page. Where the log brought the row, the insert is below its creator's
+    // watermark and never reaches a group. Where a claim built it, no watermark rose for the
+    // insert — a covered put dropped as carried raises none — so the fence is the log position,
+    // the cursor already past the envelope that carried it, and containment behind that: a page
+    // that does come back with the insert, held or re-read after `forget_log_position`, carries
+    // the claim that built the row, its emission's record says so (a gap keeps `wrote`), and the
+    // put is skipped as contained before it can join a group.
     if existing.uid.is_none() && g.ops.iter().any(|op| claims::claim(op).is_some()) {
         let merged = emission::retired(conn, meta.table, &g.ops[0].uid);
         if !matches!(merged, Ok(false)) {

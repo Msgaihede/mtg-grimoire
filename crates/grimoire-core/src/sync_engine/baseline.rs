@@ -269,7 +269,8 @@ pub fn head(first: &mut Op, n: usize, begun: &Begun) {
 }
 
 /// What this device had already absorbed when it read its tables: its `sync_peers` watermarks,
-/// plus its own highest stamp. Spec §9.
+/// each raised to its `carried@` mark where that is higher — what emissions wholly written here
+/// carried in (the baseline claim design of 2026-10-03, §8) — plus its own highest stamp. Spec §9.
 ///
 /// **Its own stamp is half the answer and not a garnish.** The emitter's own ops are on the log
 /// too, and every one of them is already inside the claims — that is §8.1's `+1`, the ordinary
