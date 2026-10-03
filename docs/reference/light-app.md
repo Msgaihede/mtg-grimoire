@@ -201,11 +201,13 @@ purpose; the phase that owns the surface owns the fix.
   of the shelves the reader has left open, and deck groups, `Recently removed` and a deck's
   managed wishlist folder start shut — so on the `starter` seed the collection wall draws 9 of 12
   rows. When every row is on a shut shelf the page says so; it cannot open one.
-- After a refused next page a wall stops asking and says nothing. It re-arms on any refetch of
-  that query (a tab away and back, a window refocus), so it is not stuck for the session.
-- When the whole-wall figure itself fails to load over an empty wall, the page draws nothing —
-  neither empty-state sentence is known to be true. `useWishlist` does return the query that
-  could say so; `useCollection` returns only the figure.
+- ~~After a refused next page a wall stops asking and says nothing~~ — **fixed 2026-10-03**: the
+  wall ends on `The next cards could not be read.` and a `Try again` that calls `fetchNextPage`
+  itself (`parts.tsx`'s `NextPageRefused`, through `CardWall`'s `footer`). It still stops asking
+  on its own until then, and still re-arms on any refetch.
+- ~~When the whole-wall figure itself fails to load over an empty wall, the page draws
+  nothing~~ — **fixed 2026-10-03**: the collection and the wishlist say the rest could not be
+  counted, from `useCollection`'s new `figuresRefused` and `useWishlist`'s `countsQuery`.
 - A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
   nothing.
 - Two rows of one printing get one accessible name; the desktop wall folds them into one tile.

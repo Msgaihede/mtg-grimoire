@@ -116,7 +116,10 @@ export function CardSheet({ cardId }: { cardId: string | null }) {
       open={cardId !== null}
       title={card?.name ?? "Card"}
       closeLabel="Close card"
-      size="w-[28rem]"
+      // Below 640px `Dialog` fills the window, and the window here runs under a cutout and the
+      // status bar (`viewport-fit=cover`), so the sheet takes the top inset itself — the shell's
+      // header, which takes it everywhere else, is underneath.
+      size="w-[28rem] pt-[env(safe-area-inset-top)] sm:pt-0"
       onDismiss={close}
       onClose={close}
     >
