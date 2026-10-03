@@ -5354,14 +5354,6 @@ async fn a_write_anywhere_in_a_baselines_emission_reaches_the_peer() {
         let a = paired("dev-a", 0);
         roster(&a, "dev-b");
         add_copy(&a, "bolt", 2);
-        // **The copies were added ten seconds ago.** A baseline's op is stamped from its row's
-        // `updated_at`, a whole second, and `dev-b` skips as seen whatever `dev-a` stamped at or
-        // below the watermark it holds for it — so the add has to sit clear of that second.
-        a.execute_batch(
-            "UPDATE sync_ops SET hlc_ms = hlc_ms - 10000;
-             UPDATE sync_clock SET ms = ms - 10000;",
-        )
-        .unwrap();
         let group = identity::group(&a).unwrap().unwrap();
         let before = outbox(&a);
 
@@ -5440,6 +5432,11 @@ fn one_more_bolt(conn: &Connection) {
 /// its rows and under its horizon and not yet on the relay's log, so it arrives a page later,
 /// where no horizon filters it, and is counted on top of the claim that already held it — a card
 /// out of nothing, which is the one direction a baseline may never fail in.
+///
+/// **And a claim judged by its emitter's watermark.** The add and the claim share a second — the
+/// add was backdated ten seconds until #780 made that unnecessary — so the claim's whole-second
+/// stamp is at or below what `dev-b` has heard from `dev-a`, while its horizon covers the write a
+/// second trip pushes with it. On the commit before #780: `3 here, 2 there` behind 7 stretches.
 #[tokio::test]
 async fn a_write_anywhere_in_a_round_trip_is_carried_by_the_next() {
     let mut wrong: Vec<String> = Vec::new();
@@ -5468,15 +5465,6 @@ async fn a_write_anywhere_in_a_round_trip_is_carried_by_the_next() {
         let a = paired("dev-a", 0);
         roster(&a, "dev-b");
         add_copy(&a, "bolt", 2);
-        // **The copies were added ten seconds ago**, for the reason the emission test above gives:
-        // a baseline's op is stamped from its row's whole second, and `dev-b` skips as seen what
-        // `dev-a` stamped at or below the watermark it holds for it. That is `apply`'s, not the
-        // trip's, and this test stands clear of it.
-        a.execute_batch(
-            "UPDATE sync_ops SET hlc_ms = hlc_ms - 10000;
-             UPDATE sync_clock SET ms = ms - 10000;",
-        )
-        .unwrap();
         set_state(&a, RELAY_URL, &server.base_url()).unwrap();
         grant(&a);
         let group = identity::group(&a).unwrap().unwrap();

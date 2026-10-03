@@ -1557,9 +1557,11 @@ file is touched.
 - **A web host needs its own socket.** `live.rs` is `tokio` tasks and `tokio-tungstenite`; the
   browser's half — a `WebSocket`, or the polling spec §7 names — is phase 6's.
 - **The same-second baseline skip in `apply`** (§6.8) was fixed on its own: #780, merged
-  2026-10-03 and in v0.40.0 — [sync.md](sync.md), *A claim names its emission*. Two whole-trip
-  tests in `sync_engine/client/tests.rs` still backdate their fixtures ten seconds for the old
-  reason; nobody has checked whether they can stop.
+  2026-10-03 and in v0.40.0 — [sync.md](sync.md), *A claim names its emission*. The two
+  whole-trip tests in `sync_engine/client/tests.rs` that backdated their fixtures ten seconds to
+  stand clear of it stopped the same day. Both pass without it; on the commit before #780 the
+  round-trip one is red without it (`3 here, 2 there` behind 7 of its 19 stretches) and the
+  emission one was already green — [sync.md](sync.md), *The tests that hold it*.
 - **`share::publish` still holds the connection for a whole publish** (§6.8), and stays the
   desktop's.
 - **Step 7**: the scanner's session glue — and then the command table. *(§6.10.)*
