@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useCollection } from "@/features/collection/useCollection";
 import { CardWall, type WallItem } from "../CardWall";
 import { collectionItem } from "../items";
-import { DimNote, ReadError, useMore } from "./parts";
+import { DimNote, NextPageRefused, ReadError, useMore } from "./parts";
 
 /**
  * The cards on the collection's **open shelves**, read-only — not every card the reader owns.
@@ -14,7 +14,7 @@ import { DimNote, ReadError, useMore } from "./parts";
  */
 export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
   const collection = useCollection();
-  const { query, marketplace, figures } = collection;
+  const { query, marketplace, figures, figuresRefused } = collection;
   const items = useMemo(
     () => collection.rows.map((row) => collectionItem(row, marketplace.currency)),
     [collection.rows, marketplace.currency],
@@ -25,7 +25,15 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
 
   // No rows is not no cards. `rows` is the open shelves; `figures` counts every shelf the wall
   // covers, folded ones included — so it is the only thing here that can say "empty" truthfully.
-  // Until it has answered, neither sentence is known to be true and neither is said.
+  // Until it has answered, neither sentence is known to be true and neither is said — and if it
+  // never will, that is said instead of an empty page.
+  if (!query.isPending && items.length === 0 && figures === undefined && figuresRefused) {
+    return (
+      <ReadError>
+        Nothing is on your open shelves, and the rest of your collection could not be counted.
+      </ReadError>
+    );
+  }
   if (!query.isPending && items.length === 0 && figures !== undefined) {
     return figures.entries === 0 ? (
       <DimNote>Nothing in your collection yet.</DimNote>
@@ -43,6 +51,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
       onOpen={onOpen}
       onNearEnd={more}
       resetKey={collection.scrollKey}
+      footer={<NextPageRefused query={query} />}
     />
   );
 }

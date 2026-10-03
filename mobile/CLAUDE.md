@@ -161,6 +161,10 @@ failure behind each at its own site:
   its own entries in history state), and a replace when it is not — a reader who arrived on the
   card's own link has nothing of the app's beneath them, and a Back there would leave it. Closing
   by pushing again left the card one Back beneath the page it was closed over.
+- **A step to another printing of the open card is a link that _replaces_** —
+  `linkTo(place, { replace: true })`. The sheet is one place however many printings the reader
+  steps through, so Back closes it from whichever printing they ended on; the replaced entry keeps
+  this router's mark, so the ✕ still leaves by a real Back. `CardSheet.test.tsx` holds it.
 - **`navigate` does nothing for the place the reader is already on, asked of the place and not of
   the string**: `/` is the start view without spelling it, and a press on the lit tab must not
   push `/search` over it.
@@ -218,8 +222,9 @@ failure behind each at its own site:
   light edition's groups as rows, each opening the desktop's own panels beneath it (step 3.7).
 - **The Collection and Wishlist walls draw open shelves only** — the desktop hooks fetch the
   cards of the shelves the reader has left open, and the wall draws them as one run with no
-  heading, no fold and no way into a folder. Search is the box and the wall, with every other
-  filter still to come.
+  heading, no fold and no way into a folder. **Search has its filters** (`phone/search/
+  FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
+  and everything else in a sheet that is page state rather than a place in the URL.
 - **Nothing on the phone face writes except Settings**, whose panels make the desktop's own writes
   (a marketplace, a clear, a label) through the commands the desktop calls.
 - **No Android host, no WASM host, no service worker** — `public/light.webmanifest` is the whole

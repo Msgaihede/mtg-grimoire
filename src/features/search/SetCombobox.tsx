@@ -74,6 +74,7 @@ export function SetCombobox({
   options,
   align = "end",
   fill = false,
+  className,
 }: {
   selected: readonly string[];
   onToggle: (code: string) => void;
@@ -132,6 +133,12 @@ export function SetCombobox({
    * Every row-shaped caller leaves it off and keeps a control as wide as what it says.
    */
   fill?: boolean;
+  /**
+   * On the trigger, after its own classes. For a host whose controls are a different size from
+   * the filter row's 36px — the phone face's filters sheet, where every control is a 44px touch
+   * target whatever the pointer.
+   */
+  className?: string;
 }) {
   const [query, setQuery] = useState("");
   /**
@@ -391,6 +398,7 @@ export function SetCombobox({
       options={dropdownOptions}
       align={align}
       fill={fill}
+      className={className}
       active={selected.length > 0}
       searchable
       searchPlaceholder="Name or code"
