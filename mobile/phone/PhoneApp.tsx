@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
 import { NAV } from "@/components/nav";
@@ -15,7 +16,7 @@ import { ScannerPage } from "./pages/ScannerPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WishlistPage } from "./pages/WishlistPage";
-import { navigate, usePlace } from "./router";
+import { adoptOverlay, navigate, usePlace } from "./router";
 import { Shell } from "./Shell";
 
 /** The word for a destination — the desktop rail's, so the two apps cannot name one differently. */
@@ -74,6 +75,13 @@ function Pages({ place }: { place: Place }) {
  * The phone face, less its providers — what a test renders inside a fake world's own.
  */
 export function PhoneFace() {
+  // Before the first read of the place, so a card the desktop face had open over this entry is
+  // one this router can close with a Back by the time its sheet draws — see `adoptOverlay`. A lazy
+  // initializer for `useDesktopPlace`'s reason; StrictMode's second run finds nothing to adopt.
+  useState(() => {
+    adoptOverlay();
+    return null;
+  });
   const place = usePlace();
   // The stored folds, asked for at launch as `AppShell` asks for them — so neither cabinet draws
   // its shelves at the defaults and then re-folds a frame later.
