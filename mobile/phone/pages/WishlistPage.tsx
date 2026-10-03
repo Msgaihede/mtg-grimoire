@@ -1,9 +1,8 @@
 import { useCallback, useMemo, useState } from "react";
 import { useDecks } from "@/features/decks/useDecks";
 import { FOLD_PAUSED_REASON } from "@/features/shelves/ShelfToolbar";
-import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import { ManagedFolderNote } from "@/features/wishlist/ManagedFolderNote";
-import { managedEmptySentence } from "@/features/wishlist/managed";
+import { managedEmptySentence, managedIds } from "@/features/wishlist/managed";
 import { useWishlist, WISHLIST_TRAY } from "@/features/wishlist/useWishlist";
 import { useWishlistFolders } from "@/features/wishlist/useWishlistFolders";
 import { WishlistSummaryHeader } from "@/features/wishlist/WishlistSummary";
@@ -11,6 +10,7 @@ import {
   countTotals,
   effectiveCounts,
   folderFigures,
+  foldFor,
   rowsByShelf,
   sectionsOf,
   shelfStat,
@@ -23,6 +23,9 @@ import { CabinetFilters } from "../CabinetFilters";
 import type { WallItem } from "../CardWall";
 import { wishItem } from "../items";
 import { linkTo } from "../router";
+import { ReceiptBar } from "../deck/receipt";
+import { useListReceipt } from "../lists/receipt";
+import { WishActions, type WishActing } from "../lists/WishActions";
 import { DeckLink, EmptyShelfBox, PathRow, PhoneShelfHeading } from "../ShelfParts";
 import { NO_ITEMS, ShelfWall } from "../ShelfWall";
 import { DimNote, NextPageRefused, ReadError, useMore } from "./parts";
@@ -34,15 +37,19 @@ const ROOT = "Wishlist";
 const NO_PEEK: readonly { cardId: string }[] = [];
 
 /**
- * The wishlist's cabinet, read-only — the collection's page one table over, for the same reasons:
- * the desktop's own hook (`useWishlist`), the desktop's own shelves, the phone's own chrome, and a
- * fold pressed here held in the page rather than stored.
+ * The wishlist's cabinet — the collection's page one table over, for the same reasons: the
+ * desktop's own hook (`useWishlist`), the desktop's own shelves, the phone's own chrome, and a fold
+ * stored through the hook's `setFold` as the desktop stores one (step 3.5b).
+ *
+ * **A wish's `⋯` opens its actions** (`lists/WishActions.tsx`): the desktop's `EditWish` panel as a
+ * sheet. A wish a deck manages has none.
  *
  * **A deck's managed wishlist is a read.** Under **Managed by decks**, a `Theory + Actual` deck's
  * folder holds what the deck's Compare lists and is rewritten by the deck, never by hand — so its
  * heading carries the way to its deck, an empty one says which of the deck's views it follows, and
  * standing inside one says whose list it is with a **link** to the deck. Nothing on it is editable
- * here, which on a read-only page costs nothing to keep true.
+ * here: its wishes draw no `⋯`, because the backend refuses every hand write to one in
+ * `MANAGED_REFUSAL`'s words and a control whose only answer is that sentence teaches nothing.
  *
  * **One tile per wish**, keyed by the wish: two wishes for one card in two folders are two tiles,
  * and the chin's mark says the card is wished for again elsewhere.
@@ -52,12 +59,9 @@ const NO_PEEK: readonly { cardId: string }[] = [];
  * carries none of the three questions those cells ask.
  */
 export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
-  const stored = useShelfFolds("wishlist").folds;
-  const [pressed, setPressed] = useState<Readonly<Record<string, boolean>>>({});
-  const folds = useMemo(() => ({ ...stored, ...pressed }), [stored, pressed]);
-
-  const wishlist = useWishlist({ folds });
-  const { query, countsQuery, marketplace, shelves, filtering, folderId, openFolder } = wishlist;
+  const wishlist = useWishlist();
+  const { query, countsQuery, marketplace, shelves, filtering, folderId, openFolder, setFold } =
+    wishlist;
   const currency = marketplace.currency;
 
   const folders = useWishlistFolders();
@@ -107,9 +111,33 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
   // while the previous level is still drawn, whose rows the next page would not follow.
   const more = useMore(query, wishlist.hasMore && !wishlist.levelHeld);
 
+  // Nothing while a filter is on, the desktop's rule: folding is suspended then.
   const toggle = useCallback(
-    (shelf: Shelf) => setPressed((now) => ({ ...now, [String(shelf.id)]: !shelf.collapsed })),
-    [],
+    (shelf: Shelf) => {
+      if (filtering) return;
+      setFold(shelf.id, foldFor(shelf, !shelf.collapsed));
+    },
+    [filtering, setFold],
+  );
+
+  const managed = useMemo(() => managedIds(folders.folders), [folders.folders]);
+  const wishById = useMemo(
+    () => new Map(wishlist.rows.map((row) => [String(row.id), row])),
+    [wishlist.rows],
+  );
+  const [acting, setActing] = useState<WishActing | null>(null);
+  const receipt = useListReceipt();
+  /** A wish's `⋯` — none on a wish a deck manages, and none until the folder census can say. */
+  const actionsFor = useCallback(
+    (item: WallItem) => {
+      const wish = wishById.get(item.key);
+      if (wish === undefined) return undefined;
+      if (wish.folderId !== null && (managed.has(wish.folderId) || folders.query.isPending)) {
+        return undefined;
+      }
+      return () => setActing({ wishId: wish.id, seen: wish });
+    },
+    [wishById, managed, folders.query.isPending],
   );
 
   /** The deck a managed folder belongs to, by its own row — a deck's `Tokens` child carries the
@@ -233,6 +261,21 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
     </>
   );
 
+  // The receipt line and the sheet, under every answer below — `CollectionPage`'s arrangement.
+  const foot = (
+    <>
+      <ReceiptBar receipt={receipt} muted={acting !== null} className="shrink-0" />
+      <WishActions
+        acting={acting}
+        rows={wishlist.rows}
+        folders={folders.folders}
+        receipt={receipt}
+        onActing={setActing}
+        onClose={() => setActing(null)}
+      />
+    </>
+  );
+
   if (query.isLoadingError) {
     return (
       <>
@@ -264,6 +307,7 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
                 ? "That folder is gone."
                 : "Nothing in this folder yet."}
         </DimNote>
+        {foot}
       </>
     );
   }
@@ -286,10 +330,12 @@ export function WishlistPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
         renderHeading={renderHeading}
         renderEmpty={renderEmpty}
         onOpen={onOpen}
+        actionsFor={actionsFor}
         onNearEnd={more}
         resetKey={wishlist.queryKeyString}
         footer={<NextPageRefused query={query} />}
       />
+      {foot}
     </>
   );
 }

@@ -241,12 +241,17 @@ describe("adding cards to a deck", () => {
     ).toBeInTheDocument();
   });
 
-  it("offers no add on a card sheet opened anywhere but over a deck", async () => {
+  it("offers no deck add on a card sheet opened anywhere but over a deck", async () => {
     const bolt = (await import("../../../.storybook/fake/fixtures")).printing("2x2", "117");
     renderPhone(<PhoneFace />, { path: `/search?card=${bolt.id}` });
     await screen.findByRole("dialog", { name: "Lightning Bolt" }, SETTLE);
-    expect(screen.queryByRole("region", { name: "Actions" })).toBeNull();
-    expect(screen.queryByRole("button", { name: /^Add to / })).toBeNull();
+    // The collection's and the wishlist's adds are on every card since step 3.5b; a deck's is not.
+    const actions = await screen.findByRole("region", { name: "Actions" }, SETTLE);
+    expect(
+      within(actions)
+        .getAllByRole("button", { name: /^Add to / })
+        .map((button) => button.getAttribute("aria-label") ?? button.textContent),
+    ).toEqual(["Add to collection", "Add to wishlist", "Add to wishlist, any printing"]);
   });
 });
 

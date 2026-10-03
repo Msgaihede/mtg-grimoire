@@ -42,22 +42,34 @@ export const RECEIPT_MS = 8000;
  * Only the undo half: the phone draws no Redo, so the session's redo stack is cleared after every
  * write as the hook's contract asks and never pressed.
  */
-export interface Receipt {
+export interface ReceiptLine {
+  /** The line to draw, or `null` when there is nothing to say. */
+  text: string | null;
+  /** True when {@link text} is a refusal. */
+  refused: boolean;
+  /**
+   * What `Undo` would take back, in words — the button is named `Undo — <this>` — or `null` where
+   * there is nothing this face can take back, which draws no `Undo` at all.
+   */
+  undoName: string | null;
+  /** True while the undo itself is out. */
+  busy: boolean;
+  undo: () => void;
+  dismiss: () => void;
+}
+
+/**
+ * {@link ReceiptLine} for one deck: the line, plus the press that feeds it and the history step
+ * the last write filed.
+ */
+export interface Receipt extends ReceiptLine {
   /**
    * Call at the press, with the write's promise and — optionally — what to say once it lands,
    * worked out from its answer (`null` to say nothing but the step's own sentence).
    */
   track: <T>(write: Promise<T>, said?: (result: T) => string | null) => void;
-  /** The line to draw, or `null` when there is nothing to say. */
-  text: string | null;
-  /** True when {@link text} is a refusal. */
-  refused: boolean;
   /** The step the last tracked write filed, once the deck has said so — or `null`. */
   entry: DeckAuditEntry | null;
-  /** True while the undo itself is out. */
-  busy: boolean;
-  undo: () => void;
-  dismiss: () => void;
 }
 
 /** Hands each press its own number — see {@link Tracked.press}. */
@@ -124,6 +136,7 @@ export function useReceipt(deckId: number): Receipt {
     text,
     refused,
     entry,
+    undoName: entry !== null ? auditSentence(entry).text : null,
     busy: undo.busy,
     undo: () => {
       runUndo();
@@ -146,7 +159,8 @@ export function ReceiptBar({
   muted = false,
   className,
 }: {
-  receipt: Receipt;
+  /** A deck's receipt, or any other surface's line in the same shape (`lists/receipt.ts`). */
+  receipt: ReceiptLine;
   /**
    * Say nothing for now — another surface over this one is drawing the same receipt. The live
    * region stays mounted, so it is ready to speak the moment that surface goes.
@@ -156,8 +170,7 @@ export function ReceiptBar({
   extra?: ReactNode;
   className?: string;
 }) {
-  const { entry, text, refused } = receipt;
-  const sentence = entry !== null ? auditSentence(entry).text : null;
+  const { undoName, text, refused } = receipt;
   return (
     <div role="status" aria-live="polite" className={className}>
       {!muted && text !== null && (
@@ -176,13 +189,13 @@ export function ReceiptBar({
               </>
             )}
           </p>
-          {entry !== null && (
+          {undoName !== null && !refused && (
             <button
               type="button"
               onClick={receipt.undo}
               disabled={receipt.busy}
-              // The step's own sentence in the name: `Undo` alone is a press about nothing.
-              aria-label={`Undo — ${sentence}`}
+              // What it takes back, in the name: `Undo` alone is a press about nothing.
+              aria-label={`Undo — ${undoName}`}
               className={cn(
                 "h-11 shrink-0 rounded-md px-3 text-sm font-medium text-accent",
                 PRESS,

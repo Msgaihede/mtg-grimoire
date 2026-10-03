@@ -103,11 +103,9 @@ describe("Collection", () => {
     expect(items.map((item) => item.getAttribute("aria-posinset"))).toEqual(["1", "2", "3", "4"]);
   });
 
-  it("opens a shut shelf on a press of its heading, and draws its cards there", async () => {
+  it("opens a shut shelf on a press of its heading, draws its cards there, and stores it", async () => {
     tallViewport();
-    const writes = vi.fn();
     renderPhone(<PhoneFace />, { path: "/collection" });
-    registerCommands({ set_shelf_folds: writes });
     const wall = await cabinet();
     const heading = within(wall).getByRole("button", { name: "Modern Goodstuff" });
     expect(heading).toHaveAttribute("aria-expanded", "false");
@@ -123,8 +121,11 @@ describe("Collection", () => {
       "aria-expanded",
       "true",
     );
-    // The phone folds in place and stores nothing: the desktop's folds are the reader's.
-    expect(writes).not.toHaveBeenCalled();
+    // Stored as the desktop stores it (step 3.5b): only where it leaves the kind's default — a
+    // deck's group starts shut, so an open one is the override.
+    await waitFor(async () =>
+      expect((await ipc.shelfFolds()).collection).toEqual({ "4": false }),
+    );
   });
 
   it("shuts an open shelf on a press, and its cards go", async () => {

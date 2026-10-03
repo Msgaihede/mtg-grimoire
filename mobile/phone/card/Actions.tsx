@@ -2,6 +2,8 @@ import type { ComponentType } from "react";
 import type { CardDetail, DeckVariant } from "@/lib/ipc";
 import type { Place } from "../../routes";
 import { AddToDeck } from "./AddToDeck";
+import { CollectionAdd } from "./CollectionAdd";
+import { WishlistAdd } from "./WishlistAdd";
 
 /**
  * What every action row on the card sheet is handed — the card on screen, where the reader is, and
@@ -28,16 +30,21 @@ interface ActionSlot {
  * touch one line each rather than the same component.
  *
  * - `deck` — `Add to <deck>`, only over a deck page (step 3.5a).
+ * - `collection` — `Add to collection`, one copy into the root, on every card (step 3.5b).
+ * - `wishlist` — `Add to wishlist`, this printing or any, on every card (step 3.5b).
  */
 const SLOTS: readonly ActionSlot[] = [
   { id: "deck", applies: ({ place }) => place.deckId !== null, Row: AddToDeck },
+  { id: "collection", applies: () => true, Row: CollectionAdd },
+  { id: "wishlist", applies: () => true, Row: WishlistAdd },
 ];
 
 /**
  * The card sheet's actions — **at the top of the sheet**, under the picture's heading and above
  * everything it says about the card, because a reader who opened a card to do something with it
  * should not scroll past its rules text to find the press. Draws nothing at all where no slot
- * applies, so a card opened from Search is the read-only sheet it was.
+ * applies — since step 3.5b the collection's and the wishlist's adds apply to every card, so that
+ * is no card today.
  */
 export function ActionsSection(context: ActionContext) {
   const rows = SLOTS.filter((slot) => slot.applies(context));

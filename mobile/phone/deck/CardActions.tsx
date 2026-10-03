@@ -5,8 +5,6 @@ import {
   Layers,
   Crown,
   FolderInput,
-  Minus,
-  Plus,
   Sparkles,
   Tag,
   Trash2,
@@ -17,7 +15,6 @@ import { ALREADY_HERE, finishChoices, REGULAR, zoneClaims } from "@/features/dec
 import type { DeckCore } from "@/features/decks/useDeckCore";
 import { useDeckMeta } from "@/features/decks/useDeckMeta";
 import { FINISH_LABEL } from "@/lib/finish";
-import { FOCUS } from "@/lib/focus";
 import {
   ipc,
   ipcError,
@@ -28,13 +25,12 @@ import {
   type DeckVariant,
   type FormatSpec,
 } from "@/lib/ipc";
-import { PRESS } from "@/lib/motion";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { PRINTING_ROW, PrintingFace, printingCode } from "../card/Printings";
 import type { Receipt } from "./receipt";
 import { ReceiptBar } from "./receipt";
-import { ActionSheet, SheetBack, SheetChoice, SheetRow } from "./sheet";
+import { ActionSheet, SheetBack, SheetChoice, SheetRow, SheetStepper as Stepper } from "./sheet";
 
 /**
  * Where a deck row is — `DECK_CARD_GRAIN` less the deck and the list, which the page already is.
@@ -375,55 +371,6 @@ function MainPage({
         />
       </ul>
     </>
-  );
-}
-
-/**
- * The copies, as a stepper a thumb can work: `−`, the number, `+`, each 44px. **`−` at one copy is
- * the removal**, and says so in its name — the same write as `Remove from …` below it, and the page's
- * receipt offers it back.
- */
-function Stepper({
-  quantity,
-  name,
-  onSet,
-}: {
-  quantity: number;
-  name: string;
-  onSet: (quantity: number) => void;
-}) {
-  const button = cn(
-    "flex size-11 shrink-0 items-center justify-center rounded-md border border-border",
-    PRESS,
-    FOCUS,
-  );
-  return (
-    <div className="flex items-center gap-3 border-b border-border px-4 pb-3 pt-2">
-      <span className="min-w-0 flex-1 text-sm text-dim">Copies</span>
-      <button
-        type="button"
-        aria-label={quantity <= 1 ? `Remove ${name}` : `One fewer ${name}`}
-        onClick={() => onSet(Math.max(0, quantity - 1))}
-        className={cn(button, quantity <= 1 && "text-destructive")}
-      >
-        {quantity <= 1 ? (
-          <Trash2 aria-hidden className="size-4" />
-        ) : (
-          <Minus aria-hidden className="size-4" />
-        )}
-      </button>
-      <output aria-label="Copies" className="w-8 text-center font-mono text-base tabular-nums">
-        {quantity}
-      </output>
-      <button
-        type="button"
-        aria-label={`One more ${name}`}
-        onClick={() => onSet(quantity + 1)}
-        className={button}
-      >
-        <Plus aria-hidden className="size-4" />
-      </button>
-    </div>
   );
 }
 

@@ -227,9 +227,10 @@ export const WISHLIST_TRAY: readonly TrayCell[] = [
  *   sweep was handed until Flatten went: the root's shelves already hold every wish, so a review
  *   hand-off needs the filter and the root and nothing else (`WishlistPage` has the consume site).
  * @param options.folds The folds the shelves are built from, **in place of the stored ones** —
- *   `useCollection`'s option of the same name and for its reason: the light app's phone face folds
- *   a shelf in place without writing `app_meta`. Every caller that passes nothing, the desktop page
- *   included, gets `useShelfFolds("wishlist")`'s. Held still by the caller (a `useMemo`), and
+ *   `useCollection`'s option of the same name, and like it **passed by no caller since 2026-10-03**:
+ *   the light app's phone face held its folds in the page until step 3.5b and stores them now
+ *   (`docs/reference/light-app.md` §7.5b). Kept as the seam a surface with folds of its own would
+ *   use. Every caller that passes nothing gets `useShelfFolds("wishlist")`'s. Held still by the caller (a `useMemo`), and
  *   `setFold` / `setMany` still write the stored folds whichever was passed.
  */
 export function useWishlist({
