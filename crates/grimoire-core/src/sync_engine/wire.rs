@@ -408,6 +408,7 @@ mod tests {
             baseline: false,
             horizon: None,
             schema: None,
+            emission: None,
         }
     }
 
@@ -442,6 +443,7 @@ mod tests {
             baseline: false,
             horizon: None,
             schema: None,
+            emission: None,
         }
     }
 

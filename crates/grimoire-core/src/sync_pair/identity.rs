@@ -2326,6 +2326,7 @@ mod tests {
             // Sealing stamps this build's schema on every op, and the assertion below compares
             // what B opens against this literal.
             schema: Some(crate::schema::USER_SCHEMA_VERSION),
+            emission: None,
         }];
         let envelope =
             wire::seal_batch(&group(&a).unwrap().unwrap(), &me_a.device_id, &ops).unwrap();
