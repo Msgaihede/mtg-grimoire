@@ -2015,10 +2015,26 @@ binding rules:
   device has a `gap`, when it floors; a covered put there takes the op path, and **is skipped by
   containment once its row's claim has written the row** — on a page handed back after the
   emission completed too, which is why `emission::take` keeps the completed emission's record.
-  **A claim never builds a uid this device merged into another, in either direction**
+  **`resumed` is the emitter's generation speaking** — `sync_state`'s `logging_since`, the
+  `sync_clock` stamp at which its capture last turned on, and `logging_resumed` beside it (sent
+  as `since` and `resumed` on every chunk's head). `identity::found_group` mints one, and
+  `join_group` mints one only when the device was in no group; the initiator's re-write of the
+  group it is already in (`pairing::confirm`, through `join_group`) mints none. A generation
+  **resumes when one was held before**: `leave_group` keeps `logging_since` for it, writing `0:0`
+  where there is none (`emission::keep_logging_mark`), and `emission::start_logging` counts any
+  `sync_peers` row as one too, because leaving keeps every watermark and only a device that held a
+  group has any (`a_device_that_held_a_group_before_this_build_rejoins_resumed`). **Two things must
+  not change under it**: watermarks survive leaving, and a same-group re-write mints nothing
+  (`re_writing_the_group_it_is_in_opens_no_gap_and_mints_nothing`) — the first is how a device
+  that left under an older build is known to resume, and the second keeps every pairing from
+  looking like a device with unlogged history, which would floor rows on every peer.
+  **A claim never builds or floors a uid this device merged into another, in either direction**
   (`retired@<table>/<uid>`, written where `adopt_uid` renames or absorbs and where `rehome`
-  folds), asked in `claims::decide` and again in the write path at the moment a group would build
-  — a merge earlier in the same page writes the mark too late for `decide`. **A gap clears every
+  folds). It is asked in `claims::decide` *before* the held-row rule, so a retired uid that a row
+  wears again is still passed, gap or no gap
+  (`a_retired_uid_a_row_wears_again_is_still_passed_under_a_gap`), and again in the write path at
+  the moment a group would build — a merge earlier in the same page writes the mark too late for
+  `decide`. **A gap clears every
   `taken@` mark and every record's `passed` set, keeps its `wrote` set, and marks each record
   `before_gap`**, which is never taken: the gap closes only once each roster peer this device
   holds a watermark for has an emission recorded after the gap taken here. Its sources are
@@ -2026,12 +2042,12 @@ binding rules:
   `apply` drops — one released at the waiting bound included — and **a new place a gap can come
   from owes the same `emission::open_gap` call**. No baseline begins while anything is pending
   (the stretch bullet above), and the client passes the batches it holds back into
-  `apply::apply_page` as held, where each op is stripped of any stray reference before it is
-  grouped. `carried@<device>` rises
-  only from a wholly written emission that is not from before a gap — over-covering a horizon
-  loses a put. `update_row` writes nothing, `updated_at` included, when nothing changed. Ops with
-  no emission, and emissions named at or below the upgrade cut (`emissions_since`), keep `main`'s
-  rules.
+  `apply::apply_page` as held. There a held-back *claim* is left out altogether — a claim blocks
+  nothing — and every other held-back op is stripped of any stray reference before it is grouped.
+  `carried@<device>` rises only from a wholly written emission that is not from before a gap —
+  over-covering a horizon loses a put. `update_row` writes nothing, `updated_at` included, when
+  nothing changed. Ops with no emission, and emissions named at or below the upgrade cut
+  (`emissions_since`), keep `main`'s rules.
 - **`sync_peers` is a watermark, and the client holds its cursor only for what can still
   resolve.** Advancing the watermark past an op that may still apply loses it; applying the ops
   above it while holding it adds their counter deltas twice on a re-delivery. So `apply` holds a

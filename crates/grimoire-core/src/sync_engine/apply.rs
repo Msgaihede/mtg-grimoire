@@ -2068,8 +2068,9 @@ fn write_group<'a>(
     // Refused instead, inside the group's savepoint, as a `Why::Unbuildable` that `classify` reads
     // like any other: **dropped and recorded** where no op of the group was sealed by a newer
     // schema — `settle` records the claim passed, and the drop opens the gap — and **held as
-    // newer** where one was, the claim left unconsumed for the page that comes back after this
-    // device upgrades, when `decide` finds the mark this page wrote and passes it.
+    // newer** where one was, the claim left unconsumed. A newer hold keeps the cursor, so the page
+    // comes back on the next pull, where `decide` finds the mark this page's merge wrote and passes
+    // the claim; only the newer op waits for this device to upgrade.
     //
     // **The group's other ops go with it.** Its covered puts are sparse in practice — an edit of
     // the row on its emitter — and `main` drops those too, for finding no row. A *full* insert
