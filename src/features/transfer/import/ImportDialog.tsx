@@ -1,17 +1,16 @@
-import { useEffect, useId, useMemo, useRef, useState, type JSX, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type JSX, type ReactNode } from "react";
 import { AnimatePresence, motion } from "motion/react";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
-import { ipcError, type ImportFile, type ImportResolveLine } from "@/lib/ipc";
-import { languageCode } from "@/lib/languages";
+import { ipcError } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import { Dialog } from "@/components/Dialog";
 import type { ImportDestination } from "./destination";
-import { parseDecklist } from "./parse";
 import { PRIMARY } from "./shared/CommitBar";
 import { CsvNotes } from "./shared/CsvNotes";
 import { useImport } from "./useImport";
+import { useImportSource } from "./useImportSource";
 
 /**
  * What the source step says under a file `import.rs` read as Windows-1252 (issue #555).
@@ -75,10 +74,6 @@ export interface ImportDialogProps {
    */
   onDone: (message: string) => void;
 }
-
-/** Which half of the dialog is up. Two steps in one panel rather than two dialogs: the second
- *  is entirely about the first, and Back has to keep what was pasted. */
-type Step = "source" | "preview";
 
 /**
  * A decklist, from anywhere, into whatever the host offered.
@@ -186,49 +181,20 @@ function ImportBody({
   const id = useId();
   const listRef = useRef<HTMLTextAreaElement>(null);
 
-  const [text, setText] = useState("");
-  const [step, setStep] = useState<Step>("source");
   /**
-   * How the text in the box was read, while it is still the text a file read put there — `null`
-   * from the first keystroke or paste on, because from then on it is the reader's text and a
-   * sentence about how a file was decoded would be about something no longer on screen. Picking
-   * another file replaces it **only when that read succeeds**: a cancelled picker or a refused
-   * read leaves the old file's text in the box, so its reading still describes what is there.
+   * The paste, how a file's text was read, the parse, the resolve press and the step — the whole
+   * first step as state, in `useImportSource` so the light app's phone sheet decides none of it
+   * differently. What stays here is the drawing and the desktop's file handle.
    */
-  const [readAs, setReadAs] = useState<ImportFile["encoding"] | null>(null);
-
-  const { resolve, readFile } = useImport();
-
-  const parsed = useMemo(() => parseDecklist(text), [text]);
+  const source = useImportSource();
+  const { text, readAs, parsed, step, resolve, resolved, toSource } = source;
+  const { readFile } = useImport();
 
   // The caret starts in the box the reader has to fill, which is `CreateDeckDialog`'s rule and
   // this dialog's whole first step. A stray Enter in a textarea is a newline, not a submit.
   useEffect(() => {
     listRef.current?.focus({ preventScroll: true });
   }, []);
-
-  /** Back to the box, and the resolved rows go with it. They are addressed by **index** into
-   *  `parsed.lines`, so rows kept across an edit of the text would file the whole list by line
-   *  numbers that have moved. The destination's own mutation state goes with them, because its
-   *  `Preview` unmounts — which is why nothing here has to reset it. */
-  const toSource = () => {
-    resolve.reset();
-    setStep("source");
-  };
-
-  const preview = () => {
-    const lines: ImportResolveLine[] = parsed.lines.map((line) => ({
-      name: line.name,
-      setCode: line.setCode,
-      collectorNumber: line.collectorNumber,
-      // A CSV's `Language` cell, as a Scryfall code — a **preference** the resolver ranks ahead
-      // of every other key, never a filter (issue #555). `null` for a decklist line, which has no
-      // such column, and for a cell `languageCode` does not recognise: an unreadable language is
-      // no preference rather than a reason to lose the card.
-      lang: languageCode(line.extra.lang),
-    }));
-    resolve.mutate(lines, { onSuccess: () => setStep("preview") });
-  };
 
   const choose = () => {
     // One command is the picker and the read (`import_pick_file`, via `../files`): Rust opens the
@@ -239,8 +205,7 @@ function ImportBody({
         // A cancelled picker is not a failure — it is the most ordinary way to use a file dialog
         // after changing your mind — and it leaves the box, and how its text was read, alone.
         if (file === null) return;
-        setText(file.text);
-        setReadAs(file.encoding);
+        source.takeFile(file);
       },
     });
   };
@@ -253,8 +218,6 @@ function ImportBody({
   const fileFailure = readFile.isError
     ? `Couldn't read a decklist from a file — ${ipcError(readFile.error)}`
     : null;
-
-  const resolved = resolve.data ?? null;
 
   if (step === "preview" && resolved !== null && destination !== undefined) {
     return (
@@ -295,7 +258,7 @@ function ImportBody({
     <form
       onSubmit={(e) => {
         e.preventDefault();
-        if (parsed.lines.length > 0) preview();
+        source.preview();
       }}
       className="flex min-h-0 flex-1 flex-col"
     >
@@ -329,10 +292,7 @@ function ImportBody({
             id={`${id}-list`}
             ref={listRef}
             value={text}
-            onChange={(e) => {
-              setText(e.target.value);
-              setReadAs(null);
-            }}
+            onChange={(e) => source.type(e.target.value)}
             rows={14}
             spellCheck={false}
             aria-describedby={readAs === "windows-1252" ? `${id}-encoding` : undefined}

@@ -28,7 +28,7 @@ import {
   type PrintingTags,
 } from "@/lib/ipc";
 import { OWNED_WRITE_KEYS } from "@/lib/query";
-import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
+import { DEFAULT_VARIANT } from "@/features/decks/deckQuery";
 import { chooseDecklist } from "../files";
 
 /**

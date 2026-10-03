@@ -19,6 +19,7 @@ import type { WallItem } from "../CardWall";
 import { collectionItem } from "../items";
 import { DeckLink, EmptyShelfBox, PathRow, PhoneShelfHeading } from "../ShelfParts";
 import { NO_ITEMS, ShelfWall } from "../ShelfWall";
+import { CollectionTransfer } from "../transfer/CollectionTransfer";
 import { DimNote, NextPageRefused, ReadError, useMore } from "./parts";
 
 /** What the top of the cabinet is called — the desktop breadcrumb's word. */
@@ -230,6 +231,19 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
         header={
           <div className="pt-3 pb-1">
             <CollectionSummaryHeader summary={figures} marketplace={marketplace} />
+            {/* Import and export, beside the figures they change — the desktop's two entries.
+                The export sweeps what this wall covers: the hook's own `filters`, shelves at and
+                below the level included, and inside a folder it says which one (the desktop
+                page's `exportFiling`, word for word). */}
+            <div className="pt-3">
+              <CollectionTransfer
+                filters={collection.filters}
+                filing={{
+                  folder: folderId === null ? null : (folderById.get(folderId)?.name ?? null),
+                  narrows: folderId !== null,
+                }}
+              />
+            </div>
             {/* The shelves still say what they hold; it is the whole-level figures that are
                 missing, and an em dash for ever would say nothing about why. */}
             {collection.figuresRefused && (

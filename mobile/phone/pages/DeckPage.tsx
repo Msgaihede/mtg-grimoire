@@ -9,6 +9,7 @@ import { buildGroups, type CardGroup } from "@/features/decks/grouping";
 import { LabelDot } from "@/features/decks/CardMarks";
 import { asSortBy } from "@/features/decks/sorting";
 import { DeckSettingsDialog } from "@/features/decks/DeckSettingsDialog";
+import { exportSubject } from "@/features/decks/deckExport";
 import { useDeckCore, type DeckCore } from "@/features/decks/useDeckCore";
 import { useDeckNotes } from "@/features/decks/useDeckNotes";
 import { useDecks } from "@/features/decks/useDecks";
@@ -31,6 +32,10 @@ import { CardActions, slotOf, type Acting } from "../deck/CardActions";
 import { shownList } from "../deck/list";
 import { ReceiptBar, useReceipt } from "../deck/receipt";
 import { linkTo } from "../router";
+import { phoneDeckDestination } from "../transfer/destinations";
+import { ExportSheet } from "../transfer/ExportSheet";
+import { ImportSheet } from "../transfer/ImportSheet";
+import { TransferPair } from "../transfer/TransferPair";
 import { DeckRail } from "./DeckRail";
 import { DimNote, ReadError } from "./parts";
 
@@ -190,8 +195,8 @@ function VariantSwitch({
 
 /**
  * One list of the deck: its figures, its piles in order, then the side rail — and, at the foot of
- * the page, what the reader can do to it: `Add cards`, `Deck settings`, and the receipt of the last
- * write with its `Undo`.
+ * the page, what the reader can do to it: `Add cards`, import and export, `Deck settings`, and the
+ * receipt of the last write with its `Undo`.
  *
  * **The writes live here, in one receipt**, because every surface this page opens — a row's action
  * sheet, the add search, the rail's notes and bracket — writes the same deck, and the reader is
@@ -229,6 +234,27 @@ function DeckColumn({
   const [acting, setActing] = useState<Acting | null>(null);
   const [adding, setAdding] = useState(false);
   const [settings, setSettings] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [exporting, setExporting] = useState(false);
+
+  /**
+   * The list on screen as an import destination — the desktop editor's own, bound to the store-free
+   * step. **Memoised on identity alone**, `deckDestination`'s rule: what comes back is a component
+   * identity, and a fresh one would remount the preview under the reader and take a commander
+   * choice with it. An import lands in the list the page is showing, and a `replace` clears at most
+   * that one.
+   */
+  const importInto = useMemo(() => phoneDeckDestination({ deckId, variant }), [deckId, variant]);
+  /**
+   * The whole list as an export — the editor's `exportSubject`, so the sheet is titled, filled and
+   * named as the desktop's `Export deck` is: every row of the list on screen, switched-off piles
+   * included (what a format does with a maybeboard is the format's decision, and the sheet says
+   * so). Built only while the sheet is up.
+   */
+  const exported = useMemo(
+    () => exportSubject(exporting ? { kind: "deck" } : null, categories, cards, row.name),
+    [exporting, categories, cards, row.name],
+  );
 
   // `buildGroups`' third and last facts, read the way the editor reads them: an empty command
   // zone draws only where the format has one, and `requiresCommander` is `false` while the specs
@@ -324,7 +350,12 @@ function DeckColumn({
       </div>
 
       <ReceiptBar receipt={receipt} muted={sheetUp} className="shrink-0" />
-      <ActionBar onAdd={() => setAdding(true)} onSettings={() => setSettings(true)} />
+      <ActionBar
+        onAdd={() => setAdding(true)}
+        onImport={() => setImporting(true)}
+        onExport={() => setExporting(true)}
+        onSettings={() => setSettings(true)}
+      />
 
       <CardActions
         acting={acting}
@@ -357,16 +388,49 @@ function DeckColumn({
         onDismiss={() => setSettings(false)}
         onClose={() => setSettings(false)}
       />
+      {/* A decklist into the list on screen: the paste or a file, then the desktop's own preview —
+          the piles, the commander, Merge or Replace — and its commit. What landed is said in the
+          page's receipt line, in the preview's own sentence, where the deck's undo is offered as
+          for any other write once the deck's history answers with a newer step. */}
+      <ImportSheet
+        open={importing}
+        destination={importInto}
+        onClose={() => setImporting(false)}
+        onDone={(message) => {
+          setImporting(false);
+          receipt.track(Promise.resolve(message), (said) => said);
+        }}
+      />
+      <ExportSheet
+        open={exporting}
+        subject={exported.subject}
+        surface="deck"
+        cards={exported.cards}
+        suggestedFileName={exported.fileName}
+        onClose={() => setExporting(false)}
+      />
     </>
   );
 }
 
 /**
- * The page's foot: the two things a reader does to a whole deck, where a thumb reaches — **a bar
- * rather than a floating button**, because a button floating over the column's right edge would sit
- * on every row's own `⋯`, which is the control the rows put there for the same thumb.
+ * The page's foot: what a reader does to a whole deck, where a thumb reaches — `Add cards`, the
+ * import and export pair, and `Deck settings` — **a bar rather than a floating button**, because a
+ * button floating over the column's right edge would sit on every row's own `⋯`, which is the
+ * control the rows put there for the same thumb. The pair draws its glyphs alone: at 360px the
+ * words would leave `Add cards` too little room, and each button's name says what it moves.
  */
-function ActionBar({ onAdd, onSettings }: { onAdd: () => void; onSettings: () => void }) {
+function ActionBar({
+  onAdd,
+  onImport,
+  onExport,
+  onSettings,
+}: {
+  onAdd: () => void;
+  onImport: () => void;
+  onExport: () => void;
+  onSettings: () => void;
+}) {
   return (
     <div className="flex shrink-0 items-center gap-2 border-t border-border bg-surface px-3 py-2">
       <button
@@ -383,6 +447,13 @@ function ActionBar({ onAdd, onSettings }: { onAdd: () => void; onSettings: () =>
         <Plus aria-hidden className="size-4 shrink-0" />
         Add cards
       </button>
+      <TransferPair
+        importLabel="Import cards into this deck"
+        exportLabel="Export this deck"
+        onImport={onImport}
+        onExport={onExport}
+        words={false}
+      />
       <button
         type="button"
         onClick={onSettings}

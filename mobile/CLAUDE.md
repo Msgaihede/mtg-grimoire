@@ -77,6 +77,12 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
   called, how a file is picked, where a card image is served from. The one user-agent read the
   phone face's graph reaches today is that seam's own — `src/lib/images.ts`'s `imageOrigin`,
   which picks a URL's origin and decides nothing a page draws.
+- **Files are the one exception, and it is a stand-in until a host owns it** (step 3.6). How a
+  file is picked and saved belongs below `@/lib/core` too, but phase 3 adds no command and no
+  seam, so `phone/transfer/browserFiles.ts` answers with the web host's own APIs — an
+  `<input type="file">`, a `Blob` download, `navigator.clipboard` — on every install alike. It
+  feature-detects an API and asks nothing about the install; when phases 4 and 5 give `Core` a
+  file seam, that module is what moves behind it. Do not grow a second one beside it.
 - **What only one host has arrives from the host, in a form both understand**: Android's back
   gesture as History navigation, a cutout as the `env()` safe-area insets — the phone shell's bars
   paint to the screen's edges and inset their content, and the page between them is inset on the
@@ -278,6 +284,12 @@ failure behind each at its own site:
   (`CabinetFilters`). **Search has its filters** (`phone/search/
   FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
   and everything else in a sheet that is page state rather than a place in the URL.
+- **The phone face imports and exports a deck and the collection** (step 3.6, light-app.md §7.6):
+  phone sheets over the desktop's own parse, plan, preview, commit and writers — the split
+  modules are `useImportSource`, `useExportModel` and the `*PreviewBody` steps — with the
+  remembered choices in `phone/transfer/prefs.ts`, which opens on `@/features/transfer/prefs` as
+  the app store does. `phone/transfer/CollectionTransfer.tsx` is self-contained for the collection
+  header. The wishlist's is not built.
 - **The phone face writes decks and Settings, and nothing else yet.** Deck writes (step 3.5a,
   light-app.md §7.5) are the desktop editor's own mutations through `useDeckCore` — `useDeck`
   without the app store — so a write here and one on the desktop are the same command with the

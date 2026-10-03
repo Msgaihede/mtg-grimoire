@@ -8,13 +8,10 @@
  * since the preview reads the planner. `DeckPreview.tsx` is a component file. So the descriptor
  * sits where the other destinations' do: `destinations/<key>.ts`, beside `newDeck.ts` and, from
  * Task 14, `collection.ts` and `wishlist.ts`.
- *
- * `createElement` rather than JSX for the same reason the file is `.ts`: two one-line wrappers
- * are not worth breaking that convention over.
  */
-import { createElement } from "react";
 import type { ImportDestination } from "../destination";
-import { DeckImportSubtitle, DeckPreview, type DeckImportInto } from "./DeckPreview";
+import { DeckPreview, type DeckImportInto } from "./DeckPreview";
+import { deckDestinationWith } from "./deckIntoWith";
 
 /**
  * The deck as a destination, with its own identity closed over.
@@ -34,17 +31,7 @@ import { DeckImportSubtitle, DeckPreview, type DeckImportInto } from "./DeckPrev
  * already making.
  */
 export function deckDestination(into: DeckImportInto): ImportDestination {
-  return {
-    key: "deck",
-    label: "this deck",
-    // The deck's line names the deck, which is a `deck_get` — so this is a component, mounted by
-    // the shell inside its own `open &&`, and never a string computed by a host.
-    Subtitle: () =>
-      createElement(DeckImportSubtitle, {
-        deckId: into.deckId,
-        variant: into.variant,
-        forcedCategoryName: into.forcedCategoryName,
-      }),
-    Preview: (props) => createElement(DeckPreview, { ...props, ...into }),
-  };
+  // The descriptor is `deckIntoWith.ts`'s, which the light app's phone face binds to the
+  // store-free step; this is the desktop's, bound to the step that reads the app store.
+  return deckDestinationWith(into, DeckPreview);
 }

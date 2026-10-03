@@ -79,6 +79,13 @@ describe("Collection", () => {
     expect(within(wall).getByText("Value (USD)")).toBeInTheDocument();
   });
 
+  it("offers import and export beside the figures", async () => {
+    renderPhone(<PhoneFace />, { path: "/collection" });
+    const wall = await cabinet();
+    const pair = await within(wall).findByRole("group", { name: "Import and export" }, SETTLE);
+    expect(within(pair).getAllByRole("button")).toHaveLength(2);
+  });
+
   it("folds two grades of one printing into one tile, counting both", async () => {
     renderPhone(<PhoneFace />, { path: "/collection" });
     const wall = await cabinet();
