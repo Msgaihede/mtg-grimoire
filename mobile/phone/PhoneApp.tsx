@@ -47,13 +47,15 @@ function Pages({ place }: { place: Place }) {
       return <SearchPage onOpen={onOpen} />;
     case "decks":
       return place.deckId === null ? (
-        <DecksPage />
+        <DecksPage folderId={place.folderId ?? null} />
       ) : (
         <DeckPage
           // Keyed by the deck: a second one is a fresh page, not the first one's scroll position.
           key={place.deckId}
           deckId={place.deckId}
-          onOpen={onOpen}
+          // A deck's rows, its findings and its notes name a card by id rather than by a wall
+          // tile, so the deck page is handed the push itself.
+          onOpenCard={(cardId) => navigate({ ...place, cardId })}
         />
       );
     case "collection":
