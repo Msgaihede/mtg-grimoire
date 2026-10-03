@@ -22,7 +22,7 @@
  * would put the whole of Tiptap back in the main bundle. A press on `Edit` reports upward through
  * {@link NoteCardProps.onEdit} and the host decides what to open.
  */
-import { useCallback, useEffect, useMemo, type JSX, type KeyboardEvent } from "react";
+import { useCallback, useEffect, type JSX, type KeyboardEvent } from "react";
 import { GripVertical } from "lucide-react";
 import { CardImage } from "@/components/CardImage";
 import { useTooltip } from "@/components/tooltip/useTooltip";
@@ -37,7 +37,7 @@ import { noteTitle } from "./deckNotes";
 import { useMasonryRowSpan } from "./masonry";
 import { useDeckNoteReorder } from "./noteDrag";
 import { RowAction } from "./metaRows";
-import { parseNoteBody, type Block, type Inline } from "./noteMarkdown";
+import { NoteBody } from "./noteBody";
 
 /** The gutter between two cards in the masonry, in pixels — the band's grid draws it. */
 export const NOTE_GAP = 8;
@@ -263,7 +263,14 @@ export function NoteCard({
       {/* `flex-1` is what pushes the actions to the foot while the card sits at its floor; past
           the floor the body is simply its content, and there is no clamp on it. */}
       <div className="min-h-0 flex-1 text-xs leading-relaxed text-dim">
-        <NoteBody body={note.body} />
+        <NoteBody
+          body={note.body}
+          // A blank body is an ordinary row rather than a failure — a note that is a title and
+          // nothing else — so the card says which of the two an empty box is, and names the press
+          // that fills it.
+          empty="No content yet. Click Edit to add some."
+          onLink={openLink}
+        />
       </div>
 
       {/* The strip, drawn only where the note names a card — an empty row of frames on the band's
@@ -436,137 +443,14 @@ function actionLabel(verb: string, rest: string): JSX.Element {
 }
 
 /**
- * A note's body, drawn.
+ * What a link in a note does on the desktop: leave the app through the opener plugin.
  *
- * `parseNoteBody` is a reader for one pinned dialect and not a markdown parser: a construct it
- * has no rule for falls through to a paragraph and renders as written, so the worst case is the
- * reader's own typing and the ordinary case is a note. `ReleaseNotes.tsx` is the same shape one
- * feature over, and this is deliberately not a general component shared with it — that one draws
- * a changelog at the settings panel's type scale and this one draws prose inside a note card.
+ * A button and not an `<a href>`: this window has nowhere to navigate to, and an anchor a
+ * middle-click could follow would replace the app with a web page. `openExternal` is the one call
+ * in this app that leaves it — `ReleaseNotes` makes the identical call for the identical reason.
+ * Handed to {@link NoteBody} rather than imported by it, because the body is also drawn by the
+ * phone face, which may not reach the opener plugin.
  */
-function NoteBody({ body }: { body: string }): JSX.Element {
-  const blocks = useMemo(() => parseNoteBody(body), [body]);
-
-  if (blocks.length === 0) {
-    // A blank body is an ordinary row rather than a failure — a note that is a title and nothing
-    // else, and a note whose body the reader has emptied — so the card says which of the two an
-    // empty box is. It is stated as a **sentence** and not as blank space because the line above
-    // is a name and deliberately not a heading (see the title span), so nothing else on the card
-    // would tell a reader that this note has no prose in it from a note whose prose did not load.
-    return <p className="text-[0.6875rem] text-dim">No content yet. Click Edit to add some.</p>;
-  }
-
-  return (
-    // **`whitespace-pre-line`, and it is load-bearing rather than typography.** The `Inline` union
-    // has no break member, so `parseNoteBody` represents a hard break as a `"\n"` *inside a text
-    // run* — under the default `normal` every one of them would collapse to a space, and a note
-    // laid out in short lines would come back as one paragraph with nothing going red. It is set
-    // once here because `white-space` inherits, so a run nested in a list item or a quote is
-    // covered by the same declaration.
-    <div className="space-y-1.5 whitespace-pre-line text-xs leading-relaxed text-dim">
-      {blocks.map((block, i) => (
-        <NoteBlock key={i} block={block} />
-      ))}
-    </div>
-  );
-}
-
-function NoteBlock({ block }: { block: Block }): JSX.Element {
-  if (block.kind === "heading") {
-    // One drawn weight for all three depths. A note is a paragraph or two inside a card on the
-    // band's grid, and three sizes inside a 12px block would be a type scale nobody chose —
-    // `ReleaseNotes`' call, for the same reason.
-    return (
-      <p className="pt-1 text-[0.6875rem] font-medium uppercase tracking-wide text-text first:pt-0">
-        <Inlines inlines={block.inlines} />
-      </p>
-    );
-  }
-  if (block.kind === "list") {
-    // A real list marker and not a drawn glyph in a span: the marker stays out of the element's
-    // `textContent` and out of the accessibility tree, where a hand-drawn one has to be
-    // `aria-hidden` and still turns up in every assertion about the card's words.
-    const items = block.items.map((item, i) => (
-      <li key={i}>
-        <Inlines inlines={item} />
-      </li>
-    ));
-    // **`start` is drawn, and it is only ever present on a list that does not begin at 1.**
-    // Tiptap keeps a reader's start number and serialises it, so a list begun at `3.` would be
-    // drawn as `1.` the moment they stopped editing — the two renderers disagreeing about one
-    // body, which is the failure the dialect's round trip exists to prevent.
-    return block.ordered ? (
-      <ol start={block.start} className="list-decimal space-y-1 pl-4 marker:text-dim/60">
-        {items}
-      </ol>
-    ) : (
-      <ul className="list-disc space-y-1 pl-4 marker:text-dim/60">{items}</ul>
-    );
-  }
-  if (block.kind === "quote") {
-    return (
-      <blockquote className="border-l-2 border-border pl-2 italic">
-        <Inlines inlines={block.inlines} />
-      </blockquote>
-    );
-  }
-  return (
-    <p>
-      <Inlines inlines={block.inlines} />
-    </p>
-  );
-}
-
-function Inlines({ inlines }: { inlines: readonly Inline[] }): JSX.Element {
-  return (
-    <>
-      {inlines.map((run, i) => {
-        if (run.kind === "strong") {
-          return (
-            <strong key={i} className="font-medium text-text">
-              {run.text}
-            </strong>
-          );
-        }
-        if (run.kind === "em") {
-          return (
-            <em key={i} className="italic">
-              {run.text}
-            </em>
-          );
-        }
-        if (run.kind === "strike") {
-          return (
-            <s key={i} className="line-through">
-              {run.text}
-            </s>
-          );
-        }
-        if (run.kind === "code") {
-          return (
-            <code key={i} className="rounded bg-surface px-1 py-0.5 font-mono text-[0.95em]">
-              {run.text}
-            </code>
-          );
-        }
-        if (run.kind === "link") {
-          // A button and not an `<a href>`: this window has nowhere to navigate to, and an anchor
-          // a middle-click could follow would replace the app with a web page. `openExternal` is
-          // the one call in this app that leaves it — `ReleaseNotes` makes the identical call for
-          // the identical reason.
-          return (
-            <button
-              key={i}
-              type="button"
-              onClick={() => void openExternal(run.href)}
-              className={cn("rounded-sm text-accent underline-offset-2 hover:underline", FOCUS)}
-            >
-              {run.text}
-            </button>
-          );
-        }
-        return <span key={i}>{run.text}</span>;
-      })}
-    </>
-  );
+function openLink(href: string): void {
+  void openExternal(href);
 }
