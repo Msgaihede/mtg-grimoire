@@ -220,8 +220,11 @@ promise clears **every** `taken@` and `emission@` mark and sets the **gap** — 
 | A group dropped and recorded, or released at the waiting bound | `apply_in`, after the committed pass writes its `taken@` marks — so a pass that drops a claim leaves its emitter untaken even when the drop was that emission's last index |
 
 While the gap is open, an active emission floors the rows held here (§6). **It closes when every
-device this one holds a watermark for has a `taken@` mark again** — every emitter's state has then
-reached this device whole since the gap. Each gap is a place where the watermark — or the cursor —
+device on this group's roster that this one holds a watermark for has a `taken@` mark again** —
+every emitter's state has then reached this device whole since the gap. The roster and not
+`sync_peers` alone, because a watermark outlives its group (sync.md *A cursor is a place in one
+group's log*): a device that moved groups holds watermarks for peers that will never emit to it
+again, and would keep its gap open for good. Each gap is a place where the watermark — or the cursor —
 passed an op this device never applied. A source that drops every time keeps the gap open and every
 emission active and flooring: the narrow fix's behaviour, never below it.
 
