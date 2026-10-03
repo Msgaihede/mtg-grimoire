@@ -1866,7 +1866,8 @@ own cards, laid out from the shelf counts so every heading is placed before its 
   a `Deck` link to its deck. **A fold is the phone's own and is not stored**: the shelves start
   from the reader's stored folds and a press is held by the page, because nothing on the phone face
   writes yet and `mobile:tauri` shares the desktop's `app_meta`. `useCollection({ folds })` is the
-  seam; the desktop passes nothing.
+  seam; the desktop passes nothing. **Reversed in step 3.5b (§7.5b)**: a fold is stored now, and
+  the seam has no caller.
 - **The level is not in the URL**, unlike the deck gallery's `?folder=`: its controls are buttons,
   and Back leaves the view rather than the folder.
 - **One tile per printing, finish and folder**, the desktop wall's grain, so two grades of one
@@ -1914,7 +1915,7 @@ so: it is the desktop wall's caption, `wallPrinting` with the `elsewhere` mark b
 - **The sheet offers the desktop bar's own cells** (`WISHLIST_TRAY`, moved beside `useWishlist`):
   set, format, rarity, type, border and needs review — no price, finish or condition, because a wish
   asks none of those questions. Folds are the page's own, as on the collection
-  (`useWishlist({ folds })`), and paging reads the hook's `hasMore`, held while a level arrives.
+  (`useWishlist({ folds })`) — **stored since step 3.5b** (§7.5b) — and paging reads the hook's `hasMore`, held while a level arrives.
 - **What moved in `src/`**: `preferredFinishOf` and `wallPrinting` into `wish.ts` (out of
   `WishlistGrid`); `subtotalsOf`, `FolderTotals` and `folderFigures` into `wishShelfPlan.ts` and
   the figures band into `WishlistSummary.tsx` (out of the welded `WishlistPage`).
@@ -2076,6 +2077,113 @@ page draws them all, unfolded.
 Driven at 360 and 800 wide over the `starter` seed's decks 1, 2 and 4, in headless Chromium 141 on
 Linux with touch emulation: nothing scrolls sideways — the page, the action sheet, the add search,
 the card sheet and Deck settings.
+
+### 7.5b Step 3.5b — collection and wishlist writes on the phone (2026-10-03)
+
+**Every write is a desktop mutation, moved out of the page that owned it rather than written a
+second time.** The collection's and the wishlist's writes lived inside `CollectionPage` and
+`WishlistPage`, which reach the app store, so the phone face could not call them; the split (below)
+moved each verbatim into a store-free module the desktop page now calls, and the phone calls the
+same one. No new command, and no new IPC.
+
+**A tile's actions are a sheet behind a visible `⋯`**, 3.5a's choice for a deck row read across to
+a wall: a 44px control, drawn as the stepper-over-art's backed circle, in the tile's **top-left**
+corner — top-right is the finish chip's on every card face here and bottom-left is the count's. It
+is a sibling of the picture's button (`WallTile`'s `onActions`), so a press on the art still opens
+the card sheet. Its name says which tile (`Edit Tarmogoyf, FUT 153`). The sheet is 3.5a's
+`ActionSheet`, and what the writes did is one receipt line at the foot of the page, or of the sheet
+while it is up — `ReceiptBar`, which now takes any `ReceiptLine`, fed by `lists/receipt.ts`.
+
+**A collection tile can stand for several rows, and every write addresses one** — the desktop's
+rule from both of its ends: the card modal's `Edit` turns into `Edit which copy` over a printing in
+more than one row, and the wall's `Move to` asks `PickCopies` rather than moving every copy behind
+the art. So a tile of several rows (two grades or two languages of one printing, finish and folder)
+opens on **its copies, listed** in the modal's own words (`copyOption`: `1× Near mint · Etched · JA`,
+the drawer beside it), and a press on one opens that copy's actions; a tile of one row opens on its
+actions at once. `All copies on this tile` goes back. Nothing writes to a row the reader did not
+name — the desktop tile stepper's *first row behind the art* was weighed and refused here, because a
+sheet has the room to ask and a wall of art does not.
+
+The collection sheet (`lists/CopyActions.tsx`) offers what the desktop's edits to one copy offer:
+
+- **Copies** — `useCollectionEntryWrites`' stepper, fenced by `entryFences`' `quantityRefusal` and
+  said in its sentence where it refuses (`In Modern Goodstuff. Remove it from the deck to change the
+  quantity.`). **`−` at one copy is the removal** — the same press as `Remove from collection`,
+  which is the menu's `collection_remove_many`, so the receipt offers its **ticket** back through the
+  desktop's `bulk_undo` (`useBulkUndoAction`, `UndoNotice` less its drawing). The desktop stepper's
+  zero is `set_quantity(0)` and has no undo; the phone takes the write that has one.
+- **Condition** — `EditCopy`'s save (`useCopyUpdate`), the grade alone, one press per grade.
+- **Finish** and **Printing** — the card modal's `Edit` (`useCopyFinish`, `useCopyPrinting`). A
+  printing never made in the copy's finish refuses before anything is written, in the modal's words
+  (`finishRefusal`).
+- **Move to** — `useSetCollectionFolder`, the menu's `Move to`: the root and the reader's own
+  drawers, nested, **a drawer set aside offered and marked** (`set aside`) as the menu offers it —
+  the locked-edge confirmation is the drag's alone on the desktop. Drawn only once the reader has a
+  drawer. A copy in a deck's group is not fenced here, as it is not in the menu: the backend refuses
+  the move in its own words (`Those copies are in a deck. Cut the card from the deck to get them
+  back.`), said on the receipt line.
+- **Remove from collection** — refused in words under the row where the count is.
+
+**A write that folds the row follows it**: grade, finish, printing and drawer are all grain
+columns, so each can land on a row already there and answer its id; the sheet re-points at that id
+and keeps the row last seen, carrying what the write changed, until the re-read arrives.
+
+The wish sheet (`lists/WishActions.tsx`) is `EditWish`'s panel: **Copies** (`−` at one is the
+removal, with **no undo** — the desktop's wish removal takes none); **Printing** — `Any printing`
+first, withheld from a wish already for any (`EditWish`'s rule), then every printing, a press
+**pinning** the wish (the All printings modal's `wishlist_set_printing` from a wish, now
+`useWishEntryWrites`' `setPrinting`); **Move to** the root and the reader's own folders, never a
+managed list; **Remove from wishlist**. **A wish a deck manages draws no `⋯`** — the backend refuses
+every hand write to one in `MANAGED_REFUSAL`'s words, and a control whose only answer is that
+sentence teaches nothing — and, were one opened, the sheet says that sentence and offers nothing.
+
+**Not offered, because no surface on the desktop offers them either**: a copy's **language** (no
+write changes it — it is a grain term `collection_update`'s patch does not carry), its **entry
+note** and its **tradelist count** (the patch carries both and nothing in the desktop UI writes
+them), its **purchase price** (`EditCopy`'s other field — left for a later step), and a wish's
+**preferred finish** and **note** (`wishlist_entries` has no update command; the finish is drawn in
+the sheet's subtitle). Folder management — create, rename, delete — is left too: the desktop does it
+on shelf headings and in a strip above the wall, neither of which is a dialog the phone could host.
+
+**The card sheet's adds** are two rows of 3.5a's slot list (`card/Actions.tsx`), on every card:
+
+- **Add to collection** — one copy into **the root**, the card modal's destination, through the
+  menu's write (`useCollectionAdd`, `MENU_CONDITION`). Where the printing is sold more than one way,
+  the quick-add popup's finish chips sit under the press (a radio group, opening on the printing's
+  first finish — so a press without a look is the modal's add exactly).
+- **Add to wishlist** — this printing, or `Any printing` beside it (the popup's other answer, keyed
+  on the oracle card; absent for a printing that has lost one), through `useWishlistAdd`.
+- Each has its own receipt, and **its `Undo` is the desktop's stepper one copy back** —
+  `set_quantity` to the count before the add, which deletes a row the add made. The desktop offers
+  no undo for an add; this is the nearest write it makes, and the button's name says what it takes
+  back.
+
+**A fold is stored now**, through `useCollection`'s and `useWishlist`'s `setFold` — `useShelfFolds`,
+the desktop's own write, only where a fold leaves its shelf kind's default, and nothing while a
+filter is on (the desktop's C-I2 ruling). §7.2 held folds in the page for two reasons. *Nothing on
+the phone face writes* is gone. *`mobile:tauri` shares the desktop's `app_meta`* does not survive a
+second look: that is a dev arrangement, not a product one, and the two faces of one install are one
+app over one database — the light app's own rule is that light is the menu and the face, never the
+data — so a fold pressed on the phone face and found again on the desktop face after a resize is the
+cabinet being one cabinet. A reader who folds a 600-card binder away on a phone now finds it folded
+at the next launch, which a page-held fold could never do.
+
+**What moved in `src/`**, each re-exported or called from where it was, no desktop test changed:
+
+- `CollectionPage` → **`useCollectionEntryWrites.ts`**: the stepper, the removal and the bulk
+  removal with its undo offer, and the cache arithmetic they share. Its `countEditable` and
+  `quantityBlocked` → **`entryFences.ts`** (`countEditableIn`, `quantityRefusal`), pure, with a test.
+- `WishlistPage` → **`useWishEntryWrites.ts`**: the stepper, the removal, the filing and back to any
+  printing, plus `setPrinting` (the modal's repoint, which keeps its own copy because it closes
+  itself on the answer).
+- `EditCopy`'s save and the card modal's `Edit` writes → **`useCopyWrites.ts`**; `useCardMenuDeps`'
+  two adds → **`card/useCardAdds.ts`**; `UndoNotice`'s behaviour → **`useBulkUndoAction`** in the
+  same file. `AllPrintingsDialog`'s own copy of the printing write is left where it is.
+
+Driven at 360 and 800 wide over `starter`, in headless Chromium 141 on Linux with touch emulation:
+nothing scrolls sideways — the wall, a tile's sheet, a tile's copies, the printings and folders
+pages, a deck group's fenced copy, the receipt with `Undo`, a wish's sheet and printings, and the
+card sheet's adds with a receipt.
 
 ### 7.7 Step 3.7 — light Settings, on both faces (2026-10-03)
 

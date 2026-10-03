@@ -272,19 +272,23 @@ failure behind each at its own site:
 - **Scanner is a placeholder**: a sentence, no camera and no permission asked. Settings is the
   light edition's groups as rows, each opening the desktop's own panels beneath it (step 3.7).
 - **The Collection and the Wishlist are cabinets** (`phone/ShelfWall.tsx`, `pages/CollectionPage.tsx`,
-  `pages/WishlistPage.tsx`): headed shelves laid out from the counts, folded in place by a press
-  the page holds rather than stores, a folder opened as a level with a path row out, a deck's
-  managed wishlist as a read with a link to its deck, and 3.1's sheet over each list's own hook
-  (`CabinetFilters`). **Search has its filters** (`phone/search/
+  `pages/WishlistPage.tsx`): headed shelves laid out from the counts, folded by a press that
+  stores the fold as the desktop does (step 3.5b), a folder opened as a level with a path row out,
+  a deck's managed wishlist as a read with a link to its deck, and 3.1's sheet over each list's own
+  hook (`CabinetFilters`). **Search has its filters** (`phone/search/
   FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
   and everything else in a sheet that is page state rather than a place in the URL.
-- **The phone face writes decks and Settings, and nothing else yet.** Deck writes (step 3.5a,
-  light-app.md §7.5) are the desktop editor's own mutations through `useDeckCore` — `useDeck`
-  without the app store — so a write here and one on the desktop are the same command with the
-  same invalidations; the undo a receipt offers is the desktop's (`useDeckUndo`), and only where
-  the backend journals one. Settings' panels make the desktop's own writes (a marketplace, a
-  clear, a label). The collection's and the wishlist's entry writes, and the card sheet's adds to
-  them, are step 3.5b.
+- **The phone face writes decks, the collection, the wishlist and Settings** — each through the
+  desktop's own mutation, never a second copy of one. Deck writes (step 3.5a, light-app.md §7.5) go
+  through `useDeckCore` — `useDeck` without the app store — and a receipt's undo is the desktop's
+  (`useDeckUndo`), only where the backend journals one. The collection's and the wishlist's entry
+  writes and the card sheet's adds (step 3.5b, §7.5b) go through the store-free modules split out of
+  the desktop pages (`useCollectionEntryWrites`, `useWishEntryWrites`, `useCopyWrites`,
+  `useCardAdds`); a tile's `⋯` opens a sheet, **a tile of several rows asks which copy and every
+  write addresses one row**, a managed wish has no `⋯`, a removal offers the desktop's `bulk_undo`
+  ticket back, and an add's `Undo` is the stepper one copy back. Settings' panels make the desktop's
+  own writes. **Not yet**: folder management, a copy's purchase price, the deck tokens band's and
+  stats band's writes.
 - **No Android host, no WASM host, no service worker** — `public/light.webmanifest` is the whole
   of the PWA so far — **and no sync on a light install**: the phone face runs none and draws the
   mana line at rest. `mobile:tauri` is the desktop binary, not a light host.
