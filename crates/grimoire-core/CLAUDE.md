@@ -347,15 +347,21 @@ the fence between them (light-app spec §2.4; [light-app.md](../../docs/referenc
   glob, so it is imported at the top of `commands.rs` (`Marketplace`, `CardFilters`,
   `WishlistQuery` today); a wrapper that renamed what it imported (`plan as read_plan`) is written
   with the core's own name.
-- **Five kinds**: `read` (blocking pool, the read connection), `write` (`state::with_write`),
-  `owned` (`collection_source::with_write_owned`), `task` (awaited where it stands, bound to the
-  `Arc<State>`), `bytes` (blocking pool, with the call's raw body). **Only `read` is in the table
-  so far**; the other four are proven by `commands::tests::kinds`, a table of its own — an arm of
-  the macro nothing expands is an arm nothing has compiled. **The two that look alike are told
-  apart there**: over a warm facet index an `owned` write publishes the index again and a `write`
-  leaves it, and a `read` answers while another thread holds the write connection. A sixth kind —
-  the blocking pool with the `Arc<State>` and no body — is owed before the five `NOT_YET` reads
-  that take the `State` rather than a connection can join (`combos_status` and its siblings).
+- **Six kinds**: `read` (blocking pool, the read connection), `write` (`state::with_write`),
+  `owned` (`collection_source::with_write_owned`), `blocking` (blocking pool, the `Arc<State>`
+  and no connection — a body that takes the `State` itself, like `combos_status`, or decides
+  something before it takes a connection, like `bulk_undo`), `task` (awaited where it stands,
+  bound to the `Arc<State>`), `bytes` (blocking pool, with the call's raw body). **Every kind but
+  `bytes` is in the table since phase 4's step 4.2** (2026-10-03), which moved every write, feed
+  and sync command a light install can answer; all six are proven by `commands::tests::kinds`, a
+  table of its own — an arm of the macro nothing expands is an arm nothing has compiled. **The two
+  that look alike are told apart there**: over a warm facet index an `owned` write publishes the
+  index again and a `write` leaves it, and a `read` answers while another thread holds the write
+  connection.
+- **What a wrapper does beside the core is left out of its entry, and the entry says so**:
+  marking `AppState.changes` for the desktop's other windows, and telling the mirror. An event the
+  wrapper emits through its window (`sync_now`'s `sync:applied`) goes through `state.events`.
+  `src-tauri`'s `NOT_YET` holds what is left, each group with what it waits on.
 - **Every refusal is a sentence**: a name the table does not have, arguments that do not parse
   (the field serde misses is named, camelCase), a raw body sent to a command that takes none, and
   none sent to a `bytes` one.

@@ -29,25 +29,34 @@
 //! `ipc.ts`, which omits an optional argument rather than sending `null`, relies on. A required
 //! argument that is missing is a refusal in words, and so is a command this table does not have.
 //!
-//! **Five kinds, and what each puts the body on** ([`Kind`]):
+//! **Six kinds, and what each puts the body on** ([`Kind`]):
 //!
 //! | Kind | The body runs | Bound to |
 //! | --- | --- | --- |
 //! | `read` | on the blocking pool, holding the read connection ([`State::lock_db_read`]) | `&Connection` |
 //! | `write` | on the blocking pool, inside [`crate::state::with_write`] — armed, reconciled, settled, fenced, `db::BUSY` after its bound | `&Connection` |
 //! | `owned` | the same, inside [`crate::collection_source::with_write_owned`], which also rebuilds the facet index's `owned` dimension | `&Connection` |
+//! | `blocking` | on the blocking pool, holding nothing — for a body that takes the `State` itself, or that decides something before it takes a connection | `Arc<State>` |
 //! | `task` | where it stands, awaited — for what reaches a network or the sync lane | `Arc<State>` |
 //! | `bytes` | on the blocking pool, with the raw body the call carried — the scanner's frame and capture | `Arc<State>`, `Vec<u8>` |
 //!
-//! In a browser "the blocking pool" is the caller ([`crate::platform::spawn`]). **Only `read`
-//! commands are in the table so far** (Markus, 2026-10-03: the machinery and the reads first, the
-//! rest as the light app's pages ask for them); the other four kinds are proven by this module's
-//! own tests, over a table of their own.
+//! In a browser "the blocking pool" is the caller ([`crate::platform::spawn`]).
+//!
+//! **The table covers the light app** (phase 4, step 4.2, 2026-10-03): every read, and every write,
+//! feed and sync command a light install can answer, so no page of it is refused by an Android or
+//! a web host. What is still missing is `src-tauri`'s `command_table::NOT_YET`, each with its
+//! reason there — the scanner's commands, `share/`'s, and the two picture warms. **No entry is of
+//! kind `bytes` yet**; that arm is proven by this module's own tests, over a table of their own,
+//! until the scanner's frame joins.
 //!
 //! **A body is the desktop wrapper's own body**, its connection renamed, so a command answers the
-//! same thing on every host. The reads were drafted from the wrappers by
-//! `scripts/core-command-table.mjs` and checked by hand; a new entry is written by hand, next to
-//! its neighbours.
+//! same thing on every host. **What a wrapper does beside the core is the desktop's and is left
+//! out**, said at the entry: telling the other windows through `AppState.changes` (a light host has
+//! one window, and the mask is `AppState`'s), and telling the plain-text mirror (the desktop's for
+//! good). An event a wrapper sends through its window is sent through [`State::events`] instead, as
+//! the core sends every other. The reads were drafted from the wrappers by
+//! `scripts/core-command-table.mjs` and checked by hand; every other entry was written by hand,
+//! next to its neighbours, and a new one is too.
 
 use std::sync::Arc;
 
@@ -65,6 +74,10 @@ use crate::filters::CardFilters;
 use crate::sorting::Marketplace;
 #[allow(unused_imports)]
 use crate::wishlist::WishlistQuery;
+// A sync command's stretches are `lane.with(…)`, a method of this trait. Anonymous, so a module
+// whose glob exports a `Store` of its own (`bulk_undo`'s ticket store) cannot shadow it.
+#[allow(unused_imports)]
+use crate::state::Store as _;
 
 /// What a command is — which connection it holds, if any, and where its body runs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
@@ -73,6 +86,7 @@ pub enum Kind {
     Read,
     Write,
     Owned,
+    Blocking,
     Task,
     Bytes,
 }
@@ -143,6 +157,9 @@ macro_rules! kind {
     (owned) => {
         $crate::commands::Kind::Owned
     };
+    (blocking) => {
+        $crate::commands::Kind::Blocking
+    };
     (task) => {
         $crate::commands::Kind::Task
     };
@@ -185,6 +202,15 @@ macro_rules! run {
                 |$conn: &::rusqlite::Connection| $body,
             )
         })
+        .await
+        .map_err(|e| $crate::commands::lost($name, e))?
+    }};
+    (blocking, $state:ident, $name:expr, $raw:ident, [$st:ident], $body:expr) => {{
+        $crate::commands::no_body($name, &$raw)?;
+        let $st: ::std::sync::Arc<$crate::state::State> = ::std::sync::Arc::clone($state);
+        $crate::platform::spawn::blocking(
+            move || -> ::std::result::Result<_, ::std::string::String> { $body },
+        )
         .await
         .map_err(|e| $crate::commands::lost($name, e))?
     }};
@@ -257,6 +283,16 @@ commands! {
     // activity
     read activity_recent in activity(limit: u32) = |conn| recent(conn, limit);
 
+    // bulk_undo — a ticket names its table, and the table names the write: a collection undo
+    // moves what the reader owns, a wishlist one does not. Asked before any connection.
+    blocking bulk_undo in bulk_undo(undo_id: u64) = |state| match with_store(|s| s.table_of(undo_id)) {
+        None => Err(UNDO_GONE.to_owned()),
+        Some(Table::Collection) => {
+            crate::collection_source::with_write_owned(&state, |c| undo(c, undo_id))
+        }
+        Some(Table::Wishlist) => crate::state::with_write(&state, |c| undo(c, undo_id)),
+    };
+
     // card
     read card_detail in card(id: String, marketplace: Option<String>) = |conn| {
         let market = Marketplace::from_opt(marketplace.as_deref());
@@ -277,6 +313,7 @@ commands! {
         let market = Marketplace::from_opt(marketplace.as_deref());
         read_printing_prices(conn, &card_ids, market)
     };
+    write set_printing_group_by in card(mode: String) = |conn| store_group_by(conn, &mode);
 
     // collection
     read collection_breakdown in collection(dimension: String, marketplace: Option<String>) = |conn| {
@@ -291,6 +328,34 @@ commands! {
         shelf_counts(conn, &query)
     };
     read collection_summary in collection(query: CollectionQuery) = |conn| summarise(conn, &query);
+    owned collection_add in collection(entry: EntryInput) = |conn| add_entry(conn, &entry);
+    owned collection_set_quantity in collection(id: i64, quantity: i64) = |conn| {
+        set_quantity(conn, id, quantity)
+    };
+    owned collection_update in collection(id: i64, patch: EntryPatch) = |conn| {
+        update_entry(conn, id, &patch)
+    };
+    owned collection_set_printing in collection(id: i64, card_id: String) = |conn| {
+        set_entry_printing(conn, id, &card_id)
+    };
+    owned collection_remove in collection(id: i64) = |conn| remove_entry(conn, id);
+    owned collection_import_commit in collection(items: Vec<CollectionImportItem>, mode: String, folder_id: Option<i64>) = |conn| {
+        commit_import(conn, &items, &mode, folder_id)
+    };
+    owned collection_remove_many in collection(ids: Vec<i64>) = |conn| remove_entries(conn, &ids);
+
+    // collection_alloc
+    // An owned write, and `blocking` only because the pile is read before the lock is taken, as
+    // the wrapper does: a caller bug is not worth waiting on a busy database for.
+    blocking collection_to_deck in collection_alloc(entry_id: i64, deck_id: i64, category_id: Option<i64>, category_name: Option<String>, quantity: i64) = |state| {
+        let pile = Pile::from_args(category_id, category_name.as_deref())?;
+        crate::collection_source::with_write_owned(&state, |c| {
+            collection_to_deck(c, entry_id, deck_id, pile, quantity)
+        })
+    };
+    owned deck_to_collection in collection_alloc(deck_card_id: i64, quantity: i64) = |conn| {
+        deck_to_collection(conn, deck_card_id, quantity)
+    };
 
     // collection_folders
     read collection_folder_list in collection_folders() = |conn| list_folders(conn);
@@ -298,12 +363,46 @@ commands! {
         let marketplace = Marketplace::from_opt(marketplace.as_deref());
         folder_summary(conn, marketplace)
     };
+    write collection_folder_create in collection_folders(parent_id: Option<i64>, name: String) = |conn| {
+        create_folder(conn, parent_id, &name)
+    };
+    write collection_folder_rename in collection_folders(id: i64, name: String) = |conn| {
+        rename_folder(conn, id, &name)
+    };
+    write collection_folder_set_locked in collection_folders(id: i64, locked: bool) = |conn| {
+        set_folder_locked(conn, id, locked)
+    };
+    write collection_folder_move in collection_folders(id: i64, parent_id: Option<i64>) = |conn| {
+        move_folder(conn, id, parent_id)
+    };
+    write collection_folder_reorder in collection_folders(parent_id: Option<i64>, ids: Vec<i64>) = |conn| {
+        reorder_folders(conn, parent_id, &ids)
+    };
+    write collection_folder_delete in collection_folders(id: i64) = |conn| delete_folder(conn, id);
+    owned collection_removed_clear in collection_folders() = |conn| clear_removed(conn);
+    owned collection_set_folder in collection_folders(id: i64, folder_id: Option<i64>) = |conn| {
+        set_entry_folder(conn, id, folder_id)
+    };
+    owned collection_set_folder_many in collection_folders(ids: Vec<i64>, folder_id: Option<i64>) = |conn| {
+        set_entries_folder(conn, &ids, folder_id)
+    };
 
     // combos
     read combos_for_card in combos(oracle_id: String, search: Option<String>, card_count: Option<i64>, owned_only: bool, limit: i64, offset: i64) = |conn| {
         card_combos(conn, &oracle_id, search.as_deref(), card_count, owned_only, limit, offset)
     };
     read combos_for_cards in combos(card_ids: Vec<String>) = |conn| match_combos(conn, &card_ids);
+    blocking combos_status in combos() = |state| Ok(status_of(&state));
+    task combos_refresh in combos(force: bool) = |state| async move {
+        refresh(&state, force, &mut |phase, done, total| emit(&state, phase, done, total)).await
+    };
+    // Not `with_write`, as the wrapper's is not: the clear takes the connection itself.
+    blocking combos_clear in combos() = |state| {
+        let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) else {
+            return Err(crate::db::BUSY.to_owned());
+        };
+        clear(&conn)
+    };
 
     // deck
     read deck_bracket_reads in deck(deck_ids: Vec<i64>) = |conn| bracket_reads(conn, &deck_ids);
@@ -321,6 +420,95 @@ commands! {
         deck_values_for(conn, marketplace)
     };
     read format_specs_list in deck() = |conn| list_format_specs(conn);
+    // Every deck write is plain `write`, as its wrapper is — the clears and the delete re-file
+    // copies between folders, and the facet index's `owned` dimension names no folder.
+    write deck_create in deck(deck: DeckInput) = |conn| create_deck(conn, &deck);
+    write deck_update in deck(id: i64, patch: DeckPatch) = |conn| update_deck(conn, id, &patch);
+    write deck_delete in deck(id: i64) = |conn| delete_deck(conn, id);
+    write deck_duplicate in deck(id: i64) = |conn| duplicate_deck(conn, id);
+    write deck_set_folder in deck(deck_id: i64, folder_id: Option<i64>) = |conn| {
+        set_folder(conn, deck_id, folder_id)
+    };
+    write deck_set_view_state in deck(deck_id: i64, view_state: DeckViewState) = |conn| {
+        set_view_state(conn, deck_id, &view_state)
+    };
+    write deck_missing_to_wishlist in deck(deck_id: i64, folder_id: Option<i64>) = |conn| {
+        missing_to_wishlist(conn, deck_id, folder_id)
+    };
+    write deck_add_card in deck(deck_id: i64, card_id: String, category_id: Option<i64>, category_name: Option<String>, variant: String, finish: Option<String>, quantity: i64) = |conn| {
+        add_card(
+            conn,
+            deck_id,
+            &card_id,
+            category_id,
+            category_name.as_deref(),
+            &variant,
+            finish.as_deref(),
+            quantity,
+        )
+    };
+    write deck_add_card_to_other_list in deck(deck_id: i64, card_id: String, from_category_id: i64, variant: String, finish: Option<String>, quantity: i64) = |conn| {
+        add_card_to_other_list(
+            conn,
+            deck_id,
+            &card_id,
+            from_category_id,
+            &variant,
+            finish.as_deref(),
+            quantity,
+        )
+    };
+    write deck_set_card_quantity in deck(deck_id: i64, card_id: String, category_id: i64, variant: String, finish: Option<String>, quantity: i64) = |conn| {
+        set_card_quantity(
+            conn,
+            deck_id,
+            &card_id,
+            category_id,
+            &variant,
+            finish.as_deref(),
+            quantity,
+        )
+    };
+    write deck_category_clear in deck(deck_id: i64, category_id: i64, variant: String) = |conn| {
+        clear_category(conn, deck_id, category_id, &variant)
+    };
+    write deck_clear in deck(deck_id: i64, variant: String) = |conn| {
+        clear_variant(conn, deck_id, &variant)
+    };
+    write deck_move_card in deck(deck_id: i64, card_id: String, from_category_id: i64, to_category_id: Option<i64>, to_category_name: Option<String>, variant: String, finish: Option<String>) = |conn| {
+        move_card(
+            conn,
+            deck_id,
+            &card_id,
+            from_category_id,
+            to_category_id,
+            to_category_name.as_deref(),
+            &variant,
+            finish.as_deref(),
+        )
+    };
+    write deck_swap_printing in deck(deck_id: i64, from_card_id: String, to_card_id: String, category_id: i64, variant: String, finish: Option<String>) = |conn| {
+        swap_printing(
+            conn,
+            deck_id,
+            &from_card_id,
+            &to_card_id,
+            category_id,
+            &variant,
+            finish.as_deref(),
+        )
+    };
+    write deck_set_card_finish in deck(deck_id: i64, card_id: String, category_id: i64, variant: String, from_finish: Option<String>, to_finish: Option<String>) = |conn| {
+        set_card_finish(
+            conn,
+            deck_id,
+            &card_id,
+            category_id,
+            &variant,
+            from_finish.as_deref(),
+            to_finish.as_deref(),
+        )
+    };
 
     // deck_audit
     read deck_audit_list in deck_audit(deck_id: i64, limit: i64) = |conn| {
@@ -345,16 +533,91 @@ commands! {
     read deck_label_list in deck_meta(deck_id: i64, variant: String) = |conn| {
         list_labels(conn, deck_id, &variant)
     };
+    write deck_category_create in deck_meta(deck_id: i64, variant: String, name: String) = |conn| {
+        create_category(conn, deck_id, &variant, &name)
+    };
+    write deck_category_rename in deck_meta(id: i64, name: String) = |conn| {
+        rename_category(conn, id, &name)
+    };
+    write deck_category_set_active in deck_meta(id: i64, is_active: bool) = |conn| {
+        set_category_active(conn, id, is_active)
+    };
+    write deck_category_reorder in deck_meta(deck_id: i64, ids: Vec<i64>) = |conn| {
+        reorder_categories(conn, deck_id, &ids)
+    };
+    write deck_category_delete in deck_meta(id: i64, move_to_category_id: Option<i64>) = |conn| {
+        delete_category(conn, id, move_to_category_id)
+    };
+    write deck_label_create in deck_meta(deck_id: Option<i64>, name: String, color: String) = |conn| {
+        create_label(conn, deck_id, &name, &color)
+    };
+    write deck_label_update in deck_meta(deck_id: Option<i64>, id: i64, name: String, color: String) = |conn| {
+        update_label(conn, deck_id, id, &name, &color)
+    };
+    write deck_label_delete in deck_meta(deck_id: Option<i64>, id: i64) = |conn| {
+        delete_label(conn, deck_id, id)
+    };
+    write deck_label_remove_from_deck in deck_meta(deck_id: i64, label_id: i64, variant: String) = |conn| {
+        remove_label_from_deck(conn, deck_id, label_id, &variant)
+    };
+    write deck_card_set_label in deck_meta(deck_id: i64, card_id: String, category_id: i64, variant: String, finish: Option<String>, label_id: Option<i64>) = |conn| {
+        set_card_label(
+            conn,
+            deck_id,
+            &card_id,
+            category_id,
+            &variant,
+            finish.as_deref(),
+            label_id,
+        )
+    };
+    write deck_folder_create in deck_meta(parent_id: Option<i64>, name: String) = |conn| {
+        create_folder(conn, parent_id, &name)
+    };
+    write deck_folder_rename in deck_meta(id: i64, name: String) = |conn| {
+        rename_folder(conn, id, &name)
+    };
+    write deck_folder_move in deck_meta(id: i64, parent_id: Option<i64>) = |conn| {
+        move_folder(conn, id, parent_id)
+    };
+    write deck_folder_reorder in deck_meta(parent_id: Option<i64>, ids: Vec<i64>) = |conn| {
+        reorder_folders(conn, parent_id, &ids)
+    };
+    write deck_folder_delete in deck_meta(id: i64) = |conn| delete_folder(conn, id);
 
     // deck_missing
     read deck_missing_plan in deck_missing(deck_id: i64) = |conn| plan(conn, deck_id);
+    owned deck_missing_to_collection in deck_missing(deck_id: i64, picks: Vec<MissingPick>, clear_wishes: bool) = |conn| {
+        to_collection(conn, deck_id, &picks, clear_wishes)
+    };
 
     // deck_notes
     read card_notes in deck_notes(oracle_id: String) = |conn| notes_for_card(conn, &oracle_id);
     read deck_notes in deck_notes(deck_id: i64) = |conn| list_notes(conn, deck_id);
+    write deck_note_create in deck_notes(deck_id: i64, title: String, body: String, oracle_ids: Vec<String>) = |conn| {
+        create_note(conn, deck_id, &title, &body, &oracle_ids)
+    };
+    write deck_note_update in deck_notes(deck_id: i64, id: i64, title: Option<String>, body: Option<String>) = |conn| {
+        update_note(conn, deck_id, id, title.as_deref(), body.as_deref())
+    };
+    write deck_note_delete in deck_notes(deck_id: i64, id: i64) = |conn| {
+        delete_note(conn, deck_id, id)
+    };
+    write deck_note_attach in deck_notes(deck_id: i64, note_id: i64, oracle_id: String) = |conn| {
+        attach_card(conn, deck_id, note_id, &oracle_id)
+    };
+    write deck_note_detach in deck_notes(deck_id: i64, note_id: i64, oracle_id: String) = |conn| {
+        detach_card(conn, deck_id, note_id, &oracle_id)
+    };
+    write deck_note_reorder in deck_notes(deck_id: i64, ids: Vec<i64>) = |conn| {
+        reorder_notes(conn, deck_id, &ids)
+    };
 
     // deck_pull
     read deck_pull_plan in deck_pull(deck_id: i64) = |conn| plan(conn, deck_id);
+    owned deck_pull_from_collection in deck_pull(deck_id: i64, picks: Vec<Pick>) = |conn| {
+        from_collection(conn, deck_id, &picks)
+    };
 
     // deck_query
     read deck_query_cards in deck_query(deck_id: i64, filters: CardFilters) = |conn| {
@@ -365,6 +628,17 @@ commands! {
     read deck_quick_add_wishes in deck_quick_add(card_id: String, finish: Option<String>) = |conn| {
         card_wishes(conn, &card_id, finish.as_deref())
     };
+    owned deck_quick_add_to_collection in deck_quick_add(deck_id: i64, card_id: String, finish: Option<String>, condition: Option<String>, quantity: i64, wish_id: Option<i64>) = |conn| {
+        quick_add(
+            conn,
+            deck_id,
+            &card_id,
+            finish.as_deref(),
+            condition.as_deref(),
+            quantity,
+            wish_id,
+        )
+    };
 
     // deck_theory
     read deck_theory_diff in deck_theory(deck_id: i64, marketplace: Option<String>) = |conn| {
@@ -372,10 +646,29 @@ commands! {
         theory_diff(conn, deck_id, marketplace)
     };
     read deck_theory_slots in deck_theory(deck_id: i64) = |conn| theory_slots(conn, deck_id);
+    write deck_theory_missing_to_wishlist in deck_theory(deck_id: i64, only: Option<Vec<String>>, folder_id: Option<i64>) = |conn| {
+        missing_to_wishlist(conn, deck_id, only.as_deref(), folder_id)
+    };
 
     // deck_todos
     read deck_todo_lists in deck_todos(deck_id: i64) = |conn| lists_for(conn, deck_id);
     read every_deck_todo_list in deck_todos() = |conn| every_list(conn);
+    write deck_todo_list_create in deck_todos(deck_id: i64, title: String, body: String) = |conn| {
+        create_list(conn, deck_id, &title, &body)
+    };
+    write deck_todo_list_update in deck_todos(deck_id: i64, id: i64, title: Option<String>, body: Option<String>, expected: Option<String>) = |conn| {
+        update_list(
+            conn,
+            deck_id,
+            id,
+            title.as_deref(),
+            body.as_deref(),
+            expected.as_deref(),
+        )
+    };
+    write deck_todo_list_delete in deck_todos(deck_id: i64, id: i64) = |conn| {
+        delete_list(conn, deck_id, id)
+    };
 
     // deck_tokens
     read deck_tokens in deck_tokens(deck_id: i64, variant: String, marketplace: Option<String>) = |conn| {
@@ -386,52 +679,111 @@ commands! {
         let market = Marketplace::from_opt(marketplace.as_deref());
         list_token_printings(conn, market)
     };
+    write deck_token_set_quantity in deck_tokens(deck_id: i64, variant: String, oracle_id: String, entry: Option<TokenEntryKey>, quantity: i64) = |conn| {
+        set_quantity(conn, deck_id, &variant, &oracle_id, entry.as_ref(), quantity)
+    };
+    write deck_token_swap in deck_tokens(deck_id: i64, variant: String, oracle_id: String, from: Option<TokenEntryKey>, to: TokenEntryKey) = |conn| {
+        swap(conn, deck_id, &variant, &oracle_id, from.as_ref(), &to)
+    };
+    write deck_token_add_printing in deck_tokens(deck_id: i64, variant: String, card_id: String, finish: Option<String>) = |conn| {
+        add_printing(conn, deck_id, &variant, &card_id, finish.as_deref()).map(|_| ())
+    };
+    write deck_token_remove in deck_tokens(deck_id: i64, variant: String, oracle_id: String, entry: TokenEntryKey) = |conn| {
+        remove_entry(conn, deck_id, &variant, &oracle_id, &entry)
+    };
 
     // deck_undo
     read deck_undo_state in deck_undo(deck_id: i64, redo_id: Option<i64>) = |conn| {
         undo_state(conn, deck_id, redo_id)
     };
+    write deck_undo_apply in deck_undo(deck_id: i64, audit_id: i64) = |conn| {
+        apply_reversal(conn, deck_id, audit_id, true)
+    };
+    write deck_redo_apply in deck_undo(deck_id: i64, audit_id: i64) = |conn| {
+        apply_reversal(conn, deck_id, audit_id, false)
+    };
 
     // deckpane
     read deck_folder_pane in deckpane() = |conn| Ok(stored(conn));
+    write set_deck_folder_pane in deckpane(width: u32, collapsed: bool) = |conn| {
+        store(conn, width, collapsed)
+    };
 
     // decksort
     read deck_sort in decksort() = |conn| Ok(stored(conn));
+    write set_deck_sort in decksort(sort: String) = |conn| store(conn, &sort);
 
     // errors
     read error_log_list in errors(limit: i64) = |conn| {
         list(conn, limit).map_err(|e| format!("could not read the error log: {e}"))
     };
+    // The desktop's wrapper then marks `error_log` in `AppState.changes` by hand — a bare
+    // `DELETE` the update hook never hears — so its other windows refetch. That mask is the
+    // desktop's, for its windows; a light host has one, and the page that pressed refetches.
+    write error_log_clear in errors() = |conn| {
+        clear(conn).map_err(|e| format!("could not clear the error log: {e}"))
+    };
 
     // home
     read home_layout in home() = |conn| Ok(stored(conn));
+    write set_home_layout in home(layout: HomeLayout) = |conn| store(conn, &layout);
+
+    // images: `prefetch_images` and `prewarm_collection` are not here — `command_table::NOT_YET`
 
     // import
     read import_resolve in import(lines: Vec<ResolveLine>) = |conn| resolve_lines(conn, &lines);
+    // Plain `write`, as the wrapper's: a `live` replace re-files copies between folders, and the
+    // facet index's `owned` dimension names no folder.
+    write deck_import_commit in import(deck_id: i64, variant: String, mode: String, items: Vec<ImportItem>) = |conn| {
+        commit_import(conn, deck_id, &variant, &mode, &items)
+    };
+
+    // index::facets
+    blocking facet_cards in index::facets(req: crate::search::SearchRequest) = |state| {
+        run_facets(&state, &req)
+    };
 
     // listview
     read list_view in listview() = |conn| Ok(stored(conn));
+    write set_list_view in listview(section: String, view: String) = |conn| {
+        store(conn, &section, &view)
+    };
 
     // markcolors
     read mark_colors in markcolors() = |conn| Ok(stored(conn));
+    write set_mark_color in markcolors(mark: String, color: Option<String>) = |conn| {
+        store(conn, &mark, color.as_deref())
+    };
 
     // marketplace
     read get_marketplace in marketplace() = |conn| Ok(stored(conn));
+    // The desktop's wrapper is `set_marketplace_now`, which then tells the plain-text mirror
+    // (`mirror.mark_all()`), because every mirrored price changes with the marketplace. The
+    // mirror is the desktop's, so the store is the whole of this entry.
+    write set_marketplace in marketplace(id: String) = |conn| store(conn, &id);
 
     // marketplace_feed
     read marketplace_feed_status in marketplace_feed() = |conn| {
         let now = crate::platform::clock::now_secs();
         Ok(PROVIDERS.iter().map(|p| read_status(conn, *p, now)).collect::<Vec<_>>())
     };
+    task marketplace_feed_refresh in marketplace_feed(marketplace: String) = |state| async move {
+        refresh(&state, &marketplace, &mut |phase, done, total| {
+            emit(&state, &marketplace, phase, done, total)
+        })
+        .await
+    };
 
     // nav
     read nav_collapsed in nav() = |conn| Ok(stored(conn));
+    write set_nav_collapsed in nav(collapsed: bool) = |conn| store(conn, collapsed);
 
     // new_printings
     read new_printings in new_printings(scope: String, deck_ids: Vec<i64>, days: i64, langs: Vec<String>, include_virtual: bool, include_theory: bool, include_basics: bool, limit: Option<i64>) = |conn| {
         let ask = Ask { scope, deck_ids, days, langs, include_virtual, include_theory, include_basics, limit, };
         feed(conn, &ask)
     };
+    write mark_new_printings_seen in new_printings(at: i64) = |conn| mark_seen(conn, at);
 
     // price_history
     read price_history in price_history(card_id: String, finish: String, marketplace: Option<Marketplace>) = |conn| {
@@ -443,8 +795,34 @@ commands! {
 
     // recent_cards
     read recent_cards in recent_cards(limit: u32) = |conn| Ok(recent(conn, limit));
+    write record_recent_card in recent_cards(card_id: String) = |conn| record_now(conn, &card_id);
 
-    // scanner
+    // reset
+    // `owned`, as the wrapper's: the facet index's `owned` bitset is the collection's, so a wipe
+    // moves it.
+    owned collection_clear in reset() = |conn| clear_collection(conn);
+    write wishlist_clear in reset() = |conn| clear_wishlist(conn);
+    write decks_clear in reset() = |conn| clear_decks(conn);
+    // The refusal is asked before anything is touched, the files are swept through
+    // `platform::files` (which refuses in a browser, so a web host's clear forgets the rows and
+    // counts every file it could not reach), and the rows are forgotten through `with_write`.
+    blocking cache_clear in reset() = |state| {
+        if let Some(refusal) =
+            cache_clear_refusal(state.syncing.load(std::sync::atomic::Ordering::Relaxed))
+        {
+            return Err(refusal.to_owned());
+        }
+        let images = state.images.dir().to_path_buf();
+        let tmp = state.data_dir.join("tmp");
+        clear_cache(
+            || crate::state::with_write(&state, forget_image_rows),
+            &images,
+            &tmp,
+            &state.images,
+        )
+    };
+
+    // scanner — the reads only: every other scanner command is on `command_table::NOT_YET`
     read scanner_prefs in scanner() = |conn| Ok(stored_prefs(conn));
     read scanner_tray in scanner() = |conn| Ok(stored_tray(conn));
 
@@ -455,24 +833,148 @@ commands! {
 
     // searchopen
     read search_open in searchopen() = |conn| Ok(stored(conn));
+    write set_search_open in searchopen(section: String, open: bool) = |conn| {
+        store(conn, &section, open)
+    };
 
     // set_completion
     read set_completion in set_completion() = |conn| set_completion_of(conn);
 
     // shelffolds
     read shelf_folds in shelffolds() = |conn| Ok(stored(conn));
+    write set_shelf_folds in shelffolds(page: String, changes: std::collections::HashMap<String, Option<bool>>) = |conn| {
+        store(conn, &page, &changes)
+    };
 
     // stackhide
     read hidden_stacks in stackhide(deck_id: i64) = |conn| Ok(stored(conn, deck_id));
+    write set_stack_hidden in stackhide(deck_id: i64, category_id: i64, hidden: bool) = |conn| {
+        store(conn, deck_id, category_id, hidden)
+    };
 
     // startview
     read start_view in startview() = |conn| Ok(stored(conn));
+    write set_start_view in startview(view: String) = |conn| store(conn, &view);
 
     // sticky_notes
     read sticky_notes in sticky_notes() = |conn| Ok(list_notes(conn).unwrap_or_default());
+    write sticky_note_create in sticky_notes(title: String, body: String, color: String) = |conn| {
+        create_note(conn, &title, &body, &color)
+    };
+    write sticky_note_update in sticky_notes(id: i64, title: Option<String>, body: Option<String>, color: Option<String>, pinned: Option<bool>) = |conn| {
+        update_note(conn, id, title, body, color, pinned)
+    };
+    write sticky_note_delete in sticky_notes(id: i64) = |conn| delete_note(conn, id);
+    write sticky_note_reorder in sticky_notes(ids: Vec<i64>) = |conn| reorder_notes(conn, &ids);
+
+    // sync — the card sync's two, whose wrappers are in `desktop.rs`
+    task sync_run in sync(force: bool) = |state| async move { run_sync(state, force).await };
+    blocking sync_status in sync() = |state| Ok(status(&state));
+
+    // sync_engine::commands — the relay. A press takes the lane as the desktop's does; what the
+    // desktop runs it on (`sync::on_a_worker`, a thread of its own) is the host's, so here it is
+    // awaited where it stands, like every `task`.
+    write sync_relay_status in sync_engine::commands() = |conn| read_status(conn);
+    write sync_supporter_status in sync_engine::commands() = |conn| Ok(supporter_status(conn));
+    write sync_patreon_begin in sync_engine::commands() = |conn| begin_authorize(conn);
+    // The desktop's wrapper then marks `sync_state` in `AppState.changes`, for its other windows'
+    // Sync panels — the desktop's mask, left out here as `error_log_clear`'s is.
+    task sync_patreon_claim in sync_engine::commands(code: String) = |state| async move {
+        let lane = state.lane_for_press().await?;
+        lane.with(ensure_group)?;
+        crate::sync_engine::entitlement::claim(&lane, &code).await?;
+        lane.with(|conn| Ok(supporter_status(conn)))
+    };
+    // `sync:applied` is what tells a page a pull changed its rows. The desktop's wrapper emits it
+    // through its window once the lane is let go; here it goes through the state's sink, as the
+    // core's every other event does.
+    task sync_now in sync_engine::commands() = |state| async move {
+        let outcome = {
+            let lane = state.lane_for_press().await?;
+            crate::sync_engine::client::run_once(&lane).await?
+        };
+        if let Some(o) = outcome {
+            if o.changed || o.pushed > 0 {
+                crate::events::emit(&*state.events, "sync:applied", &o);
+            }
+        }
+        Ok(outcome)
+    };
+    write sync_review_list in sync_engine::commands() = |conn| read_review(conn);
+    // `blocking` because the table name is checked against the census before any connection is
+    // taken, as the wrapper does — it arrives from the page and is spliced into the SQL.
+    blocking sync_review_clear in sync_engine::commands(table: String, uid: String) = |state| {
+        if !REVIEWABLE.iter().any(|(t, _)| *t == table) {
+            return Err("That is not a table with anything to review.".to_owned());
+        }
+        crate::state::with_write(&state, |conn| {
+            conn.execute(
+                &format!("UPDATE {table} SET needs_review = NULL WHERE sync_uid = ?1"),
+                [&uid],
+            )
+            .map_err(|e| e.to_string())?;
+            read_review(conn)
+        })
+    };
+
+    // sync_pair — pairing. The offer is taken before the lane, never after.
+    write sync_pairing_status in sync_pair::pairing() = |conn| status(conn);
+    task sync_pairing_begin in sync_pair::pairing() = |state| async move {
+        let mut pending = state.pairing.lock().await;
+        crate::state::with_write(&state, |conn| begin(conn, &mut pending))
+    };
+    task sync_pairing_accept in sync_pair::pairing(code: String) = |state| async move {
+        let mut pending = state.pairing.lock().await;
+        let lane = state.lane_for_press().await?;
+        accept(&lane, &mut pending, &code).await
+    };
+    task sync_pairing_confirm in sync_pair::pairing() = |state| async move {
+        let mut pending = state.pairing.lock().await;
+        let lane = state.lane_for_press().await?;
+        confirm(&lane, &mut pending).await
+    };
+    task sync_pairing_poll in sync_pair::pairing() = |state| async move {
+        let now = crate::platform::clock::now_ms();
+        let mut pending = state.pairing.lock().await;
+        let lane = state.lane_for_press().await?;
+        poll(&lane, &mut pending, now).await
+    };
+    task sync_pairing_cancel in sync_pair::pairing() = |state| async move {
+        cancel(&mut *state.pairing.lock().await);
+        Ok(())
+    };
+    // The desktop's wrapper then marks `sync_devices` and `device_names` in `AppState.changes` —
+    // both `WITHOUT ROWID`, which the update hook never hears — for its other windows.
+    write sync_device_rename in sync_pair::identity(device_id: String, name: String) = |conn| {
+        rename_device(conn, &device_id, &name).map_err(|e| e.to_string())
+    };
+    task sync_device_revoke in sync_pair::pairing(device_id: String) = |state| async move {
+        let lane = state.lane_for_press().await?;
+        remove_device(&lane, &device_id).await
+    };
+    // The desktop's wrapper then marks `sync_devices`, `sync_group` and `sync_state` in
+    // `AppState.changes`, whatever the answer, for its other windows.
+    task sync_group_leave in sync_pair::pairing() = |state| async move { leave(&state).await };
+
+    // tags::art
+    task art_tags_refresh in tags::art(force: bool) = |state| async move {
+        crate::tags::refresh(&ART, &state, force, &mut |phase, done, total| {
+            crate::tags::emit(&ART, &state, phase, done, total)
+        })
+        .await
+    };
+    blocking art_tags_status in tags::art() = |state| Ok(crate::tags::status_of(&ART, &state));
 
     // tags::muted
     read tags_muted in tags::muted() = |conn| list(conn);
+    // The desktop's wrapper then marks `muted_tags` (`WITHOUT ROWID`) in `AppState.changes`, for
+    // its other windows; so does `tag_unmute`'s.
+    write tag_mute in tags::muted(namespace: String, tag_id: String, slug: String) = |conn| {
+        mute(conn, &namespace, &tag_id, &slug, crate::platform::clock::now_secs())
+    };
+    write tag_unmute in tags::muted(namespace: String, tag_id: String) = |conn| {
+        unmute(conn, &namespace, &tag_id)
+    };
 
     // tags::oracle
     read oracle_tags_for_cards in tags::oracle(oracle_ids: Vec<String>) = |conn| {
@@ -480,6 +982,15 @@ commands! {
     };
     read oracle_tags_for_printings in tags::oracle(card_ids: Vec<String>) = |conn| {
         read_printing_tags(conn, &card_ids).map_err(|e| format!("could not read the tags: {e}"))
+    };
+    task oracle_tags_refresh in tags::oracle(force: bool) = |state| async move {
+        crate::tags::refresh(&ORACLE, &state, force, &mut |phase, done, total| {
+            crate::tags::emit(&ORACLE, &state, phase, done, total)
+        })
+        .await
+    };
+    blocking oracle_tags_status in tags::oracle() = |state| {
+        Ok(crate::tags::status_of(&ORACLE, &state))
     };
 
     // tags::query
@@ -510,6 +1021,17 @@ commands! {
     read wishlist_summary in wishlist(marketplace: crate::sorting::Marketplace) = |conn| {
         summarise_wishlist(conn, marketplace)
     };
+    write wishlist_add in wishlist(wish: WishInput) = |conn| add_wish(conn, &wish);
+    write wishlist_set_quantity in wishlist(id: i64, quantity: i64) = |conn| {
+        set_wish_quantity(conn, id, quantity)
+    };
+    write wishlist_remove in wishlist(id: i64) = |conn| remove_wish(conn, id);
+    write wishlist_set_printing in wishlist(id: i64, card_id: Option<String>) = |conn| {
+        set_wish_printing(conn, id, card_id)
+    };
+    write wishlist_import_commit in wishlist(items: Vec<WishlistImportItem>, mode: String) = |conn| {
+        commit_import(conn, &items, &mode)
+    };
 
     // wishlist_folders
     read wishlist_folder_list in wishlist_folders() = |conn| list_folders(conn);
@@ -517,15 +1039,39 @@ commands! {
         let marketplace = Marketplace::from_opt(marketplace.as_deref());
         folder_summary(conn, marketplace)
     };
+    write wishlist_folder_create in wishlist_folders(parent_id: Option<i64>, name: String) = |conn| {
+        create_folder(conn, parent_id, &name)
+    };
+    write wishlist_folder_rename in wishlist_folders(id: i64, name: String) = |conn| {
+        rename_folder(conn, id, &name)
+    };
+    write wishlist_folder_move in wishlist_folders(id: i64, parent_id: Option<i64>) = |conn| {
+        move_folder(conn, id, parent_id)
+    };
+    write wishlist_folder_reorder in wishlist_folders(parent_id: Option<i64>, ids: Vec<i64>) = |conn| {
+        reorder_folders(conn, parent_id, &ids)
+    };
+    write wishlist_folder_delete in wishlist_folders(id: i64) = |conn| delete_folder(conn, id);
+    write wishlist_folder_clear in wishlist_folders(id: i64) = |conn| clear_folder(conn, id);
+    write wishlist_folder_delete_with_wishes in wishlist_folders(id: i64) = |conn| {
+        delete_folder_and_wishes(conn, id)
+    };
+    write wishlist_set_folder in wishlist_folders(id: i64, folder_id: Option<i64>) = |conn| {
+        set_wish_folder(conn, id, folder_id)
+    };
 
     // wishlist_optimize
     read wishlist_optimize_plan in wishlist_optimize(query: WishlistQuery, include_managed: Option<bool>) = |conn| {
         let include_managed = include_managed.unwrap_or(false);
         plan(conn, &query, include_managed)
     };
+    write wishlist_optimize_apply in wishlist_optimize(items: Vec<WishOptimizeApplyItem>) = |conn| {
+        apply(conn, &items)
+    };
 
     // zoom
     read card_zoom in zoom() = |conn| Ok(stored(conn));
+    write set_card_zoom in zoom(section: String, zoom: f64) = |conn| store(conn, &section, zoom);
 }
 // END TABLE
 
@@ -552,8 +1098,9 @@ mod tests {
         crate::app_meta::set_app_meta(conn, key, value).map_err(|e| e.to_string())
     }
 
-    /// **One command of every kind**, over a table of its own: the real table holds only reads so
-    /// far, and an arm of the macro nothing expands is an arm nothing has compiled.
+    /// **One command of every kind**, over a table of its own: the real table has no `bytes`
+    /// entry yet, an arm of the macro nothing expands is an arm nothing has compiled, and the two
+    /// writes are told apart here over one key.
     mod kinds {
         commands! {
             read meta_read in commands::tests(key: String) = |conn| meta(conn, &key);
@@ -562,6 +1109,11 @@ mod tests {
             };
             owned meta_owned in commands::tests(key: String, value: String) = |conn| {
                 set_meta(conn, &key, &value)
+            };
+            blocking meta_twice in commands::tests(key: String) = |state| {
+                let first = meta(&state.lock_db_read(), &key)?;
+                crate::state::with_write(&state, |c| set_meta(c, &key, "twice"))?;
+                Ok((first, meta(&state.lock_db_read(), &key)?))
             };
             task echo in commands::tests(said_twice: String) = |state| async move {
                 let _ = &state;
@@ -574,8 +1126,8 @@ mod tests {
         }
     }
 
-    /// **The same fence over the kinds' own table** — the real table's `dispatch` expands only
-    /// the `read` arm, so a lock held across an `.await` in any other arm would go unseen there.
+    /// **The same fence over the kinds' own table** — the real table's `dispatch` expands every
+    /// arm but `bytes`, so a lock held across an `.await` in that arm would go unseen there.
     #[allow(dead_code)]
     fn every_kind_holds_nothing_across_a_call(state: &Arc<State>) {
         fn sendable<T: crate::platform::Sendable>(_: T) {}
@@ -630,6 +1182,11 @@ mod tests {
             call("meta_read", json!({ "key": "probe" }), None).await,
             Ok(json!("owned"))
         );
+        // A `blocking` body holds no connection, so it may take either, and in turn.
+        assert_eq!(
+            call("meta_twice", json!({ "key": "probe" }), None).await,
+            Ok(json!(["owned", "twice"]))
+        );
         // A two-word argument is camelCase on the wire.
         assert_eq!(
             call("echo", json!({ "saidTwice": "hello" }), None).await,
@@ -646,12 +1203,13 @@ mod tests {
                 ("meta_read", Kind::Read),
                 ("meta_write", Kind::Write),
                 ("meta_owned", Kind::Owned),
+                ("meta_twice", Kind::Blocking),
                 ("echo", Kind::Task),
                 ("length", Kind::Bytes),
             ]
         );
-        assert_eq!(kinds::TABLE[4].args, ["offset"]);
-        assert_eq!(kinds::TABLE[4].types, ["usize"]);
+        assert_eq!(kinds::TABLE[5].args, ["offset"]);
+        assert_eq!(kinds::TABLE[5].types, ["usize"]);
     }
 
     /// **A read holds the read connection and never the writer's**: answered while another
@@ -808,6 +1366,119 @@ mod tests {
         );
     }
 
+    /// **A write through the table changes the database**, and the read after it answers the
+    /// change — a deck made through `deck_create` is in `deck_list`, and one renamed through
+    /// `deck_update` reads back renamed. Spelled as `ipc.ts` spells them.
+    #[tokio::test]
+    async fn a_write_through_the_table_lands() {
+        let (state, _dir) =
+            crate::state::fixtures::on_files("commands-writes", "http://127.0.0.1:1");
+        let made = dispatch(
+            &state,
+            "deck_create",
+            json!({ "deck": { "name": "Through the table" } }),
+            None,
+        )
+        .await
+        .expect("a deck");
+        let id = made["id"].as_i64().expect("the new deck's id");
+        let listed = dispatch(&state, "deck_list", Value::Null, None)
+            .await
+            .expect("the decks");
+        let names: Vec<_> = listed
+            .as_array()
+            .expect("a list")
+            .iter()
+            .map(|d| (d["id"].as_i64(), d["name"].as_str()))
+            .collect();
+        assert_eq!(names, [(Some(id), Some("Through the table"))]);
+
+        dispatch(
+            &state,
+            "deck_update",
+            json!({ "id": id, "patch": { "name": "Renamed" } }),
+            None,
+        )
+        .await
+        .expect("a rename");
+        let row = crate::deck::get_deck(
+            &state.lock_db_read(),
+            id,
+            "live",
+            crate::sorting::Marketplace::from_opt(None),
+        )
+        .expect("a read")
+        .expect("the deck");
+        assert_eq!(row.deck.name, "Renamed");
+    }
+
+    /// **An owned write through the table changes the collection _and_ the facet index's `owned`
+    /// dimension** — `collection_add`'s copy is in `collection_list`, and the warm index is
+    /// published again counting it, which a plain `write` entry would leave alone.
+    #[tokio::test]
+    async fn an_owned_write_through_the_table_lands_and_moves_the_index() {
+        let (state, _dir) =
+            crate::state::fixtures::on_files("commands-owned", "http://127.0.0.1:1");
+        crate::schema::fixtures::seed_card(&state.lock_db(), "c-bolt", "lea", "161");
+        crate::index::lifecycle::build_now(&state).expect("an index over the fixture");
+        let built = crate::index::lifecycle::current(&state).expect("a warm index");
+        assert_eq!(built.owned.count(), 0);
+
+        let added = dispatch(
+            &state,
+            "collection_add",
+            json!({ "entry": { "cardId": "c-bolt", "finish": "nonfoil", "quantity": 3 } }),
+            None,
+        )
+        .await
+        .expect("an add");
+        assert!(added["id"].as_i64().is_some(), "{added}");
+
+        let listed = dispatch(&state, "collection_list", json!({ "query": {} }), None)
+            .await
+            .expect("the collection");
+        let expected = json!(crate::collection::list_entries(
+            &state.lock_db_read(),
+            &crate::collection::CollectionQuery::default(),
+        )
+        .unwrap());
+        assert_eq!(listed, expected);
+        assert!(listed.to_string().contains("c-bolt"), "{listed}");
+        let total: i64 = state
+            .lock_db_read()
+            .query_row(
+                "SELECT sum(quantity) FROM collection_entries WHERE card_id = 'c-bolt'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(total, 3);
+
+        let after = crate::index::lifecycle::current(&state).expect("a warm index");
+        assert!(
+            !Arc::ptr_eq(&built, &after),
+            "the owned write published the index"
+        );
+        assert_eq!(after.owned.count(), 1);
+    }
+
+    /// **A task through the table**, with no network: the pairing offer is minted under the
+    /// state's own lock and taken back by a cancel — the one `task` pair that asks no relay.
+    #[tokio::test]
+    async fn a_task_through_the_table_holds_the_offer_and_lets_it_go() {
+        let (state, _dir) = crate::state::fixtures::on_files("commands-task", "http://127.0.0.1:1");
+        let offer = dispatch(&state, "sync_pairing_begin", Value::Null, None)
+            .await
+            .expect("an offer");
+        assert!(offer.is_object(), "{offer}");
+        assert!(state.pairing.lock().await.is_some(), "the offer is pending");
+        assert_eq!(
+            dispatch(&state, "sync_pairing_cancel", Value::Null, None).await,
+            Ok(Value::Null)
+        );
+        assert!(state.pairing.lock().await.is_none(), "the cancel took it");
+    }
+
     #[test]
     fn no_command_is_declared_twice() {
         let mut names: Vec<_> = TABLE.iter().map(|e| e.name).collect();
@@ -816,8 +1487,8 @@ mod tests {
         names.dedup();
         assert_eq!(names.len(), before);
         assert!(
-            TABLE.iter().all(|e| e.kind == Kind::Read),
-            "only reads are in the table so far"
+            TABLE.iter().all(|e| e.kind != Kind::Bytes),
+            "no raw body crosses the table yet: the scanner's frame is not in it"
         );
     }
 }

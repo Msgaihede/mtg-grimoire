@@ -2522,4 +2522,94 @@ anyone has recorded**; every desktop figure elsewhere in this repo is Windows):
 **Not measured.** Nothing here has run on a phone or an emulator: the APK's first build is this
 PR's `android` job, and its size is that job's summary. The cold start, the first corpus ingest on
 a phone and whether Tauri's WebChromeClient grants the camera to `getUserMedia` are a device's.
-**`core_call` answers the table's 88 reads and refuses every write** until step 4.2 moves them in.
+**`core_call` answered the table's 88 reads and refused every write** until step 4.2 (§8.2) moved them in. **The first `android` run that built** (the PR's second push) uploaded an artifact of 10 043 964 B — the zipped APK, about 10 MB.
+
+### 8.2 Step 4.2 — the table covers the light app (2026-10-03)
+
+Issue #761, phase 4. The Android host answers every frontend call through one
+`core_call(name, args)`, which forwards to `grimoire_core::dispatch` — so a command the table
+lacks is a page that is refused on a phone. Until this step the table held the 88 reads (§6.11)
+and every write was on `src-tauri`'s `NOT_YET`. Built and tested on Linux, debug builds.
+
+**The survey, and the rule it settled on.** The light app reaches the phone face's pages and —
+on any screen at least 1024px wide, an Android tablet included — the desktop UI itself in the light
+edition: Search, Decks, Collection, Wishlist, Scanner and nine Settings panels (`prices`, `sync`,
+`review`, `hidden-tags`, `theory-marks`, `labels`, `cache`, `errors`, `danger`). That graph reaches
+nearly every write the desktop has, so the rule was **move every `NOT_YET` command a light install
+can answer**, a few home-page-only writes included (`set_home_layout`, the sticky notes), and keep
+back only those that cannot run yet on a host with no window. Of the **153** on `NOT_YET`,
+**136 moved** and **17 stay**:
+
+| Kind | Moved | What they are |
+| --- | --- | --- |
+| `write` | 97 | every deck, folder, label, note, to-do, token, undo, setting and view-state write; the wishlist's; the wishlist's and the decks' clears; the error log's clear; mute and unmute; the sync panel's status reads and the review queue (their wrappers take the write connection); the Patreon begin; the device rename |
+| `owned` | 15 | every write whose wrapper takes `with_write_owned` — the collection's own writes and folder moves, `Recently removed`'s clear, the deck-to-binder move, the pull, the quick add, the deck-wide record, the collection clear |
+| `blocking` | 10 | **new** — see below: the five `State`-taking reads (`combos_status`, `sync_status`, both tag statuses, `facet_cards`), `cache_clear`, `combos_clear`, and three that decide before they take a connection (`bulk_undo`, `collection_to_deck`, `sync_review_clear`) |
+| `task` | 14 | the card sync, the three feeds' refreshes, the claim, `sync_now`, and pairing's begin, accept, confirm, poll, cancel, revoke and leave |
+
+**What stays on `NOT_YET`**, each group with its reason beside it in `command_table.rs`:
+
+- **`prefetch_images`, `prewarm_collection`** — each starts a fetch nobody waits for and answers at
+  once. The core can start background work only as a closure, never a future, so an entry would
+  await every fetch before answering; and how a picture reaches a light host's page is that host's
+  own question. Every page that asks swallows the refusal.
+- **The scanner's ten** (all but its two reads). A session or tray command admits the calling
+  window's *label* on the lease, which a table call does not carry; a frame is a JPEG plus a JSON
+  header where Android carries base64 (spec §2.4); and the session panics in a browser until
+  phase 7. The phone face's Scanner asks for none of them — **but the desktop face's Scanner page,
+  drawn on an Android tablet past 1024px, would be refused**: phase 7's to close.
+- **`share/`'s five** — the module is still `src-tauri`'s (§6.11). The light edition draws no shared
+  view, and the Share control shows only to a connected reader.
+
+**A sixth kind, `blocking`** — the blocking pool, the `Arc<State>`, no connection — which §6.11
+said was owed. It is what a body takes when it reads the `State` itself, and when the wrapper
+decides something before it takes a connection: `bulk_undo` asks the ticket which table it names
+and then takes `with_write_owned` or `with_write`; `collection_to_deck` reads its pile before the
+lock; `sync_review_clear` checks a table name from the page against the census before splicing
+it into SQL; `combos_clear` takes the connection by hand, as its wrapper does. Folding any of those
+into `write` would answer `BUSY` where the desktop answers the refusal.
+
+**What a wrapper did beside the core, and where it went:**
+
+- **Marking `AppState.changes`** — `error_log_clear`, `tag_mute`, `tag_unmute`, `sync_device_rename`,
+  `sync_patreon_claim`, `sync_group_leave` — is left out. The mask tells the desktop's *other
+  windows* about a write the update hook cannot see; it is `AppState`'s and a light host has one
+  window. Each entry says so.
+- **Telling the mirror** — `set_marketplace` is `set_marketplace_now` on the desktop, which then
+  calls `mirror.mark_all()`. The mirror is the desktop's for good; the entry is the store alone.
+- **`sync_now`'s `sync:applied`** went through the window; the entry sends it through
+  `state.events`, after the lane is let go, as the desktop does.
+- **Where a sync press runs**: the desktop runs one on `sync::on_a_worker`, a thread with a runtime
+  of its own; a `task` awaits where it stands, as the kind always has. The stretches in between
+  are short SQLite work on whatever runtime thread the host awaits `dispatch` on.
+
+**Tests** — `commands::tests` holds three new ones over the real table and one new arm in the kinds'
+own:
+
+- **`a_write_through_the_table_lands`**: `deck_create` through `dispatch`, then `deck_list` answers
+  it, then `deck_update` renames it and the core's own `get_deck` reads the new name.
+- **`an_owned_write_through_the_table_lands_and_moves_the_index`**: over a seeded printing and a
+  warm facet index, `collection_add` through `dispatch` — `collection_list` answers what
+  `list_entries` answers and names the printing, the table holds the three copies, and the index is
+  published again with one owned card, which a `write` entry would not do.
+- **`a_task_through_the_table_holds_the_offer_and_lets_it_go`**: `sync_pairing_begin` mints an
+  offer under the state's own lock with no request made, and `sync_pairing_cancel` takes it back.
+- **`blocking` through its own arm**, reading and writing in turn — it holds no connection.
+
+**The fence was mutated**: two `i64` arguments of `deck_undo_apply` swapped in the table, and
+`every_command_in_the_table_takes_its_wrappers_arguments` went red naming it; reverted. Green:
+`cargo test -p grimoire-core` whole, `cargo test -p mtg-grimoire command_table`, clippy over the
+workspace with `-D warnings`, `cargo fmt --check` for both crates, `cargo check -p mtg-grimoire`
+(the build that ships), and `cargo check` and clippy for `grimoire-core` on
+`wasm32-unknown-unknown` (clang 18).
+
+**Nothing on the desktop changed**: no wrapper was touched, and none calls `dispatch`. **The
+Android host (§8.1) is the first caller**, through `core_call`; no device has run one yet.
+
+**Open after this:**
+
+- The scanner on the table (phase 7): the lease needs a caller the table can name, and a frame a
+  body the Android host can carry.
+- The picture warms, once a light host serves pictures and the core can start a future nobody
+  awaits.
+- `share/`, as §6.11 left it.
