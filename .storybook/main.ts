@@ -1,8 +1,7 @@
 import type { StorybookConfig } from "@storybook/react-vite";
 import { fileURLToPath } from "node:url";
 import { WATCH_IGNORED } from "../vite.watch.ts";
-
-const fake = (name: string) => fileURLToPath(new URL(`./fake/${name}`, import.meta.url));
+import { FAKE_ALIASES } from "./fake/aliases.ts";
 
 /**
  * The two pieces of Node's `process` this file reads, typed at the one place they are read.
@@ -79,12 +78,10 @@ const config: StorybookConfig = {
   viteFinal: (config) => {
     config.resolve ??= {};
     // An array, not an object: these are exact-match rules and their order is the
-    // contract. `@/lib/images` must be tried before the bare `@` prefix.
+    // contract. `@/lib/images` must be tried before the bare `@` prefix. The fake's four are
+    // `fake/aliases.ts`'s, which `vite.mobile.config.ts` reads too.
     config.resolve.alias = [
-      { find: /^@tauri-apps\/api\/core$/, replacement: fake("core.ts") },
-      { find: /^@tauri-apps\/api\/event$/, replacement: fake("event.ts") },
-      { find: /^@tauri-apps\/api\/window$/, replacement: fake("window.ts") },
-      { find: /^@\/lib\/images$/, replacement: fake("images.ts") },
+      ...FAKE_ALIASES,
       { find: /^@\//, replacement: fileURLToPath(new URL("../src/", import.meta.url)) },
     ];
     // **The dev server does not inherit `vite.config.ts`'s `server` block — the builder replaces

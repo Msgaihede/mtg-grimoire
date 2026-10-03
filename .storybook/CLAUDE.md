@@ -19,7 +19,7 @@ deliberately**: no screenshots are stored.
   deliberately leaves unanswered goes in its `ABSENT` map with a reason**, and the map is held
   exact: an entry the fake has since answered, or Rust has since dropped, fails too. It compares
   **names only** — arguments and payload shapes are still `ipc.ts`'s mirror and the stories'.
-- **`main.ts` aliases four specifiers** — `@tauri-apps/api/core`, `@tauri-apps/api/event`,
+- **`main.ts` aliases four specifiers**, listed in `fake/aliases.ts` — `@tauri-apps/api/core`, `@tauri-apps/api/event`,
   `@tauri-apps/api/window` and `@/lib/images` — to `.storybook/fake/`. **The fake sits _under_
   `src/lib/ipc.ts`, not in place of it**, and that is the point: `ipc.ts` is a hand-written mirror
   of the Rust structs and is exactly the thing that can drift, so a fake beneath it means every
@@ -29,8 +29,9 @@ deliberately**: no screenshots are stored.
   the four ACL permissions in `capabilities/default.json`, and a fake replacing *it* would prove
   nothing about the one file that can drift from that capability.
 - **The fake has a second consumer since 2026-10-01: `npm run mobile:dev`**, the light app in a
-  plain browser (`vite.mobile.config.ts`, port 5175). It declares the same four aliases — a copy,
-  with no fence between the two lists, so an alias added here is owed there — and installs one
+  plain browser (`vite.mobile.config.ts`, port 5175). It reads the same four aliases —
+  **`fake/aliases.ts` is the one list, and both configs import it**, so an alias added there reaches
+  both (it was a hand-kept copy until phase 3) — and installs one
   world, `starter`, before React (`mobile/fakeBoot.ts`). **A handler the light app's pages reach
   and the fake does not answer shows up there as a broken page rather than as a broken story.**
   [`mobile/CLAUDE.md`](../mobile/CLAUDE.md) has the rest.
