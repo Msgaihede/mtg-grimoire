@@ -1,8 +1,10 @@
+import { useState } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
 import { NAV } from "@/components/nav";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { LightView } from "@/lib/edition";
+import type { DeckVariant } from "@/lib/ipc";
 import { queryClient } from "@/lib/query";
 import type { Place } from "../routes";
 import { CardSheet } from "./CardSheet";
@@ -40,7 +42,15 @@ const openCard = (place: Place) => (item: WallItem) => {
  * A `switch` over `LightView` with no `default`: a seventh view added to the edition is then a
  * compile error here rather than a blank page.
  */
-function Pages({ place }: { place: Place }) {
+function Pages({
+  place,
+  picks,
+  onPick,
+}: {
+  place: Place;
+  picks: ReadonlyMap<number, DeckVariant>;
+  onPick: (deckId: number, list: DeckVariant) => void;
+}) {
   const onOpen = openCard(place);
   switch (place.view) {
     case "search":
@@ -53,6 +63,8 @@ function Pages({ place }: { place: Place }) {
           // Keyed by the deck: a second one is a fresh page, not the first one's scroll position.
           key={place.deckId}
           deckId={place.deckId}
+          picked={picks.get(place.deckId) ?? null}
+          onPick={(list) => onPick(place.deckId as number, list)}
           // A deck's rows, its findings and its notes name a card by id rather than by a wall
           // tile, so the deck page is handed the push itself.
           onOpenCard={(cardId) => navigate({ ...place, cardId })}
@@ -74,15 +86,27 @@ function Pages({ place }: { place: Place }) {
  */
 export function PhoneFace() {
   const place = usePlace();
+  /**
+   * Which list each deck has been switched to this session — **held here rather than by the deck
+   * page**, because the card sheet over that page reads it too: its `Add to <deck>` adds to the
+   * list on screen, and the two must agree (`deck/list.ts`). Page state, not a place: a list is a
+   * way of looking at a deck, which the desktop face would drop from the URL anyway.
+   */
+  const [picks, setPicks] = useState<ReadonlyMap<number, DeckVariant>>(() => new Map());
+  const pick = (deckId: number, list: DeckVariant) =>
+    setPicks((now) => new Map(now).set(deckId, list));
   return (
     <>
       <Shell title={titleOf(place.view)}>
-        <Pages place={place} />
+        <Pages place={place} picks={picks} onPick={pick} />
       </Shell>
       {/* A sibling of the shell, not a child of a page: `Dialog`'s scrim is `fixed inset-0`, and
           nothing that covers the window may mount inside a box that could become its containing
           block. `App.tsx` mounts the desktop's card modal the same way. */}
-      <CardSheet cardId={place.cardId} />
+      <CardSheet
+        cardId={place.cardId}
+        deckPicked={place.deckId === null ? null : (picks.get(place.deckId) ?? null)}
+      />
     </>
   );
 }

@@ -5,7 +5,7 @@ import { activeChips } from "@/features/search/filterOptions";
 import { countOf } from "@/features/search/resultCount";
 import { StatedFiltersLine } from "@/features/search/StatedFiltersLine";
 import { TagQueryRow } from "@/features/search/TagQueryRow";
-import { useCardSearch } from "@/features/search/useCardSearch";
+import { useCardSearch, type CardSearch } from "@/features/search/useCardSearch";
 import { cn } from "@/lib/utils";
 import { CardWall, type WallItem } from "../CardWall";
 import { searchItem } from "../items";
@@ -39,6 +39,66 @@ export function SearchPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
     [search.rows, marketplace.currency],
   );
   const more = useMore(query, query.hasNextPage);
+
+  return (
+    <>
+      <SearchLine search={search} label="Search cards" />
+      <SearchResults
+        search={search}
+        label="Search results"
+        items={items}
+        onOpen={onOpen}
+        more={more}
+      />
+    </>
+  );
+}
+
+/**
+ * The wall under a {@link SearchLine} — a refused first read, an empty answer, or the cards — for
+ * every phone surface that searches the card database: the Search page, and a deck's `Add cards`.
+ */
+export function SearchResults({
+  search,
+  label,
+  items,
+  onOpen,
+  more,
+}: {
+  search: CardSearch;
+  label: string;
+  items: readonly WallItem[];
+  onOpen: (item: WallItem) => void;
+  more: () => void;
+}) {
+  const { query } = search;
+  return query.isLoadingError ? (
+    <ReadError>The search could not be read.</ReadError>
+  ) : !query.isPending && items.length === 0 ? (
+    <DimNote>No cards match.</DimNote>
+  ) : (
+    <CardWall
+      label={label}
+      items={items}
+      onOpen={onOpen}
+      onNearEnd={more}
+      resetKey={search.searchKey}
+      footer={<NextPageRefused query={query} />}
+    />
+  );
+}
+
+/**
+ * The search's one line — the box and a single `Filters` button — with the stated filters and the
+ * box's own terms under it, and the filters sheet behind the button. **Out of {@link SearchPage}
+ * on 2026-10-03** so a deck's `Add cards` searches through exactly this line rather than a second
+ * one: the same box, the same sheet, the same count.
+ *
+ * The sheet is mounted here, beside the line, for the page's reason: it is page state, opened from
+ * this button, and `Dialog`'s scrim is `fixed` so where it sits in the tree is not where it draws.
+ */
+export function SearchLine({ search, label }: { search: CardSearch; label: string }) {
+  const { query, marketplace } = search;
   const [sheetOpen, setSheetOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
   const filtered = search.activeCount;
@@ -62,8 +122,8 @@ export function SearchPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
         <div className="flex items-center gap-2">
           <input
             type="search"
-            aria-label="Search cards"
-            placeholder="Search cards"
+            aria-label={label}
+            placeholder={label}
             value={search.text}
             onChange={(e) => search.setText(e.target.value)}
             // 16px: below it, iOS and some Android browsers zoom the page on focus.
@@ -113,21 +173,6 @@ export function SearchPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
             box they typed it into. Draws nothing until there is something to say. */}
         <TagQueryRow search={search} />
       </div>
-
-      {query.isLoadingError ? (
-        <ReadError>The search could not be read.</ReadError>
-      ) : !query.isPending && items.length === 0 ? (
-        <DimNote>No cards match.</DimNote>
-      ) : (
-        <CardWall
-          label="Search results"
-          items={items}
-          onOpen={onOpen}
-          onNearEnd={more}
-          resetKey={search.searchKey}
-          footer={<NextPageRefused query={query} />}
-        />
-      )}
 
       <FiltersSheet
         open={sheetOpen}
