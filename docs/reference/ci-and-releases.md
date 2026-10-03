@@ -195,11 +195,17 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     tree its `rust-cache` (`workspaces: crates/card-scanner`) never saves.
   - **`Swatinem/rust-cache` takes `workspaces: ". -> src-tauri/target"`** in `ci.yml` and
     `release.yml` — where the lockfile is, then where the artifacts are.
-  - **Not yet proven by a run, as of this writing**: that `rust-cache` restores under the new
-    line, and that `tauri-action` still finds its bundles — it is invoked exactly as before,
-    and the portable step reads `src-tauri/target/release/mtg-grimoire.exe` as before. The
-    first is settled by the PR that lands this; the second only by the next release.
-  - **What stands in for that run is the action's own source, read at the pinned SHA**
+  - **Proven by a run on 2026-10-03: `tauri-action` still finds its bundles.** v0.40.0 was the
+    first release under the workspace; it is invoked exactly as before, the portable step read
+    `src-tauri/target/release/mtg-grimoire.exe` as before, and all five files were attached —
+    the NSIS installer, the MSI, the portable zip, the `.deb` and the AppImage, each within 1% of
+    v0.39.0's size. [light-app.md](light-app.md) §6.12 has the run and what it did not check.
+    **`rust-cache` restores under the new line in `ci.yml`** — read off the `rust
+    (windows-latest)` job of the CI run on that same merge (`Cache restored successfully`).
+    **In `release.yml` both legs reported `No cache found`**, which is a first release under a
+    new key and proves nothing either way: the release built cold, and the next one says
+    whether its own cache comes back.
+  - **What stood in for that run until then was the action's own source, read at the pinned SHA**
     (`1deb371b`, `src/utils.ts`). `getWorkspaceDir` walks up from the Tauri directory to the
     first `Cargo.toml` whose `[workspace]` lists it — the repository root now — and its default
     target is `<that>/target`, which would be wrong here. But `getTargetDir` looks first, on the

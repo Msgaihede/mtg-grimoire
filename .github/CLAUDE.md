@@ -128,12 +128,12 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `ci.yml` and `release.yml` alike. **This is the only job that tests the engine, and the only
   one that compiles it for Windows.** The layout was read off `cargo metadata` on the day
   (root at the repository, target under `src-tauri`), and `tauri dev` was launched under it
-  that day and built to `src-tauri/target/debug`. **`tauri-action`'s bundle lookup was read,
-  not run**: at the pinned SHA its `getTargetDir` walks up from the Tauri directory for a
-  `.cargo/config.toml` and takes `build.target-dir` relative to the directory that holds it,
-  ahead of its `<workspace>/target` default — so it looks in `src-tauri/target`, as before.
-  The cache line is first exercised by the PR that adds it, and the bundle lookup only by the
-  next release.
+  that day and built to `src-tauri/target/debug`. **`tauri-action`'s bundle lookup was read
+  first and has run since**: at the pinned SHA its `getTargetDir` walks up from the Tauri
+  directory for a `.cargo/config.toml` and takes `build.target-dir` relative to the directory
+  that holds it, ahead of its `<workspace>/target` default — so it looks in `src-tauri/target`,
+  as before. **v0.40.0 (2026-10-03) was the first release under the workspace and attached all
+  five files**; [light-app.md](../docs/reference/light-app.md) §6.12 has the run.
 - **The `core` job is a compile gate for `grimoire-core` on the two targets a desktop build
   never touches** (2026-10-02): a matrix over `wasm32-unknown-unknown` and
   `aarch64-linux-android` on `ubuntu-24.04`, each leg `cargo build --lib -p grimoire-core
@@ -206,8 +206,10 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   TOML into tagged nodes, so the obvious form matches nothing, and a non-match is a _warning_,
   not an error. `--locked` is what converts that silence into a failed check. **The file is
   the root `Cargo.lock` since 2026-10-02**, and `release-please-config.json`'s `path` moved
-  with it. What release-please does with a wrong path has not been measured; `--locked` on
-  the release PR catches a lockfile it failed to bump either way.
+  with it. **With the right path it bumps both members' entries**: v0.40.0's release PR moved
+  `grimoire-core` and `mtg-grimoire` together in the root lockfile, beside both manifests, and
+  the release built `--locked`. What release-please does with a wrong path has not been
+  measured; `--locked` on the release PR catches a lockfile it failed to bump either way.
 - **Every build leg runs `npm run scanner:assets` straight after `npm ci`, and a missing asset
   fails the leg on purpose** (2026-09-15). It downloads the card scanner's hash bundle and both
   OCR models from the prerelease **`scanner-bundle-v<FORMAT_VERSION>`** — `scanner-bundle-v3`
