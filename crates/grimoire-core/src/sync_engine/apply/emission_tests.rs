@@ -1777,7 +1777,8 @@ fn a_horizon_whose_claims_did_not_land_is_not_spent() {
     assert_eq!(copies(&b, "opt"), 2, "the step's claim was skipped as seen");
 }
 
-/// `597d19d6`: a claim is never let through for a row the page itself deletes.
+/// `597d19d6`: a claim is never let through for a row the page itself deletes
+/// — owed (design §11).
 #[test]
 fn a_claim_is_not_let_through_for_a_row_the_page_deletes() {
     let (a, b, d) = (paired("dev-a"), paired("dev-b"), paired("dev-d"));
@@ -1804,7 +1805,7 @@ fn a_claim_is_not_let_through_for_a_row_the_page_deletes() {
     );
 }
 
-/// `597d19d6`: nor for a row a delete took on an earlier page.
+/// `597d19d6`: nor for a row a delete took on an earlier page — owed (design §11).
 #[test]
 fn a_claim_is_not_let_through_for_a_row_deleted_before_its_page() {
     let (a, b, d) = (paired("dev-a"), paired("dev-b"), paired("dev-d"));
@@ -2060,7 +2061,8 @@ fn a_claim_let_through_raises_the_count_and_does_nothing_else() {
     assert_eq!((held(&a), held(&b)), (want.clone(), want));
 }
 
-/// `597d19d6`: a claim never makes a row, so a group that renames its row carries it along.
+/// `597d19d6`: a claim never makes a row, so a group that renames its row carries it along
+/// — owed (main's grain rename; Task 8b keeps it from over-counting).
 #[test]
 fn a_claim_let_through_does_not_outlive_its_row_renamed_in_the_same_page() {
     let (a, b, e) = (paired("dev-a"), paired("dev-b"), paired("dev-e"));
@@ -2096,7 +2098,8 @@ fn a_claim_let_through_does_not_outlive_its_row_renamed_in_the_same_page() {
     );
 }
 
-/// `597d19d6`: a claim is not let through for a row the page deletes, by an earlier stamp.
+/// `597d19d6`: a claim is not let through for a row the page deletes, by an earlier stamp
+/// — main's add-wins.
 #[test]
 fn a_claim_let_through_does_not_outlive_a_delete_in_the_same_page() {
     let (a, b, c, d) = (
@@ -2308,4 +2311,171 @@ fn a_claim_with_nothing_to_raise_does_not_spend_its_horizon() {
         3,
         "the add was marked taken in by nothing"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task 8b — a row merged away here is never built again (ledger ruling)
+// ---------------------------------------------------------------------------------------------
+
+/// #19's setup (`a_claim_let_through_does_not_outlive_its_row_renamed_in_the_same_page`), up to
+/// its page: a's regrade of `U_a` (LP, `+1`), a's emission, and e's NM twin under the lower uid,
+/// stamped below the regrade. Answers `(a, b, page)`, with a having taken e's twin in as #19 has
+/// it do; b has not been handed the page.
+///
+/// On b, e's insert folds first, meets `U_a` by grain while it is still NM and renames it to e's
+/// uid at 3; a's regrade then finds its uid gone and is dropped and recorded — `main`'s answer, b
+/// at 3 against a's 4 — and the drop opens the gap.
+fn renamed_in_one_page() -> (Connection, Connection, Vec<Op>) {
+    let (a, b, e) = (paired("dev-a"), paired("dev-b"), paired("dev-e"));
+    let (mut ma, mut me) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    a.execute("UPDATE collection_entries SET condition = 'LP'", [])
+        .unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let regrade = since(&a, &mut ma);
+    e.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,sync_uid,
+             created_at,updated_at)
+         VALUES ('bolt','lea','1','en','nonfoil','NM',1,'00000000000000000000000000000000',
+                 1700000000,1700000000)",
+        [],
+    )
+    .unwrap();
+    let twin = since(&e, &mut me);
+    assert_eq!(twin.len(), 1);
+
+    let mut page = regrade.clone();
+    page.extend(whole(&a, "dev-a"));
+    page.extend(twin.clone());
+    apply(&a, &twin).unwrap();
+    (a, b, page)
+}
+
+/// Ledger ruling (Task 8b): after #19, a's `U_a` lives on b inside e's row. A later emission from
+/// a names `U_a` at LP 3, and b holds no row of that uid and never wrote one — so §6 read it as a
+/// row never held and built it, counting a's two original copies a second time: 6 on b against
+/// a's 4. A uid this device merged into another row is never built again.
+#[test]
+fn a_later_emission_never_builds_a_row_a_grain_rename_merged_away() {
+    let (a, b, page) = renamed_in_one_page();
+    apply(&b, &page).unwrap();
+    assert_eq!((qty(&b), copies(&a, "bolt")), ((1, 3), 4), "#19's answer");
+
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    assert_eq!(
+        qty(&b),
+        (1, 3),
+        "a later emission built the row b merged into e's, beside the survivor"
+    );
+}
+
+/// Ledger ruling (Task 8b): the same page handed back. The drop of a's regrade opened the gap,
+/// which cleared what a's claim for `U_a` had *passed* on the first delivery (the row was still
+/// here when it was decided), so the second delivery decides it again — and found no `U_a` and no
+/// local op naming it, and built it at LP 3 beside the survivor, 6 copies.
+#[test]
+fn a_row_merged_away_is_not_built_when_its_page_comes_back_across_the_gap() {
+    let (_a, b, page) = renamed_in_one_page();
+    apply(&b, &page).unwrap();
+    assert!(
+        emission::gap_open(&b).unwrap(),
+        "the dropped regrade opened no gap"
+    );
+
+    apply(&b, &page).unwrap();
+    assert_eq!(
+        qty(&b),
+        (1, 3),
+        "the page handed back built the row b merged into e's, beside the survivor"
+    );
+}
+
+/// Ledger ruling (Task 8b), the fold site: a's binder delete reaches b, where b has filed copies
+/// of its own into the binder, and the re-homing (`rehome`) folds them onto the root copy a made,
+/// the survivor wearing the lower of the two uids. a then regrades its root copy and re-baselines
+/// before it hears of b's copies.
+///
+/// Where the root copy's uid sorts higher, b retired it into its own copy's: a's claim then names a
+/// row b merged away, its grain (LP) meets no twin, and building it counted a's one copy a second
+/// time — 4 on b against 3 on a. Where the root copy's uid sorts lower, b's own copy's uid is the
+/// one retired and no claim names it, so that direction pins the mark alone.
+fn a_later_emission_never_builds_a_row_a_folder_delete_folded_away(root_lower: bool) {
+    const LOW: &str = "00000000000000000000000000000000";
+    const HIGH: &str = "ffffffffffffffffffffffffffffffff";
+    let (root, filed) = if root_lower { (LOW, HIGH) } else { (HIGH, LOW) };
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    set_clock(&a, STAMP);
+    let bin = folder(&a, "Binder", SECOND);
+    a.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,sync_uid,
+             created_at,updated_at)
+         VALUES ('bolt','lea','1','en','nonfoil','NM',1,?1,?2,?2)",
+        rusqlite::params![root, SECOND],
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let b_bin: i64 = b
+        .query_row(
+            "SELECT id FROM collection_folders WHERE name = 'Binder'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    b.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+             sync_uid,created_at,updated_at)
+         VALUES ('bolt','lea','1','en','nonfoil','NM',2,?1,?2,?3,?3)",
+        rusqlite::params![b_bin, filed, SECOND],
+    )
+    .unwrap();
+
+    crate::collection_folders::delete_folder(&a, bin).unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let survivor = |conn: &Connection| -> String {
+        conn.query_row("SELECT sync_uid FROM collection_entries", [], |r| r.get(0))
+            .unwrap()
+    };
+    assert_eq!(
+        (qty(&b), survivor(&b)),
+        ((1, 3), LOW.to_owned()),
+        "the re-homing did not fold b's copies onto the root's under the lower uid"
+    );
+
+    a.execute("UPDATE collection_entries SET condition = 'LP'", [])
+        .unwrap();
+    let page = [since(&a, &mut ma), whole(&a, "dev-a")].concat();
+    let report = apply(&b, &page).unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(
+        (copies(&a, "bolt"), copies(&b, "bolt")),
+        (3, 3),
+        "root lower {root_lower}: a's claim built the row b folded away, beside the survivor"
+    );
+    assert!(
+        emission::retired(&b, "collection_entries", HIGH).unwrap(),
+        "root lower {root_lower}: the fold recorded no mark for the uid it dropped"
+    );
+    assert_eq!(
+        report.dropped,
+        usize::from(!root_lower),
+        "root lower {root_lower}: a's regrade of a row b merged away takes the op path, finds no \
+         row and is dropped and recorded — main's answer — and does not vanish as carried by a \
+         claim that built nothing: {report:?}"
+    );
+}
+
+#[test]
+fn a_later_emission_never_builds_a_root_copy_a_folder_delete_folded_away() {
+    a_later_emission_never_builds_a_row_a_folder_delete_folded_away(false);
+}
+
+#[test]
+fn a_folder_delete_that_folds_a_filed_copy_away_records_its_uid() {
+    a_later_emission_never_builds_a_row_a_folder_delete_folded_away(true);
 }

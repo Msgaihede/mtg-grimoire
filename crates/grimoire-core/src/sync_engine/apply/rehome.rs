@@ -20,6 +20,7 @@
 //! makes late, or a deck's group the deciding pass itself lands — and left only the rows it never
 //! mentioned for [`rehome`] (§3.3, as amended at the final review).
 
+use crate::sync_engine::emission;
 use rusqlite::Connection;
 
 /// Every `ON DELETE CASCADE` key into a folder table, as `(child table, column, parent table)`:
@@ -143,6 +144,12 @@ fn uid_of(conn: &Connection, table: &str, id: i64) -> Result<Option<String>, Str
 /// Give the survivor of a fold the moved row's uid where that one is lower, or where the survivor
 /// has none. **After the fold and never before**: the moved row is gone by now, so its uid is free
 /// and `idx_{table}_uid` has nothing to refuse.
+///
+/// **Whichever uid the survivor does not wear is retired** ([`emission::retire`], design
+/// 2026-10-03 §6) — the survivor's own where it adopts the moved one, the moved one where it keeps
+/// its own, and neither where the uid involved is absent. Its copies are the survivor's now, so a
+/// later claim naming it must never build it again. Inside the caller's savepoint, so a delete
+/// rolled back leaves no mark.
 fn adopt_lower(
     conn: &Connection,
     table: &str,
@@ -157,12 +164,19 @@ fn adopt_lower(
         return Ok(());
     };
     let survivor = uid_of(conn, table, kept)?;
-    if survivor.as_deref().is_none_or(|s| moved_uid.as_str() < s) {
-        conn.execute(
-            &format!("UPDATE {table} SET sync_uid = ?1 WHERE id = ?2"),
-            rusqlite::params![moved_uid, kept],
-        )
-        .map_err(|e| e.to_string())?;
+    let retired = match survivor {
+        Some(own) if own.as_str() <= moved_uid.as_str() => Some((moved_uid, own)),
+        own => {
+            conn.execute(
+                &format!("UPDATE {table} SET sync_uid = ?1 WHERE id = ?2"),
+                rusqlite::params![moved_uid, kept],
+            )
+            .map_err(|e| e.to_string())?;
+            own.map(|own| (own, moved_uid))
+        }
+    };
+    match retired {
+        Some((uid, into)) => emission::retire(conn, table, &uid, &into).map_err(|e| e.to_string()),
+        None => Ok(()),
     }
-    Ok(())
 }

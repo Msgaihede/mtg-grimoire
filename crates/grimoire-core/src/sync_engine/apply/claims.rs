@@ -71,11 +71,15 @@ pub(super) fn claim(op: &Op) -> Option<&Emission> {
 /// ordinary op carries, which no well-formed peer sends.
 ///
 /// **Then §6's row table.** An inert emission's claims are skipped as seen. An active claim is
-/// skipped — *passed* — on a row held here under its uid, unless the emission resumed or this
-/// device has a gap, when it goes to the fold as the floor; elsewhere it goes to the fold to build
-/// or merge. A put an active emission's horizon covers takes the op path where its row is held
-/// here or this device's own log names it (the tombstone face), and is dropped as carried by the
-/// claim where it is not.
+/// *passed* — skipped, never built and never floored, whether or not the emission resumed or a gap
+/// is open — where this device merged its row into another ([`emission::retire`]): the row's
+/// copies live in the survivor, and building it again would count them twice. It is passed too on
+/// a row held here under its uid, unless the emission resumed or this device has a gap, when it
+/// goes to the fold as the floor; elsewhere it goes to the fold to build or merge. A put an active
+/// emission's horizon covers takes the op path where its row is held here, where this device's own
+/// log names it (the tombstone face), or where its row was merged here into another — `main`'s
+/// rules, which find no row there — and is dropped as carried by the claim where none of those
+/// holds.
 ///
 /// **Containment, across every row:** a covered put is skipped when the page carries its row's
 /// claim, from an emission covering it, that has already *written* the row — read from the
@@ -151,6 +155,13 @@ pub(super) fn decide(
             out.skip.insert(i);
             continue;
         }
+        // §6: a row this device merged into another lives in the survivor, so building it again
+        // would count its copies twice. Passed — never built and never floored, resumed or gap.
+        if retired(conn, &op.table, &op.uid)? {
+            out.skip.insert(i);
+            out.passed.push((key, em.i));
+            continue;
+        }
         // §6: on a row held here under its uid the log brings everything, so the claim writes
         // nothing — unless the emission resumed or this device has a gap, when it is the floor.
         if row_here(conn, &op.table, &op.uid)? && !(page.resumed || gap) {
@@ -210,8 +221,13 @@ pub(super) fn decide(
             out.skip.insert(i);
         } else if !active {
             continue; // an inert emission drops nothing: the older rules judge the put
-        } else if row_here(conn, &op.table, &op.uid)? || named_here(conn, &op.table, &op.uid)? {
-            out.keep.insert(i); // the op path: held here, or the tombstone face
+        } else if row_here(conn, &op.table, &op.uid)?
+            || named_here(conn, &op.table, &op.uid)?
+            || retired(conn, &op.table, &op.uid)?
+        {
+            // The op path: held here, the tombstone face, or a row merged here into another —
+            // `main`'s rules, which find no row for that last and drop it as they always have.
+            out.keep.insert(i);
         } else {
             out.skip.insert(i); // the claim carries it: never held, or a grain twin's row
         }
@@ -285,6 +301,11 @@ fn row_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
     ))
     .and_then(|mut stmt| stmt.query_row([uid], |r| r.get(0)))
     .map_err(sql)
+}
+
+/// Whether this device merged the row into another one ([`emission::retire`]).
+fn retired(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
+    emission::retired(conn, table, uid).map_err(sql)
 }
 
 /// Whether this device's own op log names the row — it held it, and perhaps deleted it.

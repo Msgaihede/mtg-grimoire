@@ -1,5 +1,5 @@
 //! What a device remembers about baseline emissions — the baseline claim design of 2026-10-03
-//! (`docs/superpowers/specs/2026-10-03-baseline-claim-emissions-design.md`), §4, §5, §7, §8.
+//! (`docs/superpowers/specs/2026-10-03-baseline-claim-emissions-design.md`), §4–§8.
 //!
 //! **Every mark is a `sync_state` key, and none of them is `sync_peers`.** A claim is a statement
 //! about a row, not a place in its emitter's stream, so what remembers that it was consumed is a
@@ -10,6 +10,10 @@
 //! taken mark and what each record says its claims *passed*, keeps what they *wrote*, and marks
 //! each record as from before the gap ([`open_gap`]), so the next emission from every emitter is
 //! read whole and only one recorded after the gap can be taken.
+//!
+//! **One mark is about rows, not about any log, and no gap touches it**: a uid `apply` merged into
+//! another row ([`retire`]), so that a claim naming it is never built again beside the row that
+//! holds its copies (§6).
 //!
 //! **A value that does not parse reads as absent.** Absent makes an emission active, which is
 //! more work and never less correctness, so a hand-edited or truncated mark costs a re-read,
@@ -35,6 +39,8 @@ pub const CUT: &str = "emissions_since";
 const TAKEN: &str = "taken@";
 const RECORDS: &str = "emission@";
 const CARRIED: &str = "carried@";
+/// `retired@<table>/<uid>` = the survivor's uid: a row merged here into another ([`retire`]).
+const RETIRED: &str = "retired@";
 /// How many emissions are remembered per emitter — those in flight, and the completed one whose
 /// record [`take`] keeps, which takes one of the slots; any of them may be marked as from before a
 /// gap ([`Record::before_gap`]). An emission older than these is one a newer emission of the same
@@ -355,6 +361,31 @@ pub fn gap_open(conn: &Connection) -> rusqlite::Result<bool> {
     Ok(get(conn, GAP)?.is_some())
 }
 
+/// `uid` of `table` was merged here into another row, whose uid is `survivor` (§6's merged-away
+/// row). `apply` does it in two places: a grain match renames the row it finds to the lower uid,
+/// or to the incoming one over a row the page deletes (`adopt_uid`), and a folder delete's
+/// re-homing folds a row onto its root twin, one of the two uids going (`rehome`).
+///
+/// **The retired uid's copies live in the survivor now**, and nothing else here can tell that
+/// apart from a row never held: no row wears the uid and this device's own log never named it.
+/// So without the mark a later active claim for it — a later emission, or a page handed back across
+/// the gap its dropped edits opened — built it again, and counted those copies twice: 6 on a
+/// device whose emitter held 4. That is the direction §8.2 forbids.
+///
+/// **No gap clears it**, and nor does leaving a group or forgetting a log position: it is a fact
+/// about this device's rows, not about a log. Keyed by the op's table name, which is `apply`'s
+/// `Meta::table` for every synced table.
+pub fn retire(conn: &Connection, table: &str, uid: &str, survivor: &str) -> rusqlite::Result<()> {
+    put(conn, &format!("{RETIRED}{table}/{uid}"), survivor)
+}
+
+/// Whether `uid` of `table` was merged here into another row ([`retire`]). Asked of every active
+/// claim a page carries, so the statement is cached.
+pub fn retired(conn: &Connection, table: &str, uid: &str) -> rusqlite::Result<bool> {
+    conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM sync_state WHERE key = ?1)")?
+        .query_row([format!("{RETIRED}{table}/{uid}")], |r| r.get(0))
+}
+
 /// Close the gap once every device on this group's roster that this one holds a watermark for
 /// has a `taken@` mark again (§7). The roster and not `sync_peers` alone: a watermark outlives
 /// its group, and a peer of an old group never emits here again.
@@ -620,6 +651,37 @@ mod tests {
         assert!(
             !gap_open(&conn).unwrap(),
             "dev-z is on no roster and holds nothing open"
+        );
+    }
+
+    /// Task 8b: a uid merged here into another row reads back by its table and its uid, and no
+    /// gap clears it — it is a fact about this device's rows, not about a log.
+    #[test]
+    fn a_retired_uid_reads_back_and_survives_a_gap() {
+        let conn = db();
+        assert!(
+            !retired(&conn, "collection_entries", "u1").unwrap(),
+            "a uid never merged here reads as retired"
+        );
+        retire(&conn, "collection_entries", "u1", "u0").unwrap();
+        assert!(retired(&conn, "collection_entries", "u1").unwrap());
+        assert_eq!(
+            value(&conn, "retired@collection_entries/u1").as_deref(),
+            Some("u0"),
+            "the mark names its survivor"
+        );
+        assert!(
+            !retired(&conn, "wishlist_entries", "u1").unwrap(),
+            "another table's row of the same uid"
+        );
+        assert!(
+            !retired(&conn, "collection_entries", "u0").unwrap(),
+            "the survivor"
+        );
+        open_gap(&conn).unwrap();
+        assert!(
+            retired(&conn, "collection_entries", "u1").unwrap(),
+            "a gap cleared the mark"
         );
     }
 

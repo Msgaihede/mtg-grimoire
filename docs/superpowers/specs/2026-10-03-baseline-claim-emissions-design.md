@@ -203,7 +203,22 @@ since", asked of the generation, never of a stamp.
 | **here, under the claim's uid** | **op path**: applied as the delta it is, at its own stamp | **passed — writes nothing**, unless the emission `resumed` or this device has an open gap (§7), when it is a **floor** over the op path: `max(local + Σ deltas, claim)` |
 | not here under its uid, and **this device's own `sync_ops` names it** (it held and deleted it) | **op path** — the tombstone face | **builds** the row: `insert_row`'s `max(Σ deltas, claim)`, existence decided by add-wins at the puts' own stamps |
 | not here under its uid, **a grain twin under another uid** | **dropped**: the claim carries it, and the two rows are independent — §8's `max`, never a sum | **merges** by `max`, adopting `min(uid)` as today |
+| not here under its uid, **merged here into another row** (`retired@`) | **op path** — main's rules, where it finds no row | **passed — never builds, never floors** |
 | **not here at all**, never held | **dropped**: the claim carries it | **builds** — §8.2's accepted under-count, unchanged |
+
+**Why a row merged here into another is passed** (amended 2026-10-03, Task 8b). `apply` retires a
+local row's uid in two places: a grain match renames the row it finds to the lower uid, or to the
+incoming one over a row the page deletes (`adopt_uid`), and a folder delete's re-homing folds a row
+onto its root twin, one uid going (`rehome`). Each records `retired@<table>/<uid>`, naming the
+survivor, inside the savepoint of the write that merged it, so a write rolled back leaves no mark.
+**The retired uid's copies live in the survivor, so building
+it again counts them twice** — §8.2's forbidden direction. Without the mark nothing told it from a
+row never held: no row wears the uid and this device's own log never named it. Measured on the
+narrow fix's renamed-row scenario: a's regrade raced e's lower-uid twin on b, b merged a's row into
+e's at 3, and the next active claim for a's uid — a later emission, or the page handed back across
+the gap the dropped regrade opened — built it at LP 3 beside the survivor, **6 on b against a's 4**.
+The mark is asked ahead of the held-row arm, and no gap clears it: it is a fact about this device's
+rows, not about a log.
 
 **And one rule across every row: a covered put is skipped when the page carries a claim for its row,
 from an emission whose horizon covers it, that has already *written* the row.** That is a re-delivery
@@ -337,6 +352,10 @@ an upgraded emitter behaves as today.
 - **A device that resumed before this build** sends `since: 0` and no `resumed`, so its first
   emission after the upgrade writes nothing on rows held elsewhere; edits it made while out of a group
   before the upgrade, and never re-emitted, stay where they are.
+- **A grain rename that races a regrade keeps `main`'s under-count.** A third device's twin, stamped
+  below the regrade, renames the row here to its own lower uid; the regrade then finds its uid gone
+  and is dropped, and the claim for the merged-away uid is passed for good (§6's `retired@` row) —
+  so the emitter holds the regrade and this device never does. Under, never over.
 - Each goes to sync.md's *What is still owed* with its scenario.
 
 ## 12. Constraints, and how each is met
@@ -345,6 +364,7 @@ an upgraded emitter behaves as today.
 | --- | --- |
 | The baseline design §9.1: the horizon is a filter on one batch and never a watermark write | unchanged — the horizon still only filters, claims write no watermark, and `carried` feeds an emitter's own horizon, never `sync_peers` (§5, §8) |
 | §8.2's accepted under-count for a row never held is not fixed by accident | §6's last row keeps the drop, and the under-count's test stays as written |
+| No schema rung | every mark is a `sync_state` key: `logging_since` and `logging_resumed` (§4), `emission@<device>` and `taken@<device>` (§5), `retired@<table>/<uid>` (§6), `gap` (§7), `carried@<device>` (§8), `emissions_since` (§10) |
 | The sync client moves to `crates/grimoire-core` in #761 step 6b | 6b has merged; every client line — the `chunk[0]` keys, the pending check, the held sender's ops passed to `apply`, the unreadable gap — is written against the moved file (§13) |
 | Decide by experiment | §1's table is measured; every row of it and of the narrow fix's matrix becomes a red test before any code moves (§14) |
 

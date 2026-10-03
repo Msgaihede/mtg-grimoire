@@ -115,6 +115,7 @@
 //! [`Waiting::Release`]. [sync.md](../../../docs/reference/sync.md) is the record.
 
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
+use crate::sync_engine::emission;
 use crate::sync_engine::hlc::Hlc;
 use crate::sync_engine::merge::{fold, Horizon, Kind, Op, Resolved};
 use rusqlite::types::Value as Sql;
@@ -1768,6 +1769,11 @@ struct Found {
 /// Give the found row the uid [`find_row`] decided on — **inside the group's savepoint, and only
 /// once nothing else here wears it.** Taken, the group is a row this database cannot build: two
 /// local rows each hold half of what the op describes, and no uid adoption reconciles that.
+///
+/// **The uid it gives up is retired** ([`emission::retire`], design 2026-10-03 §6): its copies
+/// live under the new uid now, so a later claim naming the old one must never build it again.
+/// Written inside the same savepoint, so a group rolled back — unbuildable, or a delete waiting
+/// for its pass — and a pass rolled back leave no mark.
 fn adopt_uid(conn: &Connection, meta: &Meta, found: &Found) -> Result<(), Why> {
     let Some((from, to)) = &found.rename else {
         return Ok(());
@@ -1792,8 +1798,8 @@ fn adopt_uid(conn: &Connection, meta: &Meta, found: &Found) -> Result<(), Why> {
         ),
         [to, from],
     )
-    .map(|_| ())
-    .map_err(unbuildable)
+    .map_err(unbuildable)?;
+    emission::retire(conn, meta.table, from, to).map_err(unbuildable)
 }
 
 /// This device's own ops for a row, out of `sync_ops`.
