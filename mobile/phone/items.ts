@@ -1,13 +1,15 @@
 import { FINISH_LABEL, isFinish, playedFinish, soleFinish, type Finish } from "@/lib/finish";
-import type { CardSummary, CollectionRow, DeckCard, WishRow } from "@/lib/ipc";
+import type { CollectionTile } from "@/features/collection/collectionWall";
+import type { CardSummary, DeckCard, WishRow } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import type { WallItem } from "./CardWall";
+import { wishPrinting } from "./WishPrinting";
 
 /**
  * Each of the phone face's lists, turned into what the wall draws.
  *
- * Four DTOs and one tile. The rows are the desktop's own — the same commands answer both faces —
+ * Three DTOs, the collection's tile, and one wall item. The rows are the desktop's own — the same commands answer both faces —
  * so everything a list knows about a card arrives here and what the wall needs is picked out once.
  *
  * **Which finish a tile is marked with is the desktop's rule for that list, not one rule for all
@@ -62,27 +64,40 @@ export function searchItem(card: CardSummary, currency: Currency): WallItem {
   };
 }
 
-export function collectionItem(row: CollectionRow, currency: Currency): WallItem {
-  const name = row.name ?? "Unknown card";
+/**
+ * A collection **tile** — `collectionWall.ts`'s fold of the rows, the desktop wall's own: one
+ * printing in one finish in one folder, whatever grades and languages its copies are in. So two
+ * rows of one etched printing are one tile counting both, and one name a screen reader can tell
+ * from every other; the wall says the copies.
+ */
+export function collectionItem(tile: CollectionTile, currency: Currency): WallItem {
   // The finish this copy *is* — the row's own column, not a fact about its printing.
-  const finish = marked(row.finish);
+  const finish = marked(tile.finish);
   return {
-    key: String(row.id),
-    cardId: row.cardId,
-    name,
-    rarity: row.rarity,
+    key: tile.key,
+    cardId: tile.id,
+    name: tile.name,
+    rarity: tile.rarity,
     chin: {
-      setCode: row.setCode,
-      collectorNumber: row.collectorNumber,
-      printingTitle: row.setName,
+      setCode: tile.setCode,
+      collectorNumber: tile.collectorNumber,
+      printingTitle: tile.setName,
     },
     finish,
-    money: formatPrice(row.unitPrice, currency),
-    count: row.quantity,
-    pressLabel: labelOf(name, printingWords(row.setCode, row.collectorNumber), finish),
+    money: formatPrice(tile.unitPrice, currency),
+    count: tile.copies,
+    pressLabel: labelOf(tile.name, printingWords(tile.setCode, tile.collectorNumber), finish),
   };
 }
 
+/**
+ * A wish: one tile per wish, the desktop wall's grain and the counts' (`ShelfCount.tiles`).
+ *
+ * **The picture is the printing the wish is drawn as** (`artCardId`): a pinned wish's own, the
+ * newest printing for a wish for *any* printing, and nothing at all for a wish whose card the
+ * corpus has lost — the one row with no printing to show or to open, which the wall then draws as
+ * no control rather than as a press that does nothing.
+ */
 export function wishItem(row: WishRow, currency: Currency): WallItem {
   // A wish names a printing only when it has both halves; a wish for *any* printing has neither,
   // and is drawn as one particular printing whose set it must not claim.
@@ -91,12 +106,13 @@ export function wishItem(row: WishRow, currency: Currency): WallItem {
   const finish = marked(row.preferredFinish);
   return {
     key: String(row.id),
-    cardId: row.cardId ?? row.artCardId,
+    cardId: row.artCardId,
     name: row.name,
     rarity: row.rarity,
-    chin: pinned
-      ? { setCode: row.setCode as string, collectorNumber: row.collectorNumber as string }
-      : { printing: "Any printing", printingTitle: null },
+    // The desktop wall's caption — the printing, and the `elsewhere` mark beside it. No title:
+    // a wish carries no set name, and for a wish for any printing the name of the printing it is
+    // drawn as would contradict the words.
+    chin: { printing: wishPrinting(row), printingTitle: null },
     finish,
     money: formatPrice(row.unitPrice, currency),
     count: row.quantity,

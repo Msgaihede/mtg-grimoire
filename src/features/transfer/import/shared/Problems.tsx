@@ -13,7 +13,7 @@
 import type { JSX } from "react";
 import { plural } from "@/lib/counts";
 import type { HintMiss, UnmatchedLine } from "../destinations/deck";
-import { ProblemList } from "../destinations/DeckPreview";
+import { ProblemList } from "../destinations/DeckPreviewBody";
 import type { ParseIssue } from "../parse";
 
 export function ImportProblems({

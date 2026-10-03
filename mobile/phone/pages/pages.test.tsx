@@ -7,7 +7,6 @@ vi.mock("@tauri-apps/api/event", () => import("../../../.storybook/fake/event"))
 vi.mock("@tauri-apps/api/window", () => import("../../../.storybook/fake/window"));
 
 import { registerCommands } from "../../../.storybook/fake/core";
-import { ipc } from "@/lib/ipc";
 import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 
@@ -199,173 +198,14 @@ describe("the card sheet", () => {
   });
 });
 
-describe("Decks", () => {
-  it("lists the reader's decks, each a link to its own page", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks" });
-    const list = await screen.findByRole("list", { name: "Your decks" });
-    const first = await waitFor(() => within(list).getAllByRole("link")[0], SETTLE);
-    // The whole computed name, never its two halves apart: a name and a caption with nothing
-    // between them read as `Modern GoodstuffModern · 60 cards`, and each half is still found.
-    expect(first).toHaveAccessibleName(/^Modern Goodstuff Modern · \d+ cards$/);
-    // A real address, so a middle click and "copy link" have something to act on.
-    expect(first).toHaveAttribute("href", "/decks/1");
-  });
+// Decks — the gallery and a deck — are `decks.test.tsx`'s.
 
-  it("opens a deck as a wall of its cards, with the deck's name as the title", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks" });
-    const list = await screen.findByRole("list", { name: "Your decks" });
-    const first = await waitFor(() => within(list).getAllByRole("link")[0], SETTLE);
-
-    await userEvent.click(first);
-
-    expect(window.location.pathname).toBe("/decks/1");
-    const wall = await screen.findByRole("list", { name: "Cards in this deck" }, SETTLE);
-    // Four copies, said in the tile's name by the wall.
-    expect(
-      await within(wall).findByRole("button", { name: "Counterspell, MH2 267, 4 copies" }, SETTLE),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 2, name: "Modern Goodstuff" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Back to decks" })).toHaveAttribute("href", "/decks");
-  });
-
-  it("draws no title until the deck has a name to put in it", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks/999999" });
-    expect(await screen.findByText("That deck is gone.", undefined, SETTLE)).toBeInTheDocument();
-    // An empty heading is a stop a screen reader lands on and hears nothing at.
-    expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
-  });
-
-  it("says so when the deck is gone, and Back to decks leaves it", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks/999999" });
-    expect(await screen.findByText("That deck is gone.", undefined, SETTLE)).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).toBeNull();
-
-    await userEvent.click(screen.getByRole("link", { name: "Back to decks" }));
-
-    expect(window.location.pathname).toBe("/decks");
-    expect(await screen.findByRole("list", { name: "Your decks" })).toBeInTheDocument();
-  });
-
-  it("says the deck could not be read when the read fails, not that the deck is gone", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    registerCommands({ deck_get: refused() });
-    await userEvent.click(tab("Decks"));
-    const list = await screen.findByRole("list", { name: "Your decks" });
-
-    await userEvent.click(await waitFor(() => within(list).getAllByRole("link")[0], SETTLE));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("That deck could not be read.");
-    expect(screen.queryByText("That deck is gone.")).toBeNull();
-  });
-
-  it("says so when the decks cannot be read", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    registerCommands({ deck_list: refused() });
-
-    await userEvent.click(tab("Decks"));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("Your decks could not be read.");
-  });
-
-  it("says so, and offers nothing, when there are no decks", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks", fake: { seed: "empty" } });
-    expect(await screen.findByText("No decks", undefined, SETTLE)).toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Your decks" })).toBeNull();
-  });
-});
-
-describe("Collection", () => {
-  it("draws the cards on the reader's open shelves", async () => {
-    renderPhone(<PhoneFace />, { path: "/collection" });
-    const wall = await screen.findByRole("list", { name: "Your collection" });
-    expect(
-      await within(wall).findByRole("button", { name: "Lightning Bolt, 2X2 117, 4 copies" }, SETTLE),
-    ).toBeInTheDocument();
-    // Two grades of one etched printing are two rows, and so two tiles with one name.
-    expect(within(wall).getAllByRole("button", { name: "Lightning Bolt, STA 105, Etched" })).toHaveLength(2);
-    // The copies a deck holds are on that deck's shelf, which starts shut.
-    expect(within(wall).queryByRole("button", { name: /^Counterspell, MH2 267/ })).toBeNull();
-  });
-
-  it("says so when the collection is empty", async () => {
-    renderPhone(<PhoneFace />, { path: "/collection", fake: { seed: "empty" } });
-    expect(await screen.findByText("Nothing in your collection yet.", undefined, SETTLE)).toBeInTheDocument();
-  });
-
-  it("does not call a collection empty when every copy is on a folded shelf", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    // Every row but the three a deck's own group holds — `MH2 267` and `MH2 138` in deck 1's,
-    // `C21 263` in deck 2's. Those shelves start shut, so the wall has nothing to draw.
-    await ipc.collectionRemoveMany([1, 2, 3, 6, 8, 9, 10, 11, 12]);
-
-    await userEvent.click(tab("Collection"));
-
-    expect(await screen.findByText(/on folded shelves/, undefined, SETTLE)).toBeInTheDocument();
-    expect(screen.queryByText("Nothing in your collection yet.")).toBeNull();
-  });
-
-  it("says so when the collection cannot be read", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    registerCommands({ collection_list: refused() });
-
-    await userEvent.click(tab("Collection"));
-
-    expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your collection could not be read.",
-    );
-  });
-});
-
-describe("Wishlist", () => {
-  it("draws the wishes on the reader's open shelves", async () => {
-    renderPhone(<PhoneFace />, { path: "/wishlist" });
-    const wall = await screen.findByRole("list", { name: "Your wishlist" });
-    expect(await within(wall).findByRole("button", { name: "Sol Ring, any printing" }, SETTLE)).toBeInTheDocument();
-    // The finish a wish asks for is part of what it is called.
-    expect(
-      within(wall).getByRole("button", { name: "Ragavan, Nimble Pilferer, MH2 138, Foil" }),
-    ).toBeInTheDocument();
-    // One printing wished for at the root and again in a folder: two wishes, one name.
-    expect(within(wall).getAllByRole("button", { name: "Rhystic Study, PCY 45" })).toHaveLength(2);
-  });
-
-  it("says so when the wishlist is empty", async () => {
-    renderPhone(<PhoneFace />, { path: "/wishlist", fake: { seed: "empty" } });
-    expect(await screen.findByText("Nothing on your wishlist yet.", undefined, SETTLE)).toBeInTheDocument();
-  });
-
-  it("does not call a wishlist empty when every wish is on a folded shelf", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    // The eight wishes the reader filed themselves. What is left is the five a deck manages,
-    // in that deck's own folder — a shelf that starts shut.
-    for (const id of [1, 2, 3, 4, 5, 6, 7, 8]) await ipc.wishlistRemove(id);
-
-    await userEvent.click(tab("Wishlist"));
-
-    expect(await screen.findByText(/on folded shelves/, undefined, SETTLE)).toBeInTheDocument();
-    expect(screen.queryByText("Nothing on your wishlist yet.")).toBeNull();
-  });
-
-  it("says so when the wishlist cannot be read", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    registerCommands({ wishlist_list: refused() });
-
-    await userEvent.click(tab("Wishlist"));
-
-    expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your wishlist could not be read.",
-    );
-  });
-});
-
-describe("Scanner and Settings", () => {
+// The Collection and the Wishlist have suites of their own since steps 3.2 and 3.3 —
+// `CollectionPage.test.tsx` and `WishlistPage.test.tsx`. Settings has one since step 3.7 —
+// `SettingsPage.test.tsx`.
+describe("Scanner", () => {
   it("says what is coming, and opens no camera", () => {
     renderPhone(<PhoneFace />, { path: "/scanner" });
     expect(screen.getByText(/The scanner arrives in a later phase/)).toBeInTheDocument();
-  });
-
-  it("names the edition", () => {
-    renderPhone(<PhoneFace />, { path: "/settings" });
-    expect(screen.getByText(/light edition/i)).toBeInTheDocument();
   });
 });

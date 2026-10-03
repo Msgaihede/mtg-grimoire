@@ -5,6 +5,7 @@ import {
   folderDescendants,
   folderLevel,
   lockedFolderIds,
+  trailOf,
   type FolderLike,
 } from "./folderTree";
 import type { CollectionFolder } from "./ipc";
@@ -261,5 +262,34 @@ describe("folderLevel", () => {
     const tree = buildFolderTree([folder(1, null, "Commander"), folder(5, 99, "Odds")], []);
 
     expect(folderLevel(tree, null).map((n) => n.folder.name)).toEqual(["Commander", "Odds"]);
+  });
+});
+
+describe("trailOf", () => {
+  const folders = [
+    folder(1, null, "Binder"),
+    folder(2, 1, "Trade binder"),
+    folder(3, 2, "Foils"),
+    folder(4, null, "Someday"),
+  ];
+  const names = (trail: readonly FolderLike[]) => trail.map((f) => f.name);
+
+  it("walks from the root down to the folder, without the root", () => {
+    expect(names(trailOf(folders, 3))).toEqual(["Binder", "Trade binder", "Foils"]);
+    expect(names(trailOf(folders, 4))).toEqual(["Someday"]);
+  });
+
+  it("answers the empty trail at the root and for a folder the list does not carry", () => {
+    expect(trailOf(folders, null)).toEqual([]);
+    expect(trailOf(folders, 99)).toEqual([]);
+  });
+
+  it("stops at a parent the list does not carry, as though the folder sat at the root", () => {
+    expect(names(trailOf([folder(5, 99, "Odds")], 5))).toEqual(["Odds"]);
+  });
+
+  it("terminates on a cycle", () => {
+    const loop = [folder(1, 2, "A"), folder(2, 1, "B")];
+    expect(names(trailOf(loop, 1))).toEqual(["B", "A"]);
   });
 });

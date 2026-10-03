@@ -8,12 +8,11 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { useMutation, useQuery, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useMutation, useQuery } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, Eraser, FolderInput, TrendingDown, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import type { MenuItem } from "@/components/menu/types";
 import { useContextMenu } from "@/components/menu/useContextMenu";
-import { Figure, FigureRow } from "@/components/Figure";
 import { UndoNotice } from "@/components/UndoNotice";
 import { buildCardMenu, type CardMenuTarget } from "@/features/card/cardMenu";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
@@ -37,9 +36,9 @@ import { wishlistDestination } from "@/features/transfer/import/destinations/Wis
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { SearchCardDrag } from "@/features/search/searchCardDrag";
-import { FilterBar, StatedFiltersLine, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
+import { FilterBar, StatedFiltersLine, type FilterLabels } from "@/features/search/FilterBar";
 import { FilterQuickBar } from "@/features/search/FilterQuickBar";
-import { count, plural } from "@/lib/counts";
+import { plural } from "@/lib/counts";
 import { useDragRecord } from "@/lib/dndTarget";
 import { readFolderDrag, type FolderDrag, type FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
@@ -50,18 +49,18 @@ import {
   flattenFolders,
   folderDescendants,
   folderLevel,
+  trailOf,
   type FolderNode,
 } from "@/lib/folderTree";
 import {
   ipc,
   ipcError,
   type WishlistFolder,
-  type WishlistPage as Page,
   type WishRow,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
 import { statusLine } from "@/lib/motion";
-import { formatPrice, pricesAsOf } from "@/lib/prices";
+import { pricesAsOf } from "@/lib/prices";
 import { layoutShelves } from "@/lib/shelfLayout";
 import { buildShelves, visibleShelves, type Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
@@ -72,15 +71,16 @@ import { useFilterQuickBar } from "@/lib/useFilterQuickBar";
 import { useReviewHandoff } from "@/lib/useReviewHandoff";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
-import { refreshCardSearches } from "@/lib/searchMarks";
 import { ManagedFolderNote } from "./ManagedFolderNote";
+import { WishlistSummaryHeader } from "./WishlistSummary";
 import { managedEmptySentence, managedIds, userWishFolders } from "./managed";
+import { useWishEntryWrites } from "./useWishEntryWrites";
 import { WishlistBreadcrumb } from "./WishlistBreadcrumb";
 import { WishlistSearchPanel } from "./WishlistSearchPanel";
 import { WishlistGrid, type WishShelves } from "./WishlistGrid";
 import { WishlistTable, type WishTableBands } from "./WishlistTable";
 import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
-import { useWishlist, type Wishlist } from "./useWishlist";
+import { useWishlist, WISHLIST_TRAY, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
 import { useWishlistOptimize } from "./useWishlistOptimize";
 import { wholeWishlistQuery, type SweepScope } from "./wholeWishlistQuery";
@@ -99,6 +99,7 @@ import {
   foldChanges,
   foldFor,
   foldedForDrag,
+  folderFigures,
   isBand,
   keepNewFolder,
   newFolderShelf,
@@ -108,6 +109,7 @@ import {
   shelfOfWish,
   shelfStat,
   shelfTable,
+  subtotalsOf,
   type ShelfFigures,
 } from "./wishShelfPlan";
 
@@ -207,28 +209,6 @@ type Panel =
   | { kind: "clearFolder"; folderId: number }
   | null;
 
-/** What a folder's heading reads — the recursive total, summed by {@link subtotalsOf}. */
-interface FolderTotals {
-  wishes: number;
-  copies: number;
-  cost: number;
-  unpriced: number;
-}
-
-/**
- * A folder the summary has no row for.
- *
- * **Not a defensive default — the ordinary answer for an empty folder.**
- * `wishlist_folder_summary` is a `GROUP BY` over `wishlist_entries`, so a folder holding no
- * wishes emits no row at all, and a card fed a raw `Map.get` would render `undefined` figures
- * over exactly the folder whose whole job on this screen is to be empty.
- *
- * **It is the answer for a folder the summary skipped, and never for a summary that has not
- * answered yet.** The two are one `Map.get` miss apart and mean opposite things — see the
- * `summaryQuery.isPending` branch at the wall below, which is what keeps them apart.
- */
-const NO_WISHES: FolderTotals = { wishes: 0, copies: 0, cost: 0, unpriced: 0 };
-
 /** No rows on a shelf — one identity, so `rowsOf` hands `WishlistGrid` a stable array. */
 const NO_ROWS: readonly WishRow[] = [];
 /** No thumbnails — a shelf the counts have not reached yet. */
@@ -282,76 +262,6 @@ function wishTarget(row: WishRow, cardId: string): CardMenuTarget {
 }
 
 /**
- * The trail from the root down to the folder the reader is standing in — **without the root**,
- * which the breadcrumb prepends itself because `null` is a destination rather than a folder.
- *
- * Walked up through `parentId` and then reversed, because that is the only direction the flat
- * rows can be read in. Two shapes of broken input are resolved rather than trusted, and both
- * resolve **towards the root**: a `parentId` naming a folder this list does not carry — one
- * another surface deleted between the two reads — ends the walk there, so the folder draws as
- * though it sat at the top level; and a cycle, which the backend refuses outright and which only
- * corruption could produce, terminates on the visited set. That is `buildFolderTree`'s own rule
- * applied to the other half of the tree, and it is the rule because the alternative strands the
- * reader: a trail that gave up would leave them inside a folder with no way back out.
- *
- * A `folderId` naming nothing at all answers the empty trail, which is the same rule seen from
- * the bottom — the reader reads as standing at the root, which is where the wishes of a deleted
- * folder have just gone.
- */
-function trailOf(
-  folders: readonly WishlistFolder[],
-  folderId: number | null,
-): readonly WishlistFolder[] {
-  const byId = new Map(folders.map((folder) => [folder.id, folder]));
-  const trail: WishlistFolder[] = [];
-  const seen = new Set<number>();
-  let at = folderId;
-  while (at !== null && !seen.has(at)) {
-    seen.add(at);
-    const folder = byId.get(at);
-    if (folder === undefined) break;
-    trail.unshift(folder);
-    at = folder.parentId;
-  }
-  return trail;
-}
-
-/**
- * Every folder's numbers **with its sub-folders' added in**, indexed by folder id.
- *
- * `wishlist_folder_summary` answers *direct* counts — this folder's own wishes, never the ones
- * nested under it — and says so at its own type, because SQL that walked the tree would be a
- * second implementation of the arithmetic `buildFolderTree` already does for `FolderNode.count`.
- * This is that arithmetic, over four fields instead of one: a folder card handed a raw lookup
- * would draw `0 wishes` over a drawer holding twelve in two sub-folders, and the reader would
- * only catch it by opening the drawer.
- *
- * The whole tree in one pass rather than a sum per card, because a node's total is its children's
- * totals and a per-card recursion would recompute every level of the cabinet once per level.
- */
-function subtotalsOf(
-  nodes: readonly FolderNode<WishlistFolder>[],
-  direct: ReadonlyMap<number, FolderTotals>,
-): ReadonlyMap<number, FolderTotals> {
-  const out = new Map<number, FolderTotals>();
-  const visit = (node: FolderNode<WishlistFolder>): FolderTotals => {
-    const own = direct.get(node.folder.id) ?? NO_WISHES;
-    const total = { ...own };
-    for (const child of node.children) {
-      const under = visit(child);
-      total.wishes += under.wishes;
-      total.copies += under.copies;
-      total.cost += under.cost;
-      total.unpriced += under.unpriced;
-    }
-    out.set(node.folder.id, total);
-    return total;
-  };
-  for (const node of nodes) visit(node);
-  return out;
-}
-
-/**
  * The wishlist: what is still needed, what it will cost, where it is filed, and the quantities
  * editable in place.
  *
@@ -379,35 +289,6 @@ function subtotalsOf(
  */
 const WISHLIST_LABELS: FilterLabels = { idStem: "wishlist", search: "Search your wishlist" };
 
-/**
- * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
- *
- * The card search's printing cells, `border` among them (issue #573 — a wish is for a printing,
- * and the printing has a frame), then `needsReview`, which only a list the reconciler walks can
- * ask. **No `finish` cell**, although the collection's tray has one: a wish carries the finish
- * the reader *prefers*, which is neither the card search's question (what the printing was
- * published in) nor the collection's (what a copy is), and a cell drawn here would be read as one
- * of those two while filtering by the third. **No `price` cell**, and
- * that is the one absence here that is a fact about the wire rather than about the screen:
- * `WishlistQuery` carries no `priceMin`/`priceMax`, so the band would be a control whose numbers
- * reach nothing — which is why those three fields are the optional half of `FilterSurface`.
- *
- * **`needsReview` is drawn unconditionally**, where the chip it replaces appeared only once the
- * reconciler had flagged something. That rule was about a *row*, where a control spending its
- * whole life saying nothing is a control the reader learns to stop reading; in a shut tray it
- * costs nothing, and a cell that came and went would be the one thing in this list that moved.
- */
-// `fulfilled` sat between `rarity` and `needsReview` until 2026-09-08 — the Fulfilled / Still
-// missing pair, which asked the backend which wishes the collection already covered. It went with
-// every other comparison this list made against the binder.
-const WISHLIST_TRAY: readonly TrayCell[] = [
-  "set",
-  "format",
-  "rarity",
-  "type",
-  "border",
-  "needsReview",
-];
 
 export function WishlistPage() {
   // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.
@@ -433,7 +314,6 @@ export function WishlistPage() {
   } = wishlist;
   const view = useAppStore((s) => s.wishlistView);
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
-  const queryClient = useQueryClient();
   const folders = useWishlistFolders();
 
   /**
@@ -649,203 +529,12 @@ export function WishlistPage() {
   useDockHeight(dockRef, deskRef, quick.dockTop);
 
   /**
-   * Rewrite one wish wherever the wishlist is cached.
-   *
-   * Every cached filter combination, not just the one on screen: the same wish is in the
-   * "everything" list and in whatever narrowed list the reader came from, and a stepper press
-   * that fixed one and left the other would show two different numbers for one card one filter
-   * click apart.
+   * The wish writes — the stepper, the removal, the filing and the way back to any printing — and
+   * the cache arithmetic they share. **`useWishEntryWrites` since 2026-10-03**, store-free, so the
+   * light app's phone face presses the same four mutations with the same patches and the same
+   * `settleWhole`; the doc for each is at its new home.
    */
-  const patchWish = useCallback(
-    (id: number, next: ((row: WishRow) => WishRow) | null) => {
-      queryClient.setQueriesData<InfiniteData<Page>>({ queryKey: ["wishlist", "list"] }, (data) => {
-        if (!data || !data.pages.some((p) => p.items.some((r) => r.id === id))) return data;
-        return {
-          ...data,
-          pages: data.pages.map((page) =>
-            next === null
-              ? {
-                  items: page.items.filter((r) => r.id !== id),
-                  // Every page carries the same count of the whole list, so every page's copy
-                  // of it moves — otherwise the header the *first* page feeds would go on
-                  // counting a wish that is gone.
-                  total: Math.max(0, page.total - 1),
-                }
-              : { ...page, items: page.items.map((r) => (r.id === id ? next(r) : r)) },
-          ),
-        };
-      });
-    },
-    [queryClient],
-  );
-
-  /** Undo, for a write the backend refused. */
-  const snapshot = useCallback(
-    () => queryClient.getQueriesData<InfiniteData<Page>>({ queryKey: ["wishlist", "list"] }),
-    [queryClient],
-  );
-  const restore = useCallback(
-    (saved: ReturnType<typeof snapshot>) => {
-      for (const [key, data] of saved) queryClient.setQueryData(key, data);
-    },
-    [queryClient],
-  );
-
-  /**
-   * How **every** write on this page finishes: the whole `["wishlist"]` root re-read, and the
-   * card search with it.
-   *
-   * The search, because a result row draws `wishlisted`: adding or clearing a wish changes the
-   * heart on every printing of that card, and a wall that goes on showing one for a wish the
-   * reader just crossed off is wrong on screen rather than stale in a cache. Nothing further out
-   * moves — a wish write moves no copies, so the collection and its header are untouched.
-   *
-   * **`["wishlist"]` rather than the three keys under it**, because it covers the list, the
-   * folder list and the summary at every marketplace at once, and because that is the shape of
-   * the other wishlist writes in this app: `useWishlistFolders`' (whose two wish-deleting ones
-   * take the card search too, for the reason below), the card menu's
-   * add, the deck sweeps'. One page inventing a narrower settle is how the three fell out of step
-   * in the first place.
-   *
-   * **One function for every caller here, because the reason is the same shape in all of them:
-   * the answer is not something this page can compute.**
-   *
-   * * A *refusal* is almost always a row something else already deleted, and a list that has lost
-   *   a row has lost the total and the cost it was part of.
-   * * A *filing* is the same problem wearing the other hat: the wish is now in a list this page is
-   *   not drawing, at a sort position and on a page only the backend knows, and two folder
-   *   subtotals have moved with it.
-   * * And the **stepper and the removal** are the same problem again, which is what this function
-   *   did not cover until 2026-08-22. Those two shipped patching the list and re-reading the
-   *   search alone, on the argument that the row's own number was already the answer. That
-   *   argument is true about the *row* and false about everything counted from it, in two ways a
-   *   reader acts on. `wishlist_folder_summary` is a `GROUP BY` carrying an owned-copies subquery
-   *   and a price expression — arithmetic this page cannot redo — so a folder card went on saying
-   *   `Ordered folder, 2 wishes, $20.00` over a drawer holding one, which on a shopping list is
-   *   the subtotal somebody buys against. And `elsewhere` is a correlated count over the whole
-   *   table, so crossing off one of two duplicates left the survivor still marked
-   *   "Also on your wishlist…" — the one mark whose entire job is honesty about duplicates,
-   *   pointing at a wish that no longer exists. **Neither repairs itself at the app's own
-   *   `staleTime`** (`lib/query.ts`, 30s): the summary's observer is mounted for the life of this
-   *   page, so marking it stale without a refetch changes nothing, and the suite's default of 0
-   *   hides the whole class.
-   *
-   * {@link patchWish} is not replaced by any of this and stays where it was. It is what the
-   * reader sees at the moment of the press — a stepper the cache controls must not be computed
-   * from a value a round trip is still on its way to confirm — and the re-read behind it is for
-   * the figures the press moved that this page was never holding.
-   */
-  const settleWhole = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    void refreshCardSearches(queryClient);
-  }, [queryClient]);
-
-  const setQuantity = useMutation({
-    mutationFn: ({ row, quantity }: { row: WishRow; quantity: number }) =>
-      ipc.wishlistSetQuantity(row.id, quantity),
-    // Optimistic on the row's own number and nothing else. Without it, holding `+` sends the
-    // same number three times — the box is controlled by the cache, so a second press before
-    // the first answer would be computed from a stale value.
-    //
-    // **It writes a `0` into the row for one round trip now that the stepper's floor is zero
-    // (issue #284), and that is accepted rather than special-cased** — the collection's twin
-    // accepts the same one. Guessing the *removal* here instead is the guess this page is not
-    // entitled to make: a refusal would then have to put a row back at a sort position and on a
-    // page only the backend knows, which is the argument {@link setFolder} makes at length about
-    // its own write. What a reader sees in the meantime is the number they pressed to, on a row
-    // that leaves a few milliseconds later — a stepper that reported a different number from the
-    // one under their finger would be worse than a row that lingers.
-    onMutate: ({ row, quantity }) => {
-      const saved = snapshot();
-      patchWish(row.id, (r) => ({ ...r, quantity }));
-      return saved;
-    },
-    onError: (_error, _variables, saved) => {
-      if (saved) restore(saved);
-      settleWhole();
-    },
-    onSuccess: (change) => {
-      // The answer, not the guess: the backend clamps and canonicalises, and this is the
-      // number it actually stored — **or says the row is not there any more**. Then the
-      // re-read, for what the new number is counted into — the folder subtotal a copy count
-      // multiplies straight through.
-      //
-      // `removed` is not decoration. `set_wish_quantity(id, 0)` returns `remove_wish(conn, id)`
-      // — `wishlist_entries.quantity` carries `CHECK (quantity > 0)`, so it always has — and
-      // since issue #284 the stepper is `min={0}`, which puts that delete one press away on a
-      // single-copy wish.
-      //
-      // **What reading the answer as "quantity 0" costs here is a round trip, not a permanent
-      // ghost**, and the distinction is worth getting right because the collection's twin
-      // handler has the harsher version of it. {@link settleWhole} invalidates `["wishlist"]`
-      // *whole* and this list's own key is `["wishlist", "list", …]` (`useWishlist.ts`), so the
-      // refetch does take the row — eventually. Until it lands the wish sits in the list wanting
-      // none of something, and the `+` beside it answers GONE. That is exactly what
-      // `remove.onSuccess` below refuses to let a crossed-off wish do: "the row goes at once —
-      // a crossed-off wish must not sit there for the length of a round trip". A
-      // removal and a stepper taken to zero are **one write with two gestures**, so the two
-      // handlers are the same two lines; anything else is one gesture behaving differently from
-      // the other for a reason no reader could name.
-      //
-      // `CollectionPage`'s handler is these same two lines and its comment carries the live
-      // sighting — but not its reason: `settle()` there re-reads the summaries and pointedly
-      // **not** the list, so the same misreading leaves a row that outlives every round trip.
-      // Do not port that sentence back here.
-      patchWish(change.id, change.removed ? null : (r) => ({ ...r, quantity: change.quantity }));
-      settleWhole();
-    },
-  });
-
-  const remove = useMutation({
-    mutationFn: (row: WishRow) => ipc.wishlistRemove(row.id),
-    onError: settleWhole,
-    onSuccess: (change) => {
-      // The row goes at once — a crossed-off wish must not sit there for the length of a round
-      // trip — and then everything the row was part of is re-read: the folder it was filed in,
-      // and the `elsewhere` mark on whatever duplicate it left behind.
-      patchWish(change.id, null);
-      settleWhole();
-    },
-  });
-
-  /**
-   * Filing a wish — the drag's write and the panel's, which are one command and deliberately one
-   * mutation: spec §9 says both routes reach `wishlist_set_folder`, so a merge behaves the same
-   * whichever hand made the gesture.
-   *
-   * **This is the one write on the page that is deliberately not optimistic**, and the reason is
-   * what a move actually changes: not a number the reader is holding down, but *which list the
-   * row belongs to*. Every optimistic answer to that is a guess this page is not entitled to
-   * make.
-   *
-   * * Taking the row off the level is the guess it shipped with, and the live pass found it wrong
-   *   three ways at once (2026-08-22): the row left the list and **nothing ever put it back**, so
-   *   a filed wish was gone from the app until a reload; the destination folder went on saying
-   *   "Nothing filed here yet." under a card already counting the wish; and the header
-   *   under-counted by one on the way *out* to the root as well as on the way in. Only the merge
-   *   path re-read, so a plain move — the common one — was the case nothing covered.
-   * * Putting the row in is the other guess, and it is worse: the destination list is sorted and
-   *   paged by the backend, so an insert has to invent both the position and the page, then be
-   *   undone whenever the answer disagrees.
-   * * And **a merge answers a different id than the one asked about** — moving a wish into a
-   *   folder that already holds the same `(oracleId, cardId, preferredFinish)` sums the two
-   *   quantities into the *destination* row and deletes the source — so there is not always a row
-   *   left to patch at all.
-   *
-   * So the answer is a re-read, both ways: {@link settleWhole}. It costs one query over a list of
-   * tens of rows, and it is the only thing that is right for the level being left, the level being
-   * joined, both folder subtotals and a merge at once. A folder move is one deliberate press
-   * rather than a held-down stepper, so there is no second press racing the first — which is the
-   * whole reason the stepper beside it *is* optimistic.
-   */
-  const setFolder = useMutation({
-    mutationFn: ({ id, folderId: to }: { id: number; folderId: number | null }) =>
-      ipc.wishlistSetFolder(id, to),
-    // Either way, and one handler because there is one behaviour: a refusal leaves the list
-    // exactly as unknown as a success does, since a refused move is almost always a row another
-    // surface has already moved or deleted.
-    onSettled: settleWhole,
-  });
+  const { settleWhole, setQuantity, remove, setFolder, anyPrinting } = useWishEntryWrites();
 
   /**
    * A card **dropped** out of the search column onto a folder card or a breadcrumb segment.
@@ -882,47 +571,6 @@ export function WishlistPage() {
     onSettled: settleWhole,
   });
 
-  /**
-   * Back to **any printing** — the second of spec §5's two printing writes, and the only one
-   * this page makes itself: pinning a wish to a printing is a press in the All printings modal,
-   * which owns that half (spec §6).
-   *
-   * Optimistic on the four columns this page can honestly guess — the printing, its set, its
-   * number and its language all clear together, and `needs_review` clears with them, because
-   * choosing the printing by hand *is* the review a flagged wish was waiting for. The caption
-   * flips to "Any printing" on the press, which is the feedback the reader asked for.
-   *
-   * **The answer is a re-read rather than a patch, and that is where this parts company with the
-   * stepper above — which re-reads too, but holds its own row's number.** Every write on this
-   * page settles the same way now; the difference is how much of the row survives the settle.
-   * Un-pinning does not merely clear columns: the backend re-resolves the wish
-   * against the newest printing of its oracle card, so the art the tile is drawn as, its rarity,
-   * its mana cost and its unit price are all different afterwards and none of them is derivable
-   * here. And this write **merges** on the same rule `wishlist_set_folder` does — un-pinning a
-   * wish for the Alpha Bolt when an any-printing Bolt already sits in the same folder is the
-   * reader saying they are one wish — so the `EntryChange` may not even name the row that was
-   * asked about.
-   */
-  const anyPrinting = useMutation({
-    mutationFn: (row: WishRow) => ipc.wishlistSetPrinting(row.id, null),
-    onMutate: (row) => {
-      const saved = snapshot();
-      patchWish(row.id, (r) => ({
-        ...r,
-        cardId: null,
-        setCode: null,
-        collectorNumber: null,
-        lang: null,
-        needsReview: null,
-      }));
-      return saved;
-    },
-    onError: (_error, _variables, saved) => {
-      if (saved) restore(saved);
-      settleWhole();
-    },
-    onSuccess: settleWhole,
-  });
 
   const onSetQuantity = useCallback(
     (row: WishRow, quantity: number) => setQuantity.mutate({ row, quantity }),
@@ -1781,16 +1429,8 @@ export function WishlistPage() {
 
   /** A folder's unfiltered figures, recursive — `null` for Not sorted and before the summary. */
   const figuresOf = useCallback(
-    (shelf: Shelf): ShelfFigures | null => {
-      if (shelf.kind === "unfiled" || folders.summaryQuery.isPending) return null;
-      const total = subtotals.get(shelf.id) ?? NO_WISHES;
-      return {
-        wishes: total.wishes,
-        copies: total.copies,
-        cost: total.cost > 0 ? total.cost : null,
-        unpriced: total.unpriced,
-      };
-    },
+    (shelf: Shelf): ShelfFigures | null =>
+      folderFigures(shelf, folders.summaryQuery.isPending ? null : subtotals),
     [folders.summaryQuery.isPending, subtotals],
   );
 
@@ -2268,7 +1908,7 @@ export function WishlistPage() {
           under it would be a subheading repeating its own heading. */}
       <h2 className="sr-only">Wishlist</h2>
 
-      <FigureRow
+      <WishlistSummaryHeader
         // The band's far end, where they used to sit beside the filter row — see `FigureRow`,
         // which is where the placement is argued, and `CollectionPage`, whose twin this is.
         //
@@ -2329,29 +1969,9 @@ export function WishlistPage() {
             />
           </div>
         }
-      >
-        {/* **Both figures count the whole wall** (spec §3.6) — this level and every shelf below it,
-            shut ones included — summed from the per-shelf counts, never from the rows loaded. */}
-        <Figure label="Cards" value={totals === null ? "—" : count(totals.wishes)} />
-        {/* The one number this view exists for, in the currency the reader picked, with how old
-            the prices are and whose. An unpriced wish is left out of the sum and counted in the
-            note — never quoted at another marketplace's rate.
-
-            **It read `Still to buy` until 2026-09-08 and was summed over the copies each wish was
-            still short of.** Both went with the owned count: this list compares itself to the
-            collection nowhere, so what it can honestly total is what it *asks for* rather than
-            what is left to get.
-
-            Etched printings have no EUR price in Scryfall's data at all — `eur_etched` is
-            documented and absent — so on Cardmarket a wish for one is left out of this sum
-            and counted in the note rather than quoted at the nonfoil rate. */}
-        <Figure
-          label={`Total cost (${currency.toUpperCase()})`}
-          value={totals === null || totals.wishes === 0 ? "—" : formatPrice(totals.value, currency)}
-          note={totals !== null && totals.unpriced > 0 ? `${totals.unpriced} unpriced` : undefined}
-          title={pricesAsOf(marketplace)}
-        />
-      </FigureRow>
+        totals={totals}
+        marketplace={marketplace}
+      />
 
       {/* The same row the search, the Tags page and the collection draw, over this page's own
           hook — see `FilterBar`, whose prop is a structural `FilterSurface` that `useWishlist`

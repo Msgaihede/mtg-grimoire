@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ShelfCount, WishlistFolder, WishRow } from "@/lib/ipc";
+import { buildFolderTree } from "@/lib/folderTree";
 import { layoutShelves } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
 import {
@@ -19,6 +20,8 @@ import {
   shelfTable,
   tileCountOf,
   toShelfFolder,
+  folderFigures,
+  subtotalsOf,
 } from "./wishShelfPlan";
 
 /** A shelf built by hand — `buildShelves` is what makes them in the app; this is the shape. */
@@ -381,5 +384,44 @@ describe("shelfTable", () => {
       table.rows.filter(isBand).map((row) => (row.band === "heading" ? row.shelf.id : null)),
     ).toEqual([0]);
     expect(table.total).toBe(5);
+  });
+});
+
+describe("subtotalsOf and folderFigures", () => {
+  const folder = (id: number, parentId: number | null): WishlistFolder => ({
+    id,
+    parentId,
+    name: `F${id}`,
+    sortOrder: 0,
+    managedDeckId: null,
+    managedTokens: false,
+  });
+  const tree = buildFolderTree([folder(1, null), folder(2, 1), folder(3, null)], []);
+  const subtotals = subtotalsOf(
+    tree,
+    new Map([
+      [1, { wishes: 1, copies: 2, cost: 3, unpriced: 0 }],
+      [2, { wishes: 2, copies: 2, cost: 0, unpriced: 1 }],
+    ]),
+  );
+
+  it("adds a sub-folder's wishes into its parent, and an empty folder reads zero", () => {
+    expect(subtotals.get(1)).toEqual({ wishes: 3, copies: 4, cost: 3, unpriced: 1 });
+    expect(subtotals.get(3)).toEqual({ wishes: 0, copies: 0, cost: 0, unpriced: 0 });
+  });
+
+  it("reads a folder's recursive figures, a zero cost as no price", () => {
+    expect(folderFigures({ id: 1, kind: "folder" }, subtotals)).toEqual({
+      wishes: 3,
+      copies: 4,
+      cost: 3,
+      unpriced: 1,
+    });
+    expect(folderFigures({ id: 2, kind: "folder" }, subtotals)?.cost).toBeNull();
+  });
+
+  it("knows nothing for Not sorted, or before the summary has answered", () => {
+    expect(folderFigures({ id: 0, kind: "unfiled" }, subtotals)).toBeNull();
+    expect(folderFigures({ id: 1, kind: "folder" }, null)).toBeNull();
   });
 });

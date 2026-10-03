@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, type ReactNode } from "react";
+import { useCallback, useEffect, useMemo, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import {
   PanelLeftClose,
@@ -34,9 +34,10 @@ import {
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { editionHas, useEdition } from "@/lib/edition";
 import { LAYER } from "@/lib/layers";
+import { ReachContext } from "@/lib/reach";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
-import { useAppStore } from "@/lib/store";
+import { useAppStore, type ViewId } from "@/lib/store";
 import { usePrefetchSearchOpen } from "@/features/search/useSearchOpen";
 import { usePrefetchShelfFolds } from "@/features/shelves/useShelfFolds";
 import { usePrefetchFolderPane } from "@/features/decks/useFolderPane";
@@ -281,7 +282,13 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
       }
       // Ahead of the modal guard with `F1`, and for a reason of its own: opening another window
       // disturbs nothing in this one, so a dialog has nothing to be stranded over.
-      if (matchesShortcut(NEW_WINDOW, e)) {
+      //
+      // **The full edition's alone.** Another window onto the same app is a desktop window's
+      // verb (`docs/reference/multi-window.md`); wherever the light edition runs, a browser or an
+      // OS owns the windows, and in a browser this very chord is its own — a private window. So
+      // there the press is left alone entirely, ahead of `preventDefault`, like a digit for a
+      // view the edition does not draw.
+      if (edition.id === "full" && matchesShortcut(NEW_WINDOW, e)) {
         e.preventDefault();
         // Held keys repeat at the OS rate, and every repeat would be another window.
         if (!e.repeat) void ipc.windowNew().catch(() => undefined);
@@ -417,6 +424,13 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
   const activityVisible = useDelayedFlag(activity !== null, ACTIVITY_DELAY_MS);
 
   const title = NAV.find((n) => n.id === activeView)?.label ?? "";
+
+  /**
+   * What `useReaches` answers below this shell: whether this window draws a view. Memoised on the
+   * edition, which never changes for the life of the window, so it is one function for good —
+   * `ReachContext`'s doc says why that matters.
+   */
+  const reaches = useCallback((view: ViewId) => editionHas(edition, view), [edition]);
 
   /**
    * The destinations this reader actually has, which is `NAV` minus the row they have not earned.
@@ -668,7 +682,9 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             `relative` *here* moved that phantom scroll from the document into `main` rather than
             removing it (measured: `main.scrollHeight` 742 → 1646). This line is the same rule
             applied to the outermost scroller, so a view that grows cannot reach the document. */}
-          <main className="relative min-h-0 flex-1 overflow-auto p-5">{children}</main>
+          <main className="relative min-h-0 flex-1 overflow-auto p-5">
+            <ReachContext.Provider value={reaches}>{children}</ReachContext.Provider>
+          </main>
         </div>
       </div>
     </div>

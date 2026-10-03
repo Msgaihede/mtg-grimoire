@@ -40,8 +40,9 @@ import {
   SHELF_INDENT_PX,
   SHELF_STICKY_HEIGHT,
   anchorPlan,
+  fillShelves,
   layoutHeight,
-  layoutShelves,
+  loadedShelves,
   rowHeight,
   rowOfTile,
   rowStartOf,
@@ -1019,31 +1020,17 @@ export function CardGrid<T extends GridCard>({
   /**
    * Each shelf with the tiles it has loaded and the count it is laid out at — `null` on a flat
    * wall, which is what keeps every wall that passes no `sections` exactly the wall it was.
+   * `lib/shelfLayout.ts`' {@link loadedShelves} is the rule, and argues it.
    *
    * **Keyed on the list and the lookup, never on the `sections` object**, so a caller that builds
    * `{ sections, tilesOf, renderHeading, … }` inline re-lays nothing; see {@link GridSections}.
-   *
-   * **A shelf is laid out at whichever is larger, its count or what has loaded.** The counts and
-   * the pages are two queries, and a card added between them leaves a shelf with one more tile
-   * than its count says — laid out at the count, that tile would have no slot and would simply not
-   * be drawn. The other direction, a count ahead of the pages, is the ordinary state of a wall
-   * mid-scroll, and is what the empty frames are for.
    */
   const sectionList = sections?.sections;
   const tilesOf = sections?.tilesOf;
-  const shelfTiles = useMemo(() => {
-    if (!sectionList || !tilesOf) return null;
-    return sectionList.map((section) => {
-      // A collapsed shelf is its heading alone — `layoutShelves` gives it no slots — so whatever a
-      // page still holds for it (the previous query's rows, kept on screen while a fold refetches)
-      // is not drawn, walked or picked. Read here, it would be written into the next shelf's slots.
-      const tiles: readonly T[] = section.shelf.collapsed ? [] : tilesOf(section.shelf.id);
-      return {
-        section: { shelf: section.shelf, tileCount: Math.max(section.tileCount, tiles.length) },
-        tiles,
-      };
-    });
-  }, [sectionList, tilesOf]);
+  const shelfTiles = useMemo(
+    () => (sectionList && tilesOf ? loadedShelves(sectionList, tilesOf) : null),
+    [sectionList, tilesOf],
+  );
 
   /**
    * What the deepest shelf's rows are pushed in by, taken off the wall **before** the column count
@@ -1084,20 +1071,7 @@ export function CardGrid<T extends GridCard>({
    */
   const shelved = useMemo(() => {
     if (!shelfTiles) return null;
-    const layout = layoutShelves(
-      shelfTiles.map((s) => s.section),
-      columns,
-    );
-    const slots = new Array<T | undefined>(layout.totalTiles).fill(undefined);
-    let frontier = 0;
-    for (const { section, tiles } of shelfTiles) {
-      const start = layout.tileStart.get(section.shelf.id);
-      if (start === undefined || tiles.length === 0) continue;
-      tiles.forEach((card, i) => {
-        if (start + i < slots.length) slots[start + i] = card;
-      });
-      frontier = start + tiles.length;
-    }
+    const { layout, slots, frontier } = fillShelves(shelfTiles, columns);
     const keys = layout.rows.map((_, index) => shelfRowKey(layout, index));
     return { layout, slots, frontier, keys };
   }, [shelfTiles, columns]);

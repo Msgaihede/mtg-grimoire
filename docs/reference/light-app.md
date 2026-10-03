@@ -1,14 +1,15 @@
 # The light app
 
 The Android and web face of MTG Grimoire — card search, decks, collection, wishlist and scanner —
-as one second entry over the desktop's own components. **What is built is phase 1, the skeleton:
-it runs in a browser over the Storybook fake (§2.1) and in a phone-sized window over the real
-Rust core (§2.2), and both were driven. There is no Android host, no WASM host, no service worker
-and no sync on a light install yet.** Underneath it, phase 2 has started: the engine is moving
-into a crate those hosts can link, a step at a time (§6).
+as one second entry over the desktop's own components. **What is built is phase 1, the skeleton,
+and phase 3, the pages:** it runs in a browser over the Storybook fake (§2.1, §7) and in a
+phone-sized window over the real Rust core (§2.2). There is no Android host, no WASM host, no
+service worker and no sync on a light install yet. Underneath it, phase 2 moved the engine into a
+crate those hosts can link (§6).
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
-- How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md).
+- How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
+  pages: [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md).
 - What is left, phase by phase: [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761).
 - The binding rules for anyone changing it: [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
 
@@ -187,8 +188,9 @@ repository, so Vite watches all of it, and Windows refuses a watch on a file a c
 writing. `vite.mobile.config.ts` now keeps the watcher out of every build output under the root,
 **and that was driven the same way it was found**: the server was left up through the second
 `verify` of §2.3, cargo's run over that crate included, and was still listening when it ended.
-**The base config ignores `src-tauri` only, so the desktop's and the share viewer's dev servers
-have the same exposure** — outside this branch, and flagged rather than fixed.
+**The base config ignored `src-tauri` only, so the desktop's and the share viewer's dev servers
+had the same exposure** — flagged here, and fixed by #760: `vite.watch.ts` is the list every
+server takes from the base config, and the light config's own copy was dropped in phase 3.
 
 ## 5. Open, and where each belongs
 
@@ -197,42 +199,52 @@ purpose; the phase that owns the surface owns the fix.
 
 ### Phase 3 — the phone pages (each comes to the owner as built options first)
 
-- **The Collection and Wishlist walls draw open shelves only.** The desktop hooks fetch the cards
-  of the shelves the reader has left open, and deck groups, `Recently removed` and a deck's
-  managed wishlist folder start shut — so on the `starter` seed the collection wall draws 9 of 12
-  rows. When every row is on a shut shelf the page says so; it cannot open one.
-- After a refused next page a wall stops asking and says nothing. It re-arms on any refetch of
-  that query (a tab away and back, a window refocus), so it is not stuck for the session.
-- When the whole-wall figure itself fails to load over an empty wall, the page draws nothing —
-  neither empty-state sentence is known to be true. `useWishlist` does return the query that
-  could say so; `useCollection` returns only the figure.
-- A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
-  nothing.
-- Two rows of one printing get one accessible name; the desktop wall folds them into one tile.
-- `DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
-  the `live` list; and `facesOf` now exists twice (the desktop's lives in a module that imports
-  the store).
-- The wall's list semantics count rows rather than cards; no test scrolls a long wall to its end.
-- In landscape the bars stop short of the screen's edge beside a cutout — the shell pads the
-  root by the side insets. Whether the bars should bleed with their content inset is a device
-  pass's call.
+- ~~**The Collection and Wishlist walls draw open shelves only.**~~ — **fixed 2026-10-03 for the
+  collection in step 3.2** (§7.2): it is the cabinet, every shelf headed and every one openable,
+  a deck's group and `Recently removed` included — **and for the wishlist in step 3.3** (§7.3),
+  a deck's managed wishlist folder included.
+- ~~After a refused next page a wall stops asking and says nothing~~ — **fixed 2026-10-03**: the
+  wall ends on `The next cards could not be read.` and a `Try again` that calls `fetchNextPage`
+  itself (`parts.tsx`'s `NextPageRefused`, through `CardWall`'s `footer`). It still stops asking
+  on its own until then, and still re-arms on any refetch.
+- ~~When the whole-wall figure itself fails to load over an empty wall, the page draws
+  nothing~~ — **fixed 2026-10-03**: the collection and the wishlist say the rest could not be
+  counted, from `useCollection`'s new `figuresRefused` and `useWishlist`'s `countsQuery`.
+- ~~A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
+  nothing~~ — **fixed 2026-10-03 in step 3.3** (§7.3): a wish is drawn as the printing it is drawn
+  as (`artCardId`), and a tile with none is no control at all, on both walls (`WallTile`).
+- ~~Two rows of one printing get one accessible name~~ — **fixed 2026-10-03 in step 3.2**
+  (§7.2): the phone folds them into one tile exactly as the desktop wall does
+  (`collectionWall.ts`'s `collectionTiles`), so `Lightning Bolt, STA 105, Etched, 2 copies` is
+  one name for one tile.
+- ~~`DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
+  the `live` list~~ — **fixed 2026-10-03 in step 3.4** (§7.4): it asks through `deckDetailQuery`
+  (`src/features/decks/deckQuery.ts`), the key `useDeck` itself reads under, and opens on the list
+  the deck remembers (`lastVariant` where it keeps a plan) with a Theory / Actual switch. And
+  ~~`facesOf` now exists twice~~ — **fixed 2026-10-03**: it lives once, in
+  `src/features/card/faces.ts`, read by `CardTextDialog` and the phone's card sheet (§7.1).
+- ~~The wall's list semantics count rows rather than cards~~ — **fixed 2026-10-03 for the
+  shelved wall** (§7.2): each shelf is its own list named for the shelf, and each card says
+  `aria-setsize`/`aria-posinset` within it, so a virtualised shelf announces its whole count. The
+  flat `CardWall` (Search) still counts rows. ~~No test scrolls a long wall to its end~~ — the
+  collection's paging test scrolls the `large` seed's 600-tile shelf to its far end.
+- ~~In landscape the bars stop short of the screen's edge beside a cutout.~~ **Closed
+  2026-10-03 (§7.8)**: the bars bleed and inset their content.
 - **A constraint on the sheet's design, not a defect yet**: a step from one card to another
-  *inside* the sheet must be `navigate(…, { replace: true })`. A plain `navigate` is a second
+  *inside* the sheet must be `navigate(…, { replace: true })` — **held since 2026-10-03** by
+  `linkTo(place, { replace: true })` on every printing row (§7.1). A plain `navigate` is a second
   marked push, and one close would then land on the first card instead of the page.
-- In the light edition `Ctrl+Shift+N` still asks for a new window, and on the desktop face the
-  key map has no mount (so `F1` is left to the browser).
-- **The desktop face can reach a view the light edition does not draw.** The collection's
-  share menu opens a shared binder with `setActiveView("shared")`; the URL has no word for it, so
-  the adapter writes `/search` while the binder is on screen, no rail row is lit, and a reload, a
-  resize or Forward lands on Search. It is the one such path besides `Ctrl+Shift+N`.
+- ~~In the light edition `Ctrl+Shift+N` still asks for a new window.~~ **Closed 2026-10-03
+  (§7.8)**, and `F1` is left to the browser on purpose.
+- ~~**The desktop face can reach a view the light edition does not draw.**~~ **Closed
+  2026-10-03 (§7.8)**: the way in is hidden through `useReaches`, and the adapter refuses the
+  move.
 - **A crossing unmounts the face it leaves**, so anything half-typed on the desktop face — a
   note, an import's text, a rename — is discarded by a browser resize or a tablet's rotation; a
   zoom gesture still inside its trailing write is not persisted; and the desktop's launch reads
-  run again on each widening.
-- **History across the floor has two warts.** A card the phone face *pushed*, closed on the
-  desktop face by `replaceState`, leaves two entries for one place — one Back that shows nothing.
-  And a card opened on the desktop face is written by replace, so carried to the phone face its
-  sheet is not an entry of the router's: ✕ and Escape close it, Back leaves the page beneath.
+  run again on each widening. **Accepted, 2026-10-03 (§7.8)** — not closed.
+- ~~**History across the floor has two warts.**~~ **Both closed 2026-10-03 (§7.8)**, by two
+  history marks both faces read.
 
 ### Phase 5 — the web host
 
@@ -248,16 +260,24 @@ purpose; the phase that owns the surface owns the fix.
 
 ### The fences
 
-- `fence.test.ts`'s import walk cannot see `import.meta.glob`, a template-literal `import()` or
-  a root-absolute specifier; none exists under `mobile/` today. Its comment stripper is not
-  string-aware either: a `/*` inside a string or a regex literal would swallow the text after it,
-  import edges included. No reachable file has one.
-- `vite.mobile.config.ts` restates Storybook's four fake aliases by hand, with nothing holding
-  the two lists together.
-- Its probe sweep is literal about spelling — a destructured `userAgent`, a bracket access or
-  `@tauri-apps/plugin-os` would pass — and reads `.ts`, `.tsx`, `.css` and `.html` only.
-- `src/lib/tokens.test.ts` still stops at `src/`: it counts exactly one `MotionConfig`, and the
-  phone face rightly mounts its own.
+**Closed in phase 3, step 3.8** — each with a case in `fence.test.ts` that runs it on a tree with
+the weld or the probe in it:
+
+- The import walk sees `import.meta.glob` (every file a pattern matches is an edge), a
+  root-absolute specifier, and a template-literal `import()` — followed when nothing is
+  interpolated, **refused** when something is, as is an `import()` of any non-literal. The comment
+  stripper is string- and regex-aware; its guesses (a `/` after a token, an apostrophe in JSX
+  text) are bounded to their line and can only leave prose in, never take an import out.
+- The probe sweep asks for the question rather than one spelling: the bare word `userAgent`,
+  `navigator.platform` by dot, bracket or destructure, and `@tauri-apps/plugin-os`. It still reads
+  `.ts`, `.tsx`, `.css` and `.html` only.
+- `vite.mobile.config.ts` and `.storybook/main.ts` read the fake's four aliases from one list,
+  `.storybook/fake/aliases.ts`. The light config's own watch list is gone: the base config has
+  carried `vite.watch.ts`'s for every server since #760, which also closed §4's closing sentence.
+- `src/lib/tokens.test.ts` reads `mobile/` and counts one `MotionConfig` per face. Nothing under
+  `mobile/` broke any of its sweeps.
+- Storybook's story glob, `preview.css`'s Tailwind sources and `src/stories.test.tsx`'s module
+  glob reach `mobile/`; `Phone/Shell`, `Phone/TabBar` and `Phone/CardWall` are the first stories.
 
 ### The dev window
 
@@ -1557,9 +1577,11 @@ file is touched.
 - **A web host needs its own socket.** `live.rs` is `tokio` tasks and `tokio-tungstenite`; the
   browser's half — a `WebSocket`, or the polling spec §7 names — is phase 6's.
 - **The same-second baseline skip in `apply`** (§6.8) was fixed on its own: #780, merged
-  2026-10-03 and in v0.40.0 — [sync.md](sync.md), *A claim names its emission*. Two whole-trip
-  tests in `sync_engine/client/tests.rs` still backdate their fixtures ten seconds for the old
-  reason; nobody has checked whether they can stop.
+  2026-10-03 and in v0.40.0 — [sync.md](sync.md), *A claim names its emission*. The two
+  whole-trip tests in `sync_engine/client/tests.rs` that backdated their fixtures ten seconds to
+  stand clear of it stopped the same day. Both pass without it; on the commit before #780 the
+  round-trip one is red without it (`3 here, 2 there` behind 7 of its 19 stretches) and the
+  emission one was already green — [sync.md](sync.md), *The tests that hold it*.
 - **`share::publish` still holds the connection for a whole publish** (§6.8), and stays the
   desktop's.
 - **Step 7**: the scanner's session glue — and then the command table. *(§6.10.)*
@@ -1770,3 +1792,650 @@ were built and attached, and the Linux pair is as unrun as it has always been. A
 own `rust-cache` reported `No cache found` on both legs — a first run under a new key, so the
 build was cold and the cache line in `release.yml` is still unproven (`ci.yml`'s restores). The release also
 carries #780 (the sync fix §6.9 left open), which merged twelve minutes before the release PR.
+
+## 7. The phone pages — phase 3, a step at a time
+
+The plan is [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md): one pull
+request per step. **The owner waived the built-options round for this phase** (2026-10-03): each
+page is the implementer's pick, shipped, and redirected in review. Every figure below is from
+`npm run mobile:dev` — Vite's dev server over the Storybook fake's `starter` seed — in headless
+Chromium 141 on **Linux**, emulating a touch phone; nothing here was measured on a phone or
+against a production bundle.
+
+### 7.1 Step 3.1 — Search and the card sheet (2026-10-03)
+
+**Search is one line and a sheet.** The box keeps 16px text and its name; beside it one
+`Filters` button, gold with a badge while anything is on (`Filters — N active`). Under the line,
+only once something is on, the desktop's own `StatedFiltersLine` with the result count in place
+of its caption, and `TagQueryRow` under that so `otag:`/`atag:` resolve exactly as they do on
+the desktop. The sheet holds every cell `SEARCH_TRAY` offers — sort and its direction, format
+with `Any card`, colour identity, mana value with X, rarity, type, border, finish, owned, set,
+price, printings — over the same `useCardSearch`, dimmed by `facets.ts` the way the desktop's
+tray is, with `Reset all` and `Show N cards` in a footer. It is not a place: opening it writes no
+history.
+
+- **No `Exact` glyph chip on the phone.** Seven 44px round chips do not fit 328px with room for
+  the pressed ring, and a tooltip-only glyph tells a finger nothing; a `Within` / `Exactly` pair
+  under the six colours sets the same flag.
+- **Everything in the sheet is at least 44px tall whatever the pointer**, and every text box in it
+  is 16px, so a focused picker's search box does not zoom the page.
+- **What moved out of `FilterBar.tsx`**, store-free and re-exported from it so no desktop caller
+  changed: `filterOptions.ts` (the sort rows, rarities, `sortDirectionName`,
+  `useFormatOptions`, `activeChips`, and `formatPickerRows`, which the tray used to build inline)
+  and `StatedFiltersLine.tsx`; `countOf` left the desktop `SearchPage` for `resultCount.ts`.
+
+**The card sheet reads the desktop modal's own query keys**, so a card open on one side of the
+floor is painted from the cache on the other. One column: the picture and the words; prices for
+the finishes the printing is sold in, with the marketplace's as-of line; *In your grimoire*
+(owned, wished, in decks); printings grouped by the stored preference, five then `Show all N`;
+legality behind its summary (`Legal in 16 of 23 formats · banned in 1`); oracle tags; combos,
+three then `Show all N`, each opening to its pieces, brackets, prerequisites and steps. **Each
+empty state is its own sentence** — tags never fetched, untagged, no oracle card, a failed read;
+combos never downloaded, reading, failed, none — for the rule `commander-brackets.md` gives the
+card side.
+
+- **A step to another printing is a link that replaces** (`linkTo(place, { replace: true })`):
+  history length stayed 3 across two printing presses at 360px, and the ✕ went back to `/search`.
+- **What moved out of the desktop's dialogs**, store-free, so both faces read one copy:
+  `faces.ts`, `legality.ts`, `oracleTags.ts`, `combos.ts`, and `cardKeys.ts` (the printings and
+  holdings keys `CardDetailModal` spelled inline).
+- **Not on the sheet**: the `Open on …` rows and Commander Spellbook's link (they go through the
+  opener plugin, a host seam phases 4 and 5 own); art tags (no command answers them for one card,
+  and the desktop modal does not draw them either); an owned count per printing (printings do not
+  carry one); the printing group-by control (choosing it is a write).
+
+**`Dialog`'s ✕ is 44px under a coarse pointer** and its 24px box everywhere a mouse aims; the card
+sheet takes the top safe-area inset when it fills the window, as the filters sheet does.
+
+**Two of phase 1's leftovers closed here** (§5): a refused next page and an uncountable empty
+wall each say so now, and `facesOf` lives once.
+
+
+### 7.2 Step 3.2 — Collection (2026-10-03)
+
+**The collection is the cabinet.** Under the line — the box (`Search your collection`) and the one
+`Filters` button, with the stated filters under them once one is on — the wall is the desktop's
+shelves in `buildShelves`' order: Not sorted, the reader's folders depth first, then **Decks**,
+each deck's group by name and `Recently removed` last. The figures band (`CollectionSummaryHeader`:
+Cards, Unique, Value with its unpriced count, For trade) heads the wall and scrolls away with it.
+Each shelf is a 48px heading — the chevron, the desktop's `ShelfGlyph`, the name with its path, the
+figures under it (`Locked · …` for a drawer set aside), a peek of three cards while shut — over its
+own cards, laid out from the shelf counts so every heading is placed before its page lands.
+
+- **Every shelf opens.** A press on a heading folds it in place; its `→` opens the folder as a
+  level, with a path row (`←` and the trail) that stays put above the wall. A deck's group carries
+  a `Deck` link to its deck. **A fold is the phone's own and is not stored**: the shelves start
+  from the reader's stored folds and a press is held by the page, because nothing on the phone face
+  writes yet and `mobile:tauri` shares the desktop's `app_meta`. `useCollection({ folds })` is the
+  seam; the desktop passes nothing. **Reversed in step 3.5b (§7.5b)**: a fold is stored now, and
+  the seam has no caller.
+- **The level is not in the URL**, unlike the deck gallery's `?folder=`: its controls are buttons,
+  and Back leaves the view rather than the folder.
+- **One tile per printing, finish and folder**, the desktop wall's grain, so two grades of one
+  printing are one tile counting both — and `ShelfCount.tiles` counts the same grain, which is what
+  lets the wall be laid out from the counts at all.
+- **Filters through 3.1's sheet**, which now takes any `FilterSurface` and a `tray`: the collection
+  offers the desktop bar's own cells (`COLLECTION_TRAY`, moved beside `useCollection`) — set,
+  format, rarity, type, border, price, finish, condition, needs review — with its own sort rows, and
+  no Owned, Printings or `Any card`. A filter suspends folding, as on the desktop.
+- **Headings only are indented**, 12px a level; the cards under a nested shelf use the wall's full
+  width, because one column count serves every shelf and a 360px wall indented the desktop's 32px
+  a level drops to one column.
+- **What moved in `src/`**, each re-exported or imported where it was: `collectionWall.ts` (the
+  tile fold, `ownedFinishes`, `tilesByShelf`, `subtotalsOf`, `shelfTotal`, out of the welded
+  `CollectionPage`); `loadedShelves` and `fillShelves` (out of `CardGrid`'s sectioned memos) into
+  `shelfLayout.ts`; one generic `trailOf` in `folderTree.ts`; `TrayCell` and `SEARCH_TRAY` into
+  `filterOptions.ts`.
+- **The wall ends on 3.1's `Try again`** when a next page is refused, and a refused whole-level
+  figure says so under the band while the shelves go on saying what they hold.
+
+Driven at 360 and 800 wide over `starter`: nothing scrolls sideways, at the root, inside `Binder`,
+with a deck's group opened, and with the sheet open.
+
+### 7.3 Step 3.3 — Wishlist (2026-10-03)
+
+**The wishlist is the collection's cabinet one table over**, on the same shelved wall and under the
+same line (`Search your wishlist`, `Filters`, the stated filters): Not sorted, the reader's folders,
+then **Managed by decks**. The figures band is the desktop's (`WishlistSummaryHeader`: Cards and
+`Total cost` with its unpriced count), counted from the shelf counts. One tile per wish, keyed by
+the wish, so a card wished for at the root and again in a folder is two tiles — and the chin says
+so: it is the desktop wall's caption, `wallPrinting` with the `elsewhere` mark beside it (three of
+`starter`'s five loose wishes wear it).
+
+- **A deck's managed wishlist is a read.** Its heading carries a `Deck` link to its deck (its
+  `Tokens` child, named for no deck, carries none); an empty one says
+  `managedEmptySentence` for the view the deck follows; standing inside one draws
+  `ManagedFolderNote` — whose way to the deck is now a real link when it is handed one, and a
+  button on the desktop as before. Nothing in it is editable here, which a read-only page keeps
+  true for nothing.
+- **A wish with no card is no control.** The tile's picture is `artCardId` — a pinned wish's own
+  printing, the newest for a wish for any printing, and nothing for a wish whose card the corpus
+  has lost — and `WallTile` gives a tile with no card no `onPress`, so `CardTile` draws it as a
+  plain box with the no-art frame naming the card. The `needsReview` seed's Orcish Bowmasters is
+  the case.
+- **The sheet offers the desktop bar's own cells** (`WISHLIST_TRAY`, moved beside `useWishlist`):
+  set, format, rarity, type, border and needs review — no price, finish or condition, because a wish
+  asks none of those questions. Folds are the page's own, as on the collection
+  (`useWishlist({ folds })`) — **stored since step 3.5b** (§7.5b) — and paging reads the hook's `hasMore`, held while a level arrives.
+- **What moved in `src/`**: `preferredFinishOf` and `wallPrinting` into `wish.ts` (out of
+  `WishlistGrid`); `subtotalsOf`, `FolderTotals` and `folderFigures` into `wishShelfPlan.ts` and
+  the figures band into `WishlistSummary.tsx` (out of the welded `WishlistPage`).
+- **Not tested on the phone**: a refused next page on the wishlist — no seed holds more than a
+  page of wishes; the footer is the collection's, wired the same way.
+
+Driven at 360 and 800 wide over `starter`: nothing scrolls sideways, at the root, inside the
+managed folder, and with the sheet open.
+
+### 7.4 Step 3.4 — Decks, read (2026-10-03)
+
+**The gallery** is the reader's cabinet: the folders at this level as link rows, then two columns
+of cover links (three from 640px) — the art crop, `DeckColorBar`, the name, and format · card
+count — in the desktop's own stored sort, with archived decks behind a disclosure. **A folder is a
+place**: `?folder=<id>` on `/decks`, absent rather than `null` when there is none, and an id the
+cabinet does not hold opens the top level, so `parsePlace` stays total. The badge and the bracket
+reading stack in one corner, because side by side they do not fit at 360px, and **the illustrator
+is credited in visible text on the picture** — an art crop needs its artist named, and a phone has
+no hover for the desktop's tooltip.
+
+**The deck page is one column, the owner's call** (2026-10-03): a header with the way back to the
+deck's own folder, the name and — on a deck that keeps a plan — the Theory / Actual switch; a
+figures line (format, cards, lands, price, owned, missing); then the piles in the desktop's own
+order, through `buildGroups` and `splitRail` — **the commander first**, then the companion, then
+the deck's piles, then the sideboard, the maybeboard and any switched-off pile — under the
+desktop's `GroupHeader`; then **the side rail, last**: the check, the bracket estimate (Commander
+formats only), tokens, the mana curve, deck notes and deck to-do lists, in the order the desktop
+draws its bands. A card is a compact row — quantity, label dot, name, mana cost, unit price —
+about ten to a screen, and opens the card sheet; a rule break is red with a warning glyph
+(`validateForMarks`), and a card owned short of the deck's count carries a small red dot.
+
+- **The variant is local state, not a place.** It opens on the list the deck remembers
+  (`lastVariant` where it keeps a plan, Actual otherwise), as the desktop's restore does, and
+  writes nothing back — a way of looking at one deck, which the desktop face would drop from the
+  URL anyway.
+- **The deck is read under the desktop editor's own key** (`deckDetailQuery` in the new
+  `src/features/decks/deckQuery.ts`), so crossing 1024px paints it from the cache — phase 1's
+  leftover, closed.
+- **What was split in `src/`**, each re-exported from its old home: `deckQuery.ts` (the deck read
+  and its defaults, out of the welded `useDeck`, which also makes `useDeckTokens`, `useDeckNotes`,
+  `useDeckMeta`, `useDeckPlays` and `useDeckAudit` clean); `deckCover.ts` (out of `DeckTile`);
+  `ValidationPanel`'s popover body as `ValidationFindings`; `DeckBracket`'s reading as
+  `useBracketReading` and its body as `BracketAdvisory`, whose picker is drawn only when it is
+  handed `onBracket`; `noteBody.tsx` and `todoBody.tsx`, the bodies of a deck note and a deck to-do
+  list, which a phone draws without the cards' edit controls.
+- **Links in deck notes and to-do lists** are a plain `<a target="_blank" rel="noopener
+  noreferrer">` on the phone, because nothing below `@/lib/core` opens a URL yet; on a Tauri light
+  host that is for phases 4 and 5's seams to settle. A to-do box on the phone is drawn and cannot
+  be pressed, and says `Done:` or `To do:`.
+- **Not on the phone yet**: Compare, the theory-match ticks on the Actual list, the deck's
+  description, and the stats band beyond the mana curve (the band carries write buttons).
+
+Driven at 360 and 800 wide over the `starter` seed's decks 2 and 4: nothing scrolls sideways.
+
+### 7.5 Step 3.5a — deck writes on the phone (2026-10-03)
+
+**Every write goes through the mutation the desktop editor presses**, with its optimistic patch and
+its invalidations, so the desktop face — and the desktop app over the same database — reads the
+change the moment it lands. There is no new command and no second copy of a write: what made that
+possible is one split in `src/` (below), after which the phone's deck page calls `useDeckCore`,
+the desktop's own `useDeck` without the app store.
+
+**A row's actions are a sheet behind a visible `⋯`**, a 44px button at the row's far end, beside
+the row's own press (which still opens the card sheet) and never inside it. A long-press was
+weighed and refused: nothing on screen announces it, a scroll's slow start can fire it, and a
+screen reader or a keyboard cannot make it at all — a button at the right edge is under the thumb
+of a hand holding the phone, is found by looking, and is a tab stop. Its name says which row it is
+about (`Edit Sol Ring, foil in Ramp`), because one card can be two rows. The sheet (`deck/sheet.tsx`)
+is `Dialog` with a `self-end` panel — the app's one modal shell, as a bottom sheet below 640px and
+the centred panel above it — and page state, not a place. It holds, top to bottom:
+
+- **Copies** — `−`, the number, `+`, each 44px. `−` at one copy is the removal and says so.
+- **Pile ▸** — every pile of the list in the reader's order, the desktop menu's `Category ▸` and
+  for its reason: filing is the drag onto a heading, refused only for the pile the card is in
+  (marked, `already here`). A switched-off pile says what that costs.
+- **Set as commander / Set as companion** — the claims, present only where the format and the deck
+  have the zone, **refused in words under the row**. The desktop menu greys them silently because
+  a sentence widens every row of a menu; a sheet row is the window's width and has a second line.
+- **Label ▸** — `None`, then the labels this list wears (most-used first), then every other label:
+  the desktop's `Label card ▸` and `More labels…` on one page.
+- **Printing ▸** — the card sheet's own printings read and row (`PrintingFace`, split out of
+  `card/Printings.tsx`), as buttons that swap the deck's printing. **Finish ▸** — the finishes that
+  printing is sold in, in Scryfall's order; refused in words where there is one.
+- **Add to actual / Add to theory** — one copy into the other list, only on a deck that keeps a plan.
+- **Remove from <pile>** — every copy, the same write as the stepper's zero.
+
+**A write that moves the row moves the sheet with it**: a pile, a printing and a finish are parts
+of the row's address, so the page re-points the sheet at the new address when each answers, and
+carries what the write is known to have changed onto the row last seen, so nothing blanks while the
+deck is re-read. A removal has no address to follow and closes the sheet.
+
+**The receipt is the desktop's undo, read at the right moment** (`deck/receipt.tsx`). One line at
+the foot of the page — or of whichever sheet is up, never both — says what the last write did, in
+the press's own words (`Moved Lightning Bolt to Sideboard.`); and once the deck's undo state
+(`useDeckUndo`, the desktop toolbar's hook) answers with a newer step than the one at the press,
+`Undo` appears beside it, named by that step's own sentence, and reverses it. Two things it does not
+pretend: **a cut from an Actual list files no undo step** — it is `deck_to_collection`, a collection
+write the desktop cannot undo either — so its line says where the copies went (`The copies are in
+Recently removed.`) and offers no `Undo`; and **the Storybook fake journals no card write**
+(`deck_add_card`, the quantity, the move, the swap, the finish — its own `journalled` doc names the
+gap), so over the fake only the label, the bracket and the notes show `Undo`. Over the real core
+every one of them files a step. The phone draws no Redo; the hook's redo stack is cleared after each
+write, as its contract asks.
+
+**`Add cards`** is the page's foot, with `Deck settings` beside it — a bar rather than a floating
+button, because a button floating over the right edge would sit on the rows' own `⋯`. It opens the
+card database as a full-height sheet (`deck/AddCards.tsx`) through the Search page's own line and
+wall — `SearchLine` and `SearchResults`, split out of `SearchPage` for it — over `useCardSearch`
+with the deck's format as the opening filter where the database can answer it (the editor's
+`searchFormatDefault`) and `availableForDeck`. **A press on a tile adds one copy** (the tile's name
+starts `Add …`), through `addCard` with `deckDefault`: the pile Deck settings names, else the pile
+the card's Oracle tags file it under. The foot says what was added and how many of that printing the
+list now holds. The filters sheet opens over it, stacked inside its panel.
+
+**The card sheet's `Add to <deck>`** sits at the top of the sheet when it is open over a deck page,
+and adds one copy of the printing on screen to **the list the page is showing**. That needed the
+list to be readable from outside the page: `PhoneFace` now holds each deck's switched list for the
+session, and `deck/list.ts`' `shownList` is the one rule both the page and the sheet read. The
+sheet's actions are a slot list (`card/Actions.tsx`): each action is a file and one entry with an
+`applies` test, so step 3.5b adds the collection's and the wishlist's rows without touching this one.
+
+**Deck notes and to-do lists are written through the desktop's own dialogs.** `New note` and
+`Edit` open `NoteEditorDialog`, whose save the page hosts exactly as the desktop band does (a create
+sends an empty title and the body; an edit sends the note's own title back unchanged) — so the
+history row and the undo step are the desktop's. `Delete` asks first in the band's words. A to-do
+box ticks in place with the card's compare-and-set; `New list` and `Edit` open `TodoListDialog` and
+its autosave; `Delete` asks first. **Tiptap on touch works**: driven in headless Chromium with touch
+emulation at 360px, a tap put the caret in the editor and typed text landed. The dialog fills the
+width below 640px and keeps the desktop's footer buttons, which are under the 44px floor.
+
+**Deck-level**: the bracket picker is the advisory's own (`onBracket` → `deck.update`), its rungs
+raised to 44px from the phone's side; and **`Deck settings` is the desktop's `DeckSettingsDialog`,
+whole** — name, format, game, kind (Theory + Actual / Virtual), the theory marks, the managed
+wishlist, the folder, the cover, the default pile, the pull and the two clears. It was clean to
+reuse once it read the store-free hook, and nothing in it scrolls sideways at 360px; several of its
+controls are desktop-sized.
+
+**What moved in `src/`**, each re-exported from its old home so no desktop caller or test changed:
+
+- `useDeck.ts` → **`useDeckCore.ts`**: the whole hook body, store-free. What a write does to the
+  desktop card modal's address for a deck row — re-anchor it on a move, plan a departure before a
+  removal, step off it after — stays in `useDeck.ts` as the `DeckAnchor` it hands in; the phone
+  hands none (`NO_ANCHOR`).
+- `deckCardMenu.tsx` → **`deckCardRules.ts`**: `ALREADY_HERE`, `REGULAR`, `finishChoices`,
+  `companionRefusal`, and the commander/companion claims as `zoneClaims`, which the menu now maps
+  to its rows.
+- `DeckNotesPanel.tsx` → **`DeleteNoteDialog.tsx`**; `DeckTokensPanel.tsx`'s `TOKENS_HEADING` →
+  `deckTokens.ts`, which is what made `auditText` and so `useDeckUndo` clean.
+- `DeckSettingsDialog` reads `useDeckCore` (nothing it writes moves a row), and `TodoBody` grew a
+  `touch` prop: a 44px `<label>` round the same 14px box, pulled back out of the layout.
+
+**Not done**: attaching cards to a deck note (`NoteCardsDialog` is a desktop picker); categories and
+labels as things in themselves (create, rename, switch off, delete — the Categories and Labels
+dialogs); the token pile's steppers and the tokens band's writes; the stats band's writes (missing
+to wishlist, pull, quick add to collection) and the card menu's `Collection link ▸`; Compare; a
+picked set and any write to several rows at once; Redo. A long list of printings in the `Printing ▸`
+page draws them all, unfolded.
+
+Driven at 360 and 800 wide over the `starter` seed's decks 1, 2 and 4, in headless Chromium 141 on
+Linux with touch emulation: nothing scrolls sideways — the page, the action sheet, the add search,
+the card sheet and Deck settings.
+
+### 7.5b Step 3.5b — collection and wishlist writes on the phone (2026-10-03)
+
+**Every write is a desktop mutation, moved out of the page that owned it rather than written a
+second time.** The collection's and the wishlist's writes lived inside `CollectionPage` and
+`WishlistPage`, which reach the app store, so the phone face could not call them; the split (below)
+moved each verbatim into a store-free module the desktop page now calls, and the phone calls the
+same one. No new command, and no new IPC.
+
+**A tile's actions are a sheet behind a visible `⋯`**, 3.5a's choice for a deck row read across to
+a wall: a 44px control, drawn as the stepper-over-art's backed circle, in the tile's **top-left**
+corner — top-right is the finish chip's on every card face here and bottom-left is the count's. It
+is a sibling of the picture's button (`WallTile`'s `onActions`), so a press on the art still opens
+the card sheet. Its name says which tile (`Edit Tarmogoyf, FUT 153`). The sheet is 3.5a's
+`ActionSheet`, and what the writes did is one receipt line at the foot of the page, or of the sheet
+while it is up — `ReceiptBar`, which now takes any `ReceiptLine`, fed by `lists/receipt.ts`.
+
+**A collection tile can stand for several rows, and every write addresses one** — the desktop's
+rule from both of its ends: the card modal's `Edit` turns into `Edit which copy` over a printing in
+more than one row, and the wall's `Move to` asks `PickCopies` rather than moving every copy behind
+the art. So a tile of several rows (two grades or two languages of one printing, finish and folder)
+opens on **its copies, listed** in the modal's own words (`copyOption`: `1× Near mint · Etched · JA`,
+the drawer beside it), and a press on one opens that copy's actions; a tile of one row opens on its
+actions at once. `All copies on this tile` goes back. Nothing writes to a row the reader did not
+name — the desktop tile stepper's *first row behind the art* was weighed and refused here, because a
+sheet has the room to ask and a wall of art does not.
+
+The collection sheet (`lists/CopyActions.tsx`) offers what the desktop's edits to one copy offer:
+
+- **Copies** — `useCollectionEntryWrites`' stepper, fenced by `entryFences`' `quantityRefusal` and
+  said in its sentence where it refuses (`In Modern Goodstuff. Remove it from the deck to change the
+  quantity.`). **`−` at one copy is the removal** — the same press as `Remove from collection`,
+  which is the menu's `collection_remove_many`, so the receipt offers its **ticket** back through the
+  desktop's `bulk_undo` (`useBulkUndoAction`, `UndoNotice` less its drawing). The desktop stepper's
+  zero is `set_quantity(0)` and has no undo; the phone takes the write that has one.
+- **Condition** — `EditCopy`'s save (`useCopyUpdate`), the grade alone, one press per grade.
+- **Finish** and **Printing** — the card modal's `Edit` (`useCopyFinish`, `useCopyPrinting`). A
+  printing never made in the copy's finish refuses before anything is written, in the modal's words
+  (`finishRefusal`).
+- **Move to** — `useSetCollectionFolder`, the menu's `Move to`: the root and the reader's own
+  drawers, nested, **a drawer set aside offered and marked** (`set aside`) as the menu offers it —
+  the locked-edge confirmation is the drag's alone on the desktop. Drawn only once the reader has a
+  drawer. A copy in a deck's group is not fenced here, as it is not in the menu: the backend refuses
+  the move in its own words (`Those copies are in a deck. Cut the card from the deck to get them
+  back.`), said on the receipt line.
+- **Remove from collection** — refused in words under the row where the count is.
+
+**A write that folds the row follows it**: grade, finish, printing and drawer are all grain
+columns, so each can land on a row already there and answer its id; the sheet re-points at that id
+and keeps the row last seen, carrying what the write changed, until the re-read arrives.
+
+The wish sheet (`lists/WishActions.tsx`) is `EditWish`'s panel: **Copies** (`−` at one is the
+removal, with **no undo** — the desktop's wish removal takes none); **Printing** — `Any printing`
+first, withheld from a wish already for any (`EditWish`'s rule), then every printing, a press
+**pinning** the wish (the All printings modal's `wishlist_set_printing` from a wish, now
+`useWishEntryWrites`' `setPrinting`); **Move to** the root and the reader's own folders, never a
+managed list; **Remove from wishlist**. **A wish a deck manages draws no `⋯`** — the backend refuses
+every hand write to one in `MANAGED_REFUSAL`'s words, and a control whose only answer is that
+sentence teaches nothing — and, were one opened, the sheet says that sentence and offers nothing.
+
+**Not offered, because no surface on the desktop offers them either**: a copy's **language** (no
+write changes it — it is a grain term `collection_update`'s patch does not carry), its **entry
+note** and its **tradelist count** (the patch carries both and nothing in the desktop UI writes
+them), its **purchase price** (`EditCopy`'s other field — left for a later step), and a wish's
+**preferred finish** and **note** (`wishlist_entries` has no update command; the finish is drawn in
+the sheet's subtitle). Folder management — create, rename, delete — is left too: the desktop does it
+on shelf headings and in a strip above the wall, neither of which is a dialog the phone could host.
+
+**The card sheet's adds** are two rows of 3.5a's slot list (`card/Actions.tsx`), on every card:
+
+- **Add to collection** — one copy into **the root**, the card modal's destination, through the
+  menu's write (`useCollectionAdd`, `MENU_CONDITION`). Where the printing is sold more than one way,
+  the quick-add popup's finish chips sit under the press (a radio group, opening on the printing's
+  first finish — so a press without a look is the modal's add exactly).
+- **Add to wishlist** — this printing, or `Any printing` beside it (the popup's other answer, keyed
+  on the oracle card; absent for a printing that has lost one), through `useWishlistAdd`.
+- Each has its own receipt, and **its `Undo` is the desktop's stepper one copy back** —
+  `set_quantity` to the count before the add, which deletes a row the add made. The desktop offers
+  no undo for an add; this is the nearest write it makes, and the button's name says what it takes
+  back.
+
+**A fold is stored now**, through `useCollection`'s and `useWishlist`'s `setFold` — `useShelfFolds`,
+the desktop's own write, only where a fold leaves its shelf kind's default, and nothing while a
+filter is on (the desktop's C-I2 ruling). §7.2 held folds in the page for two reasons. *Nothing on
+the phone face writes* is gone. *`mobile:tauri` shares the desktop's `app_meta`* does not survive a
+second look: that is a dev arrangement, not a product one, and the two faces of one install are one
+app over one database — the light app's own rule is that light is the menu and the face, never the
+data — so a fold pressed on the phone face and found again on the desktop face after a resize is the
+cabinet being one cabinet. A reader who folds a 600-card binder away on a phone now finds it folded
+at the next launch, which a page-held fold could never do.
+
+**What moved in `src/`**, each re-exported or called from where it was, no desktop test changed:
+
+- `CollectionPage` → **`useCollectionEntryWrites.ts`**: the stepper, the removal and the bulk
+  removal with its undo offer, and the cache arithmetic they share. Its `countEditable` and
+  `quantityBlocked` → **`entryFences.ts`** (`countEditableIn`, `quantityRefusal`), pure, with a test.
+- `WishlistPage` → **`useWishEntryWrites.ts`**: the stepper, the removal, the filing and back to any
+  printing, plus `setPrinting` (the modal's repoint, which keeps its own copy because it closes
+  itself on the answer).
+- `EditCopy`'s save and the card modal's `Edit` writes → **`useCopyWrites.ts`**; `useCardMenuDeps`'
+  two adds → **`card/useCardAdds.ts`**; `UndoNotice`'s behaviour → **`useBulkUndoAction`** in the
+  same file. `AllPrintingsDialog`'s own copy of the printing write is left where it is.
+
+Driven at 360 and 800 wide over `starter`, in headless Chromium 141 on Linux with touch emulation:
+nothing scrolls sideways — the wall, a tile's sheet, a tile's copies, the printings and folders
+pages, a deck group's fenced copy, the receipt with `Undo`, a wish's sheet and printings, and the
+card sheet's adds with a receipt.
+
+### 7.6 Step 3.6 — import and export on the phone (2026-10-03)
+
+**Import and export are the desktop's own decisions in sheets drawn for a finger.** Nothing that
+turns a list into cards or cards into a list was written twice: the parser, the resolver press,
+the four planners, the destinations' second steps, the seven writers and the field registry are
+the ones the desktop dialogs use, and the golden fence (`src/features/transfer/__golden__/`) is
+untouched. What the phone owns is the drawing, where its choices are remembered, and the file.
+
+**On the deck page** the foot grows a joined pair — the desktop's mirror glyphs, 44px each, drawn
+without their words because at 360px `Add cards` needs the room; the names (`Import cards into this
+deck`, `Export this deck`) carry the meaning.
+
+- **Import** is a full-window sheet (`phone/transfer/ImportSheet.tsx`). Its first step is the
+  phone's: a 16px monospaced box that fills the width, the line and card counts as they are typed,
+  `Choose a file…` (a 44px button pressing a hidden `<input type="file">`), the Windows-1252
+  notice under a file that needed it, and a full-width `Preview`. **The second step is the
+  desktop's** — `DeckPreviewBody`, the deck preview with its tally, its unmatched lines, Merge or
+  Replace and the "I own these" box — under a touch floor set from the container (every button and
+  every `<label>` at least 44px, every text box 16px), the filters sheet's arrangement. The import
+  lands in the list the page is showing, and the preview's own sentence (`9 cards imported.`) is
+  said in the page's receipt line, where the deck's undo is offered as for any other write: over
+  the fake, `deck_import_commit` files a step and `Undo` appeared.
+- **Export** is a bottom sheet (`ExportSheet.tsx`): the seven formats as 44px chips that wrap, the
+  fields this format and this surface share as 44px checkbox rows in two columns, the Arena and
+  inactive-pile boxes where they apply, the desktop's three omission lines word for word, the text
+  behind a `Show decklist (N lines)` disclosure that opens shut, and `Copy` / `Download` at the
+  foot. The subject, the cards and the file name are the editor's `exportSubject` — the whole list
+  on screen, switched-off piles included and left to the format — so a phone export of a deck is
+  titled, filled and named as the desktop's `Export deck` is.
+
+**`CollectionTransfer`** (`phone/transfer/CollectionTransfer.tsx`) is the collection's pair, with
+its words, built self-contained because step 3.2 is rewriting the Collection page: the same two
+sheets over the collection destination, and the desktop's `UndoNotice` under the pair — the
+collection preview files its undo ticket in `@/lib/bulkUndo` as it does on the desktop, so a phone
+import reads `Imported 4 cards into your collection.` with `Undo`. Export sweeps whatever `filters`
+the host hands it through `useExportScope` (the wall it draws, the desktop's rule), gated on the
+sheet being open; with none it sweeps the whole collection, says `N cards in your collection` and
+draws no box to widen what is already everything. A host that already draws the collection's undo
+notice passes `undoNotice={false}`. **It is mounted nowhere yet**: the collection header takes it
+at merge.
+
+**The file seam is a browser stand-in, and every install draws it the same way.** The spec puts
+file open and save below `Core` (§3.5); phase 3 adds no command and no host seam, so
+`phone/transfer/browserFiles.ts` answers with the web host's own APIs: a picked `File`, read and
+decoded; a `Blob` handed to an `<a download>` and its URL released a task later; and
+`navigator.clipboard.writeText`, which rejects where the browser offers none rather than claiming
+a copy. It is not in `src/lib/`, because the desktop cannot share it — its whole rule (issue #545)
+is that no file handle reaches the page. When phases 4 and 5 seam it, this module is what moves.
+
+- **The decode follows `import.rs`'s order** — a UTF-8 mark, a UTF-16 mark, valid UTF-8, then
+  Windows-1252 — and refuses a file over the megabyte in that file's own sentence before reading a
+  byte. **The Windows-1252 step is the backend's 32-entry table, not `TextDecoder`**: Node's decoder
+  reads that label as Latin-1 and turned `0x92` into a C1 control rather than `’`, which the seam's
+  own test caught. A browser gets it right; a table cannot disagree with itself between engines.
+- **A download cannot say whether it landed.** The desktop's `saveExport` answers whether a file
+  was written; a download is handed to the browser and the sheet says `Downloading <name>.`, which
+  is all it knows.
+- **A WebView may not honour `<a download>` at all** — an Android host is phase 4's to answer, with
+  the system picker; nothing here asks which it is running in.
+
+**The choices are remembered per surface for the session** (`phone/transfer/prefs.ts`), in a phone
+store that opens on the desktop store's own values — both now read `@/features/transfer/prefs`,
+so a first export of the collection is CSV on either face and an import's condition opens on
+`Not set`. A crossing of the 1024px floor loses only a choice made since launch.
+
+**What moved in `src/`**, each with the old names kept so no desktop caller or test changed:
+
+- `transfer/prefs.ts` — `ExportPrefs`, `ImportDefaults` and their opening values, which
+  `useAppStore` now opens on (and re-exports `ExportPrefs`).
+- `export/useExportModel.ts` — the field intersection, the two row filters, the text and the count
+  lines, out of `ExportDialog`'s body, which now draws from it.
+- `import/useImportSource.ts` — the paste, a file's encoding note, the parse, the one resolve press
+  and the step machine, out of `ImportDialog`'s body; `resolveLinesOf` is the line shape the
+  resolver takes. `ImportDialog` itself is store-free now (its one weld was `useImport` taking
+  `DEFAULT_VARIANT` through `useDeck`), though the phone draws its own first step.
+- `destinations/CollectionPreviewBody.tsx` and `DeckPreviewBody.tsx` — the two steps, taking the
+  import's fallbacks as props; `CollectionPreview.tsx` and `DeckPreview.tsx` are now the desktop's
+  store-reading wrappers and re-export the rest. The deck step reads its deck through `useDeckCore`.
+  `deckIntoWith.ts` binds the deck descriptor to either step.
+- `decks/deckExport.ts` — `exportSubject` and `exportFileName`, re-exported from `DeckEditor`.
+
+**Not done**: the wishlist's import and export (its preview reads the store the same way and splits
+the same way — 3.3's); a new deck from a list (`NewDeckPreview` still reads the store, and the
+gallery has no import entry on the phone); a pile's own `Export cards…` and `Import cards…` (the
+editor's category heading menu); reading a list from the clipboard (a read permission the app has
+never asked for). The desktop previews' own controls — the radios, the commander candidates, the
+dropdowns — are the desktop's sizes inside rows floored to 44px.
+
+Driven at 360 and 800 wide over the `starter` seed (Vite on port 5181, headless Chromium 141 on
+Linux with touch emulation): the deck page's foot, the import sheet's paste and preview steps, an
+import landing with its receipt and `Undo`, the export sheet shut and open on CSV; and
+`CollectionTransfer` mounted in a scratch root over the collection page — its pair, the collection
+preview, the undo notice after an import, and the export sheet. `scrollWidth` equalled the
+viewport on every one.
+
+### 7.7 Step 3.7 — light Settings, on both faces (2026-10-03)
+
+**The edition grew its Settings entries**: `Edition.settings`, `null` for every panel (the full
+edition, so it cannot fall behind a new panel) and `LIGHT_SETTINGS` for the light one — `prices`,
+`sync`, `review`, `hidden-tags`, `theory-marks`, `labels`, `cache`, `errors`, `danger`. Left out:
+`updates` and `backup` by the spec's name, `data-folder` (a path a browser or a phone cannot
+open) and `start-view` (a light install opens where its URL says). `edition.ts` carries each
+reason. `SettingsPage` is the edition's second reader, as spec §3.1 grants; `nav.ts` grew
+`panelsOf` and `groupsOf`, and a rail entry with no panel in it is not drawn.
+
+- **The desktop face** lands on the first entry it draws (`Card data`, where the full edition's
+  is `Updates`), searches only what it draws, and drops a hand-off naming a panel it leaves out.
+  The full edition is unchanged; no existing test was edited.
+- **The phone face** lists the same six groups as 52px rows; one opens at a time, its panels drawn
+  beneath it by the desktop's own components, its row pinned while they scroll. The group is not
+  in the URL, so Back leaves Settings from an open group as from a closed one. No search box.
+- **`SyncPanel` was welded** through `@/lib/externalLinks` (the plugin-opener, for *Connect
+  Patreon*). It is now `SyncPanelBody`, which takes `openLink`, and a one-line `SyncPanel` that
+  hands it `openExternal`; the phone face hands it a `window.open` until the host seam for opening
+  a link exists (phases 4 and 5).
+- **Driven in Chromium over the fake** (`mobile:dev` on port 5176): every group opened at 360 wide
+  with no sideways scroll (`scrollWidth` 360 for each), the Clear collection dialog over the
+  window rather than the list, the sync group at 800 in a `max-w-2xl` column, and the desktop
+  face at 1280×800 with six rail entries and `dropbox` matching nothing.
+
+**Open**: the phone face mounts no `useMarketplaceProgress`, so a price feed refreshed from the
+phone's Settings reports through its own mutation and the status read but not the progress event
+(`AppShell` is that hook's one caller); the Mana Pool row is still offered in a browser, which spec
+§4 says it should not be (the host-capability question is phase 5's); and the Sync panel's
+*Scan a code* asks for a camera on a host that may not grant one — phase 6's, with sync itself.
+
+### 7.8 Step 3.8 — the desktop face in the light edition, and the shell (2026-10-03)
+
+**Build: `vite --config vite.mobile.config.ts --mode fake` (Vite's dev server, not a bundle) over
+the Storybook fake's `starter` seed, driven by Playwright in headless Chromium 1194 on Linux.**
+No `?art=live`, so every card is its placeholder. The desktop face was driven at device scale 1
+with no touch; the phone face with mobile emulation (touch, scale 2). Nothing here was measured on
+a phone, a tablet, Windows or a production bundle.
+
+#### The desktop face below its 700px height floor
+
+Widths 1024, 1100 and 1280 at heights 560, 600, 650 and 700, on Search, a card modal, a deck
+(`/decks/1`) with its import and export dialogs, Collection with its import and export dialogs,
+Wishlist, Settings and Scanner. At every size `documentElement.scrollHeight` equalled the
+viewport — nothing scrolls the document.
+
+| What | 1100 × 600 | 1280 × 650 | 1024 × 700 | 1024 × 560 |
+| --- | --- | --- | --- | --- |
+| A deck's *Import a decklist* | 540 tall, its body scrolls (400 of 451) | 585, scrolls (445 / 451) | 591, fits | 504, scrolls (364 / 451) |
+| Export (a deck's, the collection's) | 363 / 411, fit | fit | fit | fit |
+| The card modal's middle column | fits, 3 columns | fits, 3 columns | **0px tall** | **0px tall** |
+
+- **The rail fits to 560**: its six rows and Collapse, Collapse's foot at 525.
+- **The deck editor stays usable at 600**: header, stats, the view row and the quick-add row take
+  the top ~270px, and the stacks and the docked search panel scroll in what is left (~330px).
+- **The card modal breaks, and it is not the height.** The panel is `Dialog`'s, inset 80px a side,
+  so a window between 1024 and about 1062 wide draws it at 864–899px — under its own
+  `@min-[900px]/card` rung, at the two-column one. There the grid's rows are
+  `minmax(0,1fr) auto`: the rail of options takes its whole content height (eight rows and more
+  over the fake's card), the printings-and-prices column above it gets what is left, and the rail spills
+  over the footer. Measured: the middle column **0px** at 1024 × 700 and 1024 × 560, 34px at
+  1024 × 800 and 1060 × 800, 194px at 1024 × 1000. **1024 × 700 is the desktop window's own
+  floor**, so this is the full edition's bug as much as the light one's — `tauri.conf.json` lets a
+  reader size the window there. Not fixed here: the modal's grid is a measured arrangement with
+  its own reasons at every class, and a fix belongs in a change of its own that drives the shipped
+  window too. Screenshots `3.8b-desktop-card-modal-1024x700.png` and `…-1024x560.png`.
+- Nothing else was cheap to fix because nothing else broke.
+
+#### The tablet rail — decided: a rail from 600px
+
+The band between 600 and 1024 is a portrait tablet, an unfolded foldable, or a phone on its side.
+Measured after the change (the "before" column is the bar's 53px given back, and the wall at the
+old width):
+
+| Viewport | Before: the bar | After | The wall |
+| --- | --- | --- | --- |
+| 360 × 800 | 2 columns | unchanged — a bar below 600 | 2 × 162px tiles |
+| 599 × 900 | 3 columns | unchanged | 3 × 184px |
+| 600 × 900 | 3 columns | rail 80 × 850 | 3 × 157px |
+| 800 × 1280 | 5 columns of ~144px | rail 80 × 1230 | 4 × 165px |
+| 915 × 412 | page 309px tall, **under one row** | rail 80 × 362, page 362 | 5 × 153px, one whole row |
+| 740 × 360 | — | rail 80 × 310, five tabs of 62px | 4 × 150px |
+
+**On the phone on its side the vertical is what is scarce**, and the bar's 53px was a sixth of
+what the page had: at 915 × 412 the wall drew less than one row. The rail spends 80px of width
+instead, which on a portrait tablet costs one column out of a height it has to spare, and each
+tile gets bigger. Upright below 600 nothing changed — the spec's measurement there stands. The
+rail asks the viewport's width and nothing else; the tabs are links in the same document order at
+every width (`flex-row-reverse` draws the rail on the left), and in the rail each is a share of
+the column between 44 and 64px, because five 64px rows do not fit a 360-tall landscape screen.
+Screenshots `3.8b-tabbar-before-{915x412,800x1280}.png` and `3.8b-rail-{915x412,800x1280}.png`.
+
+#### The bars beside a cutout
+
+Driven with `Emulation.setSafeAreaInsetsOverride` (left 44, bottom 20): at 560 × 360 the header's
+row is padded 60px on the left (16 + 44), the bar paints from x 0 and pads its tabs 44 and 20, the
+page is padded 44; at 915 × 412 the rail is 124 wide from x 0 (80 + 44) and the page beside it is
+padded 20 at the bottom and nothing on the left. `scrollWidth` equal to the width at both. **The
+page's own sticky line (Search's box) still stops at the inset** — it is the page's bar, under
+`pages/`, and bleeds when that page chooses to. Screenshots `3.8b-cutout-*.png`.
+
+#### Decided without a measurement
+
+- **A view the light edition does not draw.** The collection's *Open a shared collection* is
+  hidden where the shell answers `useReaches("shared")` with false (`src/lib/reach.ts`, provided by
+  `AppShell` from its edition) — so a page asks whether a destination exists here, never which
+  edition it is in — and `useDesktopPlace` refuses any store move onto such a view, putting the
+  store back on the URL's place without touching history. Hidden rather than refused on the press:
+  a link that answered would have nowhere to land, and a share link is a web page a browser opens
+  anyway. At 1280 × 800 the collection draws Import and Export and no Open half.
+- **`Ctrl+Shift+N`** is the full edition's alone; in the light edition the press is left to the
+  browser, where it is the browser's own private-window chord.
+- **`F1` stays the browser's.** Mounting the key map without the caption row would mean an
+  edition-aware catalogue — it lists chords this edition makes inert — for a keyboard story that
+  belongs to the web host (phase 5).
+- **The two history warts are closed by two marks** in `routes.ts`, which both faces read:
+  `PUSHED` (the phone router's; its card entry has the same page directly beneath) and `OVERLAID`
+  (a card the desktop face wrote onto an entry by replace). Driven both ways at 360 ↔ 1280:
+  - a card the phone pushed, closed on the desktop face with Escape: `history.back()` to
+    `/search` with `history.length` unchanged, and the next Back went to `/decks`, the page
+    before — not to a second `/search`;
+  - a card the desktop opened (`history.state` `{ overlaid: true }`), narrowed to the phone face:
+    the entry was split (`{ pushed: true }`, length +1, the address bar unmoved), Back closed the
+    sheet onto `/search`, and the next Back went to `/collection`, the page before.
+  A card reached by a link is neither and keeps the old rule on both faces. **One race is left**:
+  the desktop face's close is a `history.back()`, and a card opened again before that traversal
+  lands is closed by it.
+- **A crossing still discards half-typed text, and that is accepted.** Holding the face while a
+  text field has focus would draw the desktop UI below its floor — the rule `mobile/CLAUDE.md`
+  exists to keep — and would freeze a resize for a caret in an empty search box: the app has no
+  signal for *unsaved* that covers a controlled input and the note editor alike, and a debounce
+  protects nothing typed. The realistic trigger is a tablet rotating across 1024; what it costs is
+  re-typing, and what would prevent it is keeping both faces mounted, which this step did not buy.
+
+#### The fences and the tooling
+
+- **Stories for phone UI**: Storybook's story glob, its stylesheet's `@source` and
+  `src/stories.test.tsx`'s module glob reach `mobile/` (the desktop's own `src/index.css` does
+  not, so the desktop bundle carries no phone class). `Shell`, `TabBar` and `CardWall` have
+  stories; a page's stories come with its step. `npx storybook build` listed `phone-shell`,
+  `phone-tabbar` and `phone-cardwall`, and the phone-only `.h-13` was in the iframe's CSS.
+- **`src/lib/tokens.test.ts` reads `mobile/`**, every sweep of it. The one exception it kept is
+  the `MotionConfig` count, which is now one mount per face — `src/App.tsx` and
+  `mobile/phone/PhoneApp.tsx`, each with `reducedMotion="user"`. A planted third mount and a
+  planted transition with no reduced-motion opt-out each went red. Nothing in `mobile/` violated
+  it.
+- **The fence's blind spots are closed** (`mobile/phone/fence.test.ts`): an `import.meta.glob`
+  pattern is followed to every file it matches, a root-absolute specifier is followed, a
+  template-literal `import()` with nothing interpolated is read as a string and any other
+  non-literal `import()` is refused; the comment stripper is one pass that knows strings,
+  templates and regexes, and over every non-test file in `src/` and `mobile/` it finds exactly the
+  specifiers the old one did; the probe sweep catches `userAgent` however it is spelled,
+  `navigator.platform` by dot, bracket or destructuring, and `@tauri-apps/plugin-os`. Each new
+  rule has a case that fails on a tree with the weld.
+- **The fake's four aliases are one list**, `.storybook/fake/aliases.ts`, read by Storybook and by
+  `vite.mobile.config.ts`. The light config's own copy of the watch-ignore globs was deleted:
+  `vite.watch.ts` (#760) already gives every server the same list, which also settles the `EBUSY`
+  sentence in §4.

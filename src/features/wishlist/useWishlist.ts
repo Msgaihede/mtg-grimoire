@@ -20,6 +20,7 @@ import {
   type ColorFilter,
   type ColorKey,
 } from "@/features/search/useCardSearch";
+import type { TrayCell } from "@/features/search/filterOptions";
 import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import type { Border } from "@/lib/border";
 import {
@@ -178,6 +179,38 @@ export function activeFilterCount(f: WishlistFilterState): number {
 }
 
 /**
+ * Which of `FilterBar`'s tray cells the wishlist offers, in the order it draws them — on the
+ * desktop's bar and the light app's phone sheet alike, which is why it lives beside the hook that
+ * owns every one of them rather than in either page (moved here 2026-10-03).
+ *
+ * The card search's printing cells, `border` among them (issue #573 — a wish is for a printing,
+ * and the printing has a frame), then `needsReview`, which only a list the reconciler walks can
+ * ask. **No `finish` cell**, although the collection's tray has one: a wish carries the finish
+ * the reader *prefers*, which is neither the card search's question (what the printing was
+ * published in) nor the collection's (what a copy is), and a cell drawn here would be read as one
+ * of those two while filtering by the third. **No `price` cell**, and
+ * that is the one absence here that is a fact about the wire rather than about the screen:
+ * `WishlistQuery` carries no `priceMin`/`priceMax`, so the band would be a control whose numbers
+ * reach nothing — which is why those three fields are the optional half of `FilterSurface`.
+ *
+ * **`needsReview` is drawn unconditionally**, where the chip it replaces appeared only once the
+ * reconciler had flagged something. That rule was about a *row*, where a control spending its
+ * whole life saying nothing is a control the reader learns to stop reading; in a shut tray it
+ * costs nothing, and a cell that came and went would be the one thing in this list that moved.
+ */
+// `fulfilled` sat between `rarity` and `needsReview` until 2026-09-08 — the Fulfilled / Still
+// missing pair, which asked the backend which wishes the collection already covered. It went with
+// every other comparison this list made against the binder.
+export const WISHLIST_TRAY: readonly TrayCell[] = [
+  "set",
+  "format",
+  "rarity",
+  "type",
+  "border",
+  "needsReview",
+];
+
+/**
  * Filter state, the debounce, and the paged query behind the wishlist view.
  *
  * `useCollection`'s shape, minus everything a shopping list does not ask: one key built from
@@ -193,8 +226,20 @@ export function activeFilterCount(f: WishlistFilterState): number {
  *   measurement behind it. **There is no `flattenLocally` beside it**, which `useReviewHandoff`'s
  *   sweep was handed until Flatten went: the root's shelves already hold every wish, so a review
  *   hand-off needs the filter and the root and nothing else (`WishlistPage` has the consume site).
+ * @param options.folds The folds the shelves are built from, **in place of the stored ones** —
+ *   `useCollection`'s option of the same name, and like it **passed by no caller since 2026-10-03**:
+ *   the light app's phone face held its folds in the page until step 3.5b and stores them now
+ *   (`docs/reference/light-app.md` §7.5b). Kept as the seam a surface with folds of its own would
+ *   use. Every caller that passes nothing gets `useShelfFolds("wishlist")`'s. Held still by the caller (a `useMemo`), and
+ *   `setFold` / `setMany` still write the stored folds whichever was passed.
  */
-export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boolean } = {}) {
+export function useWishlist({
+  initialNeedsReview,
+  folds: foldsOverride,
+}: {
+  initialNeedsReview?: boolean;
+  folds?: Readonly<Record<string, boolean>>;
+} = {}) {
   // Which marketplace this list quotes — an input to the query and part of its key, because
   // it decides what a Cost cell contains and not merely how it is written.
   const { marketplace } = useMarketplace();
@@ -290,7 +335,9 @@ export function useWishlist({ initialNeedsReview }: { initialNeedsReview?: boole
    * `staleTime: Infinity`, and an answer arriving late re-keys the read rather than wasting one.
    */
   const folderList = useWishlistFolderList();
-  const { folds, setFold, setMany } = useShelfFolds("wishlist");
+  const stored = useShelfFolds("wishlist");
+  const { setFold, setMany } = stored;
+  const folds = foldsOverride ?? stored.folds;
   const shelfFolders = useMemo(() => folderList.folders.map(toShelfFolder), [folderList.folders]);
   const filtering =
     activeFilterCount({

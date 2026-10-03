@@ -9,6 +9,7 @@
  * shelf is filed, and how the table interleaves its heading bands with its rows.
  */
 import { plural } from "@/lib/counts";
+import type { FolderNode } from "@/lib/folderTree";
 import type { ShelfCount, WishlistFolder, WishRow } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
@@ -398,4 +399,81 @@ export function shelfTable(
     }
   }
   return { rows, owners, total };
+}
+
+/** What a folder's heading reads — the recursive total, summed by {@link subtotalsOf}. */
+export interface FolderTotals {
+  wishes: number;
+  copies: number;
+  cost: number;
+  unpriced: number;
+}
+
+/**
+ * A folder the summary has no row for.
+ *
+ * **Not a defensive default — the ordinary answer for an empty folder.**
+ * `wishlist_folder_summary` is a `GROUP BY` over `wishlist_entries`, so a folder holding no
+ * wishes emits no row at all, and a card fed a raw `Map.get` would render `undefined` figures
+ * over exactly the folder whose whole job on this screen is to be empty.
+ *
+ * **It is the answer for a folder the summary skipped, and never for a summary that has not
+ * answered yet.** The two are one `Map.get` miss apart and mean opposite things — see the
+ * `summaryQuery.isPending` branch at `WishlistPage`'s wall, which is what keeps them apart.
+ */
+export const NO_WISHES: FolderTotals = { wishes: 0, copies: 0, cost: 0, unpriced: 0 };
+
+/**
+ * Every folder's numbers **with its sub-folders' added in**, indexed by folder id.
+ *
+ * `wishlist_folder_summary` answers *direct* counts — this folder's own wishes, never the ones
+ * nested under it — and says so at its own type, because SQL that walked the tree would be a
+ * second implementation of the arithmetic `buildFolderTree` already does for `FolderNode.count`.
+ * This is that arithmetic, over four fields instead of one: a folder card handed a raw lookup
+ * would draw `0 wishes` over a drawer holding twelve in two sub-folders, and the reader would
+ * only catch it by opening the drawer.
+ *
+ * The whole tree in one pass rather than a sum per card, because a node's total is its children's
+ * totals and a per-card recursion would recompute every level of the cabinet once per level.
+ */
+export function subtotalsOf(
+  nodes: readonly FolderNode<WishlistFolder>[],
+  direct: ReadonlyMap<number, FolderTotals>,
+): ReadonlyMap<number, FolderTotals> {
+  const out = new Map<number, FolderTotals>();
+  const visit = (node: FolderNode<WishlistFolder>): FolderTotals => {
+    const own = direct.get(node.folder.id) ?? NO_WISHES;
+    const total = { ...own };
+    for (const child of node.children) {
+      const under = visit(child);
+      total.wishes += under.wishes;
+      total.copies += under.copies;
+      total.cost += under.cost;
+      total.unpriced += under.unpriced;
+    }
+    out.set(node.folder.id, total);
+    return total;
+  };
+  for (const node of nodes) visit(node);
+  return out;
+}
+
+/**
+ * A folder heading's unfiltered figures, recursive — {@link subtotalsOf}'s total as
+ * {@link shelfStat} reads it: `null` for Not sorted, which nothing counts unfiltered, and while
+ * the summary has not answered (`subtotals` is `null` then); a cost of `0` is no price, never
+ * `$0.00`.
+ */
+export function folderFigures(
+  shelf: Pick<Shelf, "id" | "kind">,
+  subtotals: ReadonlyMap<number, FolderTotals> | null,
+): ShelfFigures | null {
+  if (shelf.kind === "unfiled" || subtotals === null) return null;
+  const total = subtotals.get(shelf.id) ?? NO_WISHES;
+  return {
+    wishes: total.wishes,
+    copies: total.copies,
+    cost: total.cost > 0 ? total.cost : null,
+    unpriced: total.unpriced,
+  };
 }

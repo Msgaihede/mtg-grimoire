@@ -29,7 +29,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ipc, type DeckNote } from "@/lib/ipc";
 import { sectionFailure } from "./metaRows";
-import { opened } from "./useDeck";
+import { opened } from "./deckQuery";
 
 /**
  * Stable identity for "no notes" — a deck with none, an unloaded deck and a refused read all

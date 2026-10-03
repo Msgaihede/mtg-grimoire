@@ -1140,8 +1140,14 @@ Every one of these has its measurement and its story in
   2026-09-27. The light app picks between this UI and a phone face by viewport width — in
   `mobile/useFace.ts`, which is the only place that question is asked. What `src/` reads instead is
   an **`Edition`** (`lib/edition.ts`), handed to the shell at the root: which rail rows to draw,
-  whether to draw the caption, and which view chords act. **A page never reads it** — `AppShell` is
-  its one reader today — and a provider passes a module constant, never an object built in render.
+  whether to draw the caption, which view chords act, and which Settings panels exist. **A page
+  never reads it** — `AppShell` is one reader and `SettingsPage`'s entry list the other, the one
+  exception spec §3.1 grants — and a provider passes a module constant, never an object built in
+  render. **What a page may ask instead is whether a view exists in this window** —
+  `useReaches(view)` (`lib/reach.ts`), which the shell answers from its edition and which is every
+  view with no provider. A control whose only job is to go to a view the window does not draw is
+  hidden by it, never refused on the press; the collection's *Open a shared collection* is the
+  first.
 - **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
   `Record<string, unknown> | Uint8Array`. It widened for one *shape* of call, which two wrappers
   make — `ipc.scannerFrame` and `ipc.scannerCapture`, the only two that pass raw bytes and
@@ -1270,7 +1276,8 @@ Full detail and every measurement: [docs/reference/motion.md](../docs/reference/
   `src/lib/tokens.test.ts` is the only thing that catches it.
 - **`<MotionConfig reducedMotion="user">` is mounted once, in `App.tsx`** — not `main.tsx`,
   which nothing in the suite or Storybook loads. Motion ships `reducedMotion: "never"`, so that
-  line is load-bearing rather than decorative.
+  line is load-bearing rather than decorative. The light app's phone face mounts the one other, in
+  `mobile/phone/PhoneApp.tsx`; `tokens.test.ts` holds the pair, one per face.
 - **It only reduces positional keys, which is a trap with a live example.** `marginBottom` is
   **not** among them, so the deck stack's 293px reflow would have travelled at full speed.
   **Any `motion` animation of a non-positional property needs its own `useReducedMotion()`

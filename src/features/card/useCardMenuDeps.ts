@@ -16,19 +16,16 @@
  * `printingsDeck` — and because it carries the deck extras.
  */
 import { useCallback, useMemo, useState } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import {
   useCollectionFolderList,
   useSetCollectionFolder,
   useSetCollectionFolderMany,
 } from "@/features/collection/useCollectionFolders";
 import { useWishlistFolderList } from "@/features/wishlist/useWishlistFolders";
-import { MENU_CONDITION } from "@/lib/conditions";
 import type { Finish } from "@/lib/finish";
-import { ipc, ipcError } from "@/lib/ipc";
+import { ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
-import { refreshCardSearches } from "@/lib/searchMarks";
 import { DEFAULT_VARIANT } from "@/features/decks/useDeck";
 import {
   DeckTargetSubmenu,
@@ -36,6 +33,7 @@ import {
   type CardMenuDeps,
   type CardMenuTarget,
 } from "./cardMenu";
+import { useCollectionAdd, useWishlistAdd } from "./useCardAdds";
 
 /** What the collection's root is called in a sentence — the breadcrumb's first segment
  *  (`CollectionBreadcrumb`'s `ROOT`) and the activity feed's `COLLECTION.root`. */
@@ -60,7 +58,6 @@ export interface CardMenuWiring {
 }
 
 export function useCardMenuDeps(): CardMenuWiring {
-  const queryClient = useQueryClient();
   const { marketplace } = useMarketplace();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
 
@@ -144,77 +141,30 @@ export function useCardMenuDeps(): CardMenuWiring {
   const [refusal, setRefusal] = useState<string | null>(null);
 
   /**
-   * One copy of exactly the printing that was right-clicked.
+   * One copy of exactly the printing that was right-clicked — `useCollectionAdd`, whose doc carries
+   * the four keys it settles and why (out of this file on 2026-10-03, for the light app's phone
+   * face).
    *
-   * The four keys `AddToCollection` invalidates on a collection add, verbatim and for its
-   * reasons: the list and its summary, every wish for that card (`ownedQuantity` is summed from
-   * `collection_entries`), every deck (a claim is clamped to what the entry still holds), and
-   * the search results, which draw `ownedQuantity` on every row and every tile.
+   * **The refusal is cleared when the next add starts, not when one succeeds**, which is what every
+   * other banner on these pages does — each is derived from the *latest* mutation's state, so a new
+   * write supersedes the last one's complaint. Cleared only on success, a refusal would stand on
+   * screen while the reader dealt with it some other way: `CollectionPage` carries a comment about
+   * exactly that bug being found live and fixed for the stepper and the removal. Both writes here
+   * clear the same one, so the sentence on screen always belongs to the last thing the reader
+   * asked for.
    */
-  const collectionAdd = useMutation({
-    mutationFn: ({
-      cardId,
-      finish,
-      folderId,
-    }: {
-      cardId: string;
-      finish: Finish;
-      folderId: number | null;
-    }) =>
-      ipc.collectionAdd({
-        cardId,
-        finish,
-        condition: MENU_CONDITION,
-        quantity: 1,
-        // Where the reader pointed, and `null` for the root — never omitted. `folder_id` is the
-        // eleventh term of the storage grain, so a folder the caller failed to pass is not a
-        // copy filed in the wrong drawer but a *second row* at the root for the same printing.
-        folderId,
-      }),
-    // **Cleared when the next add starts, not when one succeeds**, which is what every other
-    // banner on these pages does — each is derived from the *latest* mutation's state, so
-    // a new write supersedes the last one's complaint. Cleared only on success, a refusal would
-    // stand on screen while the reader dealt with it some other way: `CollectionPage` carries a
-    // comment about exactly that bug being found live and fixed for the stepper and the removal.
-    // Both writes here clear the same one, so the sentence on screen always belongs to the last
-    // thing the reader asked for.
+  const collectionAdd = useCollectionAdd({
     onMutate: () => setRefusal(null),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["collection"] });
-      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void queryClient.invalidateQueries({ queryKey: ["decks"] });
-      void refreshCardSearches(queryClient);
-    },
     onError: (error) => setRefusal(`Couldn't add to your collection — ${ipcError(error)}`),
   });
 
   /**
    * A wish for **this exact printing** — the menu is opened on one, and "any printing" is a
-   * choice the quick-add popup exists to offer.
-   *
-   * Two keys rather than four: a wish is a copy the reader does not have, so it moves no
-   * collection figure and no deck's arithmetic. The search results are re-read because every
-   * row draws `wishlisted`.
+   * choice the quick-add popup exists to offer. `useWishlistAdd`, with its two keys.
    */
-  const wishlistAdd = useMutation({
-    mutationFn: ({ target, folderId }: { target: CardMenuTarget; folderId: number | null }) =>
-      ipc.wishlistAdd({
-        cardId: target.cardId,
-        quantity: 1,
-        // The surface's own where it names one — a wish for the foil is a different wish, and
-        // is not filled by the nonfoil. Absent is no preference, which is not nonfoil.
-        preferredFinish: target.finish,
-        // Where the reader pointed, and `null` for the root — never omitted. The field is part
-        // of the row's storage grain, so a folder the caller failed to pass is not a wish filed
-        // in the wrong drawer but a *second* wish for the same card.
-        folderId,
-      }),
+  const wishlistAdd = useWishlistAdd({
     // Superseded on the next add, exactly as the collection's is, and clearing the same one.
     onMutate: () => setRefusal(null),
-    onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-      void refreshCardSearches(queryClient);
-    },
     onError: (error) => setRefusal(`Couldn't add to your wishlist — ${ipcError(error)}`),
   });
 
@@ -263,7 +213,18 @@ export function useCardMenuDeps(): CardMenuWiring {
     [addCopy],
   );
   const addToWishlist = useCallback(
-    (target: CardMenuTarget, folderId: number | null) => addWish({ target, folderId }),
+    (target: CardMenuTarget, folderId: number | null) =>
+      addWish({
+        cardId: target.cardId,
+        quantity: 1,
+        // The surface's own where it names one — a wish for the foil is a different wish, and
+        // is not filled by the nonfoil. Absent is no preference, which is not nonfoil.
+        preferredFinish: target.finish,
+        // Where the reader pointed, and `null` for the root — never omitted. The field is part
+        // of the row's storage grain, so a folder the caller failed to pass is not a wish filed
+        // in the wrong drawer but a *second* wish for the same card.
+        folderId,
+      }),
     [addWish],
   );
   /** The **entry** id rather than a target, because this is the one write here that is about a

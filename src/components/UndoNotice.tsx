@@ -39,7 +39,7 @@ import { useTooltip } from "@/components/tooltip/useTooltip";
 import { CardMenuRefusal } from "@/features/card/CardMenuRefusal";
 import { useBulkUndo, useUndoOffer, type UndoOffer, type UndoScope } from "@/lib/bulkUndo";
 import { FOCUS } from "@/lib/focus";
-import { ipc, ipcError } from "@/lib/ipc";
+import { ipc, ipcError, type BulkUndoOutcome } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { invalidateOwnedWrite, refreshCardSearches } from "@/lib/searchMarks";
 import { cn } from "@/lib/utils";
@@ -59,19 +59,30 @@ function settleUndo(client: QueryClient, scope: UndoScope): void {
  *  button for the page around it. */
 export const DISMISS_UNDO = "Dismiss";
 
-export function UndoNotice({
-  scope,
-  className,
-}: {
-  scope: UndoScope;
-  /** The host's layout for the always-mounted region — `empty:-mt-2` in a `gap-2` column, so a
-   *  region saying nothing gives back the gap it would otherwise hold open. */
-  className?: string;
-}) {
+/**
+ * The offer for one scope and the two things a reader can do with it — **take it back** through
+ * `bulk_undo`, or put it down unpressed — with the refusal the last press left behind.
+ *
+ * **`UndoNotice`'s whole behaviour, less the drawing**, split out on 2026-10-03 so the light app's
+ * phone face offers the same undo, settled the same way, in a receipt line of its own: the module
+ * doc above is the contract for both.
+ */
+export function useBulkUndoAction(scope: UndoScope): {
+  offer: UndoOffer | null;
+  refusal: string | null;
+  pending: boolean;
+  undo: () => void;
+  /**
+   * Take back one ticket by its id, answering when `bulk_undo` has — the same mutation as
+   * {@link undo}, for a caller that names the ticket its own write was answered with and wants to
+   * hear how it went. Rejects on a refusal, which {@link refusal} also says.
+   */
+  take: (id: number) => Promise<BulkUndoOutcome>;
+  dismiss: () => void;
+} {
   const offer = useUndoOffer(scope);
   const drop = useBulkUndo((s) => s.drop);
   const queryClient = useQueryClient();
-  const tip = useTooltip();
 
   /** The last refusal's sentence, as the alert draws it — or `null`. */
   const [refusal, setRefusal] = useState<string | null>(null);
@@ -97,6 +108,32 @@ export function UndoNotice({
     onSettled: (_outcome, _error, id) => drop(scope, id),
   });
   const pending = undo.isPending;
+  return {
+    offer,
+    refusal,
+    pending,
+    undo: () => {
+      if (offer === null || pending) return;
+      undo.mutate(offer.id);
+    },
+    take: (id) => undo.mutateAsync(id),
+    dismiss: () => {
+      if (offer !== null) drop(scope, offer.id);
+    },
+  };
+}
+
+export function UndoNotice({
+  scope,
+  className,
+}: {
+  scope: UndoScope;
+  /** The host's layout for the always-mounted region — `empty:-mt-2` in a `gap-2` column, so a
+   *  region saying nothing gives back the gap it would otherwise hold open. */
+  className?: string;
+}) {
+  const { offer, refusal, pending, undo, dismiss } = useBulkUndoAction(scope);
+  const tip = useTooltip();
 
   return (
     <>
@@ -126,7 +163,7 @@ export function UndoNotice({
                     aria-disabled={pending || undefined}
                     onClick={() => {
                       if (pending) return;
-                      undo.mutate(offer.id);
+                      undo();
                     }}
                     // The *Needs review* banner's `Show them`, verbatim but for the glyph: the one
                     // accent press in a surface-toned box, which is what a banner offering a single
@@ -147,7 +184,7 @@ export function UndoNotice({
                     type="button"
                     aria-label={DISMISS_UNDO}
                     {...tip(DISMISS_UNDO, { describes: false })}
-                    onClick={() => drop(scope, offer.id)}
+                    onClick={dismiss}
                     className={cn(
                       "rounded-md p-1 text-dim",
                       "transition-colors duration-[var(--duration-fast)] ease-standard hover:text-text",

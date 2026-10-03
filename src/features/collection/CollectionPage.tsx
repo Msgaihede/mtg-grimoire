@@ -8,7 +8,7 @@ import {
   type MouseEvent as ReactMouseEvent,
   type ReactNode,
 } from "react";
-import { useMutation, useQueryClient, type InfiniteData } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp, FolderInput, Lock, LockOpen, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog } from "@/components/Dialog";
@@ -24,12 +24,11 @@ import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { dragData } from "@/features/decks/dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "@/features/decks/metaRows";
 import { MoveToFolder } from "@/features/decks/MoveToFolder";
-import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
+import { CardGrid, type GridSections } from "@/features/search/CardGrid";
 import {
   FilterBar,
   StatedFiltersLine,
   type FilterLabels,
-  type TrayCell,
 } from "@/features/search/FilterBar";
 import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { ShelfLabel } from "@/features/shelves/ShelfLabel";
@@ -47,24 +46,22 @@ import { everythingLabel, scopeLabel, useExportScope } from "@/features/transfer
 import { collectionDestination } from "@/features/transfer/import/destinations/CollectionPreview";
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
-import { offerUndo } from "@/lib/bulkUndo";
 import { CONDITION_LABEL, CONDITIONS, MENU_CONDITION } from "@/lib/conditions";
 import { plural } from "@/lib/counts";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
-import { FINISHES, FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
+import { FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
 import {
   buildFolderTree,
   folderDescendants,
   folderLevel,
-  type FolderNode,
+  trailOf,
 } from "@/lib/folderTree";
 import {
   ipc,
   ipcError,
   type CollectionFolder,
-  type CollectionPage as Page,
   type CollectionRow,
 } from "@/lib/ipc";
 import { LAYER } from "@/lib/layers";
@@ -87,6 +84,14 @@ import type { CollectionFolderTotals } from "./CollectionFolderCard";
 import { CollectionSearchPanel } from "./CollectionSearchPanel";
 import { CollectionSummaryHeader } from "./CollectionSummary";
 import { CollectionTable, type CollectionTableShelves } from "./CollectionTable";
+import {
+  collectionTiles,
+  NO_CARDS,
+  shelfTotal,
+  subtotalsOf,
+  tilesByShelf,
+  type CollectionTile,
+} from "./collectionWall";
 import {
   CollectionEmptyShelf,
   CollectionShelfHeading,
@@ -114,7 +119,9 @@ import {
 import { PickCopies, type CopyChoice } from "./PickCopies";
 import { ShareFolderMenu, shareTargetFor } from "./ShareFolderMenu";
 import { pinnedFolders } from "./PinnedFolders";
-import { useCollection, type Collection } from "./useCollection";
+import { COLLECTION_TRAY, useCollection, type Collection } from "./useCollection";
+import { useCollectionEntryWrites } from "./useCollectionEntryWrites";
+import { countEditableIn, quantityRefusal } from "./entryFences";
 import {
   useCollectionFolders,
   useSetCollectionFolder,
@@ -212,186 +219,6 @@ interface LockedMove {
 }
 
 /**
- * A folder the summary has no row for.
- *
- * **Not a defensive default — the ordinary answer for an empty folder.**
- * `collection_folder_summary` is a `GROUP BY` over `collection_entries`, so a folder holding
- * nothing emits no row at all, and a card fed a raw `Map.get` would render `undefined` figures
- * over exactly the drawer whose whole job on this screen is to be empty. `0 cards` is the honest
- * face of an empty drawer, and an empty drawer is where the next card goes.
- *
- * **It is the answer for a folder the summary skipped, and never for a summary that has not
- * answered yet.** The two are one `Map.get` miss apart and mean opposite things — see the
- * `summaryQuery.isPending` branch at the wall below, which is what keeps them apart.
- *
- * `value` is `null` rather than `0` for `formatPrice`'s reason and the backend's own: `$0.00` is a
- * price nobody quoted.
- */
-const NO_CARDS: CollectionFolderTotals = { cards: 0, value: null };
-
-/**
- * The trail from the root down to the folder the reader is standing in — **without the root**,
- * which the breadcrumb prepends itself because `null` is a destination rather than a folder.
- *
- * Walked up through `parentId` and then reversed, because that is the only direction the flat rows
- * can be read in. Two shapes of broken input are resolved rather than trusted, and both resolve
- * **towards the root**: a `parentId` naming a folder this list does not carry — one another
- * surface deleted between the two reads — ends the walk there, so the folder draws as though it
- * sat at the top level; and a cycle, which the backend refuses outright and which only corruption
- * could produce, terminates on the visited set. That is `buildFolderTree`'s own rule applied to
- * the other half of the tree, and it is the rule because the alternative strands the reader inside
- * a folder with no way back out.
- *
- * A `folderId` naming nothing at all answers the empty trail, which is the same rule seen from the
- * bottom — the reader reads as standing at the root, which is where the cards of a deleted folder
- * have just gone.
- */
-function trailOf(
-  folders: readonly CollectionFolder[],
-  folderId: number | null,
-): readonly CollectionFolder[] {
-  const byId = new Map(folders.map((folder) => [folder.id, folder]));
-  const trail: CollectionFolder[] = [];
-  const seen = new Set<number>();
-  let at = folderId;
-  while (at !== null && !seen.has(at)) {
-    seen.add(at);
-    const folder = byId.get(at);
-    if (folder === undefined) break;
-    trail.unshift(folder);
-    at = folder.parentId;
-  }
-  return trail;
-}
-
-/**
- * Every folder's numbers **with its sub-folders' added in**, indexed by folder id.
- *
- * `collection_folder_summary` answers *direct* counts — this folder's own copies, never the ones
- * nested under it — and says so at its own type, because SQL that walked the tree would be a
- * second implementation of the arithmetic `buildFolderTree` already does for `FolderNode.count`.
- * This is that arithmetic over the two fields: a heading handed a raw lookup would draw
- * `0 cards` over a drawer holding twelve in two sub-folders, and the reader would only catch it by
- * opening the drawer.
- *
- * **A `null` value stays `null` all the way up, and only until something under it is priced.** The
- * backend answers `None` for a folder the marketplace could price nothing in, and a sub-tree in
- * which *nothing* is priced has to say the same thing rather than `$0.00` — but a drawer holding
- * one priced card and one unpriced one is worth what the priced one is worth. So a child's `null`
- * contributes nothing and a child's number lifts the parent out of `null`, which is exactly how
- * `sum()` treats a `NULL` one statement lower down.
- *
- * The whole tree in one pass rather than a sum per card, because a node's total is its children's
- * totals and a per-card recursion would recompute every level of the cabinet once per level.
- */
-function subtotalsOf(
-  nodes: readonly FolderNode<CollectionFolder>[],
-  direct: ReadonlyMap<number, CollectionFolderTotals>,
-): ReadonlyMap<number, CollectionFolderTotals> {
-  const out = new Map<number, CollectionFolderTotals>();
-  const visit = (node: FolderNode<CollectionFolder>): CollectionFolderTotals => {
-    const own = direct.get(node.folder.id) ?? NO_CARDS;
-    let cards = own.cards;
-    let value = own.value;
-    for (const child of node.children) {
-      const under = visit(child);
-      cards += under.cards;
-      if (under.value !== null) value = (value ?? 0) + under.value;
-    }
-    const total = { cards, value };
-    out.set(node.folder.id, total);
-    return total;
-  };
-  for (const node of nodes) visit(node);
-  return out;
-}
-
-/** One tile of the wall: a printing **in one finish**, and how many copies of it the collection
- *  holds. */
-interface CollectionTile extends GridCard {
-  /**
-   * This tile's identity — {@link tileKeyOf} over the card, the finish **and the folder**, which is
-   * **not** the card's id.
-   *
-   * A foil and a played nonfoil of one printing are two tiles carrying one `id`, and since shelves
-   * (decision 11) so are the same finish filed in two folders: each shelf draws its own tile with
-   * its own count, so the wall's arrow walk and picked set key on this instead. See `CardGrid`'s
-   * `GridCard.key`.
-   */
-  key: string;
-  /**
-   * What the ring compares with the open card — the card and the finish, **no folder** (spec
-   * §5.6). The reader opened a printing, not a filing, so every shelf it sits on says so.
-   */
-  ringKey: string;
-  /** How many copies of this printing **in this finish** the collection holds, across every
-   *  grade and language **in this tile's folder** — what `OwnedBadge` draws over the art. */
-  copies: number;
-  /**
-   * The finish to mark the art with — the tile's own, since the finish is part of what makes two
-   * tiles two.
-   *
-   * **`null` is a word this build cannot name and nothing else.** `collection_entries.finish` is
-   * TEXT with a CHECK rather than an enum this side knows, so a row can arrive spelling something
-   * `FINISHES` has never heard of; that marks the art with nothing rather than with a sheen no
-   * stylesheet has. It is no longer "the copies behind this tile disagree" — grouping on the
-   * finish is what removed that question, and every tile is one finish now.
-   */
-  finish: Finish | null;
-  /**
-   * What one copy of this printing, in **this** finish, costs at the marketplace the query named.
-   *
-   * Taken off the group's first row rather than reduced across them: every row in a group now
-   * names the same printing *and* the same finish, so they all carry the same figure and picking
-   * the first is not a choice between two answers. `null` is unpriced there, and it is never
-   * filled in from another marketplace or another finish.
-   */
-  unitPrice: number | null;
-  /** Carried for the right-click menu alone — nothing on the wall draws it. A menu add is
-   *  filed by what the card *does*, exactly as a drag of the same card is. */
-  typeLine: string | null;
-  /** Also the menu's alone: which oracle card this is, so "View all printings" can reach it.
-   *  `null` where the entries behind this tile are orphans. */
-  oracleId: string | null;
-  /**
-   * The finishes the reader's own entries for this printing are in, as the JSON list
-   * `CardMenuTarget.finishes` takes.
-   *
-   * **Not the finishes the printing exists in** — a collection row does not carry those — and
-   * that difference is the point rather than a compromise. The tile sums entries, so it knows
-   * exactly which finishes are behind the art in front of the reader — and since the finish
-   * joined the grain that is **at most one**, so the menu records it without asking.
-   *
-   * **The empty list is the case worth warning about, and exactly one thing produces it**: a row
-   * spelling a finish word `FINISHES` cannot name, which {@link ownedFinishes} drops rather than
-   * pass on to the backend. A tile left saying nothing here falls to the menu's unknown-list rule
-   * and silently records a **nonfoil** copy — the same shape of failure the whole finish rule
-   * exists to prevent, arrived at from the one direction the rule cannot close. It is 0 live rows,
-   * and it is written down because the `CHECK` on `collection_entries.finish` is the only thing
-   * holding it there.
-   *
-   * (That warning was illustrated with "a reader who owns two foils and no nonfoil" until
-   * 2026-08-26. The example was false and pre-dated the split: such a reader has always got
-   * `["foil"]` out of {@link ownedFinishes} and a foil entry recorded. The warning was right; the
-   * story attached to it was not.)
-   *
-   * The narrowing itself — `FINISHES` order, unrecognised words dropped — belongs to
-   * {@link ownedFinishes} and is argued there rather than twice.
-   */
-  finishes: string;
-  /**
-   * The folder every copy behind this tile is filed in — `null` for the root.
-   *
-   * **One folder, and that is decision 11.** The folder joined the tile's key when the wall became
-   * shelves, because a tile belongs to one shelf and a shelf is one folder: a printing filed in two
-   * drawers is a tile on each, each badged with that drawer's own copies. So what used to be a list
-   * — and a caption that said `2 folders` because no single name was honest — is one id, and the
-   * heading above the tile names it.
-   */
-  folderId: number | null;
-}
-
-/**
  * The finish this tile is **marked** with — the tile's own word, with `nonfoil` mapped to nothing.
  *
  * **`nonfoil` is not a mark, and that is a rule with a shipped failure behind it.** `CardArt` gates
@@ -455,38 +282,6 @@ const lockedCaption = (lockedIds: ReadonlySet<number>) => (tile: CollectionTile)
     </span>
   );
 };
-
-/**
- * The entries' finishes for one printing, in the app's own order, as stored JSON.
- *
- * `FINISHES` order (nonfoil, foil, etched) rather than the order the rows arrived in: it is
- * Scryfall's, it is what every finish picker in this app reads in, and the card menu's
- * "Add to → Collection" records the list's first finish — so an order that depended on which
- * entry the backend sorted first would file a different finish from one render to the next.
- * Unrecognised words are dropped — `finish` is TEXT with a CHECK rather than an enum this side
- * knows — and a tile left with nothing falls to the menu's unknown-list rule, which is the honest
- * answer for an entry whose finish this build cannot name.
- *
- * Every entry counts, including one emptied to zero: the wall draws a tile for it, the table
- * keeps the row with its condition and its purchase story, and it is still a finish the reader
- * has recorded holding this printing in.
- *
- * **The set handed in is now at most a singleton, and that is what makes this function worth
- * keeping rather than what makes it redundant.** The finish joined the wall's grain on
- * 2026-08-26, so a tile merges one finish by construction and this answers one entry wherever the
- * word is one `FINISHES` knows — and the empty list for the unrecognised one the paragraph above
- * is about. One is exactly the answer the menu wants: `buildCardMenu` records a single-finish
- * list without asking, so a reader who owns two foils and no nonfoil gets a **foil** entry.
- *
- * The old two-element answer was the honest thing to say about a tile that merged two objects,
- * and the fix was to stop merging them. What survives here is the narrowing — `FINISHES` order,
- * unrecognised words dropped — which a raw `JSON.stringify([row.finish])` would throw away.
- * `CollectionTile.finishes` defers to this function for that rule rather than restating it, and
- * carries the one thing that is the *field's* business: what an empty list costs at the menu.
- */
-function ownedFinishes(seen: ReadonlySet<string>): string {
-  return JSON.stringify(FINISHES.filter((finish) => seen.has(finish)));
-}
 
 /**
  * The card a right-click on an **entry** is about.
@@ -653,30 +448,6 @@ function focusedElement(): HTMLElement | null {
   return document.activeElement instanceof HTMLElement ? document.activeElement : null;
 }
 
-/**
- * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
- *
- * The card search's printing cells — `border` among them, since a copy has its printing's frame —
- * then the three only a collection can ask: what the copy *is*, what state it is in, and whether a
- * sync left a question against it. **`finish` is the first of those three and not the card
- * search's**, although both trays name it: here it asks which finish this copy is, where the card
- * search asks which finishes the printing was published in (`FilterBar`'s finish cell carries
- * both readings). The absences are each a fact
- * about the list rather than an omission — there is no **Owned** pair because every row here is a
- * copy the reader has, no **All printings** because these *are* their printings, and no **Decks**
- * because that cell is the deck editor's Collection tab and asks about one deck.
- */
-const COLLECTION_TRAY: readonly TrayCell[] = [
-  "set",
-  "format",
-  "rarity",
-  "type",
-  "border",
-  "price",
-  "finish",
-  "condition",
-  "needsReview",
-];
 
 export function CollectionPage() {
   // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.
@@ -910,193 +681,12 @@ export function CollectionPage() {
   const [importing, setImporting] = useState(false);
 
   /**
-   * Rewrite one entry wherever the collection is cached.
-   *
-   * Every cached filter combination, not just the one on screen: the same row is in the
-   * "everything" list and in the "foils only" list, and a stepper press that fixed one and
-   * left the other would show two different numbers for one card one filter click apart.
+   * The entry writes — the stepper, the removal and the bulk removal — and the cache arithmetic
+   * they share. **`useCollectionEntryWrites` since 2026-10-03**, store-free, so the light app's
+   * phone face presses the same three mutations with the same patches and invalidations; the
+   * doc for each is at its new home.
    */
-  const patchEntry = useCallback(
-    (id: number, next: ((row: CollectionRow) => CollectionRow) | null) => {
-      queryClient.setQueriesData<InfiniteData<Page>>(
-        { queryKey: ["collection", "list"] },
-        (data) => {
-          if (!data || !data.pages.some((p) => p.items.some((r) => r.id === id))) return data;
-          return {
-            ...data,
-            pages: data.pages.map((page) =>
-              next === null
-                ? {
-                    items: page.items.filter((r) => r.id !== id),
-                    // Every page carries the same count of the whole list, so every page's
-                    // copy of it moves — otherwise the header the *first* page feeds would go
-                    // on counting a row that is gone.
-                    total: Math.max(0, page.total - 1),
-                  }
-                : { ...page, items: page.items.map((r) => (r.id === id ? next(r) : r)) },
-            ),
-          };
-        },
-      );
-    },
-    [queryClient],
-  );
-
-  /** Undo, for a write the backend refused. */
-  const snapshot = useCallback(
-    () => queryClient.getQueriesData<InfiniteData<Page>>({ queryKey: ["collection", "list"] }),
-    [queryClient],
-  );
-  const restore = useCallback(
-    (saved: ReturnType<typeof snapshot>) => {
-      for (const [key, data] of saved) queryClient.setQueryData(key, data);
-    },
-    [queryClient],
-  );
-
-  /**
-   * What every write here has in common: the header re-fetches, the search is marked stale,
-   * and the list is *not* re-fetched — the row's own number has already been rewritten from
-   * the answer, and re-reading a hundred rows because one of them changed by one is a round
-   * trip nobody is waiting for. A wrong total, though, is a worse lie than a slow one.
-   */
-  const settle = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["collection", "summary"] });
-    // And the folder subtotals, for the header's own reason one level down: `cards` is
-    // `sum(quantity)` and `value` is `sum(quantity * unit_price)`, so a stepper press on a filed
-    // row moves the card above it by exactly the amount it moved the header. This is the wishlist's
-    // 2026-08-22 lesson stated in the collection's terms — a folder card went on saying
-    // `2 wishes · $20.00` over a drawer holding one, because the argument that "the row's own
-    // number is already the answer" is true about the *row* and false about everything counted
-    // from it. **Neither repairs itself at the app's own `staleTime`** (`lib/query.ts`, 30s): this
-    // query's observer is mounted for the life of the page, so marking it stale without a refetch
-    // changes nothing.
-    //
-    // Named rather than folded into `["collection"]`, which would take the list with it — the
-    // paragraph above is why the list is deliberately left alone here.
-    void queryClient.invalidateQueries({ queryKey: ["collection", "folderSummary"] });
-    // And the headings, for the same reason one level further down: a heading's figures are
-    // `collection_shelf_counts` rolled up the tree, so a stepper press on a filed row moves the
-    // heading over it by exactly what it moved the header — and the counts query is mounted for the
-    // life of the page, so a stale mark alone would change nothing.
-    void queryClient.invalidateQueries({ queryKey: ["collection", "shelfCounts"] });
-    // The wishlist counts this list: a wish's `ownedQuantity` is computed from
-    // `collection_entries`, so a stepper press has just made every cached wish for that card
-    // wrong. The same pair `AddToCollection` invalidates, for the same reason — a write here
-    // is the same write it makes.
-    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    // And the search results, which draw `ownedQuantity` on every row now. Brought up to date
-    // rather than merely marked — an active search is patched in place (`@/lib/searchMarks`),
-    // and one that is not on screen is only marked stale.
-    void refreshCardSearches(queryClient);
-    // And every deck. Since schema v25 a deck owns what its own group physically holds, summed
-    // per oracle id, so the row this stepper just changed *is* a deck's arithmetic if it is
-    // filed in a deck group — and is spare for every theory list if it is not. Either way what
-    // that deck says it owns, and the shortfall its "missing to wishlist" button would buy,
-    // moved without the deck being touched at all. There is nothing left to recompute: the
-    // number is read off the folder at read time rather than kept in a claim table.
-    void queryClient.invalidateQueries({ queryKey: ["decks"] });
-  }, [queryClient]);
-
-  /**
-   * What a refused write leaves behind, on either path.
-   *
-   * The whole view, not just the list: a refused write is usually a row something else
-   * already removed (`GONE`), and a collection that has lost a row has also lost the copies,
-   * the value and the unique count that row was part of — measured live, the header went on
-   * counting a deleted entry until this reached past the table. The wishlist and the search
-   * go with it for the same reason a success takes them: the copies that deletion took are
-   * copies some wish counted as owned and some result row is badged with.
-   */
-  const settleFailure = useCallback(() => {
-    void queryClient.invalidateQueries({ queryKey: ["collection"] });
-    void queryClient.invalidateQueries({ queryKey: ["wishlist"] });
-    void refreshCardSearches(queryClient);
-    void queryClient.invalidateQueries({ queryKey: ["decks"] });
-  }, [queryClient]);
-
-  const setQuantity = useMutation({
-    mutationFn: ({ row, quantity }: { row: CollectionRow; quantity: number }) =>
-      ipc.collectionSetQuantity(row.id, quantity),
-    // Optimistic on the row's own number and nothing else. Without it, holding `+` sends
-    // the same number three times — the box is controlled by the cache, so a second press
-    // before the first answer would be computed from a stale value.
-    onMutate: ({ row, quantity }) => {
-      const saved = snapshot();
-      patchEntry(row.id, (r) => ({ ...r, quantity }));
-      return saved;
-    },
-    onError: (_error, _variables, saved) => {
-      if (saved) restore(saved);
-      settleFailure();
-    },
-    onSuccess: (change) => {
-      // The answer, not the guess: the backend clamps and canonicalises, and this is the
-      // number it actually stored — **or says the row is not there any more**.
-      //
-      // `removed` is not decoration. Since schema v24 `collection::set_quantity(id, 0)`
-      // *deletes* the entry, and the stepper is `min={0}`, so one press on a single copy is a
-      // delete. Read as "quantity 0" it left a ghost: the row stayed in the list, dimmed,
-      // while `settle()` — which deliberately does not re-read the list — had already sent the
-      // header off to count a collection the row is no longer in, so the two disagreed on
-      // screen instantly, and the next `+` on the ghost answered GONE. `remove.onSuccess`
-      // below is these same two lines, and this is the same write with a different gesture.
-      patchEntry(change.id, change.removed ? null : (r) => ({ ...r, quantity: change.quantity }));
-      settle();
-    },
-  });
-
-  const remove = useMutation({
-    mutationFn: (row: CollectionRow) => ipc.collectionRemove(row.id),
-    // No optimistic half, so nothing to roll back: the row is dropped from the answer rather
-    // than from the press, because a removal is one click and does not have to survive being
-    // held down. The failure path is the stepper's, though — a refusal here means the same
-    // thing it means there, and used to mean nothing at all.
-    onError: settleFailure,
-    onSuccess: (change) => {
-      patchEntry(change.id, null);
-      settle();
-    },
-  });
-
-  /**
-   * The card menu's `Remove from collection` — issue #506's press, and since issue #555 **one
-   * write**: `collection_remove_many`, every entry the press reaches in one transaction with one
-   * activity row.
-   *
-   * **It was a loop of {@link remove}'s command**, one transaction per entry, and that was the
-   * gap the issue named: N feed lines for one press, and a refusal part-way left it half applied —
-   * the rows before it gone, the rest still there, and one sentence in the banner about the one
-   * that stopped it. `cardMenu.test.tsx` asserted "one call" of the menu's dep and passed while
-   * this looped, because the loop was here. Now a refusal takes nothing, and
-   * {@link settleFailure} re-reads the list so the wall shows exactly that.
-   *
-   * **The answer is offered back** — the ticket goes to `@/lib/bulkUndo` with a sentence counted
-   * in entries, the menu row's unit, so the notice under the header says what the row said. One
-   * entry names the card instead, because `Removed 1 card` says less than the name the reader
-   * pointed at. `name` rides the variables because by `onSuccess` the row is already on its way
-   * out of the cache.
-   *
-   * Which targets may reach this at all is the menu deps' decision ({@link countEditable}, asked of
-   * every row behind the target), not this write's — `collection_remove_many` is the
-   * unconditional delete. Whether it asks first is {@link removeCopies}'.
-   */
-  const removeMany = useMutation({
-    mutationFn: ({ entryIds }: { entryIds: readonly number[]; name: string | null }) =>
-      ipc.collectionRemoveMany(entryIds),
-    onError: settleFailure,
-    onSuccess: (outcome, { entryIds, name }) => {
-      for (const id of entryIds) patchEntry(id, null);
-      settle();
-      offerUndo(
-        "collection",
-        outcome.undoId,
-        outcome.removed === 1 && name !== null
-          ? `Removed ${name} from your collection.`
-          : `Removed ${plural(outcome.removed, "card")} from your collection.`,
-      );
-    },
-  });
+  const { settleFailure, setQuantity, remove, removeMany } = useCollectionEntryWrites();
   // `mutate` and `reset` are stable across renders and the result object around them is not, so
   // the menu deps below are rebuilt only when something they carry actually changed.
   const { mutate: removeManyMutate, reset: removeManyReset } = removeMany;
@@ -1212,93 +802,15 @@ export function CollectionPage() {
     }
   }, [levelHeld, query]);
 
-  /**
-   * The wall is a wall of *objects*, where the table is a list of entries: a printing held in one
-   * finish across three grades and two languages is one piece of art to look at, so the tile
-   * carries the copies of all of them.
-   *
-   * **The finish and the folder are part of the key; condition and language are not.** A foil and
-   * a played nonfoil are two objects at two prices; the same finish in two drawers is, since shelves
-   * (decision 11), a tile on each drawer's shelf, because a shelf is one folder and a tile belongs
-   * to one shelf. `foldCopies` in `features/decks/collectionTiles.ts` still folds the deck panel's
-   * collection wall on the card and the finish, which is right there: that wall has no shelves.
-   *
-   * The rows arrive shelf by shelf — the list query sends the open shelves in wall order and the
-   * backend orders by position in that list — so each shelf's tiles are already contiguous and in
-   * the reader's sort.
-   */
-  const tiles = useMemo(() => {
-    const copies = new Map<string, number>();
-    // The same walk, answering the tile's second question: *which finishes* those copies are in —
-    // always a one-element set now, which is what {@link ownedFinishes} is for.
-    const finishes = new Map<string, Set<string>>();
-    for (const row of rows) {
-      // **The raw `row.finish`, never the narrowed one** — see {@link tileKeyOf}, which carries
-      // why a word this build cannot name keys as its own tile.
-      const key = tileKeyOf(row.cardId, row.finish, row.folderId);
-      copies.set(key, (copies.get(key) ?? 0) + row.quantity);
-      const held = finishes.get(key) ?? new Set<string>();
-      held.add(row.finish);
-      finishes.set(key, held);
-    }
-    const seen = new Set<string>();
-    const out: CollectionTile[] = [];
-    for (const row of rows) {
-      const key = tileKeyOf(row.cardId, row.finish, row.folderId);
-      if (seen.has(key)) continue;
-      seen.add(key);
-      out.push({
-        key,
-        // The card and the finish without the folder, so every shelf a printing sits on rings
-        // together when it is opened (Review Focus 1).
-        ringKey: tileKeyOf(row.cardId, row.finish),
-        // **The printing, which is what a press opens** — `CardGrid` keeps the two apart, and
-        // this is the half `onSelect`, the art fetch and the caret note are all about.
-        id: row.cardId,
-        // A printing `cards` has forgotten still has the set and number the entry recorded,
-        // and on a wall of art that is the whole of what identifies it.
-        name: row.name ?? `${row.setCode.toUpperCase()} ${row.collectorNumber}`,
-        setCode: row.setCode,
-        collectorNumber: row.collectorNumber,
-        rarity: row.rarity,
-        copies: copies.get(key) ?? 0,
-        // Narrowed against `FINISHES` rather than cast, for the reason the key above is *not*
-        // narrowed: `finish` is TEXT with a CHECK rather than an enum this side knows, so a word
-        // this build cannot name marks the art with nothing instead of with a sheen no stylesheet
-        // has — and `openCardAsFinish` is handed the same narrowed value rather than the column.
-        finish: isFinish(row.finish) ? row.finish : null,
-        // Off the row rather than reduced across the group: every row behind this tile names the
-        // same printing *and* the same finish, so they all carry the same figure and taking the
-        // first is not a choice between two answers. Already per copy, per finish, at the
-        // marketplace the query named — never the derived `price_usd`, which is a fallback chain
-        // and would price a plain copy at foil rates.
-        unitPrice: row.unitPrice,
-        typeLine: row.typeLine,
-        oracleId: row.oracleId,
-        finishes: ownedFinishes(finishes.get(key) ?? new Set()),
-        folderId: row.folderId,
-      });
-    }
-    return out;
-  }, [rows]);
+  /** The wall's tiles — `collectionWall.ts`'s {@link collectionTiles}, where the folding rule is
+   *  argued: the card, the finish and the folder make a tile; the grade and the language do not. */
+  const tiles = useMemo(() => collectionTiles(rows), [rows]);
 
-  /**
-   * The tiles and the rows **by shelf** — what `CardGrid`'s `tilesOf` and the table's `rowsOf`
-   * hand out. `folderId ?? UNFILED_SHELF`, so a copy filed nowhere is Not sorted's.
-   */
-  const tilesByShelf = useMemo(() => {
-    const out = new Map<number, CollectionTile[]>();
-    for (const tile of tiles) {
-      const shelf = tile.folderId ?? UNFILED_SHELF;
-      const held = out.get(shelf) ?? [];
-      held.push(tile);
-      out.set(shelf, held);
-    }
-    return out;
-  }, [tiles]);
+  /** The tiles **by shelf** — {@link tilesByShelf}; the rows by shelf beside it are the table's. */
+  const tilesOnShelves = useMemo(() => tilesByShelf(tiles), [tiles]);
   const tilesOf = useCallback(
-    (shelfId: number): readonly CollectionTile[] => tilesByShelf.get(shelfId) ?? NO_TILES,
-    [tilesByShelf],
+    (shelfId: number): readonly CollectionTile[] => tilesOnShelves.get(shelfId) ?? NO_TILES,
+    [tilesOnShelves],
   );
   const rowsByShelf = useMemo(() => {
     const out = new Map<number, CollectionRow[]>();
@@ -2302,9 +1814,11 @@ export function CollectionPage() {
    * folder list is empty, so a row in the holding area draws no stepper for one query and then
    * grows one.
    */
+  // `entryFences.ts`' `countEditableIn` since 2026-10-03 — the same predicate over the same census,
+  // asked by the light app's phone face too, so the two cannot answer it two ways.
   const countEditable = useCallback(
-    (id: number | null) => readersOwnLevel(id) || (id !== null && id === pinned.removed?.id),
-    [readersOwnLevel, pinned.removed],
+    (id: number | null) => countEditableIn(folders.folders, id),
+    [folders.folders],
   );
 
   /**
@@ -2432,15 +1946,10 @@ export function CollectionPage() {
    * fence of its own** — a briefly wrong sentence self-corrects and a written quantity does not.
    * The root needs no census, so this is only ever about filed rows.
    */
+  // `entryFences.ts`' `quantityRefusal` since 2026-10-03, its sentences verbatim.
   const quantityBlocked = useCallback(
-    (row: CollectionRow): string | null => {
-      if (countEditable(row.folderId)) return null;
-      if (row.folderId !== null && deckGroupIds.has(row.folderId)) {
-        return `In ${row.folderName ?? "a deck"}. Remove it from the deck to change the quantity.`;
-      }
-      return `In ${row.folderName ?? "a folder you did not make"}. Move it into one of your folders to change the quantity.`;
-    },
-    [countEditable, deckGroupIds],
+    (row: CollectionRow): string | null => quantityRefusal(folders.folders, row),
+    [folders.folders],
   );
 
   /**
@@ -3096,11 +2605,9 @@ export function CollectionPage() {
     [drawnShelves, shelfCounts],
   );
   const totalOf = useCallback(
-    (shelf: Shelf): number | null => {
+    (shelf: Shelf): number | null =>
       // Nothing counts Not sorted unfiltered, and a miss before the summary answers is not zero.
-      if (shelf.kind === "unfiled" || folders.summaryQuery.isPending) return null;
-      return (subtotals.get(shelf.id) ?? folders.summary.get(shelf.id) ?? NO_CARDS).cards;
-    },
+      shelfTotal(shelf, subtotals, folders.summaryQuery.isPending ? null : folders.summary),
     [folders.summaryQuery.isPending, subtotals, folders.summary],
   );
   const statOf = useCallback(

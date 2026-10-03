@@ -91,7 +91,7 @@
  * as a condition-bearing CSV find it that way again without a deck export dragging its own
  * Moxfield habit onto it.
  */
-import { useCallback, useId, useMemo, useState, type JSX } from "react";
+import { useCallback, useId, useState, type JSX } from "react";
 import { ChevronRight } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { copyText } from "@/lib/clipboard";
@@ -103,28 +103,11 @@ import { cn } from "@/lib/utils";
 import { radioKeys } from "@/lib/radioGroup";
 import { Dialog } from "@/components/Dialog";
 import { saveExport } from "../files";
-import {
-  ALWAYS,
-  availableFields,
-  defaultFields,
-  SURFACE_HAS_PILES,
-  TRANSFER_FIELDS,
-  type TransferFieldId,
-} from "../fields";
+import { TRANSFER_FIELDS } from "../fields";
 import type { TransferSurface } from "../fields";
 import type { TransferCard } from "../TransferCard";
-import { isInArena, notInArenaCopies } from "./arena";
-import {
-  dropsInactive,
-  EXPORT_FORMATS,
-  EXPORT_FORMAT_EXTENSION,
-  EXPORT_FORMAT_LABEL,
-  formatExport,
-  inactiveCopies,
-  isActivePile,
-  omittedCount,
-  type ExportFormat,
-} from "./format";
+import { EXPORT_FORMATS, EXPORT_FORMAT_EXTENSION, EXPORT_FORMAT_LABEL } from "./format";
+import { useExportModel } from "./useExportModel";
 
 /**
  * Copy and Save as…, and what they look like while they refuse.
@@ -273,128 +256,31 @@ function Body({
    *  `exportPrefs`, keyed by `surface` so a deck export is never dragged into the collection's. */
   const prefs = useAppStore((s) => s.exportPrefs[surface]);
   const setPrefs = useAppStore((s) => s.setExportPrefs);
-  const { format, fields, arenaOnly, includeInactive } = prefs;
-  /** The fields this format and this surface share — the whole of what decides which checkboxes
-   *  draw, `ALWAYS` excluded (see the row below). */
-  const available = useMemo(() => availableFields(format, surface), [format, surface]);
-
-  /** Switching format re-derives the field set from that format's defaults rather than carrying
-   *  the old selection across: a set chosen for CSV means nothing to Arena, and the intersection
-   *  would silently drop most of it anyway. */
-  const chooseFormat = useCallback(
-    (next: ExportFormat) => {
-      // `arenaOnly` and `includeInactive` are spread through rather than re-derived: a field set
-      // chosen for CSV means nothing to Arena, but "leave out what Arena does not have" and
-      // "write my switched-off piles" are the same answers whatever format the reader passed
-      // through on the way back.
-      setPrefs(surface, { ...prefs, format: next, fields: defaultFields(next, surface) });
-      // The preview redraws for the new format; the clipboard does not. Left standing,
-      // "Copied." would sit beside text it is no longer an honest claim about.
-      setCopied(false);
-    },
-    [prefs, setPrefs, surface],
-  );
-
-  const toggleField = useCallback(
-    (id: TransferFieldId) => {
-      const on = fields.includes(id);
-      setPrefs(surface, {
-        ...prefs,
-        fields: on ? fields.filter((f) => f !== id) : [...fields, id],
-      });
-      // The preview redraws; the clipboard does not — same claim, same reason as the format row.
-      setCopied(false);
-    },
-    [fields, prefs, setPrefs, surface],
-  );
-
-  const toggleArenaOnly = useCallback(() => {
-    setPrefs(surface, { ...prefs, arenaOnly: !prefs.arenaOnly });
-    // Same claim, same reason: the preview redraws, the clipboard does not.
-    setCopied(false);
-  }, [prefs, setPrefs, surface]);
-
-  const toggleIncludeInactive = useCallback(() => {
-    setPrefs(surface, { ...prefs, includeInactive: !prefs.includeInactive });
-    // Same claim, same reason: the preview redraws, the clipboard does not.
-    setCopied(false);
-  }, [prefs, setPrefs, surface]);
-
+  /** "Copied." is a claim about the clipboard, and every change below redraws the preview while
+   *  the clipboard stays put — so each one takes the line down. */
+  const uncopy = useCallback(() => setCopied(false), []);
   /**
-   * Whether `Include inactive categories` is a question this dialog can ask — issue #390.
-   *
-   * **Two fences and each closes a different hole.** `SURFACE_HAS_PILES` is the surface's: a
-   * collection row and a wishlist row carry `categoryActive: null`, so the box there would be a
-   * control over nothing. `dropsInactive` is the format's: Arena and MTGO leave a switched-off
-   * pile out whatever anybody asks, because a maybeboard in an Arena file is an illegal import
-   * at the other end — a box there could never move a byte, which is the furniture `src/CLAUDE.md`
-   * forbids, and `omittedCount`'s line under those two already says what it cost.
-   *
-   * It gates the **filter** as well as the checkbox, which is the Arena row filter's rule read
-   * across: a preference the reader cannot see must not be silently narrowing the file, and on
-   * these two formats the honest sentence is the format's own rather than the reader's.
+   * Every decision this dialog shows — the field row, the two filters, the text, the three count
+   * lines — is `useExportModel`'s, which the light app's phone sheet reads too. What stays in this
+   * file is the drawing, the store the answers are remembered in, and where the text goes.
    */
-  const offersInactive = SURFACE_HAS_PILES[surface] && !dropsInactive(format);
-  /** Switched-off piles are being held back — the flag read through the fence above. */
-  const excludesInactive = offersInactive && !includeInactive;
-
-  /**
-   * The two row filters, applied **before** the writer rather than inside it.
-   *
-   * `formatExport` stays `(cards, format, fields) => string` — `export/`'s whole boundary, and
-   * the reason `decklists.test.ts` can drive it — so which cards go in is the dialog's question
-   * and never a fourth argument to the writer. It is also what keeps `omittedCount` honest: it
-   * counts what *this format* leaves out of the list it is given, and giving it the filtered
-   * list is what stops a card that is both outside Arena and in a switched-off pile being
-   * reported by both lines at once.
-   *
-   * **The two can never both fire**, and that is a property rather than an accident: the Arena
-   * filter is fenced on `format === "arena"` and the inactive one on `!dropsInactive(format)`,
-   * which excludes exactly `arena` and `mtgo`. They are written as one chain anyway, because the
-   * day a format leaves `ACTIVE_ONLY` is not the day to discover the order was never decided —
-   * and the order that would then be right is this one, for `formatExport`'s own reason: filter
-   * before anything folds, so nothing held back survives to be merged into a row that is kept.
-   *
-   * Both are fenced on the format, not just on the flag. A reader who ticked `Include inactive
-   * categories` on CSV and moved to Arena must not find Arena's own rule quietly overridden, and
-   * one who ticked the Arena box and moved to CSV must not find their CSV short of rows.
-   */
-  const exported = useMemo(() => {
-    let rows: readonly TransferCard[] = cards;
-    if (format === "arena" && arenaOnly) rows = rows.filter(isInArena);
-    if (excludesInactive) rows = rows.filter(isActivePile);
-    return rows;
-  }, [arenaOnly, cards, excludesInactive, format]);
-
-  const text = useMemo(() => formatExport(exported, format, fields), [exported, format, fields]);
-  /** Copies this format will not write — see `omittedCount`. Recomputed with the format, because
-   *  it is a claim about the text on screen and goes stale the moment that changes. */
-  const omitted = useMemo(() => omittedCount(exported, format), [exported, format]);
-  /** Copies the Arena filter is holding back, or 0 when it is not the one holding anything.
-   *  Counted over `cards` rather than `exported`, which is the list it has already emptied. */
-  const notInArena = useMemo(
-    () => (format === "arena" && arenaOnly ? notInArenaCopies(cards) : 0),
-    [arenaOnly, cards, format],
-  );
-  /** Copies the reader's own `Include inactive categories` answer is holding back, or 0 when it
-   *  is not the one holding anything. Counted over `cards` for `notInArena`'s reason — `exported`
-   *  is the list this has already emptied — and it can never be non-zero at the same time as
-   *  `omitted`, since the two are fenced on complementary halves of `dropsInactive`. */
-  const heldBackInactive = useMemo(
-    () => (excludesInactive ? inactiveCopies(cards) : 0),
-    [cards, excludesInactive],
-  );
-  /**
-   * Lines of the **file**, which is what the toggle names while the preview is shut.
-   *
-   * Rows of the text rather than cards in the pile, and the two really do differ: a sectioned
-   * format writes headings and blank lines between them, and CSV opens on a header. The number
-   * is a fact about the text under the toggle, so it is measured on that text — and it moves with
-   * the format for the same reason the omission line does. `trimEnd` takes off the single
-   * trailing newline every non-empty export ends with, which would otherwise count as a line
-   * nobody wrote; an empty export is 0 rather than 1.
-   */
-  const lines = useMemo(() => (text === "" ? 0 : text.trimEnd().split("\n").length), [text]);
+  const {
+    format,
+    fields,
+    arenaOnly,
+    includeInactive,
+    available,
+    offersInactive,
+    text,
+    omitted,
+    notInArena,
+    heldBackInactive,
+    lines,
+    chooseFormat,
+    toggleField,
+    toggleArenaOnly,
+    toggleIncludeInactive,
+  } = useExportModel({ surface, cards, prefs, setPrefs, onChange: uncopy });
   /** Names the preview for the toggle's `aria-controls` — see the button. */
   const previewId = useId();
 
@@ -515,22 +401,20 @@ function Body({
           the rule, so nothing here is a list to remember to grow. `ALWAYS` is not drawn: a line
           with no count and no name is not a card, and a disabled checkbox that can never move is
           furniture rather than a control. */}
-      {available.filter((id) => !ALWAYS.includes(id)).length > 0 && (
+      {available.length > 0 && (
         <fieldset className="flex flex-wrap gap-x-4 gap-y-2">
           <legend className="mb-1 text-sm text-dim">Fields</legend>
-          {available
-            .filter((id) => !ALWAYS.includes(id))
-            .map((id) => (
-              <label key={id} className="flex items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  checked={fields.includes(id)}
-                  onChange={() => toggleField(id)}
-                  className={cn("size-4 accent-accent", FOCUS)}
-                />
-                {TRANSFER_FIELDS[id].label}
-              </label>
-            ))}
+          {available.map((id) => (
+            <label key={id} className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={fields.includes(id)}
+                onChange={() => toggleField(id)}
+                className={cn("size-4 accent-accent", FOCUS)}
+              />
+              {TRANSFER_FIELDS[id].label}
+            </label>
+          ))}
         </fieldset>
       )}
 

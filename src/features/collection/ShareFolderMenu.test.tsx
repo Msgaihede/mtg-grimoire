@@ -31,6 +31,7 @@ vi.mock("@/lib/clipboard", () => ({ copyText }));
 import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CollectionFolder, ShareRow, SupporterStatus } from "@/lib/ipc";
+import { ReachContext } from "@/lib/reach";
 import { useAppStore } from "@/lib/store";
 import { shareFor, ShareFolderMenu, shareTargetFor, type ShareTarget } from "./ShareFolderMenu";
 
@@ -630,5 +631,39 @@ describe("opening somebody else's share", () => {
     await user.click(screen.getByRole("button", { name: "Close" }));
 
     await waitFor(() => expect(document.activeElement).toBe(opener));
+  });
+});
+
+/* ------------------------------------------------------ a window with no shared view ---------- */
+
+/**
+ * The light app draws six destinations and the shared binder is not one: its shell answers
+ * `useReaches("shared")` with false. The Open half goes there, so it is not drawn — a press that
+ * answered would land on a view the light app cannot stand on.
+ */
+describe("in a window with no shared view", () => {
+  const noShared = (view: string) => view !== "shared";
+
+  it("draws no way into somebody else's share, and keeps Share", async () => {
+    mount(
+      <ReachContext.Provider value={noShared}>
+        <ShareFolderMenu target={COLLECTION} />
+      </ReachContext.Provider>,
+    );
+
+    expect(await shareButton()).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Open a shared collection" })).toBeNull();
+  });
+
+  it("draws no empty group when Share is hidden too", async () => {
+    syncSupporterStatus.mockResolvedValue(NOTHING_CONNECTED);
+    mount(
+      <ReachContext.Provider value={noShared}>
+        <ShareFolderMenu target={COLLECTION} />
+      </ReachContext.Provider>,
+    );
+
+    await waitFor(() => expect(syncSupporterStatus).toHaveBeenCalled());
+    expect(screen.queryByRole("group", { name: "Sharing" })).toBeNull();
   });
 });
