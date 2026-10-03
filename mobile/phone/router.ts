@@ -109,8 +109,18 @@ export function back(fallback: Place): void {
  * router takes **only an unmodified primary click** — and only one nothing else has already
  * handled — and turns it into a {@link navigate}, which is the same destination without a document
  * load. Every other press is the browser's.
+ *
+ * **`replace` is for a link that moves the reader within one place rather than to another** — the
+ * card sheet's printings, where a press swaps the open card for another printing of it. Pushed,
+ * each would be a Back step, and the gesture a reader uses to close the sheet would walk them back
+ * through every printing they had looked at first. Replaced, the sheet is still one entry, and
+ * that entry keeps the mark {@link back} reads, so the ✕ still leaves by a real Back. A modified
+ * press is still the browser's either way: a new tab has no history to replace.
  */
-export function linkTo(place: Place): {
+export function linkTo(
+  place: Place,
+  { replace = false }: { replace?: boolean } = {},
+): {
   href: string;
   onClick: (event: MouseEvent<HTMLAnchorElement>) => void;
 } {
@@ -120,7 +130,7 @@ export function linkTo(place: Place): {
       if (event.defaultPrevented || event.button !== 0) return;
       if (event.ctrlKey || event.metaKey || event.shiftKey || event.altKey) return;
       event.preventDefault();
-      navigate(place);
+      navigate(place, { replace });
     },
   };
 }

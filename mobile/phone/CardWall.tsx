@@ -1,4 +1,4 @@
-import { useEffect, useEffectEvent, useLayoutEffect, useRef } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, type ReactNode } from "react";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { CardTile } from "@/components/CardTile";
 import type { ChinPrinting } from "@/components/CardChin";
@@ -48,6 +48,7 @@ export function CardWall({
   onOpen,
   onNearEnd,
   resetKey,
+  footer,
 }: {
   /** What this wall is a list of, for a screen reader: "Search results", "Your collection". */
   label: string;
@@ -66,6 +67,15 @@ export function CardWall({
   onNearEnd?: () => void;
   /** Changes when this is a different list — a new search — and sends the wall back to its top. */
   resetKey: string;
+  /**
+   * Drawn after the last row, inside the scroller — so it is met where the wall ends and scrolls
+   * with it. A page's `NextPageRefused` is what goes here.
+   *
+   * **After the list and never inside it**: the rows are absolutely placed at offsets the
+   * virtualiser computed, and the list's height is the sum of them, so anything in the list's own
+   * flow would be drawn under the first row. Out here it follows the list's box in normal flow.
+   */
+  footer?: ReactNode;
 }) {
   const scroller = useRef<HTMLDivElement>(null);
   // The list, not the scroller: the scroller's own padding is not room a tile can be drawn in,
@@ -162,6 +172,7 @@ export function CardWall({
           </li>
         ))}
       </ul>
+      {footer}
     </div>
   );
 }
