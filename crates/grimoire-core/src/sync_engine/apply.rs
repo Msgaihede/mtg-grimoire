@@ -844,6 +844,37 @@ fn apply_in(
         .optional()
         .map_err(|e| e.to_string())?;
     let watermarks = read_watermarks(conn)?;
+    // **Our own ops are dropped rather than applied**, and the relay is not trusted to have
+    // done it: a counter is not idempotent, so one of this device's own `+1`s coming back
+    // would be a card appearing out of nothing.
+    let mine = |op: &Op| me.as_deref() == Some(op.at.device.as_str());
+    let seen = |op: &Op| {
+        watermarks
+            .get(&op.at.device)
+            .is_some_and(|w| stamp(op) <= *w)
+    };
+
+    // **Claims that name their emission are decided here, before any older rule sees them**
+    // (design 2026-10-03 §5, §6, §10). What `decide` marks to skip or keep is final, and an op it
+    // marks to strip loses its reference here, so everything below judges it as `main` always did.
+    let decided = claims::decide(conn, ops, me.as_deref(), &seen)?;
+    let stripped: Vec<Op>;
+    let ops: &[Op] = if decided.strip.is_empty() {
+        ops
+    } else {
+        stripped = ops
+            .iter()
+            .enumerate()
+            .map(|(i, op)| {
+                let mut op = op.clone();
+                if decided.strip.contains(&i) {
+                    op.emission = None;
+                }
+                op
+            })
+            .collect();
+        &stripped
+    };
 
     // **The horizon filters this batch and writes nothing.** Spec §9.1: raising `sync_peers`
     // instead is wrong twice — it would suppress the baseline itself, whose ops are stamped
@@ -852,29 +883,34 @@ fn apply_in(
     // offered again, leaving this device holding a row the group deleted.
     //
     // Only the first op of each baseline batch carries one (§9), and a page can hold two
-    // batches, so whatever is found is unioned.
+    // batches, so whatever is found is unioned. **The horizon of an emission this design
+    // decides is its own business, never the older rules'.**
     let mut horizon = Horizon::default();
     for op in ops {
+        if op.emission.is_some() {
+            continue;
+        }
         if let Some(h) = &op.horizon {
             horizon.absorb(h);
         }
     }
 
-    // 1. Everything already seen, and everything this device wrote itself.
-    //
-    // **Our own ops are dropped rather than applied**, and the relay is not trusted to have
-    // done it: a counter is not idempotent, so one of this device's own `+1`s coming back
-    // would be a card appearing out of nothing.
+    // 1. Everything already seen, and everything this device wrote itself — after what `decide`
+    //    consumed or kept, which no rule here overrides.
     let mut fresh: Vec<&Op> = Vec::new();
-    for op in ops {
-        let mine = me.as_deref() == Some(op.at.device.as_str());
-        let seen = watermarks
-            .get(&op.at.device)
-            .is_some_and(|w| stamp(op) <= *w);
+    for (i, op) in ops.iter().enumerate() {
+        if decided.skip.contains(&i) {
+            report.skipped += 1;
+            continue;
+        }
+        if decided.keep.contains(&i) {
+            fresh.push(op);
+            continue;
+        }
         // Exemptions in spec §9.1's table: a baseline op describes the horizon rather than
         // being described by it, and a tombstone is the one thing a claim cannot express.
         let inside = op.kind == Kind::Put && !op.baseline && horizon.covers(&op.at);
-        if mine || seen || inside {
+        if mine(op) || seen(op) || inside {
             report.skipped += 1;
         } else {
             fresh.push(op);
@@ -970,6 +1006,7 @@ fn apply_in(
     }
 
     advance_watermarks(conn, &groups, &committed)?;
+    claims::settle(conn, &decided, &committed, me.as_deref())?;
     observe(conn, fresh.iter().map(|o| &o.at).max())?;
     // Read off the pass that committed, as the watermarks were: at the round cap the blocks the
     // last round found are not the ones it honoured.
@@ -1186,7 +1223,8 @@ fn run_groups<'a>(
 /// only the newer one waits on something no bound releases.
 fn held_by(g: &Group, blocked: &Blocks) -> Option<Class> {
     let mut held = None;
-    for op in &g.ops {
+    // A claim that names its emission is never collateral by stamp (design 2026-10-03 §5).
+    for op in g.ops.iter().filter(|op| op.emission.is_none()) {
         if let Some((at, class)) = blocked.get(op.at.device.as_str()) {
             if op.at >= *at {
                 if *class == Class::Newer {
@@ -1409,7 +1447,9 @@ fn cascades(conn: &Connection, table: &str, p: &Parent) -> Result<bool, String> 
 fn blocks_of(deferrals: &[Deferral], known: &Blocks) -> Blocks {
     let mut out = known.clone();
     for d in deferrals.iter().filter(|d| d.class.holds()) {
-        for op in &d.group.ops {
+        // A claim that names its emission blocks nothing (design 2026-10-03 §5): its group holds
+        // as a whole, and its stamp says nothing about its emitter's stream.
+        for op in d.group.ops.iter().filter(|op| op.emission.is_none()) {
             match out.entry(op.at.device.clone()) {
                 std::collections::btree_map::Entry::Vacant(v) => {
                     v.insert((op.at.clone(), d.class));
@@ -2415,7 +2455,8 @@ fn advance_watermarks(
         if holding.contains(&(g.table, g.ops[0].uid.as_str())) {
             continue;
         }
-        for op in &g.ops {
+        // A claim that names its emission never moves a watermark (design 2026-10-03 §5).
+        for op in g.ops.iter().filter(|op| op.emission.is_none()) {
             let e = high.entry(op.at.device.as_str());
             match e {
                 std::collections::btree_map::Entry::Vacant(v) => {
@@ -2444,6 +2485,9 @@ fn advance_watermarks(
     Ok(())
 }
 
+mod claims;
+#[cfg(test)]
+mod emission_tests;
 mod rehome;
 #[cfg(test)]
 mod tests;
