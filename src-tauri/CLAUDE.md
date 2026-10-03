@@ -91,6 +91,13 @@ capture spec is edited there.
 - **A new command is two edits in two crates**: the function in the core's file, `pub`, and the
   wrapper in this package's `<module>/mod.rs`. A `pub(crate)` item in the core does not cross
   the glob, and the compile error names the wrapper, not the visibility.
+  **And one decision since 2026-10-03, which `cargo test` will ask for**: the core's command
+  table (`grimoire_core::dispatch`, what the light app's hosts call) has the command, or
+  `src/command_table.rs` lists it as desktop-only with a reason, or as not yet in the table.
+  `every_registered_command_is_in_the_table_or_on_one_list` reads `generate_handler!` and goes red
+  for a command in none of the three; a command in the table must take exactly its wrapper's
+  arguments. See [`crates/grimoire-core/CLAUDE.md`](../crates/grimoire-core/CLAUDE.md), *The
+  command table*.
 - **`sync::with_write` is the core's `state::with_write`**, re-exported under its old name; it
   takes `&State`, which an `&AppState` derefs to. `collection_source::with_write_owned` is the
   core's too, since the facet index's lifecycle is.

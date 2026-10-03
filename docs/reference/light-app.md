@@ -280,7 +280,8 @@ the facet index that drive those; and the three feeds and the image cache. **The
 two**: the sync client, the entitlement and pairing were restated to reach the database a
 stretch at a time, on a lane, holding nothing across a request — and then moved. **The seventh**
 moved the scanner's session glue, and with it `card-scanner` became a dependency of the core.
-What is left of phase 2 is the command table.
+**The command table came last** — `grimoire_core::dispatch`, the one entry point the light app's
+hosts call, with its read commands in it and the rest on an explicit list until a page asks.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -1625,3 +1626,65 @@ which `desktop::start` manages, and no `ScannerState` is managed or asked for an
   assets a download (spec §8).
 - **A live pass of the Scanner view** over the moved glue, the next time the app lock can be
   taken with nothing else running.
+
+### 6.11 The command table — the machinery and the reads (2026-10-03)
+
+[The plan](../superpowers/plans/2026-10-03-light-app-core-command-table.md); spec §2.4. Measured on
+Windows 11, debug builds.
+
+**Surveyed first.** A script read every `#[tauri::command]` under `src-tauri/src` and what its
+body touches: **257** registered commands, of which about 199 are thin wrappers — one core call
+inside a read of the read connection (89), a write (93) or an owned write (17) — 13 reach a
+network or the sync lane, 13 are status reads and housekeeping, and about 30 name the desktop.
+**Markus chose the machinery and the reads first**, the rest joining as the light app's pages ask
+for them, and **a `macro_rules!` table** over a hand-written match.
+
+**What exists.** `crates/grimoire-core/src/commands.rs`: the `commands!` block, one line per
+command — kind, name, the module whose items its body names, the arguments, the body — and
+`grimoire_core::dispatch(&state, name, args, body)`, which parses the arguments (camelCase, an
+absent `Option` read as `None`), runs the body as its kind says, and answers JSON. **88 reads**:
+the survey's 89 less the two that start a picture fetch (`prefetch_images`, `prewarm_collection`
+— tasks, not reads) and plus `card_holdings`, which a word in its doc comment had excluded. They
+were drafted from the wrappers by `scripts/core-command-table.mjs` — each body is its wrapper's,
+the connection renamed — and five were written by hand: `marketplace_feed_status` (a block),
+`error_log_list` (in `desktop.rs`, calling `errors`), and three whose inline `mod commands`
+renamed what it imported.
+
+| Kind | Runs | In the table |
+| --- | --- | --- |
+| `read` | blocking pool, the read connection | 88 |
+| `write` | blocking pool, `state::with_write` | 0 — proven by the kinds' own test table |
+| `owned` | blocking pool, `collection_source::with_write_owned` | 0 — the same |
+| `task` | awaited where it stands, with the `Arc<State>` | 0 — the same |
+| `bytes` | blocking pool, with the call's raw body | 0 — the same |
+
+**The fence**, `src-tauri/src/command_table.rs`, three tests: every one of the 257 registered
+commands is in the table, on `DESKTOP_ONLY` (16, each with its reason — windows, the updater, the
+file dialogs, the mirror, the launch, the socket) or on `NOT_YET` (153), and in only one; nothing
+on either list or in the table is a command the app does not register; and every table entry takes
+exactly its wrapper's arguments, by name and in order. **Both were mutated and went red** — a
+renamed argument and a name taken off `NOT_YET`. **The arguments test found something the day it
+was written**: its first version told Tauri's own parameters apart by *name*, and dropped
+`price_movers`' `window`, a span of time; it reads their `tauri::` *type* now.
+
+**Tests**: the table's own four — every kind through its arm, each refusal in words (no such
+command, arguments that do not parse, snake_case where camelCase is the wire, a body where none
+belongs and none where one does), three real reads through `dispatch` against what their functions
+answer, and no name declared twice — and the fence's three. `dispatch`'s future is checked
+`Sendable`. Clippy for the workspace and for `wasm32`, and the WASM build, are clean with all 88
+arms in one `async fn`.
+
+**Nothing on the desktop changed**: its wrappers are untouched and do not call `dispatch`, so
+there is no live pass to make and no upgrade to compare. **Nothing has called `dispatch` from a
+real host yet** — that is phases 4 and 5.
+
+**Open after this:**
+
+- **Phase 2's seven steps and its table are built.** What #761's phase 2 list still holds is not
+  extraction: a decision (moving `target/` to the repository root, on an announced day), a check
+  only the first release under the workspace can make (`release.yml` finding its bundles), and
+  two standing rules (a new user rung's `UNDO_V<N>` in two files; the `testing` feature off every
+  host's `[dependencies]`).
+- The writes, tasks and bytes commands join the table as phase 3's pages ask for them — one line
+  in `commands!`, one name off `NOT_YET`.
+- `share/snapshot` and `share/cache`, which the spec listed and no step moved.

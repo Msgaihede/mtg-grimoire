@@ -204,6 +204,19 @@ JSON in a header. The table carries a `bytes` kind for them; Tauri accepts no ra
 so that host's adapter carries the same payload base64-encoded — a transport detail of the host,
 invisible above the `Core` seam (§4.6).
 
+**Built 2026-10-03, the reads first.** Markus chose the machinery and the 88 read commands now,
+the rest as the light app's pages ask for them, and a `macro_rules!` table —
+`crates/grimoire-core/src/commands.rs`, `grimoire_core::dispatch(&state, name, args, body)`. Three
+departures from the sketch above, each smaller than it reads. **The kinds are `read`, `write`,
+`owned`, `task` and `bytes`**: `async` is a keyword. **No `#[serde(default)]` is spelled**: serde
+already reads an absent `Option` field as `None`, which is the whole of what an omitted optional
+argument needed. **And the argument-name fence is a Rust test rather than `ipc.test.ts`**:
+`src-tauri`'s `command_table` compares each entry's arguments with its desktop wrapper's
+parameters, which `ipc.test.ts` already holds to `ipc.ts`'s, so the table reaches the page's
+spelling through the wrapper. The parity test lists 16 desktop-only commands with a reason each
+and everything else not yet in the table by name. [light-app.md](../../reference/light-app.md)
+§6.11 is the record.
+
 ### 2.5 `platform/`
 
 Four small interfaces, two implementations each, chosen by `cfg` in exactly one module:
