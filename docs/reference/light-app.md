@@ -1556,7 +1556,10 @@ file is touched.
   host's phase measures what a pull costs a Worker and starts from them.
 - **A web host needs its own socket.** `live.rs` is `tokio` tasks and `tokio-tungstenite`; the
   browser's half — a `WebSocket`, or the polling spec §7 names — is phase 6's.
-- **The same-second baseline skip in `apply`** (§6.8) is being fixed on its own.
+- **The same-second baseline skip in `apply`** (§6.8) was fixed on its own: #780, merged
+  2026-10-03 and in v0.40.0 — [sync.md](sync.md), *A claim names its emission*. Two whole-trip
+  tests in `sync_engine/client/tests.rs` still backdate their fixtures ten seconds for the old
+  reason; nobody has checked whether they can stop.
 - **`share::publish` still holds the connection for a whole publish** (§6.8), and stays the
   desktop's.
 - **Step 7**: the scanner's session glue — and then the command table. *(§6.10.)*
@@ -1722,11 +1725,12 @@ real host yet** — that is phases 4 and 5.
 
 **Open after this:**
 
-- **Phase 2's seven steps and its table are built.** What #761's phase 2 list still holds is not
-  extraction: a decision (moving `target/` to the repository root, on an announced day), a check
-  only the first release under the workspace can make (`release.yml` finding its bundles), and
-  two standing rules (a new user rung's `UNDO_V<N>` in two files; the `testing` feature off every
-  host's `[dependencies]`).
+- **Phase 2's seven steps and its table are built, and #761's phase 2 list has no open item**
+  (2026-10-03). The decision it held is made — `target/` stays pinned to `src-tauri/target`
+  (Markus; `src-tauri/target` is named 140 times in 75 tracked files, and a move rebuilds every
+  checkout and moves every worktree's dev database). The check it held is made — §6.12. What it
+  leaves are two standing rules, which are not tasks: a new user rung's `UNDO_V<N>` in two files,
+  and the `testing` feature off every host's `[dependencies]`.
 - The writes, tasks and bytes commands join the table as phase 3's pages ask for them — one line
   in `commands!`, one name off `NOT_YET`.
 - **A sixth kind, before five of the reads on `NOT_YET` can join**: `combos_status`,
@@ -1736,3 +1740,33 @@ real host yet** — that is phases 4 and 5.
 - **The chain from the table to the page is unpinned for 14 of the 88 reads**, which
   `ipc.test.ts` names nowhere — eight of them with arguments (the spec's §2.4 note lists them).
 - `share/snapshot` and `share/cache`, which the spec listed and no step moved.
+
+### 6.12 The first release under the workspace — v0.40.0 (2026-10-03)
+
+Two things about a release could only be read, not run, while the workspace was being built
+(§6.1): whether `release.yml` still finds what `tauri-action` builds, and whether release-please
+bumps both crates. **v0.40.0 settled both**, published 2026-10-03 at 11:34 UTC by
+[run 37119190167](https://github.com/Msgaihede/mtg-grimoire/actions/runs/37119190167) on the merge
+of release PR #748 — four jobs green, 17 minutes end to end (the Windows leg 16.5, the Linux leg
+12).
+
+| Asked | Answered |
+| --- | --- |
+| Does `tauri-action` find its bundles with the workspace at the root and `target/` pinned under `src-tauri`? | Yes. All five files are on the release: the NSIS installer, the MSI, the portable zip, the `.deb` and the AppImage — each within 1% of v0.39.0's size (the portable zip 31 566 234 B against 31 315 169) |
+| Does the portable step find the exe? | Yes — `src-tauri/target/release/mtg-grimoire.exe`, where `.cargo/config.toml` puts it |
+| Does release-please bump the engine with the app? | Yes. At the tag, `crates/grimoire-core/Cargo.toml`, `src-tauri/Cargo.toml` and both of their entries in the root `Cargo.lock` read 0.40.0, and the build passed `--locked` |
+| Does the embedded-assets build compile since step 7 moved it (§6.10)? | Yes — the *Scanner assets* step and the build behind it passed on both legs. No CI job compiles `cfg(scanner_assets)`, so this was its first real compile since `include_bytes!` went one folder deeper |
+
+**The embedded-assets path was checked an hour before the release, without a download**: three
+four-byte placeholder files in `src-tauri/scanner-assets/`, then
+`cargo check -p mtg-grimoire --locked` — 24 s, and the build script's output confirmed
+`rustc-cfg=scanner_assets` was set. `build.rs` asks only whether the three files exist, so a
+placeholder turns the cfg on; it is a compile check and says nothing about the bytes. The
+placeholders were deleted afterwards. It is the cheap check to repeat whenever
+`src-tauri/src/scanner/mod.rs` moves again.
+
+**Not checked**: nobody has installed or launched any of the five files — the run proves they
+were built and attached, and the Linux pair is as unrun as it has always been. And the release's
+own `rust-cache` reported `No cache found` on both legs — a first run under a new key, so the
+build was cold and the cache line in `release.yml` is still unproven (`ci.yml`'s restores). The release also
+carries #780 (the sync fix §6.9 left open), which merged twelve minutes before the release PR.
