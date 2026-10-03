@@ -57,7 +57,7 @@ measured, one subsection per step).
   through the same sheet over `useCollection`. Two rows of one printing get two names.
 - [ ] **3.3 — Wishlist.** The cabinet and its folders, the managed wishlist as a read, the
   `elsewhere` mark; a wish with no card to open is not a button that does nothing.
-- [x] **3.4 — Decks, read.** The gallery with covers and folders; the deck page as one column —
+- [x] **3.4 — Decks, read** (#787, merged 2026-10-03). The gallery with covers and folders; the deck page as one column —
   the commander first, then each stack (category) one above another with its count and its cards,
   the side rail last (validation, the bracket estimate, notes and to-do lists, tokens). Actual and
   Theory both readable; the deck query shared with the desktop's.
@@ -68,7 +68,7 @@ measured, one subsection per step).
 - [ ] **3.6 — Import and export on the phone face.** The collection's and a deck's, through the
   existing parsers and writers; a file arrives through `<input type=file>` and leaves as a
   download, which the host seams answer on each install.
-- [ ] **3.7 — Light Settings, on both faces.** The edition grows its Settings entries (spec §3.1:
+- [x] **3.7 — Light Settings, on both faces.** The edition grows its Settings entries (spec §3.1:
   `SettingsPage`'s entry list is the edition's second reader): sync and pairing, the supporter
   block, card data and the optional feeds, the image cache, marketplace, the danger zone.
 - [ ] **3.8 — What phase 1 left, and the measurements.** Stories for phone UI (Storybook's globs

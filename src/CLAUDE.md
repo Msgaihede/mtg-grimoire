@@ -1140,8 +1140,10 @@ Every one of these has its measurement and its story in
   2026-09-27. The light app picks between this UI and a phone face by viewport width — in
   `mobile/useFace.ts`, which is the only place that question is asked. What `src/` reads instead is
   an **`Edition`** (`lib/edition.ts`), handed to the shell at the root: which rail rows to draw,
-  whether to draw the caption, and which view chords act. **A page never reads it** — `AppShell` is
-  its one reader today — and a provider passes a module constant, never an object built in render.
+  whether to draw the caption, which view chords act, and which Settings panels exist. **A page
+  never reads it** — `AppShell` is one reader and `SettingsPage`'s entry list the other, the one
+  exception spec §3.1 grants — and a provider passes a module constant, never an object built in
+  render.
 - **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
   `Record<string, unknown> | Uint8Array`. It widened for one *shape* of call, which two wrappers
   make — `ipc.scannerFrame` and `ipc.scannerCapture`, the only two that pass raw bytes and
