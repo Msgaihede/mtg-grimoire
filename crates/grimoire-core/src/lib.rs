@@ -65,6 +65,10 @@ pub mod collection;
 pub mod collection_alloc;
 pub mod collection_folders;
 pub mod collection_source;
+/// **The command table**: one declaration per command a host with no window answers, and
+/// [`dispatch`], which answers one by name — what the light app's hosts call the engine through.
+pub mod commands;
+pub use commands::dispatch;
 /// **Commander Spellbook's combos**: the feed streamed into `combos` over its own
 /// [`platform::http`] client, and the two questions asked of it — which combos a pile of
 /// printings holds, and which combos name one card.
