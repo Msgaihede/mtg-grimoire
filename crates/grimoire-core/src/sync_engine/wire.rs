@@ -828,6 +828,30 @@ mod tests {
         assert_eq!(batches(&batch).len(), 1, "the count binds, not the bytes");
     }
 
+    /// The baseline claim design §3, §14 row 23: a full batch of claims with their emission
+    /// references, measured.
+    #[test]
+    fn a_full_batch_of_claims_with_references_is_far_below_the_cap() {
+        let g = group(0);
+        let mut batch = ops(BATCH);
+        for (i, op) in batch.iter_mut().enumerate() {
+            op.baseline = true;
+            op.emission = Some(crate::sync_engine::merge::Emission {
+                id: (1_759_000_000_000, 4),
+                i: i as u32,
+                n: (i == 0).then_some(BATCH as u32),
+                since: (i == 0).then_some((1_758_000_000_000, 0)),
+                resumed: false,
+            });
+        }
+        let envelope = seal_batch(&g, "0123456789abcdef", &batch).unwrap();
+        let row = serde_json::to_vec(&envelope).unwrap().len();
+        eprintln!("{BATCH} claims with references: {row} B as a stored row");
+        assert!(row < 2 * 1024 * 1024);
+        assert!(!oversized(&batch));
+        assert_eq!(batches(&batch).len(), 1);
+    }
+
     /// **The relay is told six things and no seventh.** The op count is deliberately not one of
     /// them: "this device wrote 431 things today" is not needed in order to relay.
     #[test]

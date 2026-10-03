@@ -62,11 +62,12 @@
 //! held connection used to give by accident.
 //!
 //! **What can land between two stretches is a reader's own write**, and three places are shaped
-//! by it: [`emit_baselines`] reads a baseline's rows and its horizon in one stretch and begins
-//! none while such a write is pending; [`push`] sends the outbox as it stood when it read it,
-//! and what was written since goes with the next trip; [`pull`] opens, applies and moves its
-//! cursor in one. The record, with the test that lands a write behind every stretch of a trip,
-//! is `docs/superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md`.
+//! by it: [`emit_baselines`] reads a baseline's rows and its horizon, and names its emission, in
+//! one stretch, and begins none while such a write — or anything else — is pending; [`push`]
+//! sends the outbox as it stood when it read it, and what was written since goes with the next
+//! trip; [`pull`] opens, applies and moves its cursor in one. The record, with the test that
+//! lands a write behind every stretch of a trip, is
+//! `docs/superpowers/research/2026-10-02-light-app-step-6-sync-trip-spike.md`.
 
 use crate::errors::{self, Kind, Source};
 use crate::platform::http;
@@ -74,9 +75,10 @@ use crate::state::{Lane, Store};
 use crate::sync_engine::apply::{self, ApplyReport};
 use crate::sync_engine::baseline;
 use crate::sync_engine::capture;
+use crate::sync_engine::emission;
 use crate::sync_engine::entitlement;
 use crate::sync_engine::hlc;
-use crate::sync_engine::merge::Op;
+use crate::sync_engine::merge::{Emission, Op};
 use crate::sync_engine::wire::{self, Envelope, WireError};
 use crate::sync_pair::crypto;
 use crate::sync_pair::identity::{self, Group};
@@ -174,10 +176,15 @@ pub(crate) struct Hold {
     since: i64,
     /// Pulls that have found it, this one included.
     pulls: i64,
-    /// **What the hold is a hold on**: each held device, at the stamp of its first held op
-    /// ([`apply::Held`]), of its first batch only a newer build can read, or — when any of its
+    /// **What the hold is a hold on** ([`apply::Held`]): each held device, at the stamp of its
+    /// first held op, of its first batch only a newer build can read, or — when any of its
     /// batches is stamped too far ahead, which holds all of them — of its earliest batch in the
-    /// page, whichever is earliest.
+    /// page, whichever is earliest; **and each held claim, as a block of its own**, keyed
+    /// `"<device>#<ms>.<ctr>#<i>"` — its emitter, its emission's `id` and its index — at its own
+    /// stamp (design 2026-10-03 §5). A claim says nothing about its emitter's stream, so it is
+    /// never folded into the emitter's key, and a `#` never appears in a device id, so the two
+    /// kinds of key never meet. **So a new held claim is a new block, and restarts the waiting
+    /// bound**, as a newly held device does.
     ///
     /// **The waiting bound belongs to these, and a block not among them starts it over** (the
     /// final review of the delivery holds, I1). Counted by kind alone, a second wait that began
@@ -451,6 +458,11 @@ impl Deferral {
     /// clock the relay goes on refusing. A baseline is sealed at the push's epoch, so `epoch_ahead`
     /// refuses it too, but at its first chunk, where it costs one request; and `too_large` says
     /// nothing about any other batch.
+    ///
+    /// **Every deferral now holds a baseline back in any case**, through [`emit_baselines`]' own
+    /// rule: a deferred push leaves its refused ops pending, and no baseline is begun while
+    /// anything is pending (the baseline claim design of 2026-10-03, §5). This is the cheaper
+    /// question for the two it names — asked here, the trip spends no stretch on it.
     fn stops_baselines(self) -> bool {
         matches!(self, Deferral::ClockAhead | Deferral::Quota)
     }
@@ -2019,6 +2031,14 @@ fn clock_sentence(conn: &Connection, device: &str, ahead_ms: i64) -> String {
 ///   one shape the watermark cannot outrun. What it costs is the sender's ordinary batches waiting
 ///   beside the fast one.
 ///
+/// **What either rule holds back still goes to `apply`, as held and never applied** (the baseline
+/// claim design of 2026-10-03, §5): it holds its rows' groups there, so another sender's claim for
+/// a row one of its puts is inside waits with it rather than landing ahead of it.
+///
+/// **An envelope stepped over opens the gap** (§7) — every unreadable one but those held behind a
+/// rotation and those only a newer build can read. It is an op this device will never apply, so
+/// no emitter's generation can be called wholly taken across it.
+///
 /// **Every envelope recorded is recorded once per hold**, not once per pull: a held page comes back
 /// on every trip, and [`Hold::noted`] is what a later pull behind the same hold asks first.
 pub async fn pull(
@@ -2107,15 +2127,23 @@ pub async fn pull(
     db.with(|conn| {
         let mut opened: Vec<(&Envelope, Vec<Op>)> = Vec::new();
         let mut unreadable = 0usize;
+        // The unreadable envelopes this pull steps over — every one that neither holds behind a
+        // rotation nor is a batch only a newer build can read. Each is an op this device will
+        // never apply, which is a gap (design 2026-10-03 §7).
+        let mut stepped_over = 0usize;
         let mut behind = false;
         // Sender → the stamp of its earliest batch in this page that only a newer build can read.
         let mut unparsed: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
         // What this pull met, beside what an earlier one behind the same hold already recorded.
         let mut met: Vec<(String, i64, i64)> = Vec::new();
         for envelope in &page.envelopes {
+            // Whether this envelope, if it does not open, is kept for a later pull rather than
+            // stepped over.
+            let mut kept = false;
             let failure = if envelope.epoch > group.epoch {
                 if relay.is_some_and(|r| envelope.epoch <= r) || asked != Some(true) {
                     behind = true;
+                    kept = true;
                     BEHIND_A_ROTATION.to_owned()
                 } else {
                     NO_SUCH_ROTATION.to_owned()
@@ -2135,6 +2163,7 @@ pub async fn pull(
                         // Opened, so a member of the group sealed it, and an op in it says a newer
                         // build did. See the doc above; `Malformed` falls through and is stepped over.
                         if let WireError::Newer(_) = e {
+                            kept = true;
                             unparsed
                                 .entry(envelope.device.as_str())
                                 .and_modify(|first| *first = (*first).min(at_of(envelope)))
@@ -2145,6 +2174,9 @@ pub async fn pull(
                 }
             };
             unreadable += 1;
+            if !kept {
+                stepped_over += 1;
+            }
             let (ms, ctr) = at_of(envelope);
             let this = (envelope.device.clone(), ms, ctr);
             if !recorded.contains(&this) {
@@ -2224,7 +2256,14 @@ pub async fn pull(
         // then skip as seen — by stamp, not page position, so earlier ones are safe. **A sender held
         // for its clock waits whole** (the doc above says why by device). A `Malformed` batch holds
         // nothing and keeps nothing back: it is stepped over.
+        //
+        // **What is held back is no longer taken out of the page** (design 2026-10-03 §5): it goes
+        // to `apply` as held, never applied, so it holds its rows' groups and a claim that contains
+        // one of its puts cannot land ahead of it. **Each opened batch goes to exactly one of the
+        // two lists**, and that is load-bearing: an op passed both as `ops` and as `held_back` is
+        // grouped twice.
         let mut ops: Vec<Op> = Vec::new();
+        let mut held_back: Vec<Op> = Vec::new();
         let mut held_behind = 0usize;
         let mut held_clock = 0usize;
         for (envelope, mut batch) in opened {
@@ -2232,20 +2271,30 @@ pub async fn pull(
             let sender = envelope.device.as_str();
             if unparsed.get(sender).is_some_and(|first| at >= *first) {
                 held_behind += batch.len();
+                held_back.append(&mut batch);
             } else if ahead.contains_key(sender) {
                 held_clock += batch.len();
+                held_back.append(&mut batch);
             } else {
                 ops.append(&mut batch);
             }
         }
 
-        let (mut report, mut blocks) = apply::apply_held(conn, &ops, apply::Waiting::Hold)?;
+        let (mut report, mut blocks) =
+            apply::apply_page(conn, &ops, &held_back, apply::Waiting::Hold)?;
         // Held behind a newer build's batch, which is what `held_newer` counts — and a block of the
         // hold's, at the first such batch, unless `apply` holds its sender earlier still. A sender held
         // for its clock is deferred and a block the same way, at its earliest batch, and counted in no
         // class of `apply`'s.
         report.held_newer += held_behind;
+        // The held-back ops only. A fresh op `apply` holds with them — another op in a held-back
+        // op's group, such as an earlier one of the same sender on that row, or collateral behind
+        // its block — is counted in no class, here or in `apply`.
         report.deferred += held_behind + held_clock;
+        if stepped_over > 0 {
+            // An envelope stepped over is an op this device will never apply (design §7).
+            emission::open_gap(conn).map_err(|e| e.to_string())?;
+        }
         let firsts = unparsed.iter().map(|(device, at)| (*device, *at)).chain(
             ahead
                 .keys()
@@ -2291,7 +2340,8 @@ pub async fn pull(
         } else if report.held_waiting > 0 {
             let hold = note_hold(conn, "waiting", blocks, met.clone())?;
             if hold.pulls >= WAITING_PULLS && now_secs(conn)? - hold.since >= WAITING_SECS {
-                let (released, still) = apply::apply_held(conn, &ops, apply::Waiting::Release)?;
+                let (released, still) =
+                    apply::apply_page(conn, &ops, &held_back, apply::Waiting::Release)?;
                 // What the first pass applied or consumed is below its watermark now and skipped
                 // here, so these add without counting anything twice.
                 report.applied += released.applied;
@@ -2483,24 +2533,24 @@ const BASELINE_CLOCK_AHEAD: &str = "the relay refused a device's first sync as s
 /// before it, which the next trip then pushes again. Recorded once a trip
 /// ([`BASELINE_WAITS_FOR_THE_CLOCK`]), and it goes once real time reaches the row.
 ///
-/// ⚠️ **And none is begun while anything written since this trip read its outbox is still
-/// pending** — `through` is the newest op there was when it did. A baseline's rows hold such a
-/// write and its horizon covers it, but the op itself is not on the relay's log yet: it goes out
-/// with the *next* trip, behind the baseline. A peer that pulls in between reads the claim in one
-/// page and the op in the next, where no horizon filters it — the horizon is a filter on one
-/// page and writes nothing — and counts it on top of the claim that already held it. A card out
+/// ⚠️ **And none is begun while anything at all is pending** (the baseline claim design of
+/// 2026-10-03, §5) — whatever left it there: a reader's write since this trip read its outbox,
+/// a conversion behind this trip's own pull, or an op an *earlier* refusal deferred. A baseline's
+/// rows hold such an op and its horizon covers it, but the op itself is not on the relay's log
+/// yet: it goes out with a *later* trip, behind the baseline. A peer reads the claims in one page
+/// and the op in a later one, where no horizon stands beside it — the horizon is a filter on one
+/// page and writes nothing — and a row a claim has just built counts it a second time. A card out
 /// of nothing, which is the one direction a baseline may never fail in (the baseline spec's
-/// §8.2). **It could not happen while a trip held the connection from its push to its ack**; a
-/// reader's write can land between the two now, and so can the conversions behind this trip's own
-/// pull. Nothing is recorded: the marker stays NULL, and the next trip — which that pending op
-/// has already asked for — pushes it and emits behind it, where the horizon covers only what the
-/// log holds. An op an *earlier* refusal left pending does not hold a baseline back; what a
-/// deferral stops is [`Deferral::stops_baselines`]', as it always was.
+/// §8.2). This used to ask only about what was written since the trip read its outbox, and let an
+/// op an earlier refusal left pending go out behind the claims; that is the same op arriving a
+/// page late, and it is refused for the same reason. Nothing is recorded: the marker stays NULL,
+/// and the next trip that pushes the op emits behind it, where the horizon covers only what the
+/// log holds. Every deferral leaves its refused ops pending, so none is begun behind any of them
+/// now — [`Deferral::stops_baselines`] still answers first for the clock and the quota.
 async fn emit_baselines(
     db: &impl Store,
     base: &str,
     token: &str,
-    through: i64,
 ) -> Result<(usize, usize), String> {
     let Some((device, group)) = db.with(me)? else {
         return Ok((0, 0));
@@ -2515,27 +2565,33 @@ async fn emit_baselines(
         // inside the horizon and outside the rows, so the peer would be handed neither its
         // value nor — the horizon filtering it — its delta. Lost, with nothing to say so.
         //
-        // **And the question whether anything newer is pending is asked in that same stretch**,
-        // so the answer is about exactly the rows that were read.
+        // **And the question whether anything is pending is asked in that same stretch**, so the
+        // answer is about exactly the rows that were read — and the emission is named there too
+        // (design 2026-10-03 §3), so its `id` is a tick of the clock those rows were read under.
         let read = db.with(|conn| {
-            let newer: bool = conn
+            // **Nothing pending at all** (design 2026-10-03 §5), not only what was written since
+            // this trip read its outbox: a pending op is inside these rows and their horizon but
+            // not on the relay's log, so it would arrive behind the claims with no horizon beside
+            // it, onto a row a claim has just built.
+            let pending: bool = conn
                 .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM sync_ops WHERE pushed_at IS NULL AND seq > ?1)",
-                    [through],
+                    "SELECT EXISTS(SELECT 1 FROM sync_ops WHERE pushed_at IS NULL)",
+                    [],
                     |r| r.get(0),
                 )
                 .map_err(|e| e.to_string())?;
-            if newer {
+            if pending {
                 return Ok(None);
             }
             Ok(Some((
                 baseline::build(conn, &device)?,
                 wall_ms(conn)?,
                 baseline::horizon(conn, &device)?,
+                emission::begin(conn).map_err(|e| e.to_string())?,
             )))
         })?;
         // **Every peer's baseline is these same rows**, so what holds one back holds them all.
-        let Some((mut ops, wall, horizon)) = read else {
+        let Some((ops, wall, horizon, begun)) = read else {
             break;
         };
         // A device holding nothing has still answered the question, so the marker is stamped
@@ -2552,10 +2608,49 @@ async fn emit_baselines(
             say(db, "push", Kind::Other, BASELINE_WAITS_FOR_THE_CLOCK, None);
             break;
         }
+        // **A row too large ever to send is left out before the ops are numbered** (design §3),
+        // asked of it as a chunk of one with the horizon and the head it would carry, so `n`
+        // counts what is sent and an index that never arrives cannot keep the emission untaken.
+        // It is recorded, as `push` records one, and the marker is still stamped once the rest
+        // has landed: the baseline is rebuilt from the tables on every trip, so a marker held NULL
+        // for its sake would offer this peer the same unsendable row, and the whole baseline
+        // around it, on every sync for good. The row stays on this device; the sentence says the
+        // peer goes without it.
+        let mut sendable: Vec<Op> = Vec::with_capacity(ops.len());
+        for op in ops {
+            let mut probe = op.clone();
+            probe.horizon = Some(horizon.clone());
+            probe.emission = Some(Emission {
+                id: begun.id,
+                i: u32::MAX,
+                n: Some(u32::MAX),
+                since: Some(begun.since),
+                resumed: begun.resumed,
+            });
+            if wire::oversized(std::slice::from_ref(&probe)) {
+                say(
+                    db,
+                    "push",
+                    Kind::Other,
+                    &unsendable(&op, "a device's first sync"),
+                    Some(&op.uid),
+                );
+            } else {
+                sendable.push(op);
+            }
+        }
+        let mut ops = sendable;
+        if ops.is_empty() {
+            db.with(|conn| baseline::mark_sent(conn, &peer))?;
+            continue;
+        }
+        baseline::number(&mut ops, &begun);
+        let n = ops.len();
         // **Cut where `wire::batches` would cut** — by count and by bytes — and walked as mutable
-        // slices of those lengths, because `batches` hands out shared ones and the horizon has to
-        // be written in. The lengths are measured before the horizon rides on, which is the few
-        // hundred bytes `wire::BATCH_BYTES` leaves room for under the relay's cap.
+        // slices of those lengths, because `batches` hands out shared ones and the horizon and the
+        // head have to be written in. The lengths are measured with every op's emission reference
+        // on and before the horizon and the head ride on, which is the few hundred bytes
+        // `wire::BATCH_BYTES` leaves room for under the relay's cap.
         let lengths: Vec<usize> = wire::batches(&ops)
             .iter()
             .map(|chunk| chunk.len())
@@ -2570,23 +2665,9 @@ async fn emit_baselines(
             // receiver handed only the second would union no horizon at all and count deltas that
             // are already inside the claims — §8.1's `+1`, silently.
             chunk[0].horizon = Some(horizon.clone());
-            // **A row too large ever to send is recorded and left out, as `push` leaves one
-            // out** — and asked of the chunk as it will be sealed, horizon and all. The baseline
-            // is rebuilt from the tables on every trip, so a marker held NULL for its sake would
-            // offer this peer the same unsendable row, and the whole baseline around it, on every
-            // sync for good. The row stays on this device; the sentence says the peer goes
-            // without it.
-            if length == 1 && wire::oversized(chunk) {
-                let op = &chunk[0];
-                say(
-                    db,
-                    "push",
-                    Kind::Other,
-                    &unsendable(op, "a device's first sync"),
-                    Some(&op.uid),
-                );
-                continue;
-            }
+            // **And so does the head** — how many ops the emission sends and the generation it
+            // goes out under (design §3) — for the horizon's reason.
+            baseline::head(&mut chunk[0], n, &begun);
             // A `stale_epoch` is not mended here as `push` mends it: the marker stays NULL, the
             // next trip's `check_keys` adopts before it gets here, and the baseline is built and
             // sealed again under the new key — a baseline is never filed, so there is nothing
@@ -2616,9 +2697,9 @@ async fn emit_baselines(
         // **Only after every chunk has landed.** Spec §13: a half-sent baseline must leave the
         // marker NULL so the next sync starts it over. Stamping above the loop instead turns
         // one failed push into a peer that is never offered a baseline again — a device empty
-        // for ever, which is the whole failure this feature exists to remove. (A chunk left out
+        // for ever, which is the whole failure this feature exists to remove. (A row left out
         // above has not *failed*: it can never land, so the rest landing is the whole of what
-        // can.)
+        // can — and it took no index, so the emission the rest makes up is whole.)
         db.with(|conn| baseline::mark_sent(conn, &peer))?;
         emitted += sent;
         history += sent_history;
@@ -2717,11 +2798,6 @@ async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutc
     // pull and the ack below do not depend on this device having been heard, and holding them
     // back with it stopped the device reading its group — and, for a full log, stopped the relay
     // compacting the very log that was full.
-    // **The newest op there is before the push reads its outbox** — what [`emit_baselines`]
-    // measures "written since" against. Read ahead of the push rather than by it, so an op is
-    // either at or below this and in the outbox the push reads, or above it and the baseline's
-    // to wait for.
-    let through = db.with(last_op)?;
     let pushed = push(db, &base, &token).await?;
     let mut outcome = RelayOutcome {
         pushed: pushed.sent,
@@ -2750,7 +2826,7 @@ async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutc
     // refusal part of the way through and push its first chunks again on every trip
     // ([`Deferral::stops_baselines`]).
     if baselines && !pushed.deferred.is_some_and(Deferral::stops_baselines) {
-        let (ops, history) = emit_baselines(db, &base, &token, through).await?;
+        let (ops, history) = emit_baselines(db, &base, &token).await?;
         outcome.baseline_ops = ops;
         outcome.baseline_history = history;
     }
