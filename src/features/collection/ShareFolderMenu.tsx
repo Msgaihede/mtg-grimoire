@@ -49,6 +49,7 @@ import { copyText } from "@/lib/clipboard";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionFolder, type ShareFields, type ShareRow } from "@/lib/ipc";
 import { SUPPORTER_KEY, supporterState } from "@/lib/query";
+import { useReaches } from "@/lib/reach";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -209,6 +210,15 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
    * says must not see it.
    */
   const connected = membership !== "unknown" && membership !== "never";
+
+  /**
+   * Whether this window has the shared view the *Open* half goes to — the shell's answer, through
+   * `useReaches`, and false only in the light app, which draws six destinations and not this
+   * one. **Hidden there rather than refused on the press**: a link that answered would land on a
+   * view the light app cannot stand on, and a share link is a web page a browser opens anyway.
+   */
+  const canOpen = useReaches("shared");
+  const canShare = target !== null && connected;
 
   /**
    * The group's published shares, and **asked only once there is a membership to ask about**.
@@ -402,44 +412,50 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
       {/* The shape `ImportExportPair` beside it already draws: one bordered box with a hairline
           between, because these are one idea read in two directions rather than two loose
           buttons. The Share half is simply absent for a reader with nothing connected, which
-          leaves a group of one — correct, since the remaining half needs no membership. */}
-      <div
-        role="group"
-        aria-label="Sharing"
-        className="flex shrink-0 overflow-hidden rounded-md border border-border bg-surface"
-      >
-        {target !== null && connected && (
-          <button
-            ref={shareRef}
-            type="button"
-            aria-label={shareName}
-            // The popup *kind* is a fact about this button and is free; the expanded *state* is
-            // a fact about `ContextMenuProvider`, which publishes only `openMenu`/`closeMenu` —
-            // so a static `aria-expanded="false"` would be an assertion, wrong for exactly as
-            // long as the menu is up. `CollectionFolderCard`'s `⋯` makes the same declaration.
-            aria-haspopup="menu"
-            onClick={openMenu}
-            className={SHARE_BUTTON}
-          >
-            <Share2 className="size-4 shrink-0" aria-hidden="true" />
-            Share
-          </button>
-        )}
-        <button
-          ref={openRef}
-          type="button"
-          aria-label={OPEN_A_SHARE}
-          aria-haspopup="dialog"
-          onClick={() => {
-            setNote(null);
-            setOpening(true);
-          }}
-          className={cn(SHARE_BUTTON, target !== null && connected && "border-l border-border")}
+          leaves a group of one — correct, since the remaining half needs no membership. The Open
+          half is absent where the shell has no shared view (`canOpen`), and a group with neither
+          is not drawn at all. */}
+      {(canShare || canOpen) && (
+        <div
+          role="group"
+          aria-label="Sharing"
+          className="flex shrink-0 overflow-hidden rounded-md border border-border bg-surface"
         >
-          <Link2 className="size-4 shrink-0" aria-hidden="true" />
-          {OPEN_A_SHARE}
-        </button>
-      </div>
+          {canShare && (
+            <button
+              ref={shareRef}
+              type="button"
+              aria-label={shareName}
+              // The popup *kind* is a fact about this button and is free; the expanded *state* is
+              // a fact about `ContextMenuProvider`, which publishes only `openMenu`/`closeMenu` —
+              // so a static `aria-expanded="false"` would be an assertion, wrong for exactly as
+              // long as the menu is up. `CollectionFolderCard`'s `⋯` makes the same declaration.
+              aria-haspopup="menu"
+              onClick={openMenu}
+              className={SHARE_BUTTON}
+            >
+              <Share2 className="size-4 shrink-0" aria-hidden="true" />
+              Share
+            </button>
+          )}
+          {canOpen && (
+            <button
+              ref={openRef}
+              type="button"
+              aria-label={OPEN_A_SHARE}
+              aria-haspopup="dialog"
+              onClick={() => {
+                setNote(null);
+                setOpening(true);
+              }}
+              className={cn(SHARE_BUTTON, canShare && "border-l border-border")}
+            >
+              <Link2 className="size-4 shrink-0" aria-hidden="true" />
+              {OPEN_A_SHARE}
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Mounted for the life of the control and the sentence swapped into it: a live region
           that appears together with its own text announces nothing, because there was no change
@@ -487,7 +503,7 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
       </ConfirmDialog>
 
       <OpenShareDialog
-        open={opening}
+        open={opening && canOpen}
         // **The caret is this host's to hand back**, which `Dialog` states and which the paste
         // box cannot do for itself: it forwards one `onClose` to both `Dialog.onDismiss` and
         // `Dialog.onClose`, so Escape, the ✕ and a press on the scrim all arrive here as the same

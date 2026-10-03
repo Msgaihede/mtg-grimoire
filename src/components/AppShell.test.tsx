@@ -178,6 +178,7 @@ import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { EditionContext, LIGHT_EDITION } from "@/lib/edition";
+import { useReaches } from "@/lib/reach";
 import { LAYER } from "@/lib/layers";
 import { DURATION } from "@/lib/motion";
 import type { Update } from "@/lib/useUpdate";
@@ -1999,6 +2000,47 @@ describe("the light edition", () => {
     expect(useAppStore.getState().activeView).toBe("search");
     // The control for the `true` above: a chord this edition does draw is taken.
     expect(fireEvent.keyDown(document.body, { key: "2", ctrlKey: true })).toBe(false);
+  });
+
+  /**
+   * Another window is the full edition's verb. Wherever the light edition runs a browser or an OS
+   * owns the windows — and in a browser this is the private-window chord — so the press is left
+   * alone, not merely ignored. Fired by hand, for `F1`'s reason below.
+   */
+  it("leaves Ctrl+Shift+N to whatever owns the window", () => {
+    renderLight();
+    expect(fireEvent.keyDown(document.body, { key: "N", ctrlKey: true, shiftKey: true })).toBe(
+      true,
+    );
+    expect(windowNew).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The shell answers `useReaches` from its edition, so a page can hide a way into a view this
+   * window does not draw without ever reading the edition. The control is the full edition.
+   */
+  it("tells a page which views this window can reach", () => {
+    const Probe = () => {
+      const shared = useReaches("shared");
+      const collection = useReaches("collection");
+      return <span>{`shared:${shared} collection:${collection}`}</span>;
+    };
+    const { unmount } = render(
+      <EditionContext.Provider value={LIGHT_EDITION}>
+        <AppShell update={noUpdate}>
+          <Probe />
+        </AppShell>
+      </EditionContext.Provider>,
+    );
+    expect(screen.getByText("shared:false collection:true")).toBeInTheDocument();
+    unmount();
+
+    render(
+      <AppShell update={noUpdate}>
+        <Probe />
+      </AppShell>,
+    );
+    expect(screen.getByText("shared:true collection:true")).toBeInTheDocument();
   });
 
   /**
