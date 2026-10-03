@@ -214,26 +214,22 @@ purpose; the phase that owns the surface owns the fix.
   the `live` list; and `facesOf` now exists twice (the desktop's lives in a module that imports
   the store).
 - The wall's list semantics count rows rather than cards; no test scrolls a long wall to its end.
-- In landscape the bars stop short of the screen's edge beside a cutout — the shell pads the
-  root by the side insets. Whether the bars should bleed with their content inset is a device
-  pass's call.
+- ~~In landscape the bars stop short of the screen's edge beside a cutout.~~ **Closed
+  2026-10-03 (§7.8)**: the bars bleed and inset their content.
 - **A constraint on the sheet's design, not a defect yet**: a step from one card to another
   *inside* the sheet must be `navigate(…, { replace: true })`. A plain `navigate` is a second
   marked push, and one close would then land on the first card instead of the page.
-- In the light edition `Ctrl+Shift+N` still asks for a new window, and on the desktop face the
-  key map has no mount (so `F1` is left to the browser).
-- **The desktop face can reach a view the light edition does not draw.** The collection's
-  share menu opens a shared binder with `setActiveView("shared")`; the URL has no word for it, so
-  the adapter writes `/search` while the binder is on screen, no rail row is lit, and a reload, a
-  resize or Forward lands on Search. It is the one such path besides `Ctrl+Shift+N`.
+- ~~In the light edition `Ctrl+Shift+N` still asks for a new window.~~ **Closed 2026-10-03
+  (§7.8)**, and `F1` is left to the browser on purpose.
+- ~~**The desktop face can reach a view the light edition does not draw.**~~ **Closed
+  2026-10-03 (§7.8)**: the way in is hidden through `useReaches`, and the adapter refuses the
+  move.
 - **A crossing unmounts the face it leaves**, so anything half-typed on the desktop face — a
   note, an import's text, a rename — is discarded by a browser resize or a tablet's rotation; a
   zoom gesture still inside its trailing write is not persisted; and the desktop's launch reads
-  run again on each widening.
-- **History across the floor has two warts.** A card the phone face *pushed*, closed on the
-  desktop face by `replaceState`, leaves two entries for one place — one Back that shows nothing.
-  And a card opened on the desktop face is written by replace, so carried to the phone face its
-  sheet is not an entry of the router's: ✕ and Escape close it, Back leaves the page beneath.
+  run again on each widening. **Accepted, 2026-10-03 (§7.8)** — not closed.
+- ~~**History across the floor has two warts.**~~ **Both closed 2026-10-03 (§7.8)**, by two
+  history marks both faces read.
 
 ### Phase 5 — the web host
 
@@ -1779,3 +1775,111 @@ were built and attached, and the Linux pair is as unrun as it has always been. A
 own `rust-cache` reported `No cache found` on both legs — a first run under a new key, so the
 build was cold and the cache line in `release.yml` is still unproven (`ci.yml`'s restores). The release also
 carries #780 (the sync fix §6.9 left open), which merged twelve minutes before the release PR.
+
+## 7. Phase 3 — the phone pages, a step at a time
+
+One subsection per step of [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md),
+numbered by the step.
+
+### 7.8 Step 3.8 — the desktop face in the light edition, and the shell (2026-10-03)
+
+**Build: `vite --config vite.mobile.config.ts --mode fake` (Vite's dev server, not a bundle) over
+the Storybook fake's `starter` seed, driven by Playwright in headless Chromium 1194 on Linux.**
+No `?art=live`, so every card is its placeholder. The desktop face was driven at device scale 1
+with no touch; the phone face with mobile emulation (touch, scale 2). Nothing here was measured on
+a phone, a tablet, Windows or a production bundle.
+
+#### The desktop face below its 700px height floor
+
+Widths 1024, 1100 and 1280 at heights 560, 600, 650 and 700, on Search, a card modal, a deck
+(`/decks/1`) with its import and export dialogs, Collection with its import and export dialogs,
+Wishlist, Settings and Scanner. At every size `documentElement.scrollHeight` equalled the
+viewport — nothing scrolls the document.
+
+| What | 1100 × 600 | 1280 × 650 | 1024 × 700 | 1024 × 560 |
+| --- | --- | --- | --- | --- |
+| A deck's *Import a decklist* | 540 tall, its body scrolls (400 of 451) | 585, scrolls (445 / 451) | 591, fits | 504, scrolls (364 / 451) |
+| Export (a deck's, the collection's) | 363 / 411, fit | fit | fit | fit |
+| The card modal's middle column | fits, 3 columns | fits, 3 columns | **0px tall** | **0px tall** |
+
+- **The rail fits to 560**: its six rows and Collapse, Collapse's foot at 525.
+- **The deck editor stays usable at 600**: header, stats, the view row and the quick-add row take
+  the top ~270px, and the stacks and the docked search panel scroll in what is left (~330px).
+- **The card modal breaks, and it is not the height.** The panel is `Dialog`'s, inset 80px a side,
+  so a window between 1024 and about 1062 wide draws it at 864–899px — under its own
+  `@min-[900px]/card` rung, at the two-column one. There the grid's rows are
+  `minmax(0,1fr) auto`: the rail of options takes its whole content height (eight rows and more
+  over the fake's card), the printings-and-prices column above it gets what is left, and the rail spills
+  over the footer. Measured: the middle column **0px** at 1024 × 700 and 1024 × 560, 34px at
+  1024 × 800 and 1060 × 800, 194px at 1024 × 1000. **1024 × 700 is the desktop window's own
+  floor**, so this is the full edition's bug as much as the light one's — `tauri.conf.json` lets a
+  reader size the window there. Not fixed here: the modal's grid is a measured arrangement with
+  its own reasons at every class, and a fix belongs in a change of its own that drives the shipped
+  window too. Screenshots `3.8b-desktop-card-modal-1024x700.png` and `…-1024x560.png`.
+- Nothing else was cheap to fix because nothing else broke.
+
+#### The tablet rail — decided: a rail from 600px
+
+The band between 600 and 1024 is a portrait tablet, an unfolded foldable, or a phone on its side.
+Measured after the change (the "before" column is the bar's 53px given back, and the wall at the
+old width):
+
+| Viewport | Before: the bar | After | The wall |
+| --- | --- | --- | --- |
+| 360 × 800 | 2 columns | unchanged — a bar below 600 | 2 × 162px tiles |
+| 599 × 900 | 3 columns | unchanged | 3 × 184px |
+| 600 × 900 | 3 columns | rail 80 × 850 | 3 × 157px |
+| 800 × 1280 | 5 columns of ~144px | rail 80 × 1230 | 4 × 165px |
+| 915 × 412 | page 309px tall, **under one row** | rail 80 × 362, page 362 | 5 × 153px, one whole row |
+| 740 × 360 | — | rail 80 × 310, five tabs of 62px | 4 × 150px |
+
+**On the phone on its side the vertical is what is scarce**, and the bar's 53px was a sixth of
+what the page had: at 915 × 412 the wall drew less than one row. The rail spends 80px of width
+instead, which on a portrait tablet costs one column out of a height it has to spare, and each
+tile gets bigger. Upright below 600 nothing changed — the spec's measurement there stands. The
+rail asks the viewport's width and nothing else; the tabs are links in the same document order at
+every width (`flex-row-reverse` draws the rail on the left), and in the rail each is a share of
+the column between 44 and 64px, because five 64px rows do not fit a 360-tall landscape screen.
+Screenshots `3.8b-tabbar-before-{915x412,800x1280}.png` and `3.8b-rail-{915x412,800x1280}.png`.
+
+#### The bars beside a cutout
+
+Driven with `Emulation.setSafeAreaInsetsOverride` (left 44, bottom 20): at 560 × 360 the header's
+row is padded 60px on the left (16 + 44), the bar paints from x 0 and pads its tabs 44 and 20, the
+page is padded 44; at 915 × 412 the rail is 124 wide from x 0 (80 + 44) and the page beside it is
+padded 20 at the bottom and nothing on the left. `scrollWidth` equal to the width at both. **The
+page's own sticky line (Search's box) still stops at the inset** — it is the page's bar, under
+`pages/`, and bleeds when that page chooses to. Screenshots `3.8b-cutout-*.png`.
+
+#### Decided without a measurement
+
+- **A view the light edition does not draw.** The collection's *Open a shared collection* is
+  hidden where the shell answers `useReaches("shared")` with false (`src/lib/reach.ts`, provided by
+  `AppShell` from its edition) — so a page asks whether a destination exists here, never which
+  edition it is in — and `useDesktopPlace` refuses any store move onto such a view, putting the
+  store back on the URL's place without touching history. Hidden rather than refused on the press:
+  a link that answered would have nowhere to land, and a share link is a web page a browser opens
+  anyway. At 1280 × 800 the collection draws Import and Export and no Open half.
+- **`Ctrl+Shift+N`** is the full edition's alone; in the light edition the press is left to the
+  browser, where it is the browser's own private-window chord.
+- **`F1` stays the browser's.** Mounting the key map without the caption row would mean an
+  edition-aware catalogue — it lists chords this edition makes inert — for a keyboard story that
+  belongs to the web host (phase 5).
+- **The two history warts are closed by two marks** in `routes.ts`, which both faces read:
+  `PUSHED` (the phone router's; its card entry has the same page directly beneath) and `OVERLAID`
+  (a card the desktop face wrote onto an entry by replace). Driven both ways at 360 ↔ 1280:
+  - a card the phone pushed, closed on the desktop face with Escape: `history.back()` to
+    `/search` with `history.length` unchanged, and the next Back went to `/decks`, the page
+    before — not to a second `/search`;
+  - a card the desktop opened (`history.state` `{ overlaid: true }`), narrowed to the phone face:
+    the entry was split (`{ pushed: true }`, length +1, the address bar unmoved), Back closed the
+    sheet onto `/search`, and the next Back went to `/collection`, the page before.
+  A card reached by a link is neither and keeps the old rule on both faces. **One race is left**:
+  the desktop face's close is a `history.back()`, and a card opened again before that traversal
+  lands is closed by it.
+- **A crossing still discards half-typed text, and that is accepted.** Holding the face while a
+  text field has focus would draw the desktop UI below its floor — the rule `mobile/CLAUDE.md`
+  exists to keep — and would freeze a resize for a caret in an empty search box: the app has no
+  signal for *unsaved* that covers a controlled input and the note editor alike, and a debounce
+  protects nothing typed. The realistic trigger is a tablet rotating across 1024; what it costs is
+  re-typing, and what would prevent it is keeping both faces mounted, which this step did not buy.

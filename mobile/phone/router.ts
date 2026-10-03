@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore, type MouseEvent } from "react";
-import { parsePlace, placeHref, type Place } from "../routes";
+import { isOverlaid, isPushed, parsePlace, placeHref, PUSHED, type Place } from "../routes";
 
 /**
  * The phone face's router: the URL is where the reader is, and the History API is how they move.
@@ -34,19 +34,6 @@ function placeAt(current: string): Place {
 const isHere = (place: Place): boolean => placeHref(place) === placeHref(placeAt(href()));
 
 /**
- * What a history entry carries when **this router pushed it** — and so what says the entry
- * beneath it is one of the app's own.
- *
- * {@link back} reads it. An entry the reader arrived on — a link somebody sent, a bookmark, the
- * desktop face's own push before a resize — carries none, and a Back from there may leave the app.
- */
-const PUSHED = { pushed: true } as const;
-
-function pushedHere(state: unknown): boolean {
-  return typeof state === "object" && state !== null && "pushed" in state && state.pushed === true;
-}
-
-/**
  * Go somewhere. A push by default, so Back undoes it — opening a card is one, which is what lets
  * Android's back gesture close the sheet; `replace` for a correction the reader did not make.
  * Closing what a push opened is {@link back}, not a second push.
@@ -57,7 +44,8 @@ function pushedHere(state: unknown): boolean {
  * over it, and the next Back undid nothing the reader could see.
  *
  * A replace keeps the entry's own state: what is beneath an entry does not change when the entry
- * is renamed, so neither does its mark.
+ * is renamed, so neither does its mark ({@link PUSHED}, in `routes.ts` because the desktop face
+ * reads it too).
  */
 export function navigate(place: Place, { replace = false }: { replace?: boolean } = {}): void {
   if (isHere(place)) return;
@@ -65,6 +53,43 @@ export function navigate(place: Place, { replace = false }: { replace?: boolean 
   if (replace) window.history.replaceState(window.history.state, "", next);
   else window.history.pushState(PUSHED, "", next);
   for (const notify of listeners) notify();
+}
+
+/**
+ * Make a card the desktop face opened into one of this router's own — called once, as the phone
+ * face mounts.
+ *
+ * **The desktop face writes a card onto the entry it was opened over** (a modal over a page is not
+ * a place there), and marks it `OVERLAID` (`routes.ts`). Carried across the floor by a resize, that card
+ * is a sheet with nothing of this router's beneath it: {@link back} would rename it in place, so
+ * ✕ and Escape closed it while Android's back gesture — the one a phone reader uses — left the
+ * page beneath instead. So the entry is split into the two a press here would have made: the page,
+ * renamed in place, and the card, pushed over it with this router's mark. The address bar does not
+ * move, and Back now closes the sheet.
+ *
+ * **Only a desktop overlay, never an unmarked card.** A reader who arrived on `…?card=x` from a
+ * link has nothing of the app's beneath them, and {@link back}'s rule for that entry stands.
+ *
+ * Idempotent — the split entry carries {@link PUSHED}, which is not an overlay — so StrictMode's
+ * second call does nothing. A refused write puts the entry back as it was.
+ */
+export function adoptOverlay(): void {
+  const state: unknown = window.history.state;
+  if (!isOverlaid(state)) return;
+  const place = placeAt(href());
+  if (place.cardId === null) return;
+  const card = placeHref(place);
+  try {
+    window.history.replaceState(null, "", placeHref({ ...place, cardId: null }));
+    window.history.pushState(PUSHED, "", card);
+  } catch {
+    try {
+      window.history.replaceState(state, "", card);
+    } catch {
+      // Refused again: the entry may now name the page, and the sheet closes. A card the reader
+      // can open again is the whole of the cost.
+    }
+  }
 }
 
 /** A Back this router asked for and the browser has not made yet. */
@@ -86,7 +111,7 @@ let leaving = false;
  */
 export function back(fallback: Place): void {
   if (leaving || isHere(fallback)) return;
-  if (!pushedHere(window.history.state)) {
+  if (!isPushed(window.history.state)) {
     navigate(fallback, { replace: true });
     return;
   }

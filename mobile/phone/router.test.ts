@@ -1,8 +1,8 @@
 import { createElement } from "react";
 import { act, fireEvent, render, renderHook, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Place } from "../routes";
-import { back, linkTo, navigate, usePlace } from "./router";
+import { OVERLAID, PUSHED, type Place } from "../routes";
+import { adoptOverlay, back, linkTo, navigate, usePlace } from "./router";
 
 // `null` for the state as well as the path: an entry an earlier test pushed carries this router's
 // mark, and a test must start on one that does not.
@@ -181,6 +181,69 @@ describe("back", () => {
     expect(goBack).toHaveBeenCalledTimes(1);
     // The stub made no traversal, so nothing told the router its Back had landed. Say so.
     window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+});
+
+/**
+ * A card the desktop face had open when a resize drew this face. The desktop face writes a card
+ * onto the entry it was opened over and marks it `OVERLAID`; this face's card is a push.
+ */
+describe("adoptOverlay", () => {
+  const collection: Place = { view: "collection", deckId: null, cardId: null };
+
+  it("splits the desktop face's card into the page and a push over it", async () => {
+    window.history.replaceState(OVERLAID, "", "/collection?card=abc");
+    const pushState = vi.spyOn(window.history, "pushState");
+
+    adoptOverlay();
+
+    // The address bar has not moved, and the entry is now one this router pushed...
+    expect(url()).toBe("/collection?card=abc");
+    expect(window.history.state).toEqual(PUSHED);
+    expect(pushState).toHaveBeenCalledTimes(1);
+
+    // ...so the ✕ is a Back, and lands on the page — which is also where Android's back gesture,
+    // a Back the router did not ask for, now lands instead of leaving it.
+    const landed = popped();
+    back(collection);
+    await landed;
+    expect(url()).toBe("/collection");
+  });
+
+  it("does it once, however often it is asked", () => {
+    window.history.replaceState(OVERLAID, "", "/collection?card=abc");
+    // Counted by the spy rather than by `history.length`, which a push past an earlier test's
+    // Forward entry does not lengthen.
+    const pushState = vi.spyOn(window.history, "pushState");
+
+    adoptOverlay();
+    adoptOverlay();
+
+    expect(pushState).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves a card nobody marked alone", () => {
+    // A link straight to a card: nothing of the app's is beneath it, and `back` replaces there.
+    window.history.replaceState(null, "", "/collection?card=abc");
+    const pushState = vi.spyOn(window.history, "pushState");
+    const replaceState = vi.spyOn(window.history, "replaceState");
+
+    adoptOverlay();
+
+    expect(pushState).not.toHaveBeenCalled();
+    expect(replaceState).not.toHaveBeenCalled();
+  });
+
+  it("puts the entry back when the browser refuses the push", () => {
+    window.history.replaceState(OVERLAID, "", "/collection?card=abc");
+    vi.spyOn(window.history, "pushState").mockImplementation(() => {
+      throw new DOMException("Too many calls to the History API", "SecurityError");
+    });
+
+    adoptOverlay();
+
+    expect(url()).toBe("/collection?card=abc");
+    expect(window.history.state).toEqual(OVERLAID);
   });
 });
 
