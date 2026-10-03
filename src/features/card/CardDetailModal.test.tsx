@@ -292,14 +292,149 @@ it("draws a chevron pair when the walk holds a stop for the open card", async ()
   renderModal("c1");
   await screen.findByRole("dialog");
 
-  // jsdom's `matchMedia` never matches, so the window reads as narrower than 900 and the pair is
-  // drawn in the action row's corner rather than as `Dialog`'s flanks. Either way there are two
+  // jsdom's `matchMedia` never matches, so the window reads as having no room for flanks and the
+  // pair is drawn in the action row rather than as `Dialog`'s flanks. Either way there are two
   // of them and each names the list it walks.
   expect(
     screen.getByRole("button", { name: /previous card in search results/i }),
   ).toBeInTheDocument();
   expect(screen.getByRole("button", { name: /next card in search results/i })).toBeInTheDocument();
 });
+
+/**
+ * A window of a stated width, for the one question this modal asks the window rather than its own
+ * box: `useFlankRoom`'s `(min-width: …px)`.
+ *
+ * `test-setup.ts`'s stub answers `false` to every query, which is why every other case in this
+ * file sees the pair in the action row. This one reads the number out of the query, so the cases
+ * below pin *where the threshold is* rather than restating the string the source spells.
+ *
+ * `resize` is a reader dragging the frame: the width moves and every `change` listener hears it,
+ * which is the only way `useSyncExternalStore` learns the answer is different.
+ */
+function stateWindowWidth(px: number) {
+  let width = px;
+  const listeners = new Set<() => void>();
+  const spy = vi.spyOn(window, "matchMedia").mockImplementation(
+    (query: string) =>
+      ({
+        get matches() {
+          return width >= Number(/\(min-width:\s*(\d+)px\)/.exec(query)?.[1] ?? Infinity);
+        },
+        media: query,
+        onchange: null,
+        addEventListener: (_: string, heard: () => void) => listeners.add(heard),
+        removeEventListener: (_: string, heard: () => void) => listeners.delete(heard),
+        addListener() {},
+        removeListener() {},
+        dispatchEvent: () => false,
+      }) as unknown as MediaQueryList,
+  );
+  return {
+    resize(next: number) {
+      width = next;
+      act(() => listeners.forEach((heard) => heard()));
+    },
+    restore: () => spy.mockRestore(),
+  };
+}
+
+/**
+ * **Flanks and the two-column rung may never be drawn together**, which is spec §2.1's table read
+ * as a rule: two columns keep the chevrons in the action row, three hang them off the panel.
+ *
+ * Asking for flanks at a 900px *window* broke that at the desktop's own floor. The flank columns
+ * are bought off the panel — 56px each, on top of the scrim's 24px — and the container query
+ * reads the panel's content box, inside its 1px border. So a flanked panel is 162px narrower than
+ * its window and reaches the 900 rung at **1062**, not 900. Measured in the shipped window on
+ * 2026-10-03 at 1024×700: an 864px panel on the two-column rung, grid rows `0px 418px`, the
+ * printings column **0px** tall and the rail 26px over the footer. jsdom lays nothing out, so
+ * what this pins is the decision that caused it.
+ */
+it.each([1024, 1061])(
+  "keeps the chevrons in the action row at a %ipx window, where flanks would cost the third column",
+  async (width) => {
+    const media = stateWindowWidth(width);
+    try {
+      walkOfThree();
+      renderModal("c1");
+      const dialog = await screen.findByRole("dialog");
+
+      const previous = screen.getByRole("button", { name: /previous card in search results/i });
+      expect(previous.closest(".right-full")).toBeNull();
+      // The scrim reserved no columns, so the panel keeps the whole padded window.
+      expect(dialog.parentElement).not.toHaveClass("grid-cols-[3.5rem_minmax(0,1fr)_3.5rem]");
+    } finally {
+      media.restore();
+    }
+  },
+);
+
+it("hangs the chevrons off the panel from the width a flanked panel is still three columns", async () => {
+  const media = stateWindowWidth(1062);
+  try {
+    walkOfThree();
+    renderModal("c1");
+    const dialog = await screen.findByRole("dialog");
+
+    const previous = screen.getByRole("button", { name: /previous card in search results/i });
+    const next = screen.getByRole("button", { name: /next card in search results/i });
+    expect(previous.closest(".right-full")?.parentElement).toBe(dialog);
+    expect(next.closest(".left-full")?.parentElement).toBe(dialog);
+
+    // **The three terms 1062 is 900 plus**, pinned where the number that depends on them is
+    // tested: 2 × 3.5rem of flank column, 2 × 1.5rem of scrim padding, and the panel's own 1px
+    // border either side. A change to any of them in `Dialog` moves the threshold, and nothing
+    // else in either suite would say so.
+    expect(dialog.parentElement).toHaveClass("grid-cols-[3.5rem_minmax(0,1fr)_3.5rem]", "sm:px-6");
+    expect(dialog).toHaveClass("sm:border");
+  } finally {
+    media.restore();
+  }
+});
+
+/**
+ * **The crossing is above the window's floor now, so a reader can drag across it** — and the pair
+ * is two different elements either side of it. A chevron holding the caret is unmounted by the
+ * resize, the caret lands on `<body>`, and the arrows it was walking with are dead: measured in
+ * the shipped window on 2026-10-03, `document.activeElement === BODY` after 1024 → 1062 and
+ * ArrowRight moving nothing. At 900 the same drop was under the floor and nobody could reach it.
+ *
+ * The panel takes it back, through the settle `Dialog` already runs for a layer closing above it.
+ */
+it.each([
+  [1024, 1062],
+  [1062, 1024],
+])(
+  "keeps the caret in the panel when a resize from %ipx to %ipx moves the chevron holding it",
+  async (from, to) => {
+    const media = stateWindowWidth(from);
+    try {
+      walkOfThree();
+      renderModal("c1");
+      const dialog = await screen.findByRole("dialog");
+      // **Let the settle `Dialog` arms on mount end first**, which it does on its first frame. A
+      // resize staged before that frame is rescued by a loop the reader's resize never has: this
+      // case passed with no fix behind it until the frame was awaited. `Dialog.test.tsx` carries
+      // the same line for the same reason.
+      await new Promise((r) => requestAnimationFrame(r));
+
+      const next = screen.getByRole("button", { name: /next card in search results/i });
+      next.focus();
+      expect(next).toHaveFocus();
+
+      media.resize(to);
+
+      // The pair moved, so the button that held the caret is gone and has dropped it…
+      expect(next).not.toBeInTheDocument();
+      expect(document.body).toHaveFocus();
+      // …and the caret is somewhere the arrows are still heard.
+      await waitFor(() => expect(dialog).toHaveFocus());
+    } finally {
+      media.restore();
+    }
+  },
+);
 
 /** The three-stop walk both arrow tests below step along, with the open card in the middle. */
 function walkOfThree() {
