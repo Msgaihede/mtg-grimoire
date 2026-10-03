@@ -26,12 +26,9 @@ const titleOf = (view: LightView): string => NAV.find((n) => n.id === view)?.lab
 /**
  * Open a card over wherever the reader is. A push, so Back closes it.
  *
- * **A tile with no card id opens nothing.** The one row that makes such a tile is a wish whose
- * card the corpus no longer has a printing of: it has neither a printing of its own nor one to be
- * drawn as, so there is no id for a sheet to ask about. (A wish for *any* printing is not that
- * row — it carries the printing it is drawn as, and opens it.) The tile is still a button,
- * because the wall makes every tile one; what this guard buys is a press that does nothing
- * rather than a sheet that can only say the card could not be read.
+ * Only a tile with a card to open is a control at all (`WallTile`): a wish whose card the corpus
+ * has lost has no printing to show, and is drawn as no button rather than as one that does
+ * nothing — so every press that reaches here names a card.
  */
 const openCard = (place: Place) => (item: WallItem) => {
   if (item.cardId !== null) navigate({ ...place, cardId: item.cardId });

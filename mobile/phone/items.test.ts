@@ -1,4 +1,7 @@
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import type { CardSummary, CollectionRow, DeckCard, WishRow } from "@/lib/ipc";
 import { collectionTiles } from "@/features/collection/collectionWall";
 import { tileKeyOf } from "@/lib/tileKey";
@@ -132,31 +135,39 @@ const wish = (over: Partial<WishRow> = {}): WishRow =>
     quantity: 1,
     preferredFinish: null,
     unitPrice: null,
+    elsewhere: 0,
     ...over,
   }) as WishRow;
 
+/** The chin's printing line as it reads — the line is a React node, so it is rendered. */
+const chinText = (item: ReturnType<typeof wishItem>) => {
+  const printing = "printing" in item.chin ? item.chin.printing : null;
+  return renderToStaticMarkup(createElement(TooltipProvider, null, printing)).replace(/<[^>]+>/g, "");
+};
+
 describe("wishItem", () => {
-  it("draws a wish for any printing without a set line", () => {
+  it("draws a wish for any printing without a set line, as the printing it is drawn as", () => {
     const item = wishItem(wish(), "usd");
-    expect(item.chin).toEqual({ printing: "Any printing", printingTitle: null });
+    expect(chinText(item)).toBe("Any printing");
+    expect(item.chin.printingTitle).toBeNull();
     expect(item.pressLabel).toBe("Sol Ring, any printing");
     // The picture is the printing the wish is *drawn as*, which is not the one it asks for.
     expect(item.cardId).toBe("art-1");
   });
 
   it("draws a pinned wish's own printing", () => {
-    const item = wishItem(wish({ cardId: "card-9", setCode: "c21", collectorNumber: "263" }), "usd");
-    expect(item.chin).toEqual({ setCode: "c21", collectorNumber: "263" });
+    const pinned = wish({ cardId: "card-9", artCardId: "card-9", setCode: "c21", collectorNumber: "263" });
+    const item = wishItem(pinned, "usd");
+    expect(chinText(item)).toBe("C21 · 263");
     expect(item.pressLabel).toBe("Sol Ring, C21 263");
     expect(item.cardId).toBe("card-9");
   });
 
-  it("treats a set with no number as no printing at all", () => {
-    // Both halves or neither — a chin reading `c21 · null` is the bug this guards.
-    expect(wishItem(wish({ setCode: "c21", collectorNumber: null }), "usd").chin).toEqual({
-      printing: "Any printing",
-      printingTitle: null,
-    });
+  it("opens nothing for a wish whose card the corpus has lost", () => {
+    // A pinned wish keeps the id it was made for, but there is no printing behind it to draw or
+    // to open: `artCardId` is the one that says so.
+    const orphan = wish({ cardId: "gone", artCardId: null, setCode: "ltr", collectorNumber: "103" });
+    expect(wishItem(orphan, "usd").cardId).toBeNull();
   });
 
   it("says the finish a wish asks for, pinned or not", () => {
@@ -169,6 +180,24 @@ describe("wishItem", () => {
         "usd",
       ).pressLabel,
     ).toBe("Sol Ring, C21 263, Etched");
+  });
+
+  it("drops the finish's word from the chin where the glyph says it, and keeps it for nonfoil", () => {
+    const pinned = { cardId: "card-9", setCode: "c21", collectorNumber: "263" };
+    expect(chinText(wishItem(wish({ ...pinned, preferredFinish: "foil" }), "usd"))).toBe("C21 · 263");
+    expect(chinText(wishItem(wish({ ...pinned, preferredFinish: "nonfoil" }), "usd"))).toBe(
+      "C21 · 263 · Nonfoil",
+    );
+  });
+
+  it("marks a card wished for more than once, beside the printing", () => {
+    const item = wishItem(wish({ elsewhere: 2 }), "usd");
+    expect(
+      renderToStaticMarkup(
+        createElement(TooltipProvider, null, "printing" in item.chin ? item.chin.printing : null),
+      ),
+    ).toContain('aria-label="Also on your wishlist 2 more times"');
+    expect(chinText(wishItem(wish({ elsewhere: 0 }), "usd"))).toBe("Any printing");
   });
 });
 

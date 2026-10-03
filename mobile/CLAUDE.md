@@ -277,12 +277,11 @@ failure behind each at its own site:
   under the `frontend-design` skill like all UI here.
 - **Scanner is a placeholder**: a sentence, no camera and no permission asked. Settings is the
   light edition's groups as rows, each opening the desktop's own panels beneath it (step 3.7).
-- **The Collection is the cabinet** (`phone/ShelfWall.tsx`, `pages/CollectionPage.tsx`): headed
-  shelves laid out from the counts, folded in place by a press the page holds rather than stores,
-  a folder opened as a level with a path row out, and 3.1's sheet over `useCollection`. **The
-  Wishlist wall still draws open shelves only** — the desktop hook fetches the shelves the reader
-  has left open, and the wall draws them as one run with no heading, no fold and no way into a
-  folder. **Search has its filters** (`phone/search/
+- **The Collection and the Wishlist are cabinets** (`phone/ShelfWall.tsx`, `pages/CollectionPage.tsx`,
+  `pages/WishlistPage.tsx`): headed shelves laid out from the counts, folded in place by a press
+  the page holds rather than stores, a folder opened as a level with a path row out, a deck's
+  managed wishlist as a read with a link to its deck, and 3.1's sheet over each list's own hook
+  (`CabinetFilters`). **Search has its filters** (`phone/search/
   FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
   and everything else in a sheet that is page state rather than a place in the URL.
 - **The phone face imports and exports a deck and the collection** (step 3.6, light-app.md §7.6):

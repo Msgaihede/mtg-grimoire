@@ -17,8 +17,7 @@ import type { Shelf } from "@/lib/shelves";
 import { CabinetFilters } from "../CabinetFilters";
 import type { WallItem } from "../CardWall";
 import { collectionItem } from "../items";
-import { linkTo } from "../router";
-import { EmptyShelfBox, PathRow, PhoneShelfHeading } from "../ShelfParts";
+import { DeckLink, EmptyShelfBox, PathRow, PhoneShelfHeading } from "../ShelfParts";
 import { NO_ITEMS, ShelfWall } from "../ShelfWall";
 import { CollectionTransfer } from "../transfer/CollectionTransfer";
 import { DimNote, NextPageRefused, ReadError, useMore } from "./parts";
@@ -145,19 +144,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
           onToggle={() => toggle(shelf)}
           foldPaused={filtering ? FOLD_PAUSED_REASON : undefined}
           onOpenFolder={shelf.kind === "unfiled" ? undefined : () => openFolder(shelf.id)}
-          aside={
-            deckId === null ? undefined : (
-              <a
-                {...linkTo({ view: "decks", deckId, cardId: null })}
-                aria-label={`Open the deck ${shelf.name}`}
-                className="flex h-11 flex-none items-center px-1"
-              >
-                <span className="rounded-full border border-border px-2 text-[0.6875rem] leading-5 text-dim">
-                  Deck
-                </span>
-              </a>
-            )
-          }
+          aside={deckId === null ? undefined : <DeckLink deckId={deckId} name={shelf.name} />}
         />
       );
     },

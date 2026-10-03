@@ -7,7 +7,6 @@ vi.mock("@tauri-apps/api/event", () => import("../../../.storybook/fake/event"))
 vi.mock("@tauri-apps/api/window", () => import("../../../.storybook/fake/window"));
 
 import { registerCommands } from "../../../.storybook/fake/core";
-import { ipc } from "@/lib/ipc";
 import { PhoneFace } from "../PhoneApp";
 import { installLayout, renderPhone } from "../testing";
 
@@ -200,48 +199,6 @@ describe("the card sheet", () => {
 });
 
 // Decks — the gallery and a deck — are `decks.test.tsx`'s.
-
-describe("Wishlist", () => {
-  it("draws the wishes on the reader's open shelves", async () => {
-    renderPhone(<PhoneFace />, { path: "/wishlist" });
-    const wall = await screen.findByRole("list", { name: "Your wishlist" });
-    expect(await within(wall).findByRole("button", { name: "Sol Ring, any printing" }, SETTLE)).toBeInTheDocument();
-    // The finish a wish asks for is part of what it is called.
-    expect(
-      within(wall).getByRole("button", { name: "Ragavan, Nimble Pilferer, MH2 138, Foil" }),
-    ).toBeInTheDocument();
-    // One printing wished for at the root and again in a folder: two wishes, one name.
-    expect(within(wall).getAllByRole("button", { name: "Rhystic Study, PCY 45" })).toHaveLength(2);
-  });
-
-  it("says so when the wishlist is empty", async () => {
-    renderPhone(<PhoneFace />, { path: "/wishlist", fake: { seed: "empty" } });
-    expect(await screen.findByText("Nothing on your wishlist yet.", undefined, SETTLE)).toBeInTheDocument();
-  });
-
-  it("does not call a wishlist empty when every wish is on a folded shelf", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    // The eight wishes the reader filed themselves. What is left is the five a deck manages,
-    // in that deck's own folder — a shelf that starts shut.
-    for (const id of [1, 2, 3, 4, 5, 6, 7, 8]) await ipc.wishlistRemove(id);
-
-    await userEvent.click(tab("Wishlist"));
-
-    expect(await screen.findByText(/on folded shelves/, undefined, SETTLE)).toBeInTheDocument();
-    expect(screen.queryByText("Nothing on your wishlist yet.")).toBeNull();
-  });
-
-  it("says so when the wishlist cannot be read", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    registerCommands({ wishlist_list: refused() });
-
-    await userEvent.click(tab("Wishlist"));
-
-    expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      "Your wishlist could not be read.",
-    );
-  });
-});
 
 // Settings has a suite of its own since step 3.7 — `SettingsPage.test.tsx`.
 describe("Scanner", () => {

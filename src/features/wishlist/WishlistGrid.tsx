@@ -9,7 +9,7 @@ import { QuantityStepper } from "@/components/QuantityStepper";
 import { useTooltip } from "@/components/tooltip/useTooltip";
 import { dragData } from "@/features/decks/dnd";
 import { CardGrid, type GridCard, type GridSections } from "@/features/search/CardGrid";
-import { isFinish, type Finish } from "@/lib/finish";
+import type { Finish } from "@/lib/finish";
 import type { FolderNode } from "@/lib/folderTree";
 import type { WishlistFolder, WishRow } from "@/lib/ipc";
 import type { Marketplace } from "@/lib/marketplace";
@@ -19,7 +19,7 @@ import type { Shelf } from "@/lib/shelves";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { EditWishButton } from "./EditWish";
-import { printingOf, wishLabel } from "./wish";
+import { preferredFinishOf, wallPrinting, wishLabel } from "./wish";
 import { wishDragData } from "./wishDrag";
 import { ElsewhereMark } from "./wishMarks";
 
@@ -119,18 +119,6 @@ const caption = (tile: WishTile) => (
   </span>
 );
 
-/**
- * The finish this wish is **for**, where the app has an enum's word for it.
- *
- * Where the search derives this from the printing's own finish list, a wish simply says it: a
- * wish for the foil is a different wish and is not filled by the nonfoil. `isFinish` guards it
- * because `wishlist_entries.preferred_finish` is TEXT with a CHECK rather than an enum this side
- * knows. No preference answers `null`, which is right — "no preference" is not nonfoil.
- */
-const preferredFinishOf = (wish: WishRow): Finish | null => {
-  const preferred = wish.preferredFinish;
-  return preferred !== null && isFinish(preferred) ? preferred : null;
-};
 
 /**
  * The same fact as the sheen and corner chip `CardArt` draws over the picture.
@@ -140,39 +128,6 @@ const preferredFinishOf = (wish: WishRow): Finish | null => {
  */
 const tileFinish = (tile: WishTile): Finish | null => preferredFinishOf(tile.wish);
 
-/**
- * The printing this wish is for **as the wall says it** — which is the table's sentence minus
- * whatever the chin's own glyph is already saying.
- *
- * The wall and the table draw the same fact into two different surroundings, and the right answer
- * differs for that reason alone. The table has no art, no chin and no glyph, so the word is the
- * only statement of the finish there and `printingOf` stays exactly as it is for it. The wall's
- * caption is now the chin's printing line, one gutter away from `FinishMark` — so `LEA · 161 ·
- * Foil ✦` said "Foil" twice, once in a word and once in a glyph whose accessible name is that
- * same word, on the surface with the least room in the app to say anything twice.
- *
- * **The word is dropped exactly where the glyph replaces it, and nowhere else** — which is why
- * this asks {@link preferredFinishOf} rather than testing `preferredFinish` for truthiness:
- *
- * * **`nonfoil` keeps its word.** `FinishMark` returns `null` for it — nonfoil is the finish a
- *   price is assumed to be — so a blanket drop would leave a wish *for the nonfoil* looking
- *   identical to a wish with no preference. Those are two different wishes and the whole of
- *   `WISH_PREFERRED_FINISH`'s note in `wishlist.rs` is that they must not be collapsed.
- * * **A value `isFinish` does not know keeps its word** for the same reason: `tileFinish` hands
- *   `CardGrid` a `null` for it, so no glyph is drawn and the caption is again the only statement.
- *
- * It is built by handing `printingOf` a row with the finish taken off rather than by rebuilding
- * the `SET · number` half here, so there is still exactly one definition of *which printing* —
- * and **"Any printing" therefore survives untouched**, which is the one thing this caption exists
- * to protect: a wish for the card is drawn as a printing it is not for, and no wall may caption
- * that picture with the cardboard's own name.
- */
-function wallPrinting(wish: WishRow): string {
-  const spoken = preferredFinishOf(wish);
-  return spoken !== null && spoken !== "nonfoil"
-    ? printingOf({ ...wish, preferredFinish: null })
-    : printingOf(wish);
-}
 
 /**
  * What a tile carries when it is dragged — spec §1's third drag source, and since spec §9 a
