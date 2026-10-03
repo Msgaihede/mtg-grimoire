@@ -197,10 +197,12 @@ purpose; the phase that owns the surface owns the fix.
 
 ### Phase 3 — the phone pages (each comes to the owner as built options first)
 
-- **The Collection and Wishlist walls draw open shelves only.** The desktop hooks fetch the cards
-  of the shelves the reader has left open, and deck groups, `Recently removed` and a deck's
-  managed wishlist folder start shut — so on the `starter` seed the collection wall draws 9 of 12
-  rows. When every row is on a shut shelf the page says so; it cannot open one.
+- ~~**The Collection and Wishlist walls draw open shelves only.**~~ — **fixed 2026-10-03 for the
+  collection in step 3.2** (§7.2): it is the cabinet, every shelf headed and every one openable,
+  a deck's group and `Recently removed` included. **The wishlist wall still draws open shelves
+  only**: the desktop hook fetches the shelves the reader has left open, and a deck's managed
+  wishlist folder starts shut. When every wish is on a shut shelf the page says so; it cannot open
+  one.
 - ~~After a refused next page a wall stops asking and says nothing~~ — **fixed 2026-10-03**: the
   wall ends on `The next cards could not be read.` and a `Try again` that calls `fetchNextPage`
   itself (`parts.tsx`'s `NextPageRefused`, through `CardWall`'s `footer`). It still stops asking
@@ -210,14 +212,21 @@ purpose; the phase that owns the surface owns the fix.
   counted, from `useCollection`'s new `figuresRefused` and `useWishlist`'s `countsQuery`.
 - A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
   nothing.
-- Two rows of one printing get one accessible name; the desktop wall folds them into one tile.
+- ~~Two rows of one printing get one accessible name~~ — **fixed 2026-10-03 in step 3.2**
+  (§7.2): the phone folds them into one tile exactly as the desktop wall does
+  (`collectionWall.ts`'s `collectionTiles`), so `Lightning Bolt, STA 105, Etched, 2 copies` is
+  one name for one tile.
 - ~~`DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
   the `live` list~~ — **fixed 2026-10-03 in step 3.4** (§7.4): it asks through `deckDetailQuery`
   (`src/features/decks/deckQuery.ts`), the key `useDeck` itself reads under, and opens on the list
   the deck remembers (`lastVariant` where it keeps a plan) with a Theory / Actual switch. And
   ~~`facesOf` now exists twice~~ — **fixed 2026-10-03**: it lives once, in
   `src/features/card/faces.ts`, read by `CardTextDialog` and the phone's card sheet (§7.1).
-- The wall's list semantics count rows rather than cards; no test scrolls a long wall to its end.
+- ~~The wall's list semantics count rows rather than cards~~ — **fixed 2026-10-03 for the
+  shelved wall** (§7.2): each shelf is its own list named for the shelf, and each card says
+  `aria-setsize`/`aria-posinset` within it, so a virtualised shelf announces its whole count. The
+  flat `CardWall` (Search) still counts rows. ~~No test scrolls a long wall to its end~~ — the
+  collection's paging test scrolls the `large` seed's 600-tile shelf to its far end.
 - In landscape the bars stop short of the screen's edge beside a cutout — the shell pads the
   root by the side insets. Whether the bars should bleed with their content inset is a device
   pass's call.
@@ -1836,6 +1845,46 @@ sheet takes the top safe-area inset when it fills the window, as the filters she
 **Two of phase 1's leftovers closed here** (§5): a refused next page and an uncountable empty
 wall each say so now, and `facesOf` lives once.
 
+
+### 7.2 Step 3.2 — Collection (2026-10-03)
+
+**The collection is the cabinet.** Under the line — the box (`Search your collection`) and the one
+`Filters` button, with the stated filters under them once one is on — the wall is the desktop's
+shelves in `buildShelves`' order: Not sorted, the reader's folders depth first, then **Decks**,
+each deck's group by name and `Recently removed` last. The figures band (`CollectionSummaryHeader`:
+Cards, Unique, Value with its unpriced count, For trade) heads the wall and scrolls away with it.
+Each shelf is a 48px heading — the chevron, the desktop's `ShelfGlyph`, the name with its path, the
+figures under it (`Locked · …` for a drawer set aside), a peek of three cards while shut — over its
+own cards, laid out from the shelf counts so every heading is placed before its page lands.
+
+- **Every shelf opens.** A press on a heading folds it in place; its `→` opens the folder as a
+  level, with a path row (`←` and the trail) that stays put above the wall. A deck's group carries
+  a `Deck` link to its deck. **A fold is the phone's own and is not stored**: the shelves start
+  from the reader's stored folds and a press is held by the page, because nothing on the phone face
+  writes yet and `mobile:tauri` shares the desktop's `app_meta`. `useCollection({ folds })` is the
+  seam; the desktop passes nothing.
+- **The level is not in the URL**, unlike the deck gallery's `?folder=`: its controls are buttons,
+  and Back leaves the view rather than the folder.
+- **One tile per printing, finish and folder**, the desktop wall's grain, so two grades of one
+  printing are one tile counting both — and `ShelfCount.tiles` counts the same grain, which is what
+  lets the wall be laid out from the counts at all.
+- **Filters through 3.1's sheet**, which now takes any `FilterSurface` and a `tray`: the collection
+  offers the desktop bar's own cells (`COLLECTION_TRAY`, moved beside `useCollection`) — set,
+  format, rarity, type, border, price, finish, condition, needs review — with its own sort rows, and
+  no Owned, Printings or `Any card`. A filter suspends folding, as on the desktop.
+- **Headings only are indented**, 12px a level; the cards under a nested shelf use the wall's full
+  width, because one column count serves every shelf and a 360px wall indented the desktop's 32px
+  a level drops to one column.
+- **What moved in `src/`**, each re-exported or imported where it was: `collectionWall.ts` (the
+  tile fold, `ownedFinishes`, `tilesByShelf`, `subtotalsOf`, `shelfTotal`, out of the welded
+  `CollectionPage`); `loadedShelves` and `fillShelves` (out of `CardGrid`'s sectioned memos) into
+  `shelfLayout.ts`; one generic `trailOf` in `folderTree.ts`; `TrayCell` and `SEARCH_TRAY` into
+  `filterOptions.ts`.
+- **The wall ends on 3.1's `Try again`** when a next page is refused, and a refused whole-level
+  figure says so under the band while the shelves go on saying what they hold.
+
+Driven at 360 and 800 wide over `starter`: nothing scrolls sideways, at the root, inside `Binder`,
+with a deck's group opened, and with the sheet open.
 
 ### 7.4 Step 3.4 — Decks, read (2026-10-03)
 
