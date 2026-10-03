@@ -65,7 +65,7 @@ measured, one subsection per step).
   edits in the collection and the wishlist; add to a deck, the collection or the wishlist from the
   card sheet; deck notes and to-do lists edited. Each through the command the desktop already
   calls, with the desktop's undo where it has one.
-- [x] **3.6 — Import and export on the phone face.** The collection's and a deck's, through the
+- [x] **3.6 — Import and export on the phone face** (#793, merged 2026-10-03). The collection's and a deck's, through the
   existing parsers and writers; a file arrives through `<input type=file>` and leaves as a
   download, which the host seams answer on each install. Built on `phase3/transfer`
   (light-app.md §7.6): a deck's from its page's foot, the collection's as `CollectionTransfer`

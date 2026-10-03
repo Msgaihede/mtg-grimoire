@@ -1,14 +1,15 @@
 # The light app
 
 The Android and web face of MTG Grimoire — card search, decks, collection, wishlist and scanner —
-as one second entry over the desktop's own components. **What is built is phase 1, the skeleton:
-it runs in a browser over the Storybook fake (§2.1) and in a phone-sized window over the real
-Rust core (§2.2), and both were driven. There is no Android host, no WASM host, no service worker
-and no sync on a light install yet.** Underneath it, phase 2 has started: the engine is moving
-into a crate those hosts can link, a step at a time (§6).
+as one second entry over the desktop's own components. **What is built is phase 1, the skeleton,
+and phase 3, the pages:** it runs in a browser over the Storybook fake (§2.1, §7) and in a
+phone-sized window over the real Rust core (§2.2). There is no Android host, no WASM host, no
+service worker and no sync on a light install yet. Underneath it, phase 2 moved the engine into a
+crate those hosts can link (§6).
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
-- How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md).
+- How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
+  pages: [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md).
 - What is left, phase by phase: [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761).
 - The binding rules for anyone changing it: [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
 

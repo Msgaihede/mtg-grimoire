@@ -8,10 +8,12 @@ read its §3 before changing anything here.
 **Light is the menu and the face, never the data.** A light install runs the same commands
 against the same two databases. What it leaves out is destinations.
 
-**What is here is phase 1, the skeleton.** Every rule below is held by a jsdom test or by
-construction, and what was actually driven on 2026-10-01 — a browser over the fake, and the
-`mobile:tauri` window over the real core — is in [light-app.md](../docs/reference/light-app.md),
-with the date, the build and the width of each figure.
+**What is here is phase 1, the skeleton, and phase 3, the pages** (2026-10-03): Search and its
+filters, the card sheet, the two cabinets, the deck gallery and the one-column deck page, writes,
+import and export, and Settings. Every rule below is held by a jsdom test or by construction, and
+what was actually driven — a browser over the fake, and on 2026-10-01 the `mobile:tauri` window
+over the real core — is in [light-app.md](../docs/reference/light-app.md) (§2 and §7), with the
+date, the build and the width of each figure.
 
 ## One entry, two faces
 
@@ -272,9 +274,9 @@ failure behind each at its own site:
 
 ## Not here yet
 
-- **The phone pages are a skeleton.** Each real page — the filters sheet, the card sheet, the two
-  cabinets, the deck editor — comes to the owner as built options before it is built, in phase 3,
-  under the `frontend-design` skill like all UI here.
+- **Every destination has its page, and the owner waived the built-options round for phase 3**
+  (2026-10-03): each page is the implementer's pick, to be redirected in review. A page added
+  later goes back to the spec's rule — built options first, under the `frontend-design` skill.
 - **Scanner is a placeholder**: a sentence, no camera and no permission asked. Settings is the
   light edition's groups as rows, each opening the desktop's own panels beneath it (step 3.7).
 - **The Collection and the Wishlist are cabinets** (`phone/ShelfWall.tsx`, `pages/CollectionPage.tsx`,
