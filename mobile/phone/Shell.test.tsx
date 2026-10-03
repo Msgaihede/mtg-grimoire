@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/event", () => import("../../.storybook/fake/event"));
 vi.mock("@tauri-apps/api/window", () => import("../../.storybook/fake/window"));
 
 import { listeningScopes } from "../../.storybook/fake/scope";
-import { placeHref } from "../routes";
+import { OVERLAID, PUSHED, placeHref } from "../routes";
 import { PhoneFace } from "./PhoneApp";
 import { installLayout, renderPhone } from "./testing";
 
@@ -131,13 +131,58 @@ describe("the shell at the screen's edges", () => {
     expect(settings.classList.contains("focus-visible:outline-offset-2")).toBe(false);
   });
 
-  it("pads the frame by all four safe-area insets", () => {
+  it("bleeds the bars to the screen's edges and insets what is in them", () => {
+    // Until 2026-10-03 the frame padded the two sides, so in landscape both bars stopped short of
+    // the edge beside a cutout. Now no box around the bars is padded, and each insets its content.
     renderPhone(<PhoneFace />);
-    const frame = tabBar().parentElement as HTMLElement;
-    expect(frame.classList.contains("pl-[env(safe-area-inset-left)]")).toBe(true);
-    expect(frame.classList.contains("pr-[env(safe-area-inset-right)]")).toBe(true);
-    expect(screen.getByRole("banner").classList.contains("pt-[env(safe-area-inset-top)]")).toBe(true);
-    expect(tabBar().classList.contains("pb-[env(safe-area-inset-bottom)]")).toBe(true);
+    const banner = screen.getByRole("banner");
+    for (let box = banner.parentElement; box !== null; box = box.parentElement) {
+      expect(box.className).not.toMatch(/\bp[lrx]-\[env\(safe-area/);
+    }
+    expect(banner.classList.contains("pt-[env(safe-area-inset-top)]")).toBe(true);
+    const row = banner.firstElementChild as HTMLElement;
+    expect(row.classList.contains("pl-[calc(1rem+env(safe-area-inset-left))]")).toBe(true);
+    expect(row.classList.contains("pr-[calc(1rem+env(safe-area-inset-right))]")).toBe(true);
+    for (const side of ["left", "right", "bottom"]) {
+      expect(tabBar().className).toContain(`env(safe-area-inset-${side})`);
+    }
+    // The page between them keeps its side insets.
+    const main = screen.getByRole("main");
+    expect(main.classList.contains("pl-[env(safe-area-inset-left)]")).toBe(true);
+    expect(main.classList.contains("pr-[env(safe-area-inset-right)]")).toBe(true);
+  });
+
+  it("turns the tab bar into a rail from 600px, by the width alone", () => {
+    // jsdom applies no media query, so what is pinned is the one breakpoint, on both boxes that
+    // change at it — and that nothing else picks the arrangement.
+    renderPhone(<PhoneFace />);
+    expect(tabBar().classList.contains("min-[600px]:flex-col")).toBe(true);
+    expect(
+      (tabBar().parentElement as HTMLElement).classList.contains("min-[600px]:flex-row-reverse"),
+    ).toBe(true);
+    // After the page in the document at every width, so the tab order never changes with it.
+    expect(screen.getByRole("main").nextElementSibling).toBe(tabBar());
+  });
+});
+
+describe("a card the desktop face had open", () => {
+  it("is taken over as one of the router's own, so Back closes its sheet", async () => {
+    // The desktop face writes a card onto the entry it opened it over and marks it; a resize then
+    // drew this face. Left alone, ✕ closed the sheet and Back left the page beneath it.
+    const card = placeHref({ view: "search", deckId: null, cardId: "nowhere" });
+    renderPhone(<PhoneFace />, { path: card, state: OVERLAID });
+
+    expect(window.location.pathname + window.location.search).toBe(card);
+    expect(window.history.state).toEqual(PUSHED);
+
+    const landed = new Promise((resolve) =>
+      window.addEventListener("popstate", resolve, { once: true }),
+    );
+    window.history.back();
+    await landed;
+    expect(window.location.pathname + window.location.search).toBe(
+      placeHref({ view: "search", deckId: null, cardId: null }),
+    );
   });
 });
 

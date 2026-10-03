@@ -152,7 +152,7 @@ describe("a deck", () => {
 
     // The command zones head the column, the deck's piles follow in its own order with the ones
     // played beside it last, and then the rail in the desktop's order down the page. Deck 2
-    // keeps no notes, so the rail has no Notes section; it has a to-do list.
+    // keeps no notes, and the Notes section is drawn anyway — `New note` is where one starts.
     expect(regions()).toEqual([
       "Commander",
       "Companion",
@@ -163,6 +163,7 @@ describe("a deck", () => {
       "Bracket",
       "Tokens",
       "Mana curve",
+      "Notes",
       "To-do lists",
     ]);
 
@@ -183,18 +184,21 @@ describe("a deck", () => {
     expect(names.indexOf("Notes")).toBeGreaterThan(names.indexOf("Check"));
     expect(names.indexOf("To-do lists")).toBe(names.indexOf("Notes") + 1);
 
-    // A deck note, read-only: its title and its prose, and no Edit.
+    // A deck note: its title, its prose, and the two presses that write it.
     const notes = screen.getByRole("region", { name: "Notes" });
     expect(
       within(notes).getByText("The two game changers, and why there is no third"),
     ).toBeInTheDocument();
-    expect(within(notes).queryByRole("button", { name: /^Edit/ })).toBeNull();
-    // A to-do list's boxes are said, not offered.
+    expect(
+      within(notes).getByRole("button", {
+        name: "Edit The two game changers, and why there is no third",
+      }),
+    ).toBeInTheDocument();
+    // A to-do list's boxes are real checkboxes, named for their own line.
     const todos = screen.getByRole("region", { name: "To-do lists" });
-    expect(within(todos).queryByRole("checkbox")).toBeNull();
-    expect(within(todos).getByText("Sleeve the deck").parentElement).toHaveTextContent(
-      /^Done: Sleeve the deck$/,
-    );
+    expect(
+      within(todos).getByRole("checkbox", { name: 'Mark "Sleeve the deck" not done' }),
+    ).toBeChecked();
   });
 
   it("opens on the list the deck remembers, and reads the other one when switched", async () => {
