@@ -15,9 +15,11 @@
 //!   order — the wrapper's parameters are the wire (`ipc.ts` sends them camelCase, Tauri renames
 //!   them so), so a table entry with another name would answer a host's call with a refusal.
 //!
-//! Markus chose the reads first (2026-10-03): [`NOT_YET`] is everything a light host could answer
-//! that the table does not have yet, and a command leaves it for the table when a page of the
-//! light app asks for it — one line written in each place.
+//! Markus chose the reads first (2026-10-03), and the same day the table came to cover the light
+//! app (phase 4, step 4.2): every write, feed and sync command a light install can answer joined
+//! it, so an Android or a web host refuses no page. [`NOT_YET`] is what is left, each group with
+//! what it waits on — the picture warms, the scanner and `share/`. A command leaves it for the
+//! table with one line written in each place.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
@@ -54,116 +56,24 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
     ),
 ];
 
-/// Commands a light host could answer that the table does not have yet — every write, the feeds'
-/// and sync's tasks, the scanner's commands, and `share/`, which no step of the extraction moved.
+/// Commands a light host could answer one day that the table does not have yet — and since the
+/// table came to cover the light app (phase 4, step 4.2, 2026-10-03), each group here says what
+/// it is waiting on. Every other write, feed and sync command moved into the table that day.
 const NOT_YET: &[&str] = &[
-    // bulk_undo, card
-    "bulk_undo",
-    "set_printing_group_by",
-    // collection, collection_alloc, collection_folders
-    "collection_add",
-    "collection_set_quantity",
-    "collection_update",
-    "collection_set_printing",
-    "collection_remove",
-    "collection_import_commit",
-    "collection_remove_many",
-    "collection_to_deck",
-    "deck_to_collection",
-    "collection_folder_create",
-    "collection_folder_rename",
-    "collection_folder_set_locked",
-    "collection_folder_move",
-    "collection_folder_reorder",
-    "collection_folder_delete",
-    "collection_removed_clear",
-    "collection_set_folder",
-    "collection_set_folder_many",
-    // combos
-    "combos_status",
-    "combos_refresh",
-    "combos_clear",
-    // deck
-    "deck_create",
-    "deck_update",
-    "deck_delete",
-    "deck_duplicate",
-    "deck_set_folder",
-    "deck_set_view_state",
-    "deck_missing_to_wishlist",
-    "deck_add_card",
-    "deck_add_card_to_other_list",
-    "deck_set_card_quantity",
-    "deck_category_clear",
-    "deck_clear",
-    "deck_move_card",
-    "deck_swap_printing",
-    "deck_set_card_finish",
-    // deckpane, decksort
-    "set_deck_folder_pane",
-    "set_deck_sort",
-    // deck_meta
-    "deck_category_create",
-    "deck_category_rename",
-    "deck_category_set_active",
-    "deck_category_reorder",
-    "deck_category_delete",
-    "deck_label_create",
-    "deck_label_update",
-    "deck_label_delete",
-    "deck_label_remove_from_deck",
-    "deck_card_set_label",
-    "deck_folder_create",
-    "deck_folder_rename",
-    "deck_folder_move",
-    "deck_folder_reorder",
-    "deck_folder_delete",
-    // deck_missing, deck_notes, deck_pull, deck_quick_add, deck_theory, deck_todos
-    "deck_missing_to_collection",
-    "deck_note_create",
-    "deck_note_update",
-    "deck_note_delete",
-    "deck_note_attach",
-    "deck_note_detach",
-    "deck_note_reorder",
-    "deck_pull_from_collection",
-    "deck_quick_add_to_collection",
-    "deck_theory_missing_to_wishlist",
-    "deck_todo_list_create",
-    "deck_todo_list_update",
-    "deck_todo_list_delete",
-    // deck_tokens, deck_undo
-    "deck_token_set_quantity",
-    "deck_token_swap",
-    "deck_token_add_printing",
-    "deck_token_remove",
-    "deck_undo_apply",
-    "deck_redo_apply",
-    // desktop.rs: the card sync and the error log
-    "sync_run",
-    "sync_status",
-    "error_log_clear",
-    // home, images, import, index
-    "set_home_layout",
+    // images — each starts a fetch nobody waits for and answers at once. The core can start
+    // background work only as a closure (`platform::spawn::background`), never a future, so an
+    // entry would have to await every fetch before it answered; and how a picture reaches a light
+    // host's page — so whether a warm cache serves it at all — is the host's own question
+    // (`mtgimg://` is this host's, and in a browser the cache stores nothing). The pages that ask
+    // swallow a refusal (`.catch(() => {})`), so nothing a reader sees is refused.
     "prefetch_images",
     "prewarm_collection",
-    "deck_import_commit",
-    "facet_cards",
-    // listview, markcolors, marketplace, marketplace_feed
-    "set_list_view",
-    "set_mark_color",
-    "set_marketplace",
-    "marketplace_feed_refresh",
-    // nav, new_printings, recent_cards
-    "set_nav_collapsed",
-    "mark_new_printings_seen",
-    "record_recent_card",
-    // reset
-    "collection_clear",
-    "wishlist_clear",
-    "decks_clear",
-    "cache_clear",
-    // scanner
+    // scanner — every command but the two reads already in the table. Each that touches the
+    // session or the tray admits the *calling window's label* on the scanner's lease, which a
+    // table call does not carry; `scanner_frame` and `scanner_capture` carry a JPEG and a JSON
+    // header, where Android carries a frame base64 (spec §2.4); and the session's own
+    // `std::thread::scope` and `Instant` panic in a browser until the light app's phase 7 seams
+    // them. The phone face's Scanner is a placeholder that asks for none of these.
     "scanner_status",
     "scanner_frame",
     "scanner_reset",
@@ -174,64 +84,14 @@ const NOT_YET: &[&str] = &[
     "set_scanner_prefs",
     "set_scanner_tray",
     "scanner_tray_commit",
-    // searchopen
-    "set_search_open",
-    // share — `src-tauri`'s still: the spec listed its snapshot and cache, and no step moved them
+    // share — `share/` is still this crate's: the spec listed its snapshot and cache, and no step
+    // of the extraction moved them. The light edition draws no shared view, and the collection's
+    // Share control shows only to a connected reader.
     "share_list",
     "share_create",
     "share_refresh",
     "share_revoke",
     "share_open",
-    // shelffolds, stackhide, startview, sticky_notes
-    "set_shelf_folds",
-    "set_stack_hidden",
-    "set_start_view",
-    "sticky_note_create",
-    "sticky_note_update",
-    "sticky_note_delete",
-    "sticky_note_reorder",
-    // sync_engine
-    "sync_relay_status",
-    "sync_supporter_status",
-    "sync_patreon_begin",
-    "sync_patreon_claim",
-    "sync_now",
-    "sync_review_list",
-    "sync_review_clear",
-    // sync_pair
-    "sync_pairing_status",
-    "sync_pairing_begin",
-    "sync_pairing_accept",
-    "sync_pairing_confirm",
-    "sync_pairing_poll",
-    "sync_pairing_cancel",
-    "sync_device_rename",
-    "sync_device_revoke",
-    "sync_group_leave",
-    // tags
-    "art_tags_refresh",
-    "art_tags_status",
-    "tag_mute",
-    "tag_unmute",
-    "oracle_tags_refresh",
-    "oracle_tags_status",
-    // wishlist, wishlist_folders, wishlist_optimize
-    "wishlist_add",
-    "wishlist_set_quantity",
-    "wishlist_remove",
-    "wishlist_set_printing",
-    "wishlist_import_commit",
-    "wishlist_folder_create",
-    "wishlist_folder_rename",
-    "wishlist_folder_move",
-    "wishlist_folder_reorder",
-    "wishlist_folder_delete",
-    "wishlist_folder_clear",
-    "wishlist_folder_delete_with_wishes",
-    "wishlist_set_folder",
-    "wishlist_optimize_apply",
-    // zoom
-    "set_card_zoom",
 ];
 
 /// The commands `generate_handler!` registers, by their last path segment — the name a page
