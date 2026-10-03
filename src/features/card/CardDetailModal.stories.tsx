@@ -171,9 +171,10 @@ const meta = {
           "`CardModalRail` keeps them in the rail at `@min-[1200px]/card` and up; below that " +
           "they are an inline row in the centre column. Every story here shows them — at the " +
           "narrower rungs they *move* rather than vanish.\n\n" +
-          "**The step chevrons are one pair in two places.** Above 900px of window they are " +
+          "**The step chevrons are one pair in two places.** From 1062px of window they are " +
           "`Dialog`'s `flanks`, hung off the panel's edges in columns the scrim reserves; below " +
-          "that there is no glass to hang them in, so they sit in the action row's left corner. " +
+          "that the columns would take the panel under its three-column rung, so they sit in " +
+          "the action row beside the buttons. " +
           "With no stop for the open card there is no pair at all — `flanks: undefined` — " +
           "because a chevron that cannot say where it would go is worse than no chevron.\n\n" +
           "**`Add to deck` is a `Dropdown` rather than the card menu's deck picker**, and that " +

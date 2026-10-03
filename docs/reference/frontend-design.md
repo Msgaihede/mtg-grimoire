@@ -3506,6 +3506,82 @@ plus the scrim's own padding and travel with whatever the panel turns out to be 
 `calc(100vw - 10rem)` would have had to restate both constants and would have parted company with
 them the first time either moved.
 
+### The card modal's flanks start at 1062, and why 900 broke the window's own floor (2026-10-03)
+
+`CardDetailModal` hangs the same chevron pair off its panel, and decides whether to with a
+viewport query — `FLANK_ROOM`, in JavaScript, because `flanks` is a prop and the decision is made
+before the panel exists. It asked `(min-width: 900px)`, on the reading that 900 is the panel's
+three-column rung. **That is the rung of the panel, and the query is about the window; the two
+differ by what the flanks themselves take.**
+
+| Term | px |
+| --- | --- |
+| `@min-[900px]/card`, read off the panel's **content** box | 900 |
+| the panel's `sm:border`, either side | 2 |
+| `FLANK_COLUMNS`, 3.5rem either side | 112 |
+| the scrim's `sm:px-6`, either side | 48 |
+| **the window at which a flanked panel is three columns** | **1062** |
+
+So from 900 to 1061 the modal drew flanks *and* its two-column rung — a pairing
+[the spec](../superpowers/specs/2026-09-03-card-detail-modal-design.md)'s §2.1 table does not
+have (two columns: chevrons in the action row; three: flanks) — and that band holds the desktop's
+1024×700 floor. The two-column rung was drawn for a panel 840px tall: its rows are
+`minmax(0,1fr)` over `auto`, the `auto` one being the options rail at its full height, so on a
+short panel the rail takes the grid whole and everything else gets the remainder, which is none.
+
+Reported from the light app's phase-3 pass (headless Chromium on Linux, over the fake) and then
+measured **in the shipped window — debug build, `tauri dev`, Windows, the real frame resized with
+Win32 `SetWindowPos` rather than a CDP viewport override**, the old constant put back over HMR for
+the first row:
+
+| Window | Flank query | Panel | Grid columns | Grid rows | Middle column | Rail's foot against the action row |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1024×700 | `900px` (before) | x 80, **864**×560 | `300px 502px` | **`0px 418px`** | 502 × **0** | **26px over it** |
+| 1024×700 | `1062px` | x 24, **976**×560 | `320px 363px 211px` | `400px` | 363 × 400 | 20px clear |
+| 1061×700 | `1062px` | x 24, 1013×560 | `320px 400px 211px` | `400px` | 400 × 400 | 20px clear |
+| 1062×700 | `1062px` | x 80, **902**×560 | `320px 289px 211px` | `400px` | 289 × 400 | 20px clear |
+| 1100×700 | `1062px` | x 80, 940×560 | `320px 327px 211px` | `400px` | 327 × 400 | 20px clear |
+| 1024×1000 | `1062px` | x 24, 976×760 | `320px 363px 211px` | `600px` | 363 × 600 | 20px clear |
+| 1280×800 | `1062px` | x 80, 1120×640 | `320px 507px 211px` | `480px` | 507 × 480 | 20px clear |
+
+The 20px is the grid's own bottom padding; the rail scrolls inside its column (`418/400` at the
+floor) instead of running out of it. `documentElement.scrollWidth` equals `clientWidth` at every
+row, both chevrons answer `elementFromPoint` at their centres in either placement, and the action
+row stays one line of buttons. The card was `+2 Mace` off the search wall; a collection copy with
+`Edit` pressed is the tightest state the floor has — the banner takes 46px and the footnotes wrap
+to three lines beside six controls — and reads a 335px row with the same 20px clear. A deck row
+(`Mountain`, a 13 697px printings list) reads 400.
+
+**Three things follow, and each is a number rather than a preference.**
+
+- **A desktop window never draws the two-column rung.** Unflanked the panel is the window less
+  48, so it needs a window under 950; flanked it needs one under 1062, and flanks now start
+  there. The rung is still what a 764px story frame draws, and its short-panel fault is still in
+  it — **left alone on purpose**: nothing the app can open reaches it, so no change to it could
+  be checked in the window.
+- **At the floor the panel is 976 wide rather than 864**, which is 112px the middle column gets.
+  What the reader gives up from 1024 to 1061 is the flanks: the pair sits in the action row,
+  left of the buttons, where a narrow panel has always kept it. The middle column is narrowest
+  at exactly 1062 — **289px**, the 900 rung's own design minimum — not at the floor.
+- **The footer is 61px or 80px at these widths and both are the design.** The footnotes are
+  `flex-1` and wrap in what the buttons leave: 411px beside the pair at 1024, which holds two
+  lines for a short illustrator's name and three for a long one or for a sixth control.
+
+**The crossing is now somewhere a reader can drag across, and the pair is two different elements
+either side of it.** A chevron holding the caret is unmounted by the resize and drops it to
+`<body>` — measured before the cure, 1024 → 1062 with `Next card` focused: `activeElement` on
+`<body>` and ArrowRight walking nothing. `Dialog`'s `caretPulse` already exists for a control
+vanishing under the reader, so the host folds `room` into the number it passes; after it the same
+drag leaves the caret on the panel in both directions and the arrows walk. At 900 the identical
+drop was under the floor and unreachable.
+
+**Two things about the measuring.** `SetWindowPos` does not honour the window's minimum — asked
+for 900 wide it gave an 884px client area — so the floor has to be asked for exactly: on this
+machine the frame is the client area plus 16 × 9. And a browser pane that is not on screen cannot
+referee any of this: with `visibilityState: "hidden"` no `requestAnimationFrame` runs, so the
+panel sits at its entry keyframe (`scale(0.97)`, opacity 0, every rect 3% small) and **a
+`MediaQueryList` never fires `change`**, which made the fix read as flanks missing at 1280.
+
 ### Three quarters of the window, and why the panel stopped being one
 
 `AllPrintingsDialog` asks for `w-[min(100%,max(64rem,75vw))]` since 2026-08-21 — issue #157,
