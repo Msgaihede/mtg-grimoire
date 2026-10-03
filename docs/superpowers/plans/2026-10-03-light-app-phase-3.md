@@ -61,7 +61,7 @@ measured, one subsection per step).
   the commander first, then each stack (category) one above another with its count and its cards,
   the side rail last (validation, the bracket estimate, notes and to-do lists, tokens). Actual and
   Theory both readable; the deck query shared with the desktop's.
-- [ ] **3.5 — Writes.** Quantities, categories, labels, printings and finishes in a deck; entry
+- [ ] **3.5 — Writes.** *3.5a, the deck writes, is its own PR; 3.5b — the collection's and the wishlist's — follows.* Quantities, categories, labels, printings and finishes in a deck; entry
   edits in the collection and the wishlist; add to a deck, the collection or the wishlist from the
   card sheet; deck notes and to-do lists edited. Each through the command the desktop already
   calls, with the desktop's undo where it has one.
@@ -71,7 +71,7 @@ measured, one subsection per step).
 - [x] **3.7 — Light Settings, on both faces** (#788, merged 2026-10-03). The edition grows its Settings entries (spec §3.1:
   `SettingsPage`'s entry list is the edition's second reader): sync and pairing, the supporter
   block, card data and the optional feeds, the image cache, marketplace, the danger zone.
-- [x] **3.8 — What phase 1 left, and the measurements.** Stories for phone UI (Storybook's globs
+- [x] **3.8 — What phase 1 left, and the measurements** (#789, merged 2026-10-03). Stories for phone UI (Storybook's globs
   reach `mobile/`); `src/lib/tokens.test.ts` reads `mobile/`; the desktop face below its 700px
   height floor measured in a browser; the tablet rail decided; the shared binder and
   `Ctrl+Shift+N` in the light edition; the two history warts across the floor; a crossing that

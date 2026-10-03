@@ -37,6 +37,7 @@ export function TodoBody({
   ticking = false,
   onTick,
   onLink,
+  touch = false,
 }: {
   blocks: TodoBlock[];
   body: string;
@@ -50,6 +51,14 @@ export function TodoBody({
   onTick?: (line: number) => void;
   /** What a link does — `MarkdownInlines`' prop, passed through. */
   onLink?: (href: string) => void;
+  /**
+   * **Give each box a finger's target.** The box stays the 14px square the desktop card and the
+   * widget draw — a list reads the same on every surface — and a 44px press area is laid round it,
+   * which is the phone face's touch floor. It is a `<label>` around the checkbox, so a press
+   * anywhere in it is the box's own press and nothing new is in the accessibility tree; a negative
+   * margin takes the area back out of the layout, so the line keeps its height.
+   */
+  touch?: boolean;
 }): JSX.Element {
   if (blocks.length === 0) {
     return <p className="text-[0.6875rem] text-dim">Nothing on this list yet.</p>;
@@ -66,6 +75,7 @@ export function TodoBody({
           ticking={ticking}
           onTick={onTick}
           onLink={onLink}
+          touch={touch}
         />
       ))}
     </div>
@@ -89,12 +99,14 @@ function TodoBlockView({
   ticking,
   onTick,
   onLink,
+  touch,
 }: {
   block: TodoBlock;
   body: string;
   ticking: boolean;
   onTick?: (line: number) => void;
   onLink?: (href: string) => void;
+  touch: boolean;
 }): JSX.Element {
   if (block.kind === "heading") {
     return (
@@ -111,7 +123,14 @@ function TodoBlockView({
     );
   }
   return (
-    <TodoItems items={block.items} body={body} ticking={ticking} onTick={onTick} onLink={onLink} />
+    <TodoItems
+      items={block.items}
+      body={body}
+      ticking={ticking}
+      onTick={onTick}
+      onLink={onLink}
+      touch={touch}
+    />
   );
 }
 
@@ -126,6 +145,7 @@ function TodoItems({
   ticking,
   onTick,
   onLink,
+  touch,
   nested = false,
 }: {
   items: TodoItem[];
@@ -133,6 +153,7 @@ function TodoItems({
   ticking: boolean;
   onTick?: (line: number) => void;
   onLink?: (href: string) => void;
+  touch: boolean;
   nested?: boolean;
 }): JSX.Element {
   return (
@@ -145,6 +166,7 @@ function TodoItems({
           ticking={ticking}
           onTick={onTick}
           onLink={onLink}
+          touch={touch}
         />
       ))}
     </ul>
@@ -157,12 +179,14 @@ function TodoRow({
   ticking,
   onTick,
   onLink,
+  touch,
 }: {
   item: TodoItem;
   body: string;
   ticking: boolean;
   onTick?: (line: number) => void;
   onLink?: (href: string) => void;
+  touch: boolean;
 }): JSX.Element {
   // A line `toggleTodo` will not flip is drawn as a box that can never be ticked — dashed, and
   // refused — rather than as one that silently does nothing. The reader draws every line it
@@ -193,36 +217,14 @@ function TodoRow({
             )}
           </span>
         ) : (
-          // A real checkbox, `aria-disabled` rather than `disabled` (a `disabled` control leaves
-          // the tab order under the reader's caret — `src/CLAUDE.md`), so the handler is the
-          // fence and refuses the same states the box draws. Drawn over an `appearance-none`
-          // box in `TickBox`'s colours, with the tick a glyph laid over it.
-          <span className="relative mt-0.5 flex size-3.5 shrink-0">
-            <input
-              type="checkbox"
-              checked={item.done}
-              aria-label={todoTickName(item)}
-              aria-disabled={refused || undefined}
-              onChange={() => {
-                if (refused) return;
-                onTick(item.line);
-              }}
-              className={cn(
-                "peer size-3.5 cursor-pointer appearance-none rounded-[3px] border",
-                "border-dim checked:border-accent checked:bg-accent",
-                "enabled:hover:border-accent aria-disabled:cursor-default",
-                "aria-disabled:hover:border-dim aria-disabled:checked:hover:border-accent",
-                boxless && "border-dashed",
-                ticking && "opacity-50",
-                FOCUS,
-              )}
-            />
-            <Check
-              aria-hidden="true"
-              strokeWidth={3.5}
-              className="pointer-events-none absolute inset-0 m-auto hidden size-2.5 text-accent-fg peer-checked:block"
-            />
-          </span>
+          <TodoCheckbox
+            item={item}
+            refused={refused}
+            boxless={boxless}
+            ticking={ticking}
+            touch={touch}
+            onTick={onTick}
+          />
         )}
         <span
           className={cn(
@@ -243,9 +245,70 @@ function TodoRow({
           ticking={ticking}
           onTick={onTick}
           onLink={onLink}
+          touch={touch}
           nested
         />
       )}
     </li>
+  );
+}
+
+/**
+ * A to-do's checkbox, pressable — drawn over an `appearance-none` box in the widget's colours, with
+ * the tick a glyph laid over it. `aria-disabled` rather than `disabled` (a `disabled` control leaves
+ * the tab order under the reader's caret — `src/CLAUDE.md`), so the handler is the fence and
+ * refuses the same states the box draws.
+ */
+function TodoCheckbox({
+  item,
+  refused,
+  boxless,
+  ticking,
+  touch,
+  onTick,
+}: {
+  item: TodoItem;
+  refused: boolean;
+  boxless: boolean;
+  ticking: boolean;
+  touch: boolean;
+  onTick: (line: number) => void;
+}): JSX.Element {
+  const box = (
+    <span className="relative mt-0.5 flex size-3.5 shrink-0">
+      <input
+        type="checkbox"
+        checked={item.done}
+        aria-label={todoTickName(item)}
+        aria-disabled={refused || undefined}
+        onChange={() => {
+          if (refused) return;
+          onTick(item.line);
+        }}
+        className={cn(
+          "peer size-3.5 cursor-pointer appearance-none rounded-[3px] border",
+          "border-dim checked:border-accent checked:bg-accent",
+          "enabled:hover:border-accent aria-disabled:cursor-default",
+          "aria-disabled:hover:border-dim aria-disabled:checked:hover:border-accent",
+          boxless && "border-dashed",
+          ticking && "opacity-50",
+          FOCUS,
+        )}
+      />
+      <Check
+        aria-hidden="true"
+        strokeWidth={3.5}
+        className="pointer-events-none absolute inset-0 m-auto hidden size-2.5 text-accent-fg peer-checked:block"
+      />
+    </span>
+  );
+  // The phone's 44px press area round the same box — see `TodoBody`'s `touch`. Pulled back out of
+  // the layout by its margins, so the box sits exactly where it sits without one.
+  return touch ? (
+    <label className="-mx-[15px] -mb-[15px] -mt-[14px] flex size-11 shrink-0 items-center justify-center">
+      {box}
+    </label>
+  ) : (
+    box
   );
 }

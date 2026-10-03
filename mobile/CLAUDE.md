@@ -279,8 +279,13 @@ failure behind each at its own site:
   folder. **Search has its filters** (`phone/search/
   FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
   and everything else in a sheet that is page state rather than a place in the URL.
-- **Nothing on the phone face writes except Settings**, whose panels make the desktop's own writes
-  (a marketplace, a clear, a label) through the commands the desktop calls.
+- **The phone face writes decks and Settings, and nothing else yet.** Deck writes (step 3.5a,
+  light-app.md §7.5) are the desktop editor's own mutations through `useDeckCore` — `useDeck`
+  without the app store — so a write here and one on the desktop are the same command with the
+  same invalidations; the undo a receipt offers is the desktop's (`useDeckUndo`), and only where
+  the backend journals one. Settings' panels make the desktop's own writes (a marketplace, a
+  clear, a label). The collection's and the wishlist's entry writes, and the card sheet's adds to
+  them, are step 3.5b.
 - **No Android host, no WASM host, no service worker** — `public/light.webmanifest` is the whole
   of the PWA so far — **and no sync on a light install**: the phone face runs none and draws the
   mana line at rest. `mobile:tauri` is the desktop binary, not a light host.

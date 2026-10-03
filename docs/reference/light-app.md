@@ -1936,6 +1936,114 @@ about ten to a screen, and opens the card sheet; a rule break is red with a warn
 
 Driven at 360 and 800 wide over the `starter` seed's decks 2 and 4: nothing scrolls sideways.
 
+### 7.5 Step 3.5a — deck writes on the phone (2026-10-03)
+
+**Every write goes through the mutation the desktop editor presses**, with its optimistic patch and
+its invalidations, so the desktop face — and the desktop app over the same database — reads the
+change the moment it lands. There is no new command and no second copy of a write: what made that
+possible is one split in `src/` (below), after which the phone's deck page calls `useDeckCore`,
+the desktop's own `useDeck` without the app store.
+
+**A row's actions are a sheet behind a visible `⋯`**, a 44px button at the row's far end, beside
+the row's own press (which still opens the card sheet) and never inside it. A long-press was
+weighed and refused: nothing on screen announces it, a scroll's slow start can fire it, and a
+screen reader or a keyboard cannot make it at all — a button at the right edge is under the thumb
+of a hand holding the phone, is found by looking, and is a tab stop. Its name says which row it is
+about (`Edit Sol Ring, foil in Ramp`), because one card can be two rows. The sheet (`deck/sheet.tsx`)
+is `Dialog` with a `self-end` panel — the app's one modal shell, as a bottom sheet below 640px and
+the centred panel above it — and page state, not a place. It holds, top to bottom:
+
+- **Copies** — `−`, the number, `+`, each 44px. `−` at one copy is the removal and says so.
+- **Pile ▸** — every pile of the list in the reader's order, the desktop menu's `Category ▸` and
+  for its reason: filing is the drag onto a heading, refused only for the pile the card is in
+  (marked, `already here`). A switched-off pile says what that costs.
+- **Set as commander / Set as companion** — the claims, present only where the format and the deck
+  have the zone, **refused in words under the row**. The desktop menu greys them silently because
+  a sentence widens every row of a menu; a sheet row is the window's width and has a second line.
+- **Label ▸** — `None`, then the labels this list wears (most-used first), then every other label:
+  the desktop's `Label card ▸` and `More labels…` on one page.
+- **Printing ▸** — the card sheet's own printings read and row (`PrintingFace`, split out of
+  `card/Printings.tsx`), as buttons that swap the deck's printing. **Finish ▸** — the finishes that
+  printing is sold in, in Scryfall's order; refused in words where there is one.
+- **Add to actual / Add to theory** — one copy into the other list, only on a deck that keeps a plan.
+- **Remove from <pile>** — every copy, the same write as the stepper's zero.
+
+**A write that moves the row moves the sheet with it**: a pile, a printing and a finish are parts
+of the row's address, so the page re-points the sheet at the new address when each answers, and
+carries what the write is known to have changed onto the row last seen, so nothing blanks while the
+deck is re-read. A removal has no address to follow and closes the sheet.
+
+**The receipt is the desktop's undo, read at the right moment** (`deck/receipt.tsx`). One line at
+the foot of the page — or of whichever sheet is up, never both — says what the last write did, in
+the press's own words (`Moved Lightning Bolt to Sideboard.`); and once the deck's undo state
+(`useDeckUndo`, the desktop toolbar's hook) answers with a newer step than the one at the press,
+`Undo` appears beside it, named by that step's own sentence, and reverses it. Two things it does not
+pretend: **a cut from an Actual list files no undo step** — it is `deck_to_collection`, a collection
+write the desktop cannot undo either — so its line says where the copies went (`The copies are in
+Recently removed.`) and offers no `Undo`; and **the Storybook fake journals no card write**
+(`deck_add_card`, the quantity, the move, the swap, the finish — its own `journalled` doc names the
+gap), so over the fake only the label, the bracket and the notes show `Undo`. Over the real core
+every one of them files a step. The phone draws no Redo; the hook's redo stack is cleared after each
+write, as its contract asks.
+
+**`Add cards`** is the page's foot, with `Deck settings` beside it — a bar rather than a floating
+button, because a button floating over the right edge would sit on the rows' own `⋯`. It opens the
+card database as a full-height sheet (`deck/AddCards.tsx`) through the Search page's own line and
+wall — `SearchLine` and `SearchResults`, split out of `SearchPage` for it — over `useCardSearch`
+with the deck's format as the opening filter where the database can answer it (the editor's
+`searchFormatDefault`) and `availableForDeck`. **A press on a tile adds one copy** (the tile's name
+starts `Add …`), through `addCard` with `deckDefault`: the pile Deck settings names, else the pile
+the card's Oracle tags file it under. The foot says what was added and how many of that printing the
+list now holds. The filters sheet opens over it, stacked inside its panel.
+
+**The card sheet's `Add to <deck>`** sits at the top of the sheet when it is open over a deck page,
+and adds one copy of the printing on screen to **the list the page is showing**. That needed the
+list to be readable from outside the page: `PhoneFace` now holds each deck's switched list for the
+session, and `deck/list.ts`' `shownList` is the one rule both the page and the sheet read. The
+sheet's actions are a slot list (`card/Actions.tsx`): each action is a file and one entry with an
+`applies` test, so step 3.5b adds the collection's and the wishlist's rows without touching this one.
+
+**Deck notes and to-do lists are written through the desktop's own dialogs.** `New note` and
+`Edit` open `NoteEditorDialog`, whose save the page hosts exactly as the desktop band does (a create
+sends an empty title and the body; an edit sends the note's own title back unchanged) — so the
+history row and the undo step are the desktop's. `Delete` asks first in the band's words. A to-do
+box ticks in place with the card's compare-and-set; `New list` and `Edit` open `TodoListDialog` and
+its autosave; `Delete` asks first. **Tiptap on touch works**: driven in headless Chromium with touch
+emulation at 360px, a tap put the caret in the editor and typed text landed. The dialog fills the
+width below 640px and keeps the desktop's footer buttons, which are under the 44px floor.
+
+**Deck-level**: the bracket picker is the advisory's own (`onBracket` → `deck.update`), its rungs
+raised to 44px from the phone's side; and **`Deck settings` is the desktop's `DeckSettingsDialog`,
+whole** — name, format, game, kind (Theory + Actual / Virtual), the theory marks, the managed
+wishlist, the folder, the cover, the default pile, the pull and the two clears. It was clean to
+reuse once it read the store-free hook, and nothing in it scrolls sideways at 360px; several of its
+controls are desktop-sized.
+
+**What moved in `src/`**, each re-exported from its old home so no desktop caller or test changed:
+
+- `useDeck.ts` → **`useDeckCore.ts`**: the whole hook body, store-free. What a write does to the
+  desktop card modal's address for a deck row — re-anchor it on a move, plan a departure before a
+  removal, step off it after — stays in `useDeck.ts` as the `DeckAnchor` it hands in; the phone
+  hands none (`NO_ANCHOR`).
+- `deckCardMenu.tsx` → **`deckCardRules.ts`**: `ALREADY_HERE`, `REGULAR`, `finishChoices`,
+  `companionRefusal`, and the commander/companion claims as `zoneClaims`, which the menu now maps
+  to its rows.
+- `DeckNotesPanel.tsx` → **`DeleteNoteDialog.tsx`**; `DeckTokensPanel.tsx`'s `TOKENS_HEADING` →
+  `deckTokens.ts`, which is what made `auditText` and so `useDeckUndo` clean.
+- `DeckSettingsDialog` reads `useDeckCore` (nothing it writes moves a row), and `TodoBody` grew a
+  `touch` prop: a 44px `<label>` round the same 14px box, pulled back out of the layout.
+
+**Not done**: attaching cards to a deck note (`NoteCardsDialog` is a desktop picker); categories and
+labels as things in themselves (create, rename, switch off, delete — the Categories and Labels
+dialogs); the token pile's steppers and the tokens band's writes; the stats band's writes (missing
+to wishlist, pull, quick add to collection) and the card menu's `Collection link ▸`; Compare; a
+picked set and any write to several rows at once; Redo. A long list of printings in the `Printing ▸`
+page draws them all, unfolded.
+
+Driven at 360 and 800 wide over the `starter` seed's decks 1, 2 and 4, in headless Chromium 141 on
+Linux with touch emulation: nothing scrolls sideways — the page, the action sheet, the add search,
+the card sheet and Deck settings.
+
 ### 7.7 Step 3.7 — light Settings, on both faces (2026-10-03)
 
 **The edition grew its Settings entries**: `Edition.settings`, `null` for every panel (the full

@@ -9,10 +9,11 @@ import { cardDetailKey } from "@/features/card/cardDetailKey";
 import { cardHoldingsKey, cardPrintingsKey } from "@/features/card/cardKeys";
 import { facesOf } from "@/features/card/faces";
 import { FINISH_LABEL, parseFinishes } from "@/lib/finish";
-import { ipc, ipcError, type CardDetail, type Printing } from "@/lib/ipc";
+import { ipc, ipcError, type CardDetail, type DeckVariant, type Printing } from "@/lib/ipc";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { finishTreatments } from "@/lib/treatment";
 import { useMarketplace } from "@/lib/useMarketplace";
+import { ActionsSection } from "./card/Actions";
 import { CombosSection } from "./card/Combos";
 import { LegalitySection } from "./card/Legality";
 import { OracleTagsSection } from "./card/OracleTags";
@@ -48,10 +49,18 @@ import { back, usePlace } from "./router";
  * read is the desktop's own under the desktop's own key, so a card one face has open paints from
  * the cache on the other when a resize crosses 1024px.
  *
- * **What it does not do yet** is anything that leaves the app or writes: the `Open on …` rows go
- * through the opener, a host seam this face has not got, and nothing on this face writes.
+ * **Its writes are at the top, in `card/Actions.tsx`'s slot list** — today one: `Add to <deck>`,
+ * over a deck page. **What it does not do yet** is anything that leaves the app: the `Open on …`
+ * rows go through the opener, a host seam this face has not got.
  */
-export function CardSheet({ cardId }: { cardId: string | null }) {
+export function CardSheet({
+  cardId,
+  deckPicked = null,
+}: {
+  cardId: string | null;
+  /** The list the deck page beneath has been switched to — see `deck/list.ts`. */
+  deckPicked?: DeckVariant | null;
+}) {
   const place = usePlace();
   const close = () => back({ ...place, cardId: null });
   const { marketplace } = useMarketplace();
@@ -138,6 +147,7 @@ export function CardSheet({ cardId }: { cardId: string | null }) {
           <CardBody
             card={card}
             place={place}
+            deckPicked={deckPicked}
             printings={{
               items: items ?? [],
               total: printings.data?.total ?? 0,
@@ -164,10 +174,12 @@ export function CardSheet({ cardId }: { cardId: string | null }) {
 function CardBody({
   card,
   place,
+  deckPicked,
   printings,
 }: {
   card: CardDetail;
   place: Place;
+  deckPicked: DeckVariant | null;
   printings: { items: readonly Printing[]; total: number; loading: boolean; error: string | null };
 }) {
   const { marketplace, currency } = useMarketplace();
@@ -181,6 +193,8 @@ function CardBody({
 
   return (
     <div className="flex flex-col gap-4">
+      <ActionsSection card={card} place={place} deckPicked={deckPicked} />
+
       <div className="mx-auto w-full max-w-64">
         <CardArt cardId={card.id} name={card.name} variant="display" loading="eager" />
       </div>
