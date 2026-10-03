@@ -3839,15 +3839,33 @@ relay to disagree about a size the client cuts under.
 | `leaving_waits_out_an_operation_in_flight_where_a_press_is_told_busy` | the command's own departure (`pairing::leave`) behind a held lane, on a paused clock, for ten of a press's bounds | it takes a press's lane: red, the mutation was run |
 | `state::tests::a_second_operation_waits_for_the_first`, `a_press_behind_a_sync_or_a_busy_connection_is_told_busy` | two operations; a press behind one, and behind a held connection | the lane is not exclusive, or a press queues |
 
-Both whole-trip tests add their first copies "ten seconds ago". A baseline op is stamped from
-its row's `updated_at` — a whole second — and `apply` skips as seen whatever its sender stamped
-at or below the watermark the peer holds, while the horizon it carries still filters the delta:
-an edit made in the second the peer last heard from this device is lost on that peer. That is
-`apply`'s, was reproduced on `main`'s code, and is filed on its own. ⚠️ **Closed 2026-10-03 for
-an emitter on this build**: a claim that names its emission is never judged by the watermark
-(*A claim names its emission*, above), and
+Both whole-trip tests added their first copies "ten seconds ago" **until 2026-10-03, and neither
+does now.** A baseline op is stamped from its row's `updated_at` — a whole second — and `apply`
+skipped as seen whatever its sender stamped at or below the watermark the peer holds, while the
+horizon it carries still filtered the delta: an edit made in the second the peer last heard from
+this device was lost on that peer. That was `apply`'s, was reproduced on `main`'s code, and was
+filed on its own. ⚠️ **Closed 2026-10-03 for an emitter on this build**: a claim that names its
+emission is never judged by the watermark (*A claim names its emission*, above), and
 `a_rebaseline_carries_an_edit_made_in_the_second_the_peer_last_heard_from` lands that edit. An
 older emitter's baseline still loses it.
+
+**The backdating went the same day, measured both ways first** — debug, Windows, 2026-10-03, the
+two `UPDATE`s deleted from each test and nothing else changed:
+
+| Tree | `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` | `a_write_anywhere_in_a_baselines_emission_reaches_the_peer` |
+| --- | --- | --- |
+| `main` at `6d76803b`, the fix in it | green, 9 runs of 9 | green, 9 runs of 9 |
+| `bc439e10`, the commit before the fix merged | **red, 7 runs of 7**: `3 here, 2 there` behind stretches 8 to 14 of the trip's 19 | green, 7 runs of 7 |
+
+So the round-trip test needed it and no longer does, and without it that test is a whole-trip
+fence for the fix: its fixture's add and its claim share a second, which is the bug's own shape.
+**The emission test did not need it on that commit**, and why is read off the code rather than
+measured: `emit_baselines` already began no baseline over a pending write, so a write landed
+either ahead of the rows — nothing emitted, and it arrived as the delta it is — or behind them
+and above the horizon. The claim was skipped as seen there too, and held nothing the peer lacked.
+The round trip is where the two rules meet: the first trip holds its baseline back for the
+pending write, the second pushes the write and the baseline together, and the peer reads the
+write under the horizon beside a claim at or below its watermark.
 
 **And the compiler holds the rule itself.** A future that keeps a `MutexGuard` across an
 `.await` is not `Send`; `nothing_is_held_across_a_request`, in each of the three files, hands
