@@ -52,7 +52,9 @@ if (node.env.STORYBOOK_ART === "bundled" && !bundledArt) {
 }
 
 const config: StorybookConfig = {
-  stories: ["../src/**/*.stories.tsx", "../.storybook/**/*.mdx"],
+  // `mobile/` since phase 3: the light app's phone face is its own UI, and its pieces are storied
+  // where they live (`mobile/CLAUDE.md`). `preview.css` scans the same directory for classes.
+  stories: ["../src/**/*.stories.tsx", "../mobile/**/*.stories.tsx", "../.storybook/**/*.mdx"],
   addons: ["@storybook/addon-docs", "@storybook/addon-a11y", "@storybook/addon-mcp"],
   framework: { name: "@storybook/react-vite", options: {} },
   // The app's `public/`, mounted at the Storybook root. It is here for one file —
