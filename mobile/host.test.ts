@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import manifest from "./src-tauri/gen/android/app/src/main/AndroidManifest.xml?raw";
 import filePaths from "./src-tauri/gen/android/app/src/main/res/xml/file_paths.xml?raw";
 import appGradle from "./src-tauri/gen/android/app/build.gradle.kts?raw";
+import buildTask from "./src-tauri/gen/android/buildSrc/src/main/java/com/mtggrimoire/app/kotlin/BuildTask.kt?raw";
+import packageJson from "../package.json?raw";
 import lightConf from "./src-tauri/tauri.conf.json?raw";
 import lightCargo from "./src-tauri/Cargo.toml?raw";
 import lightLib from "./src-tauri/src/lib.rs?raw";
@@ -38,6 +40,14 @@ describe("the Android project's hand edits", () => {
     expect(filePaths).not.toMatch(/external-path/);
     const paths = [...filePaths.matchAll(/<([a-z-]+-path)\b[^>]*>/g)].map((m) => m[0]);
     expect(paths).toEqual(['<cache-path name="exports" path="exports/" />']);
+  });
+
+  it("has Gradle call the Tauri CLI from mobile/, where it finds this project", () => {
+    // `npm run tauri` would start the CLI at the repository root, which finds the desktop's.
+    expect(buildTask).toMatch(
+      /listOf\("run", "--", "tauri:light", "android", "android-studio-script"\)/,
+    );
+    expect(JSON.parse(packageJson).scripts["tauri:light"]).toBe("cd mobile && tauri");
   });
 
   it("signs a release build with the debug key, until signing is decided", () => {

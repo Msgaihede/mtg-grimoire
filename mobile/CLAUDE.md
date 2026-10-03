@@ -324,7 +324,9 @@ and the `mtgimg` protocol over the core's `images::answer`.
   refused on a phone until its command joins `crates/grimoire-core/src/commands.rs`.
 - **`gen/android` is committed and hand-edited, and a re-init reverts every edit** (spec §5):
   `allowBackup="false"`, the camera declared and not required, no TV launcher, the `FileProvider`
-  narrowed to `cache/exports/`, and a release build signed with the debug key. **`host.test.ts`
+  narrowed to `cache/exports/`, a release build signed with the debug key, and Gradle's Rust task
+  calling `npm run tauri:light` (`cd mobile && tauri`) — `npm run tauri` starts the CLI at the
+  repository root, where it finds the desktop's project. **`host.test.ts`
   holds each one** — run it after any `tauri android init`, and put the edits back rather than
   deleting the assertion. Regenerate from `mobile/`, never the repository root: the CLI picks the
   project by the directory it starts in, and from the root it finds the desktop's.

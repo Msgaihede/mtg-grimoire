@@ -2489,7 +2489,11 @@ to tell the page what it is.
   edits, each held by `mobile/host.test.ts`** because a re-init reverts them: `allowBackup="false"`
   and `fullBackupContent="false"`; the `CAMERA` permission with the camera feature *not required*;
   the TV launcher removed; the `FileProvider` narrowed from the whole of external storage and the
-  cache to `cache/exports/`; and the release build type signed with the debug key.
+  cache to `cache/exports/`; the release build type signed with the debug key; and **Gradle's Rust
+  task calling `npm run tauri:light`** (`cd mobile && tauri`, a root script) rather than `npm run
+  tauri` — `npm run` starts a script at the repository root, where the CLI finds the desktop's
+  project, and the first `android` run failed exactly so: *"Android Studio project directory
+  …/src-tauri/gen/android doesn't exist"*, after the release Rust build had finished in 4 m 47 s.
 - **CI's `android` job** builds `npx tauri android build --apk --target aarch64` from `mobile/` on
   `ubuntu-24.04` with JDK 21 from the image (`JAVA_HOME_21_X64`) and the image's newest NDK,
   writes the APK's size and the `.so`'s to the step summary, and uploads the APK as an artifact for

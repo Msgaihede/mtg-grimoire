@@ -48,7 +48,12 @@ open class BuildTask : DefaultTask() {
         val rootDirRel = rootDirRel ?: throw GradleException("rootDirRel cannot be null")
         val target = target ?: throw GradleException("target cannot be null")
         val release = release ?: throw GradleException("release cannot be null")
-        val args = listOf("run", "--", "tauri", "android", "android-studio-script");
+        // HAND-EDITED: `tauri:light`, never `tauri`. `npm run` runs a script from the repository
+        // root, and from there the Tauri CLI finds the desktop's project (`src-tauri`) and refuses
+        // with "Android Studio project directory …/src-tauri/gen/android doesn't exist" — the
+        // first `android` CI run, 2026-10-03. The script is `cd mobile && tauri`, so the CLI starts
+        // where it finds this one. `mobile/host.test.ts` holds it.
+        val args = listOf("run", "--", "tauri:light", "android", "android-studio-script");
 
         project.exec {
             workingDir(File(project.projectDir, rootDirRel))
