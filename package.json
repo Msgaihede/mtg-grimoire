@@ -19,8 +19,9 @@
     "mobile:serve": "vite --config vite.mobile.config.ts",
     "mobile:tauri": "tauri dev --config src-tauri/tauri.light.conf.json",
     "mobile:build": "tsc && vite build --config vite.mobile.config.ts",
+    "mobile:android": "cd mobile && tauri android dev",
     "lint": "eslint . --max-warnings 0",
-    "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo check -p mtg-grimoire --locked",
+    "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo check -p mtg-grimoire -p grimoire-light --locked",
     "test": "vitest",
     "test:run": "vitest run",
     "test:coverage": "vitest run --coverage --testTimeout=30000",
@@ -29,7 +30,7 @@
     "scanner:assets": "node scripts/scanner-assets.mjs",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
-    "verify": "npm run build && npm run lint && npm run lint:rust && npm run test:run && cargo test --workspace && cargo test --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target --features cli"
+    "verify": "npm run build && vite build --config vite.mobile.config.ts && npm run lint && npm run lint:rust && npm run test:run && cargo test --workspace && cargo test --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target --features cli"
   },
   "dependencies": {
     "@dnd-kit/abstract": "0.5.0",

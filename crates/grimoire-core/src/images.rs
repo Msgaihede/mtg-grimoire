@@ -385,6 +385,112 @@ impl std::fmt::Debug for Served {
     }
 }
 
+/// How long a webview may keep an image it has been given.
+///
+/// A day, not a year: the URL is stable across Scryfall re-scanning a card, so an immutable
+/// cache would pin a superseded picture inside the webview until the app is reinstalled. A day of
+/// staleness after a re-scan is invisible; being asked again for every tile that scrolls past is
+/// not.
+pub const IMAGE_MAX_AGE: &str = "max-age=86400";
+
+/// **The answer to one image request, as every host's protocol hands it back** — a status, the
+/// three headers that carry meaning, and the body, with no HTTP crate in it. The desktop's
+/// `mtgimg://` handler and the Android host's each turn one of these into their webview's
+/// response type, so the contract — what may be cached, for how long, and what a retry waits —
+/// is written once. Moved here from `src-tauri`'s `images` with the light app's Android host
+/// (phase 4); the desktop's seven tests of that answer still run through it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reply {
+    pub status: u16,
+    pub content_type: &'static str,
+    pub cache_control: &'static str,
+    /// Seconds, for a `Retry-After` header — present on a rate limit and a not-ready answer.
+    pub retry_after: Option<u64>,
+    pub body: Vec<u8>,
+}
+
+impl Reply {
+    /// The answer for one resolved request.
+    ///
+    /// The distinction that matters is permanent-versus-retryable. A printing Scryfall has no
+    /// art for is a **200** with a placeholder, because there is nothing to retry; a failed
+    /// fetch is a **502**, and a rate limit a **503** carrying the wait, so the `<img>` can
+    /// report an error and the grid can heal itself. Serving a placeholder for a network
+    /// failure would quietly turn a temporary outage into a permanently artless collection.
+    pub fn of(result: Result<Served, ImageError>) -> Reply {
+        match result {
+            Ok(served) => Reply {
+                status: 200,
+                content_type: served.content_type,
+                // A placeholder is the one 200 whose content is *meant* to change. It stands in
+                // for a picture the next sync may well supply — Scryfall scans a card and the
+                // `soon.jpg` becomes real art — and there is no URI change to notice it by,
+                // because the placeholder was never fetched from a URI at all. Real bytes keep
+                // their day: their URI *is* their version, so their staleness is bounded by the
+                // re-scan that ended it.
+                cache_control: if served.content_type == SVG {
+                    "no-store"
+                } else {
+                    IMAGE_MAX_AGE
+                },
+                retry_after: None,
+                body: served.bytes,
+            },
+            Err(ImageError::UnknownCard) => Reply::failure(404, "no such card", None),
+            Err(ImageError::RateLimited { retry_after_secs }) => {
+                Reply::failure(503, "rate limited by Scryfall", Some(retry_after_secs))
+            }
+            Err(e) => Reply::failure(502, &e.to_string(), None),
+        }
+    }
+
+    /// A failure, as the webview sees it.
+    ///
+    /// `no-store` on every one of them. A 404 is *heuristically* cacheable, and the card behind
+    /// one can arrive in the next sync — a cached 404 would outlive the thing it was true about,
+    /// with no way to invalidate it short of restarting the app. The same applies to a 503 the
+    /// whole design expects to be retried.
+    pub fn failure(status: u16, message: &str, retry_after: Option<u64>) -> Reply {
+        Reply {
+            status,
+            content_type: "text/plain;charset=utf-8",
+            cache_control: "no-store",
+            retry_after,
+            body: message.as_bytes().to_vec(),
+        }
+    }
+
+    /// The answer for a request that arrives before the host has its state.
+    ///
+    /// The webview and the app's own startup genuinely race at launch, so this is a real state
+    /// rather than a defensive impossibility — and a retryable one, in about the time it takes
+    /// to read the header.
+    pub fn not_ready() -> Reply {
+        Reply::failure(503, "app is still starting", Some(1))
+    }
+
+    /// A path that is not `/<variant>/<card id>/<face>`.
+    pub fn not_an_image() -> Reply {
+        Reply::failure(404, "not an image request", None)
+    }
+}
+
+/// Answer one image request by its **path** — the whole of the protocol, on every host.
+///
+/// Only the path is read because the origin differs: `http://mtgimg.localhost/…` on Windows and
+/// Android, `mtgimg://localhost/…` elsewhere.
+pub async fn answer(state: &State, path: &str) -> Reply {
+    let Some(key) = parse_request_path(path) else {
+        return Reply::not_an_image();
+    };
+    Reply::of(
+        state
+            .images
+            .get(&state.client, state.reader(), &state.db, &key)
+            .await,
+    )
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ImageError {
     #[error("no card with that id")]

@@ -28,7 +28,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /** Every job a `changes` output gates, in the order the outputs are printed. */
-export const JOBS = ["frontend", "rust", "core", "powershell", "storybook"];
+export const JOBS = ["frontend", "rust", "core", "powershell", "storybook", "android"];
 
 /**
  * The two jobs a Rust source can break: `rust`, which compiles it, and `frontend`, whose tests
@@ -45,7 +45,15 @@ const RUST_SIDE = ["frontend", "rust"];
  */
 const CORE_SIDE = [...RUST_SIDE, "core"];
 
-/** Every job that builds something. The fail-safe sets these and not `powershell`. */
+/**
+ * Every job that builds something **for every change it cannot place**. The fail-safe sets these
+ * and not `powershell` — **and not `android`**, which builds the light app's APK (phase 4,
+ * 2026-10-03): its inputs are the host in `mobile/src-tauri`, the cargo workspace's shared files
+ * and the frontend bundle, each of which has an arm that names it, and an unrecognised path is
+ * none of them. It is also the slowest job here — a release build of the whole engine for
+ * `aarch64-linux-android`, then Gradle — so a fail-safe that set it would make every new root
+ * config a twenty-minute wait for a proof about nothing it touched.
+ */
 const BUILD = [...CORE_SIDE, "storybook"];
 
 export const ARMS = [
@@ -56,7 +64,13 @@ export const ARMS = [
   // them, and `frontend` because `scripts/toolchain.test.mjs` does — it holds every workflow to
   // installing Rust through that action and nothing else. **Above the `*` fail-safe only for
   // `storybook`'s sake**, which installs no Rust.
-  { match: ["rust-toolchain.toml", ".github/actions/rust-toolchain/*"], jobs: CORE_SIDE },
+  //
+  // **And `android`**, which installs the same toolchain with the Android target added: a pin
+  // the APK build cannot use is red there and nowhere else.
+  {
+    match: ["rust-toolchain.toml", ".github/actions/rust-toolchain/*"],
+    jobs: [...CORE_SIDE, "android"],
+  },
 
   // The cargo workspace's own files, at the repository root since 2026-10-02: the manifest that
   // names the members and holds the profiles, the one lockfile both members resolve from, and
@@ -67,7 +81,9 @@ export const ARMS = [
   // direction to be wrong in. Above the fail-safe for `storybook`'s sake, as the arm above is.
   // **The patterns are anchored, so these are the root's only** — `src-tauri/Cargo.toml` and
   // `crates/card-scanner/.cargo/config.toml` match their own trees' arms below.
-  { match: ["Cargo.toml", "Cargo.lock", ".cargo/*"], jobs: CORE_SIDE },
+  // **And `android`**: the lockfile is what the APK links, and the root manifest names the light
+  // host as a member — a dependency bumped for the desktop is a dependency the phone ships.
+  { match: ["Cargo.toml", "Cargo.lock", ".cargo/*"], jobs: [...CORE_SIDE, "android"] },
 
   // The two workflows outside this gate, and Dependabot's config. No job in `ci.yml` runs any of
   // them, but `scripts/toolchain.test.mjs` reads both workflows — a release built on a floating
@@ -150,6 +166,16 @@ export const ARMS = [
     jobs: ["frontend", "rust", "storybook"],
   },
 
+  // **The light app's Android host** (phase 4, 2026-10-03): a workspace member, so `rust`
+  // compiles it for the desktop and runs its tests; `android` builds it into an APK, which is the
+  // only job that links it for a phone and packs `gen/android`; and `frontend` because
+  // `mobile/host.test.ts` reads its manifest, its Gradle file and its config as text — the
+  // hand edits a re-init would revert. **Above `mobile/*`**, and the order is the rule.
+  { match: ["mobile/src-tauri/*"], jobs: ["frontend", "rust", "android"] },
+  // The light app's pages and entry: a React tree like `src/`, which `tsc`, `eslint`, `vitest`
+  // and Storybook's story glob all read. Until this arm it fell to the fail-safe and ran the
+  // whole Rust matrix and `core` for a change to a phone sheet.
+  { match: ["mobile/*"], jobs: ["frontend", "storybook"] },
   // Frontend. What `npm run build` (`tsc && vite build`), `eslint .` and `vitest run` read — and
   // `storybook`, which builds every `*.stories.tsx` under `src/` and serves `public/` as its
   // static directory.

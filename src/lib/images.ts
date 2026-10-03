@@ -65,10 +65,14 @@ export const ART_ASPECT = "626 / 457";
 
 /**
  * Where a Tauri custom protocol lives, which is not the same string on every platform:
- * `http://<scheme>.localhost` on Windows, `<scheme>://localhost` elsewhere.
+ * `http://<scheme>.localhost` on Windows and on Android (the light app's host, phase 4 —
+ * Android's WebView serves a custom scheme from that origin, as WebView2 does), and
+ * `<scheme>://localhost` elsewhere.
  */
 export function imageOrigin(userAgent: string): string {
-  return userAgent.includes("Windows") ? "http://mtgimg.localhost" : "mtgimg://localhost";
+  return userAgent.includes("Windows") || userAgent.includes("Android")
+    ? "http://mtgimg.localhost"
+    : "mtgimg://localhost";
 }
 
 /**

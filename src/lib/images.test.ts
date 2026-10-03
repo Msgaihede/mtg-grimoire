@@ -9,8 +9,8 @@ import {
 } from "@/lib/images";
 
 /**
- * Tauri serves a custom protocol from a different origin on every platform: Windows gets
- * `http://<scheme>.localhost/`, everything else `<scheme>://localhost/`. The app is
+ * Tauri serves a custom protocol from a different origin on every platform: Windows and Android
+ * get `http://<scheme>.localhost/`, everything else `<scheme>://localhost/`. The app is
  * Windows-first, but the wrong branch is a page of broken images rather than a type error, so
  * both are pinned.
  */
@@ -19,6 +19,14 @@ describe("imageOrigin", () => {
     expect(imageOrigin("Mozilla/5.0 (Windows NT 10.0; Win64; x64) WebView2/1.0")).toBe(
       "http://mtgimg.localhost",
     );
+  });
+
+  it("uses the http form on Android, where the light app's host serves it", () => {
+    expect(
+      imageOrigin(
+        "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Version/4.0 Chrome/128.0 Mobile Safari/537.36",
+      ),
+    ).toBe("http://mtgimg.localhost");
   });
 
   it("uses the scheme form everywhere else", () => {

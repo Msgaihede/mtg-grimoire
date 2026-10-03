@@ -43,7 +43,7 @@
 # falls back to resolver 1, which unifies features across targets — and the core's WASM build
 # asks `rusqlite` for a different feature set than the desktop's does.
 resolver = "2"
-members = ["src-tauri", "crates/grimoire-core"]
+members = ["src-tauri", "crates/grimoire-core", "mobile/src-tauri"]
 exclude = ["crates/card-scanner"]
 
 # **The scanner's crates at full optimisation in a debug build.** The `image`/`imageproc`

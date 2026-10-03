@@ -230,6 +230,7 @@ failure behind each at its own site:
 | `npm run mobile:dev` | The Storybook fake, by the aliases Storybook uses | UI work in any browser. No Rust, **no lock**. `?art=live` draws real pictures |
 | `npm run mobile:tauri` | The real Rust core and the dev database | The same UI against a real corpus, in a 412 × 915 window |
 | `npm run mobile:build` | — | `tsc`, then the bundle into `dist-mobile/` |
+| `npm run mobile:android` | **The light app's Android host** (`src-tauri/` here) and its own data folder on the device | `tauri android dev` on a phone over `adb` — needs JDK 21, the Android SDK and NDK, which no machine of this repo's has yet; CI's `android` job builds the APK instead |
 
 - **`mobile:tauri` is the desktop binary with a config overlay** (`src-tauri/tauri.light.conf.json`):
   it **takes the `app` lock** and reads `src-tauri/target/debug/data`. Read the `running-the-app`
@@ -239,8 +240,9 @@ failure behind each at its own site:
 - **Fake mode has no startup gate**: the fake answers no `startup_status`, and the gate reads a
   rejected ask as *still loading*, so gating there would wait for ever. It also installs one
   world, `starter`, once, before React.
-- **Neither `verify` nor CI runs `mobile:build`**, like `share:build`. `mobile/` is in
-  `tsconfig.json`'s `include`, so `npm run build` type-checks it; nothing bundles it.
+- **`verify` bundles the light app** (`vite build --config vite.mobile.config.ts`, since phase 4:
+  the Android host's `tauri-build` reads `dist-mobile/`), and CI's `android` job bundles it into
+  the APK. CI's `rust` job stubs `dist-mobile/index.html` instead, as it stubs `dist/`.
 
 ## Tests
 
@@ -303,6 +305,33 @@ failure behind each at its own site:
   ticket back, and an add's `Undo` is the stepper one copy back. Settings' panels make the desktop's
   own writes. **Not yet**: folder management, a copy's purchase price, the deck tokens band's and
   stats band's writes.
-- **No Android host, no WASM host, no service worker** — `public/light.webmanifest` is the whole
-  of the PWA so far — **and no sync on a light install**: the phone face runs none and draws the
-  mana line at rest. `mobile:tauri` is the desktop binary, not a light host.
+- **No WASM host, no service worker** — `public/light.webmanifest` is the whole of the PWA so
+  far — **and no sync on a light install**: the phone face runs none and draws the mana line at
+  rest. `mobile:tauri` is the desktop binary, not a light host.
+
+## The Android host — `src-tauri/` here
+
+A second Tauri project over `grimoire-core` (phase 4; [light-app.md](../docs/reference/light-app.md)
+§8). It is the workspace's third member and holds almost nothing: the mobile entry point, **one
+command, `core_call`**, which forwards every call to `grimoire_core::dispatch`, the startup gate,
+and the `mtgimg` protocol over the core's `images::answer`.
+
+- **The transport is chosen below `@/lib/core` by a mark the host sets**, `window.__GRIMOIRE_CORE__`
+  — `src/lib/core/index.ts`'s `pickCore` reads it, and nothing here may (the fence's second arm).
+  The page is the same program on both hosts; only how a call crosses differs.
+- **A command the core's table does not have is refused on Android in the table's words.** The
+  desktop answers through its typed wrappers, so a page that works in `mobile:tauri` can still be
+  refused on a phone until its command joins `crates/grimoire-core/src/commands.rs`.
+- **`gen/android` is committed and hand-edited, and a re-init reverts every edit** (spec §5):
+  `allowBackup="false"`, the camera declared and not required, no TV launcher, the `FileProvider`
+  narrowed to `cache/exports/`, and a release build signed with the debug key. **`host.test.ts`
+  holds each one** — run it after any `tauri android init`, and put the edits back rather than
+  deleting the assertion. Regenerate from `mobile/`, never the repository root: the CLI picks the
+  project by the directory it starts in, and from the root it finds the desktop's.
+- **Never commit a keystore.** `src-tauri/.gitignore` here ignores `*.jks` and `*.keystore`, and
+  `gen/android`'s own ignores `key.properties`. Signing is undecided (Markus, 2026-10-03: a
+  debug-signed APK until a real phone has run it).
+- **The host also runs on a desktop**, as a debugging aid: `cargo run -p grimoire-light` after
+  `npm run mobile:build`, over a `light-data` folder beside the binary — never the desktop app's,
+  which shares its identifier. It does not take the `app` lock and does not need it, because it
+  opens a different folder; it still shares nothing with a running desktop app.

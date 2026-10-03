@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  HAND-EDITED, narrowed: the template shared the whole of external storage (the external storage root)
+  and the whole cache. A file this app hands another app — an export to share — is written
+  under cache/exports/ and nothing else is reachable through the provider.
+-->
+<paths xmlns:android="http://schemas.android.com/apk/res/android">
+  <cache-path name="exports" path="exports/" />
+</paths>

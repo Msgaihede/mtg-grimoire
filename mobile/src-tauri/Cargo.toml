@@ -1,0 +1,42 @@
+[package]
+name = "grimoire-light"
+# **The app's version**, bumped by release-please with `src-tauri`'s and the core's
+# (`release-please-config.json`), because the three ship from one tag: one core means one schema
+# version (the light-app spec §7's release rule). Tauri reads `tauri.conf.json`'s copy for the
+# Android `versionName`; this one is what the crate says.
+version = "0.40.0"
+description = "MTG Grimoire, light: the Android host over grimoire-core"
+authors = ["Markus Seerup"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+publish = false
+
+# **The light app's Android host** (the light-app spec §5, phase 4): the mobile entry point, one
+# command — `core_call`, which forwards to `grimoire_core::dispatch` — the startup gate the page
+# waits on, and the `mtgimg` protocol. Everything else is the core's. `README`-level detail is in
+# `mobile/CLAUDE.md` and `docs/reference/light-app.md` §8.
+
+[lib]
+# The `_lib` suffix keeps the library's name apart from the binary's on Windows
+# (rust-lang/cargo#8519), as `src-tauri`'s does. **The three crate types are what Tauri's
+# mobile build asks for**: `cdylib` is the `.so` Gradle packs into the APK, `staticlib` is iOS's
+# (not built here, and harmless), `rlib` is what `main.rs` links on a desktop.
+name = "grimoire_light_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+# **No plugin.** The phone face reaches the clipboard, a file and a link through the browser's
+# own APIs until a host seam takes each over (phase 4's later steps), so this host grants
+# nothing a plugin would ask for.
+tauri = { version = "2", features = [] }
+# **Never with its `testing` feature** — `platform::fence` reads this file for it, and CI's
+# `rust` job asks `cargo tree` for this package by name too.
+grimoire-core = { path = "../../crates/grimoire-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# A raw body crosses `core_call` as base64 — Tauri accepts no raw body on Android (spec §2.4) —
+# with the core's own version and features.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }

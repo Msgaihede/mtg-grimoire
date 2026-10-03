@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "light",
+  "description": "The light host's one window. Core's own defaults — events for the page's listen, and the window and path reads the desktop face's shell makes — and no plugin: this host registers none.",
+  "windows": ["main"],
+  "permissions": ["core:default"]
+}
