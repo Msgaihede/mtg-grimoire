@@ -2317,15 +2317,15 @@ fn a_claim_with_nothing_to_raise_does_not_spend_its_horizon() {
 // Task 8b — a row merged away here is never built again (ledger ruling)
 // ---------------------------------------------------------------------------------------------
 
+/// A uid below every minted one, and one above: which side of a grain hit keeps its own.
+const LOW: &str = "00000000000000000000000000000000";
+const HIGH: &str = "ffffffffffffffffffffffffffffffff";
+
 /// #19's setup (`a_claim_let_through_does_not_outlive_its_row_renamed_in_the_same_page`), up to
-/// its page: a's regrade of `U_a` (LP, `+1`), a's emission, and e's NM twin under the lower uid,
-/// stamped below the regrade. Answers `(a, b, page)`, with a having taken e's twin in as #19 has
-/// it do; b has not been handed the page.
-///
-/// On b, e's insert folds first, meets `U_a` by grain while it is still NM and renames it to e's
-/// uid at 3; a's regrade then finds its uid gone and is dropped and recorded — `main`'s answer, b
-/// at 3 against a's 4 — and the drop opens the gap.
-fn renamed_in_one_page() -> (Connection, Connection, Vec<Op>) {
+/// its page, with e's twin under `twin_uid`: a's regrade of `U_a` (LP, `+1`), a's emission, and
+/// e's NM twin, stamped below the regrade. Answers `(a, b, e, page)`, with a having taken e's twin
+/// in as #19 has it do; b has not been handed the page. #19 itself is `twin_uid` = [`LOW`].
+fn twin_in_one_page(twin_uid: &str) -> (Connection, Connection, Connection, Vec<Op>) {
     let (a, b, e) = (paired("dev-a"), paired("dev-b"), paired("dev-e"));
     let (mut ma, mut me) = (0, 0);
     set_clock(&a, STAMP);
@@ -2339,9 +2339,8 @@ fn renamed_in_one_page() -> (Connection, Connection, Vec<Op>) {
         "INSERT INTO collection_entries
             (card_id,set_code,collector_number,lang,finish,condition,quantity,sync_uid,
              created_at,updated_at)
-         VALUES ('bolt','lea','1','en','nonfoil','NM',1,'00000000000000000000000000000000',
-                 1700000000,1700000000)",
-        [],
+         VALUES ('bolt','lea','1','en','nonfoil','NM',1,?1,1700000000,1700000000)",
+        [twin_uid],
     )
     .unwrap();
     let twin = since(&e, &mut me);
@@ -2351,6 +2350,14 @@ fn renamed_in_one_page() -> (Connection, Connection, Vec<Op>) {
     page.extend(whole(&a, "dev-a"));
     page.extend(twin.clone());
     apply(&a, &twin).unwrap();
+    (a, b, e, page)
+}
+
+/// #19's page exactly. On b, e's insert folds first, meets `U_a` by grain while it is still NM
+/// and renames it to e's lower uid at 3; a's regrade then finds its uid gone and is dropped and
+/// recorded — `main`'s answer, b at 3 against a's 4 — and the drop opens the gap.
+fn renamed_in_one_page() -> (Connection, Connection, Vec<Op>) {
+    let (a, b, _e, page) = twin_in_one_page(LOW);
     (a, b, page)
 }
 
@@ -2403,8 +2410,6 @@ fn a_row_merged_away_is_not_built_when_its_page_comes_back_across_the_gap() {
 /// time — 4 on b against 3 on a. Where the root copy's uid sorts lower, b's own copy's uid is the
 /// one retired and no claim names it, so that direction pins the mark alone.
 fn a_later_emission_never_builds_a_row_a_folder_delete_folded_away(root_lower: bool) {
-    const LOW: &str = "00000000000000000000000000000000";
-    const HIGH: &str = "ffffffffffffffffffffffffffffffff";
     let (root, filed) = if root_lower { (LOW, HIGH) } else { (HIGH, LOW) };
     let (a, b) = (paired("dev-a"), paired("dev-b"));
     let (mut ma, mut mb) = (0, 0);
@@ -2478,4 +2483,29 @@ fn a_later_emission_never_builds_a_root_copy_a_folder_delete_folded_away() {
 #[test]
 fn a_folder_delete_that_folds_a_filed_copy_away_records_its_uid() {
     a_later_emission_never_builds_a_row_a_folder_delete_folded_away(true);
+}
+
+/// Ledger ruling on Task 8b's concern 1: a grain hit's other direction. #19 with e's twin under
+/// [`HIGH`]: on b, e's insert meets `U_a` by grain while it is still NM, and `U_a` sorts lower, so
+/// the row keeps its uid and e's is absorbed into it at 3; a's regrade then lands on it, LP 4 —
+/// and a holds `U_a` LP 3 beside e's NM 1, also 4. e's next emission names its own uid at NM 1:
+/// no row here wears it, b's log never named it, and the row it was absorbed into is LP now, so
+/// no grain twin meets it either — it was built beside the survivor, 5 on b against a's 4. A uid
+/// this device absorbed is retired as a renamed one is, and is never built again.
+#[test]
+fn a_later_claim_never_builds_a_uid_this_device_absorbed() {
+    let (a, b, e, page) = twin_in_one_page(HIGH);
+    apply(&b, &page).unwrap();
+    assert_eq!(
+        (qty(&b), copies(&a, "bolt")),
+        ((1, 4), 4),
+        "#19 with the twin's uid sorting higher"
+    );
+
+    apply(&b, &whole(&e, "dev-e")).unwrap();
+    assert_eq!(
+        (copies(&b, "bolt"), copies(&a, "bolt")),
+        (4, 4),
+        "e's claim built the uid b absorbed into a's row, beside it"
+    );
 }

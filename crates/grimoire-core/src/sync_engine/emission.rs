@@ -362,9 +362,11 @@ pub fn gap_open(conn: &Connection) -> rusqlite::Result<bool> {
 }
 
 /// `uid` of `table` was merged here into another row, whose uid is `survivor` (§6's merged-away
-/// row). `apply` does it in two places: a grain match renames the row it finds to the lower uid,
-/// or to the incoming one over a row the page deletes (`adopt_uid`), and a folder delete's
-/// re-homing folds a row onto its root twin, one of the two uids going (`rehome`).
+/// row), in either direction. `apply` does it in two places. A grain match (`adopt_uid`) renames
+/// the row it finds to the lower uid, or to the incoming one over a row the page deletes, and the
+/// row's own uid goes; or the row keeps its own, lower uid and absorbs the incoming one, which
+/// goes. A folder delete's re-homing (`rehome`) folds a row onto its root twin, and one of the two
+/// uids goes.
 ///
 /// **The retired uid's copies live in the survivor now**, and nothing else here can tell that
 /// apart from a row never held: no row wears the uid and this device's own log never named it.

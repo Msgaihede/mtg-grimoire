@@ -1724,16 +1724,19 @@ fn find_row(
                         found.clone().min(op_uid.clone())
                     };
                     let rename = (winner != found).then(|| (found.clone(), winner.clone()));
+                    let absorbed = (winner == found).then(|| op_uid.clone());
                     return Ok(Found {
                         uid: Some(winner),
                         displaced: Some(found),
                         rename,
+                        absorbed,
                     });
                 }
                 return Ok(Found {
                     uid: Some(found),
                     displaced: None,
                     rename: None,
+                    absorbed: None,
                 });
             }
         }
@@ -1750,6 +1753,7 @@ fn find_row(
         uid: by_uid,
         displaced: None,
         rename: None,
+        absorbed: None,
     })
 }
 
@@ -1764,21 +1768,29 @@ struct Found {
     displaced: Option<String>,
     /// `(from, to)`: the uid the row wears now, and the lower one it is to adopt.
     rename: Option<(String, String)>,
+    /// The incoming uid a grain hit merged into a row that keeps its own, lower one — the other
+    /// direction of a rename, and retired the same way ([`adopt_uid`]).
+    absorbed: Option<String>,
 }
 
 /// Give the found row the uid [`find_row`] decided on — **inside the group's savepoint, and only
 /// once nothing else here wears it.** Taken, the group is a row this database cannot build: two
 /// local rows each hold half of what the op describes, and no uid adoption reconciles that.
 ///
-/// **The uid it gives up is retired** ([`emission::retire`], design 2026-10-03 §6): its copies
-/// live under the new uid now, so a later claim naming the old one must never build it again.
-/// Written inside the same savepoint, so a group rolled back — unbuildable, or a delete waiting
-/// for its pass — and a pass rolled back leave no mark.
+/// **Whichever uid the grain hit merged away is retired** ([`emission::retire`], design
+/// 2026-10-03 §6) — the one the row gives up when it renames, and the incoming one when the row
+/// keeps its own, lower uid and absorbs it. Its copies live under the survivor's uid now, so a
+/// later claim naming it must never build it again. Written inside the same savepoint, so a group
+/// rolled back — unbuildable, or a delete waiting for its pass — and a pass rolled back leave no
+/// mark.
 fn adopt_uid(conn: &Connection, meta: &Meta, found: &Found) -> Result<(), Why> {
+    let unbuildable = |e: rusqlite::Error| Why::Unbuildable(e.to_string());
+    if let (Some(absorbed), Some(survivor)) = (&found.absorbed, &found.uid) {
+        return emission::retire(conn, meta.table, absorbed, survivor).map_err(unbuildable);
+    }
     let Some((from, to)) = &found.rename else {
         return Ok(());
     };
-    let unbuildable = |e: rusqlite::Error| Why::Unbuildable(e.to_string());
     let taken = conn
         .query_row(
             &format!("SELECT 1 FROM {} WHERE sync_uid = ?1", meta.table),

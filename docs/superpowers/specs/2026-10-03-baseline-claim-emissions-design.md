@@ -203,22 +203,26 @@ since", asked of the generation, never of a stamp.
 | **here, under the claim's uid** | **op path**: applied as the delta it is, at its own stamp | **passed — writes nothing**, unless the emission `resumed` or this device has an open gap (§7), when it is a **floor** over the op path: `max(local + Σ deltas, claim)` |
 | not here under its uid, and **this device's own `sync_ops` names it** (it held and deleted it) | **op path** — the tombstone face | **builds** the row: `insert_row`'s `max(Σ deltas, claim)`, existence decided by add-wins at the puts' own stamps |
 | not here under its uid, **a grain twin under another uid** | **dropped**: the claim carries it, and the two rows are independent — §8's `max`, never a sum | **merges** by `max`, adopting `min(uid)` as today |
-| not here under its uid, **merged here into another row** (`retired@`) | **op path** — main's rules, where it finds no row | **passed — never builds, never floors** |
+| not here under its uid, **merged here into another row, in either direction** (`retired@`) | **op path** — main's rules, where it finds no row | **passed — never builds, never floors** |
 | **not here at all**, never held | **dropped**: the claim carries it | **builds** — §8.2's accepted under-count, unchanged |
 
-**Why a row merged here into another is passed** (amended 2026-10-03, Task 8b). `apply` retires a
-local row's uid in two places: a grain match renames the row it finds to the lower uid, or to the
-incoming one over a row the page deletes (`adopt_uid`), and a folder delete's re-homing folds a row
-onto its root twin, one uid going (`rehome`). Each records `retired@<table>/<uid>`, naming the
-survivor, inside the savepoint of the write that merged it, so a write rolled back leaves no mark.
-**The retired uid's copies live in the survivor, so building
-it again counts them twice** — §8.2's forbidden direction. Without the mark nothing told it from a
-row never held: no row wears the uid and this device's own log never named it. Measured on the
-narrow fix's renamed-row scenario: a's regrade raced e's lower-uid twin on b, b merged a's row into
-e's at 3, and the next active claim for a's uid — a later emission, or the page handed back across
-the gap the dropped regrade opened — built it at LP 3 beside the survivor, **6 on b against a's 4**.
-The mark is asked ahead of the held-row arm, and no gap clears it: it is a fact about this device's
-rows, not about a log.
+**Why a row merged here into another is passed** (amended 2026-10-03, Task 8b and the ruling on
+its concern 1). `apply` merges one uid into another, **in either direction**, in two places. A
+grain match (`adopt_uid`) either renames the row it finds — to the lower uid, or to the incoming one
+over a row the page deletes — so the row's own uid goes; or the row keeps its own, lower uid and
+**absorbs** the incoming one, which goes. A folder delete's re-homing (`rehome`) folds a row onto
+its root twin, and one uid goes. Each records `retired@<table>/<uid>` for the uid that went, naming
+the survivor, inside the savepoint of the write that merged it, so a write rolled back leaves no
+mark. **The retired uid's copies live in the survivor, so building it again counts them twice** —
+§8.2's forbidden direction. Without the mark nothing told it from a row never held: no row wears
+the uid and this device's own log never named it. Measured on the narrow fix's renamed-row
+scenario: a's regrade raced e's lower-uid twin on b, b merged a's row into e's at 3, and the next
+active claim for a's uid — a later emission, or the page handed back across the gap the dropped
+regrade opened — built it at LP 3 beside the survivor, **6 on b against a's 4**. With e's twin
+under the higher uid instead, b absorbed e's uid into a's row, a's regrade landed on it at LP 4, and
+e's next emission built e's uid at NM 1 beside it, **5 on b against a's 4**. The mark is asked
+ahead of the held-row arm, and no gap clears it: it is a fact about this device's rows, not about a
+log.
 
 **And one rule across every row: a covered put is skipped when the page carries a claim for its row,
 from an emission whose horizon covers it, that has already *written* the row.** That is a re-delivery
@@ -356,6 +360,13 @@ an upgraded emitter behaves as today.
   below the regrade, renames the row here to its own lower uid; the regrade then finds its uid gone
   and is dropped, and the claim for the merged-away uid is passed for good (§6's `retired@` row) —
   so the emitter holds the regrade and this device never does. Under, never over.
+- **A first pairing between overlapping collections passes the emitter's claims for a twin this
+  device absorbed.** Where this device's twin wears the lower uid, the emitter's uid is retired here
+  on the first meeting, so the emitter's later claims naming it — until it hears the lower uid and
+  renames — are passed rather than merged by `max`. An edit the emitter made on that uid in between
+  is dropped here as an unknown uid, which opens the gap, and stays lost until the emitter's next
+  emission under the lower uid floors it. Asking the grain at decide time, to block only the build
+  and still merge into the twin, would keep it; it was judged not worth the surgery.
 - Each goes to sync.md's *What is still owed* with its scenario.
 
 ## 12. Constraints, and how each is met
