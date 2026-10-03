@@ -167,6 +167,10 @@ describe("the arms", () => {
     [".cargo/config.toml", T, T, T, F, F, T],
     [".github/workflows/release.yml", T, F, F, F, F, F],
     [".github/workflows/scanner-bundle.yml", T, F, F, F, F, F],
+    // A measurement on an emulator, outside the gate (step 4.5): its pins and its toolchain are
+    // `frontend`'s to check, and its script sits in `scripts/` like the router itself.
+    [".github/workflows/android-emulator.yml", T, F, F, F, F, F],
+    ["scripts/android-first-run.sh", T, F, F, F, F, F],
     [".github/dependabot.yml", T, F, F, F, F, F],
     [".nvmrc", T, F, F, F, T, F],
     ["src/lib/core/index.ts", T, F, F, F, T, F],

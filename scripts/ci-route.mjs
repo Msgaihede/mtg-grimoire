@@ -85,17 +85,20 @@ export const ARMS = [
   // host as a member — a dependency bumped for the desktop is a dependency the phone ships.
   { match: ["Cargo.toml", "Cargo.lock", ".cargo/*"], jobs: [...CORE_SIDE, "android"] },
 
-  // The two workflows outside this gate, and Dependabot's config. No job in `ci.yml` runs any of
-  // them, but `scripts/toolchain.test.mjs` reads both workflows — a release built on a floating
+  // The workflows outside this gate, and Dependabot's config. No job in `ci.yml` runs any of
+  // them, but `scripts/toolchain.test.mjs` reads every workflow — a release built on a floating
   // `stable` is the worst version of the drift the pin exists to stop — and
-  // `scripts/actions-pinned.test.mjs` reads all three (every action pinned by SHA, every checkout
-  // without its token, the signing secret in one job, Dependabot watching every pin), so a change
-  // to any of them runs those tests. **Above the prose arm**, where `release.yml` sat until the
-  // first test existed.
+  // `scripts/actions-pinned.test.mjs` reads them all and this config (every action pinned by SHA,
+  // every checkout without its token, no workflow-wide write grant, Dependabot watching every
+  // pin), so a change to any of them runs those tests. **Above the prose arm**, where
+  // `release.yml` sat until the first test existed. `android-emulator.yml` (phase 4, step 4.5)
+  // measures the light app's first run on an emulator and gates nothing — **not `android`**,
+  // because it builds its own APK, and a change to it is proved by its own run.
   {
     match: [
       ".github/workflows/release.yml",
       ".github/workflows/scanner-bundle.yml",
+      ".github/workflows/android-emulator.yml",
       ".github/dependabot.yml",
     ],
     jobs: ["frontend"],

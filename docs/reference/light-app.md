@@ -2721,3 +2721,71 @@ metered one holds, `always` releases it, only large downloads are listed), and t
 vitest file. **Not measured**: the JNI call has compiled only in CI's `android` job and has never
 run; whether `isActiveNetworkMetered` says *metered* on a phone's mobile data is a device's to
 show.
+
+### 8.5 Step 4.5 — the first run, on an emulator (2026-10-03)
+
+Issue #761's box — *"First run on a real phone: corpus ingest time, cold start, APK size — none was
+ever measured"* — has no phone to answer it, so its first figures come from an **Android emulator
+on a GitHub runner**: `.github/workflows/android-emulator.yml`, with the measuring in
+`scripts/android-first-run.sh`. **No figure exists yet.** The workflow had never run when this was
+written; it runs on a pull request or a push to `main` that touches the host, the core or the
+lockfile (and on a manual dispatch), so its first run is the pull request that adds it, and its
+numbers are that run's step summary and its `android-first-run` artifact. Write them here, with the run's
+date and link, when there is one.
+
+**What it does.**
+
+- **Builds an x86_64 release APK** — `npx tauri android build --apk --target x86_64 --ci` from
+  `mobile/`, the `android` job's steps otherwise (JDK 21, the image's newest NDK, the composite
+  toolchain action, `rust-cache` keyed `android-x86_64`). x86_64 because the emulator is x86_64
+  under KVM and cannot run arm64 code; the shipped APK is arm64 (§8.1). **So the `.so` measured
+  here is not the one a phone loads**, and its size is the x86_64 compile's.
+- **Boots an emulator** with `reactivecircus/android-emulator-runner` v2.38.0 after the README's
+  KVM udev rule: API 34, `google_apis`, x86_64, 4 cores, 4096M RAM, a 6000M data partition (the
+  corpus is ~900 MB on disk, beside its WAL and the image cache). `google_apis` because its adbd
+  runs as root.
+- **Measures, in order**, and writes each to the step summary and to `first-run.json`:
+  1. **The APK's size** in bytes and the `.so`'s uncompressed size, read off `unzip -l`.
+  2. **The first launch's `TotalTime`** from `am start -W` — the time to the activity's first
+     frame. The page's startup gate and the databases' creation run on the host's `startup`
+     thread, so this figure does not wait for them; it is reported apart from the cold starts.
+  3. **The first corpus ingest.** The host prints `launch: card sync started` before
+     `run_sync` and `launch: card sync finished in N ms` after it (`spawn_downloads` in
+     `mobile/src-tauri/src/lib.rs`, timed with the core's `Tick`; the existing
+     `initial sync failed: …` is the other end). Tauri's Android shell pipes stdout and stderr to
+     logcat under the tag **`RustStdoutStderr`** — tao's `ndk_glue::create`, unconditionally, so
+     a release build logs as a debug one does. The script tees `adb logcat -s RustStdoutStderr`
+     into a file from before the launch, because logcat's ring buffer can turn over in 45 minutes,
+     and reports **N** — the host's own figure, download and ingest together — beside the wall
+     clock from `am start` to the line's appearance (±10 s, the poll).
+  4. **`corpus.db` and `user.db` on the device** the moment the ingest finished, and the app's
+     whole private folder. **The data folder is `/data/data/com.mtggrimoire.app/data`**: the host
+     opens `app_data_dir()/data`, and Tauri's Android `PathPlugin.getDataDir` answers the
+     activity's `dataDir` (read off `tauri` 2.11.5's sources, not seen on a device). **A release
+     build is not debuggable, so `run-as` refuses it**; the script reads the folder through
+     `adb root`, which a `google_apis` image allows, falls back to `run-as`, and otherwise writes
+     *not measurable on a release build*. The optional feeds start behind the sync on a first
+     run, so `corpus.db` keeps growing after this figure.
+  5. **A screenshot** after the ingest (`adb exec-out screencap -p`), and another after the last
+     cold start, so a person can see the phone face as the emulator drew it.
+  6. **Three cold starts**, each `am force-stop`, five seconds, `am start -W`; each `TotalTime` and
+     the median. **Process-cold, not cache-cold**: the page cache still holds the APK and the
+     databases.
+- **Fails when there is no ingest figure**, after writing what it did measure: a sync that
+  failed, one still running at 45 minutes, or none started within 60 s of the launch. That last
+  is step 4.4's hold — the host starts nothing when Android says the network is metered — and the
+  summary says *held — the emulator reported a metered network* (or *the app died before the card
+  sync started*, when its process is gone), with the host's last stderr lines. The emulator's
+  default Wi-Fi is expected to report itself unmetered — expected, not checked here — and
+  `dumpsys connectivity` goes into the artifact so a held run can be read.
+
+**What an emulator cannot stand in for.** The emulator's CPU is the runner's, through KVM — a
+cloud x86 core, not a phone's big.LITTLE ARM cluster — so the ingest figure says how the code
+behaves, not how long a reader waits. Its storage is a file on the runner's disk, with none of a
+phone's flash characteristics. A phone throttles under a sustained load like a 45-minute ingest
+and an emulator does not. The emulator's network is the runner's datacentre link, never a real
+cellular one, so a real metered link — and whether `isActiveNetworkMetered` says *metered* on
+mobile data — is still a device's to show. The emulator draws through SwiftShader, in software
+(the action's default `-gpu swiftshader_indirect`).
+And the APK is x86_64, a different compile of the same source. **Every figure from this workflow
+is an emulator figure and is to be named as one**; the issue's box stays open for a phone.
