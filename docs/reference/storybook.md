@@ -258,9 +258,12 @@ it says `tags: ["autodocs"]`.
   resolves relative to the declaring file. Declaring it in `src/index.css` shipped Storybook's
   utilities to users: measured, `dist/assets/index-*.css` 119,935 → **119,126** bytes, 11 rules
   dropped and 0 added. Stories cannot be fenced off the same way and should not be — a
-  `.stories.tsx` is under `src/`, which `@source "../src"` must scan.
+  `.stories.tsx` is under `src/`, which `@source "../src"` must scan. **`@source "../mobile"` is
+  the third line since phase 3**: the light app's phone UI is storied where it lives, and
+  `src/index.css` must not scan `mobile/` for the desktop bundle — `mobile/mobile.css` declares it
+  for the light build, and `preview.css` for the workbench.
 - **`npm run build-storybook` runs in CI's `storybook` job**, and it is the **only** gate the
-  `.mdx` page has. Stories are `.tsx` under `src/`, so `tsc` and ESLint already see them;
+  `.mdx` page has. Stories are `.tsx` under `src/` or `mobile/`, so `tsc` and ESLint already see them;
   `DesignSystem.mdx` is seen by neither — `tsc` reads only `.ts`/`.tsx` however the `include`
   glob is written, and `eslint` answers "File ignored because no matching configuration was
   supplied" (both measured 2026-08-10). Before this step the page could break and nothing would

@@ -68,10 +68,10 @@ measured, one subsection per step).
 - [ ] **3.6 — Import and export on the phone face.** The collection's and a deck's, through the
   existing parsers and writers; a file arrives through `<input type=file>` and leaves as a
   download, which the host seams answer on each install.
-- [x] **3.7 — Light Settings, on both faces.** The edition grows its Settings entries (spec §3.1:
+- [x] **3.7 — Light Settings, on both faces** (#788, merged 2026-10-03). The edition grows its Settings entries (spec §3.1:
   `SettingsPage`'s entry list is the edition's second reader): sync and pairing, the supporter
   block, card data and the optional feeds, the image cache, marketplace, the danger zone.
-- [ ] **3.8 — What phase 1 left, and the measurements.** Stories for phone UI (Storybook's globs
+- [x] **3.8 — What phase 1 left, and the measurements.** Stories for phone UI (Storybook's globs
   reach `mobile/`); `src/lib/tokens.test.ts` reads `mobile/`; the desktop face below its 700px
   height floor measured in a browser; the tablet rail decided; the shared binder and
   `Ctrl+Shift+N` in the light edition; the two history warts across the floor; a crossing that

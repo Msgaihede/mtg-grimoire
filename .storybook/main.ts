@@ -1,8 +1,7 @@
 import type { StorybookConfig } from "@storybook/react-vite";
 import { fileURLToPath } from "node:url";
 import { WATCH_IGNORED } from "../vite.watch.ts";
-
-const fake = (name: string) => fileURLToPath(new URL(`./fake/${name}`, import.meta.url));
+import { FAKE_ALIASES } from "./fake/aliases.ts";
 
 /**
  * The two pieces of Node's `process` this file reads, typed at the one place they are read.
@@ -53,7 +52,9 @@ if (node.env.STORYBOOK_ART === "bundled" && !bundledArt) {
 }
 
 const config: StorybookConfig = {
-  stories: ["../src/**/*.stories.tsx", "../.storybook/**/*.mdx"],
+  // `mobile/` since phase 3: the light app's phone face is its own UI, and its pieces are storied
+  // where they live (`mobile/CLAUDE.md`). `preview.css` scans the same directory for classes.
+  stories: ["../src/**/*.stories.tsx", "../mobile/**/*.stories.tsx", "../.storybook/**/*.mdx"],
   addons: ["@storybook/addon-docs", "@storybook/addon-a11y", "@storybook/addon-mcp"],
   framework: { name: "@storybook/react-vite", options: {} },
   // The app's `public/`, mounted at the Storybook root. It is here for one file —
@@ -79,12 +80,10 @@ const config: StorybookConfig = {
   viteFinal: (config) => {
     config.resolve ??= {};
     // An array, not an object: these are exact-match rules and their order is the
-    // contract. `@/lib/images` must be tried before the bare `@` prefix.
+    // contract. `@/lib/images` must be tried before the bare `@` prefix. The fake's four are
+    // `fake/aliases.ts`'s, which `vite.mobile.config.ts` reads too.
     config.resolve.alias = [
-      { find: /^@tauri-apps\/api\/core$/, replacement: fake("core.ts") },
-      { find: /^@tauri-apps\/api\/event$/, replacement: fake("event.ts") },
-      { find: /^@tauri-apps\/api\/window$/, replacement: fake("window.ts") },
-      { find: /^@\/lib\/images$/, replacement: fake("images.ts") },
+      ...FAKE_ALIASES,
       { find: /^@\//, replacement: fileURLToPath(new URL("../src/", import.meta.url)) },
     ];
     // **The dev server does not inherit `vite.config.ts`'s `server` block — the builder replaces

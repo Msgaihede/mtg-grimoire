@@ -463,7 +463,7 @@ describe("the manager's sensors", () => {
 
 
 /**
- * Every source file in the app and in the workbench, as text. `?raw` through Vite rather than
+ * Every source file in the app, in the workbench and in the light app, as text. `?raw` through Vite rather than
  * `node:fs`, for the reason given at the `manifest` import above; `src/lib/tokens.test.ts` runs
  * the same sweep over the same glob.
  *
@@ -479,6 +479,12 @@ const SOURCES = {
     eager: true,
   }),
   ...import.meta.glob<string>("/.storybook/**/*.{ts,tsx}", {
+    query: "?raw",
+    import: "default",
+    eager: true,
+  }),
+  // The light app, whose phone face has story files of its own since phase 3.
+  ...import.meta.glob<string>("/mobile/**/*.{ts,tsx}", {
     query: "?raw",
     import: "default",
     eager: true,

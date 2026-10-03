@@ -124,7 +124,7 @@ vi.mock("@tauri-apps/plugin-opener", async () => {
  * removes the own property this call installed and does not restore the accessor it shadowed —
  * so a story that patched it would break layout for the whole iframe, permanently, for every
  * story the reader opened afterwards. This file is Vitest-only and the Storybook build never
- * loads it: `main.ts`'s `stories` glob requires a literal `.stories.tsx` suffix under `src/`,
+ * loads it: `main.ts`'s `stories` globs require a literal `.stories.tsx` suffix,
  * which a `.test.tsx` cannot match. (The glob is not written out here: it ends in the two
  * characters that close a block comment.)
  *
@@ -173,7 +173,8 @@ beforeAll(() => {
  */
 
 /**
- * Every story module under `src/`, **found rather than listed**.
+ * Every story module under `src/` and `mobile/` — `.storybook/main.ts`'s two story globs —
+ * **found rather than listed**.
  *
  * The first draft of this file named its four modules by hand, and that is the one systemic
  * failure it could have: a module nobody remembered to add contributes no plays and no
@@ -183,7 +184,9 @@ beforeAll(() => {
  * `eager` because a `describe` block cannot be built from a promise — Vitest collects the file
  * synchronously, so a lazy glob would register no tests at all.
  */
-const MODULES = import.meta.glob("/src/**/*.stories.tsx", { eager: true });
+const MODULES = import.meta.glob(["/src/**/*.stories.tsx", "/mobile/**/*.stories.tsx"], {
+  eager: true,
+});
 
 /** What `composeStories` will accept. `import.meta.glob` types its modules as `unknown`, so
  *  the cast is unavoidable; it is narrowed to the parameter's own type rather than to `any`. */
@@ -250,7 +253,8 @@ setProjectAnnotations([preview, { testingLibraryRender: render }]);
 
 const SCANNED = Object.entries(MODULES)
   .map(([path, mod]) => ({
-    file: path.replace(/^\/src\//, ""),
+    // `src/` is dropped, as it always was; a phone story keeps its `mobile/` so it reads as one.
+    file: path.replace(/^\/(?:src\/)?/, ""),
     plays: playsIn(composeStories(mod as StoriesModule)),
   }))
   .sort((a, b) => a.file.localeCompare(b.file));

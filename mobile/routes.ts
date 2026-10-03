@@ -71,3 +71,34 @@ export function placeHref(place: Place): string {
   if (place.cardId !== null) query.push(`card=${encodeURIComponent(place.cardId)}`);
   return query.length === 0 ? path : `${path}?${query.join("&")}`;
 }
+
+/**
+ * What a history entry's state says about how the light app wrote it.
+ *
+ * **One vocabulary for both faces, because an entry one face wrote is the entry the other face
+ * stands on after a crossing**: the phone face pushes a card, a resize hands that entry to the
+ * desktop face, and the desktop face's close has to know a Back is what put it there.
+ *
+ * - {@link PUSHED} — the phone router pushed this entry. **On an entry that carries a card, the
+ *   entry directly beneath it is the same place without the card**: the phone face opens a card
+ *   by a push over the page it is on and steps from one card to another by a replace that keeps
+ *   the mark. Both faces' closes lean on that, so neither may write a card onto a marked page.
+ * - {@link OVERLAID} — the desktop face wrote a card onto this entry by replace. The card is a
+ *   modal over the page this entry already was, so what is beneath it is whatever was beneath
+ *   that page.
+ * - Anything else, `null` above all — nothing is known: a cold load, a link, a bookmark.
+ */
+export const PUSHED = { pushed: true } as const;
+
+/** See {@link PUSHED}. */
+export const OVERLAID = { overlaid: true } as const;
+
+export function isPushed(state: unknown): boolean {
+  return typeof state === "object" && state !== null && "pushed" in state && state.pushed === true;
+}
+
+export function isOverlaid(state: unknown): boolean {
+  return (
+    typeof state === "object" && state !== null && "overlaid" in state && state.overlaid === true
+  );
+}

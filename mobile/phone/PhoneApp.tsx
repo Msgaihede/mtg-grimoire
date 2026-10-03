@@ -16,7 +16,7 @@ import { ScannerPage } from "./pages/ScannerPage";
 import { SearchPage } from "./pages/SearchPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { WishlistPage } from "./pages/WishlistPage";
-import { navigate, usePlace } from "./router";
+import { adoptOverlay, navigate, usePlace } from "./router";
 import { Shell } from "./Shell";
 
 /** The word for a destination — the desktop rail's, so the two apps cannot name one differently. */
@@ -85,6 +85,13 @@ function Pages({
  * The phone face, less its providers — what a test renders inside a fake world's own.
  */
 export function PhoneFace() {
+  // Before the first read of the place, so a card the desktop face had open over this entry is
+  // one this router can close with a Back by the time its sheet draws — see `adoptOverlay`. A lazy
+  // initializer for `useDesktopPlace`'s reason; StrictMode's second run finds nothing to adopt.
+  useState(() => {
+    adoptOverlay();
+    return null;
+  });
   const place = usePlace();
   /**
    * Which list each deck has been switched to this session — **held here rather than by the deck

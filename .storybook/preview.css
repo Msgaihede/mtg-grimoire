@@ -30,6 +30,14 @@
 
    A new directory of Storybook-only classes goes here; a new one under `src/` goes in
    `src/index.css`. Putting either in the other file is silent both ways — a missing style in
-   one direction, a bigger shipped bundle in the other. */
+   one direction, a bigger shipped bundle in the other.
+
+   `mobile` is the third line, and it is neither of those: it is the light app's own source,
+   which `src/index.css` must not scan (the desktop bundle would carry the phone face's classes)
+   and which `mobile/mobile.css` declares for the light build. Its stories render phone UI, so
+   the workbench needs that directory's classes the way the light app does — without the line a
+   class written only under it emits no rule here, and a phone story draws with the tokens and
+   none of its layout. */
 @import "../src/index.css";
 @source "../.storybook";
+@source "../mobile";

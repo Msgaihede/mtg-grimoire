@@ -50,9 +50,19 @@ export function installLayout(): void {
  */
 export function renderPhone(
   ui: ReactElement,
-  { path = "/", fake }: { path?: string; fake?: FakeParams } = {},
+  {
+    path = "/",
+    state = null,
+    fake,
+  }: {
+    path?: string;
+    /** The entry's history state — `routes.ts`'s marks, for a test about an entry the other face
+     *  wrote. */
+    state?: unknown;
+    fake?: FakeParams;
+  } = {},
 ): RenderResult {
-  window.history.replaceState(null, "", path);
+  window.history.replaceState(state, "", path);
   const world = installWorld(fake ?? { seed: "starter" });
   // After the test's own `afterEach`, so the tree — and every subscription it holds in this
   // world — has gone by the time the world does.
