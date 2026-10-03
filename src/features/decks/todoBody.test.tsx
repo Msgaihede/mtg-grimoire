@@ -26,4 +26,22 @@ describe("TodoBody", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: 'Mark "Revise tokens" done' }));
     expect(onTick).toHaveBeenCalledWith(0);
   });
+
+  it("lays a finger's press area round each box under `touch`, and a press anywhere in it ticks", () => {
+    const onTick = vi.fn();
+    render(<TodoBody blocks={parseTodoBody(body)} body={body} onTick={onTick} touch />);
+    const box = screen.getByRole("checkbox", { name: 'Mark "Sleeve the deck" not done' });
+    // The area is a label round the same box, so nothing new reaches the accessibility tree and a
+    // press on the label is the box's own.
+    const area = box.closest("label");
+    expect(area).not.toBeNull();
+    expect(area).toHaveClass("size-11");
+    fireEvent.click(area as HTMLElement);
+    expect(onTick).toHaveBeenCalledWith(1);
+  });
+
+  it("lays no press area round a box without `touch`", () => {
+    render(<TodoBody blocks={parseTodoBody(body)} body={body} onTick={vi.fn()} />);
+    expect(screen.getAllByRole("checkbox")[0].closest("label")).toBeNull();
+  });
 });

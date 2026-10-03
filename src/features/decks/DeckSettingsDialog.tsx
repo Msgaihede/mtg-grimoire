@@ -10,7 +10,10 @@ import { DeckSettingsForm, folderPaths, type DeckSettingsValue } from "./DeckSet
 import { listName } from "./listNames";
 import { RowAction } from "./metaRows";
 import { PullFromCollectionDialog } from "./PullFromCollectionDialog";
-import { useDeck, usePullPlan } from "./useDeck";
+// The store-free body of `useDeck` (`useDeckCore.ts`): nothing this dialog writes moves a deck row,
+// so it has no card surface to keep in step, and importing it from there is what lets the light
+// app's phone face mount this dialog whole.
+import { useDeckCore as useDeck, usePullPlan } from "./useDeckCore";
 import { useDeckField } from "./useDeckField";
 import { useDeckFolders } from "./useDeckFolders";
 import { ANY_GAME, pickerFormats, useFormatSpecs } from "./useFormatSpecs";

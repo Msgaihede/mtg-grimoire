@@ -172,10 +172,53 @@ function PrintingRow({
   place: Place;
   currency: Currency;
 }) {
-  const code = `${printing.setCode.toUpperCase()} · ${printing.collectorNumber}${
+  const code = printingCode(printing);
+  const body = <PrintingFace printing={printing} currency={currency} />;
+
+  const row = PRINTING_ROW;
+  return (
+    <li>
+      {current ? (
+        <div
+          aria-current="true"
+          className={cn(row, "border-l-2 border-accent bg-surface pl-1.5 text-text")}
+        >
+          {body}
+        </div>
+      ) : (
+        <a
+          {...linkTo({ ...place, cardId: printing.id }, { replace: true })}
+          // The name says what the press does and which printing it is about, in one text node —
+          // the visible set name and code are both in it, verbatim.
+          aria-label={`Show ${printing.setName ?? printing.setCode.toUpperCase()}, ${code}`}
+          className={cn(row, "text-text active:bg-surface", FOCUS_INSET)}
+        >
+          {body}
+        </a>
+      )}
+    </li>
+  );
+}
+
+/** A printing row's box — the touch floor, two lines and the price column. */
+export const PRINTING_ROW =
+  "flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left";
+
+/** A printing's code line — set, number and year — as a row writes it and names it. */
+export function printingCode(printing: Printing): string {
+  return `${printing.setCode.toUpperCase()} · ${printing.collectorNumber}${
     printing.releasedAt ? ` · ${printing.releasedAt.slice(0, 4)}` : ""
   }`;
-  const body = (
+}
+
+/**
+ * What one printing row draws inside its control — the set's glyph and name, the code line, and a
+ * price per finish. **Its own component so the deck page's `Printing ▸` draws the same row** as a
+ * button that swaps the deck's printing, where this list draws it as a link that steps the sheet.
+ */
+export function PrintingFace({ printing, currency }: { printing: Printing; currency: Currency }) {
+  const code = printingCode(printing);
+  return (
     <>
       {/* keyrune's own `.ss` rule draws a generic symbol for a set it has no glyph for, and the
           code beside it says which set either way — so the glyph is decoration to a reader who
@@ -218,29 +261,5 @@ function PrintingRow({
         ))}
       </span>
     </>
-  );
-
-  const row = "flex min-h-11 w-full items-center gap-2.5 rounded-md px-2 py-1.5 text-left";
-  return (
-    <li>
-      {current ? (
-        <div
-          aria-current="true"
-          className={cn(row, "border-l-2 border-accent bg-surface pl-1.5 text-text")}
-        >
-          {body}
-        </div>
-      ) : (
-        <a
-          {...linkTo({ ...place, cardId: printing.id }, { replace: true })}
-          // The name says what the press does and which printing it is about, in one text node —
-          // the visible set name and code are both in it, verbatim.
-          aria-label={`Show ${printing.setName ?? printing.setCode.toUpperCase()}, ${code}`}
-          className={cn(row, "text-text active:bg-surface", FOCUS_INSET)}
-        >
-          {body}
-        </a>
-      )}
-    </li>
   );
 }

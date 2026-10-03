@@ -607,6 +607,13 @@ layer.
 
 ## Writes
 
+- **`useDeck` is two files since 2026-10-03, and the line between them is the app store.**
+  `useDeckCore.ts` is the whole hook — every query, every mutation, every invalidation — with no
+  store in it, so the light app's phone face can write a deck (`mobile/phone/deck/`). What a write
+  does to the desktop card modal's open row (re-anchor it on a move, plan a departure before a
+  removal, step off it after) is a `DeckAnchor` that `useDeck.ts` hands in; the phone hands in
+  `NO_ANCHOR`. `useDeck.ts` re-exports the core, so every desktop caller still imports `useDeck`.
+  **A new mutation goes in the core**, and only its pane side effect, if it has one, in the anchor.
 - **A write to what is _in_ a deck goes through a `useDeck` mutation — but the refused-write family
   stopped being all of one hook's on 2026-08-14.** `DeckEditor`'s `newestWrite([...])` takes
   **every `useDeck` mutation but `rememberView`** — update (rename, cover, format, the

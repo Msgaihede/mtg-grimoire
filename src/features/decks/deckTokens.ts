@@ -579,3 +579,12 @@ export function tokenCardName(view: DeckTokenView): string {
   const name = tokenEntryName("Show details for", view);
   return isHandAdded(view) ? `${name}, ${NOT_MADE_BY_DECK.toLowerCase()}` : name;
 }
+
+/**
+ * The area's name, in one place because three things say it: the region's `aria-label`, the
+ * disclosure's visible text, and every test and story that addresses either.
+ *
+ * **`&` rather than `and`**, which is the deck editor's own house style for a pair of nouns in a
+ * heading (`Categories & labels`), and the ampersand is what a reader scans past.
+ */
+export const TOKENS_HEADING = "Tokens & Emblems";
