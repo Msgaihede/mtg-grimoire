@@ -28,10 +28,18 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-# **No plugin.** The phone face reaches the clipboard, a file and a link through the browser's
-# own APIs until a host seam takes each over (phase 4's later steps), so this host grants
-# nothing a plugin would ask for.
 tauri = { version = "2", features = [] }
+# **Three plugins, each used from Rust only and granted to the page not at all** (phase 4, step
+# 4.3): `capabilities/light.json` names no `dialog:`, `fs:` or `opener:` permission, so no script in
+# the webview can reach them — the desktop's rule for its file dialogs (issue #545), kept here.
+# - `dialog` opens the system picker and the save dialog — on Android the Storage Access
+#   Framework, which answers a `content://` URI rather than a path;
+# - `fs` writes and reads that URI (`Fs::open` asks the Android side for a file descriptor);
+# - `opener` hands a link that is not one of the app's own pages to the system browser.
+# The same major the desktop asks for, so the lockfile carries one copy of each.
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
 # **Never with its `testing` feature** — `platform::fence` reads this file for it, and CI's
 # `rust` job asks `cargo tree` for this package by name too.
 grimoire-core = { path = "../../crates/grimoire-core" }

@@ -96,29 +96,6 @@ fn open_failed(e: String) -> String {
     format!("That file could not be opened — {e}")
 }
 
-/// The cap and the decode, over anything readable.
-fn read_bounded(mut reader: impl std::io::Read) -> Result<ImportFile, String> {
-    use std::io::Read as _;
-
-    // **A bounded read rather than a `metadata()` check.** `take(MAX + 1)` then a length test is
-    // the whole of it — one byte over the limit is read and refused, and nothing larger is ever
-    // in memory, which keeps what the fence was for: a 200 MB file the reader pointed at by
-    // mistake costs a megabyte, not two hundred.
-    let mut bytes = Vec::new();
-    reader
-        .by_ref()
-        .take(MAX_IMPORT_BYTES + 1)
-        .read_to_end(&mut bytes)
-        .map_err(|e| format!("That file could not be read — {e}"))?;
-    if bytes.len() as u64 > MAX_IMPORT_BYTES {
-        return Err(format!(
-            "That file is over {} MB. A decklist is text; this reads at most 1 MB.",
-            MAX_IMPORT_BYTES / 1_000_000
-        ));
-    }
-    Ok(decode(&bytes))
-}
-
 /// Ask the reader for a decklist file — the OS open dialog, modal to the window that asked — and
 /// hand its text to the parser. `None` is Cancel, which is not a failure.
 ///

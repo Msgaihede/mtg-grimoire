@@ -40,8 +40,14 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "update_open_release_page",
         "the portable updater swaps this exe",
     ),
-    ("export_save_file", "a native save dialog, opened by Rust"),
-    ("import_pick_file", "a native open dialog, opened by Rust"),
+    (
+        "export_save_file",
+        "a native save dialog, opened by Rust — the light host answers it beside the table",
+    ),
+    (
+        "import_pick_file",
+        "a native open dialog, opened by Rust — the light host answers it beside the table",
+    ),
     ("mirror_pick_root", "a native folder picker, for the mirror"),
     ("mirror_status", "the plain-text mirror is this host's"),
     ("mirror_set_enabled", "the plain-text mirror is this host's"),

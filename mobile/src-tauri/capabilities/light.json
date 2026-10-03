@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "light",
-  "description": "The light host's one window. Core's own defaults — events for the page's listen, and the window and path reads the desktop face's shell makes — and no plugin: this host registers none.",
+  "description": "The light host's one window. Core's own defaults — events for the page's listen, and the window and path reads the desktop face's shell makes. The opener's URL grant and its default scope — the desktop's exact pair, never `opener:default` — because the desktop face, drawn on a tablet past 1024px, opens `Open on …` and Connect Patreon through `@tauri-apps/plugin-opener` (`src/lib/externalLinks.ts`). No dialog or fs permission: both are used from Rust only, as the desktop's dialogs are.",
   "windows": ["main"],
-  "permissions": ["core:default"]
+  "permissions": ["core:default", "opener:allow-open-url", "opener:allow-default-urls"]
 }

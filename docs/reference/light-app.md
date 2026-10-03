@@ -2613,3 +2613,69 @@ Android host (§8.1) is the first caller**, through `core_call`; no device has r
 - The picture warms, once a light host serves pictures and the core can start a future nobody
   awaits.
 - `share/`, as §6.11 left it.
+
+### 8.3 Step 4.3 — the back gesture, the insets and files (2026-10-03)
+
+**The back gesture needed no code, and the record says why.** Read off the shipped sources
+(`tauri` 2.11.5's `AppPlugin.kt`, `wry` 0.55.1's `WryActivity.kt`): both register an
+`OnBackPressedCallback` that calls `webView.goBack()` while `canGoBack()` and hands the press to
+the activity only from the first entry — and the plugin's `back-button` event, which would replace
+that, has no listener here. A `pushState` is an entry `canGoBack()` counts, so the phone router's
+pushes are exactly what the gesture walks: a card sheet closes, a folder level goes up, and from
+the page the app opened on the gesture leaves the app. `mobile/host.test.ts` holds that
+`MainActivity` neither turns `handleBackNavigation` off nor takes `onBackPressed` itself.
+
+**The insets are the host's, as padding rather than `env()`.** From target SDK 35 Android draws
+every app edge to edge and no longer resizes a window for the keyboard, and whether a WebView
+reports the bars and a cutout through `env(safe-area-inset-*)` is a property of a WebView version
+the app does not ship. So `MainActivity` pads `android.R.id.content` by `systemBars()`,
+`displayCutout()` and `ime()` — the page is simply smaller, its `100dvh` is the safe area, its own
+`env()` insets read 0, and a search box is never under the keyboard. Both bars draw light icons
+(`SystemBarStyle.dark`), and the window behind them is `#0e0f13`, the web manifest's
+`background_color` — so the bars, the launch and the page's ground agree, two levels off
+`--color-bg` exactly as the manifest already is (§5, phase 5's).
+
+**Files.**
+
+- **Picking needed no seam.** wry's `RustWebChromeClient.onShowFileChooser` answers an
+  `<input type="file">` with the system picker and hands the page a `File` over the chosen
+  `content://` document, which the page reads as it reads any other. `phone/transfer/browserFiles.ts`
+  keeps the read and the decode. **One catch, found in review**: both that chooser and the dialog
+  plugin turn each extension into a MIME type through `MimeTypeMap` and drop the ones it does not
+  know, so `.dec` and `.dek` were greyed out. `DECKLIST_ACCEPT` now carries
+  `application/octet-stream` — what the system picker calls a file of an unknown extension — and
+  the host's own picker passes no filter on a phone.
+- **Saving did.** A WebView has no download manager for a `blob:` URL, so a `Blob` and
+  `<a download>` saves nothing on Android. `@/lib/core/files`'s `saveText` is the seam: on the
+  light host it calls the desktop's own `export_save_file` — answered by the host, not the table —
+  and in a browser it is the download it was. The phone's export sheet now says `Saved Burn.txt.`,
+  says nothing for a cancelled dialog, and still says `Downloading Burn.txt.` in a browser.
+- **The host answers the desktop's two file commands by their names and arguments**
+  (`mobile/src-tauri/src/files.rs`): `export_save_file(fileName, contents) -> bool` and
+  `import_pick_file() -> ImportFile | null`, through `tauri-plugin-dialog` (the Storage Access
+  Framework on Android) and `tauri-plugin-fs` (`Fs::open`, which on Android asks the Kotlin side for
+  a descriptor for the `content://` URI). So the desktop face, drawn on a tablet past 1024px, saves
+  and picks as it does on Windows. No URI crosses to the page in either direction, the desktop's
+  rule (issue #545); the capability grants no `dialog:`, `fs:` or `opener:` permission.
+  `read_bounded` and `suggested_name` moved into the core's `import` so both hosts share the
+  megabyte cap and the name rule.
+
+**Links.** `mobile/src-tauri/src/navigation.rs` is the desktop's `app_origin` guard restated for this
+host's origins, with one addition: an `http(s)` link off the app's pages is handed to the system
+browser through `tauri-plugin-opener` (an intent on Android) and the window stays where it was; any
+other scheme is refused. So a deck note's link opens the browser rather than replacing the app.
+**The hand-off runs off the hook's thread, and a reviewer found why it must**: on Android the
+hook is called on the UI thread (wry's `shouldOverrideUrlLoading`), and the opener's mobile arm
+waits for a Kotlin command that the UI thread's own looper runs — called inline, the first web
+link would have frozen the app for good. The dev server's origin is the config's `devUrl` read at
+run time, since `tauri android dev` may serve from the machine's address. **The desktop face** —
+a tablet past 1024px — opens its links through `@tauri-apps/plugin-opener` from the page, so the
+capability grants the desktop's exact pair, `opener:allow-open-url` and `opener:allow-default-urls`.
+**What this does not do** is give the phone card sheet its `Open on …` rows — those are still not
+drawn; with the guard in place they can be plain links.
+
+**Measured, 2026-10-03, on Linux**: clippy clean on the three crates with the plugins in;
+`cargo test -p grimoire-light` adds the guard's four tests and the file module's two; the lockfile
+gained only `tauri-plugin-fs`'s edge from the host. **Not measured**: every claim above about a
+device — the back gesture, the padding, the system dialogs, the browser hand-off — is read off the
+sources and pinned by text, not driven. A phone or an emulator is step 4.5's.

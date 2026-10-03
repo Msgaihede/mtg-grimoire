@@ -1,7 +1,9 @@
 /**
- * How a file gets **into** the phone face and how text gets **out** of it — the three browser APIs
- * a transfer needs, and nothing else: a `File` from an `<input type="file">` read as text, a
- * `Blob` handed to the browser as a download, and `navigator.clipboard`.
+ * How a file gets **into** the phone face, and how text reaches the clipboard — a `File` from an
+ * `<input type="file">` read as text, and `navigator.clipboard`. **Saving moved below the `Core`
+ * seam in phase 4** (`@/lib/core/files`): a browser downloads, the Android host opens the system's
+ * save dialog. Picking needed no seam — Android's WebView answers an `<input type="file">` with the
+ * system picker and hands the page a `File` for the `content://` document, as a browser does.
  *
  * **A stand-in, and a deliberate one.** The light-app spec puts file open and save below the
  * `Core` seam (§3.5): the desktop answers with Rust opening the native dialog
@@ -30,8 +32,13 @@ export const MAX_DECKLIST_BYTES = 1024 * 1024;
  * What the picker offers. The desktop dialog's four (`import.rs`'s `DECKLIST_EXTENSIONS`) and the
  * two MIME types a phone's picker files them under — **a hint and not a fence**, like the desktop
  * filter: a browser may still hand over anything the reader chooses, and the parser reads it.
+ *
+ * **`application/octet-stream` is for Android** (phase 4): its WebView maps each extension through
+ * `MimeTypeMap` and drops the ones it does not know, so `.dec` and `.dek` were greyed out — and the
+ * system picker types a file of an unknown extension as `application/octet-stream`. A browser
+ * reads the same hint and still offers the rest.
  */
-export const DECKLIST_ACCEPT = ".txt,.dec,.dek,.csv,text/plain,text/csv";
+export const DECKLIST_ACCEPT = ".txt,.dec,.dek,.csv,text/plain,text/csv,application/octet-stream";
 
 /**
  * Windows-1252's `0x80`–`0x9F`, the only 32 bytes where it is not Latin-1 — `import.rs`'s
@@ -96,37 +103,6 @@ export function decodeDecklist(bytes: Uint8Array): ImportFile {
 export async function readDecklistFile(file: File): Promise<ImportFile> {
   if (file.size > MAX_DECKLIST_BYTES) throw new Error(TOO_BIG);
   return decodeDecklist(new Uint8Array(await file.arrayBuffer()));
-}
-
-/**
- * Hand `text` to the browser as a file called `fileName` — a `Blob`, an object URL and an
- * `<a download>` pressed once, then the URL released.
- *
- * **Where it lands is the browser's**: a download folder, or a save prompt where the reader has
- * asked for one. There is no answer to wait for and no cancel to report — the desktop's
- * `saveExport` answers whether a file was written; a download cannot, so this resolves when the
- * browser has been handed the file.
- *
- * Plain text in UTF-8, which is what every writer in `export/` emits and every reader of a
- * decklist expects.
- */
-export function downloadText(fileName: string, text: string): void {
-  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = fileName;
-  // Off-screen rather than unattached: an anchor outside the document is not pressed by every
-  // engine.
-  link.style.display = "none";
-  document.body.append(link);
-  try {
-    link.click();
-  } finally {
-    link.remove();
-    // After the press has been handed over, not before — revoking in the same task can cancel
-    // the download it started.
-    setTimeout(() => URL.revokeObjectURL(url), 0);
-  }
 }
 
 /**

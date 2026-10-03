@@ -10,7 +10,11 @@
 //! - **the startup gate** the page waits on before it mounts ([`startup`]), answered inside
 //!   `core_call` because the core has no window to start;
 //! - **the `mtgimg` protocol**, answered by the core's [`grimoire_core::images::answer`] — the
-//!   same contract the desktop's `mtgimg://` handler hands its webview.
+//!   same contract the desktop's `mtgimg://` handler hands its webview;
+//! - **the desktop's two file commands**, `export_save_file` and `import_pick_file`, answered
+//!   through the system's own picker and save dialog ([`files`]), and **a navigation guard** that
+//!   keeps the window on the app's pages and hands every web link to the system browser
+//!   ([`navigation`]) — step 4.3.
 //!
 //! **What it starts is the desktop's launch less what is the desktop's alone** ([`start`]): the
 //! facet index, the image upkeep, the card sync and, behind it on a first run, the optional
@@ -27,6 +31,8 @@ use grimoire_core::state::State;
 use serde_json::Value;
 use tauri::Manager;
 
+mod files;
+mod navigation;
 mod startup;
 
 use startup::{Startup, StartupStatus};
@@ -58,6 +64,10 @@ async fn core_call(
         let status = app.state::<Startup>().status();
         return serde_json::to_value(status).map_err(|e| e.to_string());
     }
+    // The two file commands need no state: a dialog and a document, never the database.
+    if files::answers(&name) {
+        return files::answer(&app, &name, args).await;
+    }
     let Some(state) = app.try_state::<Arc<State>>() else {
         return Err(format!("{name}: the app is still starting."));
     };
@@ -80,6 +90,12 @@ fn decode_body(name: &str, text: &str) -> Result<Vec<u8>, String> {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
+        // Used from Rust only — the capability grants the page none of them (`Cargo.toml` says
+        // why). `fs` before `dialog`, which reads through it.
+        .plugin(tauri_plugin_fs::init())
+        .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_opener::init())
+        .plugin(navigation::guard())
         // Card art from the cache. On Android a custom scheme is served at
         // `http://mtgimg.localhost/…` and on a desktop at `mtgimg://localhost/…` or
         // `http://mtgimg.localhost/…`; only the path is read, so one handler serves them all.

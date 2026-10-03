@@ -2,6 +2,12 @@ import { describe, expect, it } from "vitest";
 import manifest from "./src-tauri/gen/android/app/src/main/AndroidManifest.xml?raw";
 import filePaths from "./src-tauri/gen/android/app/src/main/res/xml/file_paths.xml?raw";
 import appGradle from "./src-tauri/gen/android/app/build.gradle.kts?raw";
+import mainActivity from "./src-tauri/gen/android/app/src/main/java/com/mtggrimoire/app/MainActivity.kt?raw";
+import themes from "./src-tauri/gen/android/app/src/main/res/values/themes.xml?raw";
+import nightThemes from "./src-tauri/gen/android/app/src/main/res/values-night/themes.xml?raw";
+import colors from "./src-tauri/gen/android/app/src/main/res/values/colors.xml?raw";
+import lightCapability from "./src-tauri/capabilities/light.json?raw";
+import manifestJson from "../public/light.webmanifest?raw";
 import buildTask from "./src-tauri/gen/android/buildSrc/src/main/java/com/mtggrimoire/app/kotlin/BuildTask.kt?raw";
 import packageJson from "../package.json?raw";
 import lightConf from "./src-tauri/tauri.conf.json?raw";
@@ -53,6 +59,51 @@ describe("the Android project's hand edits", () => {
   it("signs a release build with the debug key, until signing is decided", () => {
     const release = appGradle.slice(appGradle.indexOf('getByName("release")'));
     expect(release).toMatch(/signingConfig = signingConfigs\.getByName\("debug"\)/);
+  });
+});
+
+describe("the Android window's insets", () => {
+  it("keeps the page inside the bars, the cutout and the keyboard", () => {
+    // targetSdk 35+ draws every app edge to edge and stops resizing it for the keyboard; the
+    // content view's padding is what keeps a search box out from under the IME.
+    expect(mainActivity).toMatch(/setOnApplyWindowInsetsListener/);
+    for (const kind of ["systemBars()", "displayCutout()", "ime()"]) {
+      expect(mainActivity).toContain(`WindowInsetsCompat.Type.${kind}`);
+    }
+  });
+
+  it("draws light icons on both bars, the app being dark", () => {
+    expect(mainActivity).toMatch(/statusBarStyle = SystemBarStyle\.dark/);
+    expect(mainActivity).toMatch(/navigationBarStyle = SystemBarStyle\.dark/);
+  });
+
+  it("paints the ground behind the bars in the manifest's colour, by day and by night", () => {
+    const ground = (JSON.parse(manifestJson) as { background_color: string }).background_color;
+    expect(colors).toContain(`<color name="ground">#FF${ground.slice(1).toUpperCase()}</color>`);
+    for (const theme of [themes, nightThemes]) {
+      expect(theme).toContain('<item name="android:windowBackground">@color/ground</item>');
+    }
+  });
+
+  it("leaves Android's back gesture to the WebView's history", () => {
+    // Tauri's `AppPlugin` and wry's `WryActivity` both send the gesture to `webView.goBack()` while
+    // the WebView can go back, and to the activity only from the first entry. The phone router's
+    // pushes are those entries, so the gesture closes a sheet. Turning that off would be here.
+    expect(mainActivity).not.toMatch(/handleBackNavigation/);
+    expect(mainActivity).not.toMatch(/onBackPressed/);
+  });
+});
+
+describe("the light host's capability", () => {
+  it("grants core's defaults and the desktop's opener pair, and no dialog or fs permission", () => {
+    // The opener pair is the desktop face's, on a tablet past 1024px (`externalLinks.ts`); dialog
+    // and fs are used from Rust only, so the page is granted neither.
+    const cap = JSON.parse(lightCapability) as { permissions: string[] };
+    expect(cap.permissions).toEqual([
+      "core:default",
+      "opener:allow-open-url",
+      "opener:allow-default-urls",
+    ]);
   });
 });
 
