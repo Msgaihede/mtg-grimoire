@@ -97,9 +97,11 @@ import wishlistOptimizeRsCore from "../../crates/grimoire-core/src/wishlist_opti
 import wishlistOptimizeRsDesktop from "../../src-tauri/src/wishlist_optimize/mod.rs?raw";
 // The scanner's sources. All but one are in the `card-scanner` crate rather than under
 // `src-tauri/src` — the detector is a library with a CLI of its own, and the shapes the page
-// reads are declared there — and `src-tauri/src/scanner.rs` is the app's own commands, with the
-// stored prefs and tray beside them.
-import scannerRs from "../../src-tauri/src/scanner.rs?raw";
+// reads are declared there — and the app's own `scanner` is two files since the extraction's
+// seventh step: the session glue, the stored prefs and tray in the core, the commands in
+// `src-tauri`, joined below as `scannerRs`.
+import scannerRsCore from "../../crates/grimoire-core/src/scanner.rs?raw";
+import scannerRsDesktop from "../../src-tauri/src/scanner/mod.rs?raw";
 import sessionRs from "../../crates/card-scanner/src/session.rs?raw";
 import resolveRs from "../../crates/card-scanner/src/resolve.rs?raw";
 import filtersRs from "../../crates/card-scanner/src/filters.rs?raw";
@@ -165,6 +167,7 @@ const newPrintingsRs = newPrintingsRsCore + "\n" + newPrintingsRsDesktop;
 const priceHistoryRs = priceHistoryRsCore + "\n" + priceHistoryRsDesktop;
 const recentCardsRs = recentCardsRsCore + "\n" + recentCardsRsDesktop;
 const resetRs = resetRsCore + "\n" + resetRsDesktop;
+const scannerRs = scannerRsCore + "\n" + scannerRsDesktop;
 const searchRs = searchRsCore + "\n" + searchRsDesktop;
 const setCompletionRs = setCompletionRsCore + "\n" + setCompletionRsDesktop;
 const shelffoldsRs = shelffoldsRsCore + "\n" + shelffoldsRsDesktop;

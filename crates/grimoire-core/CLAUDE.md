@@ -19,9 +19,13 @@ card sync, and `index/`, the facet index with its lifecycle; and the three feeds
 `marketplace_feed`, `tags/`) with `images`, the image cache. **The sync step arrived in two
 parts and both are here** (2026-10-03): `state::Store` and the lane, then the relay's client,
 the entitlement, the wire format, the socket's schedule, the sync panel's reads, and pairing
-with the identity under it. **What is not here yet** is the scanner's session. `share/`, the
-mirror, the updater and live sync's connection manager (`sync_engine::live`, `tokio` tasks and a
-socket) are the desktop's for good.
+with the identity under it. **And the scanner's session glue arrived with the seventh step**
+(2026-10-03), `scanner`, which takes `card-scanner` as a dependency — so every module on the
+seven steps' lists has moved. **One thing the spec's §2.3 named did not**: `share/snapshot` and
+`share/cache` were to move and were on no step's list, so they are still `src-tauri`'s, in
+`share/` with its publisher — a decision nobody has taken yet, not one taken against them. The
+mirror, the updater, live sync's connection manager (`sync_engine::live`, `tokio` tasks and a
+socket) and the scanner's raw request body and embedded assets are the desktop's for good.
 Every rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) about a
 module binds that module wherever it lives — moving a file changes which crate compiles it and
 nothing about what it must do. **That file's database and deck rules are this crate's now**: a
@@ -90,13 +94,13 @@ over there is this crate's item unless that file defines one.
 | | Native | Browser |
 | --- | --- | --- |
 | `platform::clock::now_ms`, `now_secs` | `SystemTime` | `Date.now()` |
-| `platform::clock::Tick` — `now()`, `elapsed()`, for how long a wait has run | `Instant` | `Date.now()`, never negative |
+| `platform::clock::Tick` — `now()`, `elapsed()`, for how long a wait has run; `==`, `+ Duration` and `saturating_duration_since`, so a test can say "two seconds later" without waiting | `Instant` | `Date.now()`, never negative |
 | `platform::clock::Wall` — a moment that can be **stored and compared**: `now()`, `+` and `-` a `Duration`, `as_secs()` | whole milliseconds since the epoch | the same |
 | `platform::pause(Duration) -> bool` — stand aside for another thread | `thread::sleep`, `true` | **`false`, at once**: a Worker has no other thread to wait for |
 | `platform::timer::sleep`, `timeout` — a wait a future awaits, and a deadline on one | `tokio::time` | a `Promise` around the global `setTimeout` |
 | `platform::http` — `Client` (`get`, `post`, `deadline`), `Request` (`header`, `body`), `Response` (`bytes`, `text`), `Body`, `Error` | `reqwest` over rustls, with a connect bound and a per-read bound; `deadline` is **not applied** | `reqwest` over `fetch`: **no connect or read bound to set**, so `deadline` — the whole request — is the only bound there is; `is_connect()` is always `false` |
 | `platform::device::name()` — what this machine is called, for a device's default name | `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere | `None`: a page has no such thing to ask, and `identity::mint_name` falls back to a word |
-| `platform::files` — `open`, `write`, `remove`, `remove_dir`, `create_dir_all`, `entries`, `listing`, `set_modified`, `is_file`, `exists`; and `files::aio` for an `async fn`, with `read` and `rename` | `std::fs`; `tokio::fs` | **refused**, `ErrorKind::Unsupported`; the two questions answer `false` |
+| `platform::files` — `open`, `read`, `write`, `remove`, `remove_dir`, `create_dir_all`, `entries`, `listing`, `set_modified`, `is_file`, `exists`; and `files::aio` for an `async fn`, with `read` and `rename` | `std::fs`; `tokio::fs` | **refused**, `ErrorKind::Unsupported`; the two questions answer `false` |
 | `platform::sync::Semaphore`, `Lock` — a permit and a lock an `async fn` holds across an `.await`, **first come, first served**; `Shared<T>` — a value one holder at a time changes, the same lock with something behind it | `tokio::sync` | `tokio::sync`: it needs no runtime |
 | `platform::Sendable` — what a fence over a future's `Send`-ness bounds by | `Send` | anything: no request is `Send` there, and there is no other thread |
 | `platform::spawn::blocking(f).await` — synchronous work under an `async fn`; `spawn::background(f)` — work nobody waits for | the async runtime's blocking pool, **started by the call**; a thread | **run where it stands**: a Worker has no second thread, so `blocking` runs at its first poll and `background` before it returns |
@@ -240,6 +244,15 @@ offer, came here with the sync step's second part**: `State.pairing`, a
 page that made it on every host, and dies with the process on every host. **Take it before the
 lane, never after** — a press holding the lane and waiting on the offer is behind a poll holding
 the offer and waiting on the lane.
+
+**`State.scanner` came with the seventh step, and it was never an `AppState` field** — the desktop
+`app.manage`d it beside `AppState`, deliberately, because it is optional and shares nothing but
+the data directory. Markus chose the field over a second handle a host would keep beside its
+`State` (2026-10-03), because the command table reaches everything through one. `State::new`
+builds it **empty** from the data directory it already has — no new argument, and nothing is read
+until a command first asks for the session. **What the host's binary carries is said once,
+through `ScannerState::carry`, before any command can reach the state** — the desktop does it
+above its `app.manage`; a host that never says carries nothing, and a second word is ignored.
 
 **`state::with_write` is the one definition of a user-facing write, and it is here since the
 domain step.** `with_write`, `with_write_waiting` and the private `written` they share: the
@@ -399,6 +412,7 @@ src-tauri/src/<module>/mod.rs` counts them:
 | `sync` (`src/sync/mod.rs`) | `AppState` and its `Deref`; `lock_db`, `lock_db_read`, `lock_plain` | the mirror's fields and the change mask (the pending pairing offer was the third, until it moved to `State` with the sync step) | never |
 | `index` (`src/index/mod.rs`, `src/index/facets/mod.rs`) | the `facet_cards` command, and no test: every one moved, onto a fixture this crate builds at head | a window | never |
 | `images` (`src/images/mod.rs`) | `serve`, `respond`, `fail`, `not_ready`, `IMAGE_MAX_AGE`; `spawn_upkeep`; 7 tests | `tauri::http`, an `AppHandle`; a thread that sleeps | never: how a picture reaches a page, and when to wake for a pass, are a host's |
+| `scanner` (`src/scanner/mod.rs`) | `compiled()` and the three `include_bytes!` it reads; the three request headers, `FramePayload`, `frame_payload`, `split_detail`, `capture_payload`; 8 tests | `cfg(scanner_assets)`, which `build.rs` sets and this crate's fence refuses; `tauri::ipc::InvokeBody` and `HeaderMap` | never: what a binary embeds and how bytes cross a host's IPC are the host's — the Android host carries a frame base64 (spec §2.4) |
 | `sync_engine` (`src/sync_engine/mod.rs`) | `live`, the connection manager — its socket, its backoff timers, the exit push — and its tests | `tokio` tasks, a WebSocket and an `AppHandle` it emits `sync:live` and `sync:applied` through | never: how a host keeps a socket open is the host's; `schedule` is the half that decides, and it is here |
 | `maintenance` | 9 tests — nothing of its code | a database `split` converted | never |
 | `import` | `read_import_file`, two helpers and 5 tests | a path the desktop's file dialog answered | never: a host reads its own file |
@@ -448,6 +462,14 @@ is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain c
   SQLite build for a browser is in rusqlite's default set, and switching it off fails with
   `unresolved import libsqlite3_sys`, which reads as "unsupported" and is the opposite.
 - **`getrandom` gains `wasm_js` on WASM** and needs no build flag at 0.4.
+- **`card-scanner` is a path dependency on every target, declared as `src-tauri` declares it**
+  (`corpus` and `ocr`), since the seventh step. Measured before it came: the core with it checks
+  clean for wasm32 in 27 s and builds in 68 s, and **its `rusqlite` line's `bundled` asks nothing
+  of a browser build** — libsqlite3-sys is not in the wasm tree at all, so the rule above holds
+  without a target table for it. ⚠️ **Compiling is not running**: in a browser the crate's own
+  `std::thread::scope` and `Instant` panic, so nothing may call the session there before the light
+  app's phase 7 seams them; the Android compile is CI's. **A change under `crates/card-scanner`
+  runs the `core` job** — `scripts/ci-route.mjs`'s `crates/*` arm took `core` the same day.
 - A target-specific dependency goes in a `[target.'cfg(…)'.dependencies]` table. That is the one
   place outside `src/platform/` a target is named, and the fence does not read it for that.
 - **The `testing` feature is test scaffolding and nothing a build ships**: `schema::memory_pair`,

@@ -136,6 +136,9 @@ pub mod recent_cards;
 /// behind the capture guard, because every device derives them for itself.
 pub mod reconcile;
 pub mod reset;
+/// **The scanner's session glue**: the `card-scanner` session behind a lazy load, the one-window
+/// lease, the reader's scanner prefs and review tray. `State.scanner` holds it.
+pub mod scanner;
 /// **Every table, both ladders and the staging swaps.** `bring_to_head` is the half of a launch
 /// that may stop it; `prepare_database` is that and the half that is logged and left owing.
 pub mod schema;

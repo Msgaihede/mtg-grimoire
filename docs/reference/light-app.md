@@ -271,15 +271,16 @@ The engine is moving out of `src-tauri` into `crates/grimoire-core`, a crate wit
 dependency that the desktop, the Android host and the WASM host will all link (spec §2). The
 rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md);
 this section is what each step built and measured. **Nothing here runs on a phone or in a
-browser yet**: what exists is a crate the desktop links, compiled for two more targets. Six
-steps of seven have landed — the leaves, the storage layer, the state a host holds over it, and
+browser yet**: what exists is a crate the desktop links, compiled for two more targets. All
+seven steps have landed — the leaves, the storage layer, the state a host holds over it, and
 the domain: the decks, the collection, the wishlist and the search — and the whole of the
 fifth, in three parts: a request, a timer, a file, a lock and background work under
 `platform/`; the Scryfall client, the ingest and the reconciler over them; the card sync and
 the facet index that drive those; and the three feeds and the image cache. **The sixth came in
 two**: the sync client, the entitlement and pairing were restated to reach the database a
-stretch at a time, on a lane, holding nothing across a request — and then moved. What is left
-is the seventh, the scanner's session.
+stretch at a time, on a lane, holding nothing across a request — and then moved. **The seventh**
+moved the scanner's session glue, and with it `card-scanner` became a dependency of the core.
+What is left of phase 2 is the command table.
 
 ### 6.1 Step 1 — the workspace, the crate and the leaves (2026-10-02)
 
@@ -1554,4 +1555,73 @@ file is touched.
 - **The same-second baseline skip in `apply`** (§6.8) is being fixed on its own.
 - **`share::publish` still holds the connection for a whole publish** (§6.8), and stays the
   desktop's.
-- **Step 7**: the scanner's session glue — and then the command table.
+- **Step 7**: the scanner's session glue — and then the command table. *(§6.10.)*
+
+**6b merged the same day, #772**, its `core` job green on wasm32 and Android — the first
+Android compile of the relay client and pairing, and of the `Sendable` bound above.
+
+### 6.10 Step 7 — the scanner's session glue (2026-10-03)
+
+[The plan](../superpowers/plans/2026-10-03-light-app-core-step-7-scanner.md). Measured on
+Windows 11, debug builds, on the branch's own tree over `main` at `91e5bc59` (6b's merge).
+
+**Measured before it was decided.** With `card-scanner` (`corpus`, `ocr`) added to the core for an
+experiment, the core checked clean for wasm32 in **27 s** and built in **68 s**, and
+`cargo tree --target wasm32-unknown-unknown -i libsqlite3-sys` printed nothing: the crate's
+`rusqlite` asks for `bundled`, and in a browser build that names a package that is not in the
+tree. Android cannot be compiled here (no NDK); the `core` job is its first compile. **Running the
+session in a browser is still impossible** — the crate keeps `std::thread::scope` and `Instant`,
+which panic there — and nothing calls it there before phase 7 (spec §8).
+
+**Markus chose the whole glue, and its state as a field of `State`.** The other two answers on
+the table were moving only what names no engine (prefs, tray, lease), and deferring the step to
+phase 7. The field reverses the desktop's documented choice — the scanner's state was
+`app.manage`d beside `AppState` because it is optional and shares nothing but the data directory
+— because the command table that comes next reaches everything through one handle.
+
+**Moved by `scripts/core-step-7.mjs`**, the 6b script's shape with a split inside the tests module
+as well (`rs-items.mjs`'s `inner`):
+
+| | Now |
+| --- | --- |
+| The session and its lazy load, the lease, the asset load order, prefs, tray, the tray's commit, the capture writer, and 34 tests | `crates/grimoire-core/src/scanner.rs` |
+| The assets `build.rs` embeds, the three request headers and the raw-body parsing, the 12 commands, and the 8 tests of that body | `src-tauri/src/scanner/mod.rs`, under `pub use grimoire_core::scanner::*;` |
+| The scanner's state | `State.scanner`, built empty by `State::new` from the data directory — no new argument |
+| What the binary embeds | the desktop's `scanner::compiled()` — the only place `cfg(scanner_assets)` is asked — handed once to `state.scanner.carry(…)` above `app.manage`, so no command reaches the state before it is said |
+| The lease's clock | `platform::clock::Tick`, which grew `==`, `+ Duration` and `saturating_duration_since` |
+| The asset and capture files | `platform::files`, which grew a whole-file `read` |
+| The model pair | read through `files` and handed to `TitleReader::from_bytes`, with `TitleReader::load`'s sentences kept word for word — a test now pins that the refusal still names both files |
+| A `card-scanner` change in CI | runs the `core` job too |
+
+**Nothing a command answers changed**: the same twelve names, arguments, refusals and sentences,
+and the page is untouched. All 42 of the module's tests pass where they now live; core **2 989**
+and desktop **426**, which is 6b's 3 414 and the `Tick` test, none lost; clippy for the workspace
+and for `wasm32`; the wasm build; `cargo check --locked`; no `testing` in the shipped tree; the
+frontend's build and lint, and its suite but one: `ScannerPage.test.tsx`'s refused-camera test
+timed out a 1 s `findByText` at 1.46 s under the full run's load and passed 40/40 three times
+alone — the branch touches no frontend code but `ipc.test.ts`'s import.
+
+**A fresh reviewer read the branch and found no must-fix** — every command, every test, the
+fence, the router and `read_models`' sentences checked against the old code. What it found was
+prose the move had made false, the CI docs above all (`crates/*` "never runs `core`"), and a
+claim here that every module the spec named had moved: `share/snapshot` and `share/cache` were
+on §2.3's list and on no step's.
+
+**No live pass this step, and why.** Markus's own portable build was running from Explorer, and
+a dev build launched beside it only opens a window in that app — the single-instance guard keys on
+the identifier, not the build — so driving the scanner's commands would have driven his real
+data. What a live pass would have caught that the compiler cannot is a command asking for a
+managed state that is no longer managed; every one of the twelve asks for `State<Arc<AppState>>`,
+which `desktop::start` manages, and no `ScannerState` is managed or asked for anywhere.
+
+**No upgrade check against `main`'s binary**: no schema rung, launch pass or file changed. The two
+`app_meta` rows are read and written by the same functions, now in the core.
+
+**Open after this step:**
+
+- **The command table** (`core::dispatch`), with a name-parity test against `generate_handler!` —
+  the last item of phase 2.
+- **The scanner in a browser** is phase 7's: the crate's threads and clock need a seam, and the
+  assets a download (spec §8).
+- **A live pass of the Scanner view** over the moved glue, the next time the app lock can be
+  taken with nothing else running.
