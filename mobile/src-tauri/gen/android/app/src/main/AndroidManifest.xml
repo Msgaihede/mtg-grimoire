@@ -6,6 +6,9 @@
 -->
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Whether the active network is metered (`downloads::metered`, step 4.4): a normal
+         permission, granted at install, and the one `isActiveNetworkMetered` needs. -->
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <!-- The card scanner (phase 7) and the pairing scanner (phase 6) read the camera through the
          WebView's getUserMedia; Tauri's WebChromeClient asks for the runtime grant on first use.
          Declared now, with the host, so the permission set does not change under a later

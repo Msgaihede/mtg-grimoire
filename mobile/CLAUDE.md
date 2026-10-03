@@ -340,6 +340,11 @@ and the `mtgimg` protocol over the core's `images::answer`.
   and no URI ever crossing to the page — and `opener` takes every `http(s)` link that is not one of
   the app's pages to the system browser (`navigation.rs`'s guard), so a deck note's link never
   replaces the app. `capabilities/light.json` stays `core:default` alone.
+- **The launch's downloads wait on a metered link** (step 4.4): the host asks Android over JNI
+  whether the network is metered and, unless the reader said *always*, holds every launch
+  download. `DownloadsPrompt.tsx`, which `LightApp` mounts above both faces, asks the host's
+  `light_downloads` and draws only when it says it is holding — so a host without the command
+  draws nothing, and the page never asks where it runs. Not now is the default and sends nothing.
 - **The insets are the host's**: `MainActivity.kt` pads the content view by the system bars, the
   cutout and the keyboard, draws light icons on both bars, and the window's ground behind them is
   the web manifest's colour (`themes.xml`, `colors.xml`). `host.test.ts` holds all of it.

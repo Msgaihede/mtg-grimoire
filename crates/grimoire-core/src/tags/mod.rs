@@ -1672,8 +1672,9 @@ pub async fn refresh_if_due(ds: &'static Dataset, state: &Arc<State>) {
     }
 }
 
-/// Should the launch refresh `ds` at `now`? Stale, and not resting after an unusable file.
-fn due_at_launch(ds: &Dataset, state: &State, now: i64) -> bool {
+/// Should the launch refresh `ds` at `now`? Stale, and not resting after an unusable file. `pub`
+/// for [`crate::downloads::launch_due`].
+pub fn due_at_launch(ds: &Dataset, state: &State, now: i64) -> bool {
     let conn = state.lock_db_read();
     is_stale(
         read_meta(ds, &conn).map(|m| m.checked_at),

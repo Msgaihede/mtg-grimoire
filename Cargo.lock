@@ -1722,6 +1722,7 @@ version = "0.40.0"
 dependencies = [
  "base64 0.22.1",
  "grimoire-core",
+ "jni",
  "serde",
  "serde_json",
  "tauri",

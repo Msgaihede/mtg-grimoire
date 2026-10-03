@@ -2679,3 +2679,45 @@ drawn; with the guard in place they can be plain links.
 gained only `tauri-plugin-fs`'s edge from the host. **Not measured**: every claim above about a
 device — the back gesture, the padding, the system dialogs, the browser hand-off — is read off the
 sources and pinned by text, not driven. A phone or an emulator is step 4.5's.
+
+### 8.4 Step 4.4 — the mobile-data prompt (2026-10-03)
+
+The spec's §4: *"Any feed over 5 MB shows its measured size and, where the connection reports
+itself metered, defaults to Not now."* Every launch download this repository has measured is over
+5 MB — the card file 77 MB, Card Kingdom's prices 63.7 MiB and Mana Pool's 48.4 MiB, the combos
+27.5 MB, the art tags 12.5 MB, the oracle tags 5.85 MB — so on a metered link the rule is: ask
+before any of them.
+
+- **The host decides whether to ask, and the page only draws the question.** The Android host asks
+  `ConnectivityManager.isActiveNetworkMetered()` over JNI at launch (through the activity tao
+  keeps; `ACCESS_NETWORK_STATE`, a normal permission, is in the manifest for it). On a metered link
+  where the reader has not said *always*, it starts none of the launch's downloads and holds them.
+  **The check fails open**: a JNI call that cannot be made answers *not metered*, and the launch
+  downloads as it always has. **The hold is decided before the page is told it may mount**
+  (`startup::settle`): the prompt asks once, as it mounts, and a review found that deciding after
+  `settle` let that question read `held: false` a moment before the hold came down — a metered
+  first run with no cards and no prompt.
+- **Two host commands**, answered inside `core_call` beside the file commands:
+  `light_downloads` → `{ held, metered, due }`, each due download over 5 MB with its size, and
+  `light_downloads_start { always }`, which starts exactly what the launch would have — the card
+  sync, then the feeds behind it on a first run — and with `always` stores `app_meta`'s
+  `light_downloads_on_metered = "always"`. A second press, or a press on a launch that never held,
+  starts nothing.
+- **What is due is the core's**, `grimoire_core::downloads::launch_due`: each feed's own launch
+  rule (`combos::due_at_launch`, `tags::due_at_launch`, the new `marketplace_feed::selected_due`
+  that `refresh_selected_if_due` now uses too) and the card sync's throttle, with each measured
+  size beside it. A due card check may cost a few hundred bytes — the file has not rotated — and
+  is listed anyway, because Scryfall rotates it daily.
+- **The prompt is `mobile/DownloadsPrompt.tsx`, mounted by `LightApp` above both faces.** It asks
+  `light_downloads` once and draws only when the host says it is holding: the desktop binary under
+  `mobile:tauri` and the Storybook fake have no such command, and a refusal is nothing to ask. Not
+  now is the first button and Escape and the scrim are Not now too; it sends nothing, and the next
+  launch asks again. Sizes are decimal megabytes rounded up, prefixed *about*.
+
+**Measured, 2026-10-03, on Linux**: the core's `downloads` tests (a first launch owes cards, combos
+and both tag files; a feed-backed marketplace adds its price list at its own size; a card check
+made an hour ago is not due), the host's `downloads` tests (an unmetered launch starts at once, a
+metered one holds, `always` releases it, only large downloads are listed), and the prompt's
+vitest file. **Not measured**: the JNI call has compiled only in CI's `android` job and has never
+run; whether `isActiveNetworkMetered` says *metered* on a phone's mobile data is a device's to
+show.
