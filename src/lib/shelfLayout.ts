@@ -309,3 +309,79 @@ export function shelfAtRow(layout: ShelfLayout, rowIndex: number): Shelf | null 
   const next = rowIndex + 1 < layout.rows.length ? layout.rows[rowIndex + 1] : null;
   return next !== null && next.kind !== "label" ? next.shelf : null;
 }
+
+/** One shelf with the tiles it has loaded, and the section it is laid out as. */
+export interface LoadedShelf<T> {
+  section: ShelfSection;
+  tiles: readonly T[];
+}
+
+/**
+ * Each shelf with the tiles it has loaded and the count it is laid out at.
+ *
+ * **A shelf is laid out at whichever is larger, its count or what has loaded.** The counts and the
+ * pages are two queries, and a card added between them leaves a shelf with one more tile than its
+ * count says — laid out at the count, that tile would have no slot and would simply not be drawn.
+ * The other direction, a count ahead of the pages, is the ordinary state of a wall mid-scroll, and
+ * is what the empty frames are for.
+ *
+ * **A collapsed shelf is its heading alone** — {@link layoutShelves} gives it no slots — so whatever
+ * a page still holds for it (the previous query's rows, kept on screen while a fold refetches) is
+ * not drawn, walked or picked. Read here, it would be written into the next shelf's slots.
+ *
+ * Split out of `CardGrid` so the light app's phone wall lays its shelves out by the same rule.
+ */
+export function loadedShelves<T>(
+  sections: readonly ShelfSection[],
+  tilesOf: (shelfId: number) => readonly T[],
+): LoadedShelf<T>[] {
+  return sections.map((section) => {
+    const tiles: readonly T[] = section.shelf.collapsed ? [] : tilesOf(section.shelf.id);
+    return {
+      section: { shelf: section.shelf, tileCount: Math.max(section.tileCount, tiles.length) },
+      tiles,
+    };
+  });
+}
+
+/** {@link fillShelves}' answer: the layout, which loaded tile fills which slot, and where the
+ *  loaded run ends. */
+export interface FilledShelves<T> {
+  layout: ShelfLayout;
+  /**
+   * Indexed by a tile's slot in the layout's flat order. A hole is a slot whose page has not
+   * landed: a shelf's size comes from its count, so every heading can be placed before the cards
+   * arrive and nothing reflows when they do.
+   */
+  slots: (T | undefined)[];
+  /** The slot after the last loaded tile in shelf order — the row a wall pages on. */
+  frontier: number;
+}
+
+/**
+ * The shelves laid out at `columns`, with every loaded tile in its slot.
+ *
+ * It keeps counting correctly when a shelf's loaded tiles do not fill its count, which the loaded
+ * order alone could not: a shelf whose count is ahead of its pages leaves holes, and every shelf
+ * after it would otherwise be numbered short. Pure, so it is a row in `shelfLayout.test.ts`.
+ */
+export function fillShelves<T>(
+  shelves: readonly LoadedShelf<T>[],
+  columns: number,
+): FilledShelves<T> {
+  const layout = layoutShelves(
+    shelves.map((s) => s.section),
+    columns,
+  );
+  const slots = new Array<T | undefined>(layout.totalTiles).fill(undefined);
+  let frontier = 0;
+  for (const { section, tiles } of shelves) {
+    const start = layout.tileStart.get(section.shelf.id);
+    if (start === undefined || tiles.length === 0) continue;
+    tiles.forEach((card, i) => {
+      if (start + i < slots.length) slots[start + i] = card;
+    });
+    frontier = start + tiles.length;
+  }
+  return { layout, slots, frontier };
+}

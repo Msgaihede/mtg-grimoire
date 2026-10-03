@@ -246,8 +246,21 @@ function answered(read: { isPending: boolean; isPlaceholderData: boolean }): boo
  *   rendering still fetched the unfiltered list once. `useReviewHandoff` has the measurement.
  *   **There is no `flattenLocally` beside it any more**: that was the hand-off's sweep, a flat read
  *   of every drawer, and the root's shelves are every drawer already.
+ * @param options.folds The folds the shelves are built from, **in place of the stored ones** —
+ *   `useShelfFolds("collection")`'s, which is what every caller that passes nothing gets, the
+ *   desktop page included. The light app's phone face passes its own: a heading pressed there
+ *   folds the shelf in place without writing `app_meta`, which `mobile:tauri` shares with the
+ *   desktop's database, and nothing on the phone face writes yet. Held still by the caller (a
+ *   `useMemo`): it is a level frame's input, and a fresh object every render is a new frame every
+ *   render. `setFold` and `setMany` below still write the stored folds whichever was passed.
  */
-export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boolean } = {}) {
+export function useCollection({
+  initialNeedsReview,
+  folds: foldsOverride,
+}: {
+  initialNeedsReview?: boolean;
+  folds?: Readonly<Record<string, boolean>>;
+} = {}) {
   // Which marketplace this list quotes — an input to both queries below, and part of both
   // keys: it decides what a Value cell contains, not merely how it is written.
   const { marketplace } = useMarketplace();
@@ -363,7 +376,9 @@ export function useCollection({ initialNeedsReview }: { initialNeedsReview?: boo
    * out `DEBOUNCE_MS`.
    */
   const folderList = useCollectionFolderList();
-  const { folds, setFold, setMany } = useShelfFolds("collection");
+  const stored = useShelfFolds("collection");
+  const { setFold, setMany } = stored;
+  const folds = foldsOverride ?? stored.folds;
   /**
    * The drawers set aside, **every folder inside a locked one included** — `lockedFolderIds` is
    * the single place that inheritance is computed on this side, and a shelf's `locked` is this
