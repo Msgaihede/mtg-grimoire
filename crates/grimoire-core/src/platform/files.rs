@@ -51,6 +51,12 @@ pub fn open(path: &Path) -> io::Result<Reader> {
     imp::open(path).map(Reader)
 }
 
+/// The whole of `path`, in memory — for code already off the async runtime that wants a file
+/// whole, as the scanner's asset load does with its 12 MB of models.
+pub fn read(path: &Path) -> io::Result<Vec<u8>> {
+    imp::read(path)
+}
+
 /// Write `bytes` as the whole of `path`, replacing what was there.
 pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
     imp::write(path, bytes)
@@ -219,6 +225,10 @@ mod imp {
         std::fs::File::open(path)
     }
 
+    pub fn read(path: &Path) -> io::Result<Vec<u8>> {
+        std::fs::read(path)
+    }
+
     pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
         std::fs::write(path, bytes)
     }
@@ -376,6 +386,10 @@ mod imp {
     pub struct Writer;
 
     pub fn open(_path: &Path) -> io::Result<Reader> {
+        Err(unsupported())
+    }
+
+    pub fn read(_path: &Path) -> io::Result<Vec<u8>> {
         Err(unsupported())
     }
 
