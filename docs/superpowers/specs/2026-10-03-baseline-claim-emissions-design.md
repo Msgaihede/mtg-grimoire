@@ -130,7 +130,10 @@ history no log carries.
 - **`resumed` is true when a generation is minted over an earlier one** — `logging_since` already
   held a value, which `identity::leave_group` keeps for exactly this, and writes as `0` when the
   device has none, so a device that logged before this build and leaves on it still resumes when it
-  comes back. A device's *first* generation
+  comes back. A device that left or was removed *under an older build* never had that `0` written,
+  so any `sync_peers` row counts as an earlier generation too — only a device that held a group has
+  one, and leaving keeps every watermark (§7) (amended 2026-10-03, after Task 9's review).
+  A device's *first* generation
   is not resumed: its pre-pairing rows carry uids no peer holds, so they reach every peer through the
   rows-not-here arms of §6, never through a row held here.
 - **A device that has never minted one sends `since: 0` and no `resumed`** — "the logging that began

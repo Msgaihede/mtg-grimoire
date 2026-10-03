@@ -114,8 +114,18 @@ pub fn begin(conn: &Connection) -> rusqlite::Result<Begun> {
 
 /// Capture has just turned on: mint a generation (§4). It resumes when one was held before —
 /// `identity::leave_group` keeps it for exactly this.
+///
+/// **A watermark says so too.** A device that left or was removed under an older build never had
+/// [`keep_logging_mark`] write its `0:0`, so `logging_since` alone would call its return a first
+/// generation, and the edits it made while in no group would be passed on its peers rather than
+/// floored. A `sync_peers` row is a peer whose ops this device applied, which only a device that
+/// held a group can have, and leaving keeps every one of them (§7) — so any row is a generation
+/// held before. A fresh install has none, and its first generation still does not resume.
 pub fn start_logging(conn: &Connection) -> rusqlite::Result<()> {
-    let resumed = get(conn, LOGGING_SINCE)?.is_some();
+    let resumed = get(conn, LOGGING_SINCE)?.is_some()
+        || conn.query_row("SELECT EXISTS(SELECT 1 FROM sync_peers)", [], |r| {
+            r.get::<_, bool>(0)
+        })?;
     let since = tick(conn)?;
     put(conn, LOGGING_SINCE, &show(since))?;
     put(conn, LOGGING_RESUMED, if resumed { "1" } else { "0" })
