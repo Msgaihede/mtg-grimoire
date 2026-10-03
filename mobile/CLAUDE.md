@@ -158,6 +158,10 @@ failure behind each at its own site:
   its own entries in history state), and a replace when it is not — a reader who arrived on the
   card's own link has nothing of the app's beneath them, and a Back there would leave it. Closing
   by pushing again left the card one Back beneath the page it was closed over.
+- **A step to another printing of the open card is a link that _replaces_** —
+  `linkTo(place, { replace: true })`. The sheet is one place however many printings the reader
+  steps through, so Back closes it from whichever printing they ended on; the replaced entry keeps
+  this router's mark, so the ✕ still leaves by a real Back. `CardSheet.test.tsx` holds it.
 - **`navigate` does nothing for the place the reader is already on, asked of the place and not of
   the string**: `/` is the start view without spelling it, and a press on the lit tab must not
   push `/search` over it.
