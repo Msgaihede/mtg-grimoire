@@ -202,22 +202,25 @@ purpose; the phase that owns the surface owns the fix.
   of the shelves the reader has left open, and deck groups, `Recently removed` and a deck's
   managed wishlist folder start shut — so on the `starter` seed the collection wall draws 9 of 12
   rows. When every row is on a shut shelf the page says so; it cannot open one.
-- After a refused next page a wall stops asking and says nothing. It re-arms on any refetch of
-  that query (a tab away and back, a window refocus), so it is not stuck for the session.
-- When the whole-wall figure itself fails to load over an empty wall, the page draws nothing —
-  neither empty-state sentence is known to be true. `useWishlist` does return the query that
-  could say so; `useCollection` returns only the figure.
+- ~~After a refused next page a wall stops asking and says nothing~~ — **fixed 2026-10-03**: the
+  wall ends on `The next cards could not be read.` and a `Try again` that calls `fetchNextPage`
+  itself (`parts.tsx`'s `NextPageRefused`, through `CardWall`'s `footer`). It still stops asking
+  on its own until then, and still re-arms on any refetch.
+- ~~When the whole-wall figure itself fails to load over an empty wall, the page draws
+  nothing~~ — **fixed 2026-10-03**: the collection and the wishlist say the rest could not be
+  counted, from `useCollection`'s new `figuresRefused` and `useWishlist`'s `countsQuery`.
 - A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
   nothing.
 - Two rows of one printing get one accessible name; the desktop wall folds them into one tile.
 - `DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
-  the `live` list; and `facesOf` now exists twice (the desktop's lives in a module that imports
-  the store).
+  the `live` list; and ~~`facesOf` now exists twice~~ — **fixed 2026-10-03**: it lives once, in
+  `src/features/card/faces.ts`, read by `CardTextDialog` and the phone's card sheet (§7.1).
 - The wall's list semantics count rows rather than cards; no test scrolls a long wall to its end.
 - ~~In landscape the bars stop short of the screen's edge beside a cutout.~~ **Closed
   2026-10-03 (§7.8)**: the bars bleed and inset their content.
 - **A constraint on the sheet's design, not a defect yet**: a step from one card to another
-  *inside* the sheet must be `navigate(…, { replace: true })`. A plain `navigate` is a second
+  *inside* the sheet must be `navigate(…, { replace: true })` — **held since 2026-10-03** by
+  `linkTo(place, { replace: true })` on every printing row (§7.1). A plain `navigate` is a second
   marked push, and one close would then land on the first card instead of the page.
 - ~~In the light edition `Ctrl+Shift+N` still asks for a new window.~~ **Closed 2026-10-03
   (§7.8)**, and `F1` is left to the browser on purpose.
@@ -1776,10 +1779,62 @@ own `rust-cache` reported `No cache found` on both legs — a first run under a 
 build was cold and the cache line in `release.yml` is still unproven (`ci.yml`'s restores). The release also
 carries #780 (the sync fix §6.9 left open), which merged twelve minutes before the release PR.
 
-## 7. Phase 3 — the phone pages, a step at a time
+## 7. The phone pages — phase 3, a step at a time
 
-One subsection per step of [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md),
-numbered by the step.
+The plan is [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md): one pull
+request per step. **The owner waived the built-options round for this phase** (2026-10-03): each
+page is the implementer's pick, shipped, and redirected in review. Every figure below is from
+`npm run mobile:dev` — Vite's dev server over the Storybook fake's `starter` seed — in headless
+Chromium 141 on **Linux**, emulating a touch phone; nothing here was measured on a phone or
+against a production bundle.
+
+### 7.1 Step 3.1 — Search and the card sheet (2026-10-03)
+
+**Search is one line and a sheet.** The box keeps 16px text and its name; beside it one
+`Filters` button, gold with a badge while anything is on (`Filters — N active`). Under the line,
+only once something is on, the desktop's own `StatedFiltersLine` with the result count in place
+of its caption, and `TagQueryRow` under that so `otag:`/`atag:` resolve exactly as they do on
+the desktop. The sheet holds every cell `SEARCH_TRAY` offers — sort and its direction, format
+with `Any card`, colour identity, mana value with X, rarity, type, border, finish, owned, set,
+price, printings — over the same `useCardSearch`, dimmed by `facets.ts` the way the desktop's
+tray is, with `Reset all` and `Show N cards` in a footer. It is not a place: opening it writes no
+history.
+
+- **No `Exact` glyph chip on the phone.** Seven 44px round chips do not fit 328px with room for
+  the pressed ring, and a tooltip-only glyph tells a finger nothing; a `Within` / `Exactly` pair
+  under the six colours sets the same flag.
+- **Everything in the sheet is at least 44px tall whatever the pointer**, and every text box in it
+  is 16px, so a focused picker's search box does not zoom the page.
+- **What moved out of `FilterBar.tsx`**, store-free and re-exported from it so no desktop caller
+  changed: `filterOptions.ts` (the sort rows, rarities, `sortDirectionName`,
+  `useFormatOptions`, `activeChips`, and `formatPickerRows`, which the tray used to build inline)
+  and `StatedFiltersLine.tsx`; `countOf` left the desktop `SearchPage` for `resultCount.ts`.
+
+**The card sheet reads the desktop modal's own query keys**, so a card open on one side of the
+floor is painted from the cache on the other. One column: the picture and the words; prices for
+the finishes the printing is sold in, with the marketplace's as-of line; *In your grimoire*
+(owned, wished, in decks); printings grouped by the stored preference, five then `Show all N`;
+legality behind its summary (`Legal in 16 of 23 formats · banned in 1`); oracle tags; combos,
+three then `Show all N`, each opening to its pieces, brackets, prerequisites and steps. **Each
+empty state is its own sentence** — tags never fetched, untagged, no oracle card, a failed read;
+combos never downloaded, reading, failed, none — for the rule `commander-brackets.md` gives the
+card side.
+
+- **A step to another printing is a link that replaces** (`linkTo(place, { replace: true })`):
+  history length stayed 3 across two printing presses at 360px, and the ✕ went back to `/search`.
+- **What moved out of the desktop's dialogs**, store-free, so both faces read one copy:
+  `faces.ts`, `legality.ts`, `oracleTags.ts`, `combos.ts`, and `cardKeys.ts` (the printings and
+  holdings keys `CardDetailModal` spelled inline).
+- **Not on the sheet**: the `Open on …` rows and Commander Spellbook's link (they go through the
+  opener plugin, a host seam phases 4 and 5 own); art tags (no command answers them for one card,
+  and the desktop modal does not draw them either); an owned count per printing (printings do not
+  carry one); the printing group-by control (choosing it is a write).
+
+**`Dialog`'s ✕ is 44px under a coarse pointer** and its 24px box everywhere a mouse aims; the card
+sheet takes the top safe-area inset when it fills the window, as the filters sheet does.
+
+**Two of phase 1's leftovers closed here** (§5): a refused next page and an uncountable empty
+wall each say so now, and `facesOf` lives once.
 
 ### 7.8 Step 3.8 — the desktop face in the light edition, and the shell (2026-10-03)
 

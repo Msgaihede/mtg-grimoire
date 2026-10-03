@@ -5,72 +5,14 @@ import { ipc, type CardDetail, type OracleTagStatus } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { cardDetailKey } from "./cardDetailKey";
-
-/**
- * The tag read, keyed on the **oracle** id — which is what the plan asks for and what the data
- * actually is.
- *
- * Oracle tags are a fact about a *card*, not about a piece of cardboard: all four Lightning Bolts
- * carry one set of slugs between them. A key carrying the printing id would therefore fetch the
- * same answer once per printing and miss the cache every time a reader stepped between two
- * printings of the card they are already reading about.
- */
-function oracleTagsKey(oracleId: string) {
-  return ["tags", "oracle", "card", oracleId];
-}
-
-/** The taxonomy's own freshness — one small table, no network call, safe before the first
- *  refresh has ever run. See {@link NEVER_FETCHED} for what this dialog needs it for. */
-const ORACLE_TAG_STATUS_KEY = ["tags", "oracle", "status"];
-
-/**
- * What an empty answer means when the taxonomy has never been ingested.
- *
- * **This sentence is the whole reason the dialog reads {@link ipc.oracleTagsStatus} at all.**
- * `oracle_tags_for_cards` is documented to make "no tags" and "no such card" the *same* answer —
- * an untagged card, an unknown oracle id and a database with no taxonomy in it all come back
- * with an empty slug list, on purpose, because every categorising caller's response to all three
- * is to fall back to the type line. That is the right contract for a caller filing a deck add
- * and the wrong one for a panel that has to say a sentence: an empty list on its own cannot tell
- * a reader *which* of the three they are looking at, and the two answers are not close. So the
- * status row is what decides between this and {@link UNTAGGED}, and neither claim is made
- * without it.
- *
- * A never-fetched taxonomy is a **supported state**, not a failure — it is what every install is
- * on its first launch and what a machine that cannot reach Scryfall stays in permanently. The
- * second sentence is the Tags page's, word for word: there is no button for this anywhere in the
- * app, so the honest instruction is that nothing needs a press.
- */
-const NEVER_FETCHED =
-  "Tag data is still downloading. Check back shortly.";
-
-/** An empty answer from a taxonomy that *is* here: Tagger's editors have not tagged this card.
- *  The other half of {@link NEVER_FETCHED}'s split, and the claim that needs the status row. */
-const UNTAGGED = "No oracle tags for this card.";
-
-/**
- * A printing with no oracle card behind it.
- *
- * `CardDetail.oracleId` is nullable and a handful of rows really are null, so this is a state
- * rather than a defect — and it is the one case where the dialog asks nothing at all. There is no
- * question to put: the read is keyed on an oracle id, so a null id has nothing to look up and a
- * call would only be this component asking the backend to confirm that `[]` is `[]`.
- */
-const NO_ORACLE_CARD = "Oracle tags aren't available for this printing.";
-
-/**
- * Where the tags came from and how old they are — the app's rule that data with an age says its
- * age, in the voice `pricesAsOf` set.
- *
- * **It does not say "as of the last card-data sync", and the plan's draft of this sentence did.**
- * That clause is `pricesAsOf`'s and is true of Scryfall's *prices*, which arrive inside the card
- * corpus; the two Tagger files are separate bulk downloads on a refresh interval of their own
- * (`tags::oracle::REFRESH_INTERVAL_SECS`, a week), so a card sync that finished this morning says
- * nothing whatever about how old these slugs are. Blurring the two is the thing the root
- * `CLAUDE.md` asks in bold not to do, and a caption that names the wrong clock is worse than one
- * that names none.
- */
-const AS_OF = "Tags from Scryfall Tagger.";
+import {
+  emptyTagsSentence,
+  ORACLE_TAG_STATUS_KEY,
+  ORACLE_TAGS_AS_OF,
+  ORACLE_TAGS_NO_ORACLE_CARD,
+  oracleTagsKey,
+  slugsFor,
+} from "./oracleTags";
 
 /**
  * The card's Oracle tags, over the card detail modal.
@@ -98,7 +40,8 @@ const AS_OF = "Tags from Scryfall Tagger.";
  * it files deck adds by card type instead — the floor rather than an error. An empty panel would
  * read as "this card has no tags", which is a different claim and, on a first launch, a false
  * one. So an empty answer says which of the two it is, out of the status row —
- * {@link NEVER_FETCHED} against {@link UNTAGGED} — and never draws an empty box.
+ * `ORACLE_TAGS_NEVER_FETCHED` against `ORACLE_TAGS_UNTAGGED`, both in `./oracleTags` with the
+ * phone sheet as their other reader — and never draws an empty box.
  */
 export function OracleTagsDialog(): JSX.Element {
   const overlay = useAppStore((s) => s.cardOverlay);
@@ -172,14 +115,8 @@ function Body({
 }) {
   const headingId = useId();
 
-  /**
-   * **Matched back by id, never by position.** One id in means one entry out here, so an index
-   * would work today — but the command's contract is that blanks and duplicates are dropped, so
-   * `result[0]` is a habit that is correct until the first caller sends two ids and then is
-   * silently wrong. The rule is cheaper to keep than to remember.
-   */
-  const slugs =
-    oracleId === null ? [] : (tags.data?.find((row) => row.oracleId === oracleId)?.slugs ?? []);
+  // Matched back by id, never by position — see {@link slugsFor}.
+  const slugs = slugsFor(tags.data, oracleId);
 
   return (
     <>
@@ -187,7 +124,7 @@ function Body({
         {card === null ? (
           <Note>Loading card…</Note>
         ) : oracleId === null ? (
-          <Note>{NO_ORACLE_CARD}</Note>
+          <Note>{ORACLE_TAGS_NO_ORACLE_CARD}</Note>
         ) : tags.isPending || status.isPending ? (
           // Both reads, not just the tag one: the sentence an empty answer gets is *decided* by
           // the status row, so drawing before it lands would flash whichever of the two claims
@@ -218,16 +155,14 @@ function Body({
             </ul>
           </section>
         ) : (
-          // An unanswered status reads as never-fetched rather than as untagged, and that is the
-          // safe way round: `oracle_tags_status` is documented as unable to fail, so this branch
-          // is all but unreachable — and of the two claims, "the file has not been downloaded" is
-          // the one that stays true of a database nobody can read the status of.
-          <Note>{(status.data?.ingestedAt ?? null) === null ? NEVER_FETCHED : UNTAGGED}</Note>
+          // An unanswered status reads as never-fetched rather than as untagged — see
+          // {@link emptyTagsSentence} for why that is the safe way round.
+          <Note>{emptyTagsSentence(status.data)}</Note>
         )}
       </div>
       {/* Outside the scroller: the caption is about the whole panel, so it must not scroll away
           from the thing it qualifies. */}
-      <p className="border-t border-border px-4 py-3 text-xs text-dim">{AS_OF}</p>
+      <p className="border-t border-border px-4 py-3 text-xs text-dim">{ORACLE_TAGS_AS_OF}</p>
     </>
   );
 }

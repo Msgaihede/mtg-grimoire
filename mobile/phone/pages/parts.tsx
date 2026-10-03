@@ -1,8 +1,11 @@
 import { useCallback, type ReactNode } from "react";
+import { FOCUS } from "@/lib/focus";
+import { PRESS } from "@/lib/motion";
+import { cn } from "@/lib/utils";
 
 /**
- * The three things every list page here says the same way: that a read failed, a sentence where
- * a list would be, and "more, please".
+ * The four things every list page here says the same way: that a read failed, a sentence where
+ * a list would be, "more, please", and that more was refused.
  */
 
 /**
@@ -46,6 +49,10 @@ interface Paged {
  * backend refused is requested again on every scroll step down there. It is asked for again once
  * something else has put the list right: a refetch that succeeds clears the flag.
  *
+ * **The stop is the wall's, not the reader's.** {@link NextPageRefused} is the way past it: it
+ * says the page was refused at the end of the wall and asks again only when it is pressed, by
+ * calling `fetchNextPage` itself — this guard refuses on purpose, so it is not the way round it.
+ *
  * The three fields are read off the result rather than depended on whole: `useInfiniteQuery`
  * hands back a fresh proxy every render, and `fetchNextPage` is bound once per observer.
  */
@@ -54,4 +61,41 @@ export function useMore(query: Paged, hasMore: boolean): () => void {
   return useCallback(() => {
     if (hasMore && !isFetchingNextPage && !isFetchNextPageError) void fetchNextPage();
   }, [hasMore, isFetchingNextPage, isFetchNextPageError, fetchNextPage]);
+}
+
+/**
+ * What a wall says at its end when the next page was refused — and the one way to ask again.
+ *
+ * **Drawn at the end of the wall, inside its scroller**, through `CardWall`'s `footer`: the
+ * refusal is about the cards after the last one, so it is said where those cards would be, and a
+ * reader only meets it by scrolling to where more was expected. Nothing at all otherwise — a wall
+ * whose next page is on its way, or that has none, ends at its last row.
+ *
+ * **Not an alert**, for {@link ReadError}'s rule turned round: every card already on the wall is
+ * still good, and a refusal about the page after them is not news worth interrupting a screen
+ * reader for. `role="status"` makes it polite.
+ *
+ * **`Try again` calls `fetchNextPage` itself, never the wall's "more".** {@link useMore} refuses
+ * after a refused page — that is what keeps a scroll near the end from turning one refusal into a
+ * request per scroll step — so the press has to go round it. While the retry is in flight the
+ * query clears its error flag, so the line goes; a second refusal brings it back.
+ */
+export function NextPageRefused({ query }: { query: Paged }) {
+  if (!query.isFetchNextPageError) return null;
+  return (
+    <div role="status" className="flex items-center gap-3 pt-4 pb-1">
+      <p className="min-w-0 flex-1 text-sm text-dim">The next cards could not be read.</p>
+      <button
+        type="button"
+        onClick={() => void query.fetchNextPage()}
+        className={cn(
+          "h-11 shrink-0 rounded-md border border-border px-4 text-sm text-text",
+          PRESS,
+          FOCUS,
+        )}
+      >
+        Try again
+      </button>
+    </div>
+  );
 }

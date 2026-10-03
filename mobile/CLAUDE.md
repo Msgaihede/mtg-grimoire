@@ -198,6 +198,11 @@ failure behind each at its own site:
 - **The history marks live in `routes.ts`, both faces read them, and their promise is one
   sentence**: an entry marked `PUSHED` that carries a card has the same place without the card
   directly beneath it. Neither face may write a card onto a marked page.
+
+- **A step to another printing of the open card is a link that _replaces_** —
+  `linkTo(place, { replace: true })`. The sheet is one place however many printings the reader
+  steps through, so Back closes it from whichever printing they ended on; the replaced entry keeps
+  this router's mark, so the ✕ still leaves by a real Back. `CardSheet.test.tsx` holds it.
 - **`navigate` does nothing for the place the reader is already on, asked of the place and not of
   the string**: `/` is the start view without spelling it, and a press on the lit tab must not
   push `/search` over it.
@@ -259,8 +264,9 @@ failure behind each at its own site:
 - **Scanner and Settings are placeholders**: a sentence each, no camera and no permission asked.
 - **The Collection and Wishlist walls draw open shelves only** — the desktop hooks fetch the
   cards of the shelves the reader has left open, and the wall draws them as one run with no
-  heading, no fold and no way into a folder. Search is the box and the wall, with every other
-  filter still to come.
+  heading, no fold and no way into a folder. **Search has its filters** (`phone/search/
+  FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
+  and everything else in a sheet that is page state rather than a place in the URL.
 - **Nothing on the phone face writes.**
 - **No Android host, no WASM host, no service worker** — `public/light.webmanifest` is the whole
   of the PWA so far — **and no sync on a light install**: the phone face runs none and draws the

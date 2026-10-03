@@ -131,7 +131,7 @@ function hasUnsaved(client: QueryClient, key: QueryKey): boolean {
 const DECKS: readonly QueryKey[] = [["decks"]];
 
 /**
- * The card modal's **In your grimoire** figures — `CardDetailModal`'s file-private `HOLDINGS_KEY`,
+ * The card modal's **In your grimoire** figures — `HOLDINGS_KEY` in `features/card/cardKeys.ts`,
  * spelled rather than imported.
  *
  * **No mutation names it, and that is why it has to be named here.** The writing window refreshes
