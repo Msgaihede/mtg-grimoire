@@ -200,10 +200,8 @@ purpose; the phase that owns the surface owns the fix.
 
 - ~~**The Collection and Wishlist walls draw open shelves only.**~~ — **fixed 2026-10-03 for the
   collection in step 3.2** (§7.2): it is the cabinet, every shelf headed and every one openable,
-  a deck's group and `Recently removed` included. **The wishlist wall still draws open shelves
-  only**: the desktop hook fetches the shelves the reader has left open, and a deck's managed
-  wishlist folder starts shut. When every wish is on a shut shelf the page says so; it cannot open
-  one.
+  a deck's group and `Recently removed` included — **and for the wishlist in step 3.3** (§7.3),
+  a deck's managed wishlist folder included.
 - ~~After a refused next page a wall stops asking and says nothing~~ — **fixed 2026-10-03**: the
   wall ends on `The next cards could not be read.` and a `Try again` that calls `fetchNextPage`
   itself (`parts.tsx`'s `NextPageRefused`, through `CardWall`'s `footer`). It still stops asking
@@ -211,8 +209,9 @@ purpose; the phase that owns the surface owns the fix.
 - ~~When the whole-wall figure itself fails to load over an empty wall, the page draws
   nothing~~ — **fixed 2026-10-03**: the collection and the wishlist say the rest could not be
   counted, from `useCollection`'s new `figuresRefused` and `useWishlist`'s `countsQuery`.
-- A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
-  nothing.
+- ~~A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
+  nothing~~ — **fixed 2026-10-03 in step 3.3** (§7.3): a wish is drawn as the printing it is drawn
+  as (`artCardId`), and a tile with none is no control at all, on both walls (`WallTile`).
 - ~~Two rows of one printing get one accessible name~~ — **fixed 2026-10-03 in step 3.2**
   (§7.2): the phone folds them into one tile exactly as the desktop wall does
   (`collectionWall.ts`'s `collectionTiles`), so `Lightning Bolt, STA 105, Etched, 2 copies` is
@@ -1890,6 +1889,40 @@ own cards, laid out from the shelf counts so every heading is placed before its 
 
 Driven at 360 and 800 wide over `starter`: nothing scrolls sideways, at the root, inside `Binder`,
 with a deck's group opened, and with the sheet open.
+
+### 7.3 Step 3.3 — Wishlist (2026-10-03)
+
+**The wishlist is the collection's cabinet one table over**, on the same shelved wall and under the
+same line (`Search your wishlist`, `Filters`, the stated filters): Not sorted, the reader's folders,
+then **Managed by decks**. The figures band is the desktop's (`WishlistSummaryHeader`: Cards and
+`Total cost` with its unpriced count), counted from the shelf counts. One tile per wish, keyed by
+the wish, so a card wished for at the root and again in a folder is two tiles — and the chin says
+so: it is the desktop wall's caption, `wallPrinting` with the `elsewhere` mark beside it (three of
+`starter`'s five loose wishes wear it).
+
+- **A deck's managed wishlist is a read.** Its heading carries a `Deck` link to its deck (its
+  `Tokens` child, named for no deck, carries none); an empty one says
+  `managedEmptySentence` for the view the deck follows; standing inside one draws
+  `ManagedFolderNote` — whose way to the deck is now a real link when it is handed one, and a
+  button on the desktop as before. Nothing in it is editable here, which a read-only page keeps
+  true for nothing.
+- **A wish with no card is no control.** The tile's picture is `artCardId` — a pinned wish's own
+  printing, the newest for a wish for any printing, and nothing for a wish whose card the corpus
+  has lost — and `WallTile` gives a tile with no card no `onPress`, so `CardTile` draws it as a
+  plain box with the no-art frame naming the card. The `needsReview` seed's Orcish Bowmasters is
+  the case.
+- **The sheet offers the desktop bar's own cells** (`WISHLIST_TRAY`, moved beside `useWishlist`):
+  set, format, rarity, type, border and needs review — no price, finish or condition, because a wish
+  asks none of those questions. Folds are the page's own, as on the collection
+  (`useWishlist({ folds })`), and paging reads the hook's `hasMore`, held while a level arrives.
+- **What moved in `src/`**: `preferredFinishOf` and `wallPrinting` into `wish.ts` (out of
+  `WishlistGrid`); `subtotalsOf`, `FolderTotals` and `folderFigures` into `wishShelfPlan.ts` and
+  the figures band into `WishlistSummary.tsx` (out of the welded `WishlistPage`).
+- **Not tested on the phone**: a refused next page on the wishlist — no seed holds more than a
+  page of wishes; the footer is the collection's, wired the same way.
+
+Driven at 360 and 800 wide over `starter`: nothing scrolls sideways, at the root, inside the
+managed folder, and with the sheet open.
 
 ### 7.4 Step 3.4 — Decks, read (2026-10-03)
 

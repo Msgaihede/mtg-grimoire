@@ -4,6 +4,7 @@ import type { CardSummary, DeckCard, WishRow } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import type { WallItem } from "./CardWall";
+import { wishPrinting } from "./WishPrinting";
 
 /**
  * Each of the phone face's lists, turned into what the wall draws.
@@ -89,6 +90,14 @@ export function collectionItem(tile: CollectionTile, currency: Currency): WallIt
   };
 }
 
+/**
+ * A wish: one tile per wish, the desktop wall's grain and the counts' (`ShelfCount.tiles`).
+ *
+ * **The picture is the printing the wish is drawn as** (`artCardId`): a pinned wish's own, the
+ * newest printing for a wish for *any* printing, and nothing at all for a wish whose card the
+ * corpus has lost — the one row with no printing to show or to open, which the wall then draws as
+ * no control rather than as a press that does nothing.
+ */
 export function wishItem(row: WishRow, currency: Currency): WallItem {
   // A wish names a printing only when it has both halves; a wish for *any* printing has neither,
   // and is drawn as one particular printing whose set it must not claim.
@@ -97,12 +106,13 @@ export function wishItem(row: WishRow, currency: Currency): WallItem {
   const finish = marked(row.preferredFinish);
   return {
     key: String(row.id),
-    cardId: row.cardId ?? row.artCardId,
+    cardId: row.artCardId,
     name: row.name,
     rarity: row.rarity,
-    chin: pinned
-      ? { setCode: row.setCode as string, collectorNumber: row.collectorNumber as string }
-      : { printing: "Any printing", printingTitle: null },
+    // The desktop wall's caption — the printing, and the `elsewhere` mark beside it. No title:
+    // a wish carries no set name, and for a wish for any printing the name of the printing it is
+    // drawn as would contradict the words.
+    chin: { printing: wishPrinting(row), printingTitle: null },
     finish,
     money: formatPrice(row.unitPrice, currency),
     count: row.quantity,

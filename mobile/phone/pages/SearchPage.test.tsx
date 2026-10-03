@@ -218,15 +218,17 @@ describe("a figure that cannot be read over an empty wall", () => {
     expect(screen.queryByText("Nothing in your collection yet.")).toBeNull();
   });
 
-  it("is said on the wishlist, for the same reason", async () => {
+  it("is said on the wishlist, where the shelf counts are the figure", async () => {
     renderPhone(<PhoneFace />, { path: "/scanner" });
     for (const id of [1, 2, 3, 4, 5, 6, 7, 8]) await ipc.wishlistRemove(id);
     registerCommands({ wishlist_shelf_counts: refused() });
 
     await userEvent.click(tab("Wishlist"));
 
+    // The cabinet (step 3.3) is laid out from those counts, so without them it says so rather
+    // than drawing shelves it cannot size.
     expect(await screen.findByRole("alert", undefined, SETTLE)).toHaveTextContent(
-      /the rest of your wishlist could not be counted/,
+      "Your wishlist's shelves could not be read.",
     );
     expect(screen.queryByText("Nothing on your wishlist yet.")).toBeNull();
   });
