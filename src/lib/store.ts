@@ -6,12 +6,15 @@ import {
   stepZoom,
   type ZoomSection,
 } from "./cardZoom";
-import { CONDITION_NOT_SET, type Condition } from "./conditions";
 import type { Finish } from "./finish";
 import { applySelect, EMPTY_SELECTION, type Selection, type SelectModifiers } from "./multiSelect";
-import { defaultFields } from "@/features/transfer/fields";
-import type { TransferFieldId, TransferSurface } from "@/features/transfer/fields";
-import type { ExportFormat } from "@/features/transfer/formats";
+import {
+  INITIAL_EXPORT_PREFS,
+  INITIAL_IMPORT_DEFAULTS,
+  type ExportPrefs,
+  type ImportDefaults,
+} from "@/features/transfer/prefs";
+import type { TransferSurface } from "@/features/transfer/fields";
 import type { SweepScope } from "@/features/wishlist/wholeWishlistQuery";
 import type { DeckFinish, DeckVariant, PriceMoverWindow, ScannerTrayChoice } from "./ipc";
 
@@ -211,29 +214,10 @@ export const LIST_VIEW_FIELD = {
 } as const satisfies Record<ListSection, string>;
 
 /**
- * What one surface's export dialog opens holding — see {@link AppState.exportPrefs}, which is
- * where the per-surface argument and `arenaOnly`'s exemption from the format switch are made.
- *
- * Named and exported rather than written inline, because the export dialog's `setPrefs` calls
- * spread it: a fourth key added here must reach those call sites as a type error rather than as
- * a setting they silently drop on the next press.
+ * What one surface's export dialog opens holding. **Declared in `@/features/transfer/prefs`**, with
+ * the opening values both faces share, and re-exported here so no caller of this file changed.
  */
-export interface ExportPrefs {
-  format: ExportFormat;
-  fields: TransferFieldId[];
-  /** Leave out cards MTG Arena does not have. Read by the `arena` format alone. */
-  arenaOnly: boolean;
-  /**
-   * Write the piles the reader has switched off — issue #390. Read only on a surface that has
-   * piles (`SURFACE_HAS_PILES`) and only by the five formats that do not already answer the
-   * question for themselves (`export/format.ts`'s `dropsInactive`).
-   *
-   * **Named for what ticking it does rather than for what leaving it does**, unlike `arenaOnly`
-   * beside it, and the two therefore default off for opposite reasons — see the initial state,
-   * where the behaviour change this cost is written down.
-   */
-  includeInactive: boolean;
-}
+export type { ExportPrefs } from "@/features/transfer/prefs";
 
 interface AppState {
   /** Where the reader is. Starts at `"home"`, which is the page this app opens on — see the
@@ -1064,8 +1048,8 @@ interface AppState {
    * next re-reads the same answer rather than asking again. `NONE` matches Rust's
    * `DEFAULT_CONDITION`.
    */
-  importDefaults: { condition: Condition; finish: DeckFinish };
-  setImportDefaults: (defaults: { condition: Condition; finish: DeckFinish }) => void;
+  importDefaults: ImportDefaults;
+  setImportDefaults: (defaults: ImportDefaults) => void;
 }
 
 /**
@@ -1712,53 +1696,12 @@ export const useAppStore = create<AppState>((set) => ({
         paneReturns: rest.length === 0 ? EMPTY_RETURNS : rest,
       };
     }),
-  // A collection opens on CSV because that is the only format that can carry a condition, and a
-  // collection without conditions is a card list rather than a record of what the reader owns.
-  // `arenaOnly` opens **off** everywhere: the Arena export has written every card handed to it
-  // since it shipped, and a filter that starts on would quietly change what an existing reader's
-  // next export contains. The dialog's own count line is how they find the box.
-  //
-  // **`includeInactive` opens off too, and that argument is spent on the other side** — issue
-  // #390 is a reader reporting the maybeboard turning up in a deck they exported, so leaving it
-  // on by default would ship the fix with the bug still in it. It is worth naming what that
-  // costs: the five formats that wrote a switched-off pile before this shipped — plain,
-  // Moxfield, Archidekt, TCGplayer, CSV — stop writing one unless the reader ticks the box, so an
-  // existing reader's next deck export **does** change. The dialog's own count line is how they
-  // find the box, and Arena and MTGO are untouched because `dropsInactive` already answers for
-  // them. `false` on the two pile-less surfaces is the value `SURFACE_HAS_PILES` makes
-  // unreachable rather than a decision about them.
-  exportPrefs: {
-    deck: {
-      format: "plain",
-      fields: defaultFields("plain", "deck"),
-      arenaOnly: false,
-      includeInactive: false,
-    },
-    collection: {
-      format: "csv",
-      fields: defaultFields("csv", "collection"),
-      arenaOnly: false,
-      includeInactive: false,
-    },
-    wishlist: {
-      format: "plain",
-      fields: defaultFields("plain", "wishlist"),
-      arenaOnly: false,
-      includeInactive: false,
-    },
-  },
+  // The opening values, and the argument for each, are `@/features/transfer/prefs`'s — the
+  // phone face holds the same answers without this store and opens on the same ones.
+  exportPrefs: INITIAL_EXPORT_PREFS,
   setExportPrefs: (surface, prefs) =>
     set((s) => ({ exportPrefs: { ...s.exportPrefs, [surface]: prefs } })),
-  // The condition opens on the sentinel since schema v35: an import line that says nothing about
-  // a grade records that it said nothing, rather than the app writing the best grade on the scale
-  // on the reader's behalf.
-  //
-  // **Nothing converts a value already in hand, and today there is none to convert** — this pair
-  // is in-memory session state with no `app_meta` row and no persist middleware behind it, so
-  // this literal is what every launch opens on. If it is ever given a stored home, the migration
-  // to write is *none*: a reader whose stored answer is `NM` either chose it or lived with it,
-  // and silently changing what their next import records is worse than the inconsistency it
-  // would tidy away.
-  importDefaults: { condition: CONDITION_NOT_SET, finish: null },
+  // `@/features/transfer/prefs` again: the sentinel condition, and why nothing converts it.
+  importDefaults: INITIAL_IMPORT_DEFAULTS,
   setImportDefaults: (importDefaults) => set({ importDefaults }),
 }));

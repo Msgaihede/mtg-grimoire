@@ -55,7 +55,7 @@ measured, one subsection per step).
 - [x] **3.2 — Collection** (#791, merged 2026-10-03). The cabinet: folders and shelves as headed groups, every shelf
   openable (deck groups and `Recently removed` included), the collection's figures, filters
   through the same sheet over `useCollection`. Two rows of one printing get two names.
-- [x] **3.3 — Wishlist.** The cabinet and its folders, the managed wishlist as a read, the
+- [x] **3.3 — Wishlist** (#792, merged 2026-10-03). The cabinet and its folders, the managed wishlist as a read, the
   `elsewhere` mark; a wish with no card to open is not a button that does nothing.
 - [x] **3.4 — Decks, read** (#787, merged 2026-10-03). The gallery with covers and folders; the deck page as one column —
   the commander first, then each stack (category) one above another with its count and its cards,
@@ -65,9 +65,12 @@ measured, one subsection per step).
   edits in the collection and the wishlist; add to a deck, the collection or the wishlist from the
   card sheet; deck notes and to-do lists edited. Each through the command the desktop already
   calls, with the desktop's undo where it has one.
-- [ ] **3.6 — Import and export on the phone face.** The collection's and a deck's, through the
+- [x] **3.6 — Import and export on the phone face.** The collection's and a deck's, through the
   existing parsers and writers; a file arrives through `<input type=file>` and leaves as a
-  download, which the host seams answer on each install.
+  download, which the host seams answer on each install. Built on `phase3/transfer`
+  (light-app.md §7.6): a deck's from its page's foot, the collection's as `CollectionTransfer`
+  in the collection's figures band; the file seam is `phone/transfer/browserFiles.ts`, a stand-in until
+  phases 4 and 5.
 - [x] **3.7 — Light Settings, on both faces** (#788, merged 2026-10-03). The edition grows its Settings entries (spec §3.1:
   `SettingsPage`'s entry list is the edition's second reader): sync and pairing, the supporter
   block, card data and the optional feeds, the image cache, marketplace, the danger zone.

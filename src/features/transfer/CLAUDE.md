@@ -41,6 +41,31 @@ and `ExportDialog` call it and know nothing about how a file is picked or writte
   `LEGACY_ENCODING_NOTICE` under the text box for `windows-1252`, because a file in some *other*
   legacy code page reads as mojibake under that guess and the reader is the only one who can tell.
 
+## Two faces — the decisions are store-free, the desktop's memory is not
+
+**The light app's phone face imports and exports through this directory too** (2026-10-03, step
+3.6 — [light-app.md](../../../docs/reference/light-app.md) §7.6), and it may not reach the app
+store (`mobile/phone/fence.test.ts`). So every *decision* here is store-free and the store is
+read only by thin desktop wrappers that keep the old names:
+
+- **`prefs.ts`** holds `ExportPrefs`, `ImportDefaults` and their opening values. `useAppStore`
+  opens on them and so does the phone's own store; a change to what a first export looks like is
+  one edit here, not two.
+- **`export/useExportModel.ts`** is everything `ExportDialog` decides — the field intersection, the
+  two row filters and their order, the text, the three count lines — with the prefs passed in.
+  The dialog draws it; so does the phone's export sheet.
+- **`import/useImportSource.ts`** is the first step's state — the paste, a file's encoding note,
+  the parse, the one resolve press, the step machine — for `ImportDialog` and the phone's sheet;
+  how a file is *picked* is each shell's.
+- **`CollectionPreviewBody` and `DeckPreviewBody`** take the import's fallbacks as props;
+  `CollectionPreview` and `DeckPreview` are the desktop's wrappers reading `importDefaults`, and
+  `deckIntoWith.ts` binds the deck descriptor to either. `WishlistPreview` and `NewDeckPreview`
+  still read the store directly — split them the same way when the phone needs them.
+
+**A new decision goes in the store-free module, never in a wrapper**, or the phone face draws a
+file the desktop would not. `files.ts` below stays the desktop's: the phone's file handles are
+the browser's (`mobile/phone/transfer/browserFiles.ts`) until a host seam exists.
+
 ## Import
 
 `import/` is `parse.ts` (text → lines), `destinations/deck.ts` (lines + the printings Rust
