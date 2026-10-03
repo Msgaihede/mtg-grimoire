@@ -664,6 +664,11 @@ enum Outcome {
     Deferred(Why),
 }
 
+/// The [`Why::Unbuildable`] a group carrying a claim gives when its row was merged here into
+/// another one ([`emission::retire`]) — by a grain hit or a re-homing earlier in the same page —
+/// and it would otherwise be built again beside the survivor (design 2026-10-03 §6).
+const MERGED_AWAY: &str = "its row was merged into another here, and a claim never builds it again";
+
 /// Why a group could not be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Why {
@@ -2048,6 +2053,32 @@ fn write_group<'a>(
             .map_err(|e| e.to_string())?;
         report.applied += g.ops.len();
         return Ok(Outcome::Written);
+    }
+
+    // **A claim never builds a row this device merged into another** (design 2026-10-03 §6),
+    // asked here as well as in `claims::decide`, and at the moment the row would be built.
+    // `decide` reads the mark before the page, so a merge EARLIER IN THIS PAGE — a twin's group
+    // sorting first and renaming the row away (`adopt_uid`), or a re-homing folding it — writes
+    // the mark too late for it. With a gap open, or a resumed emission, `decide` then sends the
+    // claim to the fold as the floor of a row it saw here; the group finds no row by grain or by
+    // uid, and would build the merged-away uid beside the survivor, counting its copies twice.
+    // Refused instead, inside the group's savepoint: dropped and recorded, which `settle` records
+    // as the claim passed, and the drop opens the gap.
+    //
+    // **The group's other ops go with it.** Its covered puts are sparse in practice — an edit of
+    // the row on its emitter — and `main` drops those too, for finding no row. A *full* insert
+    // put in such a group would be dropped here where `main` might build it, but no well-formed
+    // page reaches that: only a row's creator sends its insert, once, and this device held the row
+    // before the page, so a re-sent insert is below the creator's watermark and never reaches a
+    // group.
+    if existing.uid.is_none() && g.ops.iter().any(|op| claims::claim(op).is_some()) {
+        let merged = emission::retired(conn, meta.table, &g.ops[0].uid);
+        if !matches!(merged, Ok(false)) {
+            rollback()?;
+            return Ok(Outcome::Deferred(Why::Unbuildable(
+                merged.map_or_else(|e| e.to_string(), |_| MERGED_AWAY.to_owned()),
+            )));
+        }
     }
 
     let written = match &existing.uid {

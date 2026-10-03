@@ -203,7 +203,7 @@ since", asked of the generation, never of a stamp.
 | **here, under the claim's uid** | **op path**: applied as the delta it is, at its own stamp | **passed — writes nothing**, unless the emission `resumed` or this device has an open gap (§7), when it is a **floor** over the op path: `max(local + Σ deltas, claim)` |
 | not here under its uid, and **this device's own `sync_ops` names it** (it held and deleted it) | **op path** — the tombstone face | **builds** the row: `insert_row`'s `max(Σ deltas, claim)`, existence decided by add-wins at the puts' own stamps |
 | not here under its uid, **a grain twin under another uid** | **dropped**: the claim carries it, and the two rows are independent — §8's `max`, never a sum | **merges** by `max`, adopting `min(uid)` as today |
-| not here under its uid, **merged here into another row, in either direction** (`retired@`) | **op path** — main's rules, where it finds no row | **passed — never builds, never floors** |
+| **merged here into another row, in either direction** (`retired@`) — whether or not a row wears the uid again | **op path** — main's rules, where it finds no row | **passed — never builds, never floors** |
 | **not here at all**, never held | **dropped**: the claim carries it | **builds** — §8.2's accepted under-count, unchanged |
 
 **Why a row merged here into another is passed** (amended 2026-10-03, Task 8b and the ruling on
@@ -221,8 +221,19 @@ active claim for a's uid — a later emission, or the page handed back across th
 regrade opened — built it at LP 3 beside the survivor, **6 on b against a's 4**. With e's twin
 under the higher uid instead, b absorbed e's uid into a's row, a's regrade landed on it at LP 4, and
 e's next emission built e's uid at NM 1 beside it, **5 on b against a's 4**. The mark is asked
-ahead of the held-row arm, and no gap clears it: it is a fact about this device's rows, not about a
-log.
+ahead of the held-row arm, so the row holds whether or not a row wears the uid again — an older
+emitter's baseline, judged by `main`'s rules, can rebuild it — and no gap clears it: it is a fact
+about this device's rows, not about a log.
+
+**And it is asked again where a claim would build** (Task 8b, fix round 1). `decide` reads the mark
+before the page, so a merge *earlier in the same page* writes it too late: with a gap open, or a
+resumed emission, the claim goes to the fold as the floor of a row still here when it was decided,
+a twin's group sorting first renames the row away, and the claim's own group then finds no row by
+grain or by uid — and built the merged-away uid beside the survivor, **6 on b against a's 4** with
+#19's page under a gap. So the write path asks the mark itself, inside the group's savepoint, at the
+moment a group carrying a claim would build: the group is dropped and recorded as a row merged into
+another, its claim records as passed, and the drop opens the gap. The group's covered puts are
+sparse in practice and `main` drops them too, for finding no row.
 
 **And one rule across every row: a covered put is skipped when the page carries a claim for its row,
 from an emission whose horizon covers it, that has already *written* the row.** That is a re-delivery
@@ -359,7 +370,9 @@ an upgraded emitter behaves as today.
 - **A grain rename that races a regrade keeps `main`'s under-count.** A third device's twin, stamped
   below the regrade, renames the row here to its own lower uid; the regrade then finds its uid gone
   and is dropped, and the claim for the merged-away uid is passed for good (§6's `retired@` row) —
-  so the emitter holds the regrade and this device never does. Under, never over.
+  so the emitter holds the regrade and this device never does. Under, never over. The mark outlives
+  its survivor: a survivor deleted later still passes claims for the retired uid, an under-count
+  only.
 - **A first pairing between overlapping collections passes the emitter's claims for a twin this
   device absorbed.** Where this device's twin wears the lower uid, the emitter's uid is retired here
   on the first meeting, so the emitter's later claims naming it — until it hears the lower uid and

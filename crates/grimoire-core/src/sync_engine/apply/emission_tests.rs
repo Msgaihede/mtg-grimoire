@@ -2371,12 +2371,40 @@ fn a_later_emission_never_builds_a_row_a_grain_rename_merged_away() {
     apply(&b, &page).unwrap();
     assert_eq!((qty(&b), copies(&a, "bolt")), ((1, 3), 4), "#19's answer");
 
-    apply(&b, &whole(&a, "dev-a")).unwrap();
+    let later = whole(&a, "dev-a");
+    apply(&b, &later).unwrap();
     assert_eq!(
         qty(&b),
         (1, 3),
         "a later emission built the row b merged into e's, beside the survivor"
     );
+    // Not vacuous: the later emission was active on b, and its claim for `U_a` was decided there
+    // and passed — an inert emission keeps no record of its own and decides no claim.
+    let u_a = merged_away_uid(&a);
+    let em = later
+        .iter()
+        .find(|o| o.uid == u_a)
+        .and_then(|o| o.emission.clone())
+        .unwrap();
+    let record = emission::records(&b, "dev-a")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == em.id)
+        .expect("the later emission was not active on b");
+    assert!(
+        record.passed.contains(em.i) && !record.wrote.contains(em.i),
+        "the claim for the merged-away row was not decided as passed: {record:?}"
+    );
+}
+
+/// a's `U_a`, the one row a holds at LP — the uid #19 merges away on b.
+fn merged_away_uid(a: &Connection) -> String {
+    a.query_row(
+        "SELECT sync_uid FROM collection_entries WHERE condition = 'LP'",
+        [],
+        |r| r.get(0),
+    )
+    .unwrap()
 }
 
 /// Ledger ruling (Task 8b): the same page handed back. The drop of a's regrade opened the gap,
@@ -2507,5 +2535,123 @@ fn a_later_claim_never_builds_a_uid_this_device_absorbed() {
         (copies(&b, "bolt"), copies(&a, "bolt")),
         (4, 4),
         "e's claim built the uid b absorbed into a's row, beside it"
+    );
+}
+
+/// Task 8b fix round 1 (I1): the merge and the claim in ONE page. `decide` reads `retired@` before
+/// the page, when `U_a` is still here, and with a gap open the claim goes to the fold as the floor.
+/// e's twin's group sorts first and renames `U_a` away, writing the mark too late for `decide`;
+/// `U_a`'s own group — the claim and a's regrade — then meets no LP twin and no row by its uid,
+/// and built `U_a` at LP 3 beside the survivor: 6 on b against a's 4. The write path asks the mark
+/// itself, at the moment it would build, and builds nothing: dropped and recorded, `main`'s answer.
+#[test]
+fn a_claim_floored_on_a_row_merged_away_in_the_same_page_builds_nothing() {
+    let (a, b, page) = renamed_in_one_page();
+    let u_a = merged_away_uid(&a);
+    emission::open_gap(&b).unwrap();
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(
+        (qty(&b), copies(&a, "bolt")),
+        ((1, 3), 4),
+        "the claim built the row a rename merged away earlier in its own page: {report:?}"
+    );
+    let skipped: Vec<String> = skips(&b)
+        .into_iter()
+        .filter_map(|(_, _, _, detail, _)| detail)
+        .filter(|d| d.contains(&u_a))
+        .collect();
+    assert_eq!(
+        skipped,
+        vec![format!("uid {u_a} · {}", super::MERGED_AWAY)],
+        "the group was not recorded as merged away"
+    );
+    // The refused claim wrote nothing. `settle` recorded it passed, and the drop then opened the
+    // gap, which clears every record's passed set (§7) — so the page handed back decides it again,
+    // and `decide` now finds the mark and passes it.
+    let em = page
+        .iter()
+        .find(|o| o.uid == u_a && o.baseline)
+        .and_then(|o| o.emission.clone())
+        .unwrap();
+    let record = |conn: &Connection| {
+        emission::records(conn, "dev-a")
+            .unwrap()
+            .into_iter()
+            .find(|r| r.id == em.id)
+            .expect("a's emission left no record on b")
+    };
+    assert!(
+        !record(&b).wrote.contains(em.i),
+        "the refused claim was recorded as written: {:?}",
+        record(&b)
+    );
+    apply(&b, &page).unwrap();
+    assert_eq!(
+        (qty(&b), record(&b).passed.contains(em.i)),
+        ((1, 3), true),
+        "the page handed back built the row, or did not pass its claim: {:?}",
+        record(&b)
+    );
+}
+
+/// Task 8b fix round 1 (m2): §6's merged-away row is asked ahead of the held-row arm, so it holds
+/// whether or not a row wears the uid again. After #19, an older build's re-baseline from a — no
+/// emission reference, so `main`'s rules — rebuilds `U_a` on b: its grain, LP, meets no twin, and
+/// a note a second later stamps it above b's watermark for a. b then holds `U_a` at 1, and with a
+/// gap open a's next emission arrives: its claim for `U_a` is passed, where the held-row arm alone
+/// would floor the row back to 3.
+#[test]
+fn a_retired_uid_a_row_wears_again_is_still_passed_under_a_gap() {
+    let (a, b, page) = renamed_in_one_page();
+    apply(&b, &page).unwrap();
+    let u_a = merged_away_uid(&a);
+    a.execute(
+        "UPDATE collection_entries SET notes = 'sleeved', updated_at = ?1 WHERE sync_uid = ?2",
+        rusqlite::params![SECOND + 10, u_a],
+    )
+    .unwrap();
+    let mut older_build = whole(&a, "dev-a");
+    for op in &mut older_build {
+        op.emission = None;
+    }
+    apply(&b, &older_build).unwrap();
+    let worn: i64 = b
+        .query_row(
+            "SELECT count(*) FROM collection_entries WHERE sync_uid = ?1",
+            [&u_a],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(worn, 1, "no row wears the merged-away uid again");
+
+    b.execute(
+        "UPDATE collection_entries SET quantity = 1 WHERE sync_uid = ?1",
+        [&u_a],
+    )
+    .unwrap();
+    emission::open_gap(&b).unwrap();
+    let later = whole(&a, "dev-a");
+    apply(&b, &later).unwrap();
+    let held: i64 = b
+        .query_row(
+            "SELECT quantity FROM collection_entries WHERE sync_uid = ?1",
+            [&u_a],
+            |r| r.get(0),
+        )
+        .unwrap();
+    let em = later
+        .iter()
+        .find(|o| o.uid == u_a)
+        .and_then(|o| o.emission.clone())
+        .unwrap();
+    let record = emission::records(&b, "dev-a")
+        .unwrap()
+        .into_iter()
+        .find(|r| r.id == em.id)
+        .expect("a's later emission was not active on b");
+    assert_eq!(
+        (held, record.passed.contains(em.i)),
+        (1, true),
+        "the claim for a retired uid a row wears again was floored under the gap: {record:?}"
     );
 }

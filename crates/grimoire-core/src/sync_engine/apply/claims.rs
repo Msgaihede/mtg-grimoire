@@ -156,7 +156,9 @@ pub(super) fn decide(
             continue;
         }
         // §6: a row this device merged into another lives in the survivor, so building it again
-        // would count its copies twice. Passed — never built and never floored, resumed or gap.
+        // would count its copies twice. Passed — never built and never floored, resumed or gap,
+        // and whether or not a row wears the uid again. A merge earlier in this same page writes
+        // the mark too late for this read; `write_group` asks it again where it would build.
         if retired(conn, &op.table, &op.uid)? {
             out.skip.insert(i);
             out.passed.push((key, em.i));
