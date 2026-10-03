@@ -36,7 +36,7 @@ import { wishlistDestination } from "@/features/transfer/import/destinations/Wis
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import type { SearchCardDrag } from "@/features/search/searchCardDrag";
-import { FilterBar, StatedFiltersLine, type FilterLabels, type TrayCell } from "@/features/search/FilterBar";
+import { FilterBar, StatedFiltersLine, type FilterLabels } from "@/features/search/FilterBar";
 import { FilterQuickBar } from "@/features/search/FilterQuickBar";
 import { plural } from "@/lib/counts";
 import { useDragRecord } from "@/lib/dndTarget";
@@ -81,7 +81,7 @@ import { WishlistSearchPanel } from "./WishlistSearchPanel";
 import { WishlistGrid, type WishShelves } from "./WishlistGrid";
 import { WishlistTable, type WishTableBands } from "./WishlistTable";
 import { OptimizeWishlistDialog } from "./OptimizeWishlistDialog";
-import { useWishlist, type Wishlist } from "./useWishlist";
+import { useWishlist, WISHLIST_TRAY, type Wishlist } from "./useWishlist";
 import { useWishlistFolders } from "./useWishlistFolders";
 import { useWishlistOptimize } from "./useWishlistOptimize";
 import { wholeWishlistQuery, type SweepScope } from "./wholeWishlistQuery";
@@ -290,35 +290,6 @@ function wishTarget(row: WishRow, cardId: string): CardMenuTarget {
  */
 const WISHLIST_LABELS: FilterLabels = { idStem: "wishlist", search: "Search your wishlist" };
 
-/**
- * Which of `FilterBar`'s tray cells this page offers, in the order it draws them.
- *
- * The card search's printing cells, `border` among them (issue #573 — a wish is for a printing,
- * and the printing has a frame), then `needsReview`, which only a list the reconciler walks can
- * ask. **No `finish` cell**, although the collection's tray has one: a wish carries the finish
- * the reader *prefers*, which is neither the card search's question (what the printing was
- * published in) nor the collection's (what a copy is), and a cell drawn here would be read as one
- * of those two while filtering by the third. **No `price` cell**, and
- * that is the one absence here that is a fact about the wire rather than about the screen:
- * `WishlistQuery` carries no `priceMin`/`priceMax`, so the band would be a control whose numbers
- * reach nothing — which is why those three fields are the optional half of `FilterSurface`.
- *
- * **`needsReview` is drawn unconditionally**, where the chip it replaces appeared only once the
- * reconciler had flagged something. That rule was about a *row*, where a control spending its
- * whole life saying nothing is a control the reader learns to stop reading; in a shut tray it
- * costs nothing, and a cell that came and went would be the one thing in this list that moved.
- */
-// `fulfilled` sat between `rarity` and `needsReview` until 2026-09-08 — the Fulfilled / Still
-// missing pair, which asked the backend which wishes the collection already covered. It went with
-// every other comparison this list made against the binder.
-const WISHLIST_TRAY: readonly TrayCell[] = [
-  "set",
-  "format",
-  "rarity",
-  "type",
-  "border",
-  "needsReview",
-];
 
 export function WishlistPage() {
   // The To review widget's needs-review hand-off — `useReviewHandoff` has the whole rule.

@@ -20,6 +20,7 @@ import {
   type ColorFilter,
   type ColorKey,
 } from "@/features/search/useCardSearch";
+import type { TrayCell } from "@/features/search/filterOptions";
 import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import type { Border } from "@/lib/border";
 import {
@@ -176,6 +177,38 @@ export function activeFilterCount(f: WishlistFilterState): number {
     f.needsReview !== undefined,
   ].filter(Boolean).length;
 }
+
+/**
+ * Which of `FilterBar`'s tray cells the wishlist offers, in the order it draws them — on the
+ * desktop's bar and the light app's phone sheet alike, which is why it lives beside the hook that
+ * owns every one of them rather than in either page (moved here 2026-10-03).
+ *
+ * The card search's printing cells, `border` among them (issue #573 — a wish is for a printing,
+ * and the printing has a frame), then `needsReview`, which only a list the reconciler walks can
+ * ask. **No `finish` cell**, although the collection's tray has one: a wish carries the finish
+ * the reader *prefers*, which is neither the card search's question (what the printing was
+ * published in) nor the collection's (what a copy is), and a cell drawn here would be read as one
+ * of those two while filtering by the third. **No `price` cell**, and
+ * that is the one absence here that is a fact about the wire rather than about the screen:
+ * `WishlistQuery` carries no `priceMin`/`priceMax`, so the band would be a control whose numbers
+ * reach nothing — which is why those three fields are the optional half of `FilterSurface`.
+ *
+ * **`needsReview` is drawn unconditionally**, where the chip it replaces appeared only once the
+ * reconciler had flagged something. That rule was about a *row*, where a control spending its
+ * whole life saying nothing is a control the reader learns to stop reading; in a shut tray it
+ * costs nothing, and a cell that came and went would be the one thing in this list that moved.
+ */
+// `fulfilled` sat between `rarity` and `needsReview` until 2026-09-08 — the Fulfilled / Still
+// missing pair, which asked the backend which wishes the collection already covered. It went with
+// every other comparison this list made against the binder.
+export const WISHLIST_TRAY: readonly TrayCell[] = [
+  "set",
+  "format",
+  "rarity",
+  "type",
+  "border",
+  "needsReview",
+];
 
 /**
  * Filter state, the debounce, and the paged query behind the wishlist view.
