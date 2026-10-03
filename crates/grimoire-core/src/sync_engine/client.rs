@@ -427,6 +427,12 @@ const QUOTA: &str = "quota";
 pub enum Deferral {
     /// 413 `too_large`. Unreachable while [`wire::batches`] cuts under the cap and [`push`] sets
     /// aside the one op no cut can save — the two sides disagreeing about a size.
+    ///
+    /// ⚠️ **If it is reached, it now costs every later baseline as well** (the baseline claim
+    /// design of 2026-10-03, §5): the refused batch is one this device measured as fitting, so
+    /// it is offered again and refused again on every trip, its ops stay pending for good, and
+    /// [`emit_baselines`] begins nothing while anything is pending — where before it emitted
+    /// behind the refusal.
     TooLarge,
     /// 507 `quota`: the group's stored log is full.
     Quota,
@@ -462,7 +468,8 @@ impl Deferral {
     /// **Every deferral now holds a baseline back in any case**, through [`emit_baselines`]' own
     /// rule: a deferred push leaves its refused ops pending, and no baseline is begun while
     /// anything is pending (the baseline claim design of 2026-10-03, §5). This is the cheaper
-    /// question for the two it names — asked here, the trip spends no stretch on it.
+    /// question for the two it names — asked here, the trip spends no stretch on it. For a
+    /// `too_large` that cost lasts for good ([`Deferral::TooLarge`]).
     fn stops_baselines(self) -> bool {
         matches!(self, Deferral::ClockAhead | Deferral::Quota)
     }
@@ -2289,7 +2296,10 @@ pub async fn pull(
         report.held_newer += held_behind;
         // The held-back ops only. A fresh op `apply` holds with them — another op in a held-back
         // op's group, such as an earlier one of the same sender on that row, or collateral behind
-        // its block — is counted in no class, here or in `apply`.
+        // its block — is counted in no class, here or in `apply`. **The cursor decision below is
+        // unaffected**: `held_back` is non-empty only when `held_clock > 0` or `unread_newer` (a
+        // `held_behind` op sits behind a batch `unparsed` names), and either one holds the page
+        // as `"clock"` or `"newer"` before `held_waiting` is ever asked.
         report.deferred += held_behind + held_clock;
         if stepped_over > 0 {
             // An envelope stepped over is an op this device will never apply (design §7).
@@ -2616,18 +2626,23 @@ async fn emit_baselines(
         // for its sake would offer this peer the same unsendable row, and the whole baseline
         // around it, on every sync for good. The row stays on this device; the sentence says the
         // peer goes without it.
+        //
+        // Probed in place rather than on a clone: `baseline::build` leaves both fields `None` on
+        // every op, so putting them back to `None` leaves the op exactly as it was read.
         let mut sendable: Vec<Op> = Vec::with_capacity(ops.len());
-        for op in ops {
-            let mut probe = op.clone();
-            probe.horizon = Some(horizon.clone());
-            probe.emission = Some(Emission {
+        for mut op in ops {
+            op.horizon = Some(horizon.clone());
+            op.emission = Some(Emission {
                 id: begun.id,
                 i: u32::MAX,
                 n: Some(u32::MAX),
                 since: Some(begun.since),
                 resumed: begun.resumed,
             });
-            if wire::oversized(std::slice::from_ref(&probe)) {
+            let oversized = wire::oversized(std::slice::from_ref(&op));
+            op.horizon = None;
+            op.emission = None;
+            if oversized {
                 say(
                     db,
                     "push",
