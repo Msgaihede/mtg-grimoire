@@ -158,8 +158,11 @@ A claim that carries an `emission` reference is, in `apply_in`:
   ahead of it, which is the third review's 6-for-3 closed at its root. (A batch only a newer build can
   parse has no ops to pass; §6's containment rule and §8's horizon cover it.)
 - **taken** when every index of one emission is consumed: `taken@<device id>` becomes that
-  emission's `since`, and every in-flight record of that emitter whose `since` is at or below it is
-  dropped. A newer emission completing supersedes an older one left half-sent.
+  emission's `since`, every other record of that emitter whose `since` is at or below it is
+  dropped, and its own record is kept. A page handed back after the emission completed still
+  carries the covered puts its claims carried; the first delivery dropped them and no watermark
+  rose, so that record's `wrote` set is the only evidence they are inside rows here. A newer
+  emission completing supersedes an older one left half-sent.
 
 **No baseline is begun while anything is pending.** 6a already refuses one while an op written since
 the trip read its outbox is pending; this widens it to every pending op, whatever left it there. A
@@ -177,7 +180,7 @@ because one page can hold an emission from before an emitter's rejoin and one fr
 | The emitter's generation, as this device holds it | The emission is |
 | --- | --- |
 | no `taken@` mark, or `since` above it | **active** |
-| `since` at or below the mark | **inert**: every claim skipped as seen with no database work; its horizon left out of the page's union, so it drops no put; its indices not tracked |
+| `since` at or below the mark | **inert**: every claim skipped as seen with no database work; its horizon left out of the page's union, so it drops no put; its indices not tracked — except that a completed emission whose record this device kept (§5) still serves containment: a covered put of a page handed back after it completed is skipped where the page's claim for its row wrote the row, and is otherwise left to the older rules |
 
 **Why inert is exact.** A taken generation means this device consumed one whole emission of it and
 has read every op the emitter logged since — §7 clears the mark the moment that stops being true.

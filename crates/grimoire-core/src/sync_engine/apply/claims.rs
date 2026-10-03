@@ -12,9 +12,10 @@
 //! rest, and the op is judged exactly as `main` judges it — never as a claim, and never as the
 //! head of an emission.
 
+use super::meta_of;
 use super::{Class, Deferral};
 use crate::sync_engine::emission::{self, Record, Stamp};
-use crate::sync_engine::merge::{Emission, Horizon, Op};
+use crate::sync_engine::merge::{Emission, Horizon, Kind, Op};
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -29,6 +30,9 @@ struct InPage {
     horizon: Horizon,
     /// `Some` while the emission is active: the ledger's record of it, or a fresh one.
     record: Option<Record>,
+    /// `Some` while it is inert and is the very emission this device completed: the record `take`
+    /// kept (§5), read for containment and nothing else.
+    done: Option<Record>,
 }
 
 /// What [`decide`] settled before any group is formed.
@@ -58,20 +62,32 @@ fn claim(op: &Op) -> Option<&Emission> {
     op.emission.as_ref().filter(|_| op.baseline)
 }
 
-/// Decide a page's claims (spec §5, §6, §10).
+/// Decide a page's claims, and the puts their horizons cover (spec §5, §6, §10).
 ///
 /// An emission named at or below the upgrade cut, and a claim whose chunk head is not in the page
 /// — `n` and `since` absent on every op of its emission — are marked to be stripped: the caller
 /// takes their reference off and `main`'s rules judge them as ops with none. So is this device's
 /// own emission when the relay hands it back, which `main` drops as its own, and a reference an
 /// ordinary op carries, which no well-formed peer sends.
+///
+/// **Then §6's row table.** An inert emission's claims are skipped as seen. An active claim is
+/// skipped — *passed* — on a row held here under its uid, unless the emission resumed or this
+/// device has a gap, when it goes to the fold as the floor; elsewhere it goes to the fold to build
+/// or merge. A put an active emission's horizon covers takes the op path where its row is held
+/// here or this device's own log names it (the tombstone face), and is dropped as carried by the
+/// claim where it is not.
+///
+/// **Containment, across every row:** a covered put is skipped when the page carries its row's
+/// claim, from an emission covering it, that has already *written* the row — read from the
+/// active emission's record, or, for a page handed back after the emission completed, from the
+/// record `take` kept. An inert emission serves containment and nothing else: a covered put it
+/// cannot prove written is left to the older rules, because an inert emission drops nothing.
 pub(super) fn decide(
     conn: &Connection,
     ops: &[Op],
     me: Option<&str>,
     seen: &dyn Fn(&Op) -> bool,
 ) -> Result<Decided, String> {
-    let _ = seen; // read by Task 5's covered-put arm
     let mut out = Decided::default();
     let cut = emission::cut(conn).map_err(sql)?;
     for op in ops {
@@ -92,6 +108,7 @@ pub(super) fn decide(
                 resumed: em.resumed,
                 horizon: h.clone(),
                 record: None,
+                done: None,
             });
     }
     for (i, op) in ops.iter().enumerate() {
@@ -105,15 +122,19 @@ pub(super) fn decide(
     // Active or inert, against the marks as they stood before the page (§6).
     for ((emitter, id), page) in out.emissions.iter_mut() {
         let taken = emission::taken(conn, emitter).map_err(sql)?;
+        let held = emission::records(conn, emitter)
+            .map_err(sql)?
+            .into_iter()
+            .find(|r| r.id == *id);
         if taken.is_none_or(|t| page.since > t) {
-            let held = emission::records(conn, emitter)
-                .map_err(sql)?
-                .into_iter()
-                .find(|r| r.id == *id);
             page.record =
                 Some(held.unwrap_or_else(|| Record::new(*id, page.n, page.since, page.resumed)));
+        } else {
+            // Inert. The very emission this device completed keeps its record for containment.
+            page.done = held.filter(Record::complete);
         }
     }
+    let gap = emission::gap_open(conn).map_err(sql)?;
     for (i, op) in ops.iter().enumerate() {
         let Some(em) = claim(op) else {
             continue;
@@ -130,8 +151,59 @@ pub(super) fn decide(
             out.skip.insert(i);
             continue;
         }
-        out.keep.insert(i);
-        out.kept.push((key, em.i, op.table.clone(), op.uid.clone()));
+        // §6: on a row held here under its uid the log brings everything, so the claim writes
+        // nothing — unless the emission resumed or this device has a gap, when it is the floor.
+        if row_here(conn, &op.table, &op.uid)? && !(page.resumed || gap) {
+            out.skip.insert(i);
+            out.passed.push((key, em.i));
+        } else {
+            out.keep.insert(i);
+            out.kept.push((key, em.i, op.table.clone(), op.uid.clone()));
+        }
+    }
+    // §6: a put an active emission's horizon covers, by its row — and, for containment only, one a
+    // completed emission handed back covers.
+    for (i, op) in ops.iter().enumerate() {
+        if op.kind != Kind::Put || op.baseline || me == Some(op.at.device.as_str()) || seen(op) {
+            continue;
+        }
+        let covering: Vec<&Key> = out
+            .emissions
+            .iter()
+            .filter(|(_, p)| (p.record.is_some() || p.done.is_some()) && p.horizon.covers(&op.at))
+            .map(|(k, _)| k)
+            .collect();
+        if covering.is_empty() {
+            continue;
+        }
+        // Containment: the page's claim for this row, from an emission that covers the put, has
+        // already written the row — a page handed back after the claim built, merged or floored.
+        // Asked of claims alone, so a reference on an ordinary op never stands in for one.
+        let written = ops.iter().any(|c| {
+            c.table == op.table
+                && c.uid == op.uid
+                && claim(c).is_some_and(|em| {
+                    let key: Key = (c.at.device.clone(), em.id);
+                    covering.contains(&&key)
+                        && out
+                            .emissions
+                            .get(&key)
+                            .and_then(|p| p.record.as_ref().or(p.done.as_ref()))
+                            .is_some_and(|r| r.wrote.contains(em.i))
+                })
+        });
+        let active = covering
+            .iter()
+            .any(|k| out.emissions.get(*k).is_some_and(|p| p.record.is_some()));
+        if written {
+            out.skip.insert(i);
+        } else if !active {
+            continue; // an inert emission drops nothing: the older rules judge the put
+        } else if row_here(conn, &op.table, &op.uid)? || named_here(conn, &op.table, &op.uid)? {
+            out.keep.insert(i); // the op path: held here, or the tombstone face
+        } else {
+            out.skip.insert(i); // the claim carries it: never held, or a grain twin's row
+        }
     }
     Ok(out)
 }
@@ -179,4 +251,30 @@ pub(super) fn settle(
         }
     }
     Ok(())
+}
+
+/// Whether this device holds the row under exactly this uid.
+fn row_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
+    let Some(meta) = meta_of(table) else {
+        return Ok(false);
+    };
+    conn.query_row(
+        &format!(
+            "SELECT EXISTS(SELECT 1 FROM {} WHERE sync_uid = ?1)",
+            meta.table
+        ),
+        [uid],
+        |r| r.get(0),
+    )
+    .map_err(sql)
+}
+
+/// Whether this device's own op log names the row — it held it, and perhaps deleted it.
+fn named_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
+    conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sync_ops WHERE tbl = ?1 AND uid = ?2)",
+        [table, uid],
+        |r| r.get(0),
+    )
+    .map_err(sql)
 }

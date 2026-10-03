@@ -120,10 +120,6 @@ fn rows(conn: &Connection, card: &str) -> i64 {
     .unwrap()
 }
 
-#[allow(
-    dead_code,
-    reason = "read by the row table's scenarios, which arrive next"
-)]
 fn note(conn: &Connection, card: &str) -> String {
     conn.query_row(
         "SELECT coalesce(notes, '-') FROM collection_entries WHERE card_id = ?1",
@@ -535,6 +531,9 @@ fn a_claim_above_its_emitters_held_op_is_not_held_with_it() {
     let mut ma = 0;
     stash(&a, "opt", 1, SECOND + 10);
     a.execute("DELETE FROM sync_ops", []).unwrap();
+    // Minted before the filed op: an op captured before the emission is inside its horizon, and
+    // §6 drops it on a row not here — it would never wait.
+    let claim = chunk_of(&emit(&a, "dev-a", 1), "opt");
     set_clock(&a, STAMP);
     let binder = folder(&a, "Binder", SECOND);
     file_in(&a, "bolt", 2, binder, SECOND);
@@ -543,7 +542,6 @@ fn a_claim_above_its_emitters_held_op_is_not_held_with_it() {
         .filter(|op| op.table == "collection_entries")
         .collect();
     assert_eq!(filed.len(), 1, "{filed:?}");
-    let claim = chunk_of(&emit(&a, "dev-a", 1), "opt");
     assert!(
         claim[0].at > filed[0].at,
         "the claim is stamped above the held op"
@@ -555,5 +553,524 @@ fn a_claim_above_its_emitters_held_op_is_not_held_with_it() {
         (rows(&b, "bolt"), copies(&b, "opt")),
         (0, 1),
         "the claim was held as collateral of its emitter's waiting op: {report:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task 5 — the row table (spec §6, §14 rows 5–9, 11–12, 15, 18, 22, 24–27)
+// ---------------------------------------------------------------------------------------------
+
+/// Moves a device's whole op log a minute into the past, so a claim stamped from a row's
+/// `updated_at` (written now) reads as later than every op a peer has applied.
+fn age_ops(conn: &Connection) {
+    conn.execute_batch(
+        "UPDATE sync_ops SET hlc_ms = hlc_ms - 60000;
+         UPDATE sync_clock SET ms = ms - 60000;
+         UPDATE collection_entries SET updated_at = updated_at - 60;",
+    )
+    .unwrap();
+}
+
+fn real_stash(conn: &Connection, card: &str, n: i64) {
+    conn.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,
+             created_at,updated_at)
+         VALUES (?1,'lea','1','en','nonfoil','NM',?2,unixepoch(),unixepoch())",
+        rusqlite::params![card, n],
+    )
+    .unwrap();
+}
+
+/// §14 row 5 — the tombstone face.
+#[test]
+fn a_claim_does_not_lose_the_add_wins_its_own_edit_would_win() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute("DELETE FROM collection_entries", []).unwrap();
+    set_clock(&a, STAMP + 3_600_000);
+    step(&a, "bolt", 1, SECOND);
+    let edit = since(&a, &mut ma);
+    apply(&b, &page(&[&edit, &whole(&a, "dev-a")])).unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!((copies(&a, "bolt"), copies(&b, "bolt")), (3, 3));
+}
+
+fn minus_one(take_first: bool, step_at: i64) -> (i64, i64) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 3, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    if take_first {
+        apply(&b, &whole(&a, "dev-a")).unwrap();
+    }
+    step(&a, "bolt", -1, step_at);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    (copies(&a, "bolt"), copies(&b, "bolt"))
+}
+
+/// §14 row 6.
+#[test]
+fn a_removal_sent_with_a_rebaseline_reaches_a_device_that_holds_the_row() {
+    for take_first in [false, true] {
+        for step_at in [SECOND, SECOND + 5] {
+            assert_eq!(
+                minus_one(take_first, step_at),
+                (2, 2),
+                "taken {take_first}, at {step_at}"
+            );
+        }
+    }
+}
+
+fn plus_one_each_side(take_first: bool) -> (i64, i64) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    if take_first {
+        apply(&b, &whole(&a, "dev-a")).unwrap();
+    }
+    step(&b, "bolt", 1, SECOND);
+    step(&a, "bolt", 1, SECOND + 5);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    (copies(&a, "bolt"), copies(&b, "bolt"))
+}
+
+/// §14 row 7.
+#[test]
+fn a_copy_added_on_each_side_is_two_copies() {
+    for take_first in [false, true] {
+        assert_eq!(plus_one_each_side(take_first), (4, 4), "taken {take_first}");
+    }
+}
+
+/// §14 row 8.
+#[test]
+fn a_note_written_there_after_it_heard_this_devices_wins_here_too() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute("UPDATE collection_entries SET notes = 'mine'", [])
+        .unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    a.execute("UPDATE collection_entries SET notes = 'theirs'", [])
+        .unwrap();
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    assert_eq!(
+        (note(&a, "bolt"), note(&b, "bolt")),
+        ("theirs".to_owned(), "theirs".to_owned())
+    );
+}
+
+/// §14 row 9.
+#[test]
+fn an_edit_whose_claim_is_in_a_later_chunk_lands_at_once() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let edit = since(&a, &mut ma);
+    let chunks = emit(&a, "dev-a", 1);
+    let folder_chunk = chunks
+        .iter()
+        .find(|c| c[0].table == "collection_folders")
+        .unwrap()
+        .clone();
+    apply(&b, &page(&[&edit, &folder_chunk])).unwrap();
+    assert_eq!(
+        copies(&b, "bolt"),
+        3,
+        "the edit waited for a chunk it did not need"
+    );
+    apply(&b, &chunk_of(&chunks, "bolt")).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3);
+}
+
+fn removal_meanwhile(take_first: bool) -> (i64, i64) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    real_stash(&a, "bolt", 3);
+    age_ops(&a);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    if take_first {
+        apply(&b, &whole(&a, "dev-a")).unwrap();
+    }
+    b.execute("UPDATE collection_entries SET quantity = quantity - 1", [])
+        .unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    b.execute("UPDATE collection_entries SET quantity = quantity - 1", [])
+        .unwrap();
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    (copies(&a, "bolt"), copies(&b, "bolt"))
+}
+
+fn note_meanwhile(take_first: bool) -> (String, String) {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    real_stash(&a, "bolt", 2);
+    age_ops(&a);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&c, &seed).unwrap();
+    if take_first {
+        apply(&b, &whole(&a, "dev-a")).unwrap();
+    }
+    c.execute("UPDATE collection_entries SET purchase_price = 1.5", [])
+        .unwrap();
+    let price = since(&c, &mut mc);
+    apply(&a, &price).unwrap();
+    apply(&b, &price).unwrap();
+    let rebroadcast = whole(&a, "dev-a");
+    c.execute("UPDATE collection_entries SET notes = 'c'", [])
+        .unwrap();
+    let note_op = since(&c, &mut mc);
+    apply(&b, &note_op).unwrap();
+    apply(&b, &rebroadcast).unwrap();
+    apply(&a, &note_op).unwrap();
+    (note(&a, "bolt"), note(&b, "bolt"))
+}
+
+fn delete_meanwhile(take_first: bool) -> (i64, i64, i64) {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    real_stash(&a, "bolt", 2);
+    age_ops(&a);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&c, &seed).unwrap();
+    if take_first {
+        apply(&b, &whole(&a, "dev-a")).unwrap();
+    }
+    c.execute("UPDATE collection_entries SET purchase_price = 1.5", [])
+        .unwrap();
+    let edit = since(&c, &mut mc);
+    apply(&a, &edit).unwrap();
+    apply(&b, &edit).unwrap();
+    c.execute("DELETE FROM collection_entries", []).unwrap();
+    let del = since(&c, &mut mc);
+    apply(&b, &del).unwrap();
+    let rebroadcast = whole(&a, "dev-a");
+    apply(&b, &rebroadcast).unwrap();
+    apply(&a, &del).unwrap();
+    (rows(&a, "bolt"), rows(&b, "bolt"), rows(&c, "bolt"))
+}
+
+/// §14 row 11.
+#[test]
+fn a_rebroadcast_takes_back_nothing_this_device_did_since() {
+    for take_first in [false, true] {
+        assert_eq!(removal_meanwhile(take_first), (1, 1), "taken {take_first}");
+        assert_eq!(
+            note_meanwhile(take_first),
+            ("c".to_owned(), "c".to_owned()),
+            "taken {take_first}"
+        );
+    }
+    assert_eq!(delete_meanwhile(true), (0, 0, 0));
+    assert_eq!(
+        delete_meanwhile(false),
+        (0, 1, 0),
+        "owed (design §11): a third device's delete and an active claim resurrect the row here only"
+    );
+}
+
+fn leave_edit_repair(clock_ahead: bool) -> (i64, String) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    emission::start_logging(&a).unwrap();
+    if clock_ahead {
+        a.execute_batch(
+            "UPDATE sync_clock
+                SET ms = cast(unixepoch('subsec') * 1000 AS INTEGER) + 3600000, ctr = 0;",
+        )
+        .unwrap();
+    }
+    real_stash(&a, "bolt", 2);
+    age_ops(&a);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    a.execute("DELETE FROM sync_group", []).unwrap();
+    emission::keep_logging_mark(&a).unwrap();
+    a.execute(
+        "UPDATE collection_entries
+            SET quantity = 4, notes = 'unpaired', updated_at = unixepoch()",
+        [],
+    )
+    .unwrap();
+    assert!(
+        since(&a, &mut ma).is_empty(),
+        "an unpaired edit was captured"
+    );
+    a.execute(
+        "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+         VALUES (1, 'g', 0, x'02', 0)",
+        [],
+    )
+    .unwrap();
+    emission::start_logging(&a).unwrap();
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    (copies(&b, "bolt"), note(&b, "bolt"))
+}
+
+/// §14 row 12, the apply half (the identity half is Task 9).
+#[test]
+fn a_device_back_from_time_out_of_a_group_brings_what_it_did_there() {
+    for clock_ahead in [false, true] {
+        assert_eq!(
+            leave_edit_repair(clock_ahead),
+            (4, "unpaired".to_owned()),
+            "clock ahead {clock_ahead}"
+        );
+    }
+}
+
+/// §14 row 15.
+#[test]
+fn a_whole_active_page_handed_back_writes_nothing_the_second_time() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    step(&a, "bolt", 1, SECOND);
+    let first = page(&[&outbox(&a), &whole(&a, "dev-a")]);
+    apply(&b, &first).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3);
+    b.execute(
+        "UPDATE collection_entries SET quantity = quantity - 1, notes = 'later'",
+        [],
+    )
+    .unwrap();
+    let again = apply(&b, &first).unwrap();
+    assert_eq!(again.applied, 0, "{again:?}");
+    assert_eq!(
+        (copies(&b, "bolt"), note(&b, "bolt")),
+        (2, "later".to_owned())
+    );
+}
+
+/// §14 row 18.
+#[test]
+fn a_grain_twin_and_a_put_carried_through_a_claim_end_at_the_max_everywhere() {
+    let (a, b, c, e) = (
+        paired("dev-a"),
+        paired("dev-b"),
+        paired("dev-c"),
+        paired("dev-e"),
+    );
+    let mut mc = 0;
+    stash(&a, "bolt", 2, 1_700_000_000);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    stash(&b, "bolt", 3, 1_700_000_000);
+    b.execute("DELETE FROM sync_ops", []).unwrap();
+    apply(&c, &whole(&a, "dev-a")).unwrap();
+    step(&c, "bolt", 1, 1_700_000_100);
+    let put = since(&c, &mut mc);
+    apply(&a, &put).unwrap();
+    apply(&e, &page(&[&put, &whole(&a, "dev-a")])).unwrap();
+    assert_eq!(copies(&e, "bolt"), 3);
+    apply(&b, &page(&[&put, &whole(&e, "dev-e")])).unwrap();
+    assert_eq!(
+        copies(&b, "bolt"),
+        3,
+        "c's +1 was counted on top of b's own row"
+    );
+}
+
+/// §14 row 22, with emissions: §8.1 and §8.2 keep their answers.
+#[test]
+fn the_first_pairing_twice_and_the_never_held_undercount_keep_their_answers() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    stash(&a, "bolt", 1, 1_700_000_000);
+    a.execute("UPDATE collection_entries SET quantity = 5", [])
+        .unwrap();
+    let first = page(&[&outbox(&a), &whole(&a, "dev-a")]);
+    apply(&b, &first).unwrap();
+    apply(&b, &first).unwrap();
+    assert_eq!(copies(&b, "bolt"), 5, "§8.1");
+
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let claims = whole(&a, "dev-a");
+    step(&a, "bolt", 1, SECOND);
+    let ops = outbox(&a);
+    apply(&b, &page(&[&ops[..1], &claims, &ops[1..]])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 2, "§8.2's accepted under-count");
+}
+
+/// Review Focus 3.
+#[test]
+fn an_emission_from_before_a_rejoin_is_inert_beside_one_from_after_it() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    emission::start_logging(&a).unwrap();
+    real_stash(&a, "bolt", 2);
+    age_ops(&a);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let old = whole(&a, "dev-a");
+    apply(&b, &old).unwrap();
+    let first = emission::taken(&b, "dev-a").unwrap();
+    a.execute("DELETE FROM sync_group", []).unwrap();
+    emission::keep_logging_mark(&a).unwrap();
+    a.execute(
+        "UPDATE collection_entries SET quantity = 4, updated_at = unixepoch()",
+        [],
+    )
+    .unwrap();
+    a.execute(
+        "INSERT INTO sync_group (id, group_id, epoch, group_key, joined_at)
+         VALUES (1, 'g', 0, x'02', 0)",
+        [],
+    )
+    .unwrap();
+    emission::start_logging(&a).unwrap();
+    apply(&b, &page(&[&old, &whole(&a, "dev-a")])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 4);
+    assert!(emission::taken(&b, "dev-a").unwrap() > first);
+}
+
+/// §14 row 24 — the narrow fix's review-7 double count: `a` hears `c`'s `+1` only through `e`'s
+/// claim, adds a copy and re-baselines; `b` meets `c`'s `+1`, `a`'s and `a`'s emission without
+/// `e`'s. Then every device reads the rest of the log.
+#[test]
+fn a_put_one_emitter_took_in_through_anothers_claim_counts_once_everywhere() {
+    let (a, b, c, e) = (
+        paired("dev-a"),
+        paired("dev-b"),
+        paired("dev-c"),
+        paired("dev-e"),
+    );
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    for peer in [&b, &c, &e] {
+        apply(peer, &seed).unwrap();
+    }
+    step(&c, "bolt", 1, SECOND);
+    let y = since(&c, &mut mc);
+    apply(&e, &y).unwrap();
+    apply(&a, &whole(&e, "dev-e")).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let p = since(&a, &mut ma);
+    apply(&b, &page(&[&y, &p, &whole(&a, "dev-a")])).unwrap();
+    for peer in [&a, &c, &e] {
+        apply(peer, &page(&[&y, &p])).unwrap();
+    }
+    assert_eq!(
+        [
+            copies(&a, "bolt"),
+            copies(&b, "bolt"),
+            copies(&c, "bolt"),
+            copies(&e, "bolt")
+        ],
+        [4, 4, 4, 4]
+    );
+}
+
+/// §14 row 25 — review 7's removal: `b` meets `c`'s `-1` inside `e`'s horizon beside a chunk
+/// carrying only another card's claim, then `a`'s `+1` and re-baseline from before `a` heard of
+/// the removal.
+#[test]
+fn a_removal_beside_a_chunk_of_another_cards_claim_is_never_floored_over() {
+    let (a, b, c, e) = (
+        paired("dev-a"),
+        paired("dev-b"),
+        paired("dev-c"),
+        paired("dev-e"),
+    );
+    let (mut ma, mut mc, mut me) = (0, 0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    for peer in [&b, &c, &e] {
+        apply(peer, &seed).unwrap();
+    }
+    stash(&e, "opt", 1, SECOND);
+    let from_e = since(&e, &mut me);
+    apply(&a, &from_e).unwrap();
+    apply(&b, &from_e).unwrap();
+    step(&c, "bolt", -1, SECOND);
+    let removed = since(&c, &mut mc);
+    apply(&e, &removed).unwrap();
+    let e_chunks = emit(&e, "dev-e", 1);
+    apply(&b, &page(&[&removed, &chunk_of(&e_chunks, "opt")])).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    apply(&a, &removed).unwrap();
+    assert_eq!((copies(&a, "bolt"), copies(&b, "bolt")), (2, 2));
+}
+
+/// §14 row 26 — a `+1` re-baseline, then a `-1` one.
+#[test]
+fn a_rebaseline_with_a_copy_added_then_one_with_it_removed_end_where_they_began() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3);
+    step(&a, "bolt", -1, SECOND);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    assert_eq!((copies(&a, "bolt"), copies(&b, "bolt")), (2, 2));
+}
+
+/// §14 row 27, first half — a third device's new row, inside the emitter's horizon.
+#[test]
+fn a_third_devices_new_row_inside_the_horizon_lands() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    stash(&c, "opt", 1, 1_700_000_000);
+    let from_c = outbox(&c);
+    apply(&a, &from_c).unwrap();
+    apply(&b, &page(&[&from_c, &whole(&a, "dev-a")])).unwrap();
+    assert_eq!(copies(&b, "opt"), 1);
+}
+
+/// §14 row 27, second half — an emitter behind this device, on another row, still brings its edit.
+#[test]
+fn an_emitter_behind_this_device_on_another_row_still_brings_its_edit() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    stash(&c, "opt", 1, 1_700_000_000);
+    apply(&b, &since(&c, &mut mc)).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    apply(&b, &page(&[&since(&a, &mut ma), &whole(&a, "dev-a")])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3);
+}
+
+/// Spec §8 against §6's held-row arm: a whole emission applied to a device that holds its rows
+/// under their uids is taken with its claims passed — written nowhere — so no `carried@` mark
+/// rises from it. A mark there would cover puts the rows here hold only through this device's log.
+#[test]
+fn an_emission_whose_claims_passed_on_held_rows_carries_nothing() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    stash(&a, "bolt", 2, 1_700_000_000);
+    apply(&b, &outbox(&a)).unwrap();
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    assert!(emission::taken(&b, "dev-a").unwrap().is_some());
+    assert_eq!(
+        emission::carried(&b).unwrap(),
+        std::collections::BTreeMap::new(),
+        "a claim that wrote nothing carried its horizon"
     );
 }

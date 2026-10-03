@@ -240,10 +240,14 @@ pub fn cut(conn: &Connection) -> rusqlite::Result<Stamp> {
     Ok(cut)
 }
 
-/// An emission wholly consumed (§5, §8): its generation is taken, every record of the emitter at
-/// or below that generation goes, and — only where `carry`, every claim having written its row —
-/// what its horizon names is carried here: each device's `carried@` raised to the horizon's entry,
-/// this device's own excepted.
+/// An emission wholly consumed (§5, §8): its generation is taken, every OTHER record of the
+/// emitter at or below that generation goes, and — only where `carry`, every claim having written
+/// its row — what its horizon names is carried here: each device's `carried@` raised to the
+/// horizon's entry, this device's own excepted.
+///
+/// **Its own record is kept.** A page handed back after the emission completed still carries the
+/// covered puts its claims carried; the first delivery dropped them and no watermark rose, so that
+/// record's `wrote` set is the only evidence they are inside rows here (§5, §6's inert row).
 pub fn take(
     conn: &Connection,
     emitter: &str,
@@ -262,6 +266,9 @@ pub fn take(
     }
     let mut all = records(conn, emitter)?;
     all.retain(|r| r.since > record.since);
+    all.push(record.clone());
+    all.sort_by_key(|r| std::cmp::Reverse(r.id));
+    all.truncate(RECORDS_PER_EMITTER);
     put(conn, &format!("{RECORDS}{emitter}"), &json(&all)?)?;
     if !carry {
         return Ok(());
@@ -425,10 +432,14 @@ mod tests {
         assert_eq!(ids, vec![(5, 0), (4, 0), (3, 0), (2, 0)]);
     }
 
+    /// Spec §5: the taken emission's own record stays, for a page handed back after it
+    /// completed; every other record of its generation or an older one goes.
     #[test]
-    fn taking_an_emission_marks_it_drops_what_it_supersedes_and_carries_its_horizon() {
+    fn taking_an_emission_keeps_its_record_drops_the_older_records_it_supersedes_and_carries_its_horizon(
+    ) {
         let conn = db();
         keep(&conn, "dev-a", Record::new((2, 0), 1, (1, 0), false)).unwrap();
+        keep(&conn, "dev-a", Record::new((3, 0), 2, (1, 0), false)).unwrap();
         keep(&conn, "dev-a", Record::new((6, 0), 1, (5, 0), true)).unwrap();
         let mut horizon = Horizon::default();
         for (device, ms) in [("dev-c", 900), ("dev-b", 50), ("dev-a", 70)] {
@@ -452,8 +463,8 @@ mod tests {
             .collect();
         assert_eq!(
             left,
-            vec![(6, 0)],
-            "only the newer generation's record stays"
+            vec![(6, 0), (2, 0)],
+            "the newer generation's record and the taken one's stay; the half-sent (3, 0) goes"
         );
         let c = carried(&conn).unwrap();
         assert_eq!(c.get("dev-c"), Some(&(900, 0)));
