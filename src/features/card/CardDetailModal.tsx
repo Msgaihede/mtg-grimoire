@@ -249,12 +249,40 @@ const PANEL_SIZE =
  * already asking for most of it — and the chevrons would be *outside* the window, which is the
  * failure `DialogProps.flanks` documents at its own site.
  *
+ * ## 1062, which is the 900 rung plus what the flanks themselves take
+ *
+ * **The question is not "is the window 900 wide" but "is a *flanked* panel still three columns"**,
+ * and until 2026-10-03 this asked the first. The flanks are bought off the panel: 3.5rem of
+ * `FLANK_COLUMNS` and 1.5rem of the scrim's `sm:px-6` either side is 160px, and the container
+ * query inside reads the panel's **content** box, which is a further 2px in for `sm:border`. So a
+ * flanked panel reaches `@min-[900px]/card` at a 1062px window and not before — and from 900 to
+ * 1061 this drew flanks *and* the two-column rung, the one pairing spec §2.1's table does not
+ * have: two columns keep the pair in the action row, three hang it off the panel.
+ *
+ * That band holds the desktop's own 1024×700 floor, and the two-column rung was drawn for a panel
+ * 840px tall. Its second row is `auto` — the rail at its full height — beside a `minmax(0,1fr)`
+ * row for everything else, so on a short panel the rail takes the grid whole. Measured in the
+ * shipped window at 1024×700 (debug build, the real frame resized): an 864px panel, rows
+ * `0px 418px`, the printings column **0px** tall and the rail's foot 26px over the action row.
+ * The 2px is measured too, in Chromium over the light app's fake: at 1060×700 the panel was
+ * exactly 900 border-box and still two columns. `docs/reference/frontend-design.md` has the
+ * table, before and after.
+ *
+ * Unflanked, the same window gives the panel 976px and the three-column rung, with the pair in
+ * the action row where a narrow panel has always kept it. **So a desktop window never draws the
+ * two-column rung at all**: unflanked it needs a window under 950, flanked one under 1062, and
+ * the floor is 1024 with flanks starting here.
+ *
+ * **The three terms are `Dialog`'s and this restates them**, which is the cost of a decision that
+ * has to be made before the panel exists. `CardDetailModal.test.tsx` pins the threshold from both
+ * sides and the three classes it is the sum of, so a change to any of them goes red there.
+ *
  * `useSyncExternalStore` and a fresh `matchMedia` per read, for two reasons: `src/CLAUDE.md`
  * forbids `setState` inside an effect, and a module-level `MediaQueryList` would be built against
  * whatever `matchMedia` was at import time — which under jsdom is before any test has stated a
  * width.
  */
-const FLANK_ROOM = "(min-width: 900px)";
+const FLANK_ROOM = "(min-width: 1062px)";
 
 function subscribeFlankRoom(onChange: () => void): () => void {
   const query = window.matchMedia(FLANK_ROOM);
@@ -557,7 +585,8 @@ export function CardDetailModal() {
           ),
         };
 
-  // Flanks above 900 and the action row's corner below it — {@link useFlankRoom}. `undefined`
+  // Flanks where a flanked panel is still three columns, and the action row's corner below
+  // that — {@link useFlankRoom}, which is where the width is worked out. `undefined`
   // rather than a pair of nulls, because that is what tells the shell to leave its scrim exactly
   // as every other dialog draws it.
   const room = useFlankRoom();
@@ -645,7 +674,17 @@ export function CardDetailModal() {
       // covered by one number even though they lose the caret at different moments — the deck at
       // the optimistic patch, the collection a refetch later — because the settle watches rather
       // than reads.
-      caretPulse={returnDepth}
+      //
+      // **And a fourth, since 2026-10-03: the window crossing {@link useFlankRoom}'s width.** The
+      // pair is two different elements either side of it — flanks off the panel, or a group in
+      // the action row — so a chevron holding the caret is unmounted by the resize and drops it
+      // exactly as the stepper does. Measured in the shipped window dragging 1024 → 1062:
+      // `activeElement` on `<body>` and ArrowRight walking nothing. It was unreachable while the
+      // crossing sat at 900, under the window's floor. `room` is folded into the same number
+      // rather than given a prop of its own because it is the same signal — the host saying a
+      // control may have just vanished — and `2n + bit` keeps the two from cancelling when a
+      // removal and a resize land in one render.
+      caretPulse={returnDepth * 2 + (room ? 1 : 0)}
       // **Two different functions, and the difference is the caret.** Escape and the ✕ are the
       // reader saying "put me back", so they go through the body's own close and whatever opened
       // the card gets the caret. A press on the **scrim** is not: they have already moved the
@@ -2024,9 +2063,10 @@ function Body({
                 boolean and would widen the trigger at *every* rung, which is a change to the wide
                 panel nobody asked for. */}
             <div className="flex w-full flex-wrap items-center justify-end gap-2 @min-[640px]/card:w-auto">
-              {/* Below 900 the pair sits in this row rather than off the panel's edges —
-                  {@link useFlankRoom} decides which, because the room they need is the scrim's
-                  and the scrim is the window. */}
+              {/* Where the window has no room for flanks the pair sits in this row rather than
+                  off the panel's edges — {@link useFlankRoom} decides which, because the room
+                  they need is the scrim's and the scrim is the window. That includes the
+                  desktop's own 1024px floor, so this is a placement a desktop reader sees. */}
               {chevrons}
               {/* **`Edit`, on the collection's own surface and nowhere else** (issue #564). A
                   collection card opens read-only, the way it always has; this is the one press
