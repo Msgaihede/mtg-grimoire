@@ -243,8 +243,21 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER`**, because `cargo` and `cc-rs` know nothing of
   `NDK_HOME` and each omission fails naming something else (`failed to find tool "clang"`,
   ``linker `cc` not found``); and **a `rust-cache` `key` per target**. The linker is the
-  API-26 clang, the first attempt's `minSdk` carried over — there is no Android project in
-  the tree to read a level from, and it is phase 4's to settle.
+  API-26 clang, the first attempt's `minSdk` carried over — and since phase 4 the light host's
+  `tauri.conf.json` says `minSdkVersion: 26` too, which `mobile/host.test.ts` pins.
+- **The `android` job builds the light app's APK** (phase 4, 2026-10-03): `npx tauri android
+  build --apk --target aarch64` from `mobile/` on `ubuntu-24.04`, with JDK 21 from the image
+  (`JAVA_HOME_21_X64` — JDK 25 breaks the Android Gradle and Kotlin plugins), `NDK_HOME` set to
+  the image's `ANDROID_NDK_LATEST_HOME`, and the light bundle built by the host's
+  `beforeBuildCommand`. It writes the APK's size and the `.so`'s to the step summary and uploads
+  the APK (`actions/upload-artifact`, 14 days). **A release build signed with the runner's debug
+  key** — installable, but one run's APK does not upgrade over another's. Its routing is the
+  host's tree (`mobile/src-tauri/*`), the workspace's root files and the toolchain pin — **not
+  the fail-safe and not `crates/grimoire-core/*`**: an unrecognised path cannot be an input to
+  the APK, the engine's Android compile is `core`'s, and its API against the host is compiled by
+  `rust`, where `mobile/src-tauri` is a workspace member. Every arm that sets `android` sets
+  `rust`. **Nothing in it runs the APK.** Its first run is the PR that adds it, and its numbers
+  are that run's summary — [light-app.md](../reference/light-app.md) §8.1.
 - **`.github/workflows/release.yml` is one workflow on purpose.** A release created with
   `GITHUB_TOKEN` does not trigger `on: release` in another workflow — GitHub's recursion
   guard — so release-please, the build matrix and the publish step are jobs in one file,

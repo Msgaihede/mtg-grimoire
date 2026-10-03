@@ -19,9 +19,10 @@
 //!
 //! **A host opens the connections; this does not.** Bringing the pair to head and running the
 //! launch's logged passes is [`crate::schema::prepare_database`], which is this crate's too —
-//! but the desktop converts a pre-27 single file first, with a module only it has, so what a
-//! host-neutral "open the data folder" should be is left to the first host that is not the
-//! desktop. [`State::new`] takes connections that are already at head.
+//! but the desktop converts a pre-27 single file first, with a module only it has. The first
+//! host that is not the desktop, the light app's Android host, brought the host-neutral "open
+//! the data folder" with it: [`crate::launch::open`]. [`State::new`] takes connections that are
+//! already at head.
 
 use crate::db::{self, CrossFileFence};
 use crate::events::EventSink;

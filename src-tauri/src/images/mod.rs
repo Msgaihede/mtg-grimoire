@@ -4,8 +4,10 @@
 //! `crates/grimoire-core/src/images.rs` since the extraction's I/O step; a path through this
 //! module reaches that crate's item unless this file defines it. Three things are defined here:
 //!
-//! * **the `mtgimg://` answer** — [`serve`] and the pure [`respond`] behind it, which turn a
-//!   cache result into the HTTP response this app's webview is handed;
+//! * **the `mtgimg://` answer** — [`serve`], and [`to_response`], which turns the core's
+//!   [`Reply`] into the HTTP response this app's webview is handed. What the reply says — what
+//!   may be cached, for how long, what a retry waits — is the core's since the light app's
+//!   Android host answers the same requests;
 //! * **the two commands** that warm the cache, which name this app's state and a task to run on;
 //! * **the upkeep thread**, [`spawn_upkeep`]. The *pass* it runs is the core's
 //!   `upkeep_tick`; what is a host's is when to wake up for one.
@@ -14,94 +16,18 @@ pub use grimoire_core::images::*;
 
 use std::sync::Arc;
 
-/// How long the webview may keep an image it has been given.
-///
-/// A day, not a year: the URL is stable across Scryfall re-scanning a card, so an
-/// immutable cache would pin a superseded picture inside the webview until the app is
-/// reinstalled. A day of staleness after a re-scan is invisible; being asked again for
-/// every tile that scrolls past is not.
-const IMAGE_MAX_AGE: &str = "max-age=86400";
-
-/// The HTTP answer for one resolved request.
-///
-/// Separated from [`serve`] because this is the whole contract with the renderer and it is
-/// pure — `serve` itself needs a running Tauri app, and a contract that can only be
-/// exercised by launching one is a contract nothing checks.
-///
-/// The distinction that matters is permanent-versus-retryable. A printing Scryfall has no
-/// art for is a **200** with a placeholder, because there is nothing to retry; a failed
-/// fetch is a **502**, and a rate limit a **503** carrying the wait, so the `<img>` can
-/// report an error and the grid can heal itself. Serving a placeholder for a network
-/// failure would quietly turn a temporary outage into a permanently artless collection.
-fn respond(result: Result<Served, ImageError>) -> tauri::http::Response<Vec<u8>> {
-    use tauri::http::{header, Response, StatusCode};
-
-    match result {
-        Ok(served) => Response::builder()
-            .status(StatusCode::OK)
-            .header(header::CONTENT_TYPE, served.content_type)
-            // A placeholder is the one 200 whose content is *meant* to change. It stands in
-            // for a picture the next sync may well supply — Scryfall scans a card and the
-            // `soon.jpg` becomes real art — and there is no URI change to notice it by,
-            // because the placeholder was never fetched from a URI at all. Real bytes keep
-            // their day: their URI *is* their version, so their staleness is bounded by the
-            // re-scan that ended it.
-            .header(
-                header::CACHE_CONTROL,
-                if served.content_type == SVG {
-                    "no-store"
-                } else {
-                    IMAGE_MAX_AGE
-                },
-            )
-            .body(served.bytes)
-            .expect("image response"),
-        Err(ImageError::UnknownCard) => fail(StatusCode::NOT_FOUND, "no such card", None),
-        Err(ImageError::RateLimited { retry_after_secs }) => fail(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "rate limited by Scryfall",
-            Some(retry_after_secs),
-        ),
-        Err(e) => fail(StatusCode::BAD_GATEWAY, &e.to_string(), None),
-    }
-}
-
-/// A failure, as the webview sees it.
-///
-/// `no-store` on every one of them. A 404 is *heuristically* cacheable, and the card
-/// behind one can arrive in the next sync — a cached 404 would outlive the thing it was
-/// true about, with no way to invalidate it short of restarting the app. The same applies
-/// to a 503 the whole design expects to be retried.
-fn fail(
-    status: tauri::http::StatusCode,
-    message: &str,
-    retry_after: Option<u64>,
-) -> tauri::http::Response<Vec<u8>> {
+/// A [`Reply`] in the type Tauri's protocol handler hands its webview.
+fn to_response(reply: Reply) -> tauri::http::Response<Vec<u8>> {
     use tauri::http::{header, Response};
 
     let mut builder = Response::builder()
-        .status(status)
-        .header(header::CONTENT_TYPE, "text/plain;charset=utf-8")
-        .header(header::CACHE_CONTROL, "no-store");
-    if let Some(secs) = retry_after {
+        .status(reply.status)
+        .header(header::CONTENT_TYPE, reply.content_type)
+        .header(header::CACHE_CONTROL, reply.cache_control);
+    if let Some(secs) = reply.retry_after {
         builder = builder.header(header::RETRY_AFTER, secs.to_string());
     }
-    builder
-        .body(message.as_bytes().to_vec())
-        .expect("static response")
-}
-
-/// The answer for a request that arrives before `setup` has managed the state.
-///
-/// The webview and the app's own startup genuinely race at launch, so this is a real
-/// state rather than a defensive impossibility — and a retryable one, in about the time
-/// it takes to read the header.
-fn not_ready() -> tauri::http::Response<Vec<u8>> {
-    fail(
-        tauri::http::StatusCode::SERVICE_UNAVAILABLE,
-        "app is still starting",
-        Some(1),
-    )
+    builder.body(reply.body).expect("image response")
 }
 
 /// Answer one `mtgimg://` request.
@@ -118,23 +44,13 @@ fn not_ready() -> tauri::http::Response<Vec<u8>> {
 pub async fn serve(app: &tauri::AppHandle, path: &str) -> tauri::http::Response<Vec<u8>> {
     use tauri::Manager;
 
-    let Some(key) = parse_request_path(path) else {
-        return fail(
-            tauri::http::StatusCode::NOT_FOUND,
-            "not an image request",
-            None,
-        );
-    };
+    if parse_request_path(path).is_none() {
+        return to_response(Reply::not_an_image());
+    }
     let Some(state) = app.try_state::<std::sync::Arc<crate::sync::AppState>>() else {
-        return not_ready();
+        return to_response(Reply::not_ready());
     };
-
-    respond(
-        state
-            .images
-            .get(&state.client, state.reader(), &state.db, &key)
-            .await,
-    )
+    to_response(answer(&state.core, path).await)
 }
 
 /// Warm the cache for a page of results.
@@ -222,6 +138,14 @@ pub fn spawn_upkeep(state: &Arc<crate::sync::AppState>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The HTTP answer for one resolved request — the core's [`Reply::of`] in Tauri's response
+    /// type, which is what [`serve`] hands the webview once the cache has answered. **The contract
+    /// is the core's since the light app's Android host** (phase 4), which answers the same
+    /// requests; these tests hold it through the desktop's conversion.
+    fn respond(result: Result<Served, ImageError>) -> tauri::http::Response<Vec<u8>> {
+        to_response(Reply::of(result))
+    }
 
     fn header<'a>(r: &'a tauri::http::Response<Vec<u8>>, name: &str) -> Option<&'a str> {
         r.headers().get(name).and_then(|v| v.to_str().ok())
@@ -355,7 +279,7 @@ mod tests {
     /// state appears within milliseconds.
     #[test]
     fn a_request_before_the_app_has_its_state_is_a_503_worth_retrying_at_once() {
-        let r = not_ready();
+        let r = to_response(Reply::not_ready());
 
         assert_eq!(r.status(), tauri::http::StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(header(&r, "retry-after"), Some("1"));

@@ -1,7 +1,7 @@
 # grimoire-core — the engine with no window
 
-What every host links: the desktop app in `src-tauri` today, an Android shell and a WASM build in
-a Worker later. The design is
+What every host links: the desktop app in `src-tauri`, the light app's Android host in
+`mobile/src-tauri` (phase 4, 2026-10-03), and a WASM build in a Worker later. The design is
 [the light-app spec](../../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md)
 §2; what each extraction step built and measured is in
 [light-app.md](../../docs/reference/light-app.md).
@@ -176,6 +176,13 @@ there and its caller answers `db::BUSY`. **No browser arm has ever run** — the
 and `date('now')` inside the statement that needs them, which is the same on every host.
 
 ## State, the hook and events
+
+**A host that is not the desktop opens its data folder with `launch::open(data_dir)`** (phase 4,
+2026-10-03): the corpus replaced if it will not open, the write connection brought to head, the
+read connection after it, the image cache and the Scryfall client with any stored 429 lockout
+re-entered — `desktop::init_state`'s steps less the pre-27 conversion and the mirror's name, with
+its sentences. It answers the pieces and builds no `State`: the sink and the observers are the
+host's. The Android host (`mobile/src-tauri`) is its first caller; the desktop does not call it.
 
 **A host builds one `state::State` and everything else is handed it.**
 `State::new(write, read, data_dir, events, observers, client, images)` takes connections the
@@ -366,11 +373,16 @@ pre-warm fetches, and the eviction pass that spares exactly those.
 
 - **`images::upkeep_tick(&State, &mut last)` is one wake of a host's upkeep loop**, and the
   loop is the host's: the desktop sleeps `UPKEEP_TICK` on a thread of its own between calls
-  (`spawn_upkeep`, in `src-tauri`). An Android host owes the same ten lines. **A browser must
+  (`spawn_upkeep`, in `src-tauri`), and the Android host has the same ten lines in
+  `mobile/src-tauri`. **A browser must
   not call it in a loop** — it has no thread to sleep on, and no files to evict.
-- **How the bytes reach a page is not here.** `serve`, `respond`, `fail` and `not_ready` build
-  a `tauri::http::Response` for the `mtgimg://` protocol and stayed, with the seven tests of
-  that answer. A web host answers a `fetch`.
+- **What a request is answered with is here; the response type is the host's.**
+  `images::answer(&State, path)` resolves a protocol path to an `images::Reply` — status,
+  content type, cache control, `Retry-After` and body, with no HTTP crate in it — and `Reply::of`,
+  `failure`, `not_ready` and `not_an_image` are the whole contract (what may be cached, for how
+  long, what a retry waits). It came here from `src-tauri` with the light app's Android host
+  (phase 4), so both hosts' `mtgimg` handlers are a conversion and nothing more; the desktop's
+  seven tests of the answer run through its `to_response`. A web host answers a `fetch`.
 - **In a browser the cache stores nothing, and that is a counted failure rather than a crash**:
   `platform::files` refuses, so every fetch serves its bytes, counts a `store_failure` and
   folds one `error_log` row. What a web host keeps pictures in — the HTTP cache, the Cache API
@@ -457,7 +469,7 @@ src-tauri/src/<module>/mod.rs` counts them:
 | `reset` | 1 test, `the_cache_sweep_unlinks_rather_than_follows` | a platform: it makes a symlink with a Windows call behind `#[cfg(windows)]`, which the fence keeps out of this crate's tests too | never |
 | `sync` (`src/sync/mod.rs`) | `AppState` and its `Deref`; `lock_db`, `lock_db_read`, `lock_plain` | the mirror's fields and the change mask (the pending pairing offer was the third, until it moved to `State` with the sync step) | never |
 | `index` (`src/index/mod.rs`, `src/index/facets/mod.rs`) | the `facet_cards` command, and no test: every one moved, onto a fixture this crate builds at head | a window | never |
-| `images` (`src/images/mod.rs`) | `serve`, `respond`, `fail`, `not_ready`, `IMAGE_MAX_AGE`; `spawn_upkeep`; 7 tests | `tauri::http`, an `AppHandle`; a thread that sleeps | never: how a picture reaches a page, and when to wake for a pass, are a host's |
+| `images` (`src/images/mod.rs`) | `serve` and `to_response`; `spawn_upkeep`; 7 tests | `tauri::http`, an `AppHandle`; a thread that sleeps | never: the response type, and when to wake for a pass, are a host's — the reply itself came here in phase 4 |
 | `scanner` (`src/scanner/mod.rs`) | `compiled()` and the three `include_bytes!` it reads; the three request headers, `FramePayload`, `frame_payload`, `split_detail`, `capture_payload`; 8 tests | `cfg(scanner_assets)`, which `build.rs` sets and this crate's fence refuses; `tauri::ipc::InvokeBody` and `HeaderMap` | never: what a binary embeds and how bytes cross a host's IPC are the host's — the Android host carries a frame base64 (spec §2.4) |
 | `sync_engine` (`src/sync_engine/mod.rs`) | `live`, the connection manager — its socket, its backoff timers, the exit push — and its tests | `tokio` tasks, a WebSocket and an `AppHandle` it emits `sync:live` and `sync:applied` through | never: how a host keeps a socket open is the host's; `schedule` is the half that decides, and it is here |
 | `maintenance` | 9 tests — nothing of its code | a database `split` converted | never |
@@ -537,7 +549,8 @@ is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain c
   `[workspace.dependencies]` entry, a renamed dependency and a command-line `--features` all
   pass it), and CI's `rust` job fails when
   `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints
-  `feature "testing"`. **A new host owes that step its own package name.**
+  `feature "testing"`. **A new host owes that step its own package name** — the light app's
+  Android host, `grimoire-light`, has it since phase 4.
 - **`clippy --all-targets` and `cargo test` both turn `testing` on for the host's ordinary
   library too**, so neither notices a non-test use of the scaffolding. `cargo check -p
   mtg-grimoire --locked` is the build that ships; `npm run verify` and the `rust` job both run it.

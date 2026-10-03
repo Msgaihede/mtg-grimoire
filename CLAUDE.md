@@ -168,8 +168,9 @@ no combo" and "we have never downloaded the list" have to be two different sente
   one app runs across every worktree. See the `running-the-app` skill.
 - `npm run verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test. **Run
   before every commit.** Rust is pinned by `rust-toolchain.toml` and Node by `.nvmrc`.
-- `npm run test` / `test:run` — frontend tests; `cargo test --workspace` — Rust tests, for both
-  members of the cargo workspace at the root (`src-tauri` and `crates/grimoire-core`). **Its
+- `npm run test` / `test:run` — frontend tests; `cargo test --workspace` — Rust tests, for every
+  member of the cargo workspace at the root (`src-tauri`, `crates/grimoire-core` and, since
+  2026-10-03, the light app's Android host `mobile/src-tauri`). **Its
   build tree is still `src-tauri/target`**: `.cargo/config.toml` pins it, so nothing that names
   that folder moved when the workspace arrived on 2026-10-02.
 - `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not

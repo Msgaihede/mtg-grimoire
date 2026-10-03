@@ -134,6 +134,19 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   that holds it, ahead of its `<workspace>/target` default — so it looks in `src-tauri/target`,
   as before. **v0.40.0 (2026-10-03) was the first release under the workspace and attached all
   five files**; [light-app.md](../docs/reference/light-app.md) §6.12 has the run.
+- **The `android` job builds the light app's APK** (phase 4, 2026-10-03): `npx tauri android
+  build --apk --target aarch64` from `mobile/` on `ubuntu-24.04`, with JDK 21 from the image
+  (`JAVA_HOME_21_X64` — JDK 25 breaks the Android Gradle and Kotlin plugins), `NDK_HOME` set to
+  the image's `ANDROID_NDK_LATEST_HOME`, and the light bundle built by the host's
+  `beforeBuildCommand`. It writes the APK's size and the `.so`'s to the step summary and uploads
+  the APK (`actions/upload-artifact`, 14 days). **A release build signed with the runner's debug
+  key** — installable, but one run's APK does not upgrade over another's. Its routing is the
+  host's tree (`mobile/src-tauri/*`), the workspace's root files and the toolchain pin — **not
+  the fail-safe and not `crates/grimoire-core/*`**: an unrecognised path cannot be an input to
+  the APK, the engine's Android compile is `core`'s, and its API against the host is compiled by
+  `rust`, where `mobile/src-tauri` is a workspace member. Every arm that sets `android` sets
+  `rust`. **Nothing in it runs the APK.** Its first run is the PR that adds it, and its numbers
+  are that run's summary — [light-app.md](../docs/reference/light-app.md) §8.1.
 - **The `core` job is a compile gate for `grimoire-core` on the two targets a desktop build
   never touches** (2026-10-02): a matrix over `wasm32-unknown-unknown` and
   `aarch64-linux-android` on `ubuntu-24.04`, each leg `cargo build --lib -p grimoire-core
@@ -150,8 +163,8 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   successfully`), with the version printed and checked in the step; **the NDK's `bin` on
   `PATH` and `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` set by hand**, because cargo and
   `cc-rs` have never read `NDK_HOME`; and **a `rust-cache` `key` per target**, or one cache
-  thrashes between the legs. The linker is the API-26 one, carried over and not decided here:
-  the level is phase 4's to settle, with the Android host.
+  thrashes between the legs. The linker is the API-26 one, and since phase 4 the light host's
+  `tauri.conf.json` names the same `minSdkVersion` (`mobile/host.test.ts` pins it).
 - **The `rust` job runs a second, separate package's tests and only its tests.**
   `crates/card-scanner` is excluded from the workspace on purpose, so `cargo test --workspace`
   compiles it and runs none of it — `session::tests` (the `live.html` key census, the panic

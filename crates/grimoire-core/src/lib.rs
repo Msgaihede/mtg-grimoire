@@ -121,6 +121,9 @@ pub mod index;
 /// **A Scryfall bulk file, streamed into `cards`** a batch at a time, the write connection
 /// given back between batches.
 pub mod ingest;
+/// **Opening a data folder for a host that is not the desktop** — the steps `desktop::init_state`
+/// takes, less the two only the desktop has (the pre-27 conversion and the mirror's name).
+pub mod launch;
 pub mod legalities;
 pub mod listview;
 pub mod maintenance;

@@ -44,6 +44,7 @@ jobs:
       core: ${{ steps.classify.outputs.core }}
       powershell: ${{ steps.classify.outputs.powershell }}
       storybook: ${{ steps.classify.outputs.storybook }}
+      android: ${{ steps.classify.outputs.android }}
     steps:
       # The classification is a diff against the base, so this needs history, not a
       # depth-1 checkout. 188 commits of text — the full fetch costs a second or two.
@@ -94,7 +95,7 @@ jobs:
           # missing one reads as `''`, every job gated on it skips, and `ci-ok` counts a skip
           # as a pass — so a router that printed nothing would take the gate green having run
           # nothing. Fail here instead.
-          for job in frontend rust core powershell storybook; do
+          for job in frontend rust core powershell storybook android; do
             grep -Eqx "$job=(true|false)" <<< "$flags" \
               || { echo "ci-route.mjs printed no '$job=true|false' line:" >&2; echo "$flags" >&2; exit 1; }
           done
@@ -229,11 +230,15 @@ jobs:
       # job parallel with `frontend` instead of serialized behind a full Vite build;
       # nothing under test reads it. It is also why this job is safe to run alone: the
       # frontend it "needs" is one file it writes itself.
+      #
+      # **Two bundles since the light app's Android host joined the workspace** (2026-10-03):
+      # `mobile/src-tauri` reads `frontendDist: "../../dist-mobile"` the same way.
       - name: Stub the frontend bundle
         shell: bash
         run: |
-          mkdir -p dist
+          mkdir -p dist dist-mobile
           echo '<!doctype html><title>ci stub</title>' > dist/index.html
+          echo '<!doctype html><title>ci stub</title>' > dist-mobile/index.html
 
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
       - uses: ./.github/actions/rust-toolchain
@@ -258,7 +263,7 @@ jobs:
       # has no such reach: clippy and the tests see the members and nothing else.
       - name: cargo fmt
         if: matrix.os == 'ubuntu-22.04'
-        run: cargo fmt -p mtg-grimoire -p grimoire-core --check
+        run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light --check
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -271,7 +276,7 @@ jobs:
       # fail in `tauri build`, on a release tag. This is the build with no dev-dependencies
       # in it.
       - name: cargo check (the shipped feature set)
-        run: cargo check -p mtg-grimoire --locked
+        run: cargo check -p mtg-grimoire -p grimoire-light --locked
 
       # **And the resolver's own answer to "is `testing` on in that build"**, because one thing
       # behind the feature is not scaffolding: `image_uri::is_allowed_host` lets a loopback
@@ -283,12 +288,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          tree=$(cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core --locked)
-          echo "$tree"
-          if echo "$tree" | grep -q 'feature "testing"'; then
-            echo "grimoire-core's 'testing' feature is on in a build that is not a test" >&2
-            exit 1
-          fi
+          # Every host by its package name — the desktop, and the light app's Android host.
+          for host in mtg-grimoire grimoire-light; do
+            tree=$(cargo tree -p "$host" -e features,normal,build -i grimoire-core --locked)
+            echo "$tree"
+            if echo "$tree" | grep -q 'feature "testing"'; then
+              echo "grimoire-core's 'testing' feature is on in $host's build, which is not a test" >&2
+              exit 1
+            fi
+          done
 
       - name: cargo test
         run: cargo test --workspace --locked
@@ -398,9 +406,9 @@ jobs:
       # clang on `PATH` (or `cc-rs` reports `failed to find tool "clang"` while compiling
       # `libsqlite3-sys`), and an explicit linker (or `rustc` reports ``linker `cc` not found``).
       #
-      # **API 26 is the first attempt's `minSdk`, carried over and not decided here.** There is
-      # no Android project in the tree to read one from; the level is phase 4's to settle, with
-      # the host, and this linker name moves with it.
+      # **API 26 is the light host's `minSdkVersion`** (`mobile/src-tauri/tauri.conf.json`, held
+      # by `mobile/host.test.ts`): the first attempt's level, carried over and settled with the
+      # host in phase 4. This linker name moves with it.
       - name: Point cargo at the NDK toolchain
         if: matrix.target == 'aarch64-linux-android'
         run: |
@@ -433,6 +441,97 @@ jobs:
 
       - name: cargo clippy (${{ matrix.target }})
         run: cargo clippy --lib -p grimoire-core --locked --target ${{ matrix.target }} -- -D warnings
+
+  # **The light app's Android host, built into an APK** (phase 4, 2026-10-03). The `core` job
+  # proves the engine *compiles* for `aarch64-linux-android`; this one links the host
+  # (`mobile/src-tauri`) for it, packs the light bundle and the `.so` into an APK through the
+  # committed `gen/android` Gradle project, and reports its size — the first APK this repository
+  # has produced. **It is the Android toolchain Markus's machine does not have yet**: the
+  # session that built the host could not reach `dl.google.com`, and the Ubuntu runner ships the
+  # SDK, the NDK and JDK 21, so Markus chose CI as the place the APK is built (2026-10-03).
+  #
+  # **A release build, signed with the runner's debug key** (`gen/android/app/build.gradle.kts`,
+  # by hand): installable and the size a shipped APK would be, but every runner mints its own
+  # key, so one run's APK does not upgrade over another's. Signing and distribution are decided
+  # after a real phone has run it. **arm64 only**, because that is every phone this app is for
+  # and each further ABI is another release compile of the whole engine.
+  #
+  # **Nothing here runs the APK.** Installing it, the cold start and the first corpus ingest are
+  # a device's or an emulator's to measure. The artifact is kept 14 days.
+  #
+  # **JDK 21, from the image**: `JAVA_HOME_21_X64` is the runner's own, and JDK 25 breaks the
+  # Android Gradle and Kotlin plugins (the light-app spec §5). `npx tauri`, never `cargo tauri` —
+  # the CLI is what points cargo at the NDK's clang and linker for each target, which the `core`
+  # job above has to do by hand.
+  android:
+    name: android
+    needs: changes
+    if: needs.changes.outputs.android == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Point the build at JDK 21, the SDK and the NDK
+        run: |
+          set -euo pipefail
+          : "${JAVA_HOME_21_X64:?the runner image did not set JAVA_HOME_21_X64}"
+          : "${ANDROID_HOME:?the runner image did not set ANDROID_HOME}"
+          : "${ANDROID_NDK_LATEST_HOME:?the runner image did not set ANDROID_NDK_LATEST_HOME}"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          "$JAVA_HOME_21_X64/bin/java" -version
+          cat "$ANDROID_NDK_LATEST_HOME/source.properties"
+
+      - uses: ./.github/actions/rust-toolchain
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> src-tauri/target"
+          key: android-aarch64
+
+      # From `mobile/`, so the CLI finds `mobile/src-tauri/tauri.conf.json` — from the repository
+      # root it finds the desktop's. `beforeBuildCommand` builds the light bundle into
+      # `dist-mobile/` first.
+      - name: Build the APK
+        working-directory: mobile
+        run: npx tauri android build --apk --target aarch64 --ci
+
+      - name: Report the APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=$(find mobile/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          [ -n "$apk" ] || { echo "the build produced no APK" >&2; exit 1; }
+          bytes=$(stat -c %s "$apk")
+          so=$(unzip -l "$apk" | awk '/lib\/arm64-v8a\/.*\.so$/ {print $1}' | head -1)
+          echo "APK: $apk — $bytes bytes"
+          {
+            echo "### Light app APK (arm64, release, debug-signed)"
+            echo
+            echo "| | bytes | MiB |"
+            echo "| --- | ---: | ---: |"
+            echo "| APK | $bytes | $(awk "BEGIN {printf \"%.1f\", $bytes / 1048576}") |"
+            echo "| \`libgrimoire_light_lib.so\`, uncompressed | ${so:-?} | $(awk "BEGIN {printf \"%.1f\", ${so:-0} / 1048576}") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p apk-out && cp "$apk" apk-out/mtg-grimoire-light-arm64.apk
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mtg-grimoire-light-arm64
+          path: apk-out/mtg-grimoire-light-arm64.apk
+          retention-days: 14
+          if-no-files-found: error
 
   # Branch protection pins required checks by name string, and a matrix job's name embeds
   # its matrix values — so protecting `rust (windows-latest)` would silently stop applying
@@ -472,7 +571,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, frontend, rust, core, powershell, storybook]
+    needs: [changes, frontend, rust, core, powershell, storybook, android]
     runs-on: ubuntu-22.04
     steps:
       - name: Fail unless every dependency succeeded or was deliberately skipped
@@ -483,8 +582,9 @@ jobs:
           CORE: ${{ needs.core.result }}
           POWERSHELL: ${{ needs.powershell.result }}
           STORYBOOK: ${{ needs.storybook.result }}
+          ANDROID: ${{ needs.android.result }}
         run: |
-          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST core=$CORE powershell=$POWERSHELL storybook=$STORYBOOK"
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST core=$CORE powershell=$POWERSHELL storybook=$STORYBOOK android=$ANDROID"
 
           # `changes` is the one dependency that may never be skipped or fail. It decides
           # what the other two do, so if it dies they skip — and a rule that reads a skip
@@ -494,7 +594,7 @@ jobs:
           # A skip here is a deliberate answer from `changes`: that part of the repo did
           # not change, so it has nothing to prove. Every job gated on a `changes` output
           # belongs in this loop — one left out is a job whose failure the gate ignores.
-          for result in "$FRONTEND" "$RUST" "$CORE" "$POWERSHELL" "$STORYBOOK"; do
+          for result in "$FRONTEND" "$RUST" "$CORE" "$POWERSHELL" "$STORYBOOK" "$ANDROID"; do
             case "$result" in
               success|skipped) ;;
               *) exit 1 ;;

@@ -1717,6 +1717,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "grimoire-light"
+version = "0.40.0"
+dependencies = [
+ "base64 0.22.1",
+ "grimoire-core",
+ "serde",
+ "serde_json",
+ "tauri",
+ "tauri-build",
+]
+
+[[package]]
 name = "gtk"
 version = "0.18.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"

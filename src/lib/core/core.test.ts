@@ -82,3 +82,46 @@ describe("the Tauri core", () => {
     });
   });
 });
+
+describe("the table core", () => {
+  it("names the command inside one core_call, its arguments untouched", async () => {
+    const { tableCore } = await import("@/lib/core/table");
+    invoke.mockResolvedValue({ ok: 1 });
+    const out = await tableCore.call("search_cards", { req: { text: "bolt" } });
+    expect(invoke).toHaveBeenCalledWith("core_call", {
+      name: "search_cards",
+      args: { req: { text: "bolt" } },
+    });
+    expect(out).toEqual({ ok: 1 });
+  });
+
+  it("sends no args key for a command called with none", async () => {
+    const { tableCore } = await import("@/lib/core/table");
+    await tableCore.call("list_sets");
+    expect(invoke).toHaveBeenCalledWith("core_call", { name: "list_sets" });
+  });
+
+  it("carries a byte payload as base64, its headers as the arguments", async () => {
+    const { tableCore } = await import("@/lib/core/table");
+    await tableCore.call("scanner_frame", new Uint8Array([0, 1, 2, 255]), {
+      headers: { "x-scanner-options": "{}" },
+    });
+    expect(invoke).toHaveBeenCalledWith("core_call", {
+      name: "scanner_frame",
+      args: { "x-scanner-options": "{}" },
+      body: "AAEC/w==",
+    });
+  });
+});
+
+describe("pickCore", () => {
+  it("picks the table only for the mark the light host sets", async () => {
+    const { pickCore, HOST_MARK } = await import("@/lib/core");
+    const { tableCore } = await import("@/lib/core/table");
+    // `mobile/src-tauri/src/lib.rs`'s HOST_MARK sets exactly this; its own test pins the string.
+    expect(HOST_MARK).toBe("__GRIMOIRE_CORE__");
+    expect(pickCore({ __GRIMOIRE_CORE__: "table" })).toBe(tableCore);
+    expect(pickCore({})).toBe(tauriCore);
+    expect(pickCore({ __GRIMOIRE_CORE__: "something else" })).toBe(tauriCore);
+  });
+});
