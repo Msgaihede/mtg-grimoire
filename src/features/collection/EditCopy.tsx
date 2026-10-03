@@ -37,17 +37,17 @@
  * list is re-read instead.
  */
 import { useId, useState, type ReactElement } from "react";
-import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { Dialog } from "@/components/Dialog";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import { CONDITIONS, CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { FINISH_LABEL, isFinish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
-import { ipc, ipcError, type EntryPatch } from "@/lib/ipc";
+import { ipcError, type EntryPatch } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { parsePurchasePrice, priceText, unreadablePriceNote } from "@/lib/prices";
 import { cn } from "@/lib/utils";
+import { useCopyUpdate } from "./useCopyWrites";
 
 /**
  * The one `collection_entries` row this dialog is about, as much of it as the question needs.
@@ -318,7 +318,6 @@ function EditCopyForm({
   onDone: () => void;
 }): ReactElement {
   const id = useId();
-  const queryClient = useQueryClient();
 
   /**
    * Seeded from the row, **mount-only**, in a plain initial value.
@@ -357,29 +356,20 @@ function EditCopyForm({
    *  it would be the silent no-op this dialog exists to refuse. */
   const blocked = !changed || price.kind === "unreadable";
 
-  const save = useMutation({
-    mutationFn: () => ipc.collectionUpdate(target.entryId, patch),
-    onSuccess: () => {
-      /**
-       * **`["collection"]` whole, and nothing else.**
-       *
-       * The whole key rather than `CollectionPage`'s narrower `settle()` set, which deliberately
-       * leaves the *list* alone because a stepper press has already rewritten the one number it
-       * moved. Nothing of the sort is true here: eight of the patch's fields are grain columns,
-       * so an edit can fold this row onto another one and the answer names an id the caller never
-       * passed in. A list that has lost a row cannot be repaired from a patch, so it is re-read.
-       *
-       * And nothing else, because nothing else draws either field. `["cards", "search"]` is
-       * `ownedQuantity` and `wishlisted` — both counts of *copies*, and no copy moved.
-       * `["wishlist"]` is the same arithmetic one table over. `["decks"]` is what a deck's group
-       * physically holds, which is a folder and a quantity: this dialog edits neither. A grade and
-       * a price are on no badge and in no deck's sums.
-       */
-      void queryClient.invalidateQueries({ queryKey: ["collection"] });
-      // Closed without moving the caret: the menu row that opened this is long gone, so there is
-      // nothing to hand focus back to and `Dialog`'s own restore has nothing to do.
-      onDone();
-    },
+  /**
+   * **`useCopyUpdate`** — the write and its settle, out of this form on 2026-10-03 so the light
+   * app's phone face corrects a grade through the same mutation. What it settles is
+   * **`["collection"]` whole, and nothing else**: the whole key rather than `CollectionPage`'s
+   * narrower `settle()` set, because eight of the patch's fields are grain columns, so an edit can
+   * fold this row onto another one and the answer names an id the caller never passed in — a list
+   * that has lost a row cannot be repaired from a patch, so it is re-read. And nothing else,
+   * because nothing else draws either field: `["cards", "search"]` and `["wishlist"]` count
+   * *copies*, and `["decks"]` reads a folder and a quantity, neither of which this edits.
+   */
+  const save = useCopyUpdate({
+    // Closed without moving the caret: the menu row that opened this is long gone, so there is
+    // nothing to hand focus back to and `Dialog`'s own restore has nothing to do.
+    onSuccess: () => onDone(),
   });
 
   /**
@@ -472,7 +462,7 @@ function EditCopyForm({
             onKeyDown={(e) => {
               if (e.key !== "Enter" || blocked || save.isPending) return;
               e.preventDefault();
-              save.mutate();
+              save.mutate({ id: target.entryId, patch });
             }}
             aria-label={`Purchase price in ${paidIn.toUpperCase()}`}
             aria-invalid={price.kind === "unreadable" || undefined}
@@ -498,7 +488,7 @@ function EditCopyForm({
           // delivers its press.
           onClick={() => {
             if (blocked || save.isPending) return;
-            save.mutate();
+            save.mutate({ id: target.entryId, patch });
           }}
           className={SAVE}
         >

@@ -1,6 +1,11 @@
 import { useCallback, useMemo, useState } from "react";
 import { CollectionSummaryHeader } from "@/features/collection/CollectionSummary";
-import { peekOf, rolledUp, shelfStat } from "@/features/collection/collectionShelfModel";
+import {
+  foldChange,
+  peekOf,
+  rolledUp,
+  shelfStat,
+} from "@/features/collection/collectionShelfModel";
 import {
   collectionTiles,
   shelfTotal,
@@ -10,13 +15,17 @@ import {
 import { COLLECTION_TRAY, useCollection } from "@/features/collection/useCollection";
 import { useCollectionFolders } from "@/features/collection/useCollectionFolders";
 import { FOLD_PAUSED_REASON } from "@/features/shelves/ShelfToolbar";
-import { useShelfFolds } from "@/features/shelves/useShelfFolds";
 import { buildFolderTree, trailOf } from "@/lib/folderTree";
 import { layoutShelves, type ShelfSection } from "@/lib/shelfLayout";
 import type { Shelf } from "@/lib/shelves";
+import { tileKeyOf } from "@/lib/tileKey";
+import type { CollectionRow } from "@/lib/ipc";
 import { CabinetFilters } from "../CabinetFilters";
 import type { WallItem } from "../CardWall";
 import { collectionItem } from "../items";
+import { ReceiptBar } from "../deck/receipt";
+import { CopyActions, type CopyActing } from "../lists/CopyActions";
+import { useListReceipt } from "../lists/receipt";
 import { DeckLink, EmptyShelfBox, PathRow, PhoneShelfHeading } from "../ShelfParts";
 import { NO_ITEMS, ShelfWall } from "../ShelfWall";
 import { CollectionTransfer } from "../transfer/CollectionTransfer";
@@ -37,11 +46,15 @@ const ROOT = "Collection";
  * **Every shelf opens.** A heading's press folds its shelf in place; its `→` opens the folder as a
  * level of its own — a deck's group and `Recently removed` included, which start shut.
  *
- * **A fold here is the phone's own and is not stored.** The shelves start from the folds the
- * reader stored on the desktop (`useShelfFolds`, read and never written), and a press here is
- * held in this page for as long as it is mounted: nothing on the phone face writes yet, and
- * `mobile:tauri` shares the desktop's database — a fold pressed on a phone must not re-fold the
- * reader's desktop.
+ * **A fold is stored, as on the desktop** (step 3.5b): a heading's press writes the reader's folds
+ * through `useCollection`'s `setFold` — `useShelfFolds`, the one `app_meta` row both faces of this
+ * install read — and only where it moves off the shelf kind's default (`foldChange`). Until 3.5b a
+ * press was held by the page because nothing on the phone wrote; light-app.md §7.5b has why that
+ * reason went and the other one (`mobile:tauri` sharing the desktop's database) does not hold.
+ *
+ * **A tile's `⋯` opens its copies' actions** (`lists/CopyActions.tsx`) — the desktop's edits to
+ * one copy, as a sheet — and a press on the picture still opens the card. What the writes did is
+ * said in one line at the foot of the page, or of the sheet while it is up.
  *
  * **Filtered as Search is**: the box and one `Filters` button on a line that stays put, the
  * filters that are on stated under it, and the sheet behind the button drawing the desktop bar's
@@ -50,11 +63,7 @@ const ROOT = "Collection";
  * fold.
  */
 export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void }) {
-  const stored = useShelfFolds("collection").folds;
-  const [pressed, setPressed] = useState<Readonly<Record<string, boolean>>>({});
-  const folds = useMemo(() => ({ ...stored, ...pressed }), [stored, pressed]);
-
-  const collection = useCollection({ folds });
+  const collection = useCollection();
   const {
     query,
     marketplace,
@@ -66,6 +75,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
     filtering,
     folderId,
     openFolder,
+    setFold,
   } = collection;
   const currency = marketplace.currency;
 
@@ -116,9 +126,37 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
 
   const more = useMore(query, query.hasNextPage && !collection.levelHeld);
 
+  // Nothing while a filter is on — the desktop's rule (its C-I2 ruling): folding is suspended
+  // then, so a press would store a fold the reader cannot see take effect until the box empties.
   const toggle = useCallback(
-    (shelf: Shelf) => setPressed((now) => ({ ...now, [String(shelf.id)]: !shelf.collapsed })),
-    [],
+    (shelf: Shelf) => {
+      if (filtering) return;
+      setFold(shelf.id, foldChange(shelf, !shelf.collapsed));
+    },
+    [filtering, setFold],
+  );
+
+  /** The rows behind each tile, by the tile's own key — what a tile's `⋯` addresses. */
+  const rowsByTile = useMemo(() => {
+    const out = new Map<string, CollectionRow[]>();
+    for (const row of collection.rows) {
+      const key = tileKeyOf(row.cardId, row.finish, row.folderId);
+      const held = out.get(key) ?? [];
+      held.push(row);
+      out.set(key, held);
+    }
+    return out;
+  }, [collection.rows]);
+  const [acting, setActing] = useState<CopyActing | null>(null);
+  const receipt = useListReceipt();
+  const actionsFor = useCallback(
+    (item: WallItem) => () => {
+      const behind = rowsByTile.get(item.key) ?? [];
+      // One row is the copy itself; several are a question the sheet asks first.
+      const only = behind.length === 1 ? behind[0] : null;
+      setActing({ tileKey: item.key, entryId: only?.id ?? null, seen: only });
+    },
+    [rowsByTile],
   );
 
   const renderHeading = useCallback(
@@ -184,6 +222,23 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
     />
   );
 
+  // The receipt line and the sheet, drawn under every answer below: a removal that empties a shelf
+  // still says what it did, and still offers it back.
+  const foot = (
+    <>
+      {/* Muted while the sheet is up: the sheet draws the same line in its own foot. */}
+      <ReceiptBar receipt={receipt} muted={acting !== null} className="shrink-0" />
+      <CopyActions
+        acting={acting}
+        rows={collection.rows}
+        folders={folders.folders}
+        receipt={receipt}
+        onActing={setActing}
+        onClose={() => setActing(null)}
+      />
+    </>
+  );
+
   if (query.isLoadingError) {
     return (
       <>
@@ -217,6 +272,7 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
                 ? "That folder is gone."
                 : "Nothing in this folder yet."}
         </DimNote>
+        {foot}
       </>
     );
   }
@@ -256,10 +312,12 @@ export function CollectionPage({ onOpen }: { onOpen: (item: WallItem) => void })
         renderHeading={renderHeading}
         renderEmpty={renderEmpty}
         onOpen={onOpen}
+        actionsFor={actionsFor}
         onNearEnd={more}
         resetKey={collection.scrollKey}
         footer={<NextPageRefused query={query} />}
       />
+      {foot}
     </>
   );
 }

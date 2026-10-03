@@ -74,6 +74,7 @@ import { sameDeckSlot } from "@/features/decks/deckWalk";
 import { departureFrom, useReturnToRemovedCard, type PaneDeparture } from "./cardReturn";
 import { LabelSwatch } from "@/features/decks/LabelColorPicker";
 import type { DropdownOption } from "@/components/Dropdown/types";
+import { useCopyFinish, useCopyPrinting } from "@/features/collection/useCopyWrites";
 import { MENU_CONDITION } from "@/lib/conditions";
 import { parseFinishes, soleFinish, type Finish } from "@/lib/finish";
 import { FOCUS } from "@/lib/focus";
@@ -1163,21 +1164,21 @@ function Body({
    * a `useMutation`-level `onSuccess` outlives the panel that pressed it, which is exactly the
    * property the invalidations in {@link settle} need and the follow must not have.
    */
+  //
+  // **The writes and their settle are `useCopyFinish` and `useCopyPrinting`** (out of this file on
+  // 2026-10-03, so the light app's phone face edits a copy through the same two mutations): each
+  // settles `OWNED_WRITE_KEYS` itself — {@link settle}'s four keys, the same set — before the
+  // handlers below run, so the follow is all this file adds.
   const followCopy = (sent: number, cardId: string, finish: Finish | null, change: EntryChange) => {
-    settle();
     if (useAppStore.getState().paneCopy?.entryId !== sent) return;
     editCopy(cardId, finish, change.id);
   };
-  const setCopyFinish = useMutation({
-    mutationFn: ({ id, finish }: { id: number; cardId: string; finish: Finish }) =>
-      ipc.collectionUpdate(id, { finish }),
+  const setCopyFinish = useCopyFinish({
     onMutate: () => setRefusal(null),
     onSuccess: (change, { id, cardId, finish }) => followCopy(id, cardId, finish, change),
     onError: (e) => setRefusal(`Couldn't change this copy's finish — ${ipcError(e)}`),
   });
-  const moveCopy = useMutation({
-    mutationFn: ({ id, cardId }: { id: number; cardId: string; finish: Finish | null }) =>
-      ipc.collectionSetPrinting(id, cardId),
+  const moveCopy = useCopyPrinting({
     onMutate: () => setRefusal(null),
     onSuccess: (change, { id, cardId, finish }) => followCopy(id, cardId, finish, change),
     onError: (e) => setRefusal(`Couldn't change this copy's printing — ${ipcError(e)}`),

@@ -107,11 +107,9 @@ describe("Wishlist", () => {
     ).toHaveLength(3);
   });
 
-  it("opens a shut deck's list on a press, and stores nothing", async () => {
+  it("opens a shut deck's list on a press, and stores the fold", async () => {
     tallViewport();
-    const writes = vi.fn();
     renderPhone(<PhoneFace />, { path: "/wishlist" });
-    registerCommands({ set_shelf_folds: writes });
     const wall = await cabinet();
     const heading = within(wall).getByRole("button", { name: "Rhystic Testbed" });
     expect(heading).toHaveAttribute("aria-expanded", "false");
@@ -122,7 +120,8 @@ describe("Wishlist", () => {
     expect(
       await within(shelf).findByRole("button", { name: "Black Lotus, LEA 232" }, SETTLE),
     ).toBeInTheDocument();
-    expect(writes).not.toHaveBeenCalled();
+    // Stored as the desktop stores it (step 3.5b), off the managed list's shut default.
+    await waitFor(async () => expect((await ipc.shelfFolds()).wishlist).toEqual({ "4": false }));
   });
 
   it("links a deck's list to its deck from the heading", async () => {

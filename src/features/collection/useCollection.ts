@@ -275,10 +275,10 @@ function answered(read: { isPending: boolean; isPlaceholderData: boolean }): boo
  *   **There is no `flattenLocally` beside it any more**: that was the hand-off's sweep, a flat read
  *   of every drawer, and the root's shelves are every drawer already.
  * @param options.folds The folds the shelves are built from, **in place of the stored ones** —
- *   `useShelfFolds("collection")`'s, which is what every caller that passes nothing gets, the
- *   desktop page included. The light app's phone face passes its own: a heading pressed there
- *   folds the shelf in place without writing `app_meta`, which `mobile:tauri` shares with the
- *   desktop's database, and nothing on the phone face writes yet. Held still by the caller (a
+ *   `useShelfFolds("collection")`'s, which is what every caller that passes nothing gets.
+ *   **No caller passes it since 2026-10-03**: the light app's phone face held its folds in the page
+ *   until step 3.5b and stores them through `setFold` now (`docs/reference/light-app.md` §7.5b);
+ *   it is kept as the seam a surface with folds of its own would use. Held still by the caller (a
  *   `useMemo`): it is a level frame's input, and a fresh object every render is a new frame every
  *   render. `setFold` and `setMany` below still write the stored folds whichever was passed.
  */

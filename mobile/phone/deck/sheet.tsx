@@ -1,7 +1,8 @@
 import type { ReactNode } from "react";
-import { Check, ChevronLeft, ChevronRight } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Minus, Plus, Trash2 } from "lucide-react";
 import { Dialog } from "@/components/Dialog";
-import { FOCUS_INSET } from "@/lib/focus";
+import { FOCUS, FOCUS_INSET } from "@/lib/focus";
+import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 
 /**
@@ -130,11 +131,14 @@ export function SheetChoice({
   label,
   current,
   note,
+  indent = 0,
   onPick,
   children,
 }: {
   label: string;
   current: boolean;
+  /** How deep in a tree the choice sits — a nested folder — 16px a level past the row's own. */
+  indent?: number;
   /** A dim second line — `(off)` on a switched-off pile, what it costs. */
   note?: string;
   onPick: () => void;
@@ -148,6 +152,7 @@ export function SheetChoice({
         aria-current={current ? "true" : undefined}
         aria-disabled={current || undefined}
         aria-label={children !== undefined ? label : undefined}
+        style={indent > 0 ? { paddingLeft: 16 + indent * 16 } : undefined}
         onClick={() => {
           if (!current) onPick();
         }}
@@ -186,5 +191,55 @@ export function SheetBack({ label, onBack }: { label: string; onBack: () => void
       <ChevronLeft aria-hidden className="size-4 shrink-0" />
       <span className="min-w-0 flex-1 truncate">{label}</span>
     </button>
+  );
+}
+
+/**
+ * The copies, as a stepper a thumb can work: `−`, the number, `+`, each 44px. **`−` at one copy is
+ * the removal**, and says so in its name — the same write as the sheet's `Remove …` row below it,
+ * and the receipt offers it back where the desktop can. A deck row's sheet and a collection copy's
+ * and a wish's draw it alike.
+ */
+export function SheetStepper({
+  quantity,
+  name,
+  onSet,
+}: {
+  quantity: number;
+  name: string;
+  onSet: (quantity: number) => void;
+}) {
+  const button = cn(
+    "flex size-11 shrink-0 items-center justify-center rounded-md border border-border",
+    PRESS,
+    FOCUS,
+  );
+  return (
+    <div className="flex items-center gap-3 border-b border-border px-4 pb-3 pt-2">
+      <span className="min-w-0 flex-1 text-sm text-dim">Copies</span>
+      <button
+        type="button"
+        aria-label={quantity <= 1 ? `Remove ${name}` : `One fewer ${name}`}
+        onClick={() => onSet(Math.max(0, quantity - 1))}
+        className={cn(button, quantity <= 1 && "text-destructive")}
+      >
+        {quantity <= 1 ? (
+          <Trash2 aria-hidden className="size-4" />
+        ) : (
+          <Minus aria-hidden className="size-4" />
+        )}
+      </button>
+      <output aria-label="Copies" className="w-8 text-center font-mono text-base tabular-nums">
+        {quantity}
+      </output>
+      <button
+        type="button"
+        aria-label={`One more ${name}`}
+        onClick={() => onSet(quantity + 1)}
+        className={button}
+      >
+        <Plus aria-hidden className="size-4" />
+      </button>
+    </div>
   );
 }

@@ -87,6 +87,7 @@ export function ShelfWall({
   renderEmpty,
   shelfLabel,
   onOpen,
+  actionsFor,
   onNearEnd,
   resetKey,
   footer,
@@ -105,6 +106,11 @@ export function ShelfWall({
   /** What a shelf's list is called. Defaults to the shelf's own name. */
   shelfLabel?: (shelf: Shelf) => string;
   onOpen: (item: WallItem) => void;
+  /**
+   * The press behind a tile's `⋯` (`WallTile.onActions`), or `undefined` for a tile that offers
+   * none — a deck's managed wish, which nothing on the phone may edit. Absent, no tile has one.
+   */
+  actionsFor?: (item: WallItem) => (() => void) | undefined;
   /** `CardWall.onNearEnd`'s contract: asked often near the end, so it must be idempotent. */
   onNearEnd?: () => void;
   /** Changes when this is a different list — a level, a filter, a sort — and sends the wall to
@@ -212,7 +218,12 @@ export function ShelfWall({
               aria-posinset={slot - first + 1}
               className="flex min-w-0 flex-1"
             >
-              <WallTile item={item} onOpen={onOpen} className="min-w-0 flex-1" />
+              <WallTile
+                item={item}
+                onOpen={onOpen}
+                onActions={actionsFor?.(item)}
+                className="min-w-0 flex-1"
+              />
             </div>
           ) : (
             <div key={`slot-${i}`} aria-hidden className="min-w-0 flex-1">
