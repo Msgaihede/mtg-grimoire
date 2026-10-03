@@ -42,6 +42,9 @@ pub mod collection_alloc;
 pub mod collection_folders;
 pub use grimoire_core::collection_source;
 pub mod combos;
+/// The fence between `grimoire-core`'s command table and `generate_handler!` — test-only.
+#[cfg(test)]
+mod command_table;
 pub use grimoire_core::db;
 pub mod deck;
 pub mod deck_audit;
