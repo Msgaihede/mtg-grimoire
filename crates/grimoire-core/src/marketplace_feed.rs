@@ -1193,6 +1193,18 @@ pub fn emit(state: &State, marketplace: &str, phase: &str, done: u64, total: u64
     );
 }
 
+/// The selected marketplace, when it is feed-backed and its feed is due at a launch: stale, and
+/// not resting after a file that arrived and could not be used ([`crate::feed::backoff`]).
+/// `None` for a marketplace priced from `cards.prices`, which downloads nothing, ever.
+/// [`refresh_selected_if_due`] and [`crate::downloads::launch_due`] both ask it.
+pub fn selected_due(conn: &Connection, now: i64) -> Option<String> {
+    let id = crate::marketplace::stored(conn);
+    let provider = provider_for(&id)?;
+    let fetched_at = read_status(conn, provider, now).fetched_at;
+    let resting = crate::feed::backoff::resting(conn, &backoff_feed(provider), now);
+    (is_stale(fetched_at, now) && !resting).then_some(id)
+}
+
 /// Refresh the selected marketplace's feed if it is feed-backed and due, at startup.
 ///
 /// **Only the selected one, and only when it is due.** Nobody downloads 63.7 MiB for a
@@ -1203,23 +1215,13 @@ pub fn emit(state: &State, marketplace: &str, phase: &str, done: u64, total: u64
 /// Silent and best-effort: this runs before there is a window to complain in, the failure is
 /// already in `error_log`, and the honest fallback is the prices already on disk.
 pub async fn refresh_selected_if_due(state: &Arc<State>) {
-    let (marketplace, fetched_at, resting) = {
+    let due = {
         let conn = state.lock_db_read();
-        let id = crate::marketplace::stored(&conn);
-        let now = unix_now();
-        let provider = provider_for(&id);
-        let at = provider.map(|p| read_status(&conn, p, now).fetched_at);
-        // A feed that arrived and could not be used rests for a day — [`crate::feed::backoff`].
-        let resting =
-            provider.is_some_and(|p| crate::feed::backoff::resting(&conn, &backoff_feed(p), now));
-        (id, at, resting)
+        selected_due(&conn, unix_now())
     };
-    let Some(fetched_at) = fetched_at else {
-        return; // Not a feed-backed marketplace: nothing to download, ever.
-    };
-    if !is_stale(fetched_at, unix_now()) || resting {
+    let Some(marketplace) = due else {
         return;
-    }
+    };
     if let Err(e) = refresh(state, &marketplace, &mut |phase, done, total| {
         emit(state, &marketplace, phase, done, total)
     })

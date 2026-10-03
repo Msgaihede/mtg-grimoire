@@ -2089,8 +2089,9 @@ fn due_at_startup(meta: Option<&ComboMeta>, now: i64) -> bool {
 }
 
 /// [`due_at_startup`], unless the last file arrived and could not be used within the day —
-/// [`crate::feed::backoff`]. A reader's Refresh does not ask this.
-fn due_at_launch(conn: &Connection, now: i64) -> bool {
+/// [`crate::feed::backoff`]. A reader's Refresh does not ask this. `pub` for
+/// [`crate::downloads::launch_due`], which asks every launch download the same question.
+pub fn due_at_launch(conn: &Connection, now: i64) -> bool {
     due_at_startup(read_meta(conn).as_ref(), now)
         && !crate::feed::backoff::resting(conn, BACKOFF_FEED, now)
 }

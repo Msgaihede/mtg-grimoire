@@ -31,6 +31,7 @@ use grimoire_core::state::State;
 use serde_json::Value;
 use tauri::Manager;
 
+mod downloads;
 mod files;
 mod navigation;
 mod startup;
@@ -72,6 +73,10 @@ async fn core_call(
         return Err(format!("{name}: the app is still starting."));
     };
     let state = Arc::clone(&state);
+    if downloads::answers(&name) {
+        let hold = app.state::<downloads::Hold>();
+        return downloads::answer(state, &hold, &name, args).await;
+    }
     let body = body.map(|b| decode_body(&name, &b)).transpose()?;
     grimoire_core::dispatch(&state, &name, args.unwrap_or(Value::Null), body).await
 }
@@ -112,6 +117,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![core_call])
         .setup(|app| {
             app.manage(Startup::default());
+            app.manage(downloads::Hold::default());
             let handle = app.handle().clone();
             std::thread::Builder::new()
                 .name("startup".into())
@@ -185,6 +191,16 @@ fn start(app: &tauri::AppHandle) {
     // The image cache's budget: a pass a minute after launch and every minute after.
     spawn_upkeep(&state);
 
+    // **Whether the launch's downloads wait — decided before the page is told it may mount.** The
+    // prompt asks `light_downloads` once, as it mounts; decided after `settle`, a question landing
+    // first reads `held: false`, the hold comes down after it, and a metered first run sits with
+    // no cards and no prompt (found in review, 2026-10-03). Nothing starts until after `settle`.
+    let start_downloads = downloads::decide(
+        &state,
+        &app.state::<downloads::Hold>(),
+        downloads::metered(),
+    );
+
     startup::settle(app, StartupStatus::Ready);
 
     // The corpus check the launch no longer waits for — see `schema::check_corpus`.
@@ -193,14 +209,23 @@ fn start(app: &tauri::AppHandle) {
         .name("corpus-check".into())
         .spawn(move || check_corpus(&check));
 
-    // The card sync, and the optional feeds — behind it on a first run, beside it after: on a
-    // first run the reader waits for the cards, and ~46 MB of feeds on the same link would make
-    // that wait longer for data no screen can use until the cards are there (issue #551).
+    // The launch's downloads — unless Android said the link is metered and the reader has not
+    // said "always": then they wait for the page's prompt (`downloads`, step 4.4).
+    if start_downloads {
+        spawn_downloads(&state);
+    }
+}
+
+/// The card sync, and the optional feeds — behind it on a first run, beside it after: on a first
+/// run the reader waits for the cards, and ~46 MB of feeds on the same link would make that wait
+/// longer for data no screen can use until the cards are there (issue #551). The launch calls it,
+/// or the page's mobile-data prompt does once the reader says yes.
+pub(crate) fn spawn_downloads(state: &Arc<State>) {
     let first_run = {
         let conn = state.lock_db_read();
         !grimoire_core::sync::has_cards(&conn)
     };
-    let sync_state = Arc::clone(&state);
+    let sync_state = Arc::clone(state);
     tauri::async_runtime::spawn(async move {
         if let Err(e) = grimoire_core::sync::run_sync(Arc::clone(&sync_state), false).await {
             eprintln!("initial sync failed: {e}");
@@ -210,7 +235,7 @@ fn start(app: &tauri::AppHandle) {
         }
     });
     if !first_run {
-        spawn_optional_feeds(&state);
+        spawn_optional_feeds(state);
     }
 }
 

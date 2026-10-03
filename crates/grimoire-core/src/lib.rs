@@ -92,6 +92,8 @@ pub mod deck_tokens;
 pub mod deck_undo;
 pub mod deckpane;
 pub mod decksort;
+/// **What a launch would download now, and about how much** — the light app's mobile-data prompt.
+pub mod downloads;
 /// **The error log**: what failed, when, how often — and `kind_of`, which says what kind of
 /// failure a [`scryfall::ScryfallError`] was.
 pub mod errors;
