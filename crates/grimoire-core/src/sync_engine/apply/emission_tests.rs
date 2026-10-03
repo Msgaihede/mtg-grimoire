@@ -151,6 +151,30 @@ fn qty(conn: &Connection) -> (i64, i64) {
     .unwrap()
 }
 
+fn add_copy(conn: &Connection) {
+    conn.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,
+             created_at,updated_at)
+         VALUES ('c1','lea','1','en','nonfoil','NM',1,unixepoch(),unixepoch())",
+        [],
+    )
+    .unwrap();
+}
+
+/// `error_log` as a skip writes it: `(source, operation, message, detail, count)`.
+fn skips(conn: &Connection) -> Vec<(String, String, String, Option<String>, i64)> {
+    let mut stmt = conn
+        .prepare("SELECT source, operation, message, detail, count FROM error_log ORDER BY id")
+        .unwrap();
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
 /// An emission as `client::emit_baselines` sends it, in chunks of `per`: every op numbered, and
 /// each chunk's first op carrying the horizon and the head.
 fn emit(conn: &Connection, device: &str, per: usize) -> Vec<Vec<Op>> {
@@ -1478,4 +1502,810 @@ fn a_deck_a_claim_changed_nothing_on_keeps_its_place_in_the_gallery() {
         )
         .unwrap();
     assert_eq!(at, 1_600_000_000);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Task 8 — the narrow fix's fences (spec §14 row 29)
+// ---------------------------------------------------------------------------------------------
+
+/// Task 7's deferred minor: an apply that does change a row — a field that wins, or a resumed
+/// claim that raises a held row's counter — still stamps it, through the combined `UPDATE`.
+#[test]
+fn an_apply_that_changes_a_row_still_moves_its_updated_at() {
+    // An op whose field wins over the row here.
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    stash(&a, "bolt", 2, 1_700_000_000);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute("UPDATE collection_entries SET updated_at = 1600000000", [])
+        .unwrap();
+    a.execute("UPDATE collection_entries SET notes = 'newer'", [])
+        .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(note(&b, "bolt"), "newer");
+    let field = updated_at(&b, "bolt");
+
+    // A resumed claim that raises a held row's counter.
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    stash(&a, "bolt", 2, 1_700_000_000);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute(
+        "UPDATE collection_entries SET quantity = 1, updated_at = 1600000000",
+        [],
+    )
+    .unwrap();
+    emission::start_logging(&a).unwrap();
+    emission::start_logging(&a).unwrap(); // resumed: the claim floors this held row
+    apply(&b, &whole(&a, "dev-a")).unwrap();
+    assert_eq!(copies(&b, "bolt"), 2);
+    let counter = updated_at(&b, "bolt");
+
+    assert!(
+        field > 1_600_000_000 && counter > 1_600_000_000,
+        "an apply that changed the row left its stamp: field {field}, counter {counter}"
+    );
+}
+
+/// `597d19d6`: a re-baseline carries an edit made in the second the peer last heard from.
+#[test]
+fn a_rebaseline_carries_an_edit_made_in_the_second_the_peer_last_heard_from() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    step(&a, "bolt", 1, SECOND);
+    let mut page = since(&a, &mut ma);
+    page.extend(whole(&a, "dev-a"));
+    let horizon = page.iter().find_map(|o| o.horizon.clone()).unwrap();
+    assert!(
+        horizon.covers(&page[0].at),
+        "the edit is not inside the horizon, so this fixture proves nothing"
+    );
+
+    apply(&b, &page).unwrap();
+    assert_eq!(copies(&a, "bolt"), 3);
+    assert_eq!(
+        copies(&b, "bolt"),
+        3,
+        "the third copy never reached the peer"
+    );
+    let again = apply(&b, &page).unwrap();
+    assert_eq!(
+        (again.applied, copies(&b, "bolt")),
+        (0, 3),
+        "the page handed back let the claim through again: {again:?}"
+    );
+
+    // ...and the stream goes on from there: the next op applies once.
+    step(&a, "bolt", 1, SECOND);
+    let next = since(&a, &mut ma);
+    apply(&b, &next).unwrap();
+    assert_eq!(copies(&b, "bolt"), 4);
+}
+
+/// `597d19d6`: a re-baseline carries an edit from a device whose clock runs ahead.
+#[test]
+fn a_rebaseline_carries_an_edit_from_a_device_whose_clock_runs_ahead() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    a.execute_batch(
+        "UPDATE sync_clock
+            SET ms = cast(unixepoch('subsec') * 1000 AS INTEGER) + 3600000, ctr = 0;",
+    )
+    .unwrap();
+    add_copy(&a);
+    // The add was ten minutes ago, by the op's stamp, the clock's and the row's.
+    a.execute_batch(
+        "UPDATE sync_ops SET hlc_ms = hlc_ms - 600000;
+         UPDATE sync_clock SET ms = ms - 600000;
+         UPDATE collection_entries SET updated_at = updated_at - 600;",
+    )
+    .unwrap();
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    a.execute(
+        "UPDATE collection_entries SET quantity = quantity + 1, updated_at = unixepoch()",
+        [],
+    )
+    .unwrap();
+    let mut page = since(&a, &mut ma);
+    page.extend(whole(&a, "dev-a"));
+
+    apply(&b, &page).unwrap();
+    assert_eq!(qty(&a), (1, 2));
+    assert_eq!(qty(&b), (1, 2), "the second copy never reached the peer");
+}
+
+/// `597d19d6`: a third device's op inside the horizon lands through the claim.
+#[test]
+fn a_third_devices_op_inside_the_horizon_lands_through_the_claim() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&c, &seed).unwrap();
+
+    step(&c, "bolt", 1, SECOND);
+    let from_c: Vec<Op> = outbox(&c);
+    apply(&a, &from_c).unwrap();
+    let mut page = from_c.clone();
+    page.extend(whole(&a, "dev-a"));
+    let horizon = page.iter().find_map(|o| o.horizon.clone()).unwrap();
+    assert!(
+        horizon.covers(&from_c[0].at),
+        "the third device's op is not inside the horizon, so this fixture proves nothing"
+    );
+
+    apply(&b, &page).unwrap();
+    assert_eq!(
+        copies(&b, "bolt"),
+        3,
+        "the third device's copy never arrived"
+    );
+}
+
+/// `597d19d6`: a claim let through is applied once, however often its page comes back.
+#[test]
+fn a_claim_let_through_is_applied_once_however_often_its_page_comes_back() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&c, &seed).unwrap();
+    step(&c, "bolt", 1, SECOND);
+    let from_c: Vec<Op> = outbox(&c);
+    apply(&a, &from_c).unwrap();
+    let mut page = from_c.clone();
+    page.extend(whole(&a, "dev-a"));
+
+    apply(&b, &page).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3);
+
+    step(&b, "bolt", -1, SECOND);
+    for delivery in ["second", "third"] {
+        let report = apply(&b, &page).unwrap();
+        assert_eq!(report.applied, 0, "{delivery}: {report:?}");
+        assert_eq!(
+            copies(&b, "bolt"),
+            2,
+            "{delivery}: the claim came back over a copy removed here"
+        );
+    }
+}
+
+/// `597d19d6`: a first contact's page handed back applies nothing again.
+#[test]
+fn a_first_contact_page_handed_back_applies_nothing_again() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    step(&a, "bolt", 1, SECOND);
+    let mut page = outbox(&a);
+    page.extend(whole(&a, "dev-a"));
+    assert!(
+        page[1].at > page.last().unwrap().at,
+        "the edit is not above the claim, so this fixture proves nothing"
+    );
+
+    apply(&b, &page).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3);
+    step(&b, "bolt", -1, SECOND);
+    for delivery in ["second", "third"] {
+        let report = apply(&b, &page).unwrap();
+        assert_eq!(report.applied, 0, "{delivery}: {report:?}");
+        assert_eq!(
+            copies(&b, "bolt"),
+            2,
+            "{delivery}: the claim came back over a copy removed here"
+        );
+    }
+}
+
+/// `597d19d6`: a claim is not applied again past a put on a row its emitter deleted.
+#[test]
+fn a_claim_is_not_applied_again_past_a_put_on_a_deleted_row() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    set_clock(&a, STAMP);
+    stash(&a, "gone", 1, SECOND);
+    stash(&a, "bolt", 2, SECOND);
+    a.execute("DELETE FROM collection_entries WHERE card_id = 'gone'", [])
+        .unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let mut page = outbox(&a);
+    page.extend(whole(&a, "dev-a"));
+
+    apply(&b, &page).unwrap();
+    assert_eq!(copies(&b, "bolt"), 3);
+    step(&b, "bolt", -1, SECOND);
+    let again = apply(&b, &page).unwrap();
+    assert_eq!(
+        (again.applied, copies(&b, "bolt")),
+        (0, 2),
+        "the claim came back over a copy removed here: {again:?}"
+    );
+}
+
+/// `597d19d6`: a claim that landed on an earlier page than a put it carries is not applied again.
+#[test]
+fn a_claim_that_landed_before_its_put_is_not_applied_again() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    stash(&c, "opt", 2, 1_700_000_000);
+    let from_c = outbox(&c);
+    apply(&a, &from_c).unwrap();
+    let claims = whole(&a, "dev-a");
+
+    apply(&b, &claims).unwrap();
+    assert_eq!(copies(&b, "opt"), 2);
+    step(&b, "opt", -1, 1_700_000_000);
+    let mut page = from_c.clone();
+    page.extend(claims);
+    let again = apply(&b, &page).unwrap();
+    assert_eq!(
+        (again.applied, copies(&b, "opt")),
+        (0, 1),
+        "the claim came back over a copy removed here: {again:?}"
+    );
+}
+
+/// `597d19d6`: a horizon riding a chunk none of whose claims landed is not spent.
+#[test]
+fn a_horizon_whose_claims_did_not_land_is_not_spent() {
+    let (b, c) = (paired("dev-b"), paired("dev-c"));
+    let mut mc = 0;
+    set_clock(&c, STAMP);
+    stash(&c, "bolt", 2, SECOND);
+    stash(&c, "opt", 1, SECOND);
+    apply(&b, &since(&c, &mut mc)).unwrap();
+    step(&c, "opt", 1, SECOND);
+    let edit = since(&c, &mut mc);
+    let chunks = emit(&c, "dev-c", 1);
+
+    let mut first = edit.clone();
+    first.extend(chunk_of(&chunks, "bolt"));
+    apply(&b, &first).unwrap();
+
+    let mut second = edit.clone();
+    second.extend(chunk_of(&chunks, "opt"));
+    apply(&b, &second).unwrap();
+    assert_eq!(copies(&b, "opt"), 2, "the step's claim was skipped as seen");
+}
+
+/// `597d19d6`: a claim is never let through for a row the page itself deletes.
+#[test]
+fn a_claim_is_not_let_through_for_a_row_the_page_deletes() {
+    let (a, b, d) = (paired("dev-a"), paired("dev-b"), paired("dev-d"));
+    let (mut ma, mut md) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&d, &seed).unwrap();
+    d.execute("DELETE FROM collection_entries", []).unwrap();
+    let deletion = since(&d, &mut md);
+    apply(&b, &deletion).unwrap();
+    assert_eq!(qty(&b), (0, 0));
+
+    step(&a, "bolt", 1, SECOND);
+    let mut page = since(&a, &mut ma);
+    page.extend(whole(&a, "dev-a"));
+    page.extend(deletion);
+    apply(&b, &page).unwrap();
+    assert_eq!(
+        qty(&b),
+        (1, 3),
+        "owed (design §11): a third device's delete and an active claim resurrect the row here only"
+    );
+}
+
+/// `597d19d6`: nor for a row a delete took on an earlier page.
+#[test]
+fn a_claim_is_not_let_through_for_a_row_deleted_before_its_page() {
+    let (a, b, d) = (paired("dev-a"), paired("dev-b"), paired("dev-d"));
+    let (mut ma, mut md) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&d, &seed).unwrap();
+    d.execute("DELETE FROM collection_entries", []).unwrap();
+    apply(&b, &since(&d, &mut md)).unwrap();
+    assert_eq!(qty(&b), (0, 0));
+
+    step(&a, "bolt", 1, SECOND);
+    let mut page = since(&a, &mut ma);
+    page.extend(whole(&a, "dev-a"));
+    apply(&b, &page).unwrap();
+    assert_eq!(
+        qty(&b),
+        (1, 3),
+        "owed (design §11): a third device's delete and an active claim resurrect the row here only"
+    );
+}
+
+/// `597d19d6`: a claim for a row this device lacks — this design converges.
+#[test]
+fn a_claim_for_a_row_this_device_lacks_is_not_counted_or_spent() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    stash(&a, "opt", 1, SECOND);
+    let mut page = since(&a, &mut ma);
+    page.extend(chunk_of(&emit(&a, "dev-a", 1), "opt"));
+    apply(&b, &page).unwrap();
+    assert_eq!(copies(&b, "opt"), 1, "the claim did not build the row");
+    assert_eq!(copies(&b, "opt"), copies(&a, "opt"));
+}
+
+/// `597d19d6`: a third device's removal applied here, then a re-baseline — this design converges.
+#[test]
+fn a_claim_is_not_let_through_over_a_removal_this_device_applied() {
+    let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&c, &seed).unwrap();
+    step(&c, "bolt", -1, SECOND);
+    let removed = since(&c, &mut mc);
+    apply(&b, &removed).unwrap();
+
+    step(&a, "bolt", 1, SECOND);
+    let mut page = since(&a, &mut ma);
+    page.extend(whole(&a, "dev-a"));
+    apply(&b, &page).unwrap();
+    apply(&a, &removed).unwrap();
+    assert_eq!((copies(&a, "bolt"), copies(&b, "bolt")), (2, 2));
+}
+
+/// `597d19d6`: nor over a removal this device took in through another emitter's claim.
+#[test]
+fn a_claim_is_not_let_through_over_a_removal_this_device_took_in_through_a_claim() {
+    let (a, b, c, e) = (
+        paired("dev-a"),
+        paired("dev-b"),
+        paired("dev-c"),
+        paired("dev-e"),
+    );
+    let (mut ma, mut mc, mut me) = (0, 0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    for peer in [&b, &c, &e] {
+        apply(peer, &seed).unwrap();
+    }
+    stash(&e, "opt", 1, SECOND);
+    let from_e = since(&e, &mut me);
+    apply(&a, &from_e).unwrap();
+    apply(&b, &from_e).unwrap();
+    step(&c, "bolt", -1, SECOND);
+    let removed = since(&c, &mut mc);
+    apply(&e, &removed).unwrap();
+
+    let mut first = removed.clone();
+    first.extend(whole(&e, "dev-e"));
+    apply(&b, &first).unwrap();
+
+    step(&a, "bolt", 1, SECOND);
+    let mut second = since(&a, &mut ma);
+    second.extend(whole(&a, "dev-a"));
+    assert!(
+        second
+            .iter()
+            .find_map(|o| o.horizon.as_ref())
+            .is_some_and(|h| h.seen.contains_key("dev-e") && !h.seen.contains_key("dev-c")),
+        "a has not heard of e, or has heard of c, so this fixture proves nothing"
+    );
+    apply(&b, &second).unwrap();
+    apply(&a, &removed).unwrap();
+    assert_eq!(copies(&a, "bolt"), 2);
+    assert!(
+        copies(&b, "bolt") <= 2,
+        "the claim floored the row over a removal it never heard of: {}",
+        copies(&b, "bolt")
+    );
+}
+
+/// `597d19d6`: a removal made here, then the emitter's re-baseline — this design converges.
+#[test]
+fn a_claim_is_not_let_through_over_a_removal_made_here_since() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    step(&b, "bolt", -1, SECOND);
+    step(&a, "bolt", 1, SECOND);
+    let mut page = since(&a, &mut ma);
+    page.extend(whole(&a, "dev-a"));
+    apply(&b, &page).unwrap();
+    apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!((copies(&a, "bolt"), copies(&b, "bolt")), (2, 2));
+}
+
+/// `597d19d6`: a claim is let through only for a put its own emitter's horizon covers.
+#[test]
+fn a_claim_is_not_let_through_for_a_put_its_emitter_never_held() {
+    let (a, b, c, e) = (
+        paired("dev-a"),
+        paired("dev-b"),
+        paired("dev-c"),
+        paired("dev-e"),
+    );
+    let (mut ma, mut mc, mut me) = (0, 0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    for peer in [&b, &c, &e] {
+        apply(peer, &seed).unwrap();
+    }
+    stash(&e, "opt", 1, SECOND);
+    apply(&b, &since(&e, &mut me)).unwrap();
+    step(&c, "bolt", 1, SECOND);
+    let step_c = since(&c, &mut mc);
+    apply(&e, &step_c).unwrap();
+
+    let mut page = step_c.clone();
+    page.extend(chunk_of(&emit(&a, "dev-a", 1), "bolt"));
+    page.extend(chunk_of(&emit(&e, "dev-e", 1), "opt"));
+    apply(&b, &page).unwrap();
+    step(&b, "bolt", -1, SECOND);
+    let held = copies(&b, "bolt");
+    let again = apply(&b, &page).unwrap();
+    assert_eq!(
+        (again.applied, copies(&b, "bolt")),
+        (0, held),
+        "a claim that never held the step came back over a copy removed here: {again:?}"
+    );
+}
+
+/// `597d19d6`: a claim let through does not suppress a later chunk of the same baseline.
+#[test]
+fn a_later_chunk_is_not_suppressed_by_a_claim_let_through_before_it() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    stash(&a, "opt", 1, SECOND + 2);
+    a.execute("DELETE FROM sync_ops WHERE seq > ?1", [ma])
+        .unwrap();
+    set_clock(&a, STAMP + 5_000);
+    step(&a, "bolt", 1, SECOND);
+    let mut first = since(&a, &mut ma);
+    let chunks = emit(&a, "dev-a", 1);
+    first.extend(chunk_of(&chunks, "bolt"));
+
+    apply(&b, &first).unwrap();
+    apply(&b, &chunk_of(&chunks, "opt")).unwrap();
+    assert_eq!(
+        (copies(&b, "bolt"), copies(&b, "opt")),
+        (3, 1),
+        "the later chunk's row was skipped as seen"
+    );
+}
+
+/// `597d19d6`: a count and a move into a binder not yet here — this design converges.
+#[test]
+fn a_claim_let_through_raises_the_count_and_does_nothing_else() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute("UPDATE collection_entries SET updated_at = 1600000000", [])
+        .unwrap();
+    a.execute(
+        "INSERT INTO collection_folders (parent_id, name, kind, sort_order,
+                                         created_at, updated_at)
+         VALUES (NULL, 'Binder', 'user', 1, ?1, ?1)",
+        [SECOND],
+    )
+    .unwrap();
+    a.execute(
+        "UPDATE collection_entries
+            SET folder_id = (SELECT id FROM collection_folders WHERE name = 'Binder'),
+                quantity = quantity + 1, updated_at = ?1",
+        [SECOND],
+    )
+    .unwrap();
+    let edits = since(&a, &mut ma);
+    assert_eq!(edits.len(), 2, "the binder, then the move: {edits:?}");
+    let mut page = vec![edits[1].clone()];
+    let chunks = emit(&a, "dev-a", 1);
+    page.extend(chunk_of(&chunks, "bolt"));
+
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(
+        report.held_waiting, 1,
+        "the count and the move wait for the binder together: {report:?}"
+    );
+    let (folder, written): (Option<i64>, i64) = b
+        .query_row(
+            "SELECT folder_id, updated_at FROM collection_entries",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (copies(&b, "bolt"), folder, written),
+        (2, None, 1_600_000_000)
+    );
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+
+    // The rest of the page, the binder with it: the held put lands, count and move together.
+    apply(&b, &[edits.clone(), chunks.concat()].concat()).unwrap();
+    let held = |conn: &Connection| -> (i64, String, i64, Option<String>) {
+        conn.query_row(
+            "SELECT (SELECT count(*) FROM collection_entries WHERE card_id = 'bolt'),
+                    e.condition, e.quantity, f.name
+               FROM collection_entries e
+               LEFT JOIN collection_folders f ON f.id = e.folder_id
+              WHERE e.card_id = 'bolt'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        )
+        .unwrap()
+    };
+    let want = (1, "NM".to_owned(), 3, Some("Binder".to_owned()));
+    assert_eq!((held(&a), held(&b)), (want.clone(), want));
+}
+
+/// `597d19d6`: a claim never makes a row, so a group that renames its row carries it along.
+#[test]
+fn a_claim_let_through_does_not_outlive_its_row_renamed_in_the_same_page() {
+    let (a, b, e) = (paired("dev-a"), paired("dev-b"), paired("dev-e"));
+    let (mut ma, mut me) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    a.execute("UPDATE collection_entries SET condition = 'LP'", [])
+        .unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let regrade = since(&a, &mut ma);
+    e.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,sync_uid,
+             created_at,updated_at)
+         VALUES ('bolt','lea','1','en','nonfoil','NM',1,'00000000000000000000000000000000',
+                 1700000000,1700000000)",
+        [],
+    )
+    .unwrap();
+    let twin = since(&e, &mut me);
+    assert_eq!(twin.len(), 1);
+
+    let mut page = regrade.clone();
+    page.extend(whole(&a, "dev-a"));
+    page.extend(twin.clone());
+    apply(&b, &page).unwrap();
+    apply(&a, &twin).unwrap();
+    assert_eq!(
+        (qty(&b), copies(&a, "bolt")),
+        ((1, 3), 4),
+        "owed: main's grain rename drops a's regrade; the narrow fix's floor reached 4"
+    );
+}
+
+/// `597d19d6`: a claim is not let through for a row the page deletes, by an earlier stamp.
+#[test]
+fn a_claim_let_through_does_not_outlive_a_delete_in_the_same_page() {
+    let (a, b, c, d) = (
+        paired("dev-a"),
+        paired("dev-b"),
+        paired("dev-c"),
+        paired("dev-d"),
+    );
+    let (mut ma, mut mc, mut md) = (0, 0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    for peer in [&b, &c, &d] {
+        apply(peer, &seed).unwrap();
+    }
+    step(&c, "bolt", 1, SECOND);
+    let step_c = since(&c, &mut mc);
+    apply(&a, &step_c).unwrap();
+    d.execute("DELETE FROM collection_entries", []).unwrap();
+    let deletion = since(&d, &mut md);
+    // The delete was made before `a` applied the step, by the stamp that decides the fold.
+    let claim_ms = a
+        .query_row("SELECT updated_at FROM collection_entries", [], |r| {
+            r.get::<_, i64>(0)
+        })
+        .unwrap()
+        * 1000;
+    let mut deletion = deletion;
+    deletion[0].at.ms = claim_ms - 1_000;
+
+    let mut page = step_c.clone();
+    page.extend(deletion);
+    page.extend(whole(&a, "dev-a"));
+    let report = apply(&b, &page).unwrap();
+    assert_eq!(
+        (qty(&b), report.resurrected),
+        ((1, 3), 1),
+        "c's covered +1 takes the op path at its own stamp, later than the delete the fixture \
+         stamped by hand, so add-wins keeps the row — main's answer with no claim at all: \
+         {report:?}"
+    );
+}
+
+/// `597d19d6`: a claim built before a removal it does not carry is not let through.
+#[test]
+fn a_claim_built_before_a_removal_it_does_not_carry_is_not_let_through() {
+    for relay_order in [false, true] {
+        let (a, b) = (paired("dev-a"), paired("dev-b"));
+        let mut ma = 0;
+        set_clock(&a, STAMP);
+        stash(&a, "bolt", 2, SECOND);
+        apply(&b, &since(&a, &mut ma)).unwrap();
+        step(&a, "bolt", 1, SECOND);
+        let added = since(&a, &mut ma);
+        let first = whole(&a, "dev-a");
+        step(&a, "bolt", -1, SECOND);
+        let removed = since(&a, &mut ma);
+        let second = whole(&a, "dev-a");
+
+        let parts = if relay_order {
+            [second, first, added, removed]
+        } else {
+            [added, first, removed, second]
+        };
+        apply(&b, &parts.concat()).unwrap();
+        assert_eq!(copies(&a, "bolt"), 2);
+        assert_eq!(
+            copies(&b, "bolt"),
+            2,
+            "relay order {relay_order}: a stale claim brought back a removed copy"
+        );
+    }
+}
+
+/// `597d19d6`: nor beside part of the newer emission that carries the removal.
+#[test]
+fn a_claim_older_than_a_removal_is_not_let_through_beside_part_of_a_newer_emission() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    stash(&a, "opt", 1, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let added = since(&a, &mut ma);
+    let first = emit(&a, "dev-a", 1);
+    step(&a, "bolt", -1, SECOND);
+    let removed = since(&a, &mut ma);
+    let second = emit(&a, "dev-a", 1);
+
+    let page = [
+        added,
+        chunk_of(&first, "bolt"),
+        removed,
+        chunk_of(&second, "opt"),
+    ]
+    .concat();
+    apply(&b, &page).unwrap();
+    assert_eq!(
+        copies(&b, "bolt"),
+        2,
+        "a stale claim brought back a removed copy"
+    );
+    apply(&b, &chunk_of(&second, "bolt")).unwrap();
+    assert_eq!((copies(&a, "bolt"), copies(&b, "bolt")), (2, 2));
+}
+
+/// `597d19d6`: nor beside another emitter's claim that has heard of the removal.
+#[test]
+fn a_claim_that_never_heard_of_a_removal_beside_it_is_not_let_through() {
+    let (a, b, e) = (paired("dev-a"), paired("dev-b"), paired("dev-e"));
+    let (mut ma, mut me) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&e, &seed).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let added = since(&a, &mut ma);
+    apply(&e, &added).unwrap();
+    step(&e, "bolt", -1, SECOND);
+    let removed = since(&e, &mut me);
+
+    let page = [
+        added,
+        removed.clone(),
+        whole(&a, "dev-a"),
+        whole(&e, "dev-e"),
+    ]
+    .concat();
+    apply(&b, &page).unwrap();
+    apply(&a, &removed).unwrap();
+    assert_eq!(copies(&a, "bolt"), 2);
+    assert_eq!(
+        copies(&b, "bolt"),
+        2,
+        "a claim that never heard of the removal floored the row over it"
+    );
+}
+
+/// `597d19d6`: a removal the emitter made after its claim lands on the floor, not under it.
+#[test]
+fn a_removal_the_emitter_made_after_its_claim_lands_on_the_floor() {
+    for relay_order in [false, true] {
+        let (a, b) = (paired("dev-a"), paired("dev-b"));
+        let mut ma = 0;
+        set_clock(&a, STAMP);
+        stash(&a, "bolt", 2, SECOND);
+        apply(&b, &since(&a, &mut ma)).unwrap();
+        step(&a, "bolt", 1, SECOND);
+        let added = since(&a, &mut ma);
+        let claims = whole(&a, "dev-a");
+        step(&a, "bolt", -1, SECOND);
+        let removed = since(&a, &mut ma);
+
+        let parts = if relay_order {
+            [claims, added, removed]
+        } else {
+            [added, claims, removed]
+        };
+        apply(&b, &parts.concat()).unwrap();
+        assert_eq!(copies(&a, "bolt"), 2);
+        assert_eq!(
+            copies(&b, "bolt"),
+            2,
+            "relay order {relay_order}: the removed copy came back"
+        );
+    }
+}
+
+/// `597d19d6`: a claim with nothing to raise does not spend its horizon.
+#[test]
+fn a_claim_with_nothing_to_raise_does_not_spend_its_horizon() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    a.execute(
+        "INSERT INTO collection_folders (parent_id, name, kind, sort_order,
+                                         created_at, updated_at)
+         VALUES (NULL, 'Binder', 'user', 1, ?1, ?1)",
+        [SECOND],
+    )
+    .unwrap();
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    a.execute(
+        "UPDATE collection_folders SET name = 'Trade binder', updated_at = ?1
+          WHERE name = 'Binder'",
+        [SECOND],
+    )
+    .unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let edits = since(&a, &mut ma);
+    let chunks = emit(&a, "dev-a", 1);
+    let mut binder: Vec<Op> = chunks
+        .concat()
+        .iter()
+        .filter(|o| o.fields.get("name").and_then(|v| v.as_str()) == Some("Trade binder"))
+        .cloned()
+        .collect();
+    assert_eq!(binder.len(), 1, "{chunks:?}");
+    binder[0].horizon = chunks[0][0].horizon.clone();
+
+    let first = [edits.clone(), binder].concat();
+    apply(&b, &first).unwrap();
+    apply(&b, &[first, chunk_of(&chunks, "bolt")].concat()).unwrap();
+    assert_eq!(
+        copies(&b, "bolt"),
+        3,
+        "the add was marked taken in by nothing"
+    );
 }
