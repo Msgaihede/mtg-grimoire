@@ -94,6 +94,7 @@ export function PhoneFace() {
   // The stored folds, asked for at launch as `AppShell` asks for them — so neither cabinet draws
   // its shelves at the defaults and then re-folds a frame later.
   usePrefetchShelfFolds();
+
   /**
    * Which list each deck has been switched to this session — **held here rather than by the deck
    * page**, because the card sheet over that page reads it too: its `Add to <deck>` adds to the
