@@ -459,7 +459,7 @@ export function ShelfHeading({
  * variant that is a whole card, and a whole card carries its printed artist credit — an `art` crop
  * here would owe one.
  */
-function PeekThumb({ cardId, first }: { cardId: string; first: boolean }): ReactElement {
+export function PeekThumb({ cardId, first }: { cardId: string; first: boolean }): ReactElement {
   const box = cn(
     "h-[31px] w-[22px] flex-none rounded-[2px] bg-surface shadow-[0_0_0_1.5px_var(--color-bg)]",
     !first && "-ml-[9px]",

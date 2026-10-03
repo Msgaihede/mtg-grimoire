@@ -1,5 +1,6 @@
 import { FINISH_LABEL, isFinish, playedFinish, soleFinish, type Finish } from "@/lib/finish";
-import type { CardSummary, CollectionRow, DeckCard, WishRow } from "@/lib/ipc";
+import type { CollectionTile } from "@/features/collection/collectionWall";
+import type { CardSummary, DeckCard, WishRow } from "@/lib/ipc";
 import type { Currency } from "@/lib/marketplace";
 import { formatPrice } from "@/lib/prices";
 import type { WallItem } from "./CardWall";
@@ -7,7 +8,7 @@ import type { WallItem } from "./CardWall";
 /**
  * Each of the phone face's lists, turned into what the wall draws.
  *
- * Four DTOs and one tile. The rows are the desktop's own — the same commands answer both faces —
+ * Three DTOs, the collection's tile, and one wall item. The rows are the desktop's own — the same commands answer both faces —
  * so everything a list knows about a card arrives here and what the wall needs is picked out once.
  *
  * **Which finish a tile is marked with is the desktop's rule for that list, not one rule for all
@@ -62,24 +63,29 @@ export function searchItem(card: CardSummary, currency: Currency): WallItem {
   };
 }
 
-export function collectionItem(row: CollectionRow, currency: Currency): WallItem {
-  const name = row.name ?? "Unknown card";
+/**
+ * A collection **tile** — `collectionWall.ts`'s fold of the rows, the desktop wall's own: one
+ * printing in one finish in one folder, whatever grades and languages its copies are in. So two
+ * rows of one etched printing are one tile counting both, and one name a screen reader can tell
+ * from every other; the wall says the copies.
+ */
+export function collectionItem(tile: CollectionTile, currency: Currency): WallItem {
   // The finish this copy *is* — the row's own column, not a fact about its printing.
-  const finish = marked(row.finish);
+  const finish = marked(tile.finish);
   return {
-    key: String(row.id),
-    cardId: row.cardId,
-    name,
-    rarity: row.rarity,
+    key: tile.key,
+    cardId: tile.id,
+    name: tile.name,
+    rarity: tile.rarity,
     chin: {
-      setCode: row.setCode,
-      collectorNumber: row.collectorNumber,
-      printingTitle: row.setName,
+      setCode: tile.setCode,
+      collectorNumber: tile.collectorNumber,
+      printingTitle: tile.setName,
     },
     finish,
-    money: formatPrice(row.unitPrice, currency),
-    count: row.quantity,
-    pressLabel: labelOf(name, printingWords(row.setCode, row.collectorNumber), finish),
+    money: formatPrice(tile.unitPrice, currency),
+    count: tile.copies,
+    pressLabel: labelOf(tile.name, printingWords(tile.setCode, tile.collectorNumber), finish),
   };
 }
 

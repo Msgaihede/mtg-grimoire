@@ -1,5 +1,5 @@
-import type { ReactNode } from "react";
-import { ArrowUp } from "lucide-react";
+import type { ReactNode, Ref } from "react";
+import { ArrowUp, SlidersHorizontal } from "lucide-react";
 import { motion } from "motion/react";
 import { Dialog } from "@/components/Dialog";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
@@ -17,19 +17,23 @@ import {
 import { PriceRange } from "@/components/PriceRange";
 import { colorDisabled, countDisabled, facetTitle, optionDisabled } from "@/features/search/facets";
 import {
+  conditionChip,
   formatPickerRows,
   RARITIES,
   SEARCH_SORT_ROWS,
+  SEARCH_TRAY,
   sentence,
+  type TrayCell,
   sortDirectionName,
   useFormatOptions,
 } from "@/features/search/filterOptions";
 import { countOf } from "@/features/search/resultCount";
 import { SetCombobox } from "@/features/search/SetCombobox";
-import { CARD_TYPES, type CardSearch } from "@/features/search/useCardSearch";
+import type { FilterSurface } from "@/features/search/FilterBar";
+import { CARD_TYPES, cycleTriState } from "@/features/search/useCardSearch";
 import { BORDERS, BORDER_LABEL } from "@/lib/border";
 import { FINISHES, FINISH_LABEL } from "@/lib/finish";
-import type { SearchSortKey } from "@/lib/ipc";
+import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { MANA_KEYS, MANA_LABEL } from "@/lib/mana";
 import { TRANSITION } from "@/lib/motion";
 import { cn } from "@/lib/utils";
@@ -58,6 +62,54 @@ export const BADGE =
   "rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground";
 
 /**
+ * The one `Filters` button a page's line carries, beside its box — Search's, the collection's and
+ * the wishlist's, so the three draw one control.
+ */
+export function FiltersButton({
+  ref,
+  active,
+  expanded,
+  onClick,
+}: {
+  ref?: Ref<HTMLButtonElement>;
+  /** The surface's `activeCount`. */
+  active: number;
+  expanded: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      ref={ref}
+      type="button"
+      onClick={onClick}
+      // A sheet, not a disclosure: the desktop bar's `FiltersButton` opens a tray in the page and
+      // says so with `aria-controls`; a modal has neither a place in the page nor an id to point at.
+      aria-haspopup="dialog"
+      aria-expanded={expanded}
+      // The count is in the name because the badge is hidden from a screen reader, and the
+      // word on the button is in it too (WCAG 2.5.3).
+      aria-label={active > 0 ? `Filters — ${active} active` : "Filters"}
+      className={cn(
+        FILTER_CONTROL,
+        FILTER_FOCUS,
+        "inline-flex h-11 shrink-0 items-center gap-2 px-3",
+        // Gold while anything is on: the sheet is shut, so this is the one place a filter
+        // the reader cannot see is said to be there.
+        filterChipState(active > 0),
+      )}
+    >
+      <SlidersHorizontal className="size-4 shrink-0" aria-hidden="true" />
+      Filters
+      {active > 0 && (
+        <span aria-hidden="true" className={BADGE}>
+          {active}
+        </span>
+      )}
+    </button>
+  );
+}
+
+/**
  * One captioned section of the sheet.
  *
  * **A heading rather than a `<label>`**, so a screen reader can walk the sheet by its twelve
@@ -83,7 +135,7 @@ function Section({ caption, children }: { caption: string; children: ReactNode }
  * on one flag must never announce it in two sentences. No tooltip — a finger has no hover, and
  * the accessible name already says everything a tooltip would.
  */
-function SortDirection({ search }: { search: CardSearch }) {
+function SortDirection<SortKey extends string>({ search }: { search: FilterSurface<SortKey> }) {
   const dir = search.sortDir;
   return (
     <button
@@ -139,14 +191,35 @@ function SortDirection({ search }: { search: CardSearch }) {
  * under the status bar and the home indicator otherwise. From 640 to this face's 1023 it is a
  * centred panel.
  */
-export function FiltersSheet({
+export function FiltersSheet<SortKey extends string>({
   open,
   search,
+  tray = SEARCH_TRAY,
+  sortRows,
+  total,
+  capped = false,
   onDismiss,
   onClose,
 }: {
   open: boolean;
-  search: CardSearch;
+  /**
+   * Any list's filters — the structural surface the desktop's `FilterBar` takes, so the card
+   * search's hook, the collection's and the wishlist's all fit it.
+   */
+  search: FilterSurface<SortKey>;
+  /**
+   * Which of the optional cells the sheet draws — `FilterBar`'s own `tray` list, so a surface
+   * offers the same filters on both faces. The sort, the colours and the mana values are always
+   * drawn, as they are always on the desktop's bar; a cell named here whose setter the surface does
+   * not wire draws nothing, the bar's rule. Defaults to the card search's.
+   */
+  tray?: readonly TrayCell[];
+  /** The sort picker's rows. Defaults to the card search's. */
+  sortRows?: readonly { value: SortKey | ""; label: string; disabled?: boolean }[];
+  /** How many cards the list now holds, for the footer — `undefined` until it has answered. */
+  total: number | undefined;
+  /** Whether `total` is a floor (the search stops counting at 5 000). */
+  capped?: boolean;
   /** Escape, the ✕ and `Show N cards`: hand the caret back to the opener, then close. */
   onDismiss: () => void;
   /** The scrim: close, and leave the caret where the press put it. */
@@ -161,7 +234,16 @@ export function FiltersSheet({
       onDismiss={onDismiss}
       onClose={onClose}
     >
-      <SheetBody search={search} onDone={onDismiss} />
+      <SheetBody
+        search={search}
+        tray={tray}
+        sortRows={
+          sortRows ?? (SEARCH_SORT_ROWS as readonly { value: SortKey | ""; label: string }[])
+        }
+        total={total}
+        capped={capped}
+        onDone={onDismiss}
+      />
     </Dialog>
   );
 }
@@ -170,21 +252,31 @@ export function FiltersSheet({
  * The sheet's contents — a separate component so the hooks below run only while it is open:
  * `Dialog` mounts nothing while shut.
  */
-function SheetBody({ search, onDone }: { search: CardSearch; onDone: () => void }) {
-  const { facets, query } = search;
+function SheetBody<SortKey extends string>({
+  search,
+  tray,
+  sortRows,
+  total,
+  capped,
+  onDone,
+}: {
+  search: FilterSurface<SortKey>;
+  tray: readonly TrayCell[];
+  sortRows: readonly { value: SortKey | ""; label: string; disabled?: boolean }[];
+  total: number | undefined;
+  capped: boolean;
+  onDone: () => void;
+}) {
+  const { facets } = search;
   const formatRows = formatPickerRows(search, useFormatOptions(search));
-  const sortRows = SEARCH_SORT_ROWS;
   const currency = search.marketplace.currency;
+  /** A cell is drawn where the surface names it **and** wires it — `FilterBar`'s two rules. */
+  const offers = (cell: TrayCell) => tray.includes(cell);
   // The figure the footer button carries. `undefined` until the first page has answered, which
   // says nothing about how many cards there are.
-  const counted =
-    query.data === undefined ? undefined : countOf(search.total, search.totalIsCapped);
+  const counted = total === undefined ? undefined : countOf(total, capped);
   const showLabel =
-    counted === undefined
-      ? "Show cards"
-      : search.total === 0
-        ? "No cards match"
-        : `Show ${counted}`;
+    counted === undefined ? "Show cards" : total === 0 ? "No cards match" : `Show ${counted}`;
 
   return (
     <>
@@ -202,7 +294,7 @@ function SheetBody({ search, onDone }: { search: CardSearch; onDone: () => void 
                 // and this name has to be unambiguous wherever the search is drawn.
                 label="Sort results"
                 value={search.sortSelection}
-                onChange={(key) => search.setSortKey(key as SearchSortKey | "")}
+                onChange={(key) => search.setSortKey(key as SortKey)}
                 options={sortRows}
                 fill
                 className="min-w-0"
@@ -211,19 +303,21 @@ function SheetBody({ search, onDone }: { search: CardSearch; onDone: () => void 
             </div>
           </Section>
 
-          <Section caption="Format">
-            <Dropdown
-              label="Format"
-              value={search.format}
-              onChange={search.setFormat}
-              options={formatRows}
-              fill
-              searchable
-              // Gold for anything but `Any format`, `Any card` included: the desktop tray's rule,
-              // because the widening is as much a statement about the wall as a narrowing.
-              active={search.format !== ""}
-            />
-          </Section>
+          {offers("format") && (
+            <Section caption="Format">
+              <Dropdown
+                label="Format"
+                value={search.format}
+                onChange={search.setFormat}
+                options={formatRows}
+                fill
+                searchable
+                // Gold for anything but `Any format`, `Any card` included: the desktop tray's rule,
+                // because the widening is as much a statement about the wall as a narrowing.
+                active={search.format !== ""}
+              />
+            </Section>
+          )}
 
           <Section caption="Color identity">
             {/* One line from 640, where the six and the pair fit beside each other; two below. */}
@@ -302,139 +396,195 @@ function SheetBody({ search, onDone }: { search: CardSearch; onDone: () => void 
             />
           </Section>
 
-          <Section caption="Rarity">
-            <div
-              role="group"
-              aria-label="Rarity"
-              // Centred, as every other chip in the sheet is: `RarityChip` starts its gem at the
-              // left edge, which is right in a row of chips sized to their words and ragged in a
-              // grid of equal cells.
-              className="grid grid-cols-2 gap-1.5 *:justify-center sm:grid-cols-4"
-            >
-              {RARITIES.map((rarity) => (
-                <RarityChip
-                  key={rarity}
-                  rarity={rarity}
-                  pressed={search.rarities.includes(rarity)}
-                  disabled={optionDisabled(
-                    facets?.rarities,
-                    rarity,
-                    search.rarities.includes(rarity),
-                  )}
-                  title={facetTitle(sentence(rarity), facets?.rarities[rarity])}
-                  onClick={() => search.toggleRarity(rarity)}
-                />
-              ))}
-            </div>
-          </Section>
-
-          <Section caption="Type">
-            {/* Two columns: `Planeswalker` is wider than a third of a phone's sheet. */}
-            <div role="group" aria-label="Type" className="grid grid-cols-2 gap-1.5 sm:grid-cols-4">
-              {CARD_TYPES.map((t) => (
-                <ToggleChip
-                  key={t}
-                  label={t}
-                  pressed={search.types.includes(t)}
-                  disabled={optionDisabled(facets?.types, t, search.types.includes(t))}
-                  title={facetTitle(t, facets?.types?.[t])}
-                  onClick={() => search.toggleType(t)}
-                />
-              ))}
-            </div>
-          </Section>
-
-          <Section caption="Border">
-            <div role="group" aria-label="Border" className="grid grid-cols-3 gap-1.5">
-              {BORDERS.map((b) => {
-                const pressed = search.borders.includes(b);
-                return (
-                  <ToggleChip
-                    key={b}
-                    label={BORDER_LABEL[b]}
-                    pressed={pressed}
-                    disabled={optionDisabled(facets?.borders, b, pressed)}
-                    title={facetTitle(BORDER_LABEL[b], facets?.borders?.[b])}
-                    onClick={() => search.toggleBorder(b)}
+          {offers("rarity") && (
+            <Section caption="Rarity">
+              <div
+                role="group"
+                aria-label="Rarity"
+                // Centred, as every other chip in the sheet is: `RarityChip` starts its gem at the
+                // left edge, which is right in a row of chips sized to their words and ragged in a
+                // grid of equal cells.
+                className="grid grid-cols-2 gap-1.5 *:justify-center sm:grid-cols-4"
+              >
+                {RARITIES.map((rarity) => (
+                  <RarityChip
+                    key={rarity}
+                    rarity={rarity}
+                    pressed={search.rarities.includes(rarity)}
+                    disabled={optionDisabled(
+                      facets?.rarities,
+                      rarity,
+                      search.rarities.includes(rarity),
+                    )}
+                    title={facetTitle(sentence(rarity), facets?.rarities[rarity])}
+                    onClick={() => search.toggleRarity(rarity)}
                   />
-                );
-              })}
-            </div>
-          </Section>
+                ))}
+              </div>
+            </Section>
+          )}
 
-          <Section caption="Finish">
-            {/* Whether the printing was *published* in a finish — the card search's question, a
-                printing in two finishes answering both. */}
-            <div role="group" aria-label="Finish" className="grid grid-cols-3 gap-1.5">
-              {FINISHES.map((f) => {
-                const pressed = search.finishes.includes(f);
-                return (
+          {offers("type") && search.toggleType && (
+            <Section caption="Type">
+              {/* Two columns: `Planeswalker` is wider than a third of a phone's sheet. */}
+              <div
+                role="group"
+                aria-label="Type"
+                className="grid grid-cols-2 gap-1.5 sm:grid-cols-4"
+              >
+                {CARD_TYPES.map((t) => (
                   <ToggleChip
-                    key={f}
-                    label={FINISH_LABEL[f]}
-                    pressed={pressed}
-                    disabled={optionDisabled(facets?.finishes, f, pressed)}
-                    title={facetTitle(FINISH_LABEL[f], facets?.finishes?.[f])}
-                    onClick={() => search.toggleFinish(f)}
+                    key={t}
+                    label={t}
+                    pressed={search.types?.includes(t) ?? false}
+                    disabled={optionDisabled(facets?.types, t, search.types?.includes(t) ?? false)}
+                    title={facetTitle(t, facets?.types?.[t])}
+                    onClick={() => search.toggleType?.(t)}
                   />
-                );
-              })}
-            </div>
-          </Section>
+                ))}
+              </div>
+            </Section>
+          )}
 
-          <Section caption="Owned">
-            {/* Pressing the answer already on turns it off, so off → Owned → Missing is still one
+          {offers("border") && search.toggleBorder && (
+            <Section caption="Border">
+              <div role="group" aria-label="Border" className="grid grid-cols-3 gap-1.5">
+                {BORDERS.map((b) => {
+                  const pressed = search.borders?.includes(b) ?? false;
+                  return (
+                    <ToggleChip
+                      key={b}
+                      label={BORDER_LABEL[b]}
+                      pressed={pressed}
+                      disabled={optionDisabled(facets?.borders, b, pressed)}
+                      title={facetTitle(BORDER_LABEL[b], facets?.borders?.[b])}
+                      onClick={() => search.toggleBorder?.(b)}
+                    />
+                  );
+                })}
+              </div>
+            </Section>
+          )}
+
+          {offers("finish") && search.toggleFinish && (
+            <Section caption="Finish">
+              {/* Whether the printing was *published* in a finish — the card search's question, a
+                printing in two finishes answering both — or, over a list of copies, which finish
+                this copy *is*. One cell, the desktop's, and its two readings. */}
+              <div role="group" aria-label="Finish" className="grid grid-cols-3 gap-1.5">
+                {FINISHES.map((f) => {
+                  const pressed = search.finishes?.includes(f) ?? false;
+                  return (
+                    <ToggleChip
+                      key={f}
+                      label={FINISH_LABEL[f]}
+                      pressed={pressed}
+                      disabled={optionDisabled(facets?.finishes, f, pressed)}
+                      title={facetTitle(FINISH_LABEL[f], facets?.finishes?.[f])}
+                      onClick={() => search.toggleFinish?.(f)}
+                    />
+                  );
+                })}
+              </div>
+            </Section>
+          )}
+
+          {offers("condition") && search.toggleCondition && (
+            <Section caption="Condition">
+              {/* The grade of the copy — a collection's question alone. Three to a line, and
+                  `Not set` the whole first one, the desktop tray's narrow arrangement and for its
+                  reason: it is the one label with a space in it. */}
+              <div role="group" aria-label="Condition" className="grid grid-cols-3 gap-1.5">
+                {CONDITIONS.map((c) => {
+                  const { label, hint } = conditionChip(c);
+                  return (
+                    <ToggleChip
+                      key={c}
+                      label={label}
+                      hint={hint}
+                      pressed={search.conditions?.includes(c) ?? false}
+                      onClick={() => search.toggleCondition?.(c)}
+                      className={cn(c === CONDITION_NOT_SET && "col-span-3 whitespace-nowrap")}
+                    />
+                  );
+                })}
+              </div>
+            </Section>
+          )}
+
+          {offers("owned") && search.setOwned && (
+            <Section caption="Owned">
+              {/* Pressing the answer already on turns it off, so off → Owned → Missing is still one
                 press each, and neither answer hides behind the other. */}
-            <div className="grid grid-cols-2 gap-1.5">
-              <ToggleChip
-                label="Owned"
-                pressed={search.owned === true}
-                title={facetTitle("Owned", facets?.owned.owned)}
-                onClick={() => search.setOwned(search.owned === true ? undefined : true)}
-              />
-              <ToggleChip
-                label="Missing"
-                pressed={search.owned === false}
-                title={facetTitle("Missing", facets?.owned.missing)}
-                onClick={() => search.setOwned(search.owned === false ? undefined : false)}
-              />
-            </div>
-          </Section>
+              <div className="grid grid-cols-2 gap-1.5">
+                <ToggleChip
+                  label="Owned"
+                  pressed={search.owned === true}
+                  title={facetTitle("Owned", facets?.owned.owned)}
+                  onClick={() => search.setOwned?.(search.owned === true ? undefined : true)}
+                />
+                <ToggleChip
+                  label="Missing"
+                  pressed={search.owned === false}
+                  title={facetTitle("Missing", facets?.owned.missing)}
+                  onClick={() => search.setOwned?.(search.owned === false ? undefined : false)}
+                />
+              </div>
+            </Section>
+          )}
 
-          <Section caption="Set">
-            <SetCombobox
-              selected={search.sets}
-              onToggle={search.toggleSet}
-              counts={facets?.sets}
-              align="start"
-              fill
-            />
-          </Section>
+          {offers("set") && (
+            <Section caption="Set">
+              <SetCombobox
+                selected={search.sets}
+                onToggle={search.toggleSet}
+                counts={facets?.sets}
+                align="start"
+                fill
+              />
+            </Section>
+          )}
 
           {/* The marketplace's currency in the caption, never a bare `$`: a band in euros and a
               band in dollars are two different filters, and this is the only place that says
               which one is on. */}
-          <Section caption={`Price (${currency.toUpperCase()})`}>
-            {/* The boxes a step wider than the bar's: at 16px a 64px box clips `12.50`. */}
-            <div className="[&_input[type=text]]:w-20">
-              <PriceRange
-                min={search.priceMin}
-                max={search.priceMax}
-                currency={currency}
-                onChange={search.setPriceRange}
-              />
-            </div>
-          </Section>
+          {offers("price") && search.setPriceRange && (
+            <Section caption={`Price (${currency.toUpperCase()})`}>
+              {/* The boxes a step wider than the bar's: at 16px a 64px box clips `12.50`. */}
+              <div className="[&_input[type=text]]:w-20">
+                <PriceRange
+                  min={search.priceMin}
+                  max={search.priceMax}
+                  currency={currency}
+                  onChange={search.setPriceRange}
+                />
+              </div>
+            </Section>
+          )}
 
-          <Section caption="Printings">
-            {/* A view mode rather than a filter: neither counted on the badge nor cleared by
+          {offers("needsReview") && search.setNeedsReview && (
+            <Section caption="Needs review">
+              {/* Off → flagged → not flagged → off, and the word on the chip says which of the
+                  three is on — the desktop tray's chip, word for word. */}
+              <ToggleChip
+                label={search.needsReview === false ? "Not flagged" : "Needs review"}
+                pressed={search.needsReview !== undefined}
+                onClick={() => search.setNeedsReview?.(cycleTriState(search.needsReview, true))}
+              />
+            </Section>
+          )}
+
+          {offers("printings") && search.toggleAllPrintings && (
+            <Section caption="Printings">
+              {/* A view mode rather than a filter: neither counted on the badge nor cleared by
                 Reset all. One label, never flipped — `aria-pressed` carries the state. */}
-            <ToggleChip
-              label="All printings"
-              pressed={search.allPrintings}
-              onClick={search.toggleAllPrintings}
-            />
-          </Section>
+              <ToggleChip
+                label="All printings"
+                pressed={search.allPrintings ?? false}
+                onClick={search.toggleAllPrintings}
+              />
+            </Section>
+          )}
         </div>
       </div>
 

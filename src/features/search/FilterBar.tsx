@@ -42,6 +42,7 @@ import {
   sortDirectionName,
   useFormatOptions,
 } from "./filterOptions";
+import { SEARCH_TRAY, type TrayCell } from "./filterOptions";
 import { SetCombobox } from "./SetCombobox";
 import { TagQueryRow, type TagQuerySurface } from "./TagQueryRow";
 import {
@@ -56,60 +57,11 @@ import {
 export { SEARCH_SORT_ROWS, sortDirectionName, useFormatOptions } from "./filterOptions";
 export { StatedFiltersLine } from "./StatedFiltersLine";
 
-/**
- * Which captioned cells the tray draws, in the order it draws them.
- *
- * **Named rather than derived from what the surface can answer**, so a filter a surface has the
- * state for but does not mean to offer is an absent name here rather than a cell that appears
- * because a field happened to be wired. Each surface's list is written down where that surface is
- * mounted, which is the same rule the row itself has always followed: this file owns the layout,
- * the caller owns *which* filters it offers.
- */
-// `"exact"` led this list from 2026-09-23 to 2026-09-28 — the colour row's reading, one
-// disclosure away from the chips it modifies. It is `ColorExactChip` at the end of the colour
-// group now, on the bar at every width, because a modifier a press away from what it modifies is
-// the arrangement the tray was meant to fix one step further off.
-export type TrayCell =
-  | "set"
-  | "format"
-  | "owned"
-  | "decks"
-  | "rarity"
-  | "type"
-  /** The printing's frame — `Regular`, `Borderless`, `Full art` (issue #573). A fact about the
-   *  printing on every surface, so it reads one question wherever it is drawn. */
-  | "border"
-  | "price"
-  | "printings"
-  /** One cell, two questions — see the cell itself. Published finish on the card search, the
-   *  copy's own finish on a list of copies. */
-  | "finish"
-  | "condition"
-  // `"fulfilled"` sat here until 2026-09-08. It was the wishlist's alone — the Fulfilled / Still
-  // missing pair — and it went with every other comparison that list made against the collection.
-  | "needsReview";
+// `TrayCell` and `SEARCH_TRAY` live in `filterOptions.ts` since 2026-10-03, beside the rest of the
+// tray's vocabulary, so the light app's phone sheet can read the same lists without reaching this
+// file (which reads the store). Re-exported here so every caller keeps its import.
+export { SEARCH_TRAY, type TrayCell };
 
-/**
- * What the card search offers: every cell that asks about a card or a printing, and none of the
- * ones that ask about a copy (`condition`, `needsReview`) or a deck (`decks`). The default, so the
- * surfaces that take it — the search page, the Tags page and every docked `CardSearchBody` — say
- * nothing.
- *
- * `border` and `finish` sit after `type` because the three describe the cardboard in front of the
- * reader, and `finish` has been here only since issue #573: on this surface it asks whether the
- * printing was **published** in a finish, which is a real narrowing — see the cell.
- */
-export const SEARCH_TRAY: readonly TrayCell[] = [
-  "set",
-  "format",
-  "owned",
-  "rarity",
-  "type",
-  "border",
-  "finish",
-  "price",
-  "printings",
-];
 
 /**
  * What this row's own controls are **called**, and the `id` stem their labels bind through.

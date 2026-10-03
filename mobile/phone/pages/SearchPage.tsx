@@ -1,15 +1,12 @@
 import { useMemo, useRef, useState } from "react";
-import { SlidersHorizontal } from "lucide-react";
-import { FILTER_CONTROL, FILTER_FOCUS, filterChipState } from "@/components/FilterChips";
 import { activeChips } from "@/features/search/filterOptions";
 import { countOf } from "@/features/search/resultCount";
 import { StatedFiltersLine } from "@/features/search/StatedFiltersLine";
 import { TagQueryRow } from "@/features/search/TagQueryRow";
 import { useCardSearch, type CardSearch } from "@/features/search/useCardSearch";
-import { cn } from "@/lib/utils";
 import { CardWall, type WallItem } from "../CardWall";
 import { searchItem } from "../items";
-import { BADGE, FiltersSheet } from "../search/FiltersSheet";
+import { FiltersButton, FiltersSheet } from "../search/FiltersSheet";
 import { DimNote, NextPageRefused, ReadError, useMore } from "./parts";
 
 /**
@@ -129,34 +126,12 @@ export function SearchLine({ search, label }: { search: CardSearch; label: strin
             // 16px: below it, iOS and some Android browsers zoom the page on focus.
             className="h-11 min-w-0 flex-1 rounded-md border border-border bg-bg px-3 text-base text-text select-text"
           />
-          <button
+          <FiltersButton
             ref={opener}
-            type="button"
+            active={filtered}
+            expanded={sheetOpen}
             onClick={() => setSheetOpen(true)}
-            // A sheet, not a disclosure: `FiltersButton` opens a tray in the page and says so with
-            // `aria-controls`, and a modal has neither a place in the page nor an id to point at.
-            aria-haspopup="dialog"
-            aria-expanded={sheetOpen}
-            // The count is in the name because the badge is hidden from a screen reader, and the
-            // word on the button is in it too (WCAG 2.5.3).
-            aria-label={filtered > 0 ? `Filters — ${filtered} active` : "Filters"}
-            className={cn(
-              FILTER_CONTROL,
-              FILTER_FOCUS,
-              "inline-flex h-11 shrink-0 items-center gap-2 px-3",
-              // Gold while anything is on: the sheet is shut, so this is the one place a filter
-              // the reader cannot see is said to be there.
-              filterChipState(filtered > 0),
-            )}
-          >
-            <SlidersHorizontal className="size-4 shrink-0" aria-hidden="true" />
-            Filters
-            {filtered > 0 && (
-              <span aria-hidden="true" className={BADGE}>
-                {filtered}
-              </span>
-            )}
-          </button>
+          />
         </div>
 
         {stating &&
@@ -177,6 +152,9 @@ export function SearchLine({ search, label }: { search: CardSearch; label: strin
       <FiltersSheet
         open={sheetOpen}
         search={search}
+        // Nothing until the first page has answered — a count then would be about no search.
+        total={query.data === undefined ? undefined : search.total}
+        capped={search.totalIsCapped}
         onDismiss={() => {
           opener.current?.focus();
           setSheetOpen(false);

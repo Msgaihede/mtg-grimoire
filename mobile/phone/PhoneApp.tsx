@@ -3,6 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
 import { NAV } from "@/components/nav";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import { usePrefetchShelfFolds } from "@/features/shelves/useShelfFolds";
 import type { LightView } from "@/lib/edition";
 import type { DeckVariant } from "@/lib/ipc";
 import { queryClient } from "@/lib/query";
@@ -93,6 +94,10 @@ export function PhoneFace() {
     return null;
   });
   const place = usePlace();
+  // The stored folds, asked for at launch as `AppShell` asks for them — so neither cabinet draws
+  // its shelves at the defaults and then re-folds a frame later.
+  usePrefetchShelfFolds();
+
   /**
    * Which list each deck has been switched to this session — **held here rather than by the deck
    * page**, because the card sheet over that page reads it too: its `Add to <deck>` adds to the
