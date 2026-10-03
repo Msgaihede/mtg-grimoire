@@ -157,21 +157,26 @@ A claim that carries an `emission` reference is, in `apply_in`:
   whose record is kept when it is taken (below) — `emission@<device id>`: each one's `id`, `n`,
   `since`, `resumed`, and two sets of index ranges: **wrote** (the claim built, merged or floored its
   row) and **passed** (consumed and wrote nothing — §6's held-row arm, a moot claim, one dropped and
-  recorded); the newest four emissions at most, **the kept completed record taking one of the four**.
+  recorded); four records an emitter at most, each taking a slot — the emissions in flight, the
+  completed one whose record is kept when it is taken, and the superseded ones kept beside it (below).
   A claim whose index is in either set is skipped as seen. A record a gap found is marked as from
   before it (§7). **Past four, a record whose claims wrote nothing is evicted first**, oldest first,
-  and only then the oldest that wrote — though never the record being stored, which is its
-  emission's progress (amended 2026-10-03, after the final review): `wrote` is the only evidence that
-  a put a claim carried is inside a row here, and a record from before a gap keeps its `wrote`.
+  and only then the oldest that wrote (amended 2026-10-03, after the final review): `wrote` is the
+  only evidence that a put a claim carried is inside a row here, and a record from before a gap
+  keeps its `wrote`. The record being stored ranks with the ones that wrote whatever it holds — it is
+  its emission's progress, and would otherwise be cut for having written nothing yet — but goes by
+  age among them like the rest: an older in-flight record stored while four newer records that wrote
+  are held is evicted the moment it is stored.
 - **decided together with its row.** Groups are one per row and a group already holds as a whole
   (`held_by` asks every op in it), so a claim beside a put that is held — by a device block, a missing
   parent, a newer schema — is held with it, not consumed, and comes back with it. The claim itself
   blocks nothing: it creates no device block. **What is new is that ops the client holds back are no
   longer taken out of the page**: every batch it holds that it could open — a sender held for its
   clock, or a sender's batches behind one only a newer build can read — enters `apply` with its ops
-  marked held, so they hold their rows' groups. The claim that contains such a put can no longer land
-  ahead of it, which is the third review's 6-for-3 closed at its root. (A batch only a newer build can
-  parse has no ops to pass; §6's containment rule and §8's horizon cover it.) **A held-back op joins
+  marked held, so they hold the groups of their rows that carry a claim. The claim that contains
+  such a put can no longer land ahead of it, which is the third review's 6-for-3 closed at its root.
+  (A batch only a newer build can parse has no ops to pass; §6's containment rule and §8's horizon
+  cover it.) **A held-back op joins
   only a group that carries a claim** (amended 2026-10-03, after the final review): elsewhere it joins
   nothing and holds nothing. Joining every group of its row, it held another sender's ordinary op
   there — and that sender's later ops, as collateral — for as long as the client held the first: up
@@ -430,6 +435,13 @@ an upgraded emitter behaves as today.
   or a gap — finds no record and counts the puts its emission carried again. And a superseded record
   of an older generation is still dropped when a newer generation's emission is taken; a resumed
   emission's floor normally writes the same rows.
+- **The older claim's carry can cost a put `main` also loses** (added 2026-10-03, after the final
+  re-review). §6 leaves a covered put to `inside` wherever an older baseline in the page — no
+  references, or stripped at the cut — covers it. Where that older claim for the put's row is itself
+  skipped as seen by the watermark while the newer emission's claim for the row passes on a held row,
+  nothing writes the put: before that rule it took the op path and landed, and now it is lost as
+  `main` loses it — this section's loss of an older emitter's baselines, until it is updated. Within
+  §10's promise and §8.2's direction: an under-count, never worse than `main`.
 - Each goes to sync.md's *What is still owed* with its scenario.
 
 ## 12. Constraints, and how each is met

@@ -2050,11 +2050,18 @@ binding rules:
   **joins only a group that carries a claim**, holds nothing anywhere else, and is counted in no
   class of the report (the client counts it). `carried@<device>` rises only from a wholly written
   emission that is not from before a gap — over-covering a horizon loses a put. `update_row` writes
-  nothing, `updated_at` included, when nothing changed. Ops with no emission, and emissions named at
-  or below the upgrade cut (`emissions_since`), keep `main`'s rules — `decide` leaves a covered put
-  that such an op's horizon covers to `inside`, even beside an active emission — **except that an
-  ordinary op sharing a group with a claim and a held-back op waits with them**, and its sender's
-  later ops as collateral, for as long as the client holds the held-back op's sender.
+  nothing, `updated_at` included, when nothing changed. Baseline ops with no emission, and
+  emissions named at or below the upgrade cut (`emissions_since`), keep `main`'s rules — `decide`
+  leaves a covered put that such an op's horizon covers to `inside`, even beside an active
+  emission — and an ordinary op no active emission in the page covers is judged as `main` judges
+  one, by the watermark and by `inside` against those older horizons alone (an inert emission's
+  drops nothing). **An ordinary put an active emission's horizon covers is not**:
+  `claims::decide`'s row table decides it (the op path on a row held here, the tombstone face or a
+  merged-away uid; dropped as carried where the claim builds or merges), and only an older baseline
+  in the page covering it too hands it back to `inside`. Across both, containment skips a put whose row's claim in the page — from an emission
+  whose horizon covers it and whose record this device still holds — has already written the row.
+  **And an ordinary op sharing a group with a claim and a held-back op waits with them**, and its
+  sender's later ops as collateral, for as long as the client holds the held-back op's sender.
 - **`sync_peers` is a watermark, and the client holds its cursor only for what can still
   resolve.** Advancing the watermark past an op that may still apply loses it; applying the ops
   above it while holding it adds their counter deltas twice on a re-delivery. So `apply` holds a

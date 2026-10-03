@@ -2039,8 +2039,9 @@ fn clock_sentence(conn: &Connection, device: &str, ahead_ms: i64) -> String {
 ///   beside the fast one.
 ///
 /// **What either rule holds back still goes to `apply`, as held and never applied** (the baseline
-/// claim design of 2026-10-03, §5): it holds its rows' groups there, so another sender's claim for
-/// a row one of its puts is inside waits with it rather than landing ahead of it.
+/// claim design of 2026-10-03, §5): there it joins the group of a row that carries a claim, and
+/// holds that group, so another sender's claim for a row one of its puts is inside waits with it
+/// rather than landing ahead of it. On a row with no claim it joins nothing and holds nothing.
 ///
 /// **An envelope stepped over opens the gap** (§7) — every unreadable one but those held behind a
 /// rotation and those only a newer build can read. It is an op this device will never apply, so
@@ -2265,10 +2266,10 @@ pub async fn pull(
         // nothing and keeps nothing back: it is stepped over.
         //
         // **What is held back is no longer taken out of the page** (design 2026-10-03 §5): it goes
-        // to `apply` as held, never applied, so it holds its rows' groups and a claim that contains
-        // one of its puts cannot land ahead of it. **Each opened batch goes to exactly one of the
-        // two lists**, and that is load-bearing: an op passed both as `ops` and as `held_back` is
-        // grouped twice.
+        // to `apply` as held, never applied, and holds the group of each of its rows that carries a
+        // claim — and no other — so a claim that contains one of its puts cannot land ahead of it.
+        // **Each opened batch goes to exactly one of the two lists**, and that is load-bearing: an
+        // op passed both as `ops` and as `held_back` is grouped twice.
         let mut ops: Vec<Op> = Vec::new();
         let mut held_back: Vec<Op> = Vec::new();
         let mut held_behind = 0usize;
@@ -2294,9 +2295,12 @@ pub async fn pull(
         // for its clock is deferred and a block the same way, at its earliest batch, and counted in no
         // class of `apply`'s.
         report.held_newer += held_behind;
-        // The held-back ops only. A fresh op `apply` holds with them — another op in a held-back
-        // op's group, such as an earlier one of the same sender on that row, or collateral behind
-        // its block — is counted in no class, here or in `apply`. **The cursor decision below is
+        // The held-back ops only — `apply` counts none of them, whatever its group became. A fresh
+        // op `apply` holds with them — another op in a held-back op's group, such as an earlier one
+        // of the same sender on that row, or collateral behind its block — is counted in no class
+        // only where its group's class is `HeldBack`; where another op's block makes the group
+        // `Newer` or `Waiting`, `apply` counts its fresh ops in `held_newer` or `held_waiting`, and
+        // they reach `deferred` there. **The cursor decision below is
         // unaffected**: `held_back` is non-empty only when `held_clock > 0` or `unread_newer` (a
         // `held_behind` op sits behind a batch `unparsed` names), and either one holds the page
         // as `"clock"` or `"newer"` before `held_waiting` is ever asked.

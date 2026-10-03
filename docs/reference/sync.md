@@ -1867,8 +1867,11 @@ grouped, `settle` after the committed pass — and nothing there reads or writes
   row's claim, a moot one, one dropped and recorded). A claim whose index is in either set is
   skipped as seen. Four records an emitter (`emission::RECORDS_PER_EMITTER`), and **past four a
   record whose claims wrote nothing goes first**, oldest first — `wrote` is the only evidence that
-  a put a claim carried is inside a row here — though never the record being stored, which is an
-  emission's progress (`the_ledger_evicts_a_record_that_wrote_nothing_first`).
+  a put a claim carried is inside a row here (`the_ledger_evicts_a_record_that_wrote_nothing_first`).
+  The record being stored ranks with the ones that wrote whatever it holds, because it is an
+  emission's progress, so it is never cut for having written nothing yet; **but it is not exempt**:
+  `emission::bound` orders those by age like the rest, so an older in-flight record stored while
+  four newer records that wrote are held is evicted the moment it is stored.
 - **decided with its row.** A group is one row and holds as a whole (`held_by` asks every op in
   it), so a claim beside a put that is held is held with it, unconsumed, and comes back with it.
   The claim itself blocks nothing (`a_claim_held_mid_emission_lands_once_and_holds_nothing_else`).
@@ -2227,6 +2230,53 @@ held 4 and `b` held **5**. `a`'s claim held `c`'s `+1` and `a`'s horizon did not
 the same reason, no further narrowing could save one, and the claim needed a provenance of its own,
 which is what an emission is. **A horizon says what an emitter *applied*, not what its rows
 *hold*.**
+
+#### Driven in the shipped window
+
+**2026-10-03, debug build, Windows, `tauri dev` at `b4406e6b`** — the window over CDP, a copy of the
+dev data pointed at a mock relay on the loopback (`relay_url`, and `share_url` so the Collection
+page's share list stayed local too), in a TEST group with four **scripted** peers. Two app processes
+cannot run on one machine, so the app was device b, and the other devices' pages were built ahead of
+time from scratch databases by the real `baseline` and `emission` code, sealed by `wire::seal_batch`
+and released into the mock's log one page at a time; each was then pulled by a press of **Sync
+now**. Nothing reached the real relay. The copy needed `emissions_since` set to `0:0` by hand: it
+held a watermark from an old group, so its first apply would have minted the upgrade cut a day ahead
+and stripped every scenario's reference — the cut working as designed, on a database whose history
+did not need it. After every page b was read three ways, and they agreed: the Collection page's own
+`collection_list`, the tiles it drew, and the copy's `user.db` read beside the running app.
+
+| Page | What it carried | b, then |
+| --- | --- | --- |
+| A first pairing in two halves | dev-a's first emission, one chunk a page — the second chunk's claims stamped below the first's | Bolt after the first; **Bolt, Counterspell and Elves, one copy each, after the second**; `taken@` dev-a |
+| The same-second `+1` | dev-c's `+1` on Opt in the second b last heard from it, beside its own re-baseline | **Opt 2 → 3**: the claim *passed* (`wrote [0] passed [1]`), the `+1` took the op path |
+| An inert re-broadcast | dev-a's, its horizon covering that `+1` | Opt **3**, not 4 — `skipped 5`, no record |
+| A removal while another device re-broadcasts | the Collection page's stepper took Opt 3 → 2 and the write's own trip pushed it; then dev-c's note and dev-a's re-broadcast claiming 3, stamped above everything b had taken from dev-a | Opt **stays 2**, with dev-c's note — the inert claim took nothing back |
+| A held clock | dev-e's put stamped **three days** ahead, and dev-f's claim for that row | **no row**; `pull_hold` kind `clock` with the held claim as a block of its own; the cursor and the ack held while the log moved on; the panel's clock sentence and one `error_log` row, still one after two more presses |
+
+Before the window, the same pages ran through the real client against the same mock — `run_once`
+over a scratch copy brought to head the way the launch brings it, at `280b5242`, ahead of the final
+review's fixes — with the references and again with every reference stripped, which is how an older
+emitter's baseline arrives. With them, every row above; without them, the second half lost
+Counterspell and Elves, the `+1` was lost (2), and the removal was taken back (3). The held clock
+read the same both ways there, because at `280b5242` a held-back op still joined every group of its
+row. Since the final review's I1 it joins only a group whose claim names its emission, so a stripped
+run on `b4406e6b` would build that row ahead of the held put, as `main` does — read off the code,
+not re-run.
+
+**What b sent**: before any page, its launch pushed the post-pull conversion's three ops and then one
+baseline per peer — **4 emissions of 1 277 claims, 7 chunks each, a head and a horizon on every
+chunk's first op, `since 0:0`, indices exactly `0..1276`** — and later the removal as one sparse op,
+`quantity: -1`. One *Recently removed* folder throughout, under b's own uid (each peer's was absorbed
+into it, a `retired@` mark apiece); no gap opened. **The other half of "both collections" was not
+driven in the window**: a scripted device taking in what b pushed needs the Rust helper that applies
+it, and that was a temporary test which could not be put back while the app ran — a source edit
+under `tauri dev` is a rebuild. The dry run did it: dev-a, handed everything b pushed, ended with Opt
+at 2, as b did.
+
+**Two things the window says that are not quite right**, observed and not sync faults: a press during
+the clock hold summarises the held change as *1 change is waiting on earlier changes* — a parent
+wait's words, under the panel's correct clock sentence — and the header keeps saying *Synced with
+your other devices.* while the cursor is held.
 
 ### Held while it can resolve, skipped when it cannot
 
@@ -4228,7 +4278,30 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   road is a full re-read after `forget_log_position`. And a record of an *older* generation is still
   dropped by `take`: a half-sent emission from before the emitter rejoined loses its evidence when
   one from after it is taken, which a resumed emission's floor normally covers, since its own claim
-  for the row writes.
+  for the row writes. **And a record from before a gap that wrote nothing is still the first to
+  go**: it ranks with the empty ones, so `keep` can evict it, and its emission re-delivered comes
+  back as a fresh record — one recorded after the gap, which can be taken and close the gap that
+  the before-gap mark was holding open. Under-count only: a gap closed early passes held-row claims
+  a floor would have raised, and the record held nothing a page could count twice.
+- **`take` ranks the record it takes as evidence even when it wrote nothing** (read off the code
+  at `b4406e6b`, after the final re-review; a code minor, parked). `take` hands `emission::bound`
+  the taken record's own `id` as the record being stored, so a taken record whose claims all passed
+  — whose `wrote` set is empty — ranks with the records that wrote and can push out a kept
+  superseded record that wrote: exactly the evidence the final review's C1 keeps. It needs four
+  records of one emitter that wrote held at once besides the one being taken. What it costs is C1's
+  own shape — a page handed back with a put the pushed-out record's claim carried counts it again.
+  One fix would rank the taken record by its `wrote` set alone: it is complete, so it is no longer
+  progress that needs protecting, and a record that wrote nothing proves nothing for containment.
+- **C2's fix trades one correct answer for `main`'s loss, in one shape** (read off the code at
+  `b4406e6b`, after the final re-review). `decide` leaves a covered put to `inside` wherever the
+  horizon of an older baseline in the page — no references, or stripped at the cut — covers it
+  (`Decided::older`), because that older claim carries it. Where the older claim for the put's row
+  is itself skipped as seen by the watermark — `main`'s rules — while the newer emission's claim for
+  the row passes on a held row, nothing writes the put: before the fix it took the op path and
+  landed; now `inside` drops it, and it is lost exactly as `main` loses it — the spec's §11 loss of
+  an older emitter's baselines, the original same-second `+1` among them. It is within §10's "never
+  worse than `main`" and §8.2's direction, an under-count; it ends when the older emitter is
+  updated. No test pins it.
 - **A row whose last copy goes is deleted before its fields are written, so a field that cannot be
   written no longer stops the group** (found at the `update_row` change, read off the code and
   unmeasured). `update_row` now decides every counter before it writes anything, and on
