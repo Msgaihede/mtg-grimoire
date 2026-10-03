@@ -52,7 +52,7 @@ measured, one subsection per step).
   tags (oracle and art, with "never fetched" its own sentence) and the combos row's four states.
   Phase 1's leftovers closed here: a wall's refused next page says so and offers `Try again`;
   `facesOf` lives once. The `Open on …` rows wait for the host seams (phases 4 and 5).
-- [x] **3.2 — Collection.** The cabinet: folders and shelves as headed groups, every shelf
+- [x] **3.2 — Collection** (#791, merged 2026-10-03). The cabinet: folders and shelves as headed groups, every shelf
   openable (deck groups and `Recently removed` included), the collection's figures, filters
   through the same sheet over `useCollection`. Two rows of one printing get two names.
 - [x] **3.3 — Wishlist.** The cabinet and its folders, the managed wishlist as a read, the
