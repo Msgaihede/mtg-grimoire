@@ -87,8 +87,11 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
 `src/lib/edition.ts`. The desktop shell reads an `Edition` from context — which rail rows to draw,
 whether to draw the caption, which view chords act — and the full edition is the default, so the
 desktop app provides nothing and `DesktopFace` provides `LIGHT_EDITION`. **A page never reads the
-edition, and nothing under `src/` asks where it is running**; `AppShell` is its one reader. A
-chord for a view outside the edition is **inert** — the digits do not move between editions.
+edition, and nothing under `src/` asks where it is running**; `AppShell` is one reader, and
+`SettingsPage` the other spec §3.1 names — `Edition.settings` is its entry list, `null` for every
+panel and `LIGHT_SETTINGS` for the light edition's. The phone face's Settings reads
+`LIGHT_SETTINGS` directly, because it *is* the light edition. A chord for a view outside the
+edition is **inert** — the digits do not move between editions.
 
 - **The light app never stands on a view outside its edition, and two things hold it.** A page
   asks the shell `useReaches(view)` (`src/lib/reach.ts`) and hides a control whose only job is to
@@ -139,8 +142,12 @@ file under `mobile/phone/` and enforces it.**
 ## Navigation is the URL
 
 `routes.ts` is the one grammar and the one place the two faces agree on a spelling: a view, a
-deck under Decks, and `?card=<id>` over any of them. `parsePlace` is total — a path that names
-nothing opens on the start view — and `placeHref` is the only thing that spells a place out.
+deck under Decks, `?folder=<id>` on the deck gallery, and `?card=<id>` over any of them. **The
+folder is the phone's alone** — the desktop gallery keeps its drawer in the page, so the desktop
+face neither reads nor writes it, and a crossing drops it like any other filter state. It is an
+optional field of `Place`, absent rather than `null` at the top level, so every place spelled
+before it is still whole. `parsePlace` is total — a path that names nothing opens on the start
+view — and `placeHref` is the only thing that spells a place out.
 
 - **The phone face has its own router**, `phone/router.ts`, hand-written over the History API with
   no dependency: `usePlace`, `navigate`, `back`, `linkTo`.
@@ -181,9 +188,10 @@ failure behind each at its own site:
 - **A control that changes the URL is a real link, not a button** — `<a {...linkTo(place)}>`, with
   a real `href`, so a middle click, "open in new tab" and "copy link" work and a screen reader
   hears *link*. The router takes **only an unmodified primary click that nothing else has
-  handled**; every other press is the browser's. The tabs, the Settings control, a deck's row in
-  the gallery and a deck's way back to it are all links. **A card tile is not**: a card opens a
-  sheet over the page it is on, and `CardTile`'s control is a button by design.
+  handled**; every other press is the browser's. The tabs, the Settings control, a deck's cover
+  and a folder's row in the gallery, a folder's way up and a deck's way back to it are all
+  links. **A card tile is not**, and neither is a card's row on a deck page: a card opens a sheet
+  over the page it is on, and `CardTile`'s control is a button by design.
 - **A card is a place here, and opening one is a push** — which is what lets Android's back
   gesture close the sheet. The two faces differ on this on purpose: a sheet over a phone page is
   something a reader leaves with Back, a modal over a desktop page is not.
@@ -261,13 +269,15 @@ failure behind each at its own site:
 - **The phone pages are a skeleton.** Each real page — the filters sheet, the card sheet, the two
   cabinets, the deck editor — comes to the owner as built options before it is built, in phase 3,
   under the `frontend-design` skill like all UI here.
-- **Scanner and Settings are placeholders**: a sentence each, no camera and no permission asked.
+- **Scanner is a placeholder**: a sentence, no camera and no permission asked. Settings is the
+  light edition's groups as rows, each opening the desktop's own panels beneath it (step 3.7).
 - **The Collection and Wishlist walls draw open shelves only** — the desktop hooks fetch the
   cards of the shelves the reader has left open, and the wall draws them as one run with no
   heading, no fold and no way into a folder. **Search has its filters** (`phone/search/
   FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
   and everything else in a sheet that is page state rather than a place in the URL.
-- **Nothing on the phone face writes.**
+- **Nothing on the phone face writes except Settings**, whose panels make the desktop's own writes
+  (a marketplace, a clear, a label) through the commands the desktop calls.
 - **No Android host, no WASM host, no service worker** — `public/light.webmanifest` is the whole
   of the PWA so far — **and no sync on a light install**: the phone face runs none and draws the
   mana line at rest. `mobile:tauri` is the desktop binary, not a light host.

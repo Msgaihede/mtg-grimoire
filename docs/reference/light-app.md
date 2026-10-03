@@ -212,8 +212,11 @@ purpose; the phase that owns the surface owns the fix.
 - A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
   nothing.
 - Two rows of one printing get one accessible name; the desktop wall folds them into one tile.
-- `DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
-  the `live` list; and ~~`facesOf` now exists twice~~ — **fixed 2026-10-03**: it lives once, in
+- ~~`DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
+  the `live` list~~ — **fixed 2026-10-03 in step 3.4** (§7.4): it asks through `deckDetailQuery`
+  (`src/features/decks/deckQuery.ts`), the key `useDeck` itself reads under, and opens on the list
+  the deck remembers (`lastVariant` where it keeps a plan) with a Theory / Actual switch. And
+  ~~`facesOf` now exists twice~~ — **fixed 2026-10-03**: it lives once, in
   `src/features/card/faces.ts`, read by `CardTextDialog` and the phone's card sheet (§7.1).
 - The wall's list semantics count rows rather than cards; no test scrolls a long wall to its end.
 - ~~In landscape the bars stop short of the screen's edge beside a cutout.~~ **Closed
@@ -1838,6 +1841,83 @@ sheet takes the top safe-area inset when it fills the window, as the filters she
 **Two of phase 1's leftovers closed here** (§5): a refused next page and an uncountable empty
 wall each say so now, and `facesOf` lives once.
 
+
+### 7.4 Step 3.4 — Decks, read (2026-10-03)
+
+**The gallery** is the reader's cabinet: the folders at this level as link rows, then two columns
+of cover links (three from 640px) — the art crop, `DeckColorBar`, the name, and format · card
+count — in the desktop's own stored sort, with archived decks behind a disclosure. **A folder is a
+place**: `?folder=<id>` on `/decks`, absent rather than `null` when there is none, and an id the
+cabinet does not hold opens the top level, so `parsePlace` stays total. The badge and the bracket
+reading stack in one corner, because side by side they do not fit at 360px, and **the illustrator
+is credited in visible text on the picture** — an art crop needs its artist named, and a phone has
+no hover for the desktop's tooltip.
+
+**The deck page is one column, the owner's call** (2026-10-03): a header with the way back to the
+deck's own folder, the name and — on a deck that keeps a plan — the Theory / Actual switch; a
+figures line (format, cards, lands, price, owned, missing); then the piles in the desktop's own
+order, through `buildGroups` and `splitRail` — **the commander first**, then the companion, then
+the deck's piles, then the sideboard, the maybeboard and any switched-off pile — under the
+desktop's `GroupHeader`; then **the side rail, last**: the check, the bracket estimate (Commander
+formats only), tokens, the mana curve, deck notes and deck to-do lists, in the order the desktop
+draws its bands. A card is a compact row — quantity, label dot, name, mana cost, unit price —
+about ten to a screen, and opens the card sheet; a rule break is red with a warning glyph
+(`validateForMarks`), and a card owned short of the deck's count carries a small red dot.
+
+- **The variant is local state, not a place.** It opens on the list the deck remembers
+  (`lastVariant` where it keeps a plan, Actual otherwise), as the desktop's restore does, and
+  writes nothing back — a way of looking at one deck, which the desktop face would drop from the
+  URL anyway.
+- **The deck is read under the desktop editor's own key** (`deckDetailQuery` in the new
+  `src/features/decks/deckQuery.ts`), so crossing 1024px paints it from the cache — phase 1's
+  leftover, closed.
+- **What was split in `src/`**, each re-exported from its old home: `deckQuery.ts` (the deck read
+  and its defaults, out of the welded `useDeck`, which also makes `useDeckTokens`, `useDeckNotes`,
+  `useDeckMeta`, `useDeckPlays` and `useDeckAudit` clean); `deckCover.ts` (out of `DeckTile`);
+  `ValidationPanel`'s popover body as `ValidationFindings`; `DeckBracket`'s reading as
+  `useBracketReading` and its body as `BracketAdvisory`, whose picker is drawn only when it is
+  handed `onBracket`; `noteBody.tsx` and `todoBody.tsx`, the bodies of a deck note and a deck to-do
+  list, which a phone draws without the cards' edit controls.
+- **Links in deck notes and to-do lists** are a plain `<a target="_blank" rel="noopener
+  noreferrer">` on the phone, because nothing below `@/lib/core` opens a URL yet; on a Tauri light
+  host that is for phases 4 and 5's seams to settle. A to-do box on the phone is drawn and cannot
+  be pressed, and says `Done:` or `To do:`.
+- **Not on the phone yet**: Compare, the theory-match ticks on the Actual list, the deck's
+  description, and the stats band beyond the mana curve (the band carries write buttons).
+
+Driven at 360 and 800 wide over the `starter` seed's decks 2 and 4: nothing scrolls sideways.
+
+### 7.7 Step 3.7 — light Settings, on both faces (2026-10-03)
+
+**The edition grew its Settings entries**: `Edition.settings`, `null` for every panel (the full
+edition, so it cannot fall behind a new panel) and `LIGHT_SETTINGS` for the light one — `prices`,
+`sync`, `review`, `hidden-tags`, `theory-marks`, `labels`, `cache`, `errors`, `danger`. Left out:
+`updates` and `backup` by the spec's name, `data-folder` (a path a browser or a phone cannot
+open) and `start-view` (a light install opens where its URL says). `edition.ts` carries each
+reason. `SettingsPage` is the edition's second reader, as spec §3.1 grants; `nav.ts` grew
+`panelsOf` and `groupsOf`, and a rail entry with no panel in it is not drawn.
+
+- **The desktop face** lands on the first entry it draws (`Card data`, where the full edition's
+  is `Updates`), searches only what it draws, and drops a hand-off naming a panel it leaves out.
+  The full edition is unchanged; no existing test was edited.
+- **The phone face** lists the same six groups as 52px rows; one opens at a time, its panels drawn
+  beneath it by the desktop's own components, its row pinned while they scroll. The group is not
+  in the URL, so Back leaves Settings from an open group as from a closed one. No search box.
+- **`SyncPanel` was welded** through `@/lib/externalLinks` (the plugin-opener, for *Connect
+  Patreon*). It is now `SyncPanelBody`, which takes `openLink`, and a one-line `SyncPanel` that
+  hands it `openExternal`; the phone face hands it a `window.open` until the host seam for opening
+  a link exists (phases 4 and 5).
+- **Driven in Chromium over the fake** (`mobile:dev` on port 5176): every group opened at 360 wide
+  with no sideways scroll (`scrollWidth` 360 for each), the Clear collection dialog over the
+  window rather than the list, the sync group at 800 in a `max-w-2xl` column, and the desktop
+  face at 1280×800 with six rail entries and `dropbox` matching nothing.
+
+**Open**: the phone face mounts no `useMarketplaceProgress`, so a price feed refreshed from the
+phone's Settings reports through its own mutation and the status read but not the progress event
+(`AppShell` is that hook's one caller); the Mana Pool row is still offered in a browser, which spec
+§4 says it should not be (the host-capability question is phase 5's); and the Sync panel's
+*Scan a code* asks for a camera on a host that may not grant one — phase 6's, with sync itself.
+
 ### 7.8 Step 3.8 — the desktop face in the light edition, and the shell (2026-10-03)
 
 **Build: `vite --config vite.mobile.config.ts --mode fake` (Vite's dev server, not a bundle) over
@@ -1940,3 +2020,28 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
   signal for *unsaved* that covers a controlled input and the note editor alike, and a debounce
   protects nothing typed. The realistic trigger is a tablet rotating across 1024; what it costs is
   re-typing, and what would prevent it is keeping both faces mounted, which this step did not buy.
+
+#### The fences and the tooling
+
+- **Stories for phone UI**: Storybook's story glob, its stylesheet's `@source` and
+  `src/stories.test.tsx`'s module glob reach `mobile/` (the desktop's own `src/index.css` does
+  not, so the desktop bundle carries no phone class). `Shell`, `TabBar` and `CardWall` have
+  stories; a page's stories come with its step. `npx storybook build` listed `phone-shell`,
+  `phone-tabbar` and `phone-cardwall`, and the phone-only `.h-13` was in the iframe's CSS.
+- **`src/lib/tokens.test.ts` reads `mobile/`**, every sweep of it. The one exception it kept is
+  the `MotionConfig` count, which is now one mount per face — `src/App.tsx` and
+  `mobile/phone/PhoneApp.tsx`, each with `reducedMotion="user"`. A planted third mount and a
+  planted transition with no reduced-motion opt-out each went red. Nothing in `mobile/` violated
+  it.
+- **The fence's blind spots are closed** (`mobile/phone/fence.test.ts`): an `import.meta.glob`
+  pattern is followed to every file it matches, a root-absolute specifier is followed, a
+  template-literal `import()` with nothing interpolated is read as a string and any other
+  non-literal `import()` is refused; the comment stripper is one pass that knows strings,
+  templates and regexes, and over every non-test file in `src/` and `mobile/` it finds exactly the
+  specifiers the old one did; the probe sweep catches `userAgent` however it is spelled,
+  `navigator.platform` by dot, bracket or destructuring, and `@tauri-apps/plugin-os`. Each new
+  rule has a case that fails on a tree with the weld.
+- **The fake's four aliases are one list**, `.storybook/fake/aliases.ts`, read by Storybook and by
+  `vite.mobile.config.ts`. The light config's own copy of the watch-ignore globs was deleted:
+  `vite.watch.ts` (#760) already gives every server the same list, which also settles the `EBUSY`
+  sentence in §4.

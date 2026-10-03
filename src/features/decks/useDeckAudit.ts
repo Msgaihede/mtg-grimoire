@@ -2,7 +2,7 @@ import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { ipc, type DeckAuditEntry } from "@/lib/ipc";
 import { auditDays } from "./auditText";
-import { opened } from "./useDeck";
+import { opened } from "./deckQuery";
 
 /** Stable identity for "nothing read yet", so {@link auditDays} is not re-run over a new empty
  *  array on every render of a dialog that is still waiting. */

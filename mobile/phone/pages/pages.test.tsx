@@ -199,80 +199,7 @@ describe("the card sheet", () => {
   });
 });
 
-describe("Decks", () => {
-  it("lists the reader's decks, each a link to its own page", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks" });
-    const list = await screen.findByRole("list", { name: "Your decks" });
-    const first = await waitFor(() => within(list).getAllByRole("link")[0], SETTLE);
-    // The whole computed name, never its two halves apart: a name and a caption with nothing
-    // between them read as `Modern GoodstuffModern · 60 cards`, and each half is still found.
-    expect(first).toHaveAccessibleName(/^Modern Goodstuff Modern · \d+ cards$/);
-    // A real address, so a middle click and "copy link" have something to act on.
-    expect(first).toHaveAttribute("href", "/decks/1");
-  });
-
-  it("opens a deck as a wall of its cards, with the deck's name as the title", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks" });
-    const list = await screen.findByRole("list", { name: "Your decks" });
-    const first = await waitFor(() => within(list).getAllByRole("link")[0], SETTLE);
-
-    await userEvent.click(first);
-
-    expect(window.location.pathname).toBe("/decks/1");
-    const wall = await screen.findByRole("list", { name: "Cards in this deck" }, SETTLE);
-    // Four copies, said in the tile's name by the wall.
-    expect(
-      await within(wall).findByRole("button", { name: "Counterspell, MH2 267, 4 copies" }, SETTLE),
-    ).toBeInTheDocument();
-    expect(screen.getByRole("heading", { level: 2, name: "Modern Goodstuff" })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Back to decks" })).toHaveAttribute("href", "/decks");
-  });
-
-  it("draws no title until the deck has a name to put in it", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks/999999" });
-    expect(await screen.findByText("That deck is gone.", undefined, SETTLE)).toBeInTheDocument();
-    // An empty heading is a stop a screen reader lands on and hears nothing at.
-    expect(screen.queryByRole("heading", { level: 2 })).toBeNull();
-  });
-
-  it("says so when the deck is gone, and Back to decks leaves it", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks/999999" });
-    expect(await screen.findByText("That deck is gone.", undefined, SETTLE)).toBeInTheDocument();
-    expect(screen.queryByRole("alert")).toBeNull();
-
-    await userEvent.click(screen.getByRole("link", { name: "Back to decks" }));
-
-    expect(window.location.pathname).toBe("/decks");
-    expect(await screen.findByRole("list", { name: "Your decks" })).toBeInTheDocument();
-  });
-
-  it("says the deck could not be read when the read fails, not that the deck is gone", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    registerCommands({ deck_get: refused() });
-    await userEvent.click(tab("Decks"));
-    const list = await screen.findByRole("list", { name: "Your decks" });
-
-    await userEvent.click(await waitFor(() => within(list).getAllByRole("link")[0], SETTLE));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("That deck could not be read.");
-    expect(screen.queryByText("That deck is gone.")).toBeNull();
-  });
-
-  it("says so when the decks cannot be read", async () => {
-    renderPhone(<PhoneFace />, { path: "/scanner" });
-    registerCommands({ deck_list: refused() });
-
-    await userEvent.click(tab("Decks"));
-
-    expect(await screen.findByRole("alert")).toHaveTextContent("Your decks could not be read.");
-  });
-
-  it("says so, and offers nothing, when there are no decks", async () => {
-    renderPhone(<PhoneFace />, { path: "/decks", fake: { seed: "empty" } });
-    expect(await screen.findByText("No decks", undefined, SETTLE)).toBeInTheDocument();
-    expect(screen.queryByRole("list", { name: "Your decks" })).toBeNull();
-  });
-});
+// Decks — the gallery and a deck — are `decks.test.tsx`'s.
 
 describe("Collection", () => {
   it("draws the cards on the reader's open shelves", async () => {
@@ -358,14 +285,10 @@ describe("Wishlist", () => {
   });
 });
 
-describe("Scanner and Settings", () => {
+// Settings has a suite of its own since step 3.7 — `SettingsPage.test.tsx`.
+describe("Scanner", () => {
   it("says what is coming, and opens no camera", () => {
     renderPhone(<PhoneFace />, { path: "/scanner" });
     expect(screen.getByText(/The scanner arrives in a later phase/)).toBeInTheDocument();
-  });
-
-  it("names the edition", () => {
-    renderPhone(<PhoneFace />, { path: "/settings" });
-    expect(screen.getByText(/light edition/i)).toBeInTheDocument();
   });
 });

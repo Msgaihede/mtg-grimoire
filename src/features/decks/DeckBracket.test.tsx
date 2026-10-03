@@ -7,7 +7,7 @@ import { AUTO_BRACKET, type ComboStatus, type DeckCard, type DeckCombo } from "@
 import { commander, gameChanger, islands } from "./validation/fixtures";
 import type { BracketEstimate } from "./validation/bracket";
 import { bracketWarning, estimateBracket } from "./validation/bracket";
-import { DeckBracket } from "./DeckBracket";
+import { BracketAdvisory, DeckBracket } from "./DeckBracket";
 
 const combosForCards = vi.hoisted(() => vi.fn());
 const combosStatus = vi.hoisted(() => vi.fn());
@@ -727,5 +727,53 @@ describe("DeckBracket", () => {
     );
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("BracketAdvisory, drawn without a picker", () => {
+  // `estimateBracket` is mocked in this file; the body draws whatever reading it is handed.
+  const reading = estimate({ floor: 3, gameChangers: 1, gameChangerNames: ["Rhystic Study"] });
+
+  it("says the deck's answer in words and offers no radios when it cannot write one", () => {
+    render(
+      <BracketAdvisory
+        estimate={reading}
+        bracket={AUTO_BRACKET}
+        warning={null}
+        comboState="read"
+      />,
+    );
+    expect(screen.queryByRole("radiogroup")).toBeNull();
+    expect(screen.getByText(/^Auto — read from the cards/)).toBeInTheDocument();
+  });
+
+  it("names a rung the reader set, and still leads with the mismatch", () => {
+    render(
+      <BracketAdvisory
+        estimate={reading}
+        bracket={2}
+        warning="The cards read as bracket 3 or higher."
+        comboState="never"
+      />,
+    );
+    expect(screen.getByText(/^Set to 2 Core —/)).toBeInTheDocument();
+    expect(screen.getByText("The cards read as bracket 3 or higher.")).toBeInTheDocument();
+    // The four combo states are the advisory's own, whichever surface draws it.
+    expect(screen.getByText(/Combo data hasn.t downloaded yet/)).toBeInTheDocument();
+  });
+
+  it("keeps the picker where a surface hands it a write", () => {
+    const onBracket = vi.fn();
+    render(
+      <BracketAdvisory
+        estimate={reading}
+        bracket={AUTO_BRACKET}
+        warning={null}
+        onBracket={onBracket}
+        comboState="read"
+      />,
+    );
+    fireEvent.click(within(screen.getByRole("radiogroup")).getByRole("radio", { name: "3 Upgraded" }));
+    expect(onBracket).toHaveBeenCalledWith(3);
   });
 });
