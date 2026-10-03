@@ -373,7 +373,14 @@ one is not. **The second is built the same day**: the client, the entitlement, `
 `schedule`, `identity`, pairing and the sync panel's reads are the core's, every relay request
 goes through `platform::http` with a deadline a browser honours, and the pending pairing offer
 is a field of `State`. Live sync's socket stays the desktop's. [The step's plan](../plans/2026-10-02-light-app-core-step-6-sync.md)
-has the tasks, and what a test that lands a write behind every stretch of a trip found.
+has the tasks, and what a test that lands a write behind every stretch of a trip found. **It
+merged the same day, #772.**
+
+**Step 7 was decided and built on 2026-10-03.** Markus chose the whole glue over moving only what
+names no engine — so `card-scanner` is a dependency of the core, measured clean for wasm32 first
+(its `bundled` SQLite is not in a browser's tree at all) and still unable to *run* there until §8's
+seam — and the scanner's state as a field of `State` rather than a struct each host keeps beside
+it. [Its plan](../plans/2026-10-03-light-app-core-step-7-scanner.md) has the rest.
 
 ### 2.9 Decided here, and deliberately left to the extraction's own plan
 
