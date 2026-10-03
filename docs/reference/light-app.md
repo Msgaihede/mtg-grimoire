@@ -1836,3 +1836,48 @@ sheet takes the top safe-area inset when it fills the window, as the filters she
 **Two of phase 1's leftovers closed here** (§5): a refused next page and an uncountable empty
 wall each say so now, and `facesOf` lives once.
 
+
+### 7.4 Step 3.4 — Decks, read (2026-10-03)
+
+**The gallery** is the reader's cabinet: the folders at this level as link rows, then two columns
+of cover links (three from 640px) — the art crop, `DeckColorBar`, the name, and format · card
+count — in the desktop's own stored sort, with archived decks behind a disclosure. **A folder is a
+place**: `?folder=<id>` on `/decks`, absent rather than `null` when there is none, and an id the
+cabinet does not hold opens the top level, so `parsePlace` stays total. The badge and the bracket
+reading stack in one corner, because side by side they do not fit at 360px, and **the illustrator
+is credited in visible text on the picture** — an art crop needs its artist named, and a phone has
+no hover for the desktop's tooltip.
+
+**The deck page is one column, the owner's call** (2026-10-03): a header with the way back to the
+deck's own folder, the name and — on a deck that keeps a plan — the Theory / Actual switch; a
+figures line (format, cards, lands, price, owned, missing); then the piles in the desktop's own
+order, through `buildGroups` and `splitRail` — **the commander first**, then the companion, then
+the deck's piles, then the sideboard, the maybeboard and any switched-off pile — under the
+desktop's `GroupHeader`; then **the side rail, last**: the check, the bracket estimate (Commander
+formats only), tokens, the mana curve, deck notes and deck to-do lists, in the order the desktop
+draws its bands. A card is a compact row — quantity, label dot, name, mana cost, unit price —
+about ten to a screen, and opens the card sheet; a rule break is red with a warning glyph
+(`validateForMarks`), and a card owned short of the deck's count carries a small red dot.
+
+- **The variant is local state, not a place.** It opens on the list the deck remembers
+  (`lastVariant` where it keeps a plan, Actual otherwise), as the desktop's restore does, and
+  writes nothing back — a way of looking at one deck, which the desktop face would drop from the
+  URL anyway.
+- **The deck is read under the desktop editor's own key** (`deckDetailQuery` in the new
+  `src/features/decks/deckQuery.ts`), so crossing 1024px paints it from the cache — phase 1's
+  leftover, closed.
+- **What was split in `src/`**, each re-exported from its old home: `deckQuery.ts` (the deck read
+  and its defaults, out of the welded `useDeck`, which also makes `useDeckTokens`, `useDeckNotes`,
+  `useDeckMeta`, `useDeckPlays` and `useDeckAudit` clean); `deckCover.ts` (out of `DeckTile`);
+  `ValidationPanel`'s popover body as `ValidationFindings`; `DeckBracket`'s reading as
+  `useBracketReading` and its body as `BracketAdvisory`, whose picker is drawn only when it is
+  handed `onBracket`; `noteBody.tsx` and `todoBody.tsx`, the bodies of a deck note and a deck to-do
+  list, which a phone draws without the cards' edit controls.
+- **Links in deck notes and to-do lists** are a plain `<a target="_blank" rel="noopener
+  noreferrer">` on the phone, because nothing below `@/lib/core` opens a URL yet; on a Tauri light
+  host that is for phases 4 and 5's seams to settle. A to-do box on the phone is drawn and cannot
+  be pressed, and says `Done:` or `To do:`.
+- **Not on the phone yet**: Compare, the theory-match ticks on the Actual list, the deck's
+  description, and the stats band beyond the mana curve (the band carries write buttons).
+
+Driven at 360 and 800 wide over the `starter` seed's decks 2 and 4: nothing scrolls sideways.
