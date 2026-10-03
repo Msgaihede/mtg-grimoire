@@ -61,7 +61,7 @@ measured, one subsection per step).
   the commander first, then each stack (category) one above another with its count and its cards,
   the side rail last (validation, the bracket estimate, notes and to-do lists, tokens). Actual and
   Theory both readable; the deck query shared with the desktop's.
-- [ ] **3.5 — Writes.** *3.5a, the deck writes, is its own PR; 3.5b — the collection's and the wishlist's — follows.* Quantities, categories, labels, printings and finishes in a deck; entry
+- [ ] **3.5 — Writes.** *3.5a, the deck writes, merged as #790 (2026-10-03); 3.5b — the collection's and the wishlist's — follows.* Quantities, categories, labels, printings and finishes in a deck; entry
   edits in the collection and the wishlist; add to a deck, the collection or the wishlist from the
   card sheet; deck notes and to-do lists edited. Each through the command the desktop already
   calls, with the desktop's undo where it has one.
