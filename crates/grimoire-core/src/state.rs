@@ -93,6 +93,12 @@ pub struct State {
     /// it. **Taken before the lane, never after.** It was a field of the desktop's `AppState`
     /// until the sync step brought its type here.
     pub pairing: Shared<Option<crate::sync_pair::pairing::Pending>>,
+    /// The scanner's session glue — built empty from [`State::data_dir`], so it costs nothing
+    /// until a command first asks for the session, and a host whose reader never opens the
+    /// scanner never loads a byte of it. What the host's binary carries is said once, through
+    /// [`crate::scanner::ScannerState::carry`]. It was the desktop's own managed state, beside its
+    /// `AppState`, until the extraction's seventh step.
+    pub scanner: crate::scanner::ScannerState,
 }
 
 impl State {
@@ -131,6 +137,7 @@ impl State {
         State {
             db: Mutex::new(write),
             db_read: read.map(Mutex::new),
+            scanner: crate::scanner::ScannerState::new(data_dir.clone()),
             data_dir,
             fence,
             events,

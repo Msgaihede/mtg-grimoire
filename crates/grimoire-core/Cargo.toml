@@ -45,6 +45,15 @@ name = "grimoire_core"
 testing = []
 
 [dependencies]
+# The card scanner, for `scanner`'s session glue (the extraction's seventh step). Declared as
+# `src-tauri` declares it — a plain path dependency on a standalone package the workspace
+# excludes on purpose (the root `Cargo.toml` says why), with the app's two features: `corpus` for
+# the labels out of `corpus.db`, `ocr` for the two readers. **It compiles for all three targets**
+# and was measured on wasm32 before it came here: libsqlite3-sys is not in that tree at all, so
+# the crate's `bundled` asks nothing of a browser build. **It does not yet run in a browser** —
+# the crate's own threads and `Instant` panic there — and nothing calls it there before the light
+# app's phase 7 gives them a seam.
+card-scanner = { path = "../card-scanner", features = ["corpus", "ocr"] }
 # What makes two label names the same name. `deck_labels` is one global list since schema v21
 # and its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode
 # lowercase, then NFC again - so "Cafe" spelled with a precomposed e-acute, with a combining

@@ -876,11 +876,11 @@ fn start(app: &tauri::AppHandle) {
             return;
         }
     };
+    // The scanner's state is the core's `State.scanner`, built empty with the state and loaded
+    // lazily on the first command; what it needs from this host is what the binary embeds, said
+    // once here — above the `manage`, so no command can reach the state before it is said.
+    state.scanner.carry(scanner::compiled());
     app.manage(state.clone());
-
-    // The scanner's own state, beside `AppState` rather than inside it — it loads
-    // lazily on the first status call and shares nothing but the data directory.
-    app.manage(Arc::new(scanner::ScannerState::new(state.data_dir.clone())));
 
     // Warm the facet index: ~767 ms of full table scan on its own thread and its own
     // read-only connection, so the window comes up now and the first searches answer

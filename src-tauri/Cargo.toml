@@ -83,7 +83,9 @@ same-file = "1.0.6"
 # from the workspace this package is a member of (the root `Cargo.toml` says why), so its three
 # tools keep building into `crates/card-scanner/target/`. `corpus` is the join back to
 # `corpus.db` for labels and unifies with the `rusqlite = "0.40"` above; `ocr` is the two
-# readers.
+# readers. The session glue is the core's since the extraction's seventh step, which declares it
+# the same way; this line stays because the commands still name the crate's types (a frame's
+# options, its verdict, the filters).
 card-scanner = { path = "../crates/card-scanner", features = ["corpus", "ocr"] }
 # The engine with no window: what this host, the Android shell and the WASM build all link.
 # A workspace member, unlike the scanner. Modules arrive there a step at a time and `lib.rs`

@@ -182,10 +182,11 @@ export const ARMS = [
   // The `card-scanner` crate: a separate cargo package, excluded from the workspace on purpose,
   // that `src-tauri` takes as a path dependency. `rust` compiles it into the app and runs its
   // own suite, and `frontend` reads eight of its `.rs` files as text (`ipc.test.ts`'s mirror
-  // rows) and lints `crates/*/scripts/**/*.mjs`. **Not `core`**: the engine does not depend on
-  // it. The day it does — the scanner's session glue is the extraction's last step — this arm
-  // gains `core` in the same commit.
-  { match: ["crates/*"], jobs: RUST_SIDE },
+  // rows) and lints `crates/*/scripts/**/*.mjs`. **And `core`, since the extraction's seventh
+  // step**: the engine depends on it for the scanner's session glue, so a change here is a
+  // change to what the engine compiles for a browser and a phone — which this arm said it would
+  // gain on that day, and does.
+  { match: ["crates/*"], jobs: CORE_SIDE },
 
   // Anything unrecognised runs every build job, `core` among them. This is the fail-safe that
   // makes the lists above safe to be wrong in the cheap direction: a new root config, a new
