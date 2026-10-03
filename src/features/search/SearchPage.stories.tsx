@@ -414,7 +414,7 @@ export const Busy: Story = {
  * **This is the story where the collapse pays for itself.** The page opens on one row per
  * card, so the caption is an exact `687 cards`; pressing All printings asks for the printings
  * instead, and *then* the count runs past `search::TOTAL_CAP` (`db.ts`, 5 000) and stops.
- * Past it the answer carries `totalIsCapped`, and `countOf` (`SearchPage.tsx`) renders
+ * Past it the answer carries `totalIsCapped`, and `countOf` (`resultCount.ts`) renders
  * `5,000+ cards`: a floor, which is true, rather than `5,000 cards`, which would not be.
  *
  * The two captions are the same seed asked two questions, which is the clearest statement of

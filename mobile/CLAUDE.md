@@ -110,8 +110,12 @@ file under `mobile/phone/` and enforces it.**
 ## Navigation is the URL
 
 `routes.ts` is the one grammar and the one place the two faces agree on a spelling: a view, a
-deck under Decks, and `?card=<id>` over any of them. `parsePlace` is total — a path that names
-nothing opens on the start view — and `placeHref` is the only thing that spells a place out.
+deck under Decks, `?folder=<id>` on the deck gallery, and `?card=<id>` over any of them. **The
+folder is the phone's alone** — the desktop gallery keeps its drawer in the page, so the desktop
+face neither reads nor writes it, and a crossing drops it like any other filter state. It is an
+optional field of `Place`, absent rather than `null` at the top level, so every place spelled
+before it is still whole. `parsePlace` is total — a path that names nothing opens on the start
+view — and `placeHref` is the only thing that spells a place out.
 
 - **The phone face has its own router**, `phone/router.ts`, hand-written over the History API with
   no dependency: `usePlace`, `navigate`, `back`, `linkTo`.
@@ -147,9 +151,10 @@ failure behind each at its own site:
 - **A control that changes the URL is a real link, not a button** — `<a {...linkTo(place)}>`, with
   a real `href`, so a middle click, "open in new tab" and "copy link" work and a screen reader
   hears *link*. The router takes **only an unmodified primary click that nothing else has
-  handled**; every other press is the browser's. The tabs, the Settings control, a deck's row in
-  the gallery and a deck's way back to it are all links. **A card tile is not**: a card opens a
-  sheet over the page it is on, and `CardTile`'s control is a button by design.
+  handled**; every other press is the browser's. The tabs, the Settings control, a deck's cover
+  and a folder's row in the gallery, a folder's way up and a deck's way back to it are all
+  links. **A card tile is not**, and neither is a card's row on a deck page: a card opens a sheet
+  over the page it is on, and `CardTile`'s control is a button by design.
 - **A card is a place here, and opening one is a push** — which is what lets Android's back
   gesture close the sheet. The two faces differ on this on purpose: a sheet over a phone page is
   something a reader leaves with Back, a modal over a desktop page is not.
@@ -158,6 +163,10 @@ failure behind each at its own site:
   its own entries in history state), and a replace when it is not — a reader who arrived on the
   card's own link has nothing of the app's beneath them, and a Back there would leave it. Closing
   by pushing again left the card one Back beneath the page it was closed over.
+- **A step to another printing of the open card is a link that _replaces_** —
+  `linkTo(place, { replace: true })`. The sheet is one place however many printings the reader
+  steps through, so Back closes it from whichever printing they ended on; the replaced entry keeps
+  this router's mark, so the ✕ still leaves by a real Back. `CardSheet.test.tsx` holds it.
 - **`navigate` does nothing for the place the reader is already on, asked of the place and not of
   the string**: `/` is the start view without spelling it, and a press on the lit tab must not
   push `/search` over it.
@@ -214,8 +223,9 @@ failure behind each at its own site:
 - **Scanner and Settings are placeholders**: a sentence each, no camera and no permission asked.
 - **The Collection and Wishlist walls draw open shelves only** — the desktop hooks fetch the
   cards of the shelves the reader has left open, and the wall draws them as one run with no
-  heading, no fold and no way into a folder. Search is the box and the wall, with every other
-  filter still to come.
+  heading, no fold and no way into a folder. **Search has its filters** (`phone/search/
+  FiltersSheet.tsx`): the box and a `Filters` button on one line, the stated filters under it,
+  and everything else in a sheet that is page state rather than a place in the URL.
 - **Nothing on the phone face writes.**
 - **No Android host, no WASM host, no service worker** — `public/light.webmanifest` is the whole
   of the PWA so far — **and no sync on a light install**: the phone face runs none and draws the

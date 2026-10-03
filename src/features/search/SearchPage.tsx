@@ -14,7 +14,6 @@ import { listWalkStops, usePublishCardWalk } from "@/features/card/cardWalk";
 import { useCardMenuDeps } from "@/features/card/useCardMenuDeps";
 import { AddToCollectionButton, REVEAL_ON_HOVER } from "@/features/collection/AddToCollection";
 import type { DragPayload } from "@/features/decks/dnd";
-import { count } from "@/lib/counts";
 import { parseFinishes, soleFinish } from "@/lib/finish";
 import { finishTreatments } from "@/lib/treatment";
 import { WALL_CARD_VARIANT } from "@/lib/images";
@@ -29,6 +28,7 @@ import { cn } from "@/lib/utils";
 import { CardGrid } from "./CardGrid";
 import { FilterBar } from "./FilterBar";
 import { FilterQuickBar } from "./FilterQuickBar";
+import { countOf } from "./resultCount";
 import { useCardSearch, type CardSearch } from "./useCardSearch";
 
 /**
@@ -429,20 +429,6 @@ export function SearchPage() {
       <Results search={search} />
     </section>
   );
-}
-
-/**
- * How many matches there are, in words.
- *
- * The backend stops counting at 5 000 rather than scanning 116 k rows for a number nobody
- * reads precisely, so past that this says `5,000+ cards` — a floor, which is true —
- * instead of `5,000 cards`, which would not be.
- */
-function countOf(total: number, capped: boolean): string {
-  const n = `${count(total)}${capped ? "+" : ""}`;
-  // **Not `plural`.** The condition is `total === 1 && !capped`, because a capped count of one
-  // is `5,000+`, and `5,000+ card` must never print. Only the numeral is shared.
-  return `${n} ${total === 1 && !capped ? "card" : "cards"}`;
 }
 
 /**

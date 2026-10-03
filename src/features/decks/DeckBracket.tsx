@@ -11,7 +11,7 @@ import { COMBOS_STATUS_KEY, combosForCardsKey } from "@/lib/query";
 import { useDismissOnEscape } from "@/lib/useDismissOnEscape";
 import { cn } from "@/lib/utils";
 import { radioKeys } from "@/lib/radioGroup";
-import { bracketWarning, estimateBracket } from "./validation/bracket";
+import { bracketWarning, estimateBracket, type BracketEstimate } from "./validation/bracket";
 
 /**
  * The Commander bracket, as a readout on the header's ledger and an advisory behind it.
@@ -102,57 +102,7 @@ export function DeckBracket({
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
 
-  /**
-   * The printings the two readings are made from, deduped and sorted — **and this array is the
-   * cache key**, which is the whole of how a deck edit produces a fresh answer.
-   *
-   * `combosForCardsKey` (`@/lib/query`, where the literal lives) is keyed on the *contents*
-   * rather than on the deck, so an
-   * added card is a different query and fetches by construction. That matters twice over here:
-   * `query.ts` caches 30 s, so a key that did not move would go on answering what it answered
-   * before the edit for half a minute — and **a mounted observer refetches only when its query
-   * is actually invalidated**, so a stable key with no invalidation behind it would never
-   * refetch at all while the editor stayed open. Keying on the ids needs neither: nothing has to
-   * remember to invalidate anything, because the question itself changed.
-   *
-   * The converse is the part worth stating: a *quantity* change does not move this key, and that
-   * is correct rather than stale. A combo is a fact about which cards are in the deck, and a
-   * second Sol Ring is not a fifth combo piece.
-   *
-   * `categoryActive` filters the same pile `estimateBracket` drops — a switched-off Maybeboard is
-   * not the deck — so the combo half and the oracle half are read off one list.
-   */
-  const cardIds = useMemo(() => {
-    const ids = new Set<string>();
-    for (const card of cards) if (card.categoryActive) ids.add(card.cardId);
-    return [...ids].sort();
-  }, [cards]);
-
-  const combos = useQuery({
-    queryKey: combosForCardsKey(cardIds),
-    queryFn: () => ipc.combosForCards(cardIds),
-  });
-
-  /**
-   * Whether the combo list has ever been downloaded — **not** gated on the panel being open.
-   *
-   * One local read per Commander deck opened, shared by key with every other mount of this
-   * control and with Settings' *Clear combos*, which is the only press left that can move
-   * it — the launch refresh moves the same rows without anyone pressing anything. `enabled: open`
-   * would save that read and cost the one thing this panel may not do: on the first press the
-   * answer would still be in flight, and a panel that draws no combos and says nothing about why
-   * is a panel implying the deck has none when the truth is that nothing has been looked at.
-   */
-  const status = useQuery({ queryKey: COMBOS_STATUS_KEY, queryFn: () => ipc.combosStatus() });
-
-  /**
-   * The reading. **Three signals until the combo read lands, four after it** — which is the same
-   * arithmetic a database that has never ingested the feed gets, and it is honest in both cases:
-   * a floor is the bottom of a range, so a floor computed from fewer signals is low rather than
-   * wrong, and it rises when the answer arrives.
-   */
-  const found = combos.data ?? NO_COMBOS;
-  const estimate = useMemo(() => estimateBracket([...cards], found), [cards, found]);
+  const { estimate, comboState } = useBracketReading(cards);
 
   /**
    * The mismatch, as **one** condition rather than two.
@@ -241,20 +191,90 @@ export function DeckBracket({
             bracket={bracket}
             warning={warning}
             onBracket={onBracket}
-            comboState={
-              status.data?.fetchedAt === null
-                ? "never"
-                : combos.isPending
-                  ? "reading"
-                  : combos.isError
-                    ? "failed"
-                    : "read"
-            }
+            comboState={comboState}
           />
         )}
       </AnimatePresence>
     </div>
   );
+}
+
+/**
+ * The bracket reading for a pile of deck rows — the estimate and where its combo half stands —
+ * with no button and no panel.
+ *
+ * **Its own hook so a second surface reads the bracket exactly as this control does**: the same
+ * two queries under the same keys, the same active-pile filter on the ids, and the same four
+ * combo states. The phone face's deck page draws {@link BracketAdvisory} inline from it; a copy
+ * of these lines there would be a second place to keep the rule that the combo ids are the pile
+ * `estimateBracket` counts.
+ */
+export function useBracketReading(cards: readonly DeckCard[]): {
+  estimate: BracketEstimate;
+  comboState: ComboState;
+} {
+  /**
+   * The printings the two readings are made from, deduped and sorted — **and this array is the
+   * cache key**, which is the whole of how a deck edit produces a fresh answer.
+   *
+   * `combosForCardsKey` (`@/lib/query`, where the literal lives) is keyed on the *contents*
+   * rather than on the deck, so an
+   * added card is a different query and fetches by construction. That matters twice over here:
+   * `query.ts` caches 30 s, so a key that did not move would go on answering what it answered
+   * before the edit for half a minute — and **a mounted observer refetches only when its query
+   * is actually invalidated**, so a stable key with no invalidation behind it would never
+   * refetch at all while the editor stayed open. Keying on the ids needs neither: nothing has to
+   * remember to invalidate anything, because the question itself changed.
+   *
+   * The converse is the part worth stating: a *quantity* change does not move this key, and that
+   * is correct rather than stale. A combo is a fact about which cards are in the deck, and a
+   * second Sol Ring is not a fifth combo piece.
+   *
+   * `categoryActive` filters the same pile `estimateBracket` drops — a switched-off Maybeboard is
+   * not the deck — so the combo half and the oracle half are read off one list.
+   */
+  const cardIds = useMemo(() => {
+    const ids = new Set<string>();
+    for (const card of cards) if (card.categoryActive) ids.add(card.cardId);
+    return [...ids].sort();
+  }, [cards]);
+
+  const combos = useQuery({
+    queryKey: combosForCardsKey(cardIds),
+    queryFn: () => ipc.combosForCards(cardIds),
+  });
+
+  /**
+   * Whether the combo list has ever been downloaded — **not** gated on the panel being open.
+   *
+   * One local read per Commander deck opened, shared by key with every other mount of this
+   * control and with Settings' *Clear combos*, which is the only press left that can move
+   * it — the launch refresh moves the same rows without anyone pressing anything. `enabled: open`
+   * would save that read and cost the one thing this panel may not do: on the first press the
+   * answer would still be in flight, and a panel that draws no combos and says nothing about why
+   * is a panel implying the deck has none when the truth is that nothing has been looked at.
+   */
+  const status = useQuery({ queryKey: COMBOS_STATUS_KEY, queryFn: () => ipc.combosStatus() });
+
+  /**
+   * The reading. **Three signals until the combo read lands, four after it** — which is the same
+   * arithmetic a database that has never ingested the feed gets, and it is honest in both cases:
+   * a floor is the bottom of a range, so a floor computed from fewer signals is low rather than
+   * wrong, and it rises when the answer arrives.
+   */
+  const found = combos.data ?? NO_COMBOS;
+  const estimate = useMemo(() => estimateBracket([...cards], found), [cards, found]);
+
+  const comboState: ComboState =
+    status.data?.fetchedAt === null
+      ? "never"
+      : combos.isPending
+        ? "reading"
+        : combos.isError
+          ? "failed"
+          : "read";
+
+  return { estimate, comboState };
 }
 
 /**
@@ -269,7 +289,7 @@ const NO_COMBOS: DeckCombo[] = [];
 
 /** Where the combo half of the reading stands. Four states and no boolean pair, because
  *  "nothing found" and "nothing looked at" are the two this panel must never blur. */
-type ComboState = "never" | "reading" | "failed" | "read";
+export type ComboState = "never" | "reading" | "failed" | "read";
 
 /**
  * The five brackets, named — **and the names are the point of this row**.
@@ -373,10 +393,7 @@ function Advisory({
   onBracket: (bracket: number) => void;
   comboState: ComboState;
 }) {
-  const gameChangers = estimate.gameChangers;
   const panelRef = useRef<HTMLDivElement>(null);
-  const [why, setWhy] = useState(false);
-  const tip = useTooltip();
   /** False from the render that starts the exit, which is a state this panel has never been in
    *  before: painted, laid out, and no longer the thing the button is describing. */
   const present = useIsPresent();
@@ -386,14 +403,6 @@ function Advisory({
   useEffect(() => {
     panelRef.current?.focus({ preventScroll: true });
   }, []);
-
-  const read: { label: string; names: string[] }[] = [
-    { label: "Game Changers", names: estimate.gameChangerNames },
-    { label: "Mass land denial", names: estimate.massLandDenial },
-    { label: "Extra turns", names: estimate.extraTurns },
-  ].filter((line) => line.names.length > 0);
-
-  const chosen = BRACKETS.find((rung) => rung.value === bracket) ?? BRACKETS[0];
 
   return (
     <motion.div
@@ -429,179 +438,243 @@ function Advisory({
         // button it was opened from is what wears the mark. `src/lib/focus.ts` has the rule.
       )}
     >
-      {/* **The mismatch leads**, above the reading it is about. It is the one thing in this
-          panel the reader did not already know from the button — the button can say *that* the
-          two numbers disagree, and only a sentence can say what makes them. The accent rule is
-          `ValidationPanel`'s per-finding shape at this panel's size; the colour is the same
-          accent the control wears everywhere else, for the reason written on the button. */}
-      {warning !== null && (
-        <p className="mb-2 border-l-2 border-accent pl-2 leading-snug text-text">{warning}</p>
-      )}
+      <BracketAdvisory
+        estimate={estimate}
+        bracket={bracket}
+        warning={warning}
+        onBracket={onBracket}
+        comboState={comboState}
+      />
+    </motion.div>
+  );
+}
 
-      {/* One text run: a headline fact split across styled spans is a sentence nothing — screen
-          reader, test, or reader skimming — puts back together. Geist Mono for the counts, as
-          everywhere else data is counted. It prints the **floor** whatever the reader has set,
-          because this line is the reading and the picker below is the answer. */}
-      <p className="font-mono font-medium tabular-nums">
-        Bracket ~{estimate.floor} · {gameChangers} Game Changer{gameChangers === 1 ? "" : "s"}
-      </p>
-      <p className="mt-1 text-dim">
-        Estimated minimum bracket, based on the cards. Your playgroup decides the real bracket.
-      </p>
+/**
+ * What the panel says — the mismatch, the reading, the reader's own answer, the combos in their
+ * four states and how the number was reached — with no layer around it.
+ *
+ * **Exported for the phone face's deck page**, which draws the reading inline as a section of the
+ * deck rather than off a button in a ledger it does not have. One body, so the two faces cannot
+ * come to say different things about one deck's bracket — least of all the combo sentence, whose
+ * four arms are this file's whole argument.
+ *
+ * **`onBracket` absent draws the answer without the picker**: the rung the deck is set to, or
+ * Auto, as one line of words. A surface that cannot write the setting must not draw six radios
+ * that look like it can.
+ */
+export function BracketAdvisory({
+  estimate,
+  bracket,
+  warning,
+  onBracket,
+  comboState,
+}: {
+  estimate: BracketEstimate;
+  bracket: number;
+  /** {@link bracketWarning}'s sentence, or `null`. Computed by the caller so a button's
+   *  treatment and this body's first line are one decision. */
+  warning: string | null;
+  onBracket?: (bracket: number) => void;
+  comboState: ComboState;
+}) {
+  const gameChangers = estimate.gameChangers;
+  const [why, setWhy] = useState(false);
+  const tip = useTooltip();
 
-      {/* **A real radio group rather than six buttons**: one of six is chosen, exactly one is
-          true at a time, and `aria-checked` is the only thing that says so to a reader who
-          cannot see which one is gold. `ExportDialog`'s format row and `TagSearchBox`'s
-          namespace row are two of the app's others, and **one Tab stop with the arrow keys
-          choosing** is every group's — `radioKeys`, since issue #558 reversed the one-stop-per-
-          radio rule this comment used to state. */}
-      <div
-        role="radiogroup"
-        // Named for the question rather than for the answers — `role="radiogroup"` takes no name
-        // from its contents, so without this a screen reader hears six loose tokens.
-        aria-label="Bracket for this deck"
-        className="mt-2 flex flex-wrap gap-1"
-      >
-        {BRACKETS.map((rung, i) => {
-          const on = rung.value === bracket;
-          const name = rung.label === rung.name ? rung.name : `${rung.label} ${rung.name}`;
-          return (
+  const read: { label: string; names: string[] }[] = [
+    { label: "Game Changers", names: estimate.gameChangerNames },
+    { label: "Mass land denial", names: estimate.massLandDenial },
+    { label: "Extra turns", names: estimate.extraTurns },
+  ].filter((line) => line.names.length > 0);
+
+  const chosen = BRACKETS.find((rung) => rung.value === bracket) ?? BRACKETS[0];
+
+  return (
+    <>
+        {/* **The mismatch leads**, above the reading it is about. It is the one thing in this
+            panel the reader did not already know from the button — the button can say *that* the
+            two numbers disagree, and only a sentence can say what makes them. The accent rule is
+            `ValidationPanel`'s per-finding shape at this panel's size; the colour is the same
+            accent the control wears everywhere else, for the reason written on the button. */}
+        {warning !== null && (
+          <p className="mb-2 border-l-2 border-accent pl-2 leading-snug text-text">{warning}</p>
+        )}
+
+        {/* One text run: a headline fact split across styled spans is a sentence nothing — screen
+            reader, test, or reader skimming — puts back together. Geist Mono for the counts, as
+            everywhere else data is counted. It prints the **floor** whatever the reader has set,
+            because this line is the reading and the picker below is the answer. */}
+        <p className="font-mono font-medium tabular-nums">
+          Bracket ~{estimate.floor} · {gameChangers} Game Changer{gameChangers === 1 ? "" : "s"}
+        </p>
+        <p className="mt-1 text-dim">
+          Estimated minimum bracket, based on the cards. Your playgroup decides the real bracket.
+        </p>
+
+        {/* **A real radio group rather than six buttons**: one of six is chosen, exactly one is
+            true at a time, and `aria-checked` is the only thing that says so to a reader who
+            cannot see which one is gold. `ExportDialog`'s format row and `TagSearchBox`'s
+            namespace row are two of the app's others, and **one Tab stop with the arrow keys
+            choosing** is every group's — `radioKeys`, since issue #558 reversed the one-stop-per-
+            radio rule this comment used to state. */}
+        {onBracket !== undefined ? (
+          <>
+            <div
+              role="radiogroup"
+              // Named for the question rather than for the answers — `role="radiogroup"` takes no name
+              // from its contents, so without this a screen reader hears six loose tokens.
+              aria-label="Bracket for this deck"
+              className="mt-2 flex flex-wrap gap-1"
+            >
+              {BRACKETS.map((rung, i) => {
+                const on = rung.value === bracket;
+                const name = rung.label === rung.name ? rung.name : `${rung.label} ${rung.name}`;
+                return (
+                  <button
+                    key={rung.value}
+                    type="button"
+                    role="radio"
+                    aria-checked={on}
+                    // The digit alone is not a name — see {@link BRACKETS}. The clause is not in here
+                    // on purpose: a name is what a control is *called*, and folding the explanation
+                    // into it would have a screen reader read the whole scale out on every pass
+                    // through the row.
+                    aria-label={name}
+                    {...tip(`${name} — ${rung.clause}`, { describes: false })}
+                    onClick={() => onBracket(rung.value)}
+                    {...radioKeys(BRACKET_VALUES, bracket, onBracket, i)}
+                    className={cn(
+                      "inline-flex h-6 shrink-0 items-center rounded-md border px-2",
+                      "font-mono text-[0.6875rem] tabular-nums",
+                      "transition-colors duration-150 motion-reduce:transition-none",
+                      on
+                        ? "border-accent text-accent"
+                        : "border-border text-dim hover:border-accent hover:text-accent",
+                      FOCUS,
+                    )}
+                  >
+                    {rung.label}
+                  </button>
+                );
+              })}
+            </div>
+            {/* The caption is the row's legibility, and it is one line rather than five: whichever
+                rung is chosen, spelled out. `aria-hidden`, because every word of it is already in the
+                chosen radio's own name and its tooltip — a screen reader that read both would hear
+                the same clause twice for one press. */}
+            <p className="mt-1 text-dim" aria-hidden="true">
+              {chosen.name} — {chosen.clause}
+            </p>
+          </>
+        ) : (
+          // No picker to read it off, so the answer is said in words — and not hidden, since
+          // nothing else here carries it.
+          <p className="mt-2 text-dim">
+            {bracket === AUTO_BRACKET ? "Auto" : `Set to ${chosen.label} ${chosen.name}`} —{" "}
+            {chosen.clause}
+          </p>
+        )}
+
+        {/* **The combos, and the four states the reader may be in — of which two look identical
+            on screen and mean opposite things.** "No combos matched" is a claim about a list that
+            was consulted; a database that has never fetched the feed has consulted nothing, and
+            writing the first sentence in the second state is the one thing this panel may never
+            do. So the never-ingested case is checked first and says which of the two it is, the
+            in-flight and failed cases say so rather than falling through to a count of zero, and
+            only a read that actually answered may say the deck has none.
+
+            **The never-ingested arm stopped asking the reader for anything, and it did not stop
+            being an arm.** The feed is fetched at launch now, so what used to be a state a database
+            could sit in for ever is one a launch ordinarily walks out of in a minute or two — which
+            changes the *sentence* and not the census. Three reasons it keeps its own arm. It is not
+            reliably transient: the launch refresh is silent and best-effort, so an install with no
+            network, or one whose download was refused, sits here for the whole session with nothing
+            on its way. Folding it into `reading` would promise an arrival this panel cannot see
+            coming, and folding it into the read arm is the forbidden sentence above. And the two
+            questions are different even while both are waiting — `never` is *has this database got
+            the file at all*, `reading` is *is this deck's own read in flight* — so the reader is
+            told which of the two they are in whichever way it ends. What the transience buys is the
+            last clause: nothing to press, so nothing to go and find. */}
+        {comboState === "never" ? (
+          <p className="mt-2 leading-snug text-dim">
+            Combo data hasn&rsquo;t downloaded yet, so two-card combos aren&rsquo;t checked. It
+            downloads automatically after launch.
+          </p>
+        ) : comboState === "reading" ? (
+          <p className="mt-2 text-dim">Loading combos…</p>
+        ) : comboState === "failed" ? (
+          <p className="mt-2 leading-snug text-dim">
+            Couldn&rsquo;t load combo data, so two-card combos weren&rsquo;t checked.
+          </p>
+        ) : estimate.combos.length === 0 && estimate.possibleCombos.length === 0 ? (
+          <p className="mt-2 text-dim">No two-card combo in the list matches this deck.</p>
+        ) : (
+          <>
+            {estimate.combos.length > 0 && (
+              <ul className="mt-2 space-y-1.5">
+                {estimate.combos.map((combo) => (
+                  <ComboLine key={combo.id} combo={combo} confirmed />
+                ))}
+              </ul>
+            )}
+
+            {/* **Their own line, and everything about it says *not counted*.** Every card these
+                name is in the deck, but each also needs a `requires[]` template — "a creature with
+                flying", "a mana outlet" — which is not a card id and cannot be resolved against a
+                decklist at all. So they raise no floor, they carry no accent rule, and the sentence
+                above them says what is missing rather than leaving a reader to infer it from a
+                heading. A possible combo shown as a found one would be this app inventing a
+                restriction the reader's deck does not have. */}
+            {estimate.possibleCombos.length > 0 && (
+              <>
+                <p className="mt-2 leading-snug text-dim">
+                  Possible combos (not counted). Each needs a generic piece, like a flier or a sac
+                  outlet, that can&rsquo;t be checked automatically.
+                </p>
+                <ul className="mt-1 space-y-1.5">
+                  {estimate.possibleCombos.map((combo) => (
+                    <ComboLine key={combo.id} combo={combo} confirmed={false} />
+                  ))}
+                </ul>
+              </>
+            )}
+          </>
+        )}
+
+        {read.length > 0 && (
+          <>
             <button
-              key={rung.value}
               type="button"
-              role="radio"
-              aria-checked={on}
-              // The digit alone is not a name — see {@link BRACKETS}. The clause is not in here
-              // on purpose: a name is what a control is *called*, and folding the explanation
-              // into it would have a screen reader read the whole scale out on every pass
-              // through the row.
-              aria-label={name}
-              {...tip(`${name} — ${rung.clause}`, { describes: false })}
-              onClick={() => onBracket(rung.value)}
-              {...radioKeys(BRACKET_VALUES, bracket, onBracket, i)}
+              aria-expanded={why}
+              onClick={() => setWhy((v) => !v)}
               className={cn(
-                "inline-flex h-6 shrink-0 items-center rounded-md border px-2",
-                "font-mono text-[0.6875rem] tabular-nums",
-                "transition-colors duration-150 motion-reduce:transition-none",
-                on
-                  ? "border-accent text-accent"
-                  : "border-border text-dim hover:border-accent hover:text-accent",
+                "mt-1 inline-flex items-center gap-1 rounded-md text-dim",
+                "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
                 FOCUS,
               )}
             >
-              {rung.label}
+              <ChevronRight
+                className={cn(
+                  "size-3 transition-transform duration-150 motion-reduce:transition-none",
+                  why && "rotate-90",
+                )}
+                aria-hidden="true"
+              />
+              How this was estimated
             </button>
-          );
-        })}
-      </div>
-      {/* The caption is the row's legibility, and it is one line rather than five: whichever
-          rung is chosen, spelled out. `aria-hidden`, because every word of it is already in the
-          chosen radio's own name and its tooltip — a screen reader that read both would hear
-          the same clause twice for one press. */}
-      <p className="mt-1 text-dim" aria-hidden="true">
-        {chosen.name} — {chosen.clause}
-      </p>
-
-      {/* **The combos, and the four states the reader may be in — of which two look identical
-          on screen and mean opposite things.** "No combos matched" is a claim about a list that
-          was consulted; a database that has never fetched the feed has consulted nothing, and
-          writing the first sentence in the second state is the one thing this panel may never
-          do. So the never-ingested case is checked first and says which of the two it is, the
-          in-flight and failed cases say so rather than falling through to a count of zero, and
-          only a read that actually answered may say the deck has none.
-
-          **The never-ingested arm stopped asking the reader for anything, and it did not stop
-          being an arm.** The feed is fetched at launch now, so what used to be a state a database
-          could sit in for ever is one a launch ordinarily walks out of in a minute or two — which
-          changes the *sentence* and not the census. Three reasons it keeps its own arm. It is not
-          reliably transient: the launch refresh is silent and best-effort, so an install with no
-          network, or one whose download was refused, sits here for the whole session with nothing
-          on its way. Folding it into `reading` would promise an arrival this panel cannot see
-          coming, and folding it into the read arm is the forbidden sentence above. And the two
-          questions are different even while both are waiting — `never` is *has this database got
-          the file at all*, `reading` is *is this deck's own read in flight* — so the reader is
-          told which of the two they are in whichever way it ends. What the transience buys is the
-          last clause: nothing to press, so nothing to go and find. */}
-      {comboState === "never" ? (
-        <p className="mt-2 leading-snug text-dim">
-          Combo data hasn&rsquo;t downloaded yet, so two-card combos aren&rsquo;t checked. It
-          downloads automatically after launch.
-        </p>
-      ) : comboState === "reading" ? (
-        <p className="mt-2 text-dim">Loading combos…</p>
-      ) : comboState === "failed" ? (
-        <p className="mt-2 leading-snug text-dim">
-          Couldn&rsquo;t load combo data, so two-card combos weren&rsquo;t checked.
-        </p>
-      ) : estimate.combos.length === 0 && estimate.possibleCombos.length === 0 ? (
-        <p className="mt-2 text-dim">No two-card combo in the list matches this deck.</p>
-      ) : (
-        <>
-          {estimate.combos.length > 0 && (
-            <ul className="mt-2 space-y-1.5">
-              {estimate.combos.map((combo) => (
-                <ComboLine key={combo.id} combo={combo} confirmed />
-              ))}
-            </ul>
-          )}
-
-          {/* **Their own line, and everything about it says *not counted*.** Every card these
-              name is in the deck, but each also needs a `requires[]` template — "a creature with
-              flying", "a mana outlet" — which is not a card id and cannot be resolved against a
-              decklist at all. So they raise no floor, they carry no accent rule, and the sentence
-              above them says what is missing rather than leaving a reader to infer it from a
-              heading. A possible combo shown as a found one would be this app inventing a
-              restriction the reader's deck does not have. */}
-          {estimate.possibleCombos.length > 0 && (
-            <>
-              <p className="mt-2 leading-snug text-dim">
-                Possible combos (not counted). Each needs a generic piece, like a flier or a sac
-                outlet, that can&rsquo;t be checked automatically.
-              </p>
-              <ul className="mt-1 space-y-1.5">
-                {estimate.possibleCombos.map((combo) => (
-                  <ComboLine key={combo.id} combo={combo} confirmed={false} />
+            {why && (
+              <dl className="mt-1 space-y-1">
+                {read.map((line) => (
+                  <div key={line.label}>
+                    <dt className="text-dim">{line.label}</dt>
+                    <dd>{line.names.join(", ")}</dd>
+                  </div>
                 ))}
-              </ul>
-            </>
-          )}
-        </>
-      )}
-
-      {read.length > 0 && (
-        <>
-          <button
-            type="button"
-            aria-expanded={why}
-            onClick={() => setWhy((v) => !v)}
-            className={cn(
-              "mt-1 inline-flex items-center gap-1 rounded-md text-dim",
-              "transition-colors duration-150 hover:text-text motion-reduce:transition-none",
-              FOCUS,
+              </dl>
             )}
-          >
-            <ChevronRight
-              className={cn(
-                "size-3 transition-transform duration-150 motion-reduce:transition-none",
-                why && "rotate-90",
-              )}
-              aria-hidden="true"
-            />
-            How this was estimated
-          </button>
-          {why && (
-            <dl className="mt-1 space-y-1">
-              {read.map((line) => (
-                <div key={line.label}>
-                  <dt className="text-dim">{line.label}</dt>
-                  <dd>{line.names.join(", ")}</dd>
-                </div>
-              ))}
-            </dl>
-          )}
-        </>
-      )}
-    </motion.div>
+          </>
+        )}
+    </>
   );
 }
 

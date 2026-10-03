@@ -201,23 +201,29 @@ purpose; the phase that owns the surface owns the fix.
   of the shelves the reader has left open, and deck groups, `Recently removed` and a deck's
   managed wishlist folder start shut — so on the `starter` seed the collection wall draws 9 of 12
   rows. When every row is on a shut shelf the page says so; it cannot open one.
-- After a refused next page a wall stops asking and says nothing. It re-arms on any refetch of
-  that query (a tab away and back, a window refocus), so it is not stuck for the session.
-- When the whole-wall figure itself fails to load over an empty wall, the page draws nothing —
-  neither empty-state sentence is known to be true. `useWishlist` does return the query that
-  could say so; `useCollection` returns only the figure.
+- ~~After a refused next page a wall stops asking and says nothing~~ — **fixed 2026-10-03**: the
+  wall ends on `The next cards could not be read.` and a `Try again` that calls `fetchNextPage`
+  itself (`parts.tsx`'s `NextPageRefused`, through `CardWall`'s `footer`). It still stops asking
+  on its own until then, and still re-arms on any refetch.
+- ~~When the whole-wall figure itself fails to load over an empty wall, the page draws
+  nothing~~ — **fixed 2026-10-03**: the collection and the wishlist say the rest could not be
+  counted, from `useCollection`'s new `figuresRefused` and `useWishlist`'s `countsQuery`.
 - A tile with no card to open (a wish whose card the corpus no longer has) is a button that does
   nothing.
 - Two rows of one printing get one accessible name; the desktop wall folds them into one tile.
-- `DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
-  the `live` list; and `facesOf` now exists twice (the desktop's lives in a module that imports
-  the store).
+- ~~`DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
+  the `live` list~~ — **fixed 2026-10-03 in step 3.4** (§7.4): it asks through `deckDetailQuery`
+  (`src/features/decks/deckQuery.ts`), the key `useDeck` itself reads under, and opens on the list
+  the deck remembers (`lastVariant` where it keeps a plan) with a Theory / Actual switch. And
+  ~~`facesOf` now exists twice~~ — **fixed 2026-10-03**: it lives once, in
+  `src/features/card/faces.ts`, read by `CardTextDialog` and the phone's card sheet (§7.1).
 - The wall's list semantics count rows rather than cards; no test scrolls a long wall to its end.
 - In landscape the bars stop short of the screen's edge beside a cutout — the shell pads the
   root by the side insets. Whether the bars should bleed with their content inset is a device
   pass's call.
 - **A constraint on the sheet's design, not a defect yet**: a step from one card to another
-  *inside* the sheet must be `navigate(…, { replace: true })`. A plain `navigate` is a second
+  *inside* the sheet must be `navigate(…, { replace: true })` — **held since 2026-10-03** by
+  `linkTo(place, { replace: true })` on every printing row (§7.1). A plain `navigate` is a second
   marked push, and one close would then land on the first card instead of the page.
 - In the light edition `Ctrl+Shift+N` still asks for a new window, and on the desktop face the
   key map has no mount (so `F1` is left to the browser).
@@ -1557,9 +1563,11 @@ file is touched.
 - **A web host needs its own socket.** `live.rs` is `tokio` tasks and `tokio-tungstenite`; the
   browser's half — a `WebSocket`, or the polling spec §7 names — is phase 6's.
 - **The same-second baseline skip in `apply`** (§6.8) was fixed on its own: #780, merged
-  2026-10-03 and in v0.40.0 — [sync.md](sync.md), *A claim names its emission*. Two whole-trip
-  tests in `sync_engine/client/tests.rs` still backdate their fixtures ten seconds for the old
-  reason; nobody has checked whether they can stop.
+  2026-10-03 and in v0.40.0 — [sync.md](sync.md), *A claim names its emission*. The two
+  whole-trip tests in `sync_engine/client/tests.rs` that backdated their fixtures ten seconds to
+  stand clear of it stopped the same day. Both pass without it; on the commit before #780 the
+  round-trip one is red without it (`3 here, 2 there` behind 7 of its 19 stretches) and the
+  emission one was already green — [sync.md](sync.md), *The tests that hold it*.
 - **`share::publish` still holds the connection for a whole publish** (§6.8), and stays the
   desktop's.
 - **Step 7**: the scanner's session glue — and then the command table. *(§6.10.)*
@@ -1770,3 +1778,106 @@ were built and attached, and the Linux pair is as unrun as it has always been. A
 own `rust-cache` reported `No cache found` on both legs — a first run under a new key, so the
 build was cold and the cache line in `release.yml` is still unproven (`ci.yml`'s restores). The release also
 carries #780 (the sync fix §6.9 left open), which merged twelve minutes before the release PR.
+
+## 7. The phone pages — phase 3, a step at a time
+
+The plan is [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md): one pull
+request per step. **The owner waived the built-options round for this phase** (2026-10-03): each
+page is the implementer's pick, shipped, and redirected in review. Every figure below is from
+`npm run mobile:dev` — Vite's dev server over the Storybook fake's `starter` seed — in headless
+Chromium 141 on **Linux**, emulating a touch phone; nothing here was measured on a phone or
+against a production bundle.
+
+### 7.1 Step 3.1 — Search and the card sheet (2026-10-03)
+
+**Search is one line and a sheet.** The box keeps 16px text and its name; beside it one
+`Filters` button, gold with a badge while anything is on (`Filters — N active`). Under the line,
+only once something is on, the desktop's own `StatedFiltersLine` with the result count in place
+of its caption, and `TagQueryRow` under that so `otag:`/`atag:` resolve exactly as they do on
+the desktop. The sheet holds every cell `SEARCH_TRAY` offers — sort and its direction, format
+with `Any card`, colour identity, mana value with X, rarity, type, border, finish, owned, set,
+price, printings — over the same `useCardSearch`, dimmed by `facets.ts` the way the desktop's
+tray is, with `Reset all` and `Show N cards` in a footer. It is not a place: opening it writes no
+history.
+
+- **No `Exact` glyph chip on the phone.** Seven 44px round chips do not fit 328px with room for
+  the pressed ring, and a tooltip-only glyph tells a finger nothing; a `Within` / `Exactly` pair
+  under the six colours sets the same flag.
+- **Everything in the sheet is at least 44px tall whatever the pointer**, and every text box in it
+  is 16px, so a focused picker's search box does not zoom the page.
+- **What moved out of `FilterBar.tsx`**, store-free and re-exported from it so no desktop caller
+  changed: `filterOptions.ts` (the sort rows, rarities, `sortDirectionName`,
+  `useFormatOptions`, `activeChips`, and `formatPickerRows`, which the tray used to build inline)
+  and `StatedFiltersLine.tsx`; `countOf` left the desktop `SearchPage` for `resultCount.ts`.
+
+**The card sheet reads the desktop modal's own query keys**, so a card open on one side of the
+floor is painted from the cache on the other. One column: the picture and the words; prices for
+the finishes the printing is sold in, with the marketplace's as-of line; *In your grimoire*
+(owned, wished, in decks); printings grouped by the stored preference, five then `Show all N`;
+legality behind its summary (`Legal in 16 of 23 formats · banned in 1`); oracle tags; combos,
+three then `Show all N`, each opening to its pieces, brackets, prerequisites and steps. **Each
+empty state is its own sentence** — tags never fetched, untagged, no oracle card, a failed read;
+combos never downloaded, reading, failed, none — for the rule `commander-brackets.md` gives the
+card side.
+
+- **A step to another printing is a link that replaces** (`linkTo(place, { replace: true })`):
+  history length stayed 3 across two printing presses at 360px, and the ✕ went back to `/search`.
+- **What moved out of the desktop's dialogs**, store-free, so both faces read one copy:
+  `faces.ts`, `legality.ts`, `oracleTags.ts`, `combos.ts`, and `cardKeys.ts` (the printings and
+  holdings keys `CardDetailModal` spelled inline).
+- **Not on the sheet**: the `Open on …` rows and Commander Spellbook's link (they go through the
+  opener plugin, a host seam phases 4 and 5 own); art tags (no command answers them for one card,
+  and the desktop modal does not draw them either); an owned count per printing (printings do not
+  carry one); the printing group-by control (choosing it is a write).
+
+**`Dialog`'s ✕ is 44px under a coarse pointer** and its 24px box everywhere a mouse aims; the card
+sheet takes the top safe-area inset when it fills the window, as the filters sheet does.
+
+**Two of phase 1's leftovers closed here** (§5): a refused next page and an uncountable empty
+wall each say so now, and `facesOf` lives once.
+
+
+### 7.4 Step 3.4 — Decks, read (2026-10-03)
+
+**The gallery** is the reader's cabinet: the folders at this level as link rows, then two columns
+of cover links (three from 640px) — the art crop, `DeckColorBar`, the name, and format · card
+count — in the desktop's own stored sort, with archived decks behind a disclosure. **A folder is a
+place**: `?folder=<id>` on `/decks`, absent rather than `null` when there is none, and an id the
+cabinet does not hold opens the top level, so `parsePlace` stays total. The badge and the bracket
+reading stack in one corner, because side by side they do not fit at 360px, and **the illustrator
+is credited in visible text on the picture** — an art crop needs its artist named, and a phone has
+no hover for the desktop's tooltip.
+
+**The deck page is one column, the owner's call** (2026-10-03): a header with the way back to the
+deck's own folder, the name and — on a deck that keeps a plan — the Theory / Actual switch; a
+figures line (format, cards, lands, price, owned, missing); then the piles in the desktop's own
+order, through `buildGroups` and `splitRail` — **the commander first**, then the companion, then
+the deck's piles, then the sideboard, the maybeboard and any switched-off pile — under the
+desktop's `GroupHeader`; then **the side rail, last**: the check, the bracket estimate (Commander
+formats only), tokens, the mana curve, deck notes and deck to-do lists, in the order the desktop
+draws its bands. A card is a compact row — quantity, label dot, name, mana cost, unit price —
+about ten to a screen, and opens the card sheet; a rule break is red with a warning glyph
+(`validateForMarks`), and a card owned short of the deck's count carries a small red dot.
+
+- **The variant is local state, not a place.** It opens on the list the deck remembers
+  (`lastVariant` where it keeps a plan, Actual otherwise), as the desktop's restore does, and
+  writes nothing back — a way of looking at one deck, which the desktop face would drop from the
+  URL anyway.
+- **The deck is read under the desktop editor's own key** (`deckDetailQuery` in the new
+  `src/features/decks/deckQuery.ts`), so crossing 1024px paints it from the cache — phase 1's
+  leftover, closed.
+- **What was split in `src/`**, each re-exported from its old home: `deckQuery.ts` (the deck read
+  and its defaults, out of the welded `useDeck`, which also makes `useDeckTokens`, `useDeckNotes`,
+  `useDeckMeta`, `useDeckPlays` and `useDeckAudit` clean); `deckCover.ts` (out of `DeckTile`);
+  `ValidationPanel`'s popover body as `ValidationFindings`; `DeckBracket`'s reading as
+  `useBracketReading` and its body as `BracketAdvisory`, whose picker is drawn only when it is
+  handed `onBracket`; `noteBody.tsx` and `todoBody.tsx`, the bodies of a deck note and a deck to-do
+  list, which a phone draws without the cards' edit controls.
+- **Links in deck notes and to-do lists** are a plain `<a target="_blank" rel="noopener
+  noreferrer">` on the phone, because nothing below `@/lib/core` opens a URL yet; on a Tauri light
+  host that is for phases 4 and 5's seams to settle. A to-do box on the phone is drawn and cannot
+  be pressed, and says `Done:` or `To do:`.
+- **Not on the phone yet**: Compare, the theory-match ticks on the Actual list, the deck's
+  description, and the stats band beyond the mana curve (the band carries write buttons).
+
+Driven at 360 and 800 wide over the `starter` seed's decks 2 and 4: nothing scrolls sideways.

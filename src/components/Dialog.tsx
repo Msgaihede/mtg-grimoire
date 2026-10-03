@@ -718,6 +718,11 @@ function Panel({
             // subtitle must not squeeze the way out.
             className={cn(
               "shrink-0 rounded-md p-1 text-dim",
+              // The way out is the one control every dialog has, so it is the one a finger must
+              // never miss: 44px under a coarse pointer, centred, and its 24px box untouched
+              // wherever a mouse is aiming — `coarse:` is `pointer: coarse`, so a desktop window
+              // never grows it.
+              "coarse:flex coarse:min-h-[var(--target-min)] coarse:min-w-[var(--target-min)] coarse:items-center coarse:justify-center",
               "transition-colors duration-[var(--duration-fast)] ease-standard hover:text-text",
               "motion-reduce:transition-none",
               FOCUS,

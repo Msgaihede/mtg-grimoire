@@ -971,6 +971,16 @@ export function useCollection({
      * held level's wall: the one frame this hook exists to rule out.
      */
     figures,
+    /**
+     * Whether the read behind {@link figures} was refused, while there is no figure to show for
+     * it — `countsError`'s companion, for the one page that has to know.
+     *
+     * **An empty wall cannot say which empty it is without the figures**: no rows on the open
+     * shelves is an empty collection *or* one whose copies are all on folded shelves, and only
+     * the whole-level count tells them apart. The phone face's collection page says neither
+     * sentence when this is set, and says the read failed instead of drawing nothing.
+     */
+    figuresRefused: held === null && summary.isLoadingError,
     /** The rows of the level on screen, in wall order. */
     rows,
     /** Rows matching the filters at the level on screen, counted in full. `0` until the first page

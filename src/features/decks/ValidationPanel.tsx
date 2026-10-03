@@ -344,15 +344,6 @@ function Findings({
     panelRef.current?.focus({ preventScroll: true });
   }, []);
 
-  /** The row a `cardId` belongs to, for the names inside a sentence. Built once per render of
-   *  the panel — a deck is small, and the alternative is a scan per issue per name. */
-  const byId = useMemo(() => new Map(cards.map((card) => [card.cardId, card.name])), [cards]);
-  const named = (issue: ValidationIssue): NamedCard[] =>
-    (issue.cardIds ?? []).flatMap((cardId) => {
-      const name = byId.get(cardId);
-      return name === undefined ? [] : [{ cardId, name }];
-    });
-
   return (
     <motion.div
       {...popup}
@@ -389,6 +380,58 @@ function Findings({
         // chip it was opened from is what wears the mark. `src/lib/focus.ts` has the rule.
       )}
     >
+      <ValidationFindings
+        issues={issues}
+        cards={cards}
+        spec={spec}
+        // The caret goes to the chip *first*, and that is not a flourish: the card pane records
+        // whatever holds it as the thing to hand it back to on Escape, and the name pressed is
+        // about to unmount with the panel the pane's own focus closes. Without the hop, Escaping
+        // out of the card drops the caret onto `<body>` and the next Tab restarts from the top of
+        // the app. Measured in the running window.
+        onSelectCard={(cardId) => {
+          buttonRef.current?.focus();
+          onSelectCard(cardId);
+        }}
+      />
+    </motion.div>
+  );
+}
+
+/**
+ * The findings themselves — every sentence the check wrote, grouped under its rule's name — with
+ * no chip, no popover and no focus handling around them.
+ *
+ * **Exported for a surface with room to draw them in the page.** The editor hangs them off its
+ * header's chip, in {@link Findings}; the phone face's deck page has no header to hang a layer
+ * from at 360px, and draws them inline as a section of the deck. One component, so the two faces
+ * cannot word a finding two ways.
+ *
+ * `onSelectCard` is what a card's name inside a sentence does when pressed: the editor selects
+ * the card, the phone opens its sheet.
+ */
+export function ValidationFindings({
+  issues,
+  cards,
+  spec,
+  onSelectCard,
+}: {
+  issues: readonly ValidationIssue[];
+  cards: readonly DeckCard[];
+  spec: FormatSpec;
+  onSelectCard: (cardId: string) => void;
+}) {
+  /** The row a `cardId` belongs to, for the names inside a sentence. Built once per render — a
+   *  deck is small, and the alternative is a scan per issue per name. */
+  const byId = useMemo(() => new Map(cards.map((card) => [card.cardId, card.name])), [cards]);
+  const named = (issue: ValidationIssue): NamedCard[] =>
+    (issue.cardIds ?? []).flatMap((cardId) => {
+      const name = byId.get(cardId);
+      return name === undefined ? [] : [{ cardId, name }];
+    });
+
+  return (
+    <>
       {issues.length === 0 ? (
         <p className="text-dim">
           No issues. This deck passes every {spec.displayName} rule we check.
@@ -421,16 +464,7 @@ function Findings({
                         <button
                           key={at}
                           type="button"
-                          // The caret goes to the chip *first*, and that is not a flourish:
-                          // the card pane records whatever holds it as the thing to hand it
-                          // back to on Escape, and this button is about to unmount with the
-                          // panel the pane's own focus closes. Without the hop, Escaping out
-                          // of the card drops the caret onto `<body>` and the next Tab
-                          // restarts from the top of the app. Measured in the running window.
-                          onClick={() => {
-                            buttonRef.current?.focus();
-                            onSelectCard(cardId);
-                          }}
+                          onClick={() => onSelectCard(cardId)}
                           className={cn("rounded-sm text-accent hover:underline", FOCUS)}
                         >
                           {text}
@@ -444,6 +478,6 @@ function Findings({
           </div>
         ))
       )}
-    </motion.div>
+    </>
   );
 }
