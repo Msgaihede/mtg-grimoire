@@ -81,6 +81,7 @@
 //! | Any reason, and an op in it was sealed by a **newer** schema ([`Op::schema`]) | held · newer | yes, with no bound | no — the panel says it |
 //! | An unknown parent, from a same or older schema | held · waiting | yes, until [`Waiting::Release`] | when released |
 //! | An unknown table, or a row this database cannot build, from a same or older schema | dropped | no | yes |
+//! | The row of an op the client held back — its sender held for its clock, or behind a batch only a newer build can read ([`apply_page`]) | held · back | yes, while the client holds the sender | no — the client counts it |
 //! | Collateral: a later op of a held device | its block's | — | — |
 //!
 //! **Moot is asked first**, because a deleted parent is a fact about this device that no
@@ -114,6 +115,7 @@
 //! [`Waiting::Release`]. [sync.md](../../../docs/reference/sync.md) is the record.
 
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
+use crate::sync_engine::emission;
 use crate::sync_engine::hlc::Hlc;
 use crate::sync_engine::merge::{fold, Horizon, Kind, Op, Resolved};
 use rusqlite::types::Value as Sql;
@@ -662,6 +664,11 @@ enum Outcome {
     Deferred(Why),
 }
 
+/// The [`Why::Unbuildable`] a group carrying a claim gives when its row was merged here into
+/// another one ([`emission::retire`]) — by a grain hit or a re-homing earlier in the same page —
+/// and it would otherwise be built again beside the survivor (design 2026-10-03 §6).
+const MERGED_AWAY: &str = "its row was merged into another here, and a claim never builds it again";
+
 /// Why a group could not be written.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Why {
@@ -673,7 +680,10 @@ enum Why {
     UnknownParent { table: &'static str, uid: String },
     /// The row could not be written: a `NOT NULL`, `CHECK` or `UNIQUE` failure, or a grain
     /// match that would move a row onto a uid another row wears. The constraint's own words,
-    /// kept for the record, where they were once discarded.
+    /// kept for the record, where they were once discarded. **Or a claim's row was merged here
+    /// into another one** and the group would build it again beside the survivor — refused by
+    /// the write path, in [`MERGED_AWAY`]'s words rather than a constraint's (design 2026-10-03
+    /// §6).
     Unbuildable(String),
     /// Not decided yet, because what the page does to the group is only known once other groups
     /// have landed. Two things answer it (spec 2026-09-27 §3.3):
@@ -764,13 +774,19 @@ enum Class {
     Moot,
     /// Consumed and recorded: nothing that can arrive will let it apply.
     Dropped,
+    /// Held because the client held its sender back — for its clock, or behind a batch only a
+    /// newer build can read — and passed it in so the claim containing it waits too (design
+    /// 2026-10-03 §5). Only a group that carries a claim is held this way. The client counts the
+    /// held-back ops themselves, so no class of the report does — not this one, and not `Newer` or
+    /// `Waiting` where another op's block gives the group that class instead.
+    HeldBack,
 }
 
 impl Class {
-    /// Whether the group holds its device — the two classes that go to [`blocks_of`] and keep
+    /// Whether the group holds its device — the three classes that go to [`blocks_of`] and keep
     /// the watermark below them. The other two are consumed.
     fn holds(self) -> bool {
-        matches!(self, Class::Newer | Class::Waiting)
+        matches!(self, Class::Newer | Class::Waiting | Class::HeldBack)
     }
 }
 
@@ -786,9 +802,10 @@ struct Deferral<'a> {
 type Blocks = BTreeMap<String, (Hlc, Class)>;
 
 /// What a committed pass left held: each held device, at the stamp of its first held op as
-/// `(ms, ctr)`. **This is what a client's hold is a hold on** — `client::pull` stores it in
-/// `pull_hold`, and a block it has not seen before starts the waiting bound over, so a wait that
-/// has run its course cannot take a new one down with it.
+/// `(ms, ctr)`, and each held claim under `<emitter>#<id ms>.<id ctr>#<index>`, at its own stamp.
+/// **This is what a client's hold is a hold on** — `client::pull` stores it in `pull_hold`, and a
+/// block it has not seen before starts the waiting bound over, so a wait that has run its course
+/// cannot take a new one down with it.
 pub type Held = BTreeMap<String, (i64, i64)>;
 
 /// One row's worth of incoming ops, folded, with the ops kept for the watermark.
@@ -816,6 +833,22 @@ pub fn apply_with(conn: &Connection, ops: &[Op], waiting: Waiting) -> Result<App
     apply_held(conn, ops, waiting).map(|(report, _)| report)
 }
 
+/// [`apply_held`], with the ops the client held back — a sender held for its clock, or behind a
+/// batch only a newer build can read. They are never applied, and never counted in the report:
+/// each holds its row's group where that group carries a claim, so a claim that contains such an
+/// op can never land ahead of it (design 2026-10-03 §5), and holds nothing anywhere else.
+pub fn apply_page(
+    conn: &Connection,
+    ops: &[Op],
+    held_back: &[Op],
+    waiting: Waiting,
+) -> Result<(ApplyReport, Held), String> {
+    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
+    let out = capture::suppressed(&tx, || apply_in(&tx, ops, held_back, waiting))?;
+    tx.commit().map_err(|e| e.to_string())?;
+    Ok(out)
+}
+
 /// [`apply_with`], answering as well which devices the committed pass left held, and where —
 /// the one caller that needs it is the client, which holds its cursor on exactly those.
 pub fn apply_held(
@@ -823,15 +856,13 @@ pub fn apply_held(
     ops: &[Op],
     waiting: Waiting,
 ) -> Result<(ApplyReport, Held), String> {
-    let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
-    let out = capture::suppressed(&tx, || apply_in(&tx, ops, waiting))?;
-    tx.commit().map_err(|e| e.to_string())?;
-    Ok(out)
+    apply_page(conn, ops, &[], waiting)
 }
 
 fn apply_in(
     conn: &Connection,
     ops: &[Op],
+    held_back: &[Op],
     waiting: Waiting,
 ) -> Result<(ApplyReport, Held), String> {
     let mut report = ApplyReport::default();
@@ -844,6 +875,37 @@ fn apply_in(
         .optional()
         .map_err(|e| e.to_string())?;
     let watermarks = read_watermarks(conn)?;
+    // **Our own ops are dropped rather than applied**, and the relay is not trusted to have
+    // done it: a counter is not idempotent, so one of this device's own `+1`s coming back
+    // would be a card appearing out of nothing.
+    let mine = |op: &Op| me.as_deref() == Some(op.at.device.as_str());
+    let seen = |op: &Op| {
+        watermarks
+            .get(&op.at.device)
+            .is_some_and(|w| stamp(op) <= *w)
+    };
+
+    // **Claims that name their emission are decided here, before any older rule sees them**
+    // (design 2026-10-03 §5, §6, §10). What `decide` marks to skip or keep is final, and an op it
+    // marks to strip loses its reference here, so everything below judges it as `main` always did.
+    let decided = claims::decide(conn, ops, me.as_deref(), &seen)?;
+    let stripped: Vec<Op>;
+    let ops: &[Op] = if decided.strip.is_empty() {
+        ops
+    } else {
+        stripped = ops
+            .iter()
+            .enumerate()
+            .map(|(i, op)| {
+                let mut op = op.clone();
+                if decided.strip.contains(&i) {
+                    op.emission = None;
+                }
+                op
+            })
+            .collect();
+        &stripped
+    };
 
     // **The horizon filters this batch and writes nothing.** Spec §9.1: raising `sync_peers`
     // instead is wrong twice — it would suppress the baseline itself, whose ops are stamped
@@ -852,29 +914,28 @@ fn apply_in(
     // offered again, leaving this device holding a row the group deleted.
     //
     // Only the first op of each baseline batch carries one (§9), and a page can hold two
-    // batches, so whatever is found is unioned.
-    let mut horizon = Horizon::default();
-    for op in ops {
-        if let Some(h) = &op.horizon {
-            horizon.absorb(h);
-        }
-    }
+    // batches, so whatever is found is unioned. **The horizon of an emission this design
+    // decides is its own business, never the older rules'**: the union is of the ops with no
+    // reference, or one stripped above. `decide` built it, and asked it of every put it left to
+    // these rules, so the two can never disagree about it.
+    let horizon: &Horizon = &decided.older;
 
-    // 1. Everything already seen, and everything this device wrote itself.
-    //
-    // **Our own ops are dropped rather than applied**, and the relay is not trusted to have
-    // done it: a counter is not idempotent, so one of this device's own `+1`s coming back
-    // would be a card appearing out of nothing.
+    // 1. Everything already seen, and everything this device wrote itself — after what `decide`
+    //    consumed or kept, which no rule here overrides.
     let mut fresh: Vec<&Op> = Vec::new();
-    for op in ops {
-        let mine = me.as_deref() == Some(op.at.device.as_str());
-        let seen = watermarks
-            .get(&op.at.device)
-            .is_some_and(|w| stamp(op) <= *w);
+    for (i, op) in ops.iter().enumerate() {
+        if decided.skip.contains(&i) {
+            report.skipped += 1;
+            continue;
+        }
+        if decided.keep.contains(&i) {
+            fresh.push(op);
+            continue;
+        }
         // Exemptions in spec §9.1's table: a baseline op describes the horizon rather than
         // being described by it, and a tombstone is the one thing a claim cannot express.
         let inside = op.kind == Kind::Put && !op.baseline && horizon.covers(&op.at);
-        if mine || seen || inside {
+        if mine(op) || seen(op) || inside {
             report.skipped += 1;
         } else {
             fresh.push(op);
@@ -882,7 +943,44 @@ fn apply_in(
     }
 
     // 2. One group per logical row, in an order that puts parents first.
-    let mut groups = group(&fresh);
+    //
+    // **The client's held-back ops join only a group that carries a claim**, never applied:
+    // each sender is blocked at its earliest such op, so every group it joins holds — and the
+    // claim containing a held put cannot land ahead of it, which is the 6-for-3 the hold exists
+    // for (§5). **Anywhere else a held-back op joins nothing and holds nothing** (amended
+    // 2026-10-03, after the final review): it used to join every group of its row, and another
+    // sender's ordinary op there waited with it — and that sender's later ops, as collateral —
+    // for as long as the client held the first: up to a day on a clock hold, and until an upgrade
+    // behind a newer build's batch. Ops with no reference keep `main`'s rules, and `main` held
+    // nothing back. An ordinary op that shares a group with a claim and a held-back op still waits
+    // with them.
+    //
+    // A held-back claim joins nothing — a claim blocks nothing (§5), and a put that lands ahead
+    // of the claim containing it is §6's ordinary case. A reference on any other op is malformed
+    // and is taken off here, as `decide` takes it off a page op: every check below asks the field,
+    // and an op still carrying one would hold nothing, land its delta, raise no watermark — and
+    // apply a second time when its sender is released.
+    let claimed: BTreeSet<(&str, &str)> = fresh
+        .iter()
+        .filter(|op| claims::claim(op).is_some())
+        .map(|op| (op.table.as_str(), op.uid.as_str()))
+        .collect();
+    let held_back_ops: Vec<Op> = held_back
+        .iter()
+        .filter(|op| {
+            claims::claim(op).is_none()
+                && !mine(op)
+                && !seen(op)
+                && claimed.contains(&(op.table.as_str(), op.uid.as_str()))
+        })
+        .map(|op| Op {
+            emission: None,
+            ..op.clone()
+        })
+        .collect();
+    let mut grouped: Vec<&Op> = fresh.clone();
+    grouped.extend(held_back_ops.iter());
+    let mut groups = group(&grouped);
     groups.sort_by_key(|g| {
         (
             meta_of(g.table).map_or(u8::MAX, |m| m.order),
@@ -916,7 +1014,19 @@ fn apply_in(
     // device and in practice once. Each round rolls its own work back, so only the last one
     // commits.
     let cap = groups.len().min(8);
+    // Seeded from the held-back ops that joined a group, and from nothing else: unseeded, the
+    // first round would write the claim's group with the held op in it. One that joined nothing is
+    // in no group, so a block of its own would hold no group of this page — the client holds its
+    // sender's cursor itself.
     let mut blocked: Blocks = BTreeMap::new();
+    for op in &held_back_ops {
+        match blocked.get(op.at.device.as_str()) {
+            Some((at, _)) if *at <= op.at => {}
+            _ => {
+                blocked.insert(op.at.device.clone(), (op.at.clone(), Class::HeldBack));
+            }
+        }
+    }
     let mut committed: Vec<Deferral> = Vec::new();
     for round in 0..=cap {
         conn.execute_batch("SAVEPOINT sync_pass")
@@ -941,13 +1051,24 @@ fn apply_in(
         blocked = found;
     }
 
+    // **A held-back op is counted in no class, whatever its group became** — the client counts
+    // what it held back itself (`held_behind`, `held_clock`), so a count here is the same op twice.
+    // A group is one row, and every held-back op of that row is in it.
+    let mut held_back_in: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    for op in &held_back_ops {
+        *held_back_in
+            .entry((op.table.as_str(), op.uid.as_str()))
+            .or_default() += 1;
+    }
     for d in &committed {
-        let n = d.group.ops.len();
+        let row = (d.group.table, d.group.ops[0].uid.as_str());
+        let n = d.group.ops.len() - held_back_in.get(&row).copied().unwrap_or(0);
         match d.class {
             Class::Newer => report.held_newer += n,
             Class::Waiting => report.held_waiting += n,
             Class::Moot => report.moot += n,
             Class::Dropped => report.dropped += n,
+            Class::HeldBack => {}
         }
     }
     report.deferred = report.held_newer + report.held_waiting;
@@ -970,13 +1091,29 @@ fn apply_in(
     }
 
     advance_watermarks(conn, &groups, &committed)?;
+    claims::settle(conn, &decided, &committed, me.as_deref())?;
     observe(conn, fresh.iter().map(|o| &o.at).max())?;
     // Read off the pass that committed, as the watermarks were: at the round cap the blocks the
     // last round found are not the ones it honoured.
-    let held: Held = blocks_of(&committed, &Blocks::new())
+    let mut held: Held = blocks_of(&committed, &Blocks::new())
         .into_iter()
         .map(|(device, (at, _))| (device, (at.ms, at.ctr)))
         .collect();
+    // **A held claim is a block of its own** (design 2026-10-03 §5), keyed by its emission and
+    // index and never by its emitter, whose stream it says nothing about. A device id is 32 hex
+    // and never holds a `#`, so no key meets a device's, and the client's per-device merge never
+    // touches one; a new held claim is a new block and restarts the waiting bound, and one that
+    // resolves drops out.
+    for d in committed.iter().filter(|d| d.class.holds()) {
+        for op in &d.group.ops {
+            if let Some(em) = claims::claim(op) {
+                held.insert(
+                    format!("{}#{}.{}#{}", op.at.device, em.id.0, em.id.1, em.i),
+                    (op.at.ms, op.at.ctr),
+                );
+            }
+        }
+    }
     Ok((report, held))
 }
 
@@ -1186,7 +1323,8 @@ fn run_groups<'a>(
 /// only the newer one waits on something no bound releases.
 fn held_by(g: &Group, blocked: &Blocks) -> Option<Class> {
     let mut held = None;
-    for op in &g.ops {
+    // A claim that names its emission is never collateral by stamp (design 2026-10-03 §5).
+    for op in g.ops.iter().filter(|op| op.emission.is_none()) {
         if let Some((at, class)) = blocked.get(op.at.device.as_str()) {
             if op.at >= *at {
                 if *class == Class::Newer {
@@ -1409,7 +1547,9 @@ fn cascades(conn: &Connection, table: &str, p: &Parent) -> Result<bool, String> 
 fn blocks_of(deferrals: &[Deferral], known: &Blocks) -> Blocks {
     let mut out = known.clone();
     for d in deferrals.iter().filter(|d| d.class.holds()) {
-        for op in &d.group.ops {
+        // A claim that names its emission blocks nothing (design 2026-10-03 §5): its group holds
+        // as a whole, and its stamp says nothing about its emitter's stream.
+        for op in d.group.ops.iter().filter(|op| op.emission.is_none()) {
             match out.entry(op.at.device.clone()) {
                 std::collections::btree_map::Entry::Vacant(v) => {
                     v.insert((op.at.clone(), d.class));
@@ -1622,16 +1762,19 @@ fn find_row(
                         found.clone().min(op_uid.clone())
                     };
                     let rename = (winner != found).then(|| (found.clone(), winner.clone()));
+                    let absorbed = (winner == found).then(|| op_uid.clone());
                     return Ok(Found {
                         uid: Some(winner),
                         displaced: Some(found),
                         rename,
+                        absorbed,
                     });
                 }
                 return Ok(Found {
                     uid: Some(found),
                     displaced: None,
                     rename: None,
+                    absorbed: None,
                 });
             }
         }
@@ -1648,6 +1791,7 @@ fn find_row(
         uid: by_uid,
         displaced: None,
         rename: None,
+        absorbed: None,
     })
 }
 
@@ -1662,16 +1806,29 @@ struct Found {
     displaced: Option<String>,
     /// `(from, to)`: the uid the row wears now, and the lower one it is to adopt.
     rename: Option<(String, String)>,
+    /// The incoming uid a grain hit merged into a row that keeps its own, lower one — the other
+    /// direction of a rename, and retired the same way ([`adopt_uid`]).
+    absorbed: Option<String>,
 }
 
 /// Give the found row the uid [`find_row`] decided on — **inside the group's savepoint, and only
 /// once nothing else here wears it.** Taken, the group is a row this database cannot build: two
 /// local rows each hold half of what the op describes, and no uid adoption reconciles that.
+///
+/// **Whichever uid the grain hit merged away is retired** ([`emission::retire`], design
+/// 2026-10-03 §6) — the one the row gives up when it renames, and the incoming one when the row
+/// keeps its own, lower uid and absorbs it. Its copies live under the survivor's uid now, so a
+/// later claim naming it must never build it again. Written inside the same savepoint, so a group
+/// rolled back — unbuildable, or a delete waiting for its pass — and a pass rolled back leave no
+/// mark.
 fn adopt_uid(conn: &Connection, meta: &Meta, found: &Found) -> Result<(), Why> {
+    let unbuildable = |e: rusqlite::Error| Why::Unbuildable(e.to_string());
+    if let (Some(absorbed), Some(survivor)) = (&found.absorbed, &found.uid) {
+        return emission::retire(conn, meta.table, absorbed, survivor).map_err(unbuildable);
+    }
     let Some((from, to)) = &found.rename else {
         return Ok(());
     };
-    let unbuildable = |e: rusqlite::Error| Why::Unbuildable(e.to_string());
     let taken = conn
         .query_row(
             &format!("SELECT 1 FROM {} WHERE sync_uid = ?1", meta.table),
@@ -1691,8 +1848,8 @@ fn adopt_uid(conn: &Connection, meta: &Meta, found: &Found) -> Result<(), Why> {
         ),
         [to, from],
     )
-    .map(|_| ())
-    .map_err(unbuildable)
+    .map_err(unbuildable)?;
+    emission::retire(conn, meta.table, from, to).map_err(unbuildable)
 }
 
 /// This device's own ops for a row, out of `sync_ops`.
@@ -1931,6 +2088,41 @@ fn write_group<'a>(
         return Ok(Outcome::Written);
     }
 
+    // **A claim never builds a row this device merged into another** (design 2026-10-03 §6),
+    // asked here as well as in `claims::decide`, and at the moment the row would be built.
+    // `decide` reads the mark before the page, so a merge EARLIER IN THIS PAGE — a twin's group
+    // sorting first and renaming the row away (`adopt_uid`), or a re-homing folding it — writes
+    // the mark too late for it. With a gap open, or a resumed emission, `decide` then sends the
+    // claim to the fold as the floor of a row it saw here; the group finds no row by grain or by
+    // uid, and would build the merged-away uid beside the survivor, counting its copies twice.
+    // Refused instead, inside the group's savepoint, as a `Why::Unbuildable` that `classify` reads
+    // like any other: **dropped and recorded** where no op of the group was sealed by a newer
+    // schema — `settle` records the claim passed, and the drop opens the gap — and **held as
+    // newer** where one was, the claim left unconsumed. A newer hold keeps the cursor, so the page
+    // comes back on the next pull, where `decide` finds the mark this page's merge wrote and passes
+    // the claim; only the newer op waits for this device to upgrade.
+    //
+    // **The group's other ops go with it.** Its covered puts are sparse in practice — an edit of
+    // the row on its emitter — and `main` drops those too, for finding no row. A *full* insert
+    // put in such a group would be dropped here where `main` might build it, and that is
+    // unreachable in practice: only a row's creator sends its insert, once, and this device held
+    // the row before the page. Where the log brought the row, the insert is below its creator's
+    // watermark and never reaches a group. Where a claim built it, no watermark rose for the
+    // insert — a covered put dropped as carried raises none — so the fence is the log position,
+    // the cursor already past the envelope that carried it, and containment behind that: a page
+    // that does come back with the insert, held or re-read after `forget_log_position`, carries
+    // the claim that built the row, its emission's record says so (a gap keeps `wrote`), and the
+    // put is skipped as contained before it can join a group.
+    if existing.uid.is_none() && g.ops.iter().any(|op| claims::claim(op).is_some()) {
+        let merged = emission::retired(conn, meta.table, &g.ops[0].uid);
+        if !matches!(merged, Ok(false)) {
+            rollback()?;
+            return Ok(Outcome::Deferred(Why::Unbuildable(
+                merged.map_or_else(|e| e.to_string(), |_| MERGED_AWAY.to_owned()),
+            )));
+        }
+    }
+
     let written = match &existing.uid {
         Some(uid) => update_row(conn, meta, spec, g, &combined, &parents, uid),
         None => {
@@ -2130,30 +2322,44 @@ fn update_row(
     parents: &BTreeMap<&'static str, Sql>,
     uid: &str,
 ) -> Result<String, String> {
+    // **A column that already holds the value is not written.** `updates` answers every field
+    // the incoming ops *won*, and a claim — a whole row — wins every field this device never
+    // edited, so without this a claim equal to the row would still write it and stamp it now.
+    //
+    // The comparison is `Value`'s own, storage class and all, so it can only be wrong in the
+    // safe direction: an equal value that reads back as another class (`2` against `2.0`, `'5'`
+    // against `5`) is written, exactly as every column was before this, and costs a stamp
+    // rather than an edit. It never skips a value that differs.
     let pairs = updates(spec, g, combined, parents);
-    if !pairs.is_empty() || meta.timestamps {
-        let mut sets: Vec<String> = pairs
-            .iter()
-            .enumerate()
-            .map(|(i, (c, _))| format!("{c} = ?{}", i + 1))
-            .collect();
-        if meta.timestamps {
-            sets.push("updated_at = unixepoch()".to_owned());
-        }
-        let mut vals: Vec<Sql> = pairs.into_iter().map(|(_, v)| v).collect();
-        let hole = vals.len() + 1;
-        vals.push(Sql::Text(uid.to_owned()));
-        conn.execute(
-            &format!(
-                "UPDATE {} SET {} WHERE sync_uid = ?{hole}",
-                meta.table,
-                sets.join(", ")
-            ),
-            rusqlite::params_from_iter(vals.iter()),
-        )
-        .map_err(|e| e.to_string())?;
-    }
+    let pairs: Vec<(String, Sql)> = if pairs.is_empty() {
+        pairs
+    } else {
+        let cols: Vec<&str> = pairs.iter().map(|(c, _)| c.as_str()).collect();
+        let current: Vec<Sql> = conn
+            .query_row(
+                &format!(
+                    "SELECT {} FROM {} WHERE sync_uid = ?1",
+                    cols.join(", "),
+                    meta.table
+                ),
+                [uid],
+                |r| (0..cols.len()).map(|i| r.get::<_, Sql>(i)).collect(),
+            )
+            .map_err(|e| e.to_string())?;
+        pairs
+            .into_iter()
+            .zip(current)
+            .filter(|((_, new), old)| new != old)
+            .map(|(pair, _)| pair)
+            .collect()
+    };
 
+    // §8.2 per counter: deltas apply to what this device holds, and a claim can only raise that
+    // floor. A counter that ends where it stands is no change (design 2026-10-03 §9). Every
+    // counter is decided before anything is written, so the one `UPDATE` below carries the
+    // fields and the counters together — or, on `Floor::DeleteAtZero`, nothing is written
+    // before the row goes.
+    let mut counter_sets: Vec<(&str, i64)> = Vec::new();
     for (name, floor) in meta.counters {
         let delta = g.resolved.counters.get(*name).copied().unwrap_or(0);
         let claim = g.resolved.claims.get(*name).copied();
@@ -2181,14 +2387,7 @@ fn update_row(
             Some(c) => (current + delta).max(c),
             None => current + delta,
         };
-        match floor {
-            Floor::Clamp => {
-                conn.execute(
-                    &format!("UPDATE {} SET {name} = ?1 WHERE sync_uid = ?2", meta.table),
-                    rusqlite::params![next.max(0), uid],
-                )
-                .map_err(|e| e.to_string())?;
-            }
+        let value = match floor {
             Floor::DeleteAtZero if next <= 0 => {
                 conn.execute(
                     &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
@@ -2197,15 +2396,46 @@ fn update_row(
                 .map_err(|e| e.to_string())?;
                 return Ok(uid.to_owned());
             }
-            Floor::DeleteAtZero => {
-                conn.execute(
-                    &format!("UPDATE {} SET {name} = ?1 WHERE sync_uid = ?2", meta.table),
-                    rusqlite::params![next, uid],
-                )
-                .map_err(|e| e.to_string())?;
-            }
+            Floor::Clamp => next.max(0),
+            Floor::DeleteAtZero => next,
+        };
+        if value != current {
+            counter_sets.push((name, value));
         }
     }
+
+    // **Nothing changed, nothing written** — not even `updated_at`. A row stamped now by an
+    // apply that changed nothing is claimed at now by this device's next baseline, beating
+    // genuinely newer edits made between (the baseline design §10.2), and jumps to the top of the
+    // deck gallery, which sorts by it. It is also a row write the update hook reports, so the
+    // mirror and every other window would refresh for nothing.
+    if pairs.is_empty() && counter_sets.is_empty() {
+        return Ok(uid.to_owned());
+    }
+    let mut sets: Vec<String> = Vec::new();
+    let mut vals: Vec<Sql> = Vec::new();
+    for (c, v) in pairs {
+        vals.push(v);
+        sets.push(format!("{c} = ?{}", vals.len()));
+    }
+    for (name, value) in counter_sets {
+        vals.push(Sql::Integer(value));
+        sets.push(format!("{name} = ?{}", vals.len()));
+    }
+    if meta.timestamps {
+        sets.push("updated_at = unixepoch()".to_owned());
+    }
+    vals.push(Sql::Text(uid.to_owned()));
+    conn.execute(
+        &format!(
+            "UPDATE {} SET {} WHERE sync_uid = ?{}",
+            meta.table,
+            sets.join(", "),
+            vals.len()
+        ),
+        rusqlite::params_from_iter(vals.iter()),
+    )
+    .map_err(|e| e.to_string())?;
     Ok(uid.to_owned())
 }
 
@@ -2415,7 +2645,8 @@ fn advance_watermarks(
         if holding.contains(&(g.table, g.ops[0].uid.as_str())) {
             continue;
         }
-        for op in &g.ops {
+        // A claim that names its emission never moves a watermark (design 2026-10-03 §5).
+        for op in g.ops.iter().filter(|op| op.emission.is_none()) {
             let e = high.entry(op.at.device.as_str());
             match e {
                 std::collections::btree_map::Entry::Vacant(v) => {
@@ -2444,6 +2675,10 @@ fn advance_watermarks(
     Ok(())
 }
 
+mod claims;
 mod rehome;
+
+#[cfg(test)]
+mod emission_tests;
 #[cfg(test)]
 mod tests;

@@ -24,8 +24,9 @@
 
 use super::apply::order_of;
 use super::capture::{Spec, TABLES};
+use super::emission::{self, Begun};
 use super::hlc::Hlc;
-use super::merge::{Horizon, Kind, Op};
+use super::merge::{Emission, Horizon, Kind, Op};
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::BTreeMap;
 
@@ -223,6 +224,7 @@ pub fn build(conn: &Connection, device: &str) -> Result<Vec<Op>, String> {
                     baseline: true,
                     horizon: None,
                     schema: None,
+                    emission: None,
                 })
             })
             .map_err(|e| e.to_string())?;
@@ -240,8 +242,35 @@ pub fn build(conn: &Connection, device: &str) -> Result<Vec<Op>, String> {
     Ok(ops)
 }
 
+/// Number an emission's ops in emission order — the baseline claim design of 2026-10-03, §3.
+///
+/// **Called after the rows too large to send are left out**, so `n` counts what is sent and an
+/// index that never arrives cannot keep the emission from being taken.
+pub fn number(ops: &mut [Op], begun: &Begun) {
+    for (i, op) in ops.iter_mut().enumerate() {
+        op.emission = Some(Emission {
+            id: begun.id,
+            i: i as u32,
+            n: None,
+            since: None,
+            resumed: false,
+        });
+    }
+}
+
+/// What the first op of every chunk carries beside the horizon: how many ops the emission sends,
+/// and the generation it goes out under (§3).
+pub fn head(first: &mut Op, n: usize, begun: &Begun) {
+    if let Some(e) = first.emission.as_mut() {
+        e.n = Some(n as u32);
+        e.since = Some(begun.since);
+        e.resumed = begun.resumed;
+    }
+}
+
 /// What this device had already absorbed when it read its tables: its `sync_peers` watermarks,
-/// plus its own highest stamp. Spec §9.
+/// each raised to its `carried@` mark where that is higher — what emissions wholly written here
+/// carried in (the baseline claim design of 2026-10-03, §8) — plus its own highest stamp. Spec §9.
 ///
 /// **Its own stamp is half the answer and not a garnish.** The emitter's own ops are on the log
 /// too, and every one of them is already inside the claims — that is §8.1's `+1`, the ordinary
@@ -264,6 +293,22 @@ pub fn horizon(conn: &Connection, device: &str) -> Result<Horizon, String> {
     for row in rows {
         let stamp = row.map_err(|e| e.to_string())?;
         out.seen.insert(stamp.device.clone(), stamp);
+    }
+    // **What complete emissions carried in is inside these rows too** (design 2026-10-03 §8):
+    // a claim never raises `sync_peers`, so a horizon read from it alone would leave a put this
+    // device took in through a claim uncovered, and a receiver would count it again.
+    for (device, (ms, ctr)) in emission::carried(conn).map_err(|e| e.to_string())? {
+        let at = Hlc {
+            ms,
+            ctr,
+            device: device.clone(),
+        };
+        match out.seen.get(&device) {
+            Some(held) if *held >= at => {}
+            _ => {
+                out.seen.insert(device, at);
+            }
+        }
     }
     let own: Option<(i64, i64)> = conn
         .query_row(
@@ -783,5 +828,73 @@ mod tests {
             ops.len()
         );
         assert_eq!(history_count(&[]), 0);
+    }
+
+    /// Design 2026-10-03 §3: every op names the emission and its index; only a chunk's first
+    /// carries the head.
+    #[test]
+    fn an_emission_numbers_its_ops_and_heads_a_chunk() {
+        use crate::sync_engine::emission::Begun;
+        use crate::sync_engine::merge::Emission;
+        let conn = paired("dev-a");
+        add_copy(&conn, "c1", 1);
+        add_copy(&conn, "c2", 1);
+        let begun = Begun {
+            id: (7, 1),
+            since: (3, 0),
+            resumed: true,
+        };
+        let mut ops = build(&conn, "dev-a").unwrap();
+        assert_eq!(ops.len(), 3, "the seeded folder and two rows");
+        number(&mut ops, &begun);
+        for (i, op) in ops.iter().enumerate() {
+            assert_eq!(
+                op.emission,
+                Some(Emission {
+                    id: (7, 1),
+                    i: i as u32,
+                    n: None,
+                    since: None,
+                    resumed: false
+                })
+            );
+        }
+        let n = ops.len();
+        head(&mut ops[0], n, &begun);
+        assert_eq!(
+            ops[0].emission,
+            Some(Emission {
+                id: (7, 1),
+                i: 0,
+                n: Some(3),
+                since: Some((3, 0)),
+                resumed: true
+            })
+        );
+        assert_eq!(ops[1].emission.as_ref().unwrap().n, None);
+    }
+
+    /// Design §8: the horizon names what complete emissions carried in — the larger of a device's
+    /// watermark and its `carried@` mark.
+    #[test]
+    fn the_horizon_names_what_complete_emissions_carried() {
+        let conn = paired("dev-a");
+        conn.execute_batch(
+            "INSERT INTO sync_peers (device_id, last_ms, last_ctr) VALUES ('dev-c', 500, 3);
+             INSERT INTO sync_state (key, value) VALUES ('carried@dev-c', '900:0'), ('carried@dev-d', '40:2');",
+        )
+        .unwrap();
+        let h = horizon(&conn, "dev-a").unwrap();
+        let at = |d: &str| h.seen.get(d).map(|s| (s.ms, s.ctr));
+        assert_eq!(at("dev-c"), Some((900, 0)));
+        assert_eq!(at("dev-d"), Some((40, 2)));
+
+        conn.execute(
+            "UPDATE sync_state SET value = '100:0' WHERE key = 'carried@dev-c'",
+            [],
+        )
+        .unwrap();
+        let h = horizon(&conn, "dev-a").unwrap();
+        assert_eq!(h.seen.get("dev-c").map(|s| (s.ms, s.ctr)), Some((500, 3)));
     }
 }

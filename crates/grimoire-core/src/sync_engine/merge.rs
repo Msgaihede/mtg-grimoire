@@ -56,6 +56,33 @@ impl Horizon {
     }
 }
 
+/// A claim's place in the emission it belongs to — the baseline claim design of 2026-10-03, §3.
+///
+/// `id` is one tick of the emitter's clock as `[ms, ctr]`, unique per device and ordering its
+/// emissions; `i` is the op's index in the emission, from 0. `n`, `since` and `resumed` ride the
+/// first op of every chunk, as the horizon does, because each chunk is pulled on its own.
+///
+/// ⚠️ **`id` and `i` are required fields**, with no `#[serde(default)]`: a build on this one that
+/// meets an `emission` object without either fails to parse the op — and so the whole envelope,
+/// which is one batch. So a future build that renames or drops either one must also raise the op
+/// `schema` that `wire::seal_batch` stamps (the user schema version): an older peer then reads the
+/// batch as `WireError::Newer` and holds it for an update, where otherwise it is `Malformed` and
+/// stepped over, its ops lost. Only `Op.emission` itself is optional on the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Emission {
+    pub id: (i64, i64),
+    pub i: u32,
+    /// How many ops the emission sends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub n: Option<u32>,
+    /// The emitter's generation: the stamp at which its capture last turned on (§4).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub since: Option<(i64, i64)>,
+    /// The generation began after the emitter had logged in a group before (§4).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub resumed: bool,
+}
+
 /// One change to one row, as it travels.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +117,10 @@ pub struct Op {
     /// the wire is `deny_unknown_fields`. Spec 2026-09-27 §3.1.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub schema: Option<i64>,
+    /// A claim's emission and its place in it — design 2026-10-03 §3. Only baseline ops carry
+    /// one. An older receiver ignores the key, and an op without it is judged as it always was.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub emission: Option<Emission>,
 }
 
 /// What a set of ops about one row adds up to.
@@ -254,6 +285,7 @@ mod tests {
             baseline: false,
             horizon: None,
             schema: None,
+            emission: None,
         }
     }
 
@@ -571,5 +603,51 @@ mod tests {
         let back: Op = serde_json::from_str(&json).unwrap();
         assert!(!back.baseline);
         assert_eq!(back.horizon, None);
+    }
+
+    /// Design 2026-10-03 §3: an emission rides a claim and nothing else, as `[ms, ctr]` arrays,
+    /// and the head's keys are left off every op but a chunk's first.
+    #[test]
+    fn an_emission_rides_a_claim_and_nothing_else_on_the_wire() {
+        let ordinary = serde_json::to_string(&put("dev-a", 1, json!({}), json!({}))).unwrap();
+        assert!(!ordinary.contains("emission"), "{ordinary}");
+
+        let mut c = claim("dev-a", 10, json!({"quantity": 2}));
+        c.emission = Some(Emission {
+            id: (5, 0),
+            i: 3,
+            n: Some(7),
+            since: Some((1, 0)),
+            resumed: true,
+        });
+        let text = serde_json::to_string(&c).unwrap();
+        assert!(
+            text.contains(r#""emission":{"id":[5,0],"i":3,"n":7,"since":[1,0],"resumed":true}"#),
+            "{text}"
+        );
+        let back: Op = serde_json::from_str(&text).unwrap();
+        assert_eq!(back, c);
+
+        let body = Emission {
+            id: (5, 0),
+            i: 4,
+            n: None,
+            since: None,
+            resumed: false,
+        };
+        assert_eq!(
+            serde_json::to_string(&body).unwrap(),
+            r#"{"id":[5,0],"i":4}"#
+        );
+    }
+
+    /// ...and an op a build before the field sent reads as having none.
+    #[test]
+    fn an_op_written_before_emissions_reads_as_having_none() {
+        let old: Op = serde_json::from_str(
+            r#"{"table":"decks","uid":"u1","kind":"put","at":{"ms":1,"ctr":0,"device":"a"},"baseline":true}"#,
+        )
+        .unwrap();
+        assert_eq!(old.emission, None);
     }
 }

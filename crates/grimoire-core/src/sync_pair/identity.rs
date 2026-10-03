@@ -11,6 +11,7 @@
 //! restoring it onto a second machine makes two devices claim one identity. [`ensure`] is where
 //! that is decided, and it mints on absence only.
 
+use crate::sync_engine::emission;
 use crate::sync_pair::crypto::{self, Keypair};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::Serialize;
@@ -312,6 +313,8 @@ pub fn found_group(conn: &Connection, g: &Group, me: &Identity) -> rusqlite::Res
     forget_superseded(conn)?;
     forget_log_position(conn)?;
     write_group(conn, g)?;
+    // Capture turns on here: a new generation (the baseline claim design §4).
+    emission::start_logging(conn)?;
     add_device(conn, &me.device_id, &me.keypair.public, &me.name)?;
     conn.execute(
         "INSERT OR REPLACE INTO sync_state (key, value) VALUES (?1, ?2)",
@@ -346,6 +349,7 @@ pub fn join_group(
     me: &Identity,
 ) -> rusqlite::Result<()> {
     let held = group(conn)?;
+    let from_no_group = held.is_none();
     let unchanged = held
         .as_ref()
         .is_some_and(|g| g.group_id == group_id && g.epoch == epoch && g.group_key == *key);
@@ -363,6 +367,12 @@ pub fn join_group(
             group_key: *key,
         },
     )?;
+    // Capture turns on only when this device was in no group: `pairing::confirm` re-writes the
+    // initiator's own group on every pairing, and minting there would make every pairing look
+    // like a device with unlogged history (the baseline claim design §4).
+    if from_no_group {
+        emission::start_logging(conn)?;
+    }
     add_device(conn, &me.device_id, &me.keypair.public, &me.name)
 }
 
@@ -1325,7 +1335,11 @@ fn adopt(
 /// `client::check_keys` is where the two facts sit side by side.
 ///
 /// **This device's place in the group's relay log goes with the group** — [`forget_log_position`]
-/// says why each of its three keys has to.
+/// says why each of its three keys has to. **Its generation is the one mark of this device's own
+/// logging that leaving keeps, and on purpose** ([`emission::keep_logging_mark`]): capture stops
+/// here, and what the reader edits while in no group is history no log carries — so the next
+/// group's generation has to be minted over this one, and go out resumed (the baseline claim
+/// design §4).
 pub fn leave_group(conn: &Connection) -> Result<(), String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     tx.execute("DELETE FROM sync_devices", [])
@@ -1334,6 +1348,7 @@ pub fn leave_group(conn: &Connection) -> Result<(), String> {
         .map_err(|e| e.to_string())?;
     forget_superseded(&tx).map_err(|e| e.to_string())?;
     forget_log_position(&tx).map_err(|e| e.to_string())?;
+    emission::keep_logging_mark(&tx).map_err(|e| e.to_string())?;
     tx.commit().map_err(|e| e.to_string())
 }
 
@@ -1359,12 +1374,21 @@ pub fn leave_group(conn: &Connection) -> Result<(), String> {
 ///
 /// [`leave_group`] calls it, and so do [`found_group`] and [`join_group`] whenever the group id
 /// moves — see the latter for why that second half is not redundant.
+///
+/// **Forgetting a place in a log is also a gap** (the baseline claim design §7), and this is
+/// where it opens. A `taken@` mark promises this device has read everything its emitter wrote
+/// since that generation, and a device that has lost its place can no longer say so — whatever
+/// the log carried while it held no cursor there, it never applied. So every mark goes and the
+/// next emission from every emitter is read whole ([`emission::open_gap`]).
 fn forget_log_position(conn: &Connection) -> rusqlite::Result<()> {
     use crate::sync_engine::client::{LAST_ACKED, PULL_CURSOR, PULL_HOLD};
     conn.execute(
         "DELETE FROM sync_state WHERE key IN (?1, ?2, ?3)",
         params![PULL_CURSOR, LAST_ACKED, PULL_HOLD],
     )?;
+    // A place in a log forgotten is a gap: the next emission from every emitter is read whole
+    // (the baseline claim design §7).
+    emission::open_gap(conn)?;
     Ok(())
 }
 
@@ -2326,6 +2350,7 @@ mod tests {
             // Sealing stamps this build's schema on every op, and the assertion below compares
             // what B opens against this literal.
             schema: Some(crate::schema::USER_SCHEMA_VERSION),
+            emission: None,
         }];
         let envelope =
             wire::seal_batch(&group(&a).unwrap().unwrap(), &me_a.device_id, &ops).unwrap();
@@ -3276,5 +3301,125 @@ mod tests {
         assert!(roster_is_dirty(&conn).unwrap());
         set_roster_dirty(&conn, false).unwrap();
         assert!(!roster_is_dirty(&conn).unwrap());
+    }
+
+    fn logging_since(conn: &Connection) -> Option<String> {
+        conn.query_row(
+            "SELECT value FROM sync_state WHERE key = 'logging_since'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()
+        .unwrap()
+    }
+
+    /// The baseline claim design §4: a generation is minted when capture turns on, and only then.
+    #[test]
+    fn founding_and_joining_from_no_group_mint_a_generation() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        let first = logging_since(&conn).expect("founding mints one");
+        assert!(!emission::begin(&conn).unwrap().resumed);
+
+        let g = group(&conn).unwrap().unwrap();
+        join_group(&conn, &g.group_id, g.epoch, &g.group_key, &me).unwrap();
+        assert_eq!(
+            logging_since(&conn),
+            Some(first.clone()),
+            "the initiator's re-write mints none"
+        );
+
+        leave_group(&conn).unwrap();
+        assert_eq!(
+            logging_since(&conn),
+            Some(first.clone()),
+            "leaving keeps it"
+        );
+        join_group(&conn, "abc123", 0, &[1u8; 32], &me).unwrap();
+        assert_ne!(logging_since(&conn), Some(first));
+        assert!(emission::begin(&conn).unwrap().resumed);
+    }
+
+    #[test]
+    fn a_device_that_logged_before_this_build_resumes_when_it_comes_back() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        conn.execute(
+            "DELETE FROM sync_state WHERE key IN ('logging_since', 'logging_resumed')",
+            [],
+        )
+        .unwrap();
+        leave_group(&conn).unwrap();
+        join_group(&conn, "abc123", 0, &[1u8; 32], &me).unwrap();
+        assert!(emission::begin(&conn).unwrap().resumed);
+    }
+
+    /// A device that left, or was removed, under a build before this one never had
+    /// `keep_logging_mark` write its `0:0` — so its watermarks, which leaving keeps, are what say
+    /// it held a group, and it rejoins resumed.
+    #[test]
+    fn a_device_that_held_a_group_before_this_build_rejoins_resumed() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO sync_peers (device_id, last_ms, last_ctr) VALUES ('dev-x', 1, 0)",
+            [],
+        )
+        .unwrap();
+        assert_eq!(
+            logging_since(&conn),
+            None,
+            "no build before this one wrote it"
+        );
+
+        join_group(&conn, "abc123", 0, &[1u8; 32], &me).unwrap();
+        assert!(emission::begin(&conn).unwrap().resumed);
+    }
+
+    /// Every pairing re-writes the initiator's own group, and a re-pair after a removal carries
+    /// the same id at a newer epoch. Neither is capture turning on, and neither forgets a place
+    /// in the log — so neither mints a generation nor opens a gap.
+    #[test]
+    fn re_writing_the_group_it_is_in_opens_no_gap_and_mints_nothing() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        conn.execute("DELETE FROM sync_state WHERE key = 'gap'", [])
+            .unwrap();
+        let first = logging_since(&conn);
+        assert!(first.is_some());
+        let g = group(&conn).unwrap().unwrap();
+
+        join_group(&conn, &g.group_id, g.epoch, &g.group_key, &me).unwrap();
+        assert!(
+            !emission::gap_open(&conn).unwrap(),
+            "the initiator's re-write"
+        );
+        assert_eq!(logging_since(&conn), first, "the initiator's re-write");
+
+        join_group(&conn, &g.group_id, g.epoch + 4, &[9u8; 32], &me).unwrap();
+        assert!(
+            !emission::gap_open(&conn).unwrap(),
+            "a re-pair at a newer epoch"
+        );
+        assert_eq!(logging_since(&conn), first, "a re-pair at a newer epoch");
+    }
+
+    /// §7: forgetting this device's place in a log is a gap.
+    #[test]
+    fn forgetting_a_place_in_a_log_opens_the_gap() {
+        let conn = db();
+        let me = ensure(&conn).unwrap();
+        create_group(&conn, &me).unwrap();
+        conn.execute_batch(
+            "DELETE FROM sync_state WHERE key = 'gap';
+             INSERT INTO sync_state (key, value) VALUES ('taken@dev-x', '1:0');",
+        )
+        .unwrap();
+        leave_group(&conn).unwrap();
+        assert!(emission::gap_open(&conn).unwrap());
+        assert_eq!(emission::taken(&conn, "dev-x").unwrap(), None);
     }
 }

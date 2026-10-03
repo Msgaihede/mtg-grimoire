@@ -1066,6 +1066,7 @@ pub fn op_from_row(row: &rusqlite::Row) -> rusqlite::Result<(i64, super::merge::
             horizon: None,
             // Stamped at sealing and never here — `merge::Op::schema` says why.
             schema: None,
+            emission: None,
         },
     ))
 }

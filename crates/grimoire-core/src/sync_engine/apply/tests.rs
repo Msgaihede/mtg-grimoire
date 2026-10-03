@@ -2104,6 +2104,7 @@ fn baseline_ops(conn: &Connection, device: &str) -> Vec<Op> {
                 baseline: true,
                 horizon: None,
                 schema: None,
+                emission: None,
             })
         })
         .unwrap()
@@ -4335,6 +4336,7 @@ fn entry_put(uid: &str, card: &str, device: &str, ms: i64) -> Op {
         baseline: false,
         horizon: None,
         schema: None,
+        emission: None,
     }
 }
 

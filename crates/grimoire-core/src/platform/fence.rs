@@ -517,6 +517,7 @@ mod tests {
             [
                 "src/scratch.rs",
                 "src/sync/run_tests.rs",
+                "src/sync_engine/apply/emission_tests.rs",
                 "src/sync_engine/apply/tests.rs",
                 "src/sync_engine/client/tests.rs"
             ],

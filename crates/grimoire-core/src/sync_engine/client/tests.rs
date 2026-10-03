@@ -4680,18 +4680,23 @@ fn first_card_is(
 /// these four refusals meets the same ops the same way on every attempt, so failing the trip on
 /// one stopped the device reading its group for as long as it lasted — and for `quota` it was a
 /// deadlock, the device's stale ack pinning the relay's compaction floor under the very log that
-/// was full. **The clock and the quota begin no baseline behind them**; the other two begin one,
-/// meet the same refusal at its first chunk, and leave its marker NULL without failing the trip.
+/// was full. **None of the four begins a baseline behind it**, and the marker stays NULL.
+///
+/// **That was two of the four until the baseline claim design of 2026-10-03** (§5): the clock and
+/// the quota stopped the baseline by [`Deferral::stops_baselines`], and `epoch_ahead` and
+/// `too_large` began one beside the op the refusal had just left pending, met the same refusal at
+/// its first chunk and posted twice. A baseline is no longer begun while anything is pending, and
+/// every deferral leaves its refused ops pending, so each of the four posts once.
 ///
 /// **What makes it red**: failing the trip on a deferral (no pull, no ack), stamping the refused
-/// ops, emitting a baseline behind a clock or quota refusal, or failing the trip on the baseline's.
+/// ops, or beginning a baseline beside the ops a refusal left pending.
 #[tokio::test]
 async fn a_push_the_relay_keeps_refusing_still_lets_the_trip_pull_and_ack() {
-    for (status, code, deferral) in [
-        (507, "quota", Deferral::Quota),
-        (422, "clock_ahead", Deferral::ClockAhead),
-        (422, "epoch_ahead", Deferral::EpochAhead),
-        (413, "too_large", Deferral::TooLarge),
+    for (status, code) in [
+        (507, "quota"),
+        (422, "clock_ahead"),
+        (422, "epoch_ahead"),
+        (413, "too_large"),
     ] {
         let server = MockServer::start_async().await;
         keys_mock(&server, 0);
@@ -4727,7 +4732,8 @@ async fn a_push_the_relay_keeps_refusing_still_lets_the_trip_pull_and_ack() {
         pulled.assert();
         acked.assert();
         assert_eq!(get_state(&a, LAST_ACKED).as_deref(), Some("7"), "{code}");
-        let posts = if deferral.stops_baselines() { 1 } else { 2 };
+        // The push's one refused post, and no baseline's beside it.
+        let posts = 1;
         assert_eq!(refused.calls(), posts, "{code}");
         assert_eq!(baselined_at(&a, "dev-b"), None, "{code}");
         let recorded: i64 = error_rows(&a).iter().map(|r| r.2).sum();
@@ -5368,8 +5374,7 @@ async fn a_write_anywhere_in_a_baselines_emission_reaches_the_peer() {
         // The trip read its outbox before the reader's hand moved: the add is on the relay.
         a.execute("UPDATE sync_ops SET pushed_at = unixepoch()", [])
             .unwrap();
-        let through = last_op(&a).unwrap();
-        emit_baselines(&db, &server.base_url(), "access-1", through)
+        emit_baselines(&db, &server.base_url(), "access-1")
             .await
             .unwrap();
         if behind == 0 {
@@ -5585,4 +5590,329 @@ async fn a_write_anywhere_beside_a_pull_is_counted_once_on_both_devices() {
         behind += 1;
     }
     assert!(wrong.is_empty(), "of {stretches} stretches: {wrong:#?}");
+}
+
+// ---------------------------------------------------------------------------------------
+// Emissions — the baseline claim design of 2026-10-03, §3, §5 and §7
+// ---------------------------------------------------------------------------------------
+
+/// An emission as `emit_baselines` builds it — for the tests that put one on the relay.
+fn emission_of(conn: &Connection, device: &str) -> Vec<Op> {
+    use crate::sync_engine::{baseline, emission};
+    let begun = emission::begin(conn).unwrap();
+    let mut ops = baseline::build(conn, device).unwrap();
+    baseline::number(&mut ops, &begun);
+    let n = ops.len();
+    ops[0].horizon = Some(baseline::horizon(conn, device).unwrap());
+    baseline::head(&mut ops[0], n, &begun);
+    ops
+}
+
+/// Design 2026-10-03 §5: no baseline is begun while anything is pending — here an op an earlier
+/// refusal (`epoch_ahead`) left behind.
+#[tokio::test]
+async fn a_baseline_waits_while_an_earlier_refusal_left_an_op_pending() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    let sent = Sent::default();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .is_true(tap(&sent));
+        then.status(409)
+            .json_body(serde_json::json!({ "code": EPOCH_AHEAD }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    let a = paired("dev-a", 0);
+    add_copy(&a, "c1", 1);
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    grant(&a);
+    let outcome = run_once(&a).await.unwrap().unwrap();
+    assert_eq!(outcome.baseline_ops, 0, "{outcome:?}");
+    let group = identity::group(&a).unwrap().unwrap();
+    assert!(
+        pushed_baselines(&sent, &group).is_empty(),
+        "a baseline was begun beside a pending op"
+    );
+    assert_eq!(baselined_at(&a, "dev-b"), None);
+}
+
+/// §3: every baseline op names one emission and its index; every chunk's first op carries the
+/// head; the count is what was sent.
+#[tokio::test]
+async fn every_baseline_op_names_its_emission_and_every_chunk_its_head() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    let sent = Sent::default();
+    server.mock(|when, then| {
+        when.method(POST)
+            .path(format!("/g/{GROUP}/push"))
+            .is_true(tap(&sent));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    let a = paired("dev-a", 0);
+    for i in 0..wire::BATCH {
+        add_copy(&a, &format!("c{i}"), 1);
+    }
+    // One row too large ever to send takes no index.
+    add_copy(&a, "huge", 1);
+    a.execute(
+        "UPDATE collection_entries SET notes = ?1 WHERE card_id = 'huge'",
+        ["x".repeat(wire::MAX_SEALED_CHARS)],
+    )
+    .unwrap();
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    grant(&a);
+    run_once(&a).await.unwrap().unwrap();
+
+    let group = identity::group(&a).unwrap().unwrap();
+    let batches = pushed_baselines(&sent, &group);
+    let all: Vec<&Op> = batches.iter().flatten().collect();
+    let n = all.len() as u32;
+    assert!(all
+        .iter()
+        .all(|op| op.fields.get("card_id").and_then(|v| v.as_str()) != Some("huge")));
+    let ids: std::collections::BTreeSet<_> = all
+        .iter()
+        .map(|op| op.emission.as_ref().unwrap().id)
+        .collect();
+    assert_eq!(ids.len(), 1, "one emission");
+    let mut indices: Vec<u32> = all
+        .iter()
+        .map(|op| op.emission.as_ref().unwrap().i)
+        .collect();
+    indices.sort_unstable();
+    assert_eq!(indices, (0..n).collect::<Vec<_>>());
+    for batch in &batches {
+        let head = batch[0].emission.as_ref().unwrap();
+        assert_eq!(head.n, Some(n));
+        assert!(head.since.is_some());
+        assert!(batch[1..]
+            .iter()
+            .all(|op| op.emission.as_ref().unwrap().n.is_none()));
+    }
+}
+
+/// §5: a sender held for its clock is passed to `apply` as held, so another sender's claim for
+/// the same row waits with it rather than landing ahead of it.
+#[tokio::test]
+async fn a_clock_held_senders_put_holds_the_claim_for_its_row() {
+    let c = paired("dev-c", 0);
+    add_copy(&c, "bolt", 2);
+    c.execute("UPDATE sync_ops SET hlc_ms = hlc_ms + 2 * 86400000", [])
+        .unwrap();
+    let from_c = outbox(&c);
+    let e = paired("dev-e", 0);
+    crate::sync_engine::apply::apply(&e, &from_c).unwrap();
+    let from_e = emission_of(&e, "dev-e");
+
+    let b = paired("dev-b", 0);
+    let group = identity::group(&b).unwrap().unwrap();
+    let envelopes = [
+        wire::seal_batch(&group, "dev-c", &from_c).unwrap(),
+        wire::seal_batch(&group, "dev-e", &from_e).unwrap(),
+    ];
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/push"));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": envelopes
+                .iter()
+                .map(|e| serde_json::to_value(e).unwrap())
+                .collect::<Vec<_>>(),
+            "cursor": 3,
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    set_state(&b, RELAY_URL, &server.base_url()).unwrap();
+    grant(&b);
+    run_once(&b).await.unwrap().unwrap();
+    let held: i64 = b
+        .query_row(
+            "SELECT count(*) FROM collection_entries WHERE card_id = 'bolt'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(held, 0, "the claim landed ahead of the put it contains");
+}
+
+/// §7: an envelope stepped over as unreadable opens the gap.
+#[tokio::test]
+async fn an_envelope_stepped_over_as_unreadable_opens_the_gap() {
+    let other = paired("dev-x", 0);
+    add_copy(&other, "c1", 1);
+    let b = paired("dev-b", 0);
+    let mut group = identity::group(&b).unwrap().unwrap();
+    group.group_key = [9u8; 32];
+    let altered = wire::seal_batch(&group, "dev-x", &outbox(&other)).unwrap();
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/push"));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200).json_body(serde_json::json!({
+            "envelopes": [serde_json::to_value(&altered).unwrap()],
+            "cursor": 2,
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    b.execute("DELETE FROM sync_state WHERE key = 'gap'", [])
+        .unwrap();
+    set_state(&b, RELAY_URL, &server.base_url()).unwrap();
+    grant(&b);
+    run_once(&b).await.unwrap().unwrap();
+    assert!(crate::sync_engine::emission::gap_open(&b).unwrap());
+}
+
+/// §7, the other side: **an envelope held behind a rotation is not stepped over, and opens no
+/// gap.** It is sealed at an epoch ahead of this device's and at or below the one the relay
+/// answered, so the next trip's `check_keys` brings its key and the page is read whole then.
+///
+/// **What makes it red**: counting it as stepped over (the behind arm's `kept`).
+#[tokio::test]
+async fn an_envelope_held_behind_a_rotation_opens_no_gap() {
+    let a = paired("dev-a", 1);
+    add_copy(&a, "c1", 1);
+    let newer = identity::group(&a).unwrap().unwrap();
+    let envelope = wire::seal_batch(&newer, "dev-a", &outbox(&a)).unwrap();
+    let server = MockServer::start_async().await;
+    serving(&server, &[&envelope], 9);
+    let b = paired("dev-b", 0);
+    b.execute("DELETE FROM sync_state WHERE key = 'gap'", [])
+        .unwrap();
+
+    // The relay is at epoch 1 and this trip's own check said so: behind, not forged.
+    let Pulled { unreadable, .. } = pull(&b, &server.base_url(), "access-1", Some(1))
+        .await
+        .unwrap();
+    assert_eq!(unreadable, 1);
+    assert_eq!(
+        get_state(&b, PULL_CURSOR),
+        None,
+        "the cursor stepped over a rotation"
+    );
+    assert!(
+        !crate::sync_engine::emission::gap_open(&b).unwrap(),
+        "an envelope held behind a rotation opened the gap"
+    );
+}
+
+/// §7, the other side: **a batch only a newer build can read is held, not stepped over, and
+/// opens no gap.** An update reads it, with the page handed back whole.
+///
+/// **What makes it red**: counting it as stepped over (the `WireError::Newer` arm's `kept`).
+#[tokio::test]
+async fn a_batch_only_a_newer_build_can_read_opens_no_gap() {
+    let a = paired("dev-a", 0);
+    add_copy(&a, "m1", 1);
+    let group = identity::group(&a).unwrap().unwrap();
+    let newer = unparseable(&group, "dev-a", &outbox(&a)[0]);
+    let server = MockServer::start_async().await;
+    serving(&server, &[&newer], 9);
+    let b = paired("dev-b", 0);
+    b.execute("DELETE FROM sync_state WHERE key = 'gap'", [])
+        .unwrap();
+    set_state(&b, PULL_CURSOR, "3").unwrap();
+
+    let Pulled { unreadable, .. } = pull(&b, &server.base_url(), "access-1", None)
+        .await
+        .unwrap();
+    assert_eq!(unreadable, 1);
+    assert_eq!(hold_of(&b).expect("no hold")["kind"], "newer");
+    assert!(
+        !crate::sync_engine::emission::gap_open(&b).unwrap(),
+        "a batch only a newer build can read opened the gap"
+    );
+}
+
+/// **A baseline the relay defers ends the emission and not the trip** — `emit_baselines`'
+/// `Refusal::Deferred` arm: the trip still pulls and acks, and the peer's marker stays NULL so
+/// the next trip offers the whole baseline again.
+///
+/// **Reached only with an empty outbox now.** A deferral of the push leaves its ops pending, and
+/// no baseline is begun beside a pending op (design 2026-10-03 §5) — so the `epoch_ahead` and
+/// `too_large` rows of [`a_push_the_relay_keeps_refusing_still_lets_the_trip_pull_and_ack`], which
+/// used to reach this arm, cannot any more. Here the push has nothing to send, and the
+/// baseline's own first chunk is what the relay refuses.
+///
+/// **507 `quota`**, because it is the deferral a baseline can meet on its own: it is the largest
+/// write a device makes, so it is what tips a nearly full log over, while a push with nothing in
+/// it never asks. `epoch_ahead` would need the baseline sealed at an epoch the relay has not
+/// reached, which this trip's own key check has just compared.
+///
+/// **What makes it red**: failing the trip on the baseline's deferral (no ack, an `Err`), or
+/// stamping the marker over a baseline that did not land.
+#[tokio::test]
+async fn a_baseline_the_relay_defers_leaves_its_marker_unset_and_the_trip_still_acks() {
+    let server = MockServer::start_async().await;
+    keys_mock(&server, 0);
+    let refused = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/push"));
+        then.status(507)
+            .json_body(serde_json::json!({ "error": "x", "code": "quota" }));
+    });
+    let pulled = server.mock(|when, then| {
+        when.method(GET).path(format!("/g/{GROUP}/pull"));
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 7 }));
+    });
+    let acked = server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{GROUP}/ack"));
+        then.status(204);
+    });
+    let a = paired("dev-a", 0);
+    roster(&a, "dev-b");
+    set_state(&a, RELAY_URL, &server.base_url()).unwrap();
+    grant(&a);
+    assert_eq!(
+        unpushed_count(&a),
+        0,
+        "the outbox must be empty: only the baseline can post"
+    );
+
+    let outcome = run_once(&a).await.unwrap().unwrap();
+
+    assert_eq!(refused.calls(), 1, "the baseline's first chunk, once");
+    assert_eq!(outcome.baseline_ops, 0, "{outcome:?}");
+    pulled.assert();
+    acked.assert();
+    assert_eq!(get_state(&a, LAST_ACKED).as_deref(), Some("7"));
+    assert_eq!(baselined_at(&a, "dev-b"), None);
 }

@@ -1,7 +1,8 @@
 # Converging From Any State: The Pairing Baseline
 
 **Status:** design, approved 2026-08-29. Amended the same day after reading the merge path and the
-deployed relay — see [§18](#18-what-changed-in-the-amendment) for what moved and why.
+deployed relay — see [§18](#18-what-changed-in-the-amendment) for what moved and why. Amended
+again 2026-10-03: a claim names its emission, and the watermark no longer judges it — §9.2.
 Supersedes one sentence of [the cross-platform design](2026-08-27-cross-platform-design.md) §7.7 —
 see §2.
 
@@ -282,7 +283,38 @@ of the two failures above:
 Nothing is written to `sync_peers` by any of this. The watermark keeps its existing meaning and
 its existing single writer, `advance_watermarks`, so the horizon cannot make this device skip an
 op on some later pull. Re-applying a baseline op is harmless anyway — claims resolve by `max` and
-the grain finds the same row — which is why the first exemption costs nothing.
+the grain finds the same row — which is why the first exemption costs nothing. ⚠️ **Not quite**,
+and §9.2 is why: a claim applied again over a copy removed since raises it back, and its fields
+overwrite a later edit this device applied from a third.
+
+### 9.2 Amended 2026-10-03: a claim names its emission
+
+§9.1 exempts a baseline op from the horizon and said nothing of the **watermark**, so `apply_in`
+judged a claim by `sync_peers` like any op and let it raise the watermark too. A claim is stamped
+from its row's `updated_at` — whole seconds off the wall clock — and emitted in table order, so a
+device that had never held a row could skip its claim as seen: a baseline pulled in two halves,
+a sparse op pulled ahead of its baseline, a re-baseline's `+1` in the second the peer last heard
+from. And a claim is §8.2's floor, which on a row the receiver already holds can neither carry a
+decrement nor sit beside a concurrent delta. **Claims now leave `sync_peers` altogether**: a
+baseline op carries an `emission` reference — the emission's name, one tick of the emitter's
+clock, and its index in it — and is consumed once against a ledger the receiver keeps in
+`sync_state`; no watermark judges it and it moves none. Where the row is held here under the
+claim's uid the claim writes nothing, and the covered puts beside it take the op path instead of
+being dropped as inside; it floors only where the emitter resumed after time out of a group or
+this device has a gap in what it has read. The horizon stays a filter (§9.1), and an emitter's
+horizon now also names what it took in through another device's emission every claim of which
+wrote its row there — `carried@`, never `sync_peers`.
+
+**A generation replaces §10.2's cheap exit and §11's "B skips it in the first filter".** Each device
+keeps the stamp at which its capture last turned on, and a receiver that has wholly consumed one
+emission of that generation marks it *taken*: every later claim of it is inert, skipped with no
+database work. That is the exit §10.2 promised, with its premise checked — "this device has heard
+everything since", asked of a generation and cleared the moment it stops being true — where the
+watermark comparison asked it of a wall-clock second against a hybrid-clock stream and was wrong
+whenever the two disagreed. [The claim emissions
+design](2026-10-03-baseline-claim-emissions-design.md) is the rule, and
+[sync.md](../../reference/sync.md)'s *A claim names its emission* the record — including the eight
+rounds of a narrower fix that kept the watermark and could not be made to trust a claim.
 
 ## 10. When a baseline is emitted
 
@@ -369,7 +401,9 @@ device that happened to pair second would win every argument it should lose.
 
 It buys a second thing that only becomes visible with three devices: a device that is already up
 to date recognises almost every op of somebody else's re-broadcast baseline as **older than its
-own watermark**, and skips the lot with no database work at all (§11).
+own watermark**, and skips the lot with no database work at all (§11). ⚠️ **That skip compared a
+wall-clock second against a hybrid-clock stamp, and lost a claim wherever the two disagreed** —
+§9.2. Replaced by a generation — the claim emissions design.
 
 Read off the live database rather than from `schema.rs`, which is a ladder and answers about
 whichever rung the grep landed on:
@@ -401,6 +435,9 @@ device already in the group. C pairs with A:
 B emits nothing and converges anyway. The cost of the broadcast is bandwidth, not work: B's
 watermark for A already sits above almost every stamp in A's baseline, so B skips it in the first
 filter. The rows B does apply are the ones A changed since B last synced, which B wanted anyway.
+⚠️ **Since 2026-10-03 B skips it by A's generation, not by its watermark** (§9.2): an emission of
+a generation B has already taken whole is inert, and one it has not is decided row by row — on a
+row B holds, it writes nothing unless A resumed or B has a gap.
 
 A fourth device joining still costs two baselines, not four.
 

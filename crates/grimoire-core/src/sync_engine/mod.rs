@@ -7,6 +7,8 @@
 //! * [`apply`] — writing a merged result back: uid resolution, cycle-breaking, `needs_review`.
 //!   It re-homes rows through the folder modules, so it arrived with them.
 //! * [`baseline`] — a whole database as claim ops, for a peer that has never heard from it.
+//! * [`emission`] — what a device remembers about baseline emissions: generations, the marks of
+//!   what it has taken, the gap, and what complete emissions carried. All of it in `sync_state`.
 //! * [`wire`] — the encrypted envelope, batched at 200 ops per stored row.
 //! * [`client`] — push, pull, the key check and the rendezvous, over `platform::http`.
 //! * [`entitlement`] — the grant: the tokens that let this device talk to the relay at all,
@@ -26,6 +28,7 @@ pub mod baseline;
 pub mod capture;
 pub mod client;
 pub mod commands;
+pub mod emission;
 pub mod entitlement;
 pub mod hlc;
 pub mod merge;

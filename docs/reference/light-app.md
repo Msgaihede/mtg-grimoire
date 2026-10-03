@@ -1461,7 +1461,10 @@ while that write was pending held it in its rows and under its horizon, and the 
 out a trip later — where a peer that had pulled in between counted it again. A card out of
 nothing. **No baseline is begun while an op written since the trip read its outbox is pending**;
 the marker stays unset and the next trip, which the write has already asked for, emits behind
-it. With the rule switched off the test is red at those seven boundaries and nowhere else.
+it. [2026-10-03: widened to *nothing pending at all* by
+[the claim emissions design](../superpowers/specs/2026-10-03-baseline-claim-emissions-design.md)
+§5 — an op an earlier refusal left pending reaches a peer a page late in the same way.] With the
+rule switched off the test is red at those seven boundaries and nowhere else.
 
 **Driven in `tauri dev`, against a mock relay on the loopback** — the dev copy was in no group
 and held no grant, its `relay_url` was pointed at `127.0.0.1`, and its files were put back

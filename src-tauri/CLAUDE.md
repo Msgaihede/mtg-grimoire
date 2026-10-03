@@ -1882,11 +1882,18 @@ binding rules:
     share a stretch.** A baseline's rows, its clock and its horizon are one; so is everything a
     pull does behind its response; so are a commit's rows (`found_group` + `add_device`,
     `leave_group` + `entitlement::clear`, a grant + its status).
-  - **No baseline is begun while an op written since the trip read its outbox is pending**
-    (`emit_baselines`' `through`). It is in the rows and under the horizon and not yet on the
-    relay's log, so a peer that pulls between this trip and the next counts it twice — a card
-    out of nothing. `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` lands a write
-    behind every stretch of a trip and is red without the rule at exactly those boundaries.
+  - **No baseline is begun while anything at all is pending** — widened on 2026-10-03 by
+    [the claim emissions design](../docs/superpowers/specs/2026-10-03-baseline-claim-emissions-design.md)
+    §5 from "an op written since the trip read its outbox" (`emit_baselines`' `through`, which is
+    gone). A pending op is in the rows and under the horizon and not yet on the relay's log, so it
+    reaches a peer a page after the claims, with no horizon beside it, onto a row a claim has just
+    built — a card out of nothing — whatever left it pending: a write behind the outbox read, a
+    conversion behind the pull, or an earlier refusal. The marker stays NULL and the trip that
+    pushes the op emits behind it. `a_write_anywhere_in_a_round_trip_is_carried_by_the_next` lands
+    a write behind every stretch of a trip and is red without the rule at exactly those
+    boundaries; `a_baseline_waits_while_an_earlier_refusal_left_an_op_pending` holds the widening.
+    ⚠️ A batch the relay keeps refusing as `too_large` leaves its ops pending for good, and every
+    baseline with them (`Deferral::TooLarge`).
   - **A stretch waits for the connection; it never answers `db::BUSY`.** It may be recording an
     answer the relay will not give twice (a spent claim code's grant, a founding `confirm`'s
     group). What it waits behind is local work, since nothing holds the connection across a
@@ -1997,6 +2004,64 @@ binding rules:
   add-wins never fires on a two-device group and a concurrent edit is silently deleted.
 - **A pushed op is kept, never pruned.** The op log is also this device's memory of what it did,
   and both add-wins and the cycle-break read it.
+- **A claim that names its emission is never judged by `sync_peers` and never moves it**
+  (2026-10-03, [the claim emissions design](../docs/superpowers/specs/2026-10-03-baseline-claim-emissions-design.md);
+  [sync.md](../docs/reference/sync.md)'s *A claim names its emission* is the record). A baseline
+  op carrying an `emission` reference is **consumed once**, against a per-emitter record in
+  `sync_state` (`emission@<device>`: which indices *wrote* their row and which *passed*); a wholly
+  consumed emission marks its emitter's generation `taken@<device>`, and **a taken generation's
+  claims are inert** — skipped with no database work, their horizon dropping nothing. **An active
+  claim on a row held here under its uid writes nothing** unless its emission `resumed` or this
+  device has a `gap`, when it floors; a covered put there takes the op path, and **is skipped by
+  containment once its row's claim has written the row** — on a page handed back after the
+  emission completed too, which is why `emission::take` keeps the completed emission's record,
+  **and every record of its generation it supersedes whose claims wrote a row**: `wrote` is the
+  only evidence a carried put is inside a row here, so the inert branch reads any record it finds,
+  and past `RECORDS_PER_EMITTER` a record that wrote nothing is evicted first.
+  **`resumed` is the emitter's generation speaking** — `sync_state`'s `logging_since`, the
+  `sync_clock` stamp at which its capture last turned on, and `logging_resumed` beside it (sent
+  as `since` and `resumed` on every chunk's head). `identity::found_group` mints one, and
+  `join_group` mints one only when the device was in no group; the initiator's re-write of the
+  group it is already in (`pairing::confirm`, through `join_group`) mints none. A generation
+  **resumes when one was held before**: `leave_group` keeps `logging_since` for it, writing `0:0`
+  where there is none (`emission::keep_logging_mark`), and `emission::start_logging` counts any
+  `sync_peers` row as one too, because leaving keeps every watermark and only a device that held a
+  group has any (`a_device_that_held_a_group_before_this_build_rejoins_resumed`). **Two things must
+  not change under it**: watermarks survive leaving, and a same-group re-write mints nothing
+  (`re_writing_the_group_it_is_in_opens_no_gap_and_mints_nothing`) — the first is how a device
+  that left under an older build is known to resume, and the second keeps every pairing from
+  looking like a device with unlogged history, which would floor rows on every peer.
+  **A claim never builds or floors a uid this device merged into another, in either direction**
+  (`retired@<table>/<uid>`, written where `adopt_uid` renames or absorbs and where `rehome`
+  folds). It is asked in `claims::decide` *before* the held-row rule, so a retired uid that a row
+  wears again is still passed, gap or no gap
+  (`a_retired_uid_a_row_wears_again_is_still_passed_under_a_gap`), and again in the write path at
+  the moment a group would build — a merge earlier in the same page writes the mark too late for
+  `decide`. **A gap clears every
+  `taken@` mark and every record's `passed` set, keeps its `wrote` set, and marks each record
+  `before_gap`**, which is never taken: the gap closes only once each roster peer this device
+  holds a watermark for has an emission recorded after the gap taken here. Its sources are
+  `identity::forget_log_position`, an envelope `client::pull` steps over as unreadable, and a group
+  `apply` drops — one released at the waiting bound included — and **a new place a gap can come
+  from owes the same `emission::open_gap` call**. No baseline begins while anything is pending
+  (the stretch bullet above), and the client passes the batches it holds back into
+  `apply::apply_page` as held. There a held-back *claim* is left out altogether — a claim blocks
+  nothing — and every other held-back op is stripped of any stray reference before it is grouped,
+  **joins only a group that carries a claim**, holds nothing anywhere else, and is counted in no
+  class of the report (the client counts it). `carried@<device>` rises only from a wholly written
+  emission that is not from before a gap — over-covering a horizon loses a put. `update_row` writes
+  nothing, `updated_at` included, when nothing changed. Baseline ops with no emission, and
+  emissions named at or below the upgrade cut (`emissions_since`), keep `main`'s rules — `decide`
+  leaves a covered put that such an op's horizon covers to `inside`, even beside an active
+  emission — and an ordinary op no active emission in the page covers is judged as `main` judges
+  one, by the watermark and by `inside` against those older horizons alone (an inert emission's
+  drops nothing). **An ordinary put an active emission's horizon covers is not**:
+  `claims::decide`'s row table decides it (the op path on a row held here, the tombstone face or a
+  merged-away uid; dropped as carried where the claim builds or merges), and only an older baseline
+  in the page covering it too hands it back to `inside`. Across both, containment skips a put whose row's claim in the page — from an emission
+  whose horizon covers it and whose record this device still holds — has already written the row.
+  **And an ordinary op sharing a group with a claim and a held-back op waits with them**, and its
+  sender's later ops as collateral, for as long as the client holds the held-back op's sender.
 - **`sync_peers` is a watermark, and the client holds its cursor only for what can still
   resolve.** Advancing the watermark past an op that may still apply loses it; applying the ops
   above it while holding it adds their counter deltas twice on a re-delivery. So `apply` holds a
