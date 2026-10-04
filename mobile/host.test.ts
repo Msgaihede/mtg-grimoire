@@ -2,6 +2,9 @@ import { describe, expect, it } from "vitest";
 import manifest from "./src-tauri/gen/android/app/src/main/AndroidManifest.xml?raw";
 import filePaths from "./src-tauri/gen/android/app/src/main/res/xml/file_paths.xml?raw";
 import appGradle from "./src-tauri/gen/android/app/build.gradle.kts?raw";
+import androidIgnore from "./src-tauri/gen/android/.gitignore?raw";
+import signScript from "../scripts/android-sign.sh?raw";
+import releaseYml from "../.github/workflows/release.yml?raw";
 import mainActivity from "./src-tauri/gen/android/app/src/main/java/com/mtggrimoire/app/MainActivity.kt?raw";
 import themes from "./src-tauri/gen/android/app/src/main/res/values/themes.xml?raw";
 import nightThemes from "./src-tauri/gen/android/app/src/main/res/values-night/themes.xml?raw";
@@ -60,9 +63,61 @@ describe("the Android project's hand edits", () => {
     expect(JSON.parse(packageJson).scripts["tauri:light"]).toBe("cd mobile && tauri");
   });
 
-  it("signs a release build with the debug key, until signing is decided", () => {
+  it("signs a release build with the debug key, and knows no other", () => {
+    // The release key is `release.yml`'s `android-sign` job's, which re-signs what this project
+    // built (`scripts/android-sign.sh`) and runs no build. A signing config here would put the
+    // keystore and its passwords on disk beside every npm script, cargo build script and Gradle
+    // plugin a build runs.
     const release = appGradle.slice(appGradle.indexOf('getByName("release")'));
     expect(release).toMatch(/signingConfig = signingConfigs\.getByName\("debug"\)/);
+    const code = appGradle
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(code).not.toMatch(/signingConfigs\s*\{|storeFile|storePassword|keyPassword|keyAlias/);
+    expect(code).not.toMatch(/keystore/i);
+  });
+
+  it("ignores a keystore, should one ever be put beside the project", () => {
+    for (const name of ["keystore.properties", "key.properties", "*.jks", "*.keystore"]) {
+      expect(androidIgnore.split(/\r?\n/), name).toContain(name);
+    }
+  });
+
+  it("names the release's signer in one line of hex, once the owner has made the key", () => {
+    // `src-tauri/release-signer.sha256` is the SHA-256 of the certificate every release's APK is
+    // signed with — public, and in every such APK. `release.yml` attaches no APK until it is
+    // committed, and `scripts/android-sign.sh` refuses a keystore that is not the one it names:
+    // a key made a second time signs happily and installs over nothing. **Absent until the key
+    // exists**, so this holds its shape for the day it appears — the script reads it with the
+    // same rule, and a file it cannot read is a release with no APK.
+    const pins = Object.entries(
+      import.meta.glob("./src-tauri/release-signer.sha256", {
+        query: "?raw",
+        import: "default",
+        eager: true,
+      }),
+    ) as [string, string][];
+    expect(pins.length).toBeLessThanOrEqual(1);
+    for (const [, pin] of pins) expect(pin).toMatch(/^[0-9a-f]{64}\n$/);
+    // The script's own reading of it, so the two rules cannot part.
+    expect(signScript).toContain('[[ "$pin" =~ ^[0-9a-f]{64}$ ]]');
+    expect(releaseYml).toContain("ANDROID_SIGNER_PIN: mobile/src-tauri/release-signer.sha256");
+  });
+
+  it("holds no keystore and no signing properties", () => {
+    // Keys only — nothing is loaded. A file a `.gitignore` hides is found too, on purpose: a
+    // key in this tree is one `git add -f` from a public repository.
+    const keys = Object.keys(
+      import.meta.glob([
+        "/mobile/**/*.{jks,keystore,p12,pfx}",
+        "/mobile/**/{keystore,key,signing}.properties",
+        "/*.{jks,keystore,p12,pfx}",
+        "!**/node_modules/**",
+        "!**/build/**",
+      ]),
+    );
+    expect(keys).toEqual([]);
   });
 });
 

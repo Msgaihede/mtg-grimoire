@@ -20,6 +20,7 @@ deploy's own record, with what it has not proved.
 | --- | --- |
 | `wrangler.jsonc` | The Worker: its name, the custom domain, the `assets` binding over `../dist-web` |
 | `_headers` | The response headers, in Cloudflare's format. The web build copies it into `dist-web/` |
+| `package.json`, `package-lock.json` | The one tool that deploys this Worker — `wrangler`, at an exact version — and every package under it with its integrity hash. Not a workspace of the root package (*Deploying*) |
 | `src/index.ts` | The script: a missing file is a 404, never the document |
 | `src/headers.ts` | A reader of `_headers` that answers as Cloudflare's does — for the preview and the tests |
 | `src/hosting.test.ts` | The fence between the policy and the hosts the engine asks |
@@ -27,8 +28,9 @@ deploy's own record, with what it has not proved.
 ## Why it is not a route on either of the other two
 
 **Blast radius**, the reason `share-worker/` gives for itself. Sync is a paid feature people
-depend on, every deploy here is done by hand by one person, and a deploy of a *page* happens far
-more often than a deploy of the relay. One Worker carrying both makes a bad build of the app a
+depend on, the relay's deploys are done by hand by one person, and a deploy of a *page* happens
+far more often than a deploy of the relay — at every release, by a job, since 2026-10-04
+(*Deploying*). One Worker carrying both makes a bad build of the app a
 sync outage.
 
 And unlike those two it shares nothing: **no D1, no R2, no KV, no Durable Object, no `vars`, and
@@ -360,9 +362,58 @@ app; Safari; a phone's first run with a clock on it.
 
 ## Deploying
 
+**Two ways, and one rule over both: the web app is never ahead of the last release.** Sync
+stamps every op with the sender's user schema, and a desktop on the last release *holds* an op
+stamped newer until it updates — so a web app deployed from a `main` that has moved the schema
+sends every paired desktop ops with no update to install. One core means one schema per commit,
+and the three hosts ship from one tag ([ci-and-releases.md](../docs/reference/ci-and-releases.md),
+*The release rule*).
+
+- **At a release, a job deploys it** (decided by the owner, 2026-10-04). `release.yml`'s `web`
+  job builds the bundle at the tag and opens it in a browser — steps 1 to 4 below, as CI's
+  `web` job runs them — and `web-deploy` then installs `wrangler` from this directory's
+  lockfile with no script run, and runs **`npx --no-install wrangler deploy`** from here with a
+  token from the `release` environment, which only `main` may use. It then asks the real
+  address three things: the document answers 200, its policy is the built `_headers` line, and
+  the document is the bundle's (`scripts/web-deploy-probe.mjs` — probe 1 below, and the
+  document check beside the table). It runs after the desktop builds and the APK and before
+  the release is published, and it refuses a tag older than the newest published release — a
+  re-run of an old release's job must not put an old bundle back. **It is the only job in this
+  repository that deploys anything, and this is the only Worker it deploys — so merging the
+  release PR is a deploy.** Without `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` in that
+  environment it deploys nothing and says so in the run's summary — and then this address
+  serves the previous deploy until somebody follows the steps below from the tag. ⚠️ **The job does not do step 5,
+  asks the relay nothing, and runs three of step 0's questions, not its twenty probes**: a release whose
+  web build needs new relay behaviour needs **the relay deployed first, by hand, before the
+  release PR is merged**, and the full table is still somebody's to run after a release that
+  changed `_headers`, `wrangler.jsonc` or the script. **No release has run it yet.**
+- **Between releases, by hand** — the rest of this section. Step 6 of *The steps, in order* is
+  the rule's guard for this way: `npm run web:deploy-guard`.
+
 ⚠️ **No agent runs `wrangler deploy`, or any wrangler command that reaches Cloudflare.** That is
-the repo owner's, as it is for the other two Workers. `wrangler` is not a dependency of this
-repository; `npx` fetches it. **The 2026-10-04 deploy was run by an agent because Markus asked
+the repo owner's, as it is for the other two Workers.
+
+**`wrangler` is pinned by this directory's lockfile, and that is the one every deploy runs.**
+`package.json` here names `wrangler` at an exact version and nothing else, and
+`package-lock.json` names all ninety-one packages under it, each with the registry's integrity
+hash. It is not a dependency of the app — this directory is not a workspace of the root
+package, so the root's `npm ci` installs none of it. Before any command below:
+
+```
+npm ci --ignore-scripts --prefix app-worker     # from the repository root; no lifecycle script runs
+cd app-worker && npx --no-install wrangler --version     # 4.146.0, or it fails
+```
+
+**Every `wrangler` below is `npx --no-install wrangler`**: what runs is what that lockfile
+installed, or nothing — never whatever `npx` would fetch that day. Until 2026-10-04 this
+runbook said `npx wrangler`, which fetched the latest, and the release job said
+`npx wrangler@4.146.0`, which pinned one package and let ninety resolve on the day, two of
+them running a `postinstall`. `--ignore-scripts` costs nothing: `esbuild`'s and `workerd`'s
+scripts only swap a launcher for the binary it starts (a `deploy --dry-run` after such an
+install was run that day, on Windows). Moving the version is `npm install --package-lock-only
+--ignore-scripts wrangler@<version> --prefix app-worker` and a pull request with both files.
+
+**The 2026-10-04 deploy was run by an agent because Markus asked
 for it in chat**, as he did for the relay's on 2026-10-01 — and **the ask is per deploy**: it
 lifted this rule for that one deploy and left it standing for the next. The second deploy that
 day, and the rollback and roll-forward after it, were asked for again — he approved a marker
@@ -503,10 +554,10 @@ from yet is a header on no request. So:
    headless Chrome profiles — the desktop face and the phone face — claim, pair and sync
    through `relay/`'s own code under workerd, by the relay's real name and under this policy,
    so a `connect-src` that lost either of the relay's sources fails there before a reader meets
-   it. It needs a wrangler (`WRANGLER=<path to wrangler.js>`, or this directory's own once it
-   has a lockfile) and runs `wrangler d1 execute --local` and `wrangler dev --local` and
-   nothing else: it reaches no Cloudflare.
-5. **`cd app-worker && npx wrangler dev`, and the probes against it — before anything is
+   it. It runs this directory's own pinned wrangler (the install under *Step 0*; or
+   `WRANGLER=<path to a wrangler.js>`), and of wrangler only `d1 execute --local` and
+   `dev --local`: it reaches no Cloudflare.
+5. **`cd app-worker && npx --no-install wrangler dev`, and the probes against it — before anything is
    public.** `wrangler dev` runs Cloudflare's own asset worker and router worker locally, the
    code `workers-sdk` publishes and the edge runs, over this `wrangler.jsonc` and this
    `dist-web/`, and deploys nothing. Set `A=http://localhost:8787` (wrangler's default port) and
@@ -526,8 +577,30 @@ from yet is a header on no request. So:
    against the edge's 2,139,023 — so the local figure is not the size a reader downloads.
    `--local` reaches nothing, which is what the rule above turns on; if it asks to log in, it is
    not in local mode: stop.
-6. **Before the first deploy, look at the zone** — *Before the first deploy*, below.
-7. **`npx wrangler deploy`**, from `app-worker/` — `--dry-run` first, which uploads nothing. Read
+6. **`npm run web:deploy-guard`, from the repository root — and stop if it does not exit 0.**
+   It reads `USER_SCHEMA_VERSION` in this tree and at the last release's tag and says which it
+   found in one sentence. **Exit 1 is the answer that means *wait for a release*:** *"This
+   tree's user schema is 60, the last release (v0.40.0) is 59: a web app deployed from here
+   would send paired desktops ops they must hold until a release exists."* The remedy is to
+   release — merging the release PR deploys this Worker from the tag — or to deploy from the
+   tag's checkout instead of `main`'s. **It also asks GitHub whether that release is
+   published** (`gh release view`): the tag is made with the *draft*, so after a release run
+   that failed, this tree can equal a release nobody can install — exit 1, *"… is still a
+   draft"*. Exit 2 is *could not tell* — the tag is not fetched (`git fetch --tags`), or `gh`
+   is missing or could not ask — and is not a pass; `--offline` skips the question and says so.
+   It needs no build, so it can be run first; it is here because here is the last moment it
+   can stop a deploy. **Run on 2026-10-04**: 59 on both sides, v0.40.0 published — `main` had
+   not moved the schema since.
+   ⚠️ **What it cannot see: equal schemas are necessary, not sufficient.** A change to the
+   wire that is not a schema rung — a new op `kind`, say — reaches a desktop on the last
+   release as a batch it cannot parse and that says nothing newer of itself: `Malformed`,
+   which the client **steps over**, where it would hold a `Newer` one. Dropped, not held, and
+   no update brings it back. The guard reads one constant and passes that tree. **If `main`
+   has changed what an op looks like since the last release, wait for the release whatever
+   this step says.**
+   (The first deploy's own step here was *look at the zone* — *Before the first deploy*, below
+   — which is done.)
+7. **`npx --no-install wrangler deploy`**, from `app-worker/` — `--dry-run` first, which uploads nothing. Read
    what it prints: the files it read and uploaded, the binding, the custom domain it attached and
    the version id. ⚠️ **It does not say how many `_headers` rules it parsed.** This step told its
    reader to read that count until 2026-10-04, when wrangler 4.146.0 printed no such line.
@@ -542,7 +615,7 @@ from yet is a header on no request. So:
 8. **Step 0's probes, all of them, against the real address**, and the answers written into the
    table above with the date.
 
-⚠️ **Never `npx wrangler preview` for this Worker.** A Preview is the same bundle deployed at
+⚠️ **Never `wrangler preview` for this Worker.** A Preview is the same bundle deployed at
 another address, and any second origin is a second, empty OPFS that looks like the app.
 Cloudflare's Previews pages say a Preview's `workers.dev` address is governed by `preview_urls`,
 which is `false` here; the review of this directory read it as *not* governed. Nobody has run it,
@@ -693,8 +766,9 @@ touches them.
 
 ### Rolling back
 
-`npx wrangler rollback` from this directory makes the previous version the deployment; `npx
-wrangler versions list` shows what there is to go back to (the 100 most recent). **To a reader a
+`npx --no-install wrangler rollback` from this directory makes the previous version the
+deployment; `npx --no-install wrangler versions list` shows what there is to go back to (the
+100 most recent). **To a reader a
 rollback is another deploy**: the chunk names change again, and a page opened on the bad build
 meets the same 404 on its next lazy import.
 

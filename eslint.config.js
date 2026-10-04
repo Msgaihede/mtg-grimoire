@@ -92,6 +92,9 @@ export default tseslint.config(
         setTimeout: "readonly",
         // `drive-frames.mjs` times each round trip; Node 22 has it as a global.
         performance: "readonly",
+        // Asked and answered: `web-deploy-probe.mjs` gives each `fetch` a deadline, and
+        // `AbortSignal.timeout` is the only way to hand `fetch` one.
+        AbortSignal: "readonly",
       },
     },
   },

@@ -54,10 +54,10 @@
 // code path a reader's own claim takes.
 //
 // **wrangler is not one of this repository's root dependencies.** It is looked for at
-// `app-worker/node_modules/wrangler/` (where `npm ci --prefix app-worker` puts it, once that
-// directory has a lockfile of its own) and then at the path in `WRANGLER`, a `wrangler.js`. The
-// only wrangler commands this runs are `d1 execute --local` and `dev --local`: nothing here
-// reaches Cloudflare.
+// `app-worker/node_modules/wrangler/` — where `npm ci --ignore-scripts --prefix app-worker` puts
+// the one version that directory's lockfile pins, which is what CI does — and then at the path
+// in `WRANGLER`, a `wrangler.js`. The only wrangler commands this runs are `d1 execute --local`
+// and `dev --local`: nothing here reaches Cloudflare.
 
 import { spawn, spawnSync } from "node:child_process";
 import { existsSync, readdirSync, readFileSync } from "node:fs";
@@ -120,7 +120,8 @@ function wranglerScript() {
   const named = process.env.WRANGLER;
   if (named && existsSync(named)) return named;
   return fail(
-    "no wrangler to run the relay with. Install app-worker's own (`npm ci --prefix app-worker`), " +
+    "no wrangler to run the relay with. Install app-worker's own " +
+      "(`npm ci --ignore-scripts --prefix app-worker`), " +
       "or set WRANGLER to a wrangler.js — for example the one `npx wrangler` keeps in npm's cache.",
   );
 }

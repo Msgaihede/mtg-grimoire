@@ -37,10 +37,15 @@ android {
             }
         }
         getByName("release") {
-            // HAND-EDITED: signed with the debug key, so a release build installs. Markus chose a
-            // debug-signed APK until a real phone has run the app (2026-10-03); signing and
-            // distribution are decided after. Each machine generates its own debug key, so an
-            // APK from one CI run does not upgrade over another's — uninstall first.
+            // HAND-EDITED: signed with the debug key, so a release build installs. Each machine
+            // generates its own debug key, so an APK from one CI run does not upgrade over
+            // another's — uninstall first.
+            //
+            // **The release key is never this project's** (step 6.6, 2026-10-04). A release's
+            // APK is this build re-signed by `scripts/android-sign.sh`, in a job of
+            // `release.yml` that holds the keystore and runs no build — so no keystore, no
+            // `keystore.properties` and no password is read here, and a Gradle plugin or a
+            // build script has none to read. `mobile/host.test.ts` holds that.
             signingConfig = signingConfigs.getByName("debug")
             isMinifyEnabled = true
             proguardFiles(

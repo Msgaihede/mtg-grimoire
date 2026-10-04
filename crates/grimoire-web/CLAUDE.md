@@ -91,7 +91,7 @@ Run verification only at the end of a feature (not after each change):
 | `npm run web:dev` | Start Vite dev server on port 5176 using current WASM build |
 | `npm run web:build` | Build production web bundle into `dist-web/` |
 | `npm run web:smoke` | Run headless Chromium offline smoke tests |
-| `npm run web:sync-smoke` | Pair two headless Chromium profiles through the relay under workerd and sync both ways (needs a wrangler: `WRANGLER=<wrangler.js>`, or `app-worker`'s own) |
+| `npm run web:sync-smoke` | Pair two headless Chromium profiles through the relay under workerd and sync both ways (runs `app-worker`'s pinned wrangler — `npm ci --ignore-scripts --prefix app-worker` first — or `WRANGLER=<wrangler.js>`) |
 | `npm run web:preview` | Preview production build on port 4176 with Service Worker |
 
 Formatting and clippy:

@@ -38,9 +38,20 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   desktop face and the phone face) claim, pair and sync through `relay/`'s own code under
   workerd (`wrangler dev --local`, a local D1, nothing that reaches Cloudflare), by the relay's
   real name and under the shipped policy; `-- --measure` adds a minute's profile of the idle
-  loop, twice. It needs a wrangler: `WRANGLER=<path to wrangler.js>`, or `app-worker`'s own.
+  loop, twice. It runs `app-worker`'s pinned wrangler (`npm ci --ignore-scripts --prefix
+  app-worker` first), or the `wrangler.js` that `WRANGLER` names.
   **`verify` runs none of them** — CI's `web` job
   does. See [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-web/CLAUDE.md).
+- `npm run web:deploy-guard` — may the web app be deployed from this tree, between releases?
+  Compares `USER_SCHEMA_VERSION` here with the last release tag's (`git show`), in one sentence:
+  exit 0 equal, 1 different, 2 could not tell. It also asks `gh` whether that release is
+  published — a draft's tag exists before anybody can install it — which is exit 1 for a
+  draft and 2 when it cannot ask; `--offline` skips the question and says so. Needs the tags
+  fetched; builds and deploys nothing. **Equal schemas are necessary, not sufficient**: a wire
+  change that is not a schema rung is dropped by an older build, and this cannot see it. The
+  by-hand runbook runs it before `wrangler deploy`
+  ([`app-worker/README.md`](../../app-worker/README.md)); a release deploys the tag and has no
+  use for it.
 
 ## Running and verifying
 

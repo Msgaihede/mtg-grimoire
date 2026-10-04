@@ -653,7 +653,9 @@ Worker.**
 under workerd, a local D1 seeded from `schema.sql` with one membership and one claim code, a
 signing key handed over with `--var` and never a file, and two browser profiles that claim, pair
 and sync through it by the relay's real name. `APP_ORIGINS` there is the run's own page origin.
-It needs a wrangler the repository does not yet pin (the script's header says where it looks).
+It runs the wrangler `app-worker/`'s lockfile pins (`npm ci --ignore-scripts --prefix
+app-worker`) — the one tool that deploys anything here — and of it only `d1 execute --local`
+and `dev --local`.
 
 ⚠️ **A removed device is told nothing, and the smoke run is where that was seen.** A rotation's
 roster marks the device departed in the group's object and closes no socket — 4001 is for a

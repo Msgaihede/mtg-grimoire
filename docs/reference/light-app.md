@@ -5920,10 +5920,11 @@ upgrade — and makes no request to the relay, which has no fixture there.
   minute on the other device for a write that was never made; it now presses an enabled
   control and checks the write landed where it was made.
 
-**CI**: `relay/**` and the new script route to `web`. **The job does not run the walk yet** —
-wrangler is not a root dependency, and the step installs it from `app-worker/package-lock.json`,
-which step 6.6 adds; until then the step is skipped and the summary says the sync smoke did not
-run. It has run on one Windows machine and on no runner.
+**CI**: `relay/**` and the new script route to `web`, and the job runs the walk after the first
+smoke. wrangler is not a root dependency: the step installs it from `app-worker/`'s own
+lockfile (step 6.6's, `npm ci --ignore-scripts --prefix app-worker`), which is also where the
+script looks first. **It has run on one Windows machine and on no runner**: its first run there
+is this step's own pull request.
 
 **Open after this step:**
 
@@ -5939,7 +5940,8 @@ run. It has run on one Windows machine and on no runner.
   has been watched coming back.
 - **The removed device's stale socket**, above: a relay that closed a departed device's socket,
   or a loop that asked about its group while connected, would each end it. Neither is built.
-- **The sync smoke on a runner**: the first run after step 6.6's lockfile lands.
+- **The sync smoke on a runner**: Linux, wrangler installed without its lifecycle scripts, a
+  runner's clock under every wait. The pull request's own `web` job is the first.
 
 ### 10.4 Step 6.4 — pairing on the phone face (2026-10-04)
 
@@ -6038,3 +6040,88 @@ where the old entry is removed.
 - **Android's system *Clear storage* has the same effect and says nothing**: the Android host
   answers no `storage_group_warning` yet.
 - **The scan smoke runs nowhere but by hand**: no CI job starts `mobile:dev` for it.
+
+### 10.6 Step 6.6 — the release rule: the three hosts ship from one tag (2026-10-04)
+
+One core means one user schema per commit, and sync stamps every op with the sender's
+`USER_SCHEMA_VERSION`: a device on an older build **holds** an op stamped newer until it updates.
+So a host that ships ahead strands the others — a web app deployed from a `main` one rung past
+the last release leaves every paired desktop holding ops with no update to install. Until this
+step release-please bumped all four crates from one tag and **the tag built only the desktop**:
+the APK was a CI artifact under a runner's debug key, which updates over nothing, and the web
+app was deployed by hand from whatever `main` was. **Written and not run** — no release has been
+cut since, and nothing below has met a real key, a real token or a real tag.
+[ci-and-releases.md](ci-and-releases.md), *The release rule*, is the full record.
+
+**`release.yml` is seven jobs** (`release-please`; `build`; `android` → `android-sign`; `web` →
+`web-deploy`; `publish`):
+
+- **`android` and `web` build at the tag as `ci.yml` builds them, and hold nothing.** They run
+  whether or not a key or a token exists: a tag one host cannot be built from is a red run.
+- **`android-sign` re-signs the APK and attaches it** as
+  `mtg-grimoire-<version>-android-arm64.apk` (`scripts/android-sign.sh`). **Gradle does not
+  sign**: a `keystore.properties` would put the key on disk beside every npm script, cargo build
+  script and Gradle plugin a build runs, and the rule a removed `sign` job left behind is that a
+  secret sits in a job that builds nothing. The Gradle project is unchanged and knows no key.
+- **The key is held to a committed fingerprint**, `mobile/src-tauri/release-signer.sha256` —
+  public, one line, absent until the owner makes the key. "Signed by the keystore in the
+  settings" is not "signed by the key the last release was"; a keystore made a second time
+  would sign happily and every phone would uninstall. No file, no APK; another key or an
+  Android debug certificate is refused before anything is signed.
+- **`web-deploy` deploys `app-worker/` and asks the address whether it serves that bundle**
+  (`scripts/web-deploy-probe.mjs`: 200, the built policy, the built document). It is the only
+  job that deploys anything and this is the only Worker — so **merging the release PR is a
+  deploy**. `wrangler` is pinned by a lockfile, `app-worker/package-lock.json`: installed with
+  `npm ci --ignore-scripts` in a step that holds nothing, run with `npx --no-install`. It goes
+  last, because a deploy is live the moment it returns, and it refuses a tag older than the
+  newest published release.
+- **`publish` waits for all three.** Any failure leaves the release a draft.
+
+**The two jobs that hold a value take it from a `release` environment**, which the owner
+restricts to `main` — a repository secret is readable from any branch's workflow. Without its
+values a job ships nothing, says so in the run's summary and ends green; some and not all is a
+failure; a debug-signed APK is never attached. `scripts/release-rule.test.mjs` holds the graph,
+the trigger, every spelling of `secrets` and which job may read which, and the exact list of
+commands those two jobs may run — each checked by breaking the workflow that way, 23 mutations.
+
+**Between releases**, `npm run web:deploy-guard` is the same rule for a deploy by hand: it
+refuses a tree whose user schema is not the last release tag's, or whose last release is still a
+draft — release-please makes the tag with the draft. **59 on both sides and v0.40.0 published
+that day**, so `main` was not ahead. ⚠️ Equal schemas are necessary, not sufficient: a wire
+change that is not a schema rung reaches an older build as `Malformed`, which the client steps
+over — dropped, not held — and the guard cannot see it.
+
+**The Android `versionCode`** is Tauri's arithmetic on the version release-please bumps (major
+× 1,000,000 + minor × 1,000 + patch; `0.40.0` is `40000`), so every release installs over the
+last; the signing script reads it back out of the APK and refuses another.
+
+**What was driven**, on Windows: the guard against the real tag and the real release; the probe
+against a local server, in each way it should fail; the workflow's own asking steps, extracted
+from the YAML; a lockfile install with no script run and a `wrangler deploy --dry-run` after
+it; the signing script with the real `keytool` and the SDK's three tools stubbed.
+
+**Open after this step:**
+
+- **No release has run these jobs.** The environment handing a value to a job on `main`, the
+  artifact hand-off, the APK's upload, a deploy under an API token, the probe at the real
+  address, and an APK updating over the last one on a phone are the first release's to show.
+- ~~The first `ci.yml` `android` run is the signing script's first meeting with the real SDK
+  tools.~~ **Met, on the pull request (#821), and the first meeting failed**: build-tools 37.0.0
+  words a signer `V2 Signer: certificate SHA-256 digest: …` (`V3.0 Signer:` once re-signed),
+  not the `Signer #1 …` of AOSP's source that the stubs spoke, and the script refused the
+  runner's own build without printing what the tool had said. It now prints every tool's raw
+  answer and reads any of the three wordings. The second run signed, held the APK to its
+  fingerprint, kept the alignment (4 KB and 16 KB, in and out), read `versionCode='40000'
+  versionName='0.40.0'` out of the APK, and refused another key's fingerprint and a debug
+  certificate. **Still a throwaway key**: the release key has signed nothing.
+- **`npm ci --ignore-scripts` and `wrangler` have not run on Linux**, which is what the runner
+  is. The lockfile gives a Linux runner its platform packages and `esbuild` finds its binary
+  without the script; nobody has watched it.
+- **The token's minimum permissions are unverified**: Cloudflare's own table says the Workers
+  *Editor* role on this one Worker and *Workers Routes: Write* on the zone, and no deploy has
+  been made with such a token.
+- **The owner's list**: restrict the `release` environment to `main` *before* anything is put in
+  it; make the keystore and back it up; commit its fingerprint; set three Android values and two
+  Cloudflare ones in the environment; and uninstall the debug-signed app from his phone once —
+  the first release-signed APK does not install over it. The commands are in
+  [ci-and-releases.md](ci-and-releases.md), *What only the owner can do*.
