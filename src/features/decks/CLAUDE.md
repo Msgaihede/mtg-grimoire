@@ -5469,6 +5469,13 @@ The storage side, the eight commands and the undo `Op` are
   `src/`. `NoteEditor` is behind `React.lazy`, and **nothing on the read path may import it
   statically** — one eager import puts a measured 141.5 kB gzip back in the main chunk and nothing
   goes red.
+- **The editor is built with `injectCSS: false`, and a second editor anywhere owes the same line.**
+  Tiptap's default appends a `<style>` at runtime, which every shipped host refuses with a console
+  error per editor built; it shipped that way until 2026-10-04 and cost nothing on screen, because
+  `NoteEditor.tsx` already imports ProseMirror's own sheet for the bundler. `tokens.test.ts` is
+  the fence, and it asks for both halves — the option and that import. The module's header has
+  what the refused sheet carried and why no rule replaced it; [`src/CLAUDE.md`](../../CLAUDE.md)
+  has the rule for the next library.
 - **A hard break travels as `"\n"` inside a text run**, because `Inline` has no break member. Any
   renderer of these blocks sets `whitespace-pre-line` or every break a reader typed draws as a
   space.

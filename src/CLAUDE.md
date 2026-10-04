@@ -1259,6 +1259,21 @@ markup of its own. Every rule below has a failure behind it that shipped or near
   is the second instance of. A keyboard open (Shift+F10, the `ContextMenu` key) anchors at the
   opener's **bottom-left**, because a keypress has no coordinates and `0, 0` would put every one of
   these in the top-left corner of the window.
+- **A library that styles itself at runtime is refused on every shipped host, and three have been
+  met.** `@dnd-kit/dom`'s drag rules (copied into `index.css`), `motion`'s two APIs (forbidden,
+  below), and since 2026-10-04 **Tiptap's `injectCSS`, which is on by default** and appends a
+  `<style>` to `<head>` for every editor built. It shipped that way from the day the note editor
+  landed, because the file's own check had read `prosemirror-view` and not the library on top of
+  it, and because nothing looked wrong: the rules that matter were already bundled through an
+  import. **A refused sheet is not silent** — it is one console error and one
+  `securitypolicyviolation` per element, which is how the live web app found it — but no suite
+  and no story runs under the policy, so nothing here was listening. `NoteEditor.tsx` passes
+  `injectCSS: false`; `tokens.test.ts` refuses any editor built without it, in `src/` and
+  `mobile/`; and `scripts/web-smoke.mjs` opens a note under the hosting policy. **Before a new
+  dependency draws anything, grep its `dist/` for `createElement("style")`** — and read the
+  package that wraps it, not only the one underneath.
+  [light-app.md](../docs/reference/light-app.md) §9.7 has the measurements, the packaged
+  window's among them.
 
 ## Motion (`motion@13.1.0`)
 

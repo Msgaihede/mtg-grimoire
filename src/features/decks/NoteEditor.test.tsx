@@ -1,7 +1,13 @@
 // `@tiptap/react` rather than `@tiptap/core`: it re-exports the whole of core, and it is the
 // package this app declares. Reaching into an undeclared transitive dependency works until a
 // hoist changes.
-import { Editor } from "@tiptap/react";
+import { Editor, type Extensions } from "@tiptap/react";
+// Declared too, each of them: the gap-cursor sweep below needs the library's own validity rule,
+// and a stock kit to prove that sweep can find a stop at all.
+import { Markdown } from "@tiptap/markdown";
+import { GapCursor } from "@tiptap/pm/gapcursor";
+import type { ResolvedPos } from "@tiptap/pm/model";
+import StarterKit from "@tiptap/starter-kit";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { compile } from "tailwindcss";
@@ -457,12 +463,24 @@ describe("NoteEditor", () => {
  * Storybook, and does nothing at all in a built binary — the editor simply draws unstyled and
  * nothing is logged. That is `motion`'s two forbidden APIs exactly, and `src/lib/tokens.test.ts`
  * bans those the same way, for the same reason.
+ *
+ * ⚠️ **"Nothing is logged" was wrong, and this sweep was looking at the wrong file** (2026-10-04).
+ * It reads `NoteEditor.tsx`, and the injection it could not see is the **library's**: Tiptap's
+ * editor appends a sheet of its own unless told not to, and a refused sheet is a console error
+ * per editor opened — which is how the live site found it. The third assertion below is that
+ * one's fence here; `tokens.test.ts` carries the app-wide one, over every editor any file builds.
  */
 describe("the stylesheet", () => {
   it("is imported so the bundler carries it, and is never injected at runtime", () => {
     expect(source).toContain('import "prosemirror-view/style/prosemirror.css"');
     expect(source).not.toContain("document.head");
     expect(source).not.toMatch(/createElement\(\s*["']style["']\s*\)/);
+  });
+
+  it("tells the editor library not to inject its own", () => {
+    // Every spelling of the option in the file, so that the one in the code is the only one:
+    // a doc comment that wrote it out would satisfy a looser match over an editor that injects.
+    expect(source.match(/\binjectCSS:\s*\w+/g)).toEqual(["injectCSS: false"]);
   });
 });
 
@@ -820,6 +838,74 @@ function checklistTrip(markdown: string): string {
   editor.destroy();
   return out;
 }
+
+/**
+ * Every place in `body` a gap cursor could stand, as the editor built from `extensions` holds it.
+ * `GapCursor.valid` is the library's own answer, asked of every position in the document.
+ */
+function gapCursorStops(extensions: Extensions, body: string): number[] {
+  const editor = new Editor({
+    element: document.createElement("div"),
+    extensions,
+    content: body,
+    contentType: "markdown",
+  });
+  const { doc } = editor.state;
+  // The rule is a static the package's declarations leave out (it is marked internal), and it is
+  // the one the plugin itself asks before it makes a gap cursor from a key or a click. The third
+  // test below is what says it is still there and still answers.
+  const { valid } = GapCursor as unknown as { valid: (pos: ResolvedPos) => boolean };
+  const stops: number[] = [];
+  for (let pos = 0; pos <= doc.content.size; pos += 1) {
+    if (valid(doc.resolve(pos))) stops.push(pos);
+  }
+  editor.destroy();
+  return stops;
+}
+
+/**
+ * **Why the app carries no rule for the gap cursor, pinned so the reason cannot expire quietly.**
+ *
+ * The library's own sheet — the one `injectCSS: false` now declines, and which every shipped
+ * build refused anyway — is ProseMirror's base rules, which the import above already bundles,
+ * plus the gap cursor's: a caret drawn where no text position exists. Nothing in the app's
+ * stylesheets draws one, and that is right only while one can never be asked for.
+ *
+ * It cannot, in either kit: a gap cursor stands beside a *closed* node — an atom, an isolating
+ * node or an empty one — and both dialects are paragraphs, headings, lists and quotes, each of
+ * which ends in text a real caret can enter. Measured over both corpora here, and in the packaged
+ * window on 2026-10-04, where neither arrow stepped past a quote that ended a note.
+ *
+ * **This goes red the day a kit gains a node that needs one** — a rule line, an image, a code
+ * block — and on that day the gap cursor is an unstyled empty `<div>`: reachable, invisible, and
+ * with the real caret hidden behind `ProseMirror-hideselection`. The rules to bundle then are
+ * `prosemirror-gapcursor/style/gapcursor.css`'s, in a colour this background can show: the
+ * library draws it black.
+ */
+describe("the gap cursor", () => {
+  it("has nowhere to stand in the note dialect", () => {
+    const reachable = DIALECT_CORPUS.filter(
+      (body) => gapCursorStops(NOTE_EXTENSIONS, body).length > 0,
+    );
+    expect(reachable).toEqual([]);
+  });
+
+  it("has nowhere to stand in the to-do dialect", () => {
+    const reachable = CHECKLIST_CORPUS.filter(
+      ({ body }) => gapCursorStops(CHECKLIST_EXTENSIONS, body).length > 0,
+    ).map(({ body }) => body);
+    expect(reachable).toEqual([]);
+  });
+
+  /**
+   * The two above are absences, and an absence is what a check that asks nothing also reports.
+   * A rule line is the standard node that needs a gap cursor, so the same sweep over a kit that
+   * has one must find a stop — or `GapCursor.valid` is not being asked what this file thinks.
+   */
+  it("is found by the same sweep in a kit that has a closed node", () => {
+    expect(gapCursorStops([StarterKit, Markdown], "above\n\n---\n\n---").length).toBeGreaterThan(0);
+  });
+});
 
 describe("the to-do dialect", () => {
   it("round-trips every shape without rewriting it", () => {
