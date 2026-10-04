@@ -131,5 +131,8 @@ then the zone checks `app-worker/README.md` lists~~ — a run in a real phone's 
 **The deploy is done: 2026-10-04, 12:47 UTC, `https://mtg-grimoire.app`.** He asked for it in
 chat and an agent ran it — `wrangler dev --local` first, the zone read through Cloudflare's API,
 then the runbook's probes and one browser run at the real address. The table's *Who deploys*
-row stands; the ask was for one deploy.
+row stands; the ask was for one deploy. A second deploy and a rollback test followed the same
+day, each asked for, and **production is `main` at `4929cc6e`**. Of the list above, Firefox has
+the owner's one sentence that the live site works there; Safari, a phone and Android's
+clipboard stand.
 ([light-app.md](../../reference/light-app.md) §9.7 is the record, with what it has not proved.)

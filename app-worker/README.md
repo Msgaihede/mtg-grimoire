@@ -4,11 +4,13 @@ A third Cloudflare Worker, beside `relay/` and `share-worker/`. It serves the li
 build — `dist-web/`, the page and the engine compiled to WASM — at **`https://mtg-grimoire.app`**,
 the origin root. It is static assets, one file of response headers, and a script of a few lines.
 
-**It is deployed there since 2026-10-04** — at 12:47 UTC, from `main` at `d8c3779b`, and every
-probe of step 0 was asked of the real address a minute later. This paragraph said *nothing is
-deployed there* until that day. **Ask the host before you believe it or its opposite.** This
-directory is source, configuration and a runbook; `wrangler deploy` is Markus's, and that one was
-run by an agent because he asked for it in chat. The design is
+**It is deployed there since 2026-10-04** — first at 12:47 UTC, from `main` at `d8c3779b`, with
+every probe of step 0 asked of the real address a minute later. **The last deploy was 13:27 UTC
+the same day, from `main` at `4929cc6e`**, rolled back at 13:28 and forward again at 13:30 to
+see a rollback work — so that commit is what production serves, and `main` has moved past it
+since. This paragraph said *nothing is deployed there* until that day. **Ask the host before you
+believe it or its opposite.** This directory is source, configuration and a runbook; `wrangler
+deploy` is Markus's, and each of those was run by an agent because he asked for it. The design is
 [the light-app spec](../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md) §6,
 and the build it serves is [light-app.md](../docs/reference/light-app.md) §9 — whose §9.7 is the
 deploy's own record, with what it has not proved.
@@ -260,10 +262,45 @@ run**; light-app.md §9.7 has every figure.
   cross-origin request** — so the relay's absence from `connect-src` was never what a reader
   met.
 
-**Not driven at the real origin**: the update flow, which needs a second deploy; a second tab;
-a launch after storage was cleared; decks, import and export, a context menu, an *Open on …*
-link; the engine's own launch checks with no network — the offline launch fell inside the
-refresh interval; an installed app; any other browser; a phone.
+**Not driven in that pass**, and driven later the same day, next: the update flow, which needed
+a second deploy; a second tab; a launch after storage was cleared; decks, import and export, a
+context menu, an *Open on …* link; the engine asked to fetch with no network.
+
+**The rest, the same day** — headless Chrome 154 again, one fresh profile, the real hosts, on
+the first deploy's build; then one tab held open across the three deploys of *Rolling back*.
+light-app.md §9.7 has every figure. **Across both sessions: no policy violation, no request
+blocked or failed while online, and nothing thrown.**
+
+- **A second tab is told at once and starts no engine** — at 130 ms with the first tab in the
+  middle of its first run, at 87 ms with it idle — and its *Reload* opens the app once the
+  first has closed.
+- **A reload that lands inside the real card sync's finish opens again**, on the fifth ask,
+  about four seconds after the first. ⚠️ The interrupted finish left no cards, so the new
+  document downloaded the card file again.
+- **A launch after the browser cleared the app's storage** drew its notice and rebuilt the
+  corpus by itself.
+- **Every reader task on both faces worked**, decks, import, export and the *Open on …* links
+  among them.
+- **With no network the app opens from the service worker**, and a refresh the reader presses
+  fails with an alert and a line in the log. ⚠️ The alert is the engine's raw words — *http
+  request failed: error sending request* — not a sentence written for a reader.
+- **Nothing stands in the way of an install by Chrome's own check**: no installability error,
+  the manifest served as `application/manifest+json` with the policy, every icon a 200. No
+  install was made; headless Chrome has no install UI.
+- **A build deployed under an open page is offered, and taken only on the reader's press** —
+  three times, with the reader's data intact each time. *What a deploy changes for a reader*,
+  below, has what it cost.
+- **`/favicon.ico` answers 404.** The app's document names an SVG icon, so a browser asks for
+  the `.ico` only when it opens a document of this origin that is not the app's — and by the
+  split in *What it answers* that miss is the script's, a Worker request each time.
+
+**And outside that Chrome: the owner used the live site in Firefox that day** and reported one
+sentence — *"it works fine. multiple tabs locks the user out until the first tab is closed."*
+No version and no figure; it is the only word there is from a second engine.
+
+**Still not driven at the real origin**: the app's *own* check for a new build — every check
+was the driver calling `registration.update()`; a deploy that renames a chunk; an installed
+app; Safari; a phone.
 
 ## Deploying
 
@@ -271,7 +308,9 @@ refresh interval; an installed app; any other browser; a phone.
 the repo owner's, as it is for the other two Workers. `wrangler` is not a dependency of this
 repository; `npx` fetches it. **The 2026-10-04 deploy was run by an agent because Markus asked
 for it in chat**, as he did for the relay's on 2026-10-01 — and **the ask is per deploy**: it
-lifted this rule for that one deploy and left it standing for the next.
+lifted this rule for that one deploy and left it standing for the next. The second deploy that
+day, and the rollback and roll-forward after it, were asked for again — he approved a marker
+deploy and a rollback test through the question tool — and nothing else was.
 
 ### Step 0 — ask the host, never a document
 
@@ -284,6 +323,12 @@ minute after the first deploy, asked with `curl` from one machine in Denmark, of
 nothing at the address to ask.) **It is that minute's answer and no later one's.** Run them again
 before believing this file or its opposite, and after every deploy, and write the answers in here
 with the date.
+
+**Production has moved once since the column was written**: version
+`f724bbc1-9853-4978-9ffe-8b3c0af6c339`, `main` at `4929cc6e`, the same engine build. Probes 1–11
+and 14–18 were asked of it after the roll forward, and **each answered as the
+column says** — the policy equal, the 304 carrying it, the document equal to the built one —
+with the module's brotli transfer 2,139,182 bytes that time.
 
 ```
 A=https://mtg-grimoire.app
@@ -440,6 +485,21 @@ domain. Nothing was changed.
   been before** — through the two responses a policy is read from, both `no-cache`: the document,
   and the engine's Worker chunk, whose 304 carries the new line. From 5.3 on it must also get
   past the service worker, which that step arranges by hashing `_headers` into its build id.
+- **Measured on 2026-10-04, three times, at the real origin**: exactly that deploy — two comment
+  lines in `_headers`, so `_headers` and `sw.js` were the only files that differed — under one
+  open tab in headless Chrome 154 with a reader's data in it.
+  - **The bar was drawn 648–689 ms after the check**, with the new worker `installed` and
+    waiting and both builds' shell caches held. A reload while it waited stayed on the old
+    build, with the bar back; *Not now* put the bar away and the next load brought it back.
+  - **The install downloaded nothing again**: 43 requests of about 810–845 bytes each, 35 KB in
+    all, the engine's module 843 bytes of it — and no request to any other host.
+  - **The press** gave a new document about 2.6 s later, with one shell cache — the new
+    build's — the reader's deck, collection and wishlist intact, and the corpus as it was.
+  - ⚠️ **The check was the driver's `registration.update()`, never the app's own.** Headless
+    Chrome would not fire `visibilitychange`, and the app asks at most hourly. That a reader is
+    offered a build without anybody calling for it is unseen here.
+  - ⚠️ **No chunk was renamed**, so the first bullet above — a page meeting a renamed chunk
+    across a deploy — is still unseen at the real host.
 - **The origin is the app's identity and must never move.** A browser keys both OPFS databases,
   the service worker and the install to it. Served from another host, another subdomain or `www`,
   a reader's collection is not there — it is still in their browser, under the address they can no
@@ -455,8 +515,28 @@ wrangler versions list` shows what there is to go back to (the 100 most recent).
 rollback is another deploy**: the chunk names change again, and a page opened on the bad build
 meets the same 404 on its next lazy import.
 
-**None of this has been run against this Worker.** The 2026-10-04 deploy was its first, so there
-has been no version to go back to.
+**Run once, on 2026-10-04, and then run again to go forward.** The owner approved a rollback
+test; this section said *none of this has been run* until then. Two builds that differ in
+`_headers` and `sw.js` alone — the first deploy, and a marker deployed at 13:27 UTC.
+
+| UTC | Command | What the host's `sw.js` then was |
+| --- | --- | --- |
+| 13:28:58 | `wrangler rollback <the first version's id> -m … -y` | the marker's at the first look, **the first deploy's five seconds later** |
+| 13:30:22 | `wrangler rollback <the marker's id>` | the first deploy's at the first two looks, 5 s apart; the marker's at the third |
+
+- **A rollback does bring a version's files back with it**, within seconds.
+- **`rollback` takes any version id**, so it rolls forward too — which is how production came to
+  end on the marker without a third upload.
+- **Non-interactive, `-y` prints *Using fallback value in non-interactive context: yes***, and
+  the command warns that it *will not rollback any of the bound resources*. This Worker binds
+  nothing but its assets, which are the version's.
+- `npx wrangler deployments list` shows the three deployments with their messages.
+- **To the page that was open it was an update like any other**: the first deploy's `sw.js` is
+  different bytes from the marker's, so the bar offered it, and until the press the page went
+  on working on the build it had — *What a deploy changes for a reader*, above.
+
+⚠️ **What that run was not**: a rollback of a build that renamed chunks, or of one that shipped a
+schema rung. Neither build changed the page's code or the database.
 
 **It does not roll back a reader's data.** If a build migrated a schema in OPFS, the build before
 it is now looking at a database from its future. A page-only fault is safe to roll back; a build
@@ -490,7 +570,8 @@ locally and Cloudflare runs in front of a Worker with assets. Read first, and **
 headers on both documents, the detach, the Worker chunk's 304, `/_headers`, the content types —
 with nothing public, and the edge then answered the same.
 
-**Only a deploy could settle these, and the one on 2026-10-04 settled all but the rollback**:
+**Only a deploy could settle these, and the three on 2026-10-04 settled each but the preview
+address**:
 
 - **The certificate and the apex**: ~~how long issuance takes, and whether a record was in the
   way~~ — no record was (the zone had none), and the apex answered 200 on the first request
@@ -508,21 +589,30 @@ with nothing public, and the edge then answered the same.
   redirect — because *Always Use HTTPS* is off.
 - **What the zone's own features do to the document** — the table above: nothing, for the
   document asked from one country on one day.
-- **That a rollback brings a version's files back with it.** The limits are stated per Worker
-  version, which says so; **nobody has watched it, and that deploy was the Worker's first, so
-  there has been no version to go back to.**
+- **That a rollback brings a version's files back with it.** ~~The limits are stated per Worker
+  version, which says so; nobody has watched it.~~ **It does** — the host served the earlier
+  version's `sw.js` five seconds after the command, on 2026-10-04 (*Rolling back*, above).
 - **The policy against the real hosts, from this origin** — which `curl` cannot ask, and a
   browser did the same day (*What the browser said under it*, above): **every host in
   `connect-src` was asked from a page at `mtg-grimoire.app` and answered 200, the app asked no
   other host, and nothing was refused.** One run, in one Chrome.
 
 **And no deploy by itself settles these**, which are a browser's and a later day's: any browser
-but one Chrome on Windows, and any phone — the policy has met no Safari and no Firefox, and
-neither has the engine; **a deploy over a page that is open with its service worker in
-control**, which is the update flow against the real host and needs a second deploy to be seen;
-and a spent free-plan day. (This paragraph ended on a card picture through the service worker
-as the one thing `img-src` had yet to draw. It has drawn them — on `localhost` in light-app.md
-§9.6, and at the real origin on 2026-10-04.)
+but one Chrome on Windows, and any phone — the policy and the engine have met no Safari, and of
+Firefox there is the owner's one sentence that it works and nothing measured; and a spent
+free-plan day. (This paragraph ended on a card picture through the service worker as the one
+thing `img-src` had yet to draw. It has drawn them — on `localhost` in light-app.md §9.6, and at
+the real origin on 2026-10-04.)
+
+**A deploy over a page that is open with its service worker in control was on that list, and
+has been seen** — three times that day, *What a deploy changes for a reader*. **Two halves of
+it are still open, and each needs a deploy to close**:
+
+- **The app's own check.** Every handover began with the driver calling
+  `registration.update()`.
+- **A renamed chunk.** No build deployed so far differs from another in the page's code. `main`
+  has moved past production by a change that does, so a deploy of it as it stands would be the
+  first to rename one.
 
 ## Cost
 
