@@ -1,7 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_DECKLIST_BYTES } from "../browserFiles";
+import { STORAGE_CLEARED, STORAGE_CLEARED_DISMISS, STORAGE_PERSISTENCE } from "../hostStorage";
 import type { Core } from "../types";
 import { answeringFiles, suggestedName } from "./files";
+import { createWebCore, type WorkerPort } from "./index";
+import type { ToWorker } from "./protocol";
 
 /** The Worker's `Core`, stood in for: it records what reached it and answers with a marker. */
 function engine(): { core: Core; calls: unknown[][]; listened: string[] } {
@@ -176,5 +179,73 @@ describe("the web host's file commands", () => {
 
     expect(calls).toEqual([["search_cards", { req: { text: "bolt" } }, undefined]]);
     expect(listened).toEqual(["sync:progress"]);
+  });
+});
+
+/**
+ * The web host answers two kinds of command on the page: the gate and the browser's storage, in
+ * `./index.ts`, and the two files, here in front of it. Each has to stay with its own answerer —
+ * a storage command swallowed by this wrapper, or a file command sent on to the Worker, is a
+ * page told nothing or told "no such command" by an engine that has no document.
+ */
+describe("the web host's two sets of page commands, composed as a build composes them", () => {
+  /** The real web core over a Worker that only records, with a browser that keeps nothing. */
+  function host() {
+    const posted: ToWorker[] = [];
+    let hear: ((event: { data: unknown }) => void) | undefined;
+    const port = {
+      postMessage: (message: ToWorker) => void posted.push(message),
+      addEventListener: (type: string, listener: (event: { data: unknown }) => void) => {
+        if (type === "message") hear = listener;
+      },
+    } as unknown as WorkerPort;
+    const core = answeringFiles(createWebCore(() => port, "mtg-grimoire", { now: () => 0 }));
+    const open = () =>
+      hear?.({
+        data: {
+          kind: "opened",
+          opened: { kind: "ready", journal: "delete", corpusJournal: "delete", schemaVersion: 59 },
+        },
+      });
+    return { core, posted, open };
+  }
+
+  it("leaves the gate and the storage commands to the host behind it", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const { core, posted, open } = host();
+
+    await expect(core.call("startup_status")).resolves.toEqual({ state: "loading" });
+    open();
+    await expect(core.call("startup_status")).resolves.toEqual({ state: "ready" });
+    await expect(core.call(STORAGE_CLEARED)).resolves.toBeNull();
+    await expect(core.call(STORAGE_CLEARED_DISMISS)).resolves.toBeNull();
+    await expect(core.call(STORAGE_PERSISTENCE)).resolves.toBeNull();
+
+    // Answered on the page, every one: the Worker was asked to open, and nothing else.
+    expect(posted.map((message) => message.kind)).toEqual(["open"]);
+  });
+
+  it("answers the two files without the Worker, and sends an engine command to it", async () => {
+    vi.spyOn(console, "info").mockImplementation(() => {});
+    const caught = catchDownloads();
+    const { core, posted, open } = host();
+
+    // Before anything has started the Worker: a file is the page's business, not the engine's.
+    await expect(
+      core.call("export_save_file", { fileName: "Burn.txt", contents: "x" }),
+    ).resolves.toBe(true);
+    expect(posted).toEqual([]);
+    // The gate's first ask is what makes the Worker; then the database opens.
+    await core.call("startup_status");
+    open();
+    const picked = core.call("import_pick_file");
+    picker()?.dispatchEvent(new Event("cancel"));
+    await expect(picked).resolves.toBeNull();
+    void core.call("search_cards", { req: { text: "bolt" } });
+
+    expect(caught).toHaveLength(1);
+    expect(posted.filter((message) => message.kind === "call")).toEqual([
+      expect.objectContaining({ command: "search_cards" }),
+    ]);
   });
 });
