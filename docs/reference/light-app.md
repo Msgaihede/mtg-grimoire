@@ -3034,7 +3034,8 @@ request each; the rules for the host crate are
 - **The web app's origin is `https://mtg-grimoire.app`** (Markus, 2026-10-04) — a domain he
   bought on Cloudflare for it, rather than a `workers.dev` name beside the relay's. An origin is
   a PWA's identity: both OPFS databases and the install are bound to it, and the relay's CORS
-  allow-list (phase 6) names it. **Nothing is deployed there**; hosting is step 5.5.
+  allow-list (phase 6) names it. **Nothing is deployed there**; the Worker that will serve it is
+  step 5.5's, §9.5.
 
 **What the tree held before the phase started** (surveyed 2026-10-04, `main` at `2abf2d7a`):
 
@@ -3310,7 +3311,8 @@ What follows for the engine in a browser:
 - **Card images.** The page still asks the `mtgimg` origins, which a browser cannot reach
   (step 5.3).
 - **Clipboard, links and files on the desktop face** in a browser (step 5.4 — **built and
-  driven 2026-10-04, §9.4**), **a service worker** (5.3) and **hosting** (5.5).
+  driven 2026-10-04, §9.4**), **a service worker** (5.3) and **hosting** (5.5 — **the Worker,
+  its policy and its runbook built 2026-10-04, §9.5; not deployed**).
 - **CI's `web` job has not run.** Its first run is this step's pull request, and its sizes are
   that run's summary — a Linux Chrome's, not the one above.
   - **It has since, on this step's pull request** (#805, merged 2026-10-04): the job's first
@@ -3378,9 +3380,11 @@ and eight things that claimed more than they did — each closed in the same cha
 - ~~**5.4 — the browser's seams and the manifest.**~~ **Built 2026-10-04 — §9.4**, with one
   thing built differently from the plan's line as it stood: the Android host opens a link
   through Tauri's opener, which its capability grants, rather than through the WebView.
-- **5.5 — hosting, and the phase's own run.** The Cloudflare Worker with static assets at
-  `mtg-grimoire.app`, its runbook, the module's size taken up with timings, and the built app
-  driven end to end against round one's figures.
+- **5.5 — hosting, and the phase's own run.** ~~The Cloudflare Worker with static assets at
+  `mtg-grimoire.app`, its runbook~~ — **built 2026-10-04, §9.5, and not deployed**, with one
+  thing this line did not say: the Worker has a script, because the single-page fallback alone
+  answers a missing file with the document. **Still to come**: the module's size taken up with
+  timings, and the built app driven end to end against round one's figures.
 
 ### 9.2 Step 5.2 — the first run (2026-10-04)
 
@@ -3953,3 +3957,226 @@ each tab's `visibilityState` as the witness for a tab switch.
 - **An install.** No installability errors is Chrome's reading of the manifest; no prompt was
   accepted, no icon was drawn by a launcher, and no `apple-touch-icon` was added.
 - **The desktop face's dialogs by pointer over a corpus**, for the reason above.
+
+### 9.5 Step 5.5 — hosting (2026-10-04)
+
+Where the web build is served from, and under what policy: a third Cloudflare Worker,
+`app-worker/`, for `https://mtg-grimoire.app`. **This is the step's first half.** The module's
+size taken up with timings, and the built app driven end to end against round one's figures,
+are still to come and are not in this section. **Nothing is deployed**: what was committed is
+source, configuration and a runbook, and [`app-worker/README.md`](../../app-worker/README.md)
+is that runbook — the probes, the steps in order, rollback and cost. Numbered for its step; 5.3
+was still in flight, so there is no §9.3 above it yet.
+
+**What was built.**
+
+- **`app-worker/`, Worker `mtg-grimoire-app`** — `wrangler.jsonc`, a `_headers` file, a script of
+  a few lines, and a reader of that file's format. Beside the relay and the share Worker and
+  never either (spec §6), for the share Worker's reason: every deploy is by hand, by one person,
+  and a bad build of a page must not be a sync outage. **It shares nothing with them**: no D1, no
+  R2, no KV, no Durable Object, no `vars`, no secret. Its own `tsc` program,
+  `tsconfig.app-worker.json`, runs in `npm run build`.
+- **Static assets, and one thing configuration could not say.** `not_found_handling:
+  "single-page-application"` answers every address that matches no file with `index.html` and a
+  200 — which `/decks/12` needs, and a chunk a deploy renamed must never get: a page loaded
+  before the deploy would be handed HTML where it asked for JavaScript, a MIME error in place of
+  the failed import the app is built to recover from (5.3). **So there is a script, and it is
+  the smallest that closes that**: with `main` present and a compatibility date of 2025-04-01 or
+  later, Cloudflare answers a request carrying `Sec-Fetch-Mode: navigate` with the document
+  *before the script runs*, and sends every other miss to the script, where it is a `404
+  text/plain` marked `nosniff` and `no-store`. A file that exists never reaches it. No
+  `run_worker_first`: that would bill a Worker request for every chunk.
+- **A navigation that did not say so** — `curl`, a link preview — is answered by `isNavigation`,
+  the rule the dev server and the preview serve by, imported from `src/lib/core/web/assets.ts`
+  so the three cannot disagree. The script asks its binding for `/` by name, which is the
+  document under every setting.
+- **Three trees hold no place at all**: under `/assets/`, `/wasm/` and `/mtgimg/` a miss is the
+  404 whatever the caller accepts. The third is 5.3's: card pictures are asked of the app's own
+  origin there and answered by the service worker, so a page that worker does not control yet
+  asks the network, and the document in answer would be a broken picture with a 200 a cache has
+  no reason to refuse. An `<img>`'s request is `no-cors`, never a navigation, so the edge sends
+  it to the script; the tree is named so the script cannot hand it the document either.
+- **`app-worker/_headers`, emitted into `dist-web/` and nowhere else.** `vite.mobile.config.ts`
+  gained a second `web`-mode plugin, `web:hosting`, which copies the file to the build's root —
+  where `wrangler deploy` parses it — and fails the build, by line, on a file that does not
+  parse. **In neither public directory**: the root's is copied into `dist/` and `dist-share/`,
+  and `mobile/public/` into the APK's `dist-mobile/`.
+
+  | Build, listed 2026-10-04 | `_headers` | Manifest and icons | Engine and its Worker |
+  | --- | --- | --- | --- |
+  | `dist/` (`npm run build`) | — | — | — |
+  | `dist-mobile/` (`mobile:build`) | — | yes | — |
+  | `dist-share/` (`share:build`) | — | — | — |
+  | `dist-web/` (`web:build`) | at the root, byte for byte the source | yes | yes |
+
+- **`app-worker/src/headers.ts` reads that format as Cloudflare does** — every matching rule in
+  order, a header two rules both set **joined with a comma**, `! Name` to detach, one splat to a
+  path, 100 rules, 2,000 characters a line — and refuses what it does not model (an absolute
+  URL pattern, a placeholder) rather than skipping it. It exists so the policy is met before a
+  deploy: **`npm run web:preview` sends what the built file says each address is sent**, answers
+  a missing file with a bare 404 as the script does, and answers `/_headers` itself with a 404,
+  as the host does. The dev server sends none of it — Vite's injected `<style>`, its inline
+  preamble and its WebSocket are each what the policy forbids.
+
+**The configuration, and the page of Cloudflare's documentation behind each key** (read
+2026-10-04).
+
+| Key | Value | Verified at |
+| --- | --- | --- |
+| `main` | `src/index.ts` | `workers/static-assets/` — "If no matching asset is found and a Worker script is present, the request will be processed by the Worker" |
+| `compatibility_date` | `2026-08-27`, the relay's | `workers/configuration/compatibility-flags/` — `assets_navigation_prefers_asset_serving`, "Default as of 2025-04-01" |
+| `routes` | `mtg-grimoire.app`, `custom_domain: true` | `workers/configuration/routing/custom-domains/` — the apex is the page's own example; the deploy creates the DNS record and the certificate, and cannot over an existing CNAME |
+| `workers_dev`, `preview_urls` | `false`, `false` | `workers/versions-and-deployments/version-urls/` — "If `preview_urls` is omitted, Wrangler does not change an existing Version URL setting". Each would be a second origin: a second OPFS and a second install |
+| `assets.directory` | `../dist-web` | `workers/static-assets/binding/` |
+| `assets.binding` | `ASSETS` | `workers/wrangler/configuration/` — "only useful when a Worker script is set with `main`" |
+| `assets.not_found_handling` | `single-page-application` | `workers/static-assets/routing/single-page-application/` — with a script, "*navigation requests* will not invoke the Worker script" |
+| `observability` | enabled | as the other two |
+
+Of `_headers`, from `workers/static-assets/headers/`: `#` begins a comment; the file "will not
+itself be served as a static asset"; and it is "not applied to responses generated by your
+Worker code" — so the script's 404 carries its own three headers.
+
+**The policy.** One line in the file — wrapped here — on `/*`, and so on every static
+response: the document, every chunk, the engine, `sw.js`.
+
+```
+default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self';
+style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self'
+https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io
+https://json.commanderspellbook.com https://api.cardkingdom.com; manifest-src 'self';
+object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+```
+
+- **`connect-src` is exactly the hosts the engine asks**, each from its own source:
+
+  | Host | Where it comes from |
+  | --- | --- |
+  | `api.scryfall.com` | `launch.rs`, `SCRYFALL_API` |
+  | `data.scryfall.io` | **not a constant** — the card sync and both Tagger feeds download whatever `jsonl_download_uri` Scryfall's descriptor names. The fence reads the descriptors transcribed into `scryfall.rs`'s and `tags/oracle.rs`'s tests |
+  | `cards.scryfall.io` | `image_uri.rs`, `IMAGE_HOST` |
+  | `json.commanderspellbook.com` | `combos.rs`, `FEED_URL` |
+  | `api.cardkingdom.com` | `marketplace_feed.rs`, Card Kingdom's `FeedProvider` |
+
+  **Not Mana Pool**, which sends no `Access-Control-Allow-Origin` (§9.1's table). **Not the
+  relay**: sync in a browser is phase 6, which adds the host in the change that adds this origin
+  to the relay's CORS allow-list; until then the request fails either way.
+- ⚠️ **`data.scryfall.io` is pinned by this policy and by nothing in the engine.** The desktop
+  follows the descriptor anywhere. If Scryfall moves its bulk files, a browser's first run fails
+  — the page says `http request failed: error sending request`, seen below — while the desktop
+  keeps working, and the fix is one host in `_headers` and a deploy.
+- **`'wasm-unsafe-eval'` and never `'unsafe-eval'`**; **`style-src 'self'`**, with the
+  desktop's `style-src-attr 'unsafe-inline'` and `font-src 'self' data:`. The same components run
+  in both, so each directive the two hosts share is held to the desktop's shipped policy.
+  `form-action 'none'` is the desktop's too.
+- **`img-src` is `'self' data:` and does not name `cards.scryfall.io`** — the second finding
+  below is why, and what it asks of the service worker.
+- **`Referrer-Policy: strict-origin-when-cross-origin`**: the origin, never a path. A page has
+  no `User-Agent` of its own to tell Scryfall who is asking, and a shop behind an *Open on …*
+  link learns the app's name and not which deck was open. `X-Content-Type-Options: nosniff`.
+  **No isolation headers** — the OPFS pool needs neither, and `require-corp` would refuse every
+  card picture. No `Strict-Transport-Security`: `.app` is on the browsers' preload list.
+- **Caching is a default and two exceptions.** `no-cache` for everything — the document at
+  every route, the manifest, the favicon and the manifest's `icons/*.png`, whose names carry no
+  hash. A year, `immutable`, for `/assets/*` and `/wasm/*`, which are content-addressed.
+  `/sw.js` restates `no-cache` by a rule of its own, written before the file exists, so
+  loosening `/*` cannot take it along. Each narrower rule detaches before it sets, or the two
+  values would be joined.
+
+**Two findings, in headless Chrome 154.0.8037.95 on Windows 11, 2026-10-04.**
+
+- **A dedicated Worker is governed by the policy on its own script's response, not the
+  page's.** Against the built app, one header changed at a time: the Worker's chunk sent
+  `default-src 'none'` could not import the engine's glue; the *document's* policy stripped of
+  `'wasm-unsafe-eval'` changed nothing, and the *chunk's* stripped of it failed with a
+  `CompileError`; `api.scryfall.com` taken out of the document's `connect-src` alone was still
+  asked by the Worker, and taken out of every response was refused each time. **A service worker
+  is the same**: its `fetch` is held to the policy on `sw.js`'s response, and a `sw.js` sent with
+  none is held to nothing. That is why there is one policy and it is sent with everything.
+- **`img-src` is checked against the address of the response a service worker returns, as well
+  as the address the page asked.** Two `localhost` origins, a page under `img-src 'self'`, and a
+  service worker answering a same-origin picture with the other origin's bytes five ways:
+  the fetched response passed along, an opaque one, one out of Cache Storage under the other
+  origin's key, one out of Cache Storage under the page's own key — **all four blocked** — and
+  `new Response(bytes)`, which was drawn. With the other origin named in `img-src`, all five
+  were drawn. **So 5.3's worker rebuilds what it returns**, and the host is not in `img-src`: the
+  policy is the tighter one, and a worker that ever stops rebuilding goes wrong where it can be
+  seen.
+
+**What a browser said under the policy** — the same Chrome, over `npm run web:build` of `main`
+at `92cbc02b` with this step merged in. **The module was a copy from the phase's working tree
+that day, not this tree's own build**: `grimoire_web_bg.wasm` at 8 623 589 B, 3 065.86 kB
+gzipped by Vite's report.
+
+- **`npm run web:smoke` passed as it stands** (4.5 s), all nine checks. It serves the build
+  with no policy.
+- **The same first run, under the policy**: a scratch copy of that script whose server sends
+  what `headersFor` answers and which listens for violations on the page and, by auto-attach,
+  in the Worker. All nine checks passed again — the engine compiled, the card sync asked
+  `api.scryfall.com` and followed the descriptor to `data.scryfall.io`, both Tagger files and
+  the combos finished, a typed search drew a tile, Settings downloaded Card Kingdom's pricelist,
+  a reload kept the cards, a second tab was told. **Every host in `connect-src` was asked and
+  let through.**
+- **One violation, seventeen times: `img-src` refusing `http://mtgimg.localhost/…`.** `main`'s
+  page still names the desktop's image protocol; 5.3 moves pictures to `/mtgimg/…`. Until then a
+  card picture in a browser is refused by the policy where before it was a connection nobody
+  accepted, and the tile draws its retry either way.
+- **The zero for the Worker is not a vacuous one.** With `data.scryfall.io` taken out of
+  `connect-src`, the same run stopped at the card sync and named the Worker's three refused
+  downloads.
+- **Both faces as deep links**, through `web:preview` with real hosts unresolvable: at
+  360 × 800 and 1280 × 800, `/search`, `/collection`, `/decks`, `/wishlist` and `/settings` each
+  reached its shell with no violation and nothing thrown.
+
+**The fence — `app-worker/src/hosting.test.ts`.** Nothing compiles the policy and the engine
+together, so a feed that moved would build green on both sides and fail in a reader's browser
+with the reason in a console nobody has open. The test reads `_headers`, `wrangler.jsonc`, the
+desktop's shipped CSP and the engine's Rust as text, and asks `headersFor` what each address is
+sent rather than matching the file's text — two rules that each look right can join into
+`no-cache, public, max-age=31536000, immutable`. It holds: `connect-src` **set-equal** to the
+engine's hosts, so an entry nobody asks is red too; Mana Pool and the relay absent; one policy
+on every kind of address; the two `unsafe` sources the policy means and no other; each shared
+directive no looser than the desktop's; `img-src` as above, with the reason; the caching rule
+for each kind of address; the configuration key by key, with an exact list of keys so a `vars`
+block or a binding is red; and that the directory holds no account id, nothing shaped like one,
+no secret's name and no `.dev.vars`. **Thirty-nine mutations, none survived** — nineteen of
+the policy and its caching, nine of `wrangler.jsonc`, five of the Rust (a constant moved to
+another host is red; a constant renamed fails with a sentence naming it) and six of the script.
+The first mutation run was itself vacuous — its harness read a report from the wrong place
+and called every run red — which is why each kill is recorded by the name of the test it failed.
+
+**Routing.** `app-worker/*` → `frontend` and `web`, out of the fail-safe:
+[ci-and-releases.md](ci-and-releases.md) has the arm. No job deploys.
+
+**Not run, and not built.**
+
+- **Every probe in the runbook.** A table of `curl`s with the answer each *should* give, each
+  marked not yet run: the document and its policy; a deep link with and without
+  `Sec-Fetch-Mode: navigate`, and with `Accept: text/html` alone; a missing chunk (**`200
+  text/html` there means the script is not deployed**); the module's content type, caching and
+  compression; `/sw.js`; `/_headers`; the `workers.dev` name; and an `<img>`'s request for
+  `/mtgimg/…`, which must be a `no-store` 404.
+- **What only a deploy can settle**: whether `_headers` reaches a response the script fetched
+  through its binding — the documentation does not say, and either answer is safe; that the
+  navigation split is as documented; the `Content-Type` a `.wasm` is given; what the edge
+  compresses it with, and so what a first visit downloads; that `no-cache` replaces Cloudflare's
+  default `Cache-Control` rather than joining it; how long the certificate takes; that a rollback
+  brings a version's files back.
+- **One sentence of the billing page read backwards.** A `run_worker_first` request past the
+  free plan's daily limit gets a 429 "instead of falling back to static asset serving" — which
+  suggests that on such a day a miss *here* falls back to the document. Not seen, and the day
+  it matters sync is already down.
+- **A browser's navigation to a missing file or picture gets the document**, by Cloudflare's
+  rule — `/assets/gone.js` typed into the address bar shows the app. Nothing in the app
+  navigates to one. The setting that would close it turns the navigation split off for the whole
+  Worker, by the documentation's own sentence, and was not taken.
+- **What a card picture costs before the service worker controls its page**: each `/mtgimg/…`
+  that reaches the network is one Worker request, from the 100,000 a day the relay's sync
+  shares. Nobody has counted a first visit.
+- **The desktop face over a corpus under the policy** — the smoke's fixtures drive the phone
+  face, and at 1280 an empty database draws its *No card data yet* wall — **a card picture
+  drawn**, **a service worker**, **the real hosts** rather than fixtures, **any browser but one
+  Chrome**, and any phone.
+- **`scripts/web-smoke.mjs` runs with no policy.** CI's `web` job therefore proves the build
+  and not the build as served. What it would take: serve through `headersFor`, answer a miss
+  and `/_headers` with a 404, and listen for violations in the Worker as well as on the page.
+- **The step's second half**: the module's size with timings, and the phase's own run.
