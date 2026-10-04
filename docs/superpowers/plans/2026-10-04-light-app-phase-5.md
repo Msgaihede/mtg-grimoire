@@ -94,8 +94,12 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
 - [ ] **5.4 — the browser's seams and the manifest.** Clipboard and open-a-link below
   `@/lib/core` on both faces; file open and save on the desktop face in a browser; the phone
   card sheet's `Open on …` rows. The manifest finished — raster and maskable icons, an `id`,
-  install — and moved out of the `public/` every build copies; the page's colour made the
-  token's. Phase 1's two history leftovers: a refused push, and `back()`'s one-release latch.
+  installable by the browser's own install UI and by no button of the app's — and moved out of
+  the `public/` every build copies; the page's colour made the token's. Phase 1's two history
+  leftovers: a refused push, and `back()`'s one-release latch. **Built differently in one
+  place**: the Android host opens a link through Tauri's opener, which its capability grants,
+  and only its clipboard is the browser's.
+  ([light-app.md](../../reference/light-app.md) §9.4 is the record.)
 - [ ] **5.5 — hosting, and the phase's own run.** A Cloudflare Worker with static assets at an
   origin root, beside the relay and never the same one: the single-page fallback, the headers a
   service worker and a WASM module need, its `wrangler.jsonc` with `mtg-grimoire.app` as its

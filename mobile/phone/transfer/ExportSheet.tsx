@@ -9,13 +9,13 @@ import {
 } from "@/features/transfer/formats";
 import { useExportModel } from "@/features/transfer/export/useExportModel";
 import type { TransferCard } from "@/features/transfer/TransferCard";
+import { copyText } from "@/lib/clipboard";
 import { FOCUS } from "@/lib/focus";
 import { ipcError } from "@/lib/ipc";
 import { PRESS_SOFT } from "@/lib/motion";
 import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
 import { saveText } from "@/lib/core/files";
-import { copyToClipboard } from "./browserFiles";
 import { usePhoneTransferPrefs } from "./prefs";
 
 /**
@@ -64,9 +64,9 @@ const ACTION = cn(
  * the same choices (the golden suite's writers, unchanged). **What is the phone's own** is the
  * drawing — every control 44px, the formats as a wrapping row of chips — where the choices are
  * remembered (`usePhoneTransferPrefs`, per surface, opening on the desktop's own defaults), and
- * where the text goes: `navigator.clipboard` (`browserFiles.ts`), and a file through
- * `@/lib/core/files`'s `saveText` — the system's save dialog on the Android host, a download in a
- * browser (phase 4, step 4.3).
+ * where the text goes: the host's clipboard through `@/lib/clipboard`, as the desktop dialog's
+ * Copy goes (phase 5, step 5.4), and a file through `@/lib/core/files`'s `saveText` — the system's
+ * save dialog on the Android host, a download in a browser (phase 4, step 4.3).
  *
  * **A bottom sheet below 640px** — the action sheet's shape: the format, the fields and the two
  * buttons fit a thumb's reach, and the preview is a disclosure that opens shut, the desktop's
@@ -140,7 +140,7 @@ function Body({
     if (notReady) return;
     setError(null);
     setDone(null);
-    copyToClipboard(text).then(
+    copyText(text).then(
       () => setDone("Copied."),
       (e: unknown) => setError(`Couldn't copy that export — ${ipcError(e)}`),
     );

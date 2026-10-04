@@ -55,8 +55,8 @@ export const COMBOS_FOLDED = 3;
  * reading as an absence. The dialog's fourth empty, *no combo matches that filter*, cannot arise
  * here: the sheet draws no filter.
  *
- * **What is skipped is the way out**: the dialog's *View on Commander Spellbook* goes through the
- * app's opener, a host seam this face does not have yet.
+ * **What is skipped is the way out**: the dialog's *View on Commander Spellbook* is not drawn here
+ * yet. The seam it waited for exists since phase 5 (`card/OpenOn.tsx` has the sheet's other links).
  */
 export function CombosSection({ oracleId }: { oracleId: string | null }) {
   const listId = useId();

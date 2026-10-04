@@ -2,11 +2,14 @@
  * A deck note's body, drawn — the pinned CommonMark dialect `noteMarkdown.ts` reads — and the
  * inline runs a deck to-do list's lines share with it.
  *
- * **Out of `NoteCard.tsx` so the phone face can draw a note.** The card reaches the opener plugin
- * through `openExternal`, which the phone face may not import (`mobile/phone/fence.test.ts`), and
- * the link was the only edge: so the link's press is a prop here, the desktop card hands in
- * `openExternal`, and a caller that hands in nothing gets a real anchor. `TodoListCard.tsx`'s own
- * copy of the inline runs was the same code with one class different, and it draws these now.
+ * **Out of `NoteCard.tsx` so the phone face can draw a note.** When it moved, the card reached
+ * the opener plugin through `openExternal`, which the phone face could not import
+ * (`mobile/phone/fence.test.ts`), and the link was the only edge: so the link's press is a prop
+ * here, the desktop card hands in `openExternal`, and a caller that hands in nothing gets a real
+ * anchor. Since the light app's step 5.4 `openExternal` is the host's, below `@/lib/core`, and
+ * the phone face could import it — it still hands in nothing, because a phone page leaves by a
+ * link a reader can long-press. `TodoListCard.tsx`'s own copy of the inline runs was the same
+ * code with one class different, and it draws these now.
  */
 import { useMemo, type JSX } from "react";
 import { FOCUS } from "@/lib/focus";
@@ -123,9 +126,11 @@ export function MarkdownInlines({
    * desktop's `openExternal`, because that window has nowhere to navigate to and an anchor a
    * middle-click could follow would replace the app with a web page. **Absent, it is a real
    * `<a>` that opens in a new tab**, which is what a page in a browser has always been able to do
-   * and the only way out the phone face has until the host seams give it one (light-app spec
-   * §3.5). The dialect's own rule keeps the href to a scheme that leaves (`noteMarkdown.ts`'
-   * `isOpenable`), so the anchor can never be a `javascript:` URL.
+   * and the way out the phone face takes: a browser opens the tab, and the Android host's guard
+   * hands the address to the system browser (light-app spec §3.5; `mobile/CLAUDE.md` has why it
+   * is still a link now that a host seam exists). The dialect's own rule keeps the href to a
+   * scheme that leaves (`noteMarkdown.ts`' `isOpenable`), so the anchor can never be a
+   * `javascript:` URL.
    */
   onLink?: (href: string) => void;
   /** The code span's backing — `bg-surface` inside a note card, `bg-bg` inside a to-do list,

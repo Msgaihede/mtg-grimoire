@@ -26,8 +26,13 @@
  * `edhrec.com/route/?cc=<name>` is the shape Scryfall itself publishes as every card's
  * `related_uris.edhrec`, and the router decides whether a name is a card page or a commander
  * page and how it slugs — all of which are EDHREC's rules to change.
+ *
+ * **How a link leaves is the host's** (`@/lib/core`, the light-app spec §3.5): Tauri's opener on
+ * the desktop and on the light app's Android host, a new tab in a browser. Nothing here names a
+ * plugin, which is what lets the light app's phone face import the builders — and draw them as
+ * the `href` of a real link, where the desktop's rows are presses.
  */
-import { openUrl } from "@tauri-apps/plugin-opener";
+import { host } from "@/lib/core";
 import type { MarketplaceId } from "./marketplace";
 
 export function scryfallCardUrl(setCode: string, collectorNumber: string): string {
@@ -166,5 +171,5 @@ export function marketplaceSearchUrl(id: MarketplaceId, cardName: string): strin
 
 /** The one call that leaves the app. Made on selection and never before it. */
 export async function openExternal(url: string): Promise<void> {
-  await openUrl(url);
+  await host.openUrl(url);
 }

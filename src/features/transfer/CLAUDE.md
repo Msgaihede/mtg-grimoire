@@ -64,8 +64,11 @@ read only by thin desktop wrappers that keep the old names:
   phone needs it.
 
 **A new decision goes in the store-free module, never in a wrapper**, or the phone face draws a
-file the desktop would not. `files.ts` below stays the desktop's: the phone's file handles are
-the browser's (`mobile/phone/transfer/browserFiles.ts`) until a host seam exists.
+file the desktop would not. `files.ts` below stays the desktop face's, and asks its host: a
+native dialog on the desktop and on Android, and in the web app the same two commands answered
+on the page (`src/lib/core/web/files.ts`, phase 5 step 5.4). The phone face picks through an
+`<input>` of its own on every host and saves through `@/lib/core/files`; both read and download
+with `src/lib/core/browserFiles.ts`, which was `mobile/phone/transfer/browserFiles.ts`.
 
 ## Import
 

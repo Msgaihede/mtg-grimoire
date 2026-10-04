@@ -8,7 +8,7 @@ import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
 import { LabelsPanel } from "@/features/settings/LabelsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
 import { ReviewPanel } from "@/features/settings/ReviewPanel";
-import { SyncPanelBody, type OpenLink } from "@/features/settings/SyncPanelBody";
+import { SyncPanel } from "@/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
 import {
   GROUPS,
@@ -43,24 +43,6 @@ const PANEL_LIST = panelsOf(LIGHT_SETTINGS) as LightPanel[];
 const GROUP_LIST = groupsOf(PANEL_LIST);
 
 /**
- * How the Sync panel's *Connect Patreon* sends a reader to Patreon from here.
- *
- * **A new tab, through the page's own `window.open`**, because the desktop's opener is a Tauri
- * plugin the phone face may not reach. `null` back is a browser that refused the tab, which the
- * panel reports as a press that did not happen rather than one that silently did nothing. The
- * opener is cut afterwards so the page on the far side cannot steer this one.
- *
- * Spec §3.5 puts *open a link* below the `Core` seam, a host service the phases that build each
- * host (4 and 5) bring; when it lands this is replaced by it, here and in the `Open on …` rows
- * alike.
- */
-const openLink: OpenLink = async (url) => {
-  const opened = window.open(url, "_blank");
-  if (opened === null) throw new Error("The link could not be opened.");
-  opened.opener = null;
-};
-
-/**
  * One panel, with the state it is drawn over.
  *
  * **Each hook is called by the panel that needs it, so a closed group asks the backend
@@ -77,7 +59,9 @@ function Panel({ id, log }: { id: LightPanel; log: ErrorLog }): JSX.Element {
     case "prices":
       return <Prices />;
     case "sync":
-      return <SyncPanelBody openLink={openLink} />;
+      // The desktop's own panel, link and all: *Connect Patreon* leaves through `@/lib/core`'s
+      // host seam, which is a new tab in a browser and the system browser on the Android host.
+      return <SyncPanel />;
     case "review":
       return <ReviewPanel />;
     case "hidden-tags":

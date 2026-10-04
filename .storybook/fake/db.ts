@@ -24643,7 +24643,8 @@ export function pluginHandlers() {
   return {
     /**
      * `tauri-plugin-clipboard-manager`'s one granted command — `allow-write-text`, never the
-     * read (`src/lib/clipboard.ts`).
+     * read. Called by `src/lib/core/tauri.ts`'s `tauriHost`, the desktop's answer behind
+     * `src/lib/clipboard.ts` — and the workbench's too, since the fake stands in for that host.
      *
      * Accepted and **not stored**, because there is no clipboard here to hold it and no read
      * command to get it back with: this app grants `write_text` only, so a fake that kept the
@@ -24653,7 +24654,8 @@ export function pluginHandlers() {
      */
     "plugin:clipboard-manager|write_text": (): void => undefined,
 
-    /** `tauri-plugin-opener`'s `openUrl`, behind `src/lib/externalLinks.ts`. A no-op for
+    /** `tauri-plugin-opener`'s `openUrl`, called by `src/lib/core/tauri.ts`'s `tauriHost`
+     *  behind `src/lib/externalLinks.ts`. A no-op for
      *  `update_open_release_page`'s reason: it hands a URL to the OS, and there is no OS here
      *  to answer it. The URL is still *built* by the app, which is the half a story is about. */
     "plugin:opener|open_url": (): void => undefined,

@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- HAND-EDITED: the one colour this project uses — `public/light.webmanifest`'s. -->
-    <color name="ground">#FF0E0F13</color>
+    <!-- HAND-EDITED: the one colour this project uses — `mobile/public/light.webmanifest`'s. -->
+    <color name="ground">#FF0C0D12</color>
 </resources>

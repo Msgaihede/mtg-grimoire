@@ -89,10 +89,23 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
 - **Saving a file is below `@/lib/core` since phase 4** (step 4.3): `@/lib/core/files`'s
   `saveText` answers `"saved"`/`"cancelled"` on the Android host — which answers the desktop's own
   `export_save_file` with the system's save dialog — and `"handed"` in a browser, which downloads.
-  **Picking is the one thing that needed no seam**: Android's WebView answers an
+  **Picking needed no seam on the phone face**: Android's WebView answers an
   `<input type="file">` with the system picker and hands the page a `File` for the `content://`
-  document, so `phone/transfer/browserFiles.ts` keeps the read, the decode and the clipboard, on
-  every install alike. Do not grow a second file module beside either.
+  document, so the phone's import sheet keeps an input of its own on every install alike, and
+  reads what it is handed with `@/lib/core/browserFiles` — the megabyte, the four readings, and
+  the download `saveText` hands over. (That module was `phone/transfer/browserFiles.ts` until the
+  web host needed the same read, step 5.4.) Do not grow a second file module beside either.
+- **The clipboard and the way out to a browser are below `@/lib/core` since phase 5** (step 5.4):
+  `src/lib/core/index.ts` chooses a `host` where it chooses the `core` — the two Tauri plugins on
+  the desktop, a browser's clipboard and Tauri's opener on the Android host (which registers no
+  clipboard plugin and grants the page the opener's pair), and a browser's own two answers in the
+  web build. `@/lib/clipboard`'s `copyText` and `@/lib/externalLinks`' `openExternal` are how
+  both faces ask, so a copy refused for want of a clipboard is one sentence everywhere, and the
+  phone face imports the URL builders beside it. **A control that leaves the app from a phone page
+  is still a real link where it can be** — `phone/card/OpenOn.tsx`'s three rows are
+  `<a target="_blank">`, which a browser opens in a tab and the Android host's guard hands to the
+  system browser; `openExternal` is for a press that has to compute its address first, as the Sync
+  panel's *Connect Patreon* does.
 - **What only one host has arrives from the host, in a form both understand**: Android's back
   gesture as History navigation (Tauri's shell sends it to the WebView's `goBack()` while there is
   an entry to go back to, so the phone router's pushes are what it walks; from the first entry the
@@ -122,9 +135,17 @@ edition is **inert** — the digits do not move between editions.
   whatever owns the window — in a browser, its own private-window chord.
 - **`F1` is left to the browser on purpose.** The map's only mount is the caption row, which this
   edition does not draw, and mounting it elsewhere is not worth it yet: its catalogue lists chords
-  the edition makes inert, and in a browser tab the digit chords it would teach are, in most
-  browsers, the tab switcher's before the page sees them (not measured here). The light edition's
-  keyboard story is the web host's (phase 5).
+  the edition makes inert.
+- **In Chrome the page sees `Ctrl+1…9` first, and the tab switcher runs only for the ones it
+  leaves alone** (measured 2026-10-04, step 5.4, light-app.md §9.4 — this said the digits were
+  the tab switcher's *before* the page saw them, which was a guess). The chords the edition
+  takes on the desktop face — 2, 4, 5, 6, 7 — move the app and switch no tab; the inert ones —
+  1, 3, 8, 9 — and every digit on the phone face, which binds none, switch tabs. `F1` reaches
+  the page, which leaves it alone, and Chrome opens a tab of its own; `Ctrl+Shift+N` never
+  reaches the page. **What that does not
+  establish**: the keys were injected over the DevTools protocol into headless Chrome 154, so
+  not a real keyboard in a window with a tab strip, not Firefox or Safari, and not an installed
+  window, which has no tabs. No key map was built on it.
 
 ## What the phone face may import
 
@@ -197,9 +218,13 @@ failure behind each at its own site:
 - **A `popstate` is followed without writing history.** Moving the store *to* the URL takes up to
   three writes, and the places between them are ones the URL never named; written back, they
   bury the entry the reader just went back to.
-- **A refused history write is swallowed.** Browsers ration the History API and the write is made
-  from inside the store's own `set`: a throw there cuts off every subscriber registered after
-  the adapter. The URL is one step stale and the next write the browser accepts puts it right.
+- **A refused history write is swallowed, and a refused _push_ is still owed.** Browsers ration
+  the History API — one throws, another drops the call — and the write is made from inside the
+  store's own `set`: a throw there cuts off every subscriber registered after the adapter. A
+  refused replace costs a URL one step stale, which the next accepted write puts right. A refused
+  push costs an entry, so the adapter remembers it and makes the next write *as* the push,
+  whatever kind it would have been — otherwise a card opened over the new page renamed the entry
+  the reader had left. The refusal is read off the address, since a dropped call throws nothing.
 - **The URL wins over the stored start view.** `mobile:tauri` shares the desktop's database,
   whose stored view may be one the light rail has no row for, so the URL is seeded as a press.
 
@@ -234,6 +259,24 @@ failure behind each at its own site:
 - **`navigate` does nothing for the place the reader is already on, asked of the place and not of
   the string**: `/` is the start view without spelling it, and a press on the lit tab must not
   push `/search` over it.
+- **A write the browser refuses does not strand the reader, and the place is held rather than
+  written some other way** (step 5.4). The router keeps the place in memory, tells its listeners
+  and draws it; the next write the browser takes, or the next Back, puts the address in step
+  again. **Not a fallback to a replace**: the ration is one counter for both verbs, and a replace
+  that was taken would rename the entry beneath — the page under an open card — and break
+  `PUSHED`'s promise. Leaving a held place is forgetting it, unless the browser's own entry is a
+  pushed card over the same page — a step between printings was the write refused — where the
+  real Back is still the right close. A hold ends with the address it was made over: a
+  traversal ends it, and so does a write the desktop face made after a crossing.
+- **A card is pushed over its own page or not at all.** A page that was only held has no entry,
+  so a card the browser *did* take would have sat, marked, on whatever the reader had left — and
+  ✕ would go back past the page they were on. The router writes the page first where the
+  browser's entry is not it, and the card only once that landed. A held page a reader leaves by
+  some other push is not paid back: Back's path is then one page short.
+- **`back()` waits a bounded time for its Back** (`BACK_WAIT_MS`). Its one release was the
+  `popstate`, so a `history.back()` the browser dropped left ✕ and Escape inert; when the wait is
+  up and the reader is still where they pressed, the entry is renamed instead, as a linked card's
+  is. `router.test.ts` holds both, with the refusal thrown and dropped.
 
 ## Running it
 
@@ -334,7 +377,10 @@ failure behind each at its own site:
   5.1 and 5.2, 2026-10-04 — *The web host* below): the launch's downloads run in a browser, so
   a web install has cards after its first run. **Its service worker is built** (step 5.3 —
   *The web host* below): the shell precached, card pictures answered on the app's own origin
-  from Cache Storage, and a newer build held until the reader takes it. Nothing is hosted.
+  from Cache Storage, and a newer build held until the reader takes it. **The manifest and its
+  icons** are in `mobile/public/`, the light builds' own public directory since step 5.4, so no
+  other build carries them; `scripts/light-icons.mjs` renders the icons from the mark, and
+  **there is no install button**: a browser's own install UI is the install. Nothing is hosted.
 - **No device sync on a light install**: the phone face pairs with nothing. **It does hear the
   host's card sync and the feeds** — `phone/cardData.ts`'s `useCardDataWatch`, mounted once in
   `PhoneFace`, runs the desktop shell's own listeners (`useSyncInvalidation`, the feed hooks) and
@@ -371,8 +417,11 @@ and the `mtgimg` protocol over the core's `images::answer`.
   `http(s)` link that is not one of the app's pages to the system browser (`navigation.rs`'s
   guard), so a deck note's link never replaces the app. **`capabilities/light.json` holds three
   permissions**: `core:default`, and `opener:allow-open-url` with `opener:allow-default-urls` —
-  the desktop's exact pair, never `opener:default` — because the desktop face, drawn on a tablet
-  past 1024px, opens its links through `@tauri-apps/plugin-opener` from the page. No `dialog:`
+  the desktop's exact pair, never `opener:default` — because a press that leaves the app goes
+  through `@tauri-apps/plugin-opener` from the page on this host, by `@/lib/core`'s `host`
+  (step 5.4): the desktop face's `Open on …` on a tablet past 1024px, and *Connect Patreon* on
+  both faces. No clipboard permission, because the host has no clipboard plugin: a copy is the
+  WebView's own `navigator.clipboard`, **which no device has been seen to grant**. No `dialog:`
   or `fs:` permission: both are used from Rust only. `host.test.ts` holds the list. (This said
   the file *stays `core:default` alone*, which the file and that test had both left behind.)
 - **The launch's downloads wait on a metered link** (step 4.4): the host asks Android over JNI
@@ -479,8 +528,7 @@ built in the `web` mode.
   each feed in turn, on every launch, and one first run against the real hosts is measured in
   [light-app.md](../docs/reference/light-app.md) §9.2. **Not there yet**, each with the step
   that owns it in [the plan](../docs/superpowers/plans/2026-10-04-light-app-phase-5.md): no
-  clipboard, open-a-link or file seam for the desktop face in a browser, and the manifest
-  unfinished (5.4); no hosting (5.5); no sync (phase 6).
+  hosting (5.5); no sync (phase 6).
 - **The service worker is the web host's, and nothing here names it** (step 5.3;
   `src/lib/core/web/sw/`, registered by the page's half of the web core in a built app and
   never by the dev server). What a page sees of it is three things, each through the seam:
@@ -503,6 +551,13 @@ built in the `web` mode.
     first activates, and a picture asked for before that is a 404 the frame's retry heals.
     **A hard reload starts a page no worker controls**, by the browser's own rule; the page
     asks the active worker to take it, and it does (driven in Chrome, 2026-10-04).
+- **The desktop face's file dialogs are answered on the page** (step 5.4): `export_save_file` is
+  a download and `import_pick_file` a hidden `<input type="file">`, in front of the Worker
+  (`src/lib/core/web/files.ts`), in the desktop commands' own result shapes — so
+  `src/features/transfer/files.ts` and both dialogs are unchanged. A save answers `true` for
+  *handed to the browser*, which is honest only because `ExportDialog` draws no sentence from it.
+  The clipboard and a link out are a browser's own there (*Nothing here asks where it is
+  running*, above), and light-app.md §9.4 has what was driven.
 - **What the storage notice was shown to do, and what it was not.** Driven in Chromium on
   2026-10-04, in a dev build, by removing the database's OPFS folder by hand between two
   loads: the notice was drawn, survived a reload and went on its button. **No browser has

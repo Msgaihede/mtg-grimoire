@@ -21,6 +21,9 @@ import { serviceWorker } from "./vite.sw.ts";
 /** The light app's document, from the repository root. */
 const ENTRY = "mobile/index.html";
 
+/** What is served at the light app's root as it stands — resolved against this file. */
+const PUBLIC_DIR = fileURLToPath(new URL("./mobile/public/", import.meta.url));
+
 /** A request as Connect hands it over — Node's `IncomingMessage`, whose type is not installed. */
 interface Asked {
   url?: string;
@@ -209,6 +212,13 @@ export default defineConfig(({ mode, command, isPreview }) => {
       // is written into `dist-web/` after everything else and into no other build.
       ...(web ? [webEngine(engineBuild, engine, building), serviceWorker("dist-web")] : []),
     ],
+    // **The light builds' own public directory**: the web manifest, its icons and the favicon.
+    // Vite copies a public directory into every build that names it, and the one at the root is
+    // every build's — there the manifest went out in the desktop's `dist/` and the share
+    // viewer's `dist-share/`, which have no use for it. Here it reaches `dist-mobile/`, `dist-web/`
+    // and the two dev servers, and nothing else. The favicon is a second copy of the mark for
+    // that reason; `mobile/host.test.ts` holds it equal to the master.
+    publicDir: PUBLIC_DIR,
     // The Storybook fake, under the real `ipc.ts` — **the four aliases `.storybook/main.ts`
     // declares, read from the one list both use**, for its reason: the fake sits *under* the
     // hand-written mirror, so the light app in a plain browser exercises the mirror too.
