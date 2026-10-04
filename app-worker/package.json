@@ -1,0 +1,10 @@
+{
+  "name": "mtg-grimoire-app-worker-deploy",
+  "version": "0.0.0",
+  "private": true,
+  "description": "The one tool that deploys this Worker, and the lockfile that says exactly which bytes it is. Not a workspace of the root package and not part of the app: `npm ci --ignore-scripts --prefix app-worker`, then `npx --no-install wrangler …` from this directory (README, \"Deploying\").",
+  "type": "module",
+  "devDependencies": {
+    "wrangler": "4.146.0"
+  }
+}

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import {
   MANIFEST_PATH,
   SCHEMA_PATH,
+  publicationOf,
   releaseTag,
   userSchemaVersion,
   verdict,
@@ -12,6 +13,7 @@ import {
 import schemaRs from "../crates/grimoire-core/src/schema.rs?raw";
 import wireRs from "../crates/grimoire-core/src/sync_engine/wire.rs?raw";
 import packageJson from "../package.json?raw";
+import guardSource from "./web-deploy-guard.mjs?raw";
 
 describe("userSchemaVersion", () => {
   it("reads the engine's real declaration", () => {
@@ -71,18 +73,97 @@ describe("releaseTag", () => {
   });
 });
 
+describe("publicationOf", () => {
+  it("reads what `gh release view --json isDraft` prints", () => {
+    expect(publicationOf('{"isDraft":false}\n')).toBe("published");
+    expect(publicationOf('{"isDraft":true}')).toBe("draft");
+  });
+
+  it.each([
+    ["nothing", ""],
+    ["not JSON", "release not found"],
+    ["another field", '{"tagName":"v0.40.0"}'],
+    ["a string", '{"isDraft":"false"}'],
+  ])("answers null for %s, never `published`", (_name, text) => {
+    expect(publicationOf(text)).toBeNull();
+  });
+});
+
 describe("verdict", () => {
-  it("passes when the two are equal", () => {
-    const answer = verdict({ tree: 59, release: 59, tag: "v0.40.0" });
+  const published = { publication: "published" };
+
+  it("passes when the two are equal and the release is published", () => {
+    const answer = verdict({ tree: 59, release: 59, tag: "v0.40.0", ...published });
     expect(answer).toMatchObject({ ok: true, code: 0 });
     expect(answer.sentence).toContain("59");
     expect(answer.sentence).toContain("v0.40.0");
+    expect(answer.sentence).not.toContain("--offline");
   });
 
   it("says so when HEAD is the release itself", () => {
-    const answer = verdict({ tree: 59, release: 59, tag: "v0.40.0", headIsTag: true });
+    const answer = verdict({
+      tree: 59,
+      release: 59,
+      tag: "v0.40.0",
+      headIsTag: true,
+      ...published,
+    });
     expect(answer).toMatchObject({ ok: true, code: 0 });
     expect(answer.sentence).toMatch(/^HEAD is v0\.40\.0/);
+  });
+
+  // release-please tags the draft (`force-tag-creation`), so after a release run that failed the
+  // tag exists, the tree equals it, and nobody can install it.
+  it("refuses a draft, though the schemas are equal — even on the tag itself", () => {
+    for (const headIsTag of [false, true]) {
+      const answer = verdict({
+        tree: 60,
+        release: 60,
+        tag: "v0.41.0",
+        headIsTag,
+        publication: "draft",
+      });
+      expect(answer).toMatchObject({ ok: false, code: 1 });
+      expect(answer.sentence).toMatch(/^v0\.41\.0 is still a draft/);
+    }
+  });
+
+  it("cannot tell when the question was not answered, and that is never a pass", () => {
+    const answer = verdict({
+      tree: 59,
+      release: 59,
+      tag: "v0.40.0",
+      publication: "unknown",
+      unasked: "`gh` is not installed",
+    });
+    expect(answer).toMatchObject({ ok: false, code: 2 });
+    expect(answer.sentence).toContain("could not be asked (`gh` is not installed)");
+    expect(answer.sentence).toContain("--offline");
+  });
+
+  it("does not pass a caller that forgot to ask", () => {
+    expect(verdict({ tree: 59, release: 59, tag: "v0.40.0" })).toMatchObject({
+      ok: false,
+      code: 2,
+    });
+    expect(verdict({ tree: 59, release: 59, tag: "v0.40.0", publication: "yes" }).ok).toBe(false);
+  });
+
+  it("passes offline, and says the question was skipped", () => {
+    const answer = verdict({ tree: 59, release: 59, tag: "v0.40.0", publication: "offline" });
+    expect(answer).toMatchObject({ ok: true, code: 0 });
+    expect(answer.sentence).toMatch(
+      /\(--offline: whether v0\.40\.0 is published.* was not asked\.\)$/,
+    );
+  });
+
+  it("refuses a differing tree whatever the release's state — GitHub is not needed to say no", () => {
+    for (const publication of ["published", "draft", "offline", "unknown"]) {
+      expect(verdict({ tree: 60, release: 59, tag: "v0.40.0", publication })).toMatchObject({
+        ok: false,
+        code: 1,
+      });
+    }
   });
 
   it("refuses a tree ahead of the release, in one sentence that names both", () => {
@@ -118,7 +199,7 @@ describe("verdict", () => {
     ],
     ["nothing on either side", { tree: null, release: null, tag: "v0.40.0" }, /in this tree/],
   ])("cannot tell with %s, and that is never a pass", (_name, input, sentence) => {
-    const answer = verdict(input);
+    const answer = verdict({ ...input, ...published });
     expect(answer).toMatchObject({ ok: false, code: 2 });
     expect(answer.sentence).toMatch(sentence);
     expect(answer.sentence).toMatch(/nothing was compared|no tag to compare/);
@@ -130,6 +211,19 @@ describe("what the guard stands on", () => {
   // another constant, this guard compares the wrong number.
   it("is the constant sync stamps every op with", () => {
     expect(wireRs).toMatch(/op\.schema = Some\(crate::schema::USER_SCHEMA_VERSION\);/);
+  });
+
+  // And the guard's stated limit, held to the source that makes it true: a batch that does not
+  // parse is `Newer` — held until an update — only when an op in it carries a higher schema. A
+  // wire change with no rung is `Malformed`, which the client steps over. If that ever changes,
+  // the script's warning is the thing to rewrite.
+  it("cannot see a wire change that is not a schema rung, and the wire still says why", () => {
+    expect(wireRs).toMatch(/Malformed\(String\)/);
+    expect(wireRs).toMatch(/Newer\(String\)/);
+    expect(wireRs).toContain(
+      "the client steps over a `Malformed` batch where it holds on a `Newer` one",
+    );
+    expect(guardSource).toContain("equal schemas are necessary, not sufficient");
   });
 
   it("is an npm script, so the runbook's step is one command", () => {

@@ -305,7 +305,11 @@ export const ARMS = [
   // `share-worker/`, whose `wrangler.jsonc` one does, which is why that tree still has no arm.
   // The crossing runs the other way (`hosting.test.ts` reads `crates/grimoire-core`), and the
   // engine's arm already sets `frontend`. No job in this gate deploys it; `release.yml`'s
-  // `web-deploy` does, at a tag, and nothing else may (step 6.6).
+  // `web-deploy` does, at a tag, and nothing else may (step 6.6). **`package.json` and
+  // `package-lock.json` here are that job's**: the one tool that deploys, pinned with everything
+  // under it. No job in this gate installs from them — the root's `npm ci` does not see a
+  // manifest that is not a workspace — and `frontend` runs the test that holds them
+  // (`scripts/release-rule.test.mjs`).
   { match: ["app-worker/*"], jobs: ["frontend", "web"] },
 
   // **The light app's web host** (phase 5, step 5.1): `grimoire-web`, a workspace member, so

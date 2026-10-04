@@ -190,12 +190,15 @@ those was run by an agent because Markus asked for it, and **the ask is per depl
 that for the light app's phase 6 he asked once for the phase's deploys, the relay's and this
 Worker's (2026-10-04), and for nothing after it. **One job deploys it, and it is the only job
 that deploys anything** (decided 2026-10-04): `release.yml`'s `web-deploy`, at a release tag,
-once the secrets it needs exist — the three hosts ship from one tag, because a web app ahead of
-the last release sends paired desktops ops they must hold
-([ci-and-releases.md](../reference/ci-and-releases.md), *The release rule*). Between releases
-a deploy is still by hand and still asked for, and **`npm run web:deploy-guard` is run first**:
-it refuses a tree whose user schema is not the last release's. The relay and the share Worker
-are deployed by no job.
+once the values it needs exist in the `release` environment — the three hosts ship from one
+tag, because a web app ahead of the last release sends paired desktops ops they must hold
+([ci-and-releases.md](../reference/ci-and-releases.md), *The release rule*). **So merging the
+release PR is a deploy of this Worker.** The tool is `wrangler` at the version
+`app-worker/package-lock.json` pins, with everything under it — installed with no lifecycle
+script run, by the job and by hand alike. Between releases a deploy is still by hand and still
+asked for, and **`npm run web:deploy-guard` is run first**: it refuses a tree whose user schema
+is not the last release's, or whose last release is still a draft — and it cannot see a wire
+change that is not a schema rung. The relay and the share Worker are deployed by no job.
 [`app-worker/README.md`](../../app-worker/README.md) is the runbook, with every probe in it answered
 at the real address that day. **Who has run it**: headless Chrome 154, driven and measured; the
 owner's Firefox and the owner's phone, a sentence each. What nobody has seen — Safari, an

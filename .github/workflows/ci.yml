@@ -561,8 +561,13 @@ jobs:
       # `apksigner` words its answer differently or that re-signing moved a library off its page
       # boundary. So it runs here first: a keystore minted with a random password in the runner's
       # temp folder, the APK above re-signed with it, the script's own checks — one signer, that
-      # certificate, the alignment Gradle gave — and both files deleted. **Not a secret and not
+      # certificate, the alignment Gradle gave — and every file deleted. **Not a secret and not
       # the artifact**: what is uploaded below is still the debug-signed build.
+      #
+      # **And its two refusals, which a release must be able to rely on**: a keystore that is
+      # not the one the committed fingerprint names — the release's guard against a key made a
+      # second time — and a keystore whose certificate is an Android debug one. Each must exit
+      # non-zero and leave no APK behind, or this step fails.
       - name: Prove the release signing on a throwaway key
         shell: bash
         run: |
@@ -575,11 +580,43 @@ jobs:
           # The version the APK must carry, and with it the versionCode Tauri derives from it.
           ANDROID_EXPECT_VERSION=$(node -p "require('./mobile/src-tauri/tauri.conf.json').version")
           export ANDROID_EXPECT_VERSION
-          trap 'rm -f "$ANDROID_KEYSTORE" "$RUNNER_TEMP/throwaway-signed.apk"' EXIT
-          "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$ANDROID_KEYSTORE" \
-            -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" \
-            -keyalg RSA -keysize 2048 -validity 1 -dname "CN=throwaway"
-          bash scripts/android-sign.sh apk-out/mtg-grimoire-light-arm64.apk "$RUNNER_TEMP/throwaway-signed.apk"
+          out="$RUNNER_TEMP/throwaway-signed.apk"
+          pin="$RUNNER_TEMP/throwaway-signer.sha256"
+          der="$RUNNER_TEMP/throwaway.der"
+          trap 'rm -f "$ANDROID_KEYSTORE" "$out" "$pin" "$der"' EXIT
+          mint() {
+            rm -f "$ANDROID_KEYSTORE"
+            "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$ANDROID_KEYSTORE" \
+              -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" \
+              -keyalg RSA -keysize 2048 -validity 1 -dname "$1"
+          }
+          sign() {
+            bash scripts/android-sign.sh apk-out/mtg-grimoire-light-arm64.apk "$out"
+          }
+
+          # The key, its fingerprint as the owner takes it, and the APK signed and held to both.
+          mint "CN=throwaway"
+          "$JAVA_HOME/bin/keytool" -exportcert -keystore "$ANDROID_KEYSTORE" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" -file "$der"
+          sha256sum "$der" | cut -d' ' -f1 > "$pin"
+          ANDROID_SIGNER_PIN="$pin" sign
+          [ -s "$out" ] || { echo "the signing reported success and wrote no APK" >&2; exit 1; }
+
+          # Another key's fingerprint: refused, and the APK above is gone with the refusal.
+          printf '%064d\n' 0 > "$pin"
+          if ANDROID_SIGNER_PIN="$pin" sign; then
+            echo "signed with a key the fingerprint does not name" >&2
+            exit 1
+          fi
+          [ ! -e "$out" ] || { echo "a refused signing left an APK behind" >&2; exit 1; }
+
+          # A debug certificate: refused whether or not a fingerprint is asked for.
+          mint "CN=Android Debug,O=Android,C=US"
+          if sign; then
+            echo "signed with an Android debug certificate" >&2
+            exit 1
+          fi
+          [ ! -e "$out" ] || { echo "a refused signing left an APK behind" >&2; exit 1; }
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

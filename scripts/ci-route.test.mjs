@@ -263,6 +263,10 @@ describe("the arms", () => {
     ["app-worker/_headers", T, F, F, F, F, F, T],
     ["app-worker/src/headers.ts", T, F, F, F, F, F, T],
     ["app-worker/src/index.ts", T, F, F, F, F, F, T],
+    // The deploy tool's manifest and lockfile (step 6.6): `release-rule.test.mjs` reads both, and
+    // no job in this gate installs from them — `release.yml`'s `web-deploy` does.
+    ["app-worker/package.json", T, F, F, F, F, F, T],
+    ["app-worker/package-lock.json", T, F, F, F, F, F, T],
     // Its runbook is prose, by the arm above every tree's; its `tsc` program is the glob's.
     ["app-worker/README.md", F, F, F, F, F, F, F],
     ["tsconfig.app-worker.json", T, F, F, F, T, F, T],
@@ -272,6 +276,8 @@ describe("the arms", () => {
     ["mobile/src-tauri/src/lib.rs", T, T, F, F, F, T, F],
     ["mobile/src-tauri/Cargo.toml", T, T, F, F, F, T, F],
     ["mobile/src-tauri/gen/android/app/src/main/AndroidManifest.xml", T, T, F, F, F, T, F],
+    // The release signer's fingerprint, once the owner commits it: `host.test.ts` holds its shape.
+    ["mobile/src-tauri/release-signer.sha256", T, T, F, F, F, T, F],
     ["mobile/index.html", T, F, F, F, T, F, T],
     ["mobile/phone/CardSheet.tsx", T, F, F, F, T, F, T],
     ["mobile/host.test.ts", T, F, F, F, T, F, T],

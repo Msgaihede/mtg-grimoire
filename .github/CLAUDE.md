@@ -74,14 +74,19 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   and an older build holds a newer op until it updates. A host that ships ahead strands the others, so:
   - `build` (desktop matrix), `android` (the APK, as `ci.yml` builds it) and `web` (`web:wasm`, `web:build`, `web:smoke`) all build at the tag and hold no secret.
   - `android-sign` re-signs the APK with the release key (`scripts/android-sign.sh`) and attaches `mtg-grimoire-<version>-android-arm64.apk`.
-  - `web-deploy` runs `npx wrangler@<exact> deploy` for `app-worker/`, then `scripts/web-deploy-probe.mjs` against the origin. It needs `build`, `android-sign` and `web`: a deploy is live at once, so it goes last.
+    The key is held to the committed fingerprint `mobile/src-tauri/release-signer.sha256`: no file, no APK; another key or a debug certificate is refused.
+  - `web-deploy` installs `wrangler` from `app-worker/package-lock.json` (`npm ci --ignore-scripts`, no secret in that step), runs `npx --no-install wrangler deploy`,
+    then `scripts/web-deploy-probe.mjs` against the origin. It needs `build`, `android-sign` and `web` — a deploy is live at once, so it goes last — and refuses a tag older than the newest published release.
   - `publish` needs `build`, `android-sign` and `web-deploy`; any failure leaves the release a draft.
-- **Secrets live in jobs that build nothing**: `android-sign` and `web-deploy` run no `npm ci`, cargo or Gradle. Each first asks whether its secrets are set:
-  none → attach/deploy nothing, say so in the summary, end green; some but not all → fail. A debug-signed APK is never attached.
-- **One job deploys one Worker**: `web-deploy` is the only `wrangler` in any workflow. The relay and the share Worker are deployed by no job.
-- **Fence**: `scripts/release-rule.test.mjs` holds the job graph, where secrets may appear, the single `wrangler` line, one version across every manifest
-  and `release-please-config.json`, and an Android `versionCode` that rises with the version.
-- **Between releases**: `npm run web:deploy-guard` refuses a by-hand web deploy from a tree whose `USER_SCHEMA_VERSION` differs from the last tag's.
+- **Secrets live in jobs that build nothing, and in the `release` environment**: `android-sign` and `web-deploy` run no root `npm ci`, cargo or Gradle, and are the only jobs with `environment: release`
+  (a repository secret is readable from any branch's workflow; an environment's only from `main`, once the owner restricts it). `on:` is a push to `main` only.
+  Each first asks whether its values are set, handed `true`/`false` and never the value: none → attach/deploy nothing, say so in the summary, end green; some but not all → fail. A debug-signed APK is never attached.
+- **One job deploys one Worker**: `web-deploy` is the only `wrangler` in any workflow. The relay and the share Worker are deployed by no job. Merging the release PR is therefore a deploy.
+- **Fence**: `scripts/release-rule.test.mjs` holds the job graph, the trigger, every spelling of `secrets` and which job may read which, the exact list of commands a secret-holding job may run,
+  the environment, the single `wrangler` line and its lockfile, one version across every manifest and `release-please-config.json`, and an Android `versionCode` that rises with the version.
+  A new step in `android-sign` or `web-deploy` that runs anything must be added to that list.
+- **Between releases**: `npm run web:deploy-guard` refuses a by-hand web deploy from a tree whose `USER_SCHEMA_VERSION` differs from the last tag's, or whose last release is still a draft.
+  Equal schemas are necessary, not sufficient: a wire change with no schema rung is dropped by an older build, and the guard cannot see it.
 - **Release-please automation**:
   - Versions are automated via Conventional Commits; never bump versions manually.
   - `release-please-config.json` tracks `package.json`, `Cargo.lock` (`@.name.value`), workspace member manifests, and `tauri.conf.json` files.

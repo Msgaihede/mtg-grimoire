@@ -3,6 +3,8 @@ import manifest from "./src-tauri/gen/android/app/src/main/AndroidManifest.xml?r
 import filePaths from "./src-tauri/gen/android/app/src/main/res/xml/file_paths.xml?raw";
 import appGradle from "./src-tauri/gen/android/app/build.gradle.kts?raw";
 import androidIgnore from "./src-tauri/gen/android/.gitignore?raw";
+import signScript from "../scripts/android-sign.sh?raw";
+import releaseYml from "../.github/workflows/release.yml?raw";
 import mainActivity from "./src-tauri/gen/android/app/src/main/java/com/mtggrimoire/app/MainActivity.kt?raw";
 import themes from "./src-tauri/gen/android/app/src/main/res/values/themes.xml?raw";
 import nightThemes from "./src-tauri/gen/android/app/src/main/res/values-night/themes.xml?raw";
@@ -80,6 +82,27 @@ describe("the Android project's hand edits", () => {
     for (const name of ["keystore.properties", "key.properties", "*.jks", "*.keystore"]) {
       expect(androidIgnore.split(/\r?\n/), name).toContain(name);
     }
+  });
+
+  it("names the release's signer in one line of hex, once the owner has made the key", () => {
+    // `src-tauri/release-signer.sha256` is the SHA-256 of the certificate every release's APK is
+    // signed with — public, and in every such APK. `release.yml` attaches no APK until it is
+    // committed, and `scripts/android-sign.sh` refuses a keystore that is not the one it names:
+    // a key made a second time signs happily and installs over nothing. **Absent until the key
+    // exists**, so this holds its shape for the day it appears — the script reads it with the
+    // same rule, and a file it cannot read is a release with no APK.
+    const pins = Object.entries(
+      import.meta.glob("./src-tauri/release-signer.sha256", {
+        query: "?raw",
+        import: "default",
+        eager: true,
+      }),
+    ) as [string, string][];
+    expect(pins.length).toBeLessThanOrEqual(1);
+    for (const [, pin] of pins) expect(pin).toMatch(/^[0-9a-f]{64}\n$/);
+    // The script's own reading of it, so the two rules cannot part.
+    expect(signScript).toContain('[[ "$pin" =~ ^[0-9a-f]{64}$ ]]');
+    expect(releaseYml).toContain("ANDROID_SIGNER_PIN: mobile/src-tauri/release-signer.sha256");
   });
 
   it("holds no keystore and no signing properties", () => {

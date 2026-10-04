@@ -3,15 +3,18 @@
 # rule's Android half (light app phase 6, step 6.6).
 #
 #   ANDROID_KEYSTORE=<path> ANDROID_KEYSTORE_PASSWORD=… ANDROID_KEY_ALIAS=… ANDROID_KEY_PASSWORD=… \
-#     [ANDROID_EXPECT_VERSION=0.41.0] bash scripts/android-sign.sh <in.apk> <out.apk>
+#     [ANDROID_EXPECT_VERSION=0.41.0] [ANDROID_SIGNER_PIN=<file>] \
+#     bash scripts/android-sign.sh <in.apk> <out.apk>
 #
 # Two jobs run it, with one difference between them:
 #
-#   - `release.yml`'s `android-sign`, with the release keystore decoded from a secret. What it
-#     writes is the APK a release attaches.
+#   - `release.yml`'s `android-sign`, with the release keystore decoded from a secret and
+#     ANDROID_SIGNER_PIN naming the committed fingerprint every release is held to
+#     (`mobile/src-tauri/release-signer.sha256`). What it writes is the APK a release attaches.
 #   - `ci.yml`'s `android`, with a keystore `keytool` minted a second earlier and deletes a second
 #     later. What it writes is thrown away: the run is the proof that this file works, on every
-#     pull request that can have changed the APK, so the first release is not its first run.
+#     pull request that can have changed the APK, so the first release is not its first run. It
+#     runs the refusals too — a fingerprint that is another key's, and a debug certificate.
 #
 # **Why a re-sign, and not Gradle's own signing config.** Gradle signs inside the build, so the
 # keystore and its passwords would sit on disk in a job that also runs every npm lifecycle
@@ -29,6 +32,12 @@
 # non-zero and deletes the output — an APK signed with any other key cannot update over the last
 # release's, and an update that will not install means an uninstall, which wipes `user.db` and a
 # paired identity with it.
+#
+# **And one it has no business signing.** A keystore whose certificate is the Android debug one
+# is refused whatever else is true; and with ANDROID_SIGNER_PIN set, so is a keystore whose
+# certificate is not the one that file names — before anything is signed. "Signed by the key it
+# was handed" is not "signed by the key the last release was": a keystore made a second time
+# passes the first and strands every phone.
 #
 # **And it refuses to lose what Gradle aligned.** A library stored uncompressed has to sit on a
 # page boundary or Android will not map it. If the input passes `zipalign -c -p 4`, the output
@@ -93,6 +102,29 @@ trap 'rm -rf "$work"' EXIT
 [ -s "$work/cert.der" ] || die "keytool exported an empty certificate"
 key=$(sha256sum "$work/cert.der" | cut -d' ' -f1)
 
+# **Never the Android debug key**, whatever else is true of it: every SDK mints its own
+# `CN=Android Debug`, so an APK signed with one updates over nothing but itself.
+"$keytool" -printcert -file "$work/cert.der" > "$work/subject.txt" 2>&1 \
+  || die "keytool could not read the certificate it exported"
+if grep -qi 'CN=Android Debug' "$work/subject.txt"; then
+  die "the keystore's certificate is an Android debug certificate (CN=Android Debug), which no release is signed with"
+fi
+
+# **The signer every release has had, or none.** Comparing the output with the keystore proves
+# the signing worked, not that it is the *same* key as the last release's — a keystore made
+# again, or the wrong one pasted into the secret, would pass, and its APK would not install over
+# the one on anybody's phone. So a release names the certificate it expects in a committed file
+# (ANDROID_SIGNER_PIN: one line, the SHA-256 as 64 lower-case hex), and a keystore that is not
+# that one is refused before anything is signed. The digest is public — it is in every APK.
+if [ -n "${ANDROID_SIGNER_PIN:-}" ]; then
+  [ -f "$ANDROID_SIGNER_PIN" ] || die "no signer fingerprint at $ANDROID_SIGNER_PIN"
+  pin=$(tr -d '\r\n' < "$ANDROID_SIGNER_PIN")
+  [[ "$pin" =~ ^[0-9a-f]{64}$ ]] \
+    || die "$ANDROID_SIGNER_PIN is not one line of 64 lower-case hex characters"
+  [ "$pin" = "$key" ] \
+    || die "the keystore's certificate is $key, and $ANDROID_SIGNER_PIN says every release is signed by $pin"
+fi
+
 # The input must be an APK this parse can read a signer from. If `apksigner` ever words its
 # answer differently, this is where it shows — before anything is signed, not as a false alarm
 # after.
@@ -140,6 +172,10 @@ version_code=$(sed -n "s/.* versionCode='\([0-9]*\)'.*/\1/p" <<< "$badging")
 version_name=$(sed -n "s/.* versionName='\([^']*\)'.*/\1/p" <<< "$badging")
 if [ -n "${ANDROID_EXPECT_VERSION:-}" ]; then
   [ -n "$version_code" ] || die "aapt2 could not read the APK's versionCode"
+  # A plain x.y.z or nothing: a pre-release (`0.41.0-rc.1`) has no place in Tauri's arithmetic,
+  # and shell arithmetic on its pieces would compute something and call it a versionCode.
+  [[ "$ANDROID_EXPECT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
+    || die "ANDROID_EXPECT_VERSION is '$ANDROID_EXPECT_VERSION', not a plain x.y.z, so no versionCode follows from it"
   IFS=. read -r major minor patch <<< "$ANDROID_EXPECT_VERSION"
   want=$((major * 1000000 + minor * 1000 + patch))
   [ "$version_name" = "$ANDROID_EXPECT_VERSION" ] \

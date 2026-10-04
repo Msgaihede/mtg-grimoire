@@ -18,8 +18,9 @@
 //      rewriting the page, under a policy that says `script-src 'self'`.
 //
 // **It asks more than once**, because the edge may answer with the previous version for a moment
-// after the deploy returns: `PROBE_ATTEMPTS` times (6), `PROBE_WAIT_MS` apart (10 s). The first
-// attempt that passes all three ends it.
+// after the deploy returns: `PROBE_ATTEMPTS` times (6), `PROBE_WAIT_MS` apart (10 s), each
+// given `PROBE_TIMEOUT_MS` (15 s) to answer in full. The first attempt that passes all three
+// ends it; the worst case is about two and a half minutes, and the step has five.
 //
 // It exits non-zero with every question that failed on the last attempt, and writes what it saw
 // to the step summary. **It deploys nothing and holds no token** — a `GET` any browser makes.
@@ -31,6 +32,9 @@ import { headersFor, parseHeaders } from "../app-worker/src/headers.ts";
 
 /** The app's one origin (`app-worker/wrangler.jsonc`, `routes`). */
 export const ORIGIN = "https://mtg-grimoire.app";
+
+/** How long one attempt may take, connection to last byte (`PROBE_TIMEOUT_MS`). */
+const TIMEOUT_MS = Number(process.env.PROBE_TIMEOUT_MS ?? 15_000);
 
 /** The policy a `_headers` file sends with the document, or `null` when it sends none. */
 export function policyOf(headersText) {
@@ -67,6 +71,9 @@ async function ask(origin) {
     headers: { "cache-control": "no-cache" },
     // A redirect is an answer that is not 200, and is reported as one.
     redirect: "manual",
+    // An address that accepts the connection and never answers is an attempt that failed, not
+    // a job that waits out its six hours. The body is read under the same deadline.
+    signal: AbortSignal.timeout(TIMEOUT_MS),
   });
   return {
     status: response.status,
