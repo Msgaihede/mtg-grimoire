@@ -5727,9 +5727,12 @@ here.
   by the owner on 2026-10-04: accepted, and nothing is changed for it.**
 - ~~**A pull's pre-flight is cached per address**, and `?since=` moves with the cursor, so most
   pulls from a browser cost one more Worker invocation — and no Durable Object request.~~
-  **answered — so it does, under workerd** (§10.5): 250 pushes to one address cost no
-  pre-flight after the first, and each pull whose cursor had moved cost one. A paged pull
-  would pay it per page.
+  **answered in part — counted in the relay's own log under workerd** (§10.5): 250 pushes to
+  one address stood behind no pre-flight, the address having been asked about minutes before;
+  seven live pulls stood behind six, and eight on a join behind five. A paged pull pays one a
+  page. **Two things are still not shown**: that a pre-flight reaches no Durable Object is
+  the code's word (`index.ts`), which nothing local counts; and how long a browser keeps the
+  answer — the relay says a day, Chromium honours two hours of it — was not waited for.
 
 ### 10.2 Step 6.2 — the live socket is the core's, and Android runs it (2026-10-04)
 
@@ -6072,9 +6075,15 @@ at 6 836 569 B. A sibling and not a mode of the walk, because it shares the walk
 devices, claim and pairing and none of its shape; those four are a module of their own now,
 `scripts/web-smoke/sync-harness.mjs`, beside the harness both smokes are written in, and the
 walk reads as it did. Nothing runs the measurement but a person; it fails by name when the two
-devices do not end up with the same rows. `release-rule.test.mjs` counts wrangler's
-subcommands across all three files — `d1 execute --local` and `dev --local`, both in the
-harness — and holds each to none of the words that reach Cloudflare.
+devices do not end up with the same rows — **row for row**: each device's whole list read
+through `collection_list`, each row reduced to what an import line set, the lines sorted, and
+the SHA-256 of both compared. (The first record of this step compared a count and a sum of
+copies and called it the rows; every run in the relay-heap rows below, and every run since,
+compares the digest.) `release-rule.test.mjs` counts wrangler's subcommands across the files
+of the run — `d1 execute --local` and `dev --local`, both in the harness — holds each file to
+its relative imports by name, so the list is the whole of the run, pins the one PowerShell
+pipeline the measurement starts to the three cmdlets it is, and holds all of them to none of
+the words that reach Cloudflare.
 
 - **The log is made by the app's own commands.** Each device's first run ingests the smoke's six
   cards grown to as many as thirty thousand printings. The importing device — the desktop face —
@@ -6093,17 +6102,30 @@ harness — and holds each to none of the words that reach Cloudflare.
   starts a trip, and the trip's first request waits as one on a stalled link would. Letting it
   through is the pull.
 - **What is read**: `WebAssembly.Memory`'s byte length off the Worker's live instance over its
-  DevTools session (`Runtime.queryObjects`); `Runtime.getHeapUsage` there five times a second;
-  the tab's process and workerd's from the system's process table; the Worker's own `Network`
-  events for each request; the relay isolate's heap over wrangler's inspector, ten times a
-  second; and `search_cards` asked from the page every 100 ms, each timed to its answer.
+  DevTools session (`Runtime.queryObjects`); `Runtime.getHeapUsage` there five times a second
+  — **answered on the Worker's own thread, so no sample lands inside a synchronous stretch**:
+  that row is the heap either side of the apply, never its peak, and no DevTools domain reads
+  it from outside; the tab's process and workerd's from the system's process table; the
+  Worker's own `Network` events for each request, and the relay's own log for the pre-flights;
+  and `search_cards` asked from the page every 100 ms, each timed to its answer.
+- **The relay isolate's heap is read by request, not by run.** `Runtime.getHeapUsage` over
+  wrangler's inspector, fifty times a second, each sample kept with its time; the heap
+  collected (`HeapProfiler.collectGarbage`) before the pushes, before the measured pull and
+  again before the ack that follows it; and a request's cost read as the used heap just before
+  it was sent against the highest sample by a quarter-second after its last byte. **The first
+  record of this step printed the whole run's peak as the pull's** — the pushes, the importing
+  device's own pull, every ack's compaction and the measured pull, with whatever garbage lay
+  between them — and that figure, 143–157 MB at 50 000 ops, said more than the pull costs.
 - **The runs**: three to five a size for the pull left behind, two a size for the live and
   join cases, and one each for the quota, the claimed join and the slow link — between 21:57
   and 22:40 local, total CPU reading 2–40 % before each, other agents' work being on the
   machine. Ranges are every one of those runs'. **Three more, taken at 22:47–22:55 with the CPU
   at 76–100 %, are kept out of the ranges**: the same applies took 1.6 s, 6.2 s and 48.3 s —
-  1.2 to 3.5 times as long — and linear memory came out the same to the megabyte. Time here
-  is this machine's on a quiet quarter of an hour; the memory is the engine's.
+  1.2 to 3.5 times as long — and linear memory came out the same to the megabyte. **And the
+  re-runs for the relay's heap, 00:00–00:20 on the 5th with the CPU at 32–100 %, give no time
+  to any table here** — a 50 000-op apply took 60 and 73 s in them — only heap figures and
+  the row-for-row comparison, neither of which the load moves. Time here is this machine's
+  on a quiet quarter of an hour; the memory is the engine's.
 
 **One device left behind, then let through — one pull:**
 
@@ -6118,10 +6140,22 @@ harness — and holds each to none of the words that reach Cloudflare.
 | The page's own thread, late by at most | 11–13 ms | 13–14 ms | 15–17 ms |
 | **Linear memory**, before → after | 8.1 → 19.4–19.7 MB | 20.7 → **131.5 MB** | 21.0 → **569.9 MB** |
 | The tab's process | 185 → 214–218 MB | 186–190 → 337–340 MB | 188–190 → 803–944 MB |
-| The Worker's JS heap, peak used | 1.5–1.8 MB | 2.3–3.1 MB | 7.9–9.3 MB |
-| The relay isolate's JS heap, peak used / committed | 4.8 / 6.3 MB | 29.5 / 40.5 MB | **142.6–156.7 / 145.9–159.9 MB** |
+| The Worker's JS heap, highest sample either side of the apply | 1.5–1.8 MB | 2.3–3.1 MB | 7.9–9.3 MB |
 | workerd's process, before → peak | 88 → 115 MB | 88 → 166 MB | 88 → 357–370 MB |
-| Rows equal on both devices afterwards | yes | yes | yes |
+| The two collections, row for row (the re-runs; before them, by count) | equal | equal | equal |
+
+**The relay isolate's JS heap, by request** — used heap just before the request → its highest
+sample after it; the re-runs of 2026-10-05 00:00–00:20, one at 1 000 and two a size above,
+alike to a tenth of a megabyte:
+
+| | 1 000 ops (0.89 MB of log) | 10 000 ops (8.9 MB) | 50 000 ops (44.6 MB) |
+| --- | --- | --- | --- |
+| The pushes — 5, 50, 250 requests, nothing collected between them | 1.0 → 2.4 MB | 1.0 → 18.4 MB | 1.0 → 16.9–18.3 MB |
+| The importing device's own pull, and the ack behind it | 2.3 → 2.4 MB | 5.0 → 18.4 MB | 17.8 → 61.9 MB |
+| **The measured pull** | 1.0 → 2.8 MB | 1.0 → 18.9 MB | 1.0 → **90.2 MB** |
+| The ack after it — a compaction | 1.0 → 1.9 MB | 1.0 → 10.0 MB | 1.0 → 45.7 MB |
+| The whole run's highest, collected as above | 2.8 MB | 18.9 MB | 90.2 MB |
+| The whole run's highest in the first runs, never collected | 4.8 MB | 29.5 MB | 142.6–156.7 MB |
 
 - **The wire is not the cost.** The relay answered its headers in under 200 ms and the body was
   down in 1.4 s at 45 MB; `fetch`'s body is a JS string for a moment and the Worker's heap never
@@ -6137,9 +6171,19 @@ harness — and holds each to none of the words that reach Cloudflare.
 - **Linear memory grew by twelve times the response and is never given back**: 11 MB, 111 MB
   and 549 MB, for the tab's life. By the code, the response's text, the parsed page, every
   opened batch and the apply's one transaction are all alive at once.
-- **The relay's isolate held 3.2–3.5 times the log** — by `group.ts`, the rows, the sorted copy
-  and the serialised answer — which at 50 000 ops is past the 128 MB an isolate is allowed in
-  production. Local workerd enforces no such limit, so nothing failed here.
+- **On the relay, a pull costs twice the log and a compaction costs it once.** The measured
+  pull raised the isolate's heap by 1.9, 17.9 and 89.2 MB for logs of 0.89, 8.9 and 44.6 MB —
+  the rows, and the one string they are serialised into. The ack that follows it, whose moved
+  cursor runs `compactNow`, raised it by 0.9, 9.0 and 44.7 MB: every row read whole, for a
+  decision that needs each row's length. The importing device's own trip costs the log once
+  too — its pull reads the rows it has just pushed, to drop them, and its ack compacts. **A
+  push is not what costs**: 250 of them left 17 MB of garbage between them, no more than 50
+  did. So by these figures production's 128 MB is met by a pull at a log of about 64 MB —
+  some 72 000 of these ops — and by a compaction, or an own-row pull, only at the quota
+  itself, which is 134 MB. **At 50 000 ops the pull's 90 MB is inside the limit**; the first
+  record of this step said it was past it, by reading the run's uncollected peak. The
+  answer's bytes on their way out are outside the JS heap and in none of these figures. Local
+  workerd enforces no limit, so nothing failed here at any size.
 
 **The same import, heard live** (`--live`: nothing held, the 1 s frame debounce at work):
 
@@ -6150,7 +6194,12 @@ harness — and holds each to none of the words that reach Cloudflare.
 | Longest wait of a `search_cards` | 415–456 ms | 2.5–3.0 s | 14.9–15.8 s |
 | Linear memory, before → after | 8.1 → 19.3 MB | 20.7 → 80.0–84.8 MB | 21 → 346–371 MB |
 | Rows equal, after the importer's outbox emptied | 1.4–1.5 s | 5.0–5.3 s | 17.4–19.9 s |
-| The relay isolate's JS heap, peak used | 4.7–4.8 MB | 33.6–38.5 MB | 175.1–181.6 MB |
+| The relay isolate's JS heap, the whole run's highest, uncollected | 4.7–4.8 MB | 33.6–38.5 MB | 158–182 MB |
+
+That last row is **the run's, and no request's**: here the pushes, the pulls and the acks
+overlap, nothing can be collected between them, and each ack's compaction reads the whole log
+again. In the re-run at 50 000 the largest pull — 18.3 MB that time, of four — raised the heap
+by 34.4 MB across its own window, the same twice-its-size the collected runs show.
 
 **Being live does not make the pulls small.** The first trip takes what one second of pushing
 left, and while it applies — deaf to its own socket as to its page — the rest of the import
@@ -6163,7 +6212,7 @@ lands behind it: the second or third pull is most of the log.
 | `collection_import_commit`, in a group (in none) | 0.9–1.0 s (0.7) | 8.8–10.1 s (7.1) | 45.3–49.8 s (34.9–37.8) |
 | The first `POST` after the import answered | 3.0 s | 3.1–3.2 s | 3.8 s |
 | `POST /push`, and how long they took | 5, 0.2 s | 50, 2.0–2.4 s | 250, 10.1–13.2 s |
-| Pre-flights for them | 0 | 0 | 0 |
+| Pre-flights for them, by the relay's own log | 0 | 0 | 0 |
 | Longest wait of a `search_cards` asked after the import answered | 44 ms | 106 ms | 1.1 s |
 | Linear memory, before → after | 8.5 → 14.0 MB | 21.1 → 67.9 MB | 21.3 → 213.8 MB |
 
@@ -6171,9 +6220,23 @@ The import is one transaction and the engine answers nothing inside it, paired o
 longest wait is the import's own length — and that is the importer's to know: the dialog is on
 screen. **The push itself is not deaf**: one read of the outbox, which is the second at 50 000,
 then a seal and a request per envelope, each request an await — a search asked during it was
-answered in a median 1.0–1.2 ms (that row is one run a size, from the loaded three). Every
-push shares one address, so the day-long pre-flight cache covers all of them; a pull's address
-carries its cursor, and each pull whose cursor had moved cost one.
+answered in a median 1.0–1.2 ms (that row is one run a size, from the loaded three).
+
+**Pre-flights, counted in the relay's log** (an `OPTIONS` to the same path; a Worker's own
+`Network` events do not show them reliably). Every push shares one address, and a browser
+keeps a pre-flight's answer per address: none of the 5, 50 or 250 pushes was pre-flighted,
+the pairing's own pushes minutes earlier having been. A pull's address carries its cursor, so
+a pull whose cursor has moved is asked about again: in the left-behind runs the two pulls
+(the importer's own and the measured one) stood behind one pre-flight, the measured pull's
+address being one the device had already asked; live at 50 000, seven pulls behind six; on
+the join, eight behind five. **How long the answer is kept is the browser's**: the relay says
+a day (`cors.ts`, `MAX_AGE_SECS`), Chromium caps what it honours at two hours and Firefox at
+a day ([MDN, Access-Control-Max-Age](https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Access-Control-Max-Age),
+read 2026-10-05, which cites Chromium's `preflight_result.cc`) — so a tab open past two
+hours pre-flights its next push again, which no run here lasted long enough to see. That a
+pre-flight costs a Worker invocation and no Durable Object request is the code's word
+(`index.ts` answers it before the object is addressed) and not a measurement: local workerd
+counts neither.
 
 **A device paired into a collection that size** (`--join`: imported in no group, then claimed
 and paired — the baseline):
@@ -6187,21 +6250,25 @@ and paired — the baseline):
 | … on the device sending the baseline | 1–9 ms | 109–129 ms | 869–895 ms |
 | Linear memory, joining device | 7.7 → 19.8 MB | 20.4 → 120–133 MB | 20.6 → 335–357 MB |
 | Rows equal, after *Codes match* | 3.2–3.5 s | 7.4–9.2 s | 33.5–36.3 s |
-| The relay isolate's JS heap, peak used / committed | 3.8 / 5.4 MB | 39.8–42.9 / 50.2–54.5 MB | **224–249 / 272–300 MB** |
+| The relay isolate's JS heap, the whole run's highest, uncollected | 3.8 MB | 39.8–42.9 MB | 224–258 MB |
 
-A join is the same cost by another road, and the relay's is higher: each of the joining
-device's pulls and acks reads the log again. **A device that claimed before it imported leaves
-that import on the log too** (`--join --claimed`, 10 000 rows, one run): the joining device was
-answered 18.7 MB for the same 10 000 rows — 8.9 MB sealed under a key it never held, read in
-170 ms, stepped over and recorded in one `error_log` row, then the baseline — and the relay's
-heap peaked at 74.4 MB.
+A join is the same cost by another road. The relay's last row is again the run's and no
+request's — 251 pushes, six to eight pulls and as many acks, each ack a compaction over the
+whole log, with nothing collected between — and in the re-run its largest pull, 27.6 MB,
+raised the heap by 35.0 MB across its own window. **A device that claimed before it imported
+leaves that import on the log too** (`--join --claimed`, 10 000 rows, one run): the joining
+device was answered 18.7 MB for the same 10 000 rows — 8.9 MB sealed under a key it never
+held, read in 170 ms, stepped over and recorded in one `error_log` row, then the baseline —
+and the relay's heap over that whole run, uncollected, reached 74.4 MB.
 
 **The two-minute deadline is a floor on the link, and a pull that misses it starts over.** The
 sync client's whole-request deadline in a browser (120 s, `client::REQUEST_DEADLINE`) covers
-the body. With the pulling device's link paced to 40 kbit/s (`--kbps 40`, a TCP relay in front
-of the local one — DevTools' network emulation answers *Not supported* on a Worker's session),
-a 1 000-op pull was given up on **120.0 s** after it was sent, both times it was run, 0.7 of
-its 0.89 MB read: the
+the body. With the pulling device's link paced (`--kbps 40`, a TCP relay in front of the local
+one — DevTools' network emulation answers *Not supported* on a Worker's session; **downstream
+only**, what the device sends going up unpaced), a 1 000-op pull was given up on **120.0 s**
+after it was sent, all three times it was run: twice with 0.7 of its 0.89 MB read, by a first
+version of the pacing that slept a fixed tenth of a second a slice and so delivered about
+35 kbit/s, and once with 0.8 MB read at a true 40, paced against the clock. Either way the
 `fetch` aborted, `error_log` says *error decoding response body*, the cursor stood still, and
 the device held no row. The engine answered every search in a millisecond throughout — waiting
 on a body is not deafness. The next trip asks for the same response from its first byte. By
@@ -6229,6 +6296,10 @@ by local workerd, and none was met against the deployed relay:
 - **No limit on a response's size**, and **2 MB a string or a row** in a Durable Object's
   SQLite — the cap `MAX_SEALED_CHARS` already stands under (the same two pages).
 
+Against the memory limit, by the per-request table above: a pull is twice its log, so one
+request passes 128 MB at a log of about 64 MB; a compaction is once its log, and passes it
+only near the quota. Both share the isolate with every other group on it.
+
 **The largest pull there can be is the group's quota, and it was made** (`--ops 250000`, one
 run). A group's log may hold 128 MiB of sealed text (`MAX_GROUP_LOG_CHARS`): the relay stored
 150 600 of the ops — 753 envelopes — and answered the next push 507 `quota`; 99 400 stayed on
@@ -6236,26 +6307,29 @@ the importing device, recorded once in its `error_log`, as designed. The device 
 then pulled the whole log in one response: **134.2 MB** (101.3 MB on the wire), down in 3.5 s;
 **244 s to apply**, 1.6 ms an op where 50 000 took 0.6; linear memory 21 → **1 647 MB**, the
 tab's process peaking at 1.94 GB; the page's own thread 248 ms late at worst; and the 150 600
-rows equal on both. The relay's isolate peaked at **1 370 MB** of heap and workerd at 1.89 GB —
-every later trip of the importing device is refused again, and `push` runs `compactNow` over
-the whole log before each refusal, 45 times in this run. **Nothing failed**, on a desktop with
+rows on both, by count — the quota left the two collections different by design. The relay's
+heap over that whole run, never collected, reached 1 370 MB and workerd 1.89 GB: every later
+trip of the importing device is refused again, and `push` runs `compactNow` over the whole
+log before each refusal, 45 times in this run. By the per-request table the pull itself is
+some 270 MB of that and each compaction 134 MB. **Nothing failed**, on a desktop with
 32 GB and a runtime that enforces no limit: this run found no size at which the unpaged pull
 stops working locally, only sizes at which nobody should be asked to wait for it.
 
 **The decision: the unpaged pull is not acceptable at the sizes a reader will meet, and what it
-needs is paging — a relay change, not built.** The plan said paging is built only if the figures
-ask for it. They do, and this step still builds none: it changes the pull's contract on both
-sides and needs a relay deploy, which is the owner's to say yes to with the figures in hand.
-Up to a couple of thousand ops in one pull it is
-unremarkable: under a second deaf, 25 MB. A collection of ten thousand rows — an ordinary one —
-already freezes a browser's engine for five seconds with nothing saying why, on a join as on an
-import, and keeps 110 MB. At fifty thousand, the spec's own example, three things are past
-what can be shipped on trust: the relay's isolate measured at 143–157 MB of heap against a
-128 MB limit (224–249 MB on a join), a tab holding 570 MB of linear memory for the rest of its
-life, and half a minute of an engine that answers nothing — on a phone, whose memory was not
-measured. **What breaks first, by size**: the reader's patience, from about two thousand ops;
-a slow link's two minutes; then, somewhere between thirty and forty-five thousand ops by these
-heaps, a limit this run could not make fail.
+needs is paging.** The plan said paging is built only if the figures ask for it. They do, and
+this step builds none — it changes the pull's contract on both sides and needs a relay
+deploy, which was the owner's to say yes to with the figures in hand. **Markus said yes on
+2026-10-04 — "Build it now" — and it is step 6.5b (§10.5b).** Up to a couple of thousand ops
+in one pull it is unremarkable: under a second deaf, 25 MB. A collection of ten thousand rows
+— an ordinary one — already freezes a browser's engine for five seconds with nothing saying
+why, on a join as on an import, and keeps 110 MB. At fifty thousand, the spec's own example,
+two things are past what can be shipped on trust: a tab holding 570 MB of linear memory for
+the rest of its life, and half a minute of an engine that answers nothing — on a phone,
+whose memory was not measured. **The relay is not a third at that size**, which the first
+record of this step said it was: the pull took its isolate to 90 MB, under production's 128.
+**What breaks first, by size**: the reader's patience, from about two thousand ops; a slow
+link's two minutes; and then, at about seventy thousand ops by the pull's own cost on the
+relay, a limit this run could not make fail.
 
 **Why not a turn between envelopes inside the apply** — the idiom the ingests use, and the
 cheaper fix, looked at first. `client::pull` opens, classifies and applies the whole page in one
@@ -6265,45 +6339,72 @@ build's batch, is decided over the page before any of it is applied; and the cur
 holds on the page's outcome. A turn taken inside `db.with` would hand the one connection to a
 reader's command inside the pull's open transaction. Splitting the stretch is a rewrite of the
 hold rules, not a `breathe()`, and the desktop would run it too. Paging gets the same turns
-with no new rule: the request for the next page is the await.
+between pages — the request for the next page is the await — and leaves a page's apply the
+one stretch it is.
 
-**The design, for the owner to take or leave:**
+**The design after review — being built as step 6.5b (§10.5b).** The design this section first
+carried was read by an independent reviewer, who found the measurement sound and three things
+in the design wrong. What follows is the corrected one; where it differs from the first, it
+says so.
 
-- **The relay**: `GET /g/{group}/pull?since=&device=&limit=<rows>`. Without `limit` the answer
-  is today's, byte for byte. With it: at most that many rows after `since` **in `seq` order**,
-  the caller's own rows left out by the query rather than after it, stopping early at a budget
-  of sealed characters (one row at least); sorted by the hybrid clock within the page, as now;
-  answered `{ envelopes, cursor, more }`, `cursor` being the last row read — the log's head
-  when `more` is false.
-- **Why a page in `seq` order is safe**: it is exactly what a device that pulled when the
-  log's head stood there was handed. The live run above is that schedule — 250 pushes taken as
-  three pulls — and a baseline's chunks are already written to be pulled apart (the horizon
-  and the head ride every chunk). Paging adds no order of arrival the engine does not already
-  meet.
-- **The client**: pull a page, run today's stretch over it, and when the cursor advanced and
-  `more` is true, pull the next. **A page that holds its cursor ends the paging for that
-  trip**: the same cursor is asked again with no `limit`, which is today's request — a hold is
-  decided over everything after the cursor ([sync.md](sync.md), *What is still owed*: page to
-  the end before a hold is evaluated), and a held cursor is rare. One ack at the end, as now.
-- **Old and new, either way round**: an old client sends no `limit` and is answered unpaged;
-  a new client's `limit` is a parameter an old relay ignores, and an answer with no `more`
-  reads as the last page. So the relay deploys first and nothing waits on it.
-- **The same deploy has to take `sealed` out of two reads**, or the limit is met without a
-  pull: `compactNow` reads every row whole on each ack that moves a cursor, for a decision
-  that needs each row's length and no more, and a pull reads the caller's own rows before
-  dropping them — the importing device's own trip put its whole import through the isolate
-  twice here.
-- **What size a page is** is the owner's: an envelope of 200 ops is about 0.1 s of apply and
-  2 MB of linear memory, and each page costs a Worker request, a Durable Object request and —
-  its address carrying a new cursor — a pre-flight. Four envelopes a page is 0.4 s deaf and 63
-  pages for a 50 000-row import, against the 250 `POST`s that pushed it.
-- **Tests it would need**: the relay's window, `more` and cursor in vitest, own rows at a
-  page's edge included; every existing pull test run again at one envelope a page and held to
-  the same final database; a held page falling back to the unpaged request; an old relay's
-  answer to a new client and the reverse; and this run again, for the table.
+- **The relay, with `limit`**: `GET /g/{group}/pull?since=&device=&limit=<rows>` answers at
+  most that many **whole rows** after `since`, in `seq` order, the caller's own rows left out
+  *by the query* — and never more than a budget of sealed characters the relay enforces
+  whatever `limit` says, which always admits one row, since one row may be 1.5 M characters.
+  Sorted by the hybrid clock within the page, as now. Answered `{ envelopes, cursor, more }`:
+  `more` is whether a row of another device lies past the page, asked without reading a body;
+  `cursor` is the last row returned while `more` is true, and otherwise the head of the whole
+  log — **past the caller's own trailing rows**, or its ack would pin the compaction floor
+  under them and a client that loops on "the cursor advanced" would loop for ever.
+- **The relay, without `limit`: today's answer, byte for byte, and never a cap.** Every
+  released desktop sends none, and an old client is not a pager: it decides its holds, its
+  release, its conversions and its baselines on whatever one answer hands it, and schedules
+  nothing after progress — so a cap on a request that asked for none would strand it. *The
+  first design left this path as it is.* It cannot stay as it is either, because the
+  per-request table says where its memory goes: so the own-row filter moves into the query,
+  with the head read on its own; the answer is **streamed**, row by row, in place of one
+  string twice the log's size; and `compactNow` reads each row's length and never its body.
+- **Why a page in `seq` order is safe**: it is what a device that pulled when the log's head
+  stood there was handed. **Not** what one unpaged pull would have been handed — and the
+  statement the step is held to is exactly that: *a paged catch-up equals what an always-live
+  device's sequence of pulls produces, not what one unpaged pull produced.* `apply` decides
+  some things over a page — a child and its parent, a `gone` decision and the op that reverses
+  it, a covered put and its claim, two other devices' ops on one row — and a page edge can
+  fall between them as two pushes a second apart always could. *The first design said paging
+  "adds no order of arrival the engine does not already meet" and left it there.* Step 6.5b
+  tests each of those split across an edge against the unpaged database, and says which
+  converge and which do not.
+- **The client**: ask with `limit`; apply a page in today's one stretch; **write the cursor
+  per page**, after that page's apply has committed; go on while `more` is true and the
+  cursor advanced. A tab closed after page three of ten resumes at page four.
+- **A page that would hold, while `more` is true, holds nothing.** *The first design fell back
+  to the unpaged request there, which re-creates the failure*: the fallback fires on the
+  ordinary join, where a child can precede its parent's page, and a `newer` hold would pull
+  unpaged on every trip until the device updates. In its place the page's envelopes are
+  **carried**: the next page is fetched, the two are sorted by the clock together and
+  evaluated again as one, and the carry is dropped when the cursor advances. **Only the
+  evaluation that reaches `more: false` may write a hold, release a wait, run the conversions
+  that follow a pull which read everything, or let a baseline be emitted** — a partial view is
+  never treated as the whole.
+- **One `/keys` ask a trip; one ack at the end — and also when a later page fails**, so what
+  advanced is acked and a flaky link does not pin the floor.
+- **Old and new, either way round**: an old client sends no `limit` and is answered as it
+  always was; a new client's `limit` is a parameter an old relay ignores, and an answer with
+  no `more` reads as the last page. The relay deploys first and nothing waits on it.
+- **The page's size** is one constant on each side, chosen from the figures above: about
+  0.12 s of apply and 2.2 MB of linear memory an envelope of 200 ops, and a link of 40 kbit/s
+  to fit inside the 120 s a request is given.
 
 **Found on the way:**
 
+- **Two of this record's own figures were wrong, and a reviewer found both.** The relay's heap
+  was the run's peak printed as the pull's, and "rows equal" was a count and a sum of copies.
+  Both are corrected above, in place, with what the first reading said kept beside it. What
+  made the heap readable by request is in the script: V8 runs a requested collection as a
+  task of the isolate's own, which workerd reaches at the isolate's next *request* — ten
+  seconds of inspector messages did not reach it, and ten seconds of silence did not — so the
+  run nudges the relay with a request it answers `404` in its Worker, and the collection
+  follows.
 - **The probe measured itself, once.** The grown card file is six names thirty thousand times
   over, so a search for `bolt` matches five thousand printings and costs 68 ms there. Asked
   every 100 ms through a 29 s apply, the 290 asks queued behind it took another 19 s to answer —

@@ -42,8 +42,8 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   app-worker` first), or the `wrangler.js` that `WRANGLER` names.
   **`npm run web:sync-pull -- --ops <n>`** is a measurement on that harness, not a check: what
   one unpaged `pull` of `n` ops costs the engine's Worker (`--live` and `--join` are the two
-  neighbouring cases; [light-app.md](../reference/light-app.md) §10.5). Nothing runs it — a
-  minute at a thousand ops, far longer at fifty thousand.
+  neighbouring cases; [light-app.md](../reference/light-app.md) §10.5). Nothing runs it —
+  half a minute at a thousand ops, five at fifty thousand.
   **`verify` runs none of them** — CI's `web` job runs the two smokes. See [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-web/CLAUDE.md).
 - `npm run web:deploy-guard` — may the web app be deployed from this tree, between releases?
   Compares `USER_SCHEMA_VERSION` here with the last release tag's (`git show`), in one sentence:
