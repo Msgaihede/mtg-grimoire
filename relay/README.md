@@ -50,6 +50,17 @@ minutes after the half merged — and nobody recorded it; the probe had been rea
 and never run. A device meets the same fact from inside: its own `/keys` 200 carries
 `removalStep: 2`.
 
+**What is written and not deployed is the browser's half** (light app phase 6, issue #761): CORS
+for the web app at `https://mtg-grimoire.app`, the `APP_ORIGINS` var that lists it, the socket's
+bearer as a sub-protocol, the socket's own origin check, and the `ping`/`pong` auto-response. It
+adds no route and no migration. Its tell is a pre-flight: `OPTIONS /token` carrying `Origin:
+https://mtg-grimoire.app` and `Access-Control-Request-Method: POST` answers **204** from this tree
+and **405** from a Worker without it. **Probed 2026-10-04 at 15:49 UTC: 405**, with the same 405
+for `Origin: https://example.com` — the control, and the answer both origins get from a Worker
+that has never heard of either. The runbook's step 0 has the three pairs. ⚠️ **The web app must be
+deployed after this and never before**: a page asking a relay that answers no pre-flight fails
+every request, and what its engine sees is a network error with no status to act on.
+
 ## What it cannot do
 
 **It cannot read anything it stores.** The group key is minted during pairing and lives only on
@@ -88,6 +99,13 @@ reads it, and a token without one (an older relay's) still verifies. The app tra
 `refresh` secret for a new one when fewer than six hours remain. That split is what makes lapse
 work: deleting `refresh_secret` is instantaneous, and an already-issued `access` dies of old age
 within a day.
+
+**One route takes the same token from a second place, and only that one.** A browser's
+`WebSocket` cannot set a header, so `GET /g/{group}/ws` with no `Authorization: Bearer` reads the
+`bearer.<access>` entry of `Sec-WebSocket-Protocol` instead — the same `verify`, the same `grp`
+comparison, the same 401. The header wins when both are there, which is every released desktop.
+`push`, `pull` and `ack` never look at the sub-protocol: a `fetch` can set a header, and a second
+place to find a credential is a second way in. See "The browser" below and `src/ticket.ts`.
 
 **The four claim-layer routes are deliberately not behind the gate, and each is guarded by
 something else.** `/oauth/patreon/callback` by the authorization code Patreon redirects with,
@@ -341,7 +359,7 @@ per group, addressed by `idFromName(group)`.
 | `POST /g/{group}/push` | one `Envelope` | `200 {"cursor": <seq>}` — the stored row's seq; the refusals are below |
 | `GET /g/{group}/pull?since={cursor}&device={id}` | — | `200 {"envelopes": [...], "cursor": <head>}` — and the device counts as heard, at most once a day |
 | `POST /g/{group}/ack` | `{"device": id, "cursor": n}` | `204` — and compaction runs; a departed device's ack is answered and not stored |
-| `GET /g/{group}/ws?device={id}` | — | `101` — a hibernatable socket; see the last section |
+| `GET /g/{group}/ws?device={id}` | — | `101` — a hibernatable socket; see the last section. The bearer may be a sub-protocol, and a foreign `Origin` is a `403` — "The browser" below |
 
 **A push is admitted in the Worker, after the gate and before the Durable Object hop**, because a
 request that reaches the object bills whether it is stored or refused, and none of these needs the
@@ -557,6 +575,78 @@ There are two internal paths, **`drop`**, which empties a group's log, its acks 
 those requests itself, `claim.ts` when a membership ends and `rotate.ts` when a rotation is
 recorded, and a device asking for either is a 404 like any other path that is not a route.
 
+### The browser: CORS, and a socket a page can open
+
+**Until 2026-10-04 every caller was the app's own Rust process, and there was no CORS code here
+because nothing needed any.** The light app's web build at `https://mtg-grimoire.app` runs the
+same sync engine as WASM and asks the same routes with `fetch`, cross-origin, so a browser now
+stands between the engine and every answer. `src/cors.ts` and `src/ticket.ts` are the whole of
+what that took; **neither changes what any route does, and a request with no `Origin` — every
+desktop and Android build — is answered byte for byte as before.**
+
+**It weakens nothing, because no route trusts a cookie.** CORS protects a server that
+authenticates by something the browser attaches unasked. Every route here is guarded by something
+the caller must hold and send — a token, a code, a secret. **So the allow-list is not an access
+control**: a caller that is not a browser sends any `Origin` it likes, or none. It bounds which
+*pages* a browser lets ask.
+
+| | |
+| --- | --- |
+| The allow-list | `APP_ORIGINS` in `wrangler.jsonc`'s `vars` — comma-separated, shipped as exactly `https://mtg-grimoire.app`. Entries are trimmed and compared to the `Origin` header **exactly**: no wildcard, no suffix, no case folding, no trailing slash. Unset or empty allows nobody and throws at nobody. |
+| Routes that take CORS | `POST /claim`, `POST /token`, `GET`/`POST /p/{rv}/{offer,join}`, `POST /g/{group}/rotate`, `GET /g/{group}/keys`, `POST /g/{group}/push`, `GET /g/{group}/pull`, `POST /g/{group}/ack` — every route a device calls with `fetch`. |
+| Routes that do not | `/oauth/patreon/callback` and `/pair` (pages a browser navigates to), `/webhook/patreon` (Patreon's server), and `/g/{group}/ws` (an upgrade, which CORS does not govern). |
+| A pre-flight | `OPTIONS` on a CORS route, from an allowed origin, carrying `Access-Control-Request-Method` → **`204`** with `Access-Control-Allow-Origin: <that origin>`, `Access-Control-Allow-Methods: <the route's own>`, `Access-Control-Allow-Headers: authorization, content-type`, `Access-Control-Max-Age: 86400`, `Vary: Origin`. |
+| Every other answer to an allowed origin | the route's own response plus `Access-Control-Allow-Origin: <origin>` and `Vary: Origin` — **refusals included**: 400, 401, 403 `device_limit`, 405, 409, 413, 422, 429, and whatever a Durable Object said. |
+| Anything else | no `Origin`, an `Origin` not on the list, or a path that takes no CORS: exactly what it was answered before. An `OPTIONS` there is still the `405` with `allow`, or the `404`. |
+
+- **The pre-flight is answered before the router is entered** — before the rate limiter, D1, the
+  HMAC and any Durable Object. A browser sends one unasked and without credentials, so it spends
+  none of the caller's rate-limit budget and never bills an object request.
+- **The refusals are the reason for the header, not an afterthought.** A browser hides a
+  cross-origin response that lacks it — status and body both — and reports a network error. The
+  engine reads a 401 as a statement about a membership, a `device_limit` as not one, a 409
+  `stale_epoch` as "catch up"; each would become "the relay is unreachable".
+- **A response is rebuilt, never mutated**: one that came back from a Durable Object stub has
+  immutable headers, and writing to them throws.
+- **No `Access-Control-Allow-Credentials`** — there is no cookie. **No
+  `Access-Control-Expose-Headers`** — the engine reads the status and the body and no response
+  header, a 429's `retry-after` included.
+- ⚠️ **`Access-Control-Allow-Headers` is a list the engine must stay inside.** A header the engine
+  starts sending that is not `authorization` or `content-type` fails every request from the web
+  app and none from the desktop. `platform::http` sets no `User-Agent` on wasm for this reason.
+
+**The socket is opened with two sub-protocols**, `grimoire.live.v1` and `bearer.<access>`:
+
+- **The gate reads the `bearer.` entry when there is no `Authorization: Bearer`** — for `ws` and no
+  other action. Every character `token.ts` mints (`A–Z a–z 0–9 - _ .`) is a legal sub-protocol
+  character, so nothing is escaped.
+- **The 101 selects `grimoire.live.v1` if and only if the request offered it**, and never echoes
+  the bearer. A browser fails a connection whose offered sub-protocols were all ignored; a native
+  client that offered none gets the bare 101 it always got.
+- **An `Origin` that is present and not on the allow-list is a `403`**, before the gate and before
+  the object. CORS does not apply to an upgrade, so the list is enforced by hand here. Absent —
+  the desktop, Android — is not foreign.
+- **The keepalive is the text frame `ping`, answered `pong` by the runtime**
+  (`setWebSocketAutoResponse`), because a page cannot send the protocol ping the native client
+  sends every 45 s. The object is not woken and no duration is billed.
+
+⚠️ **Three things about it that are stated rather than discovered:**
+
+- **A browser's keepalive is probably not free on the request line.** Cloudflare's pricing page
+  (read 2026-10-04) exempts incoming *protocol* pings by name, bills other incoming messages at
+  twenty to one, and says of auto-response only that it costs no duration. Read as written: 1 920
+  frames a day for a tab open all day is **96 billed Durable Object requests**, 32 for an
+  eight-hour session — against ~25 a day for an idle group of native devices. See Cost.
+- **The token in a sub-protocol is recorded by Workers Logs where `Authorization` is redacted.**
+  Invocation logs redact a header by its *name* — `cookie`, or one containing `auth`, `key`,
+  `secret`, `token` or `jwt` — and `sec-websocket-protocol` is none of those. With
+  `observability` on, a browser's access token sits in this account's logs for their retention. It
+  is good for at most a day and readable only by whoever can already read the signing key.
+- **The 101's `Sec-WebSocket-Protocol` has never met a browser.** `ticket.test.ts` runs the real
+  `Group.ws()` over stand-ins for `WebSocketPair` and a `Response` that accepts a 101, which Node's
+  does not; whether workerd passes the header through to the client is settled by the first socket
+  the web app opens.
+
 ## Where the logic is
 
 `src/log.ts` — `since`, `compact`, `departures` and the roster's parse and ordering, as pure
@@ -598,7 +688,19 @@ ahead of the bearer gate, and `sendRoster`, the one request either makes to a Du
 call into `log.ts` for every decision about which rows and into `admit.ts` for the quota.
 
 `src/index.ts` — the router, the auth gate, and a push's admission ahead of the object hop: the one
-D1 point read for the group's epoch, then `admit.ts`'s decision.
+D1 point read for the group's epoch, then `admit.ts`'s decision. Since 2026-10-04 `fetch` is a
+wrapper around `route`: it answers a pre-flight before the router is entered and dresses the
+router's answer for an allowed origin, and for every other request hands `route`'s response back
+untouched.
+
+`src/cors.ts` — `allowedOrigin`, `preflight` and `withCors`: the allow-list's exact match, the 204,
+and the rebuilt response. Pure, and tested through `worker.fetch` in `cors.test.ts`, where each
+answer is asked for twice — without an `Origin` and with one — and compared.
+
+`src/ticket.ts` — what a browser's socket needs: `bearerTicket` (the `bearer.` sub-protocol the
+gate reads for `ws` alone), `selectedProtocol` (what the 101 names), and `KEEPALIVE`, the
+`ping`/`pong` pair `group.ts` registers with the runtime. `ticket.test.ts` drives the gate, the
+functions, and the real `Group` over stand-ins for workerd's globals.
 
 `src/fakeD1.ts` — the test double, and it **evaluates** SQL rather than matching shapes: it holds
 a `PRIMARY_KEY` map so that an upsert conflicts the way D1 would. Import it; never write a second.
@@ -613,7 +715,12 @@ and the HMAC are all pure functions of their inputs, so they are testable withou
 what is left in the Durable Object and the handlers is SQL and routing — where a bug is a 500 in a
 log rather than a reader's data quietly disappearing. `rotate.test.ts` and `admit.test.ts` drive
 `worker.fetch` itself, because where those routes and refusals stand relative to the gate is half
-of what they are; the object there is a recorder, never workerd.
+of what they are; the object there is a recorder, never workerd. `cors.test.ts` and
+`ticket.test.ts` do the same for the browser's half. **`ticket.test.ts` is the one suite that
+constructs the real `Group`**, over a stand-in state and with three of workerd's globals stubbed:
+Node's `Response` refuses a status of 101, so without the stub `ws()` cannot return under vitest
+at all. It proves which header `ws()` puts on its 101 and that the constructor registers the
+auto-response — not that workerd honours either.
 
 Two things a deploy verifies that no test here can, and both fail loudly on the first request to
 an object rather than quietly:
@@ -682,7 +789,9 @@ runbook, with the probes that say which of them are already done, is
    call it on every trip, so a Worker pointed at a database without that table answers 500 on the
    route every device uses to sync. The reverse order costs nothing: a table nothing writes to yet
    is inert.
-3. Set the three secrets. The two public `vars` are already committed beside `RELAY_BASE`.
+3. Set the three secrets. The public `vars` are already committed beside `RELAY_BASE`: the two
+   Patreon ids and, since 2026-10-04, `APP_ORIGINS` — which a deploy carries with it and no
+   command sets.
 4. `npx wrangler deploy`, then register the redirect URI and the webhook with Patreon. **Verify
    against the host and never against an exit code** — that is what the 500 above was.
 
@@ -751,6 +860,22 @@ regardless of whether anybody is at the keyboard.
 | Busy group — 50 edits → ~20 debounced bursts, 3 devices | ~225 | ~440 |
 | Manual — the **Sync now** button, still there as a fallback | ~70 | ~1 400 |
 
+⚠️ **A browser is not in that table, and it is the first client whose idle is not free.** The
+rows above are native devices, whose keepalive is a protocol ping Cloudflare does not bill. A page
+cannot send one, so the web app sends the text `ping` every 45 s and the runtime answers it
+without waking the object — no duration. **The request line is another matter**: the pricing page
+(read 2026-10-04) bills incoming WebSocket messages at twenty to one and exempts only protocol
+pings by name, so as written each open tab costs **4.8 billed requests an hour** — 32 for an
+eight-hour session, 96 for a tab left open all day, on top of whatever its group does. Against
+100 000 a day that is about a thousand tabs open round the clock before anything else is counted.
+Not measured: nothing is deployed, and whether the dashboard counts an auto-answered frame is
+something only a live socket shows. **A browser also pays a Worker request per pre-flight**, and
+pre-flights reach no object. A browser remembers one per *URL*, query string included, for up to
+`Access-Control-Max-Age` — two hours in Chromium, a day in Firefox — so `/push`, `/ack` and
+`/token` are asked about once in that time, and **a pull is asked about nearly every time**: its
+URL carries `since=`, which moves whenever the log did. That is one more Worker invocation per
+pull from a tab, against the 100 000 a day the Worker has, and nothing against the object's.
+
 Storage never binds: 484 KB/group against 5 GB is ~10 000 groups — and the per-group quota is the
 fence on the other side of that figure, since at 128 MiB a group some forty groups at the cap would
 fill it. Duration never binds. D1 never binds: the gate reads no storage at all, and the one D1
@@ -790,7 +915,8 @@ and the one that shipped opens from the app's own Rust process instead, so neith
 survived contact with where the socket actually lives.
 
 `GET /g/{group}/ws` now upgrades to a hibernatable WebSocket, behind the same bearer gate every
-`/g/…` route sits behind — `/rotate` and `/keys` excepted. On every push the Durable Object
+`/g/…` route sits behind — `/rotate` and `/keys` excepted — and, for a browser, with the token in
+a sub-protocol rather than a header ("The browser", above). On every push the Durable Object
 sends the group's other connected sockets a `{"t":"head","cursor":N,"from":"<device>"}` frame —
 no card data, ever — and a device that hears one runs the ordinary HTTP round trip above. The
 socket only ever decides *when* that trip happens; a frame is a hint, never the cursor advancing
@@ -808,7 +934,10 @@ on its own.
    `tauri.conf.json` was not touched. A fourth reason the record never named: a browser's own
    `WebSocket` cannot set an `Authorization` header, so a socket from the page would have forced
    the bearer gate above onto a query parameter or a subprotocol. Opening it from Rust needed no
-   change to the gate at all.
+   change to the gate at all. **On 2026-10-04 a page did need one** — the web app has no Rust
+   process to open it from — and the gate took the subprotocol, for `ws` alone and only when
+   there is no header: "The browser", above. The desktop's socket is still opened from Rust and
+   still sends the header.
 3. **"Polling is comfortably inside the free tier."** There never was a poll to be comfortable —
    see [sync.md](../docs/reference/sync.md) for that correction. The cost of what shipped instead
    is re-derived in the design spec §11: an idle, connected group costs about ~25 DO requests/day,

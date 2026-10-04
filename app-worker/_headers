@@ -34,9 +34,17 @@
 #                  cards.scryfall.io            image_uri.rs   IMAGE_HOST
 #                  json.commanderspellbook.com  combos.rs      FEED_URL
 #                  api.cardkingdom.com          marketplace_feed.rs, Card Kingdom's pricelist
+#                  mtg-grimoire-relay.denmark-east.workers.dev
+#                                               sync_engine/entitlement.rs  RELAY_BASE — the sync
+#                                               relay, which answers this origin by name: its CORS
+#                                               allow-list (`relay/src/cors.ts`, `APP_ORIGINS`) and
+#                                               this entry are one fact written in two deploys, and
+#                                               THE RELAY'S GOES FIRST (README, "The steps, in
+#                                               order"). `https:` only: the live socket is `wss:`, a
+#                                               different source to this directive, and is not
+#                                               named until a browser has opened one (step 6.3).
 #                NOT manapool.com: it sends no Access-Control-Allow-Origin, so a page cannot read
-#                it whatever this says. NOT the relay: sync in a browser is phase 6, which adds the
-#                host here in the change that adds this origin to the relay's CORS allow-list.
+#                it whatever this says.
 #   img-src      This origin and `data:`, and NOT cards.scryfall.io although every card picture
 #                comes from there. A picture is asked of this origin (`/mtgimg/…`) and answered by
 #                the service worker — which must hand back a response REBUILT FROM THE BYTES.
@@ -61,7 +69,7 @@
 # preload list. No `Cross-Origin-Opener-Policy` or `-Embedder-Policy`: the OPFS pool needs neither
 # (the August spike ran it both ways), and `require-corp` would refuse every card picture.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com https://mtg-grimoire-relay.denmark-east.workers.dev; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Cache-Control: no-cache
@@ -86,7 +94,7 @@
 # immutable as theirs. Its POLICY is not: a dedicated Worker runs under the
 # Content-Security-Policy on its own script's response (the block at the top of this file), and
 # that policy is this file's, not the chunk's. A deploy that changes only `_headers` — a host
-# added to `connect-src` because Scryfall moved its bulk files, the relay in phase 6 — renames
+# added to `connect-src`, as the relay's was, or because Scryfall moved its bulk files — renames
 # nothing. Kept for a year, the chunk would never be asked for again, and a returning reader's
 # engine would go on running under the policy of the day they first came (measured, Chrome 154:
 # the script was not requested at all, and the old `connect-src` held).

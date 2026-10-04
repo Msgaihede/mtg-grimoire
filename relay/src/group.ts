@@ -12,6 +12,7 @@ import {
   type Ack,
   type Row,
 } from "./log";
+import { KEEPALIVE, selectedProtocol } from "./ticket";
 
 /**
  * One Durable Object per pairing group. It stores sealed envelopes, hands them back in the
@@ -89,6 +90,33 @@ export class Group implements DurableObject {
     this.state = state;
     this.sql = state.storage.sql;
     this.ownName = state.id.name;
+
+    // **The keepalive a browser can send, answered by the runtime and not by this class.** A page
+    // cannot send a protocol ping, so the web app sends the text frame `ping` every 45 s where the
+    // desktop sends the real thing (`ticket.ts`'s `KEEPALIVE`). As an ordinary message that would
+    // wake this object from hibernation twice a minute per open tab, for `webSocketMessage` to
+    // drop — and waking is what bills duration. Registered here, the runtime answers `pong` itself
+    // and the object stays asleep.
+    //
+    // What Cloudflare's documentation says, read 2026-10-04. The state API page: a matching
+    // request is answered "without waking WebSockets in hibernation and incurring billable
+    // duration charges". The pricing page's footnote on *duration*: auto-response messages "will
+    // not incur additional wall-clock time, and so they will not be charged".
+    // ⚠️ **Neither sentence is about the request line, and that one is not free.** The footnote on
+    // *requests* exempts incoming protocol pings by name and bills every other incoming message at
+    // twenty to one; it does not mention auto-response. Read as written, a tab's `ping` is an
+    // incoming message: 1 920 a day for a tab left open the whole day, which is **96 billed
+    // requests** — against the ~25 a day an idle group of native devices costs
+    // (`relay/README.md`, Cost), and the 100 000 a day the free plan allows. An eight-hour session
+    // is 32. The desktop's protocol ping stays free either way. Whether the dashboard counts them
+    // is something only a deployed socket shows.
+    //
+    // In the constructor because every Cloudflare sample puts it there: it runs on each wake and
+    // setting the same pair twice changes nothing. It applies to every socket accepted through
+    // `acceptWebSocket`, the desktop's included — which never sends the text and so never meets it.
+    state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair(KEEPALIVE.request, KEEPALIVE.response),
+    );
 
     // `AUTOINCREMENT` and not a bare rowid, and the reason is compaction itself: a plain
     // `INTEGER PRIMARY KEY` reuses the highest rowid after a delete, so a pass that emptied
@@ -503,6 +531,12 @@ export class Group implements DurableObject {
    * sockets — that is what makes the samples work — so calling it at fan-out time is the whole
    * mechanism, and the path this repo could not test (`evictDurableObject` needs
    * `@cloudflare/vitest-pool-workers`) does not exist to be got wrong.
+   *
+   * **The 101 selects `grimoire.live.v1` when the request offered it, and only then.** A browser
+   * opens this socket with two sub-protocols — that name, and `bearer.<token>`, which the Worker's
+   * gate has already read and verified — and fails the connection if the answer selects none. A
+   * native client offers none and gets the bare 101 it always got. `ticket.ts`'s `selectedProtocol`
+   * is both halves, and why the `bearer.` entry is never what comes back.
    */
   private ws(request: Request, url: URL): Response {
     // Lower-cased before comparing: RFC 6455 makes the token case-insensitive, every
@@ -522,7 +556,15 @@ export class Group implements DurableObject {
 
     this.state.acceptWebSocket(server, [deviceTag(device)]);
 
-    return new Response(null, { status: 101, webSocket: client });
+    // Two literals rather than one with an optional `headers`: the first is byte for byte the
+    // response every released desktop has been answered with, and it stays visibly so.
+    const protocol = selectedProtocol(request.headers.get("Sec-WebSocket-Protocol"));
+    if (protocol === null) return new Response(null, { status: 101, webSocket: client });
+    return new Response(null, {
+      status: 101,
+      webSocket: client,
+      headers: { "Sec-WebSocket-Protocol": protocol },
+    });
   }
 
   /**
@@ -533,6 +575,11 @@ export class Group implements DurableObject {
    * reads exactly like "the client is not sending anything", so the handler exists even though
    * nothing is expected to arrive: the client's keepalive is a *protocol* ping, which the
    * runtime answers itself without waking anything and without calling this.
+   *
+   * **The web app's keepalive does not arrive here either.** A browser can send no protocol ping,
+   * so it sends the text `ping` — and the constructor's `setWebSocketAutoResponse` has the runtime
+   * answer that with `pong` before this handler is ever asked. A frame that does reach it is
+   * therefore neither keepalive: a client bug, or somebody typing at a socket.
    */
   // Both parameters are unused by design — the runtime calls this by name, and there is
   // nothing to inspect. `no-unused-vars`'s `args: "after-used"` only forgives a leading unused

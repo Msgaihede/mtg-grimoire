@@ -108,7 +108,14 @@ it, the same day from `main` at `2b845048`, carried issue #548's `dev` claim on 
 relay mints. ⚠️ **This sentence named `1512ea68` and #541 until that day, and was two
 deploys behind**: issue #546's half went out on 2026-09-28 at 19:57 UTC, nobody wrote it down, and
 step 0's sixth probe found it live three days later. The next deploy is an **update** with a D1 that holds real entitlements, not a
-first landing. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
+first landing. **What the tree holds past that deploy, since 2026-10-04, is what a browser needs
+and a native client never did** — an allow-list of origins a page may ask from (`APP_ORIGINS`,
+`relay/src/cors.ts`), the pre-flight answered ahead of every limiter and every Durable Object, and
+`/ws` taking its bearer from the socket's sub-protocol, which is the only place a browser can put
+one (`relay/src/ticket.ts`). A request with no `Origin` is answered byte for byte as before, so no
+released build notices. **Written and not deployed**: asked that day, the deployed relay answered
+an `OPTIONS` from the web app's origin 405, and the runbook's step 0 has the probes that say when
+that has changed. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
 real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
 
 ## Entitlements, removal and leaving
@@ -164,16 +171,24 @@ that carries the Content-Security-Policy and the caching, and a script of a few 
 job is that a missing file is a 404 and never the document. Beside the other two for the share
 Worker's reason, blast radius, and unlike them it holds **no secret and no binding but its
 assets**: no D1, no R2, no `vars`. **The origin is the app's identity, not an address that can
-move** — a browser keys both OPFS databases, the service worker and the install to it, and phase
-6 names it in the relay's CORS allow-list. Its policy's `connect-src` is exactly the hosts the
-engine asks, and a test reads the engine's shipped Rust to hold it there: a host that moves, and
-a new address written as a literal, are each a red build. **An address a server sends is not**
+move** — a browser keys both OPFS databases, the service worker and the install to it, and the
+relay's CORS allow-list names it (`APP_ORIGINS`, `relay/src/cors.ts`). Its policy's `connect-src`
+is exactly the hosts the engine asks, and a test reads the engine's shipped Rust to hold it there:
+a host that moves, and a new address written as a literal, are each a red build. **The relay is
+one of those hosts**: a page asks it as every other host does — the engine refuses nothing for
+being in a browser — so the policy's entry and the relay's allow-list are one fact in two
+deploys, and **the relay's deploy comes first**: a page that asks a relay with no CORS answers
+fails every request. The policy names `https://` only; the live socket's `wss://` is not in it
+until a browser has opened one. ⚠️ **No build that asks the relay from a page is deployed** — the
+tree is ahead of both hosts. **An address a server sends is not**
 — Scryfall's bulk-file host is in no line of ours, so if that moves every suite stays green and
 a browser's first run fails. **The last deploy was 2026-10-04 at 13:27 UTC, from `main` at
 `4929cc6e`** — the second that day, rolled back at 13:28 and forward again at 13:30 to see a
 rollback work, so **production is that commit and not `main`**, which has moved past it. This
-paragraph said *not deployed* until then. No job deploys it and no agent may: each of those
-was run by an agent because Markus asked for it, and **the ask is per deploy**.
+paragraph said *not deployed* until then. No job deploys it and no agent may unasked: each of
+those was run by an agent because Markus asked for it, and **the ask is per deploy** — except
+that for the light app's phase 6 he asked once for the phase's deploys, the relay's and this
+Worker's (2026-10-04), and for nothing after it.
 [`app-worker/README.md`](../../app-worker/README.md) is the runbook, with every probe in it answered
 at the real address that day. **Who has run it**: headless Chrome 154, driven and measured; the
 owner's Firefox and the owner's phone, a sentence each. What nobody has seen — Safari, an

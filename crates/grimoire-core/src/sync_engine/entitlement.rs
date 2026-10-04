@@ -323,53 +323,6 @@ struct GroupGrant {
 // `sync_state`
 // ---------------------------------------------------------------------------------------
 
-/// What every command that would ask the relay answers on a host that is a web page.
-pub const NOT_FROM_A_BROWSER_YET: &str = "Syncing from a browser is not available yet. \
-     The desktop and Android apps can pair and sync; this browser keeps its collection here.";
-
-/// **The relay cannot answer a web page yet, so a page does not ask it.** `Ok` on every host
-/// that asks as itself; on one whose requests are a page's (`platform::host::asks_as_a_page`)
-/// the refusal, in a sentence a reader can be shown — [`NOT_FROM_A_BROWSER_YET`] — before
-/// anything is sent.
-///
-/// **A fact about the relay as deployed today, exactly as Mana Pool's missing CORS header is a
-/// fact about Mana Pool** (`marketplace_feed::reachable`): `relay/src` has no CORS code, so
-/// it sends no `Access-Control-Allow-Origin` and answers no `OPTIONS`, and every request this
-/// module and `client` make carries a `content-type: application/json` or an `authorization`
-/// header, which costs a pre-flight. A request from a page would leave, be refused by the
-/// browser, and reach the reader as "error sending request" — and the web app's hosting policy
-/// does not name the relay in `connect-src`, so each one is also a policy violation. The
-/// first run of the hosted app counted thirteen of those in fifteen seconds from one press of
-/// *Pair a device*.
-///
-/// **Where it is asked**, which is everywhere a request could start and everywhere a press
-/// would otherwise make something locally for a flow that cannot finish:
-///
-/// * [`relay`] here and `client::relay` — the only two ways either module reaches its HTTP
-///   client, so **no request to the relay can be built without passing this**;
-/// * `sync_pair::pairing::begin` and `accept` — no invite code and no offer for a pairing
-///   that cannot complete;
-/// * `sync_engine::commands::begin_authorize` and `ensure_group` — no trip to Patreon for a
-///   code that could not be claimed, and no group of one minted for a claim that will not be
-///   made.
-///
-/// **What it deliberately leaves alone**: every local read (the panel still draws, and says it
-/// is not connected), a device rename, cancelling an offer, and **leaving a group** — a
-/// departure's courtesy call is refused like any other request and the local clear runs
-/// whatever it answered, which is the rule that a departure is always possible.
-///
-/// ⚠️ **Phase 6 deletes this function**, in the change that gives the relay its CORS answers
-/// and the hosting policy the relay's host: three things move together — this, the relay's
-/// `OPTIONS`/`Access-Control-*` code, and `app-worker/src/hosting.test.ts`'s test that the
-/// relay is *absent* from `connect-src`. Deleting it leaves the compiler naming every place
-/// above.
-pub fn not_from_a_page_yet() -> Result<(), String> {
-    if crate::platform::host::asks_as_a_page() {
-        return Err(NOT_FROM_A_BROWSER_YET.to_owned());
-    }
-    Ok(())
-}
-
 /// The relay's base URL: the override if there is one, [`RELAY_BASE`] otherwise.
 ///
 /// **This never answers `None`**, which is the difference from the `client::relay_url` it
@@ -622,17 +575,12 @@ fn http() -> http::Client {
     build_http()
 }
 
-/// **The only way this module reaches its client**: [`http`], behind
-/// [`not_from_a_page_yet`] — so a request to the relay cannot be built on a host the relay
-/// cannot answer. The refusal is the bare sentence, and nothing is logged for it: a refusal
-/// is not a failed request.
-fn relay() -> Result<http::Client, String> {
-    not_from_a_page_yet()?;
-    Ok(http())
-}
-
 /// The one place this client's shape is written down. **Its read timeout is 10 seconds, not
 /// the relay client's 30**, which is the whole reason the two exist separately.
+///
+/// **A page asks through it like any host**, under the rules `client::build_http` states for
+/// both modules: `content-type` is the one header set here, no response header is read, and
+/// the relay answers a browser's pre-flight for the origins it names (`relay/src/cors.ts`).
 fn build_http() -> http::Client {
     http::Client::new(&http::Config {
         user_agent: crate::scryfall::USER_AGENT,
@@ -760,7 +708,7 @@ async fn post_for_grant<T: DeserializeOwned>(
     body: String,
 ) -> Result<Answer<T>, String> {
     let url = format!("{base}{path}");
-    let response = relay()?
+    let response = http()
         .post(&url)
         // By hand rather than through reqwest's `json` feature, which this crate does not
         // enable — `client::ack`'s reasoning, and the same `serde_json` already in the tree.
