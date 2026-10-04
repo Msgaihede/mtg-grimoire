@@ -1,6 +1,14 @@
-import { useMemo, useState } from "react";
-import { ChevronDown, ChevronLeft, ChevronRight, Folder } from "lucide-react";
+import { useCallback, useMemo, useRef, useState, type RefObject } from "react";
+import {
+  ChevronDown,
+  ChevronLeft,
+  ChevronRight,
+  Folder,
+  Plus,
+  SquareArrowRightEnter,
+} from "lucide-react";
 import { CardImage } from "@/components/CardImage";
+import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
 import { DeckColorBar } from "@/features/decks/DeckColorBar";
 import { coverUrl, deckBadge, hasCover } from "@/features/decks/deckCover";
 import { deckColorsLabel } from "@/features/decks/deckPips";
@@ -11,20 +19,41 @@ import { useDeckPips } from "@/features/decks/useDeckPips";
 import { useDecks } from "@/features/decks/useDecks";
 import { useDeckSort } from "@/features/decks/useDeckSort";
 import { ANY_GAME, gameLabel, useFormatSpecs } from "@/features/decks/useFormatSpecs";
+import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
 import { plural } from "@/lib/counts";
 import { FOCUS, FOCUS_INSET } from "@/lib/focus";
 import { buildFolderTree, flattenFolders, type FolderNode } from "@/lib/folderTree";
 import { ART_ASPECT } from "@/lib/images";
 import type { DeckFolder, DeckRow } from "@/lib/ipc";
 import type { PipCounts } from "@/lib/mana";
+import { PRESS_SOFT } from "@/lib/motion";
 import { useImageRetry } from "@/lib/useImageRetry";
 import { cn } from "@/lib/utils";
-import { linkTo } from "../router";
+import { linkTo, navigate } from "../router";
+import { phoneNewDeckDestination } from "../transfer/destinations";
+import { ImportSheet } from "../transfer/ImportSheet";
 import { DimNote, ReadError } from "./parts";
 
 /** The gallery's address for a folder, or for the top of the cabinet. */
 const galleryAt = (folderId: number | null) =>
   ({ view: "decks", deckId: null, cardId: null, folderId }) as const;
+
+/** A deck's own page — where a deck the gallery just made opens, so its first card is one press
+ *  away. A push: Back from the new deck is the gallery it was made from. */
+const openDeck = (deckId: number) => navigate({ view: "decks", deckId, cardId: null });
+
+/**
+ * **The touch floor for the desktop's New deck dialog**, set from outside it — `ImportSheet`'s
+ * `TOUCH_FLOOR` arrangement, narrowed. The dialog is the desktop's own and takes no class for a
+ * size, so the host reaches in: its one footer button (`Create deck`, 36px there) is floored at
+ * 44, and every text box is 16px so focusing one does not zoom the page. The form's other
+ * controls keep their desktop sizes, as `Deck settings` on the deck page does.
+ *
+ * `display: contents`, so the wrapper is no box at all — the dialog's `fixed` scrim is positioned
+ * exactly as if it were mounted bare, and a descendant selector still reaches into it.
+ */
+const CREATE_FLOOR =
+  "contents [&_footer_button]:min-h-11 [&_input]:text-base [&_textarea]:text-base";
 
 /**
  * The reader's decks: the folders filed at the level the reader is standing in, then the decks
@@ -47,9 +76,30 @@ const galleryAt = (folderId: number | null) =>
  *
  * **Each deck and each folder is a link, not a button**: it changes the URL, so it answers what
  * a link answers — a middle click, "copy link" — and a screen reader hears *link*.
+ *
+ * **New deck is the page's foot, on every state of it** — an empty cabinet, a full one, inside a
+ * folder — because a light install has no other way to get its first deck: no sync, and a phone
+ * never reaches the 1024px face. Two doors, the desktop gallery's two:
+ *
+ * - **`New deck` is the desktop's own `CreateDeckDialog`**, whole — the form, the format the
+ *   reader last built in (`useNewDeckFormat`), the folder select, the cover, and `useDecks().create`
+ *   — so the phone asks every question the desktop does and writes the deck with the same
+ *   `deck_create`. `Deck settings` on the deck page is the precedent. It opens on the drawer the
+ *   wall is open on, the desktop button's default since issue #332.
+ * - **`From a list` is the deck import**, the phone's `ImportSheet` over the desktop's new-deck
+ *   step (`NewDeckPreviewBody`): the name, the format, the commander, then `deck_create` and the
+ *   commit with the desktop's rollback between them. It files the deck in the open folder too.
+ *
+ * Either way the new deck opens on its own page, a push — nobody makes a deck to look at a cover
+ * of it, and its first card is then one press away.
  */
 export function DecksPage({ folderId }: { folderId: number | null }) {
-  const { decks, query } = useDecks();
+  const { decks, query, create } = useDecks();
+  const newDeckFormatKey = useNewDeckFormat();
+  /** Which door is open: the blank deck's dialog, the list's sheet, or neither. Page state, not a
+   *  place — a half-made deck is nothing worth sending to somebody. */
+  const [making, setMaking] = useState<"blank" | "list" | null>(null);
+  const newDeckRef = useRef<HTMLButtonElement>(null);
   const { folders } = useDeckFolders();
   const { byDeck: pipsByDeck } = useDeckPips();
   const { sort } = useDeckSort();
@@ -99,8 +149,83 @@ export function DecksPage({ folderId }: { folderId: number | null }) {
       ? bracketLabel(deck.bracket, floorByDeck.get(deck.id))
       : null;
 
-  if (query.isLoadingError) return <ReadError>Your decks could not be read.</ReadError>;
-  if (!query.isPending && decks.length === 0) return <DimNote>No decks</DimNote>;
+  /**
+   * The list's door, bound to what only this page knows. **Memoised on those facts alone**, for
+   * `phoneNewDeckDestination`'s reason: a fresh `Preview` would remount the step under the reader
+   * and take the name they typed with it. `openDeck` is a module function, so a re-render of the
+   * gallery behind the sheet changes nothing here.
+   */
+  const fromList = useMemo(
+    () =>
+      phoneNewDeckDestination({
+        defaultFormatKey: newDeckFormatKey,
+        folderId: level,
+        onImported: openDeck,
+      }),
+    [newDeckFormatKey, level],
+  );
+
+  const openBlank = useCallback(() => {
+    // A refusal from the last attempt is not news about this one — the desktop gallery's reset,
+    // for its reason: the dialog is the only place a refused create is read.
+    create.reset();
+    setMaking("blank");
+  }, [create]);
+
+  const doors = (
+    <>
+      <NewDeckBar newDeckRef={newDeckRef} onNew={openBlank} onFromList={() => setMaking("list")} />
+      <div className={CREATE_FLOOR}>
+        <CreateDeckDialog
+          create={create}
+          defaultFormatKey={newDeckFormatKey}
+          defaultFolderId={level}
+          open={making === "blank"}
+          onCreated={(deck) => {
+            setMaking(null);
+            openDeck(deck.id);
+          }}
+          // Escape and the ✕ hand the caret back to the button that opened it; a press on the
+          // scrim leaves it where the reader put it — `Dialog`'s two ways out.
+          onDismiss={() => {
+            setMaking(null);
+            newDeckRef.current?.focus();
+          }}
+          onClose={() => setMaking(null)}
+        />
+      </div>
+      <ImportSheet
+        open={making === "list"}
+        destination={fromList}
+        subtitle={open === null ? "Into a new deck" : `Into a new deck in ${open.folder.name}`}
+        onClose={() => setMaking(null)}
+        // The deck has opened by now (`onImported` runs first); the preview's numbers were the
+        // reader's to read before they pressed, and the desktop gallery discards this sentence too.
+        onDone={() => setMaking(null)}
+      />
+    </>
+  );
+
+  if (query.isLoadingError) {
+    return (
+      <>
+        <div className="min-h-0 flex-1">
+          <ReadError>Your decks could not be read.</ReadError>
+        </div>
+        {doors}
+      </>
+    );
+  }
+  if (!query.isPending && decks.length === 0) {
+    return (
+      <>
+        <div className="min-h-0 flex-1">
+          <DimNote>No decks yet.</DimNote>
+        </div>
+        {doors}
+      </>
+    );
+  }
 
   const tiles = (rows: readonly DeckRow[], label: string) => (
     <ul aria-label={label} className="grid grid-cols-2 gap-x-3 gap-y-4 px-3 sm:grid-cols-3">
@@ -116,56 +241,111 @@ export function DecksPage({ folderId }: { folderId: number | null }) {
   );
 
   return (
-    <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
-      {open !== null && <FolderBar node={open} parentId={open.folder.parentId} known={known} />}
+    <>
+      <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain pb-6">
+        {open !== null && <FolderBar node={open} parentId={open.folder.parentId} known={known} />}
 
-      {childFolders.length > 0 && (
-        <ul aria-label="Folders" className="border-b border-border">
-          {childFolders.map((node) => (
-            <FolderRow key={node.folder.id} node={node} />
-          ))}
-        </ul>
-      )}
+        {childFolders.length > 0 && (
+          <ul aria-label="Folders" className="border-b border-border">
+            {childFolders.map((node) => (
+              <FolderRow key={node.folder.id} node={node} />
+            ))}
+          </ul>
+        )}
 
-      <div className="pt-3">
-        {here.length > 0
-          ? tiles(here, open === null ? "Your decks" : `Decks in ${open.folder.name}`)
-          : !query.isPending &&
-            childFolders.length === 0 && (
-              <DimNote>
-                {archived.length > 0
-                  ? open === null
-                    ? "All your decks are archived."
-                    : "All decks in this folder are archived."
-                  : "This folder is empty."}
-              </DimNote>
-            )}
-      </div>
+        <div className="pt-3">
+          {here.length > 0
+            ? tiles(here, open === null ? "Your decks" : `Decks in ${open.folder.name}`)
+            : !query.isPending &&
+              childFolders.length === 0 && (
+                <DimNote>
+                  {archived.length > 0
+                    ? open === null
+                      ? "All your decks are archived."
+                      : "All decks in this folder are archived."
+                    : "This folder is empty."}
+                </DimNote>
+              )}
+        </div>
 
-      {archived.length > 0 && (
-        <div className="mt-4">
-          {/* A disclosure, the desktop's: an archived deck is one the reader put away, so the
+        {archived.length > 0 && (
+          <div className="mt-4">
+            {/* A disclosure, the desktop's: an archived deck is one the reader put away, so the
               wall does not open on it. Local state — a deck's way back to this level does not
               need to remember it, and the desktop face keeps it in the page too. */}
-          <button
-            type="button"
-            aria-expanded={showArchived}
-            onClick={() => setShowArchived((on) => !on)}
-            className={cn(
-              "flex min-h-11 w-full items-center gap-1.5 px-4 text-left text-sm text-dim",
-              FOCUS_INSET,
-            )}
-          >
-            {showArchived ? (
-              <ChevronDown aria-hidden className="size-4 shrink-0" />
-            ) : (
-              <ChevronRight aria-hidden className="size-4 shrink-0" />
-            )}
-            Archived <span className="font-mono tabular-nums">{archived.length}</span>
-          </button>
-          {showArchived && tiles(archived, "Archived decks")}
-        </div>
-      )}
+            <button
+              type="button"
+              aria-expanded={showArchived}
+              onClick={() => setShowArchived((on) => !on)}
+              className={cn(
+                "flex min-h-11 w-full items-center gap-1.5 px-4 text-left text-sm text-dim",
+                FOCUS_INSET,
+              )}
+            >
+              {showArchived ? (
+                <ChevronDown aria-hidden className="size-4 shrink-0" />
+              ) : (
+                <ChevronRight aria-hidden className="size-4 shrink-0" />
+              )}
+              Archived <span className="font-mono tabular-nums">{archived.length}</span>
+            </button>
+            {showArchived && tiles(archived, "Archived decks")}
+          </div>
+        )}
+      </div>
+      {doors}
+    </>
+  );
+}
+
+/**
+ * The gallery's foot: the two ways to make a deck, where a thumb reaches — the deck page's
+ * `ActionBar` shape, for its reason (a button floating over the wall would sit on the covers).
+ * **`New deck` is the gold one**: on this page it is the one thing the reader does to the cabinet
+ * rather than to a deck in it. `From a list` names its whole act for a screen reader (`New deck
+ * from a list`), the visible words being the end of that name — the bar already says *new deck*.
+ */
+function NewDeckBar({
+  newDeckRef,
+  onNew,
+  onFromList,
+}: {
+  newDeckRef: RefObject<HTMLButtonElement | null>;
+  onNew: () => void;
+  onFromList: () => void;
+}) {
+  return (
+    <div className="flex shrink-0 items-center gap-2 border-t border-border bg-surface px-3 py-2">
+      <button
+        ref={newDeckRef}
+        type="button"
+        onClick={onNew}
+        aria-haspopup="dialog"
+        className={cn(
+          "flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-md bg-accent px-4",
+          "text-sm font-medium text-accent-fg",
+          PRESS_SOFT,
+          FOCUS,
+        )}
+      >
+        <Plus aria-hidden className="size-4 shrink-0" />
+        New deck
+      </button>
+      <button
+        type="button"
+        onClick={onFromList}
+        aria-haspopup="dialog"
+        aria-label="New deck from a list"
+        className={cn(
+          "flex h-11 shrink-0 items-center justify-center gap-1.5 rounded-md border border-border",
+          "px-3 text-sm text-dim",
+          PRESS_SOFT,
+          FOCUS,
+        )}
+      >
+        <SquareArrowRightEnter aria-hidden className="size-5 shrink-0" />
+        From a list
+      </button>
     </div>
   );
 }

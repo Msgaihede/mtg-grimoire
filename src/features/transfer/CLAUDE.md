@@ -57,10 +57,11 @@ read only by thin desktop wrappers that keep the old names:
 - **`import/useImportSource.ts`** is the first step's state — the paste, a file's encoding note,
   the parse, the one resolve press, the step machine — for `ImportDialog` and the phone's sheet;
   how a file is *picked* is each shell's.
-- **`CollectionPreviewBody` and `DeckPreviewBody`** take the import's fallbacks as props;
-  `CollectionPreview` and `DeckPreview` are the desktop's wrappers reading `importDefaults`, and
-  `deckIntoWith.ts` binds the deck descriptor to either. `WishlistPreview` and `NewDeckPreview`
-  still read the store directly — split them the same way when the phone needs them.
+- **`CollectionPreviewBody`, `DeckPreviewBody` and `NewDeckPreviewBody`** take the import's
+  fallbacks as props; `CollectionPreview`, `DeckPreview` and `NewDeckPreview` are the desktop's
+  wrappers reading `importDefaults`, and `deckIntoWith.ts` binds the deck descriptor to either
+  deck step. `WishlistPreview` still reads the store directly — split it the same way when the
+  phone needs it.
 
 **A new decision goes in the store-free module, never in a wrapper**, or the phone face draws a
 file the desktop would not. `files.ts` below stays the desktop's: the phone's file handles are

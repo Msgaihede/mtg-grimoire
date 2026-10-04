@@ -12,6 +12,11 @@ import {
   type DeckImportInto,
 } from "@/features/transfer/import/destinations/DeckPreviewBody";
 import { deckDestinationWith } from "@/features/transfer/import/destinations/deckIntoWith";
+import {
+  NEW_DECK_DESTINATION,
+  NewDeckPreviewBody,
+  type NewDeckInto,
+} from "@/features/transfer/import/destinations/NewDeckPreviewBody";
 import { usePhoneTransferPrefs } from "./prefs";
 
 /**
@@ -43,6 +48,25 @@ function PhoneCollectionPreview(props: DestinationPreviewProps): JSX.Element {
   const defaults = usePhoneTransferPrefs((s) => s.importDefaults);
   const setDefaults = usePhoneTransferPrefs((s) => s.setImportDefaults);
   return <CollectionPreviewBody {...props} defaults={defaults} setDefaults={setDefaults} />;
+}
+
+function PhoneNewDeckPreview(props: DestinationPreviewProps & NewDeckInto): JSX.Element {
+  const importDefaults = usePhoneTransferPrefs((s) => s.importDefaults);
+  return <NewDeckPreviewBody {...props} importDefaults={importDefaults} />;
+}
+
+/**
+ * A deck the list is about to become — `newDeckDestination` with the desktop's own step,
+ * store-free, closing over what only the gallery knows: the format the reader last built in, the
+ * folder the gallery is open on, and where to go once the deck exists. **Call it inside a
+ * `useMemo`** for {@link phoneDeckDestination}'s reason: `Preview` is a component identity, and a
+ * fresh one remounts the step and takes the name the reader typed with it.
+ */
+export function phoneNewDeckDestination(into: NewDeckInto): ImportDestination {
+  return {
+    ...NEW_DECK_DESTINATION,
+    Preview: (props) => <PhoneNewDeckPreview {...props} {...into} />,
+  };
 }
 
 /** The reader's collection, as a destination. A value: it closes over nothing. */

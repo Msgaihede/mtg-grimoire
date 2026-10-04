@@ -2269,8 +2269,7 @@ so a first export of the collection is CSV on either face and an import's condit
 - `decks/deckExport.ts` — `exportSubject` and `exportFileName`, re-exported from `DeckEditor`.
 
 **Not done**: the wishlist's import and export (its preview reads the store the same way and splits
-the same way — 3.3's); a new deck from a list (`NewDeckPreview` still reads the store, and the
-gallery has no import entry on the phone); a pile's own `Export cards…` and `Import cards…` (the
+the same way — 3.3's); a pile's own `Export cards…` and `Import cards…` (the
 editor's category heading menu); reading a list from the clipboard (a read permission the app has
 never asked for). The desktop previews' own controls — the radios, the commander candidates, the
 dropdowns — are the desktop's sizes inside rows floored to 44px.
@@ -2883,6 +2882,22 @@ compile.
 - **(6)** Export's button reads **Save file** — true on both hosts. The status line still
   reports what the host did: *Saved <name>.* on Android, *Downloading <name>.* in a browser,
   nothing for a cancelled dialog.
+
+**Fixed since — a new deck on the phone (1).** The gallery's foot is a bar on every state
+(empty, full, inside a folder, a read error): a gold **New deck** and a bordered **From a list**
+(named *New deck from a list*), both 44px, and the empty state reads *No decks yet.* **New deck is
+the desktop's `CreateDeckDialog`, whole** — `useDecks().create` (`deck_create`), `useNewDeckFormat`,
+the folder select defaulting to the drawer the gallery is open on, and the cover picker — inside a
+`display: contents` wrapper that raises its *Create deck* button to 44px and its text boxes to
+16px; the rest of the form keeps its desktop sizes, as Deck settings does on the phone. **From a
+list is the phone's `ImportSheet` over the desktop's new-deck step**: `NewDeckPreview` was split
+as `DeckPreview` was — `NewDeckPreviewBody` is store-free and takes `importDefaults`,
+`NEW_DECK_DESTINATION` is the shared key and label, `NewDeckPreview` the desktop's store-reading
+wrapper — and `importIntoNewDeck` takes an optional `folderId`, so the phone files the deck in the
+open folder (the desktop passes none and is unchanged). Either door ends on the new deck's page, by
+a push. Every command it calls was already on the core's table. Held by `decks.test.tsx` over the
+fake; **not yet driven on a phone**, so a deck write through `core_call` on a device is still
+unproven.
 
 **Method notes.** This phone's logcat ring buffers are 256 KiB and had turned over by the end, so
 the record is a `logcat` streamed from before the first launch. The phone's clock ran 9.69 s ahead
