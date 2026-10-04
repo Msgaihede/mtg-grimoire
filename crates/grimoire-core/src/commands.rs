@@ -1559,18 +1559,17 @@ mod tests {
     }
 
     // -----------------------------------------------------------------------------------------
-    // The relay cannot answer a web page yet, so a page does not ask it
+    // A page asks the relay, as every host does
     // -----------------------------------------------------------------------------------------
 
-    /// Put `state`'s device in a group of one and point its relay at `relay` — written
-    /// straight to the tables, so it can be done on a thread standing in for a page, where the
-    /// commands that would do it are the ones refused.
-    fn in_a_group_with_a_relay(state: &State, relay: &str) {
-        let conn = state.lock_db();
-        crate::sync_engine::client::set_state(&conn, crate::sync_engine::client::RELAY_URL, relay)
-            .expect("the relay's override");
-        let me = crate::sync_pair::identity::ensure(&conn).expect("an identity");
-        crate::sync_pair::identity::create_group(&conn, &me).expect("a group of one");
+    /// Point `state`'s relay at `relay`: the override with no UI, written straight to its row.
+    fn with_a_relay(state: &State, relay: &str) {
+        crate::sync_engine::client::set_state(
+            &state.lock_db(),
+            crate::sync_engine::client::RELAY_URL,
+            relay,
+        )
+        .expect("the relay's override");
     }
 
     fn group_of(state: &State) -> Option<String> {
@@ -1579,50 +1578,45 @@ mod tests {
             .map(|g| g.group_id)
     }
 
-    /// **On a host that asks as a page, no command sends the relay a request, and every command
-    /// that would says the same sentence** — the relay sends no CORS answer today, so a request
-    /// from a page could only fail, noisily (`entitlement::not_from_a_page_yet`). The mock
-    /// stands where the relay would and counts: natively the same setup does ask it, which is
-    /// what makes a count of zero on a page mean something.
-    ///
-    /// What must still work is as much the point: the panel's reads answer, an offer can be
-    /// cancelled, and **a device in a group can still leave it** — the courtesy call is refused
-    /// like any other and the local clear runs anyway.
-    #[tokio::test]
-    async fn on_a_page_no_command_asks_the_relay_and_each_that_would_says_so() {
-        use crate::sync_engine::entitlement::NOT_FROM_A_BROWSER_YET;
-        let relay = httpmock::MockServer::start();
-        let asked = relay.mock(|when, then| {
-            when.any_request();
-            then.status(500).body("the relay, standing in");
-        });
-        let refused = || Err::<Value, String>(NOT_FROM_A_BROWSER_YET.to_owned());
-
-        // The control, natively: the same device, in the same group, does ask.
-        let (native, _native_dir) =
-            crate::state::fixtures::on_files("commands-relay-native", "http://127.0.0.1:1");
-        in_a_group_with_a_relay(&native, &relay.base_url());
-        let natively = dispatch(&native, "sync_now", Value::Null, None).await;
-        assert!(natively.is_err(), "the stand-in answers 500: {natively:?}");
-        let control = asked.calls();
-        assert!(control > 0, "natively a sync in a group asks the relay");
-        assert_ne!(natively, refused(), "and is not refused for being a page");
-
-        let _page = crate::platform::host::emulate_page();
-
-        // A page as it really is: in no group, connected to nothing.
-        let (fresh, _heard, _dir) =
-            crate::state::fixtures::single("commands-relay-page", "http://127.0.0.1:1");
-        {
-            let conn = fresh.lock_db();
-            crate::sync_engine::client::set_state(
-                &conn,
-                crate::sync_engine::client::RELAY_URL,
-                &relay.base_url(),
+    fn relay_errors_logged(state: &State) -> i64 {
+        state
+            .lock_db()
+            .query_row(
+                "SELECT count(*) FROM error_log WHERE source = 'relay'",
+                [],
+                |r| r.get(0),
             )
-            .unwrap();
-        }
-        // The panel draws: every read answers, and says it is not connected.
+            .expect("the error log")
+    }
+
+    /// One press, and how many requests it cost the relay's stand-in.
+    async fn press(
+        state: &Arc<State>,
+        asked: &httpmock::Mock<'_>,
+        name: &str,
+        args: Value,
+    ) -> (Result<Value, String>, usize) {
+        let before = asked.calls();
+        let answer = dispatch(state, name, args, None).await;
+        (answer, asked.calls() - before)
+    }
+
+    /// **Every press a Sync panel can make, on one device that starts in no group**, against a
+    /// relay that answers 500 to everything — and what each cost it, in requests. `invite` is a
+    /// code another device offered, so the join has something real to answer.
+    ///
+    /// What is asserted here is what is true on every host; the answer is the walk itself —
+    /// each press, whether it answered `Ok`, and its request count — for the caller to hold one
+    /// host's against another's.
+    async fn walk_the_sync_panel(
+        state: &Arc<State>,
+        asked: &httpmock::Mock<'_>,
+        invite: &str,
+    ) -> Vec<(&'static str, bool, usize)> {
+        const ANSWERED_500: &str = "the relay answered 500";
+        let mut walked = Vec::new();
+
+        // The panel draws: every read answers, and none of them asks.
         for read in [
             "sync_status",
             "sync_relay_status",
@@ -1630,113 +1624,197 @@ mod tests {
             "sync_pairing_status",
             "sync_review_list",
         ] {
-            let answer = dispatch(&fresh, read, Value::Null, None).await;
+            let (answer, cost) = press(state, asked, read, Value::Null).await;
             assert!(answer.is_ok(), "{read} is a local read: {answer:?}");
+            walked.push((read, true, cost));
         }
-        let pairing = dispatch(&fresh, "sync_pairing_status", Value::Null, None)
+        // Sync with nothing connected is off, and asks nobody.
+        let (off, cost) = press(state, asked, "sync_now", Value::Null).await;
+        assert_eq!(off, Ok(Value::Null));
+        walked.push(("sync_now, in no group", true, cost));
+
+        // The inviter's half. The offer is minted here and nowhere else; the poll after it is
+        // the request, and the stand-in's 500 is what comes back — a status, read off an answer.
+        let (offer, cost) = press(state, asked, "sync_pairing_begin", Value::Null).await;
+        let offer = offer.expect("an offer");
+        assert!(
+            offer["code"].as_str().is_some_and(|code| !code.is_empty()),
+            "{offer}"
+        );
+        assert!(state.pairing.lock().await.is_some(), "the offer is pending");
+        walked.push(("sync_pairing_begin", true, cost));
+        let (poll, cost) = press(state, asked, "sync_pairing_poll", Value::Null).await;
+        assert!(
+            poll.as_ref().is_err_and(|e| e.starts_with(ANSWERED_500)),
+            "{poll:?}"
+        );
+        walked.push(("sync_pairing_poll", false, cost));
+        let (cancel, cost) = press(state, asked, "sync_pairing_cancel", Value::Null).await;
+        assert_eq!(cancel, Ok(Value::Null));
+        assert!(state.pairing.lock().await.is_none(), "the cancel took it");
+        walked.push(("sync_pairing_cancel", true, cost));
+
+        // The joiner's half: the answer is posted before anything is kept.
+        let code = json!({ "code": invite });
+        let (accept, cost) = press(state, asked, "sync_pairing_accept", code).await;
+        assert!(
+            accept.as_ref().is_err_and(|e| e.starts_with(ANSWERED_500)),
+            "{accept:?}"
+        );
+        assert!(state.pairing.lock().await.is_none(), "and nothing was kept");
+        walked.push(("sync_pairing_accept", false, cost));
+
+        // Connect: the address to open is built here, and the claim is the request. The group
+        // of one it is made against is minted first and stays — `ensure_group` says why.
+        let (authorize, cost) = press(state, asked, "sync_patreon_begin", Value::Null).await;
+        let authorize = authorize.expect("an address to open");
+        assert!(
+            authorize
+                .as_str()
+                .is_some_and(|url| url.starts_with("https://www.patreon.com/oauth2/authorize?")),
+            "{authorize}"
+        );
+        walked.push(("sync_patreon_begin", true, cost));
+        assert_eq!(group_of(state), None);
+        let code = json!({ "code": "a-claim-code" });
+        let (claim, cost) = press(state, asked, "sync_patreon_claim", code).await;
+        assert!(
+            claim.as_ref().is_err_and(|e| e.starts_with(ANSWERED_500)),
+            "{claim:?}"
+        );
+        assert!(group_of(state).is_some(), "the group the claim was for");
+        walked.push(("sync_patreon_claim", false, cost));
+
+        // In a group now, so a sync is a round trip — as far as the first 500.
+        let (sync, cost) = press(state, asked, "sync_now", Value::Null).await;
+        assert!(
+            sync.as_ref().is_err_and(|e| e.contains(ANSWERED_500)),
+            "{sync:?}"
+        );
+        walked.push(("sync_now, in a group", false, cost));
+        // A removal is refused before any request, in its own words: no membership.
+        let nobody = json!({ "deviceId": "nobody" });
+        let (revoke, cost) = press(state, asked, "sync_device_revoke", nobody).await;
+        assert_eq!(
+            revoke,
+            Err(crate::sync_pair::identity::NO_MEMBERSHIP.to_owned())
+        );
+        walked.push(("sync_device_revoke", false, cost));
+
+        // **Leaving is always possible**: the local clear runs whatever the relay answered.
+        let (leave, cost) = press(state, asked, "sync_group_leave", Value::Null).await;
+        assert_eq!(leave, Ok(Value::Null));
+        assert_eq!(group_of(state), None, "the device has left, locally");
+        walked.push(("sync_group_leave", true, cost));
+
+        walked
+    }
+
+    /// **On a host that asks as a page, the commands that reach the relay reach it** — request
+    /// for request what a native host sends, with the relay's own answer read off the response.
+    /// A page's requests are bound by CORS, which the relay answers for the origins it names
+    /// (`relay/src/cors.ts`); nothing in the engine stands between a press and the request.
+    ///
+    /// The mock stands where the relay would, answers 500 to everything and counts. **The
+    /// native walk is the control**: the same presses on a desktop's two connections and many
+    /// threads, so "the page asked" is held to a number and not to "more than none". The page's
+    /// walk is on one connection and one thread with unexposed response headers hidden
+    /// (`platform::host::emulate_page`), so a relay path that took the connection twice, or
+    /// leaned on a header a browser would not show it, fails here by name.
+    ///
+    /// What a mock cannot be is a browser: no pre-flight is sent to it and no
+    /// `Access-Control-Allow-Origin` is asked of it. That half is the relay's own tests, and a
+    /// real browser's.
+    #[tokio::test]
+    async fn on_a_page_the_sync_commands_ask_the_relay_as_any_host_does() {
+        let relay = httpmock::MockServer::start();
+        let asked = relay.mock(|when, then| {
+            when.any_request();
+            then.status(500).body("the relay, standing in");
+        });
+
+        // A code to join by, from a third device — which asks nobody to make it.
+        let (inviter, _inviter_dir) =
+            crate::state::fixtures::on_files("commands-relay-inviter", "http://127.0.0.1:1");
+        let invite = dispatch(&inviter, "sync_pairing_begin", Value::Null, None)
             .await
-            .unwrap();
+            .expect("an offer")["code"]
+            .as_str()
+            .expect("the code")
+            .to_owned();
+        assert_eq!(asked.calls(), 0, "an offer is made locally");
+
+        // The control, natively.
+        let (native, _native_dir) =
+            crate::state::fixtures::on_files("commands-relay-native", "http://127.0.0.1:1");
+        with_a_relay(&native, &relay.base_url());
+        let natively = walk_the_sync_panel(&native, &asked, &invite).await;
+        let cost_of = |walk: &[(&'static str, bool, usize)], press: &str| {
+            walk.iter()
+                .find(|(name, _, _)| *name == press)
+                .map(|(_, _, cost)| *cost)
+                .expect("a press the walk makes")
+        };
+        // The five presses that are requests, and the ones that are not: without this, a walk
+        // that asked nobody would equal another that asked nobody.
+        for asks in [
+            "sync_pairing_poll",
+            "sync_pairing_accept",
+            "sync_patreon_claim",
+            "sync_now, in a group",
+            // The courtesy call. What it answers changes nothing: the device has left.
+            "sync_group_leave",
+        ] {
+            assert!(cost_of(&natively, asks) > 0, "{asks} asks the relay");
+        }
+        for local in [
+            // The panel's reads: opening Settings asks nobody, on any host.
+            "sync_status",
+            "sync_relay_status",
+            "sync_supporter_status",
+            "sync_pairing_status",
+            "sync_review_list",
+            "sync_now, in no group",
+            "sync_pairing_begin",
+            "sync_pairing_cancel",
+            "sync_patreon_begin",
+            "sync_device_revoke",
+        ] {
+            assert_eq!(cost_of(&natively, local), 0, "{local} asks nobody");
+        }
+        let native_log = relay_errors_logged(&native);
+        assert!(native_log > 0, "a failed request is in the error log");
+
+        // The page: one connection, one thread, and a browser's view of a response.
+        let (page, _heard, _page_dir) =
+            crate::state::fixtures::single("commands-relay-page", "http://127.0.0.1:1");
+        with_a_relay(&page, &relay.base_url());
+        let _page = crate::platform::host::emulate_page();
+        assert!(page.one_connection() && crate::platform::host::asks_as_a_page());
+        let before = asked.calls();
+        let on_a_page = walk_the_sync_panel(&page, &asked, &invite).await;
+
+        assert_eq!(
+            on_a_page, natively,
+            "press for press, a page asked the relay what a native host asks it"
+        );
+        assert_eq!(
+            asked.calls() - before,
+            natively.iter().map(|(_, _, cost)| cost).sum::<usize>(),
+            "and nothing between the presses asked it either"
+        );
+        assert_eq!(
+            relay_errors_logged(&page),
+            native_log,
+            "a request that failed is logged on a page as it is anywhere"
+        );
+        // What is a page's own: it is told no machine name, so `Browser` is what it is called
+        // on the roster of the device it pairs with.
+        let pairing = dispatch(&page, "sync_pairing_status", Value::Null, None)
+            .await
+            .expect("the panel's read");
         assert_eq!(pairing["groupId"], Value::Null, "{pairing}");
         assert_eq!(pairing["deviceName"], "Browser", "{pairing}");
-        // Sync with nothing connected is off, as on any host, and asks nobody.
-        assert_eq!(
-            dispatch(&fresh, "sync_now", Value::Null, None).await,
-            Ok(Value::Null)
-        );
-        // The two presses that start a flow, and the two that would continue one.
-        assert_eq!(
-            dispatch(&fresh, "sync_pairing_begin", Value::Null, None).await,
-            refused()
-        );
-        assert!(
-            fresh.pairing.lock().await.is_none(),
-            "no offer is made for a pairing that cannot complete"
-        );
-        assert_eq!(
-            dispatch(
-                &fresh,
-                "sync_pairing_accept",
-                json!({ "code": "not-an-invite" }),
-                None
-            )
-            .await,
-            refused()
-        );
-        assert_eq!(
-            dispatch(&fresh, "sync_patreon_begin", Value::Null, None).await,
-            refused()
-        );
-        assert_eq!(
-            dispatch(
-                &fresh,
-                "sync_patreon_claim",
-                json!({ "code": "a-claim-code" }),
-                None
-            )
-            .await,
-            refused()
-        );
-        assert_eq!(
-            group_of(&fresh),
-            None,
-            "a claim that cannot be made mints no group of one"
-        );
-        // With no offer there is nothing to confirm and nothing to poll for: each answers
-        // locally, in its own words — a poll says it is idle, which is what stops a page
-        // asking again every second.
-        let confirm = dispatch(&fresh, "sync_pairing_confirm", Value::Null, None).await;
-        assert!(confirm.is_err(), "{confirm:?}");
-        let poll = dispatch(&fresh, "sync_pairing_poll", Value::Null, None)
-            .await
-            .expect("a poll with no offer is an answer");
-        assert_eq!(poll["stage"], "idle", "{poll}");
-        assert_eq!(
-            dispatch(&fresh, "sync_pairing_cancel", Value::Null, None).await,
-            Ok(Value::Null)
-        );
-        assert_eq!(asked.calls(), control, "a page in no group asked nobody");
-
-        // A page that somehow is in a group — which nothing above can bring about — still
-        // sends nothing: every request either module builds passes the same door.
-        let (grouped, _heard, _dir) =
-            crate::state::fixtures::single("commands-relay-page-grouped", "http://127.0.0.1:1");
-        in_a_group_with_a_relay(&grouped, &relay.base_url());
-        assert!(group_of(&grouped).is_some());
-        assert_eq!(
-            dispatch(&grouped, "sync_now", Value::Null, None).await,
-            refused(),
-            "the request the control made natively is refused in the sentence here"
-        );
-        let revoke = dispatch(
-            &grouped,
-            "sync_device_revoke",
-            json!({ "deviceId": "nobody" }),
-            None,
-        )
-        .await;
-        assert!(revoke.is_err(), "{revoke:?}");
-        let logged: i64 = grouped
-            .lock_db()
-            .query_row("SELECT count(*) FROM error_log", [], |r| r.get(0))
-            .unwrap();
-        assert_eq!(
-            logged, 0,
-            "a refusal is not a failed request, and is not logged as one"
-        );
-
-        // **Leaving is always possible**: the courtesy call to the relay is refused like any
-        // other, and the local clear runs whatever it answered.
-        assert_eq!(
-            dispatch(&grouped, "sync_group_leave", Value::Null, None).await,
-            Ok(Value::Null)
-        );
-        assert_eq!(group_of(&grouped), None, "the device has left, locally");
-
-        assert_eq!(
-            asked.calls(),
-            control,
-            "not one request reached the relay from a page"
-        );
     }
 
     // -----------------------------------------------------------------------------------------

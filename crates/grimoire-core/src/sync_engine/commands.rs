@@ -268,8 +268,6 @@ pub fn entitled(conn: &Connection) -> bool {
 /// `sync_pair` comes from, because a `state` a third party can predict is no state at all and
 /// the failure is silent: the URL still opens and the flow still completes.
 pub fn begin_authorize(conn: &Connection) -> Result<String, String> {
-    // No trip to Patreon for a code this host could not claim.
-    entitlement::not_from_a_page_yet()?;
     let state: String = crypto::random_bytes::<16>()
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -307,9 +305,6 @@ pub fn begin_authorize(conn: &Connection) -> Result<String, String> {
 /// group), and a device that threw that group away and minted a fresh one would be locked out
 /// permanently, by the very repair meant to tidy up.
 pub fn ensure_group(conn: &Connection) -> Result<(), String> {
-    // A group of one is minted so that a claim can follow it — and on a host that cannot
-    // reach the relay none will, so nothing is minted.
-    entitlement::not_from_a_page_yet()?;
     if identity::group(conn).map_err(|e| e.to_string())?.is_some() {
         return Ok(());
     }

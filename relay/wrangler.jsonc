@@ -89,10 +89,27 @@
     { "name": "RL_MINT", "namespace_id": "1002", "simple": { "limit": 30, "period": 60 } },
     { "name": "RL_READ", "namespace_id": "1003", "simple": { "limit": 240, "period": 60 } },
   ],
+  // **`APP_ORIGINS` is the list of pages a browser may ask this relay from**, comma-separated and
+  // compared exactly — `src/cors.ts` is the reasoning. One entry: the light app's web build, which
+  // the app Worker serves at that origin and nowhere else (`app-worker/README.md`). An origin is
+  // scheme and host with **no trailing slash**, the way a browser spells the `Origin` header; a
+  // slash here matches no request, and the web app then fails every call while every native
+  // client, which sends no `Origin`, goes on working — so nothing but a browser would notice.
+  // `cors.test.ts` reads this file and holds the value to that one string.
+  //
+  // It is not an access control: a caller that is not a browser sends whatever `Origin` it likes
+  // or none. Every route is still guarded by a token, a code or a secret. Unset, it allows no
+  // origin — the web app stops syncing and nothing else changes.
+  //
+  // ⚠️ **A development origin does not belong in the committed value.** `http://localhost:…` here
+  // would let any page a reader's own machine serves ask the production relay from their browser.
+  // A local web build that needs a relay asks a local one, with the var overridden where that one
+  // is started (`wrangler dev --local --var APP_ORIGINS:…`).
   "vars": {
     "RELAY_BASE": "https://mtg-grimoire-relay.denmark-east.workers.dev",
     "PATREON_CLIENT_ID": "UFkUESN45GFyy36WQBaOpedWwFvtcOfujPZz_s8Yhu54z4I7-eA8Zg9lv-FEXqV4",
     "PATREON_CAMPAIGN_ID": "16694056",
+    "APP_ORIGINS": "https://mtg-grimoire.app",
   },
   "observability": { "enabled": true },
 }

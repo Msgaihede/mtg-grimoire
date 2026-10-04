@@ -20,13 +20,16 @@ served under that policy, and the built app has been driven end to end on both f
 the real hosts** (§9.6). **It is deployed at `https://mtg-grimoire.app` since 2026-10-04**
 (§9.7) — the deploy is the owner's, and each one that day was run by an agent at his ask; one
 headless Chrome on Windows has driven the web host, and the owner has used it in Firefox and
-on a phone and said so in a sentence each. There is no sync on a light install,
-which is phase 6 — a browser install says so in a sentence rather than asking the relay.
+on a phone and said so in a sentence each. **Sync on a light install is phase 6, built a step at
+a time in §10**: since step 6.1 a browser install asks the relay as any host does and the
+relay's source answers a page — written and not yet deployed, so the deployed web app still
+says in a sentence that it cannot sync.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
   pages: [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md); the web host:
-  [the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md).
+  [the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md); sync:
+  [the phase 6 plan](../superpowers/plans/2026-10-04-light-app-phase-6.md).
 - What is left, phase by phase: [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761).
 - The binding rules for anyone changing it: [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
 
@@ -4527,7 +4530,8 @@ object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; fo
   to the relay's CORS allow-list; until then the request fails either way. (**Since §9.6 no
   such request is made**: the engine refuses a relay call on a page in a sentence,
   `NOT_FROM_A_BROWSER_YET`, before anything is sent — so the policy's refusal is no longer
-  what a reader meets first.)
+  what a reader meets first.) (**Since step 6.1 the relay is on the list and that refusal is
+  deleted — §10.1.**)
 - ⚠️ **`data.scryfall.io` is pinned by this policy and by nothing in the engine.** No shipped
   line names the host; the desktop follows the descriptor anywhere. If Scryfall moves its bulk
   files, **every suite stays green** and a browser's first run fails — the page says `http
@@ -4941,7 +4945,8 @@ during it was not recorded.
    leaving a group are untouched. And **a device with no machine name is called what it is**:
    `platform::device::kind()` answers `Browser`, `Android` or `Desktop`, where every host said
    `Desktop` and a browser's own Devices panel read "Desktop — not paired yet." Phase 6
-   deletes the refusal in the change that gives the relay its CORS answers.
+   deletes the refusal in the change that gives the relay its CORS answers. (**Deleted in step
+   6.1 — §10.1.**)
 3. **The phone card sheet's *In your grimoire* figures did not move after an add** — `Owned 0`
    beside the receipt, and again when the sheet was closed and opened. Nothing on the phone
    face settled that read; and the desktop's hook, which did, watched `useIsMutating` fall to
@@ -5609,3 +5614,106 @@ the Worker touches either.**
 - **The offline launch's wall.** The driver's own clock put the twelve cached pictures
   complete at 19 195 ms in that launch, beside tiles at 2 127 ms. What it waited on was not
   looked into.
+
+## 10. Sync on a light install — phase 6, a step at a time
+
+A light install is another device in the group: the same invite, the same six digits, one of the
+membership's five slots, and the same socket (spec §7).
+[The plan](../superpowers/plans/2026-10-04-light-app-phase-6.md) has the six steps, one pull
+request each.
+
+**Decided before anything was built** (the plan's table), by Markus on 2026-10-04:
+
+- **No polling: a light install uses the live socket, on every host.** Spec §7 gave a browser
+  "none at first — pull on focus, on a timer and after a write", and issue #761 held a box for
+  deciding after living with that. It was decided before any of it was built, so nothing polls
+  and there is nothing to take out.
+- **A browser presents its bearer in the socket's sub-protocol**, because its `WebSocket` cannot
+  set a header: it offers `grimoire.live.v1` and `bearer.<token>`, and the relay verifies the
+  second as it verifies the header and selects the first. The header stays for every build
+  already released.
+- **The agent building the phase deploys what a step needs** — the relay, then the web app —
+  where every phase before this one said nobody here deploys. That is for this phase's deploys
+  and nothing else; each is from `main` at a merged commit and is written down below.
+
+**What the tree held before the phase started** (surveyed 2026-10-04, `main` at `daa70e12`):
+
+- **The pairing UI was already on the phone face.** Step 3.7 (§7.7) drew the desktop's own
+  `SyncPanel` there — pair, paste, scan, the six digits, the roster — and Android's manifest
+  declares the camera. Nothing had driven it at phone width, and the phone face mounted nothing
+  that hears `sync:applied`.
+- **The relay answered no page**: no `OPTIONS` arm, no `Access-Control-*` header, and a socket
+  that reads its bearer from a header a browser cannot set.
+- **The engine refused instead of asking** — §9.6's second finding — and the hosting policy left
+  the relay out of `connect-src`, with a test holding its absence.
+- **The socket's connection manager was the desktop crate's** (§6.9's second open item), so the
+  Android host started none and the web host had no loop of any kind.
+
+### 10.1 Step 6.1 — the relay answers a page, and the engine asks it (2026-10-04)
+
+Three things the code said move together, and did: the relay's CORS answers, the engine's
+refusal, and the policy's `connect-src`. **Written and not deployed** — asked at 15:49 and again
+at 15:59 UTC, the deployed relay answered an `OPTIONS /token` from `https://mtg-grimoire.app`
+with `405`, `Allow: POST` and no `access-control-*` line, and the live site's policy does not
+name the relay. The tree is ahead of both hosts until the deploys below.
+
+**The relay** (`relay/src/cors.ts`, `ticket.ts`, and the router around them):
+
+- **An allow-list, `APP_ORIGINS`**, a `vars` entry shipped as `https://mtg-grimoire.app` and
+  matched exactly against `Origin` — no wildcard, no suffix, and unset allows nobody. It is not
+  an access control: it bounds which pages a *browser* lets ask, and weakens nothing, since no
+  route trusts a cookie and each is gated by a token, a code or a secret.
+- **A pre-flight is answered `204` before the rate limiter, D1, the HMAC and any Durable
+  Object** — so it spends none of a caller's budget and is never the request that is billed. It
+  names the route's own methods, `authorization, content-type`, and a day's `max-age`.
+- **Every answer to an allowed origin carries `Access-Control-Allow-Origin` and `Vary: Origin`,
+  refusals included**, because the engine acts on a refusal's status and body: a 401 with a
+  membership that ended, a 403 `device_limit`, the rendezvous poll's 404 that means *not yet*.
+  No header is exposed, because the client reads none.
+- **A request with no `Origin` is answered byte for byte as before** — every desktop and Android
+  build. `cors.test.ts` asks sixteen answers twice, with the header and without, and compares
+  status, body and headers.
+- **`GET /g/{group}/ws`** takes its bearer from a `bearer.<token>` sub-protocol when there is no
+  `Authorization` header — for `ws` alone; a push, a pull and an ack ignore one — selects
+  `grimoire.live.v1` in its 101 when that was offered, and refuses an `Origin` that is present
+  and not on the list with a 403 before the gate, since CORS does not apply to a socket. The
+  Durable Object answers the text frame `ping` with `pong` through `setWebSocketAutoResponse`,
+  without waking: a browser cannot send the protocol ping the native client sends.
+
+**The engine**: `entitlement::NOT_FROM_A_BROWSER_YET`, `not_from_a_page_yet` and the two `relay()`
+doors that stood behind it are deleted, and `pairing::begin`, `accept`,
+`commands::begin_authorize` and `ensure_group` no longer ask what kind of host they are on.
+Nothing replaced it. **What the engine sends is held to what the relay allows**: eight requests,
+two request headers and no response header read —
+`sync_engine::client::tests::the_relay_is_asked_with_two_headers_and_no_other` reads both Rust
+files and the relay's `ALLOW_HEADERS` literal, so a third header on either side alone is red.
+**The test that held the refusal is turned round**:
+`commands::tests::on_a_page_the_sync_commands_ask_the_relay_as_any_host_does` walks every press
+a Sync panel can make, natively and then under `platform::host::emulate_page`, against a mock
+answering 500, and the two walks are equal press for press — five requests and four `error_log`
+rows on either host. One connection and one thread found no lock taken twice on any relay path.
+
+**The policy**: `connect-src` names `https://mtg-grimoire-relay.denmark-east.workers.dev`, read
+from `RELAY_BASE` by `hosting.test.ts`, whose absence test became a row of the allowed hosts.
+`https://` only — no `wss://` source is written until step 6.3 has opened a socket in a browser.
+
+**Found on the way**: `package.json` had lost its `web:smoke` script in `daa70e12` while CI's
+`web` job and the runbooks still call it, so that job could only fail on its next run. Restored
+here.
+
+**Open after this step:**
+
+- **No browser has asked.** A mock is sent no pre-flight and asked for no
+  `Access-Control-Allow-Origin`; the first request from a page is the deploy's own probe.
+- **Whether workerd carries the 101's `Sec-WebSocket-Protocol` to a browser.** The types say the
+  response may carry headers and no test can open a real socket; step 6.3's local relay settles
+  it before a deploy has to.
+- **What a browser's keepalive costs.** The auto-response is documented as costing no duration;
+  the pricing page exempts only *protocol* pings from the 20:1 rule for incoming messages. Read
+  as written, `ping` every 45 s is 96 Durable Object requests a day for a tab that never
+  closes, against a desktop's none. The runbook's item 13 is the one-hour check after a deploy.
+- **A bearer in a sub-protocol is not redacted in Workers Logs**, where `authorization` is by
+  its name. It is a token that lives a day at most, in the account's own three-day log;
+  `invocation_logs: false` would take it out and is the owner's to choose.
+- **A pull's pre-flight is cached per address**, and `?since=` moves with the cursor, so most
+  pulls from a browser cost one more Worker invocation — and no Durable Object request.
