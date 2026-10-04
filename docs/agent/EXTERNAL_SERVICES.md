@@ -190,15 +190,19 @@ Chrome 154 on 2026-10-04, in a page and in a dedicated Worker alike, a `wss://` 
 the policy names only as `https://` is refused before anything is sent (*Connecting to 'wss://…'
 violates the following Content Security Policy directive*), as an `error` with no `close`. The
 second source is derived from `RELAY_BASE` by the rule the engine dials by, and the same test
-holds it to that one. ⚠️ **No build that asks the relay from a page is deployed** — the
-tree is ahead of the web host: the relay's half went out on 2026-10-04 at 17:22 UTC
-(`docs/reference/light-app.md` §10.4), and the web app's deploy, which carries the engine that
-asks and the `wss://` source together, has not been made. **An address a server sends is not**
+holds it to that one. **A build that asks the relay from a page is deployed since 2026-10-04 at
+23:19:22 UTC** — after the relay's half, which went out at 17:22 UTC and answered its
+pre-flight `204` at 23:09 and 23:18: the web app's deploy carried the engine that asks and the
+`wss://` source together, and its policy names the relay (probe 19: `1`). ⚠️ **No browser has
+paired, or opened a socket, in production** — that needs the owner's membership
+(`docs/reference/light-app.md` §10.7). **An address a server sends is not**
 — Scryfall's bulk-file host is in no line of ours, so if that moves every suite stays green and
-a browser's first run fails. **The last deploy was 2026-10-04 at 13:27 UTC, from `main` at
-`4929cc6e`** — the second that day, rolled back at 13:28 and forward again at 13:30 to see a
-rollback work, so **production is that commit and not `main`**, which has moved past it. This
-paragraph said *not deployed* until then. No agent may deploy it unasked: each of
+a browser's first run fails. **The last deploy was 2026-10-04 at 23:19:22 UTC, from `main` at
+`2bbd4446`** (through #824), version `befbcbd9-be3d-45f5-8150-4af8ff5337c9`, engine build id
+`d6f5dc2a123a220e` — the fourth that day, with all twenty of its runbook's probes asked of the
+real address thirteen seconds later — so **production is that commit and not `main`** once
+`main` moves past it: step 6.3's engine, and not yet 6.3b's. This
+paragraph said *not deployed* until that day. No agent may deploy it unasked: each of
 those was run by an agent because Markus asked for it, and **the ask is per deploy** — except
 that for the light app's phase 6 he asked once for the phase's deploys, the relay's and this
 Worker's (2026-10-04), and for nothing after it. **One job deploys it, and it is the only job

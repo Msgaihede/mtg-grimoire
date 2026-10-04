@@ -5,9 +5,12 @@ build — `dist-web/`, the page and the engine compiled to WASM — at **`https:
 the origin root. It is static assets, one file of response headers, and a script of a few lines.
 
 **It is deployed there since 2026-10-04** — first at 12:47 UTC, from `main` at `d8c3779b`, with
-every probe of step 0 asked of the real address a minute later. **The last deploy was 13:43 UTC
-the same day, from `main` at `e1e76f78`** — the third build, and the first to rename chunks —
-so production is `main`'s code as of that commit. Between the two, a build from `4929cc6e` went
+every probe of step 0 asked of the real address a minute later. **The last deploy was 23:19:22
+UTC the same day, from `main` at `2bbd4446`** (through #824) — the fourth build, and the first
+whose engine asks the relay from a page and whose policy lets it: step 6.3's engine and the
+`wss://` source, and not yet step 6.3b or 6.5b — so production is `main`'s code as of that
+commit. Before it: 13:43 UTC from `e1e76f78`, the third build and the first to rename chunks;
+and between the first and that, a build from `4929cc6e` went
 out at 13:27 and was rolled back at 13:28 and forward again at 13:30, to see a rollback work.
 This paragraph said *nothing is deployed there* until that day. **Ask the host before you
 believe it or its opposite.** This directory is source, configuration and a runbook; `wrangler
@@ -420,8 +423,10 @@ day, and the rollback and roll-forward after it, were asked for again — he app
 deploy and a rollback test through the question tool — and so was the third, in chat: *"go
 ahead and run the deploy"*. Nothing else was run. **For the light app's phase 6 he asked once
 for the phase** (2026-10-04: *"you should deploy the changes we need, when we need them"*): the
-relay's deploy and this Worker's, as that phase's steps need them, and nothing after it. The
-steps below bind whoever runs them.
+relay's deploy and this Worker's, as that phase's steps need them, and nothing after it. **The
+deploy of 23:19 UTC that day was run under that standing ask** — after the relay's, at 17:22,
+and only once probe 20 had answered `204` with the allow-origin line. The steps below bind
+whoever runs them.
 
 ### Step 0 — ask the host, never a document
 
@@ -435,20 +440,57 @@ nothing at the address to ask.) **It is that minute's answer and no later one's.
 before believing this file or its opposite, and after every deploy, and write the answers in here
 with the date.
 
-**Production has moved twice since the column was written, and the probes were asked again each
-time.**
+**Production has moved three times since the column was written, and the probes were asked again
+each time.** The third is what production serves, and is the last bullet.
 
 - **Version `f724bbc1-9853-4978-9ffe-8b3c0af6c339`**, `main` at `4929cc6e`, the same engine
   build. Probes 1–11 and 14–18 were asked of it after the roll forward, and each answered as
   the column says — the policy equal, the 304 carrying it, the document equal to the built
   one — with the module's brotli transfer 2,139,182 bytes that time.
 - **Version `e9947184-6ee1-4a07-ad79-841d93196210`, deployed at 13:43:02 UTC from `main` at
-  `e1e76f78` — what production serves.** The same engine build, and a renamed `index` chunk,
-  so `J` is another name. **All eighteen were asked of it and each answered as the column
-  says**: the policy equal byte for byte on every response that carries it, the 304 included;
-  the document equal to the built one; the module 2,138,948 bytes as brotli; probe 12 a `404`;
-  probe 13 still `200` over plain `http` — five minutes before the setting behind it was
-  turned on.
+  `e1e76f78`** — what production served until 23:19. The same engine build, and a renamed
+  `index` chunk, so `J` is another name. **All eighteen were asked of it and each answered as
+  the column says**: the policy equal byte for byte on every response that carries it, the 304
+  included; the document equal to the built one; the module 2,138,948 bytes as brotli; probe 12
+  a `404`; probe 13 still `200` over plain `http` — five minutes before the setting behind it
+  was turned on.
+- **Version `befbcbd9-be3d-45f5-8150-4af8ff5337c9`, deployed at 23:19:22 UTC from `main` at
+  `2bbd4446` — what production serves.** Engine build id `d6f5dc2a123a220e`, `index-B-KQBiDj.js`,
+  `worker-WDxbzWW_.js`; by an agent under the phase's standing ask, with the wrangler this
+  directory's lockfile pins (4.146.0, `npm ci --ignore-scripts --prefix app-worker`). The steps
+  in order: `npm ci`; `web:wasm` (6 836 569 B); `web:build`; `web:smoke` passed in 19.0 s;
+  `web:sync-smoke` passed in 37.9 s; `web:deploy-guard` exit 0 (59 on both sides, v0.40.0);
+  `wrangler dev --local` on 127.0.0.1 with probes 1–11 and 14–19 each answering as the table
+  says (the module's brotli transfer 2 016 151 B locally); `deploy --dry-run` (48 files read);
+  the deploy (13 files uploaded, 30 already there). **Just before it, at 23:18:35 UTC**,
+  production answered probe 1 with the old policy (no relay), probe 19 `0`, and probe 20 `204`
+  with the allow-origin line — the answer that means *go*.
+
+  **All twenty at 23:19:35 UTC, against the real address**: 1, 2, 4 — `200`, `text/html` (no
+  charset), `no-cache`, `nosniff`, `strict-origin-when-cross-origin`, the policy equal byte for
+  byte to `dist-web/_headers`, one `ETag` for all three; 3 and 5 — `Not found 404 text/plain;
+  charset=utf-8`; 6 — `200 text/html`; 7 — `200`, `application/wasm`, `public,
+  max-age=31536000, immutable`, the policy equal; 8 — `content-encoding: br`, **2 169 729 bytes
+  on the wire** (the module is 6 836 569); 9 — `200`, `text/javascript`, a year, immutable, the
+  policy equal; 10 — `200`, `text/javascript`, `no-cache`, the policy equal; 11 — `404`; 12 —
+  `404`; 13 — `301 Moved Permanently`; 14 and 15 — `404`, `text/plain; charset=utf-8`,
+  `no-store`, `nosniff`, no policy line; 16 — `200`, `image/png`, `no-cache`, the policy equal;
+  17 — `200`, `text/javascript`, `no-cache`, the policy equal, a strong `ETag`; 18 — `304 Not
+  Modified` with the policy on it, equal; **19 — `1`, and the `wss://` source is there too**;
+  **20 — `204`, `Access-Control-Allow-Origin: https://mtg-grimoire.app`,
+  `access-control-allow-headers: authorization, content-type`, `access-control-allow-methods:
+  POST`, `access-control-max-age: 86400`**. The document served — to a plain `GET /` and to a
+  navigation of `/decks/12` — is byte for byte `dist-web/index.html`.
+
+  **One look in a real browser, at 23:21 UTC** — headless Chrome on a throwaway profile at
+  1280×800, `https://mtg-grimoire.app/settings`, 17 s: no policy violation; no error of the
+  app's (the one console error was Chrome's own new-tab page failing to resolve a Google host);
+  the first run began (`api.scryfall.com`, `data.scryfall.io`); **no request to the relay and
+  no socket**, from a device in no group; and the Sync panel, 4.6 s in: *Browser — not paired
+  yet.*, *Pair a device*, *Enter a code from another device*, *Not connected.*, *Connect
+  Patreon*, *Sync is off. Nothing leaves this device until you connect a membership.* — the
+  refusal sentence is gone. Nothing was pressed that asks the relay. **Not seen: a browser
+  pairing, or opening a socket, in production** — that needs the owner's membership.
 
 ```
 A=https://mtg-grimoire.app
@@ -478,7 +520,7 @@ H='^HTTP|content-type|cache-control|content-security-policy|x-content-type|refer
 | 16 | `curl -s -o /dev/null -D - "$A/icons/icon-192.png" \| grep -iE "$H"` | `200`, `image/png`, `cache-control: no-cache` | **2026-10-04** — `200`, `image/png`, `no-cache`, the policy equal byte for byte |
 | 17 | `curl -s -o /dev/null -D - "$A/assets/$W" \| grep -iE "$H"` | `200`, a JavaScript MIME type, **`cache-control: no-cache`** — one value, not a year and not three joined — the policy, and an `etag` | **2026-10-04** — `200`, `text/javascript`, `no-cache` — one value — the policy equal byte for byte, and a strong `ETag` |
 | 18 | `E=$(curl -s -o /dev/null -D - "$A/assets/$W" \| grep -i '^etag' \| cut -d' ' -f2 \| tr -d '\r')`, then `curl -s -o /dev/null -D - -H "If-None-Match: $E" "$A/assets/$W" \| grep -iE "$H"` | **`304`, with the policy line on it.** This is the response that re-governs a returning reader's engine after a change to `_headers`; a 304 without the policy leaves the old one in force (measured) | **2026-10-04** — **`304 Not Modified`, with the policy on it, equal byte for byte**, `no-cache`, and probe 17's `ETag` |
-| 19 | `curl -s -o /dev/null -D - "$A/" \| grep -i '^content-security-policy' \| grep -c 'connect-src[^;]* https://mtg-grimoire-relay\.denmark-east\.workers\.dev[ ;]'` | `1` — the policy the host sends names the relay. `0` is a build from before the engine asked it from a page, and that build's sync panel answers the refusal sentence instead | **2026-10-04, 15:59 UTC** — `0`: production is a build from before this entry. *Not yet run* against one that should answer `1` |
+| 19 | `curl -s -o /dev/null -D - "$A/" \| grep -i '^content-security-policy' \| grep -c 'connect-src[^;]* https://mtg-grimoire-relay\.denmark-east\.workers\.dev[ ;]'` | `1` — the policy the host sends names the relay. `0` is a build from before the engine asked it from a page, and that build's sync panel answers the refusal sentence instead | **2026-10-04, 15:59 UTC** — `0`: production was a build from before this entry (and `0` again at 23:18:35, a minute before the deploy). **Asked again at 23:19:35 UTC, of the build deployed at 23:19:22 — `1`**, and the `wss://` source is in the same line |
 | 20 | `curl -s -o /dev/null -D - -X OPTIONS -H "Origin: $A" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: authorization,content-type" https://mtg-grimoire-relay.denmark-east.workers.dev/token \| grep -iE '^HTTP\|^access-control'` | `204`, **`access-control-allow-origin: https://mtg-grimoire.app`**, and an `access-control-allow-headers` that names `authorization` and `content-type` — the two request headers the engine sets, and the pre-flight every sync request from a page costs. ⚠️ **Asked of the relay, not of this Worker, and asked BEFORE this Worker's deploy** (*The steps, in order*): no allow-origin line is a relay that cannot answer a page | **2026-10-04, 15:59 UTC** — `405 Method Not Allowed`, `Allow: POST`, **and no `access-control-*` line**: the relay deployed that minute predates its allow-list, which is the answer that means *stop*. **Asked again 2026-10-04, 23:09 UTC**, of the relay deployed at 17:22 — **`204` with `access-control-allow-origin: https://mtg-grimoire.app`** and `access-control-allow-headers: authorization, content-type`: the answer that means *go* |
 
 **Beside the table, the same minute**: the document served — to `-H "Sec-Fetch-Mode: navigate"`
@@ -497,14 +539,17 @@ rewriting the page — *Before the first deploy*, below. **Made on 2026-10-04 at
 headless Chrome 154.0.8037.95: no violation, the app past its gate, that console line, and one
 `<script>` in the source and in the live DOM — *What the browser said under it* has the run.
 
-⚠️ **The tree is ahead of the host by one source, and "byte for byte the line in `_headers`"
-means the `_headers` of the build that was deployed** — `dist-web/_headers`, never this
-directory's on another commit. Since the engine asks the relay from a page, this directory's
-policy names `https://mtg-grimoire-relay.denmark-east.workers.dev` in `connect-src`; every
-*Answered* cell above is from a build without it, and stays true of that build. Probes 19 and
-20 are the two that came with it. Each was asked once, that day at 15:59 UTC, of hosts that
-should *not* pass yet, and neither did — so both can fail; neither has been asked of a host
-that should pass.
+⚠️ **"Byte for byte the line in `_headers`" means the `_headers` of the build that was
+deployed** — `dist-web/_headers`, never this directory's on another commit. **The host has the
+relay's sources since the deploy of 23:19 UTC on 2026-10-04**: this directory's policy names
+`https://mtg-grimoire-relay.denmark-east.workers.dev` and its `wss://` twin in `connect-src`,
+and so does production's. (Until that deploy the tree was ahead of the host by those sources,
+and this paragraph said so.) The dated *Answered* cells of probes 1–18 are from builds without
+them and stay true of those builds; the bullet above has all twenty as the present build
+answers. Probes 19 and 20 came with the relay's sources. Each was asked first at 15:59 UTC of
+hosts that should *not* pass yet, and neither did — so both can fail — **and each has now been
+asked of a host that should pass, and did**: 20 of the relay at 23:09 and 23:18, 19 of this
+Worker at 23:19:35.
 
 **On a day the account's free limit is spent, probes 3–5, 11, 14 and 15 answer `429 text/html`**
 — Cloudflare's own page, not the script's 404 — and the rest are unchanged. *Cost* has why.

@@ -22,8 +22,10 @@ the real hosts** (§9.6). **It is deployed at `https://mtg-grimoire.app` since 2
 headless Chrome on Windows has driven the web host, and the owner has used it in Firefox and
 on a phone and said so in a sentence each. **Sync on a light install is phase 6, built a step at
 a time in §10**: since step 6.1 a browser install asks the relay as any host does and the
-relay's source answers a page — written and not yet deployed, so the deployed web app still
-says in a sentence that it cannot sync.
+relay's source answers a page — **both deployed on 2026-10-04 (§10.7)**: the relay answers the
+web app's pre-flight, and the deployed web app draws the Sync panel and its pairing where it
+used to say in a sentence that it could not sync. A browser against the deployed relay has
+still not paired or opened a socket: that needs the owner's membership.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
@@ -6704,3 +6706,68 @@ it; the signing script with the real `keytool` and the SDK's three tools stubbed
   Cloudflare ones in the environment; and uninstall the debug-signed app from his phone once —
   the first release-signed APK does not install over it. The commands are in
   [ci-and-releases.md](ci-and-releases.md), *What only the owner can do*.
+
+### 10.7 The deploys (2026-10-04)
+
+Two, in the order the runbooks hold them to — the relay first, and the web app only once the
+relay answered a page — and both run by an agent under the owner's standing ask for this phase
+(*"you should deploy the changes we need, when we need them"*). Neither carries step 6.3b: the
+relay's ninth half and a client that reads 4002 are written and wait.
+
+**The relay, at 17:22:12 UTC** — step 6.1's half, the browser's: CORS and the socket ticket.
+From `main` at `ea0aa88e` (#818), version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, wrangler
+4.146.0, `--dry-run` first; no migration, no secret touched. Step 0's twelve probes were asked
+at 17:21:24 UTC, before, and at **23:09:03 UTC, after** — five and three-quarter hours late: the
+permission classifier refused the probe script straight after the deploy, and the owner allowed
+it at 23:09.
+
+- The six bodiless probes answered the same before and after: `400 {"error":"malformed token
+  request"}`, `401`, `400 {"error":"that is not a device id"}`, `401 {"error":"unauthorized"}`,
+  `404 {"error":"nothing there"}`, `400 {"error":"that is not an epoch"}`.
+- **(a) the pre-flight, from the app**: before `405`, `Allow: POST`; **after `204`,
+  `Access-Control-Allow-Origin: https://mtg-grimoire.app`, `Vary: Origin`,
+  `access-control-allow-headers: authorization, content-type`, `access-control-allow-methods:
+  POST`, `access-control-max-age: 86400`**. Its control, from `example.com`: `405`, `Allow:
+  POST`, no `access-control-` line — before and after.
+- **(b) a refusal a page can read**: before `401`; **after `401` with
+  `Access-Control-Allow-Origin: https://mtg-grimoire.app` and `Vary: Origin`**. Control: `401`,
+  no such line.
+- **(c) the socket's origin check**, from `example.com`: before `401`; **after `403 origin not
+  allowed`**. Control, from the app: `401`, before and after.
+
+**The web app, at 23:19:22 UTC.** From `main` at `2bbd4446` (through #824 — step 6.3's engine
+and the `wss://` source; not 6.3b, not 6.5b), version `befbcbd9-be3d-45f5-8150-4af8ff5337c9`,
+engine build id `d6f5dc2a123a220e`, `index-B-KQBiDj.js`, `worker-WDxbzWW_.js`; the wrangler
+`app-worker`'s lockfile pins. The runbook's steps in order: `npm ci`; `web:wasm` (6 836 569 B);
+`web:build`; `web:smoke` passed in 19.0 s; `web:sync-smoke` passed in 37.9 s;
+`web:deploy-guard` exit 0 (59 on both sides, v0.40.0); `wrangler dev --local` with probes 1–11
+and 14–19 answering as the table says; `deploy --dry-run` (48 files read); the deploy (13 files
+uploaded, 30 already there). **Just before it, at 23:18:35 UTC**, production answered probe 1
+with the old policy, probe 19 `0`, and probe 20 — the relay's pre-flight — `204` with the
+allow-origin line: the answer that means *go*.
+
+**All twenty probes at 23:19:35 UTC, against the real address**, each as the runbook's table
+says: the document `200`, `text/html`, `no-cache`, with the policy equal byte for byte to
+`dist-web/_headers`; the module `application/wasm`, a year and immutable, **2 169 729 bytes on
+the wire** as brotli (it is 6 836 569); the 404s as plain text; plain `http` a `301`; the 304
+carrying the policy; **probe 19 `1`** — the policy names the relay, and its `wss://` twin is in
+the same line; **probe 20 `204`** with `Access-Control-Allow-Origin: https://mtg-grimoire.app`.
+The document served, to a plain `GET /` and to a navigation of `/decks/12`, is byte for byte
+`dist-web/index.html`. `app-worker/README.md` has every cell.
+
+**One look in a real browser, at 23:21 UTC** — headless Chrome on a throwaway profile at
+1280×800, `https://mtg-grimoire.app/settings`, for 17 s. No policy violation. No error of the
+app's: the one console error was Chrome's own new-tab page failing to resolve a Google host.
+The first run began (`api.scryfall.com`, `data.scryfall.io`). **No request to the relay and no
+socket**, from a device in no group. And the Sync panel, 4.6 s in: *Browser — not paired yet.*,
+*Pair a device*, *Enter a code from another device*, *Not connected.*, *Connect Patreon*, *Sync
+is off. Nothing leaves this device until you connect a membership.* — the sentence that said
+this build could not sync is gone. Nothing was pressed that asks the relay.
+
+**What only the owner's membership can show**, and nothing has:
+
+- a browser claiming or pairing against the deployed relay;
+- a browser's socket in production — the 101's sub-protocol reaching a page and the text `ping`
+  answered `pong` were settled under local workerd (§10.3), not there;
+- a write on one device drawn on another through the deployed relay, with nothing pressed;
+- what a keepalive is billed, which is the runbook's one-hour check.
