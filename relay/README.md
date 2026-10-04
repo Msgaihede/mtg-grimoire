@@ -103,7 +103,8 @@ within a day.
 **One route takes the same token from a second place, and only that one.** A browser's
 `WebSocket` cannot set a header, so `GET /g/{group}/ws` with no `Authorization: Bearer` reads the
 `bearer.<access>` entry of `Sec-WebSocket-Protocol` instead — the same `verify`, the same `grp`
-comparison, the same 401. The header wins when both are there, which is every released desktop.
+comparison, the same 401. The header wins when both are there, which is every released desktop
+and, since the light app's step 6.2, the Android app: both open the socket from Rust.
 `push`, `pull` and `ack` never look at the sub-protocol: a `fetch` can set a header, and a second
 place to find a credential is a second way in. See "The browser" below and `src/ticket.ts`.
 
@@ -630,6 +631,22 @@ control**: a caller that is not a browser sends any `Origin` it likes, or none. 
   (`setWebSocketAutoResponse`), because a page cannot send the protocol ping the native client
   sends every 45 s. The object is not woken and no duration is billed.
 
+**Who opens it, on each of the three hosts.** The client is one loop in the engine
+(`grimoire-core`'s `sync_engine::live`), over one module that knows what a socket is on the host
+it runs on (`platform::socket`):
+
+| Host | The socket | Bearer | Keepalive |
+| --- | --- | --- | --- |
+| Desktop | opened from the app's Rust process, `tokio-tungstenite` over rustls | `Authorization: Bearer`, no sub-protocol offered | a protocol ping every 45 s |
+| Android (since the light app's step 6.2) | the same code, in the Android host's Rust process | the same | the same |
+| Web | **not built until step 6.3.** `platform::socket`'s browser arm compiles and refuses every connect, and the web host does not start the loop — so no page opens this socket yet | will be `bearer.<access>` beside `grimoire.live.v1` | will be the text `ping` |
+
+So everything this section says about a browser's socket is the relay's half, written ahead of
+its client. The native client also holds the relay to an answer: once a socket has seen one pong,
+a ping that gets none ends it, and the client reconnects — which rests on the runtime answering a
+protocol ping with a pong, seen under `wrangler dev --local` on 2026-10-04 and not yet watched
+on the deployed Worker.
+
 ⚠️ **Three things about it that are stated rather than discovered:**
 
 - **A browser's keepalive is probably not free on the request line.** Cloudflare's pricing page
@@ -926,7 +943,10 @@ on its own.
    `wasm32-unknown-unknown`."** True, and it turned out not to be the obstacle it looked like:
    nothing on the wasm target named the crate — it and `sync_engine::live`, the one module that
    touches it, were both gated to the other targets. The web and Android builds were removed on
-   2026-09-27, and those gates with them.
+   2026-09-27, and those gates with them. Both are back since the light app, and the shape is
+   the same one stated properly: one module names the crate — `grimoire-core`'s
+   `platform::socket`, in its native arm, which the desktop and the Android app link — and its
+   browser arm is where a page's own `WebSocket` goes (step 6.3; it refuses until then).
 2. **"A socket from the page would need the CSP widened."** It would not, and this is the half the
    record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the **webview's**
    connections, and the socket that shipped is opened by `tokio-tungstenite` inside the app's Rust
@@ -936,8 +956,8 @@ on its own.
    the bearer gate above onto a query parameter or a subprotocol. Opening it from Rust needed no
    change to the gate at all. **On 2026-10-04 a page did need one** — the web app has no Rust
    process to open it from — and the gate took the subprotocol, for `ws` alone and only when
-   there is no header: "The browser", above. The desktop's socket is still opened from Rust and
-   still sends the header.
+   there is no header: "The browser", above. The desktop's socket, and the Android app's, is
+   still opened from Rust and still sends the header; the page's own client is not built yet.
 3. **"Polling is comfortably inside the free tier."** There never was a poll to be comfortable —
    see [sync.md](../docs/reference/sync.md) for that correction. The cost of what shipped instead
    is re-derived in the design spec §11: an idle, connected group costs about ~25 DO requests/day,
