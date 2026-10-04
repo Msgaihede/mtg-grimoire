@@ -40,7 +40,10 @@
 //      over a library that appends a stylesheet of its own unless told not to — draws, takes
 //      typing, and leaves no style element on the page
 //  15. no request would cost a CORS pre-flight — the worker's picture fetch included — and none
-//      went to a host this script has no answer for
+//      went to a host this script has no answer for; **and the sync relay heard nothing**: live
+//      sync's loop runs in this engine since step 6.3, this device is in no sync group, and it
+//      made no request to the relay and opened no socket to anybody (`watchPolicy` has how a
+//      socket, which no interception sees, is heard)
 //  16. the host's Content-Security-Policy refused nothing, anywhere: not in a page, not in the
 //      engine's Worker, not in the service worker (`watchPolicy` has why those are three)
 //  17. on a fresh profile whose card file is thirty thousand cards, a reload made the moment
@@ -80,7 +83,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, normalize, resolve, sep } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
 // Plain TypeScript with nothing but erasable types, which Node strips as it loads: the host's own
 // reader of `_headers`, and the rule its script and both local servers tell a place by.
@@ -92,8 +95,16 @@ const DIST = resolve("dist-web");
 const FIXTURES = join(dirname(fileURLToPath(import.meta.url)), "web-smoke");
 /** The folder `src/lib/core/web/index.ts` asks the engine to keep its databases in. */
 const OPFS_DIRECTORY = "mtg-grimoire";
-/** How long the whole run may take. CI's step has a longer bound of its own behind this one. */
-const DEADLINE_MS = 180_000;
+/**
+ * Which run this is — the name a failure is said under — and how long the whole of it may take.
+ * CI's step has a longer bound of its own behind this one.
+ *
+ * **This file is two things**: the web host's smoke run, when it is the script Node was started
+ * with, and the harness that run is written in — the server, the browser, the interception and
+ * the policy's ears — for `scripts/web-sync-smoke.mjs`, which imports it and says who it is
+ * through {@link runAs}.
+ */
+const run = { name: "web-smoke", deadlineMs: 180_000 };
 const started = performance.now();
 
 const TYPES = {
@@ -110,22 +121,53 @@ const TYPES = {
   ".wasm": "application/wasm",
 };
 
-const pause = (ms) => new Promise((done) => setTimeout(done, ms));
+export const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
 /**
  * What to stop, newest first: the server, the browser, its socket, its profile. Each is pushed
  * the moment it exists — a browser that fails to start must not leave the server listening, and
  * a listening server is what keeps this process alive after it has printed its verdict.
  */
-const undo = [];
+export const undo = [];
 async function stopEverything() {
   while (undo.length > 0) await Promise.resolve(undo.pop()()).catch(() => undefined);
 }
 
-function fail(message) {
-  console.error(`web-smoke: FAILED — ${message}`);
+export function fail(message) {
+  console.error(`${run.name}: FAILED — ${message}`);
   process.exitCode = 1;
   throw new Error(message);
+}
+
+/**
+ * Run `main` as the run called `name`, bounded by `deadlineMs`, and stop everything it started
+ * however it ends.
+ *
+ * **The timer is the one bound on the whole run.** `until` polls against the deadline too, but a
+ * protocol call that never answers — a navigation, an OPFS walk that never settles — polls
+ * nothing, so this is a timer and not a check. Unreferenced, so it never keeps a finished run
+ * alive.
+ */
+export function runAs(name, deadlineMs, main) {
+  run.name = name;
+  run.deadlineMs = deadlineMs;
+  setTimeout(async () => {
+    console.error(`${run.name}: FAILED — still running after ${run.deadlineMs / 1000} s`);
+    await stopEverything();
+    process.exit(1);
+  }, run.deadlineMs).unref();
+  return main()
+    .then(() => {
+      const seconds = ((performance.now() - started) / 1000).toFixed(1);
+      console.log(`${run.name}: passed in ${seconds} s`);
+    })
+    .catch((error) => {
+      if (process.exitCode !== 1) {
+        console.error(`${run.name}: FAILED — ${error.message}`);
+        process.exitCode = 1;
+      }
+    })
+    .finally(stopEverything);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -461,8 +503,8 @@ function browserPath() {
 }
 
 /** Start the browser and answer its DevTools address, which it prints once it is listening,
- *  and the way to stop it. */
-async function launch(profile) {
+ *  and the way to stop it. `extra` is a run's own switches, after this file's. */
+async function launch(profile, extra = []) {
   const args = [
     "--headless=new",
     "--remote-debugging-port=0",
@@ -477,6 +519,7 @@ async function launch(profile) {
     // Asked for rather than measured: whatever it still tries meets the resolver above.
     "--disable-background-networking",
     "--disable-component-update",
+    ...extra,
   ];
   // A runner's kernel refuses the sandbox's namespaces to an unprivileged process, and the only
   // page this browser ever loads is the one this script serves.
@@ -545,8 +588,12 @@ async function connect(address) {
  * than thrown**: this runs in the socket's listener, where a throw reaches nobody. `problems`
  * is the run's one list of them — `watchPolicy` writes to it too — read by every wait and once
  * more at the end.
+ *
+ * `through` is a run's own host that really answers — the sync smoke's local relay: a request
+ * it says yes to is let through to wherever the browser's own rules send it, and is none of
+ * this function's to write down or to hold to the no-pre-flight rule. This run has none.
  */
-async function intercept(browser, origin, userAgent, problems, routes) {
+async function intercept(browser, origin, userAgent, problems, routes, through = () => false) {
   /** Each cross-origin request that has a fixture, in order: `{ method, url, headers }`. */
   const asked = [];
   /** URLs whose answer waits on a caller: `url -> promise`. */
@@ -558,7 +605,7 @@ async function intercept(browser, origin, userAgent, problems, routes) {
     const answer = (method, params) =>
       // A tab that closed, or a browser on its way down, has no request left to answer.
       browser.send(method, { requestId, ...params }).catch(() => undefined);
-    if (request.url === origin || request.url.startsWith(`${origin}/`)) {
+    if (request.url === origin || request.url.startsWith(`${origin}/`) || through(request.url)) {
       return answer("Fetch.continueRequest");
     }
     // The fragment-free URL as asked, query included: a fixture answers one address.
@@ -637,15 +684,31 @@ async function intercept(browser, origin, userAgent, problems, routes) {
  * that two auto-attaching sessions both took — the browser's and the page's — never finished
  * installing. So the browser's session takes service workers and nothing else, and a page's
  * takes its dedicated Workers and nothing else.
+ *
+ * **And every socket, which no request interception sees.** A WebSocket's upgrade is not a
+ * request the `Fetch` domain pauses, so a socket to a host with no fixture would otherwise fail
+ * in silence against the resolver. `Network` reports one being *made*, from the target that made
+ * it — the engine's Worker, where live sync's loop runs — so that domain is switched on for
+ * every dedicated Worker, and a socket `socket(url)` does not say yes to is a problem. This run
+ * allows none: its device is in no sync group, and a loop that dialled anyway is the bug.
  */
-async function watchPolicy(browser, problems) {
+async function watchPolicy(browser, problems, socket = () => false) {
   /** Session → what it is, for the sentence. */
   const targets = new Map();
-  const watch = async (sessionId, name) => {
+  /** Every socket any watched Worker made, allowed or not: `{ url, sessionId }`. */
+  const sockets = [];
+  const watch = async (sessionId, name, type) => {
     targets.set(sessionId, name);
     await browser.send("Audits.enable", {}, sessionId);
+    if (type === "worker") await browser.send("Network.enable", {}, sessionId);
   };
 
+  browser.on("Network.webSocketCreated", ({ url }, sessionId) => {
+    sockets.push({ url, sessionId });
+    if (!socket(url)) {
+      problems.push(`${targets.get(sessionId) ?? "a target"} opened a socket to ${url}`);
+    }
+  });
   browser.on("Audits.issueAdded", ({ issue }, sessionId) => {
     const refused = issue.details?.contentSecurityPolicyIssueDetails;
     if (issue.code !== "ContentSecurityPolicyIssue" || !refused) return;
@@ -658,7 +721,9 @@ async function watchPolicy(browser, problems) {
   browser.on("Target.attachedToTarget", async ({ sessionId, targetInfo }) => {
     // Held at its first instruction until it is being listened to, so nothing it does first
     // goes unheard. A target that has already gone has nothing left to say.
-    await watch(sessionId, `${targetInfo.type} ${targetInfo.url}`).catch(() => undefined);
+    await watch(sessionId, `${targetInfo.type} ${targetInfo.url}`, targetInfo.type).catch(
+      () => undefined,
+    );
     await browser.send("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => undefined);
   });
   const attach = (only, sessionId) =>
@@ -683,6 +748,10 @@ async function watchPolicy(browser, problems) {
     },
     /** Every target that was listened to, by what it is. */
     watched: () => [...targets.values()],
+    /** Every socket a watched Worker made. */
+    sockets,
+    /** What a session is, for a sentence. */
+    named: (sessionId) => targets.get(sessionId),
   };
 }
 
@@ -714,7 +783,7 @@ async function openPage(browser, url, problems, policy) {
       // A navigation in flight has no document to ask; the next poll does.
       const value = await evaluate(expression).catch(() => undefined);
       if (value) return value;
-      if (performance.now() > stop || performance.now() - started > DEADLINE_MS) {
+      if (performance.now() > stop || performance.now() - started > run.deadlineMs) {
         const shown = await evaluate("document.body.innerText").catch(() => "(no document)");
         return fail(`${what} — never happened. The page shows:\n${shown}`);
       }
@@ -761,7 +830,7 @@ async function openPage(browser, url, problems, policy) {
   };
   /** Type into whatever the last press focused, as the keyboard's own input event. */
   const type = (text) => browser.send("Input.insertText", { text }, sessionId);
-  return { evaluate, until, thrown, said, reload, forget, press, type };
+  return { evaluate, until, thrown, said, reload, forget, press, type, sessionId };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -877,8 +946,11 @@ function engineFiles() {
  * A browser on a profile of its own — so a first run — with every request it makes answered
  * from `routes` and the host's policy listened to on every target. `close` stops it and removes
  * the profile; it is on the undo list too, so a run that fails anywhere leaves neither behind.
+ *
+ * `own` is what a run adds for itself: `args`, more switches for the browser; `through`, a host
+ * that really answers ({@link intercept}); `socket`, the sockets it expects ({@link watchPolicy}).
  */
-async function browse(origin, routes) {
+async function browse(origin, routes, own = {}) {
   const profile = await mkdtemp(join(tmpdir(), "grimoire-web-smoke-"));
   let socket = null;
   let stop = () => undefined;
@@ -893,7 +965,7 @@ async function browse(origin, routes) {
     await rm(profile, { recursive: true, force: true, maxRetries: 5 });
   };
   undo.push(close);
-  const { address, kill } = await launch(profile);
+  const { address, kill } = await launch(profile, own.args);
   stop = kill;
   const browser = (socket = await connect(address));
 
@@ -903,10 +975,16 @@ async function browse(origin, routes) {
   const userAgent = await blank.evaluate("navigator.userAgent");
   /** Everything that fails the run without throwing where it happened. */
   const problems = [];
-  const hosts = await intercept(browser, origin, userAgent, problems, routes);
-  const policy = await watchPolicy(browser, problems);
-  return { browser, hosts, policy, close };
+  const hosts = await intercept(browser, origin, userAgent, problems, routes, own.through);
+  const policy = await watchPolicy(browser, problems, own.socket);
+  return { browser, hosts, policy, close, problems };
 }
+
+// What `scripts/web-sync-smoke.mjs` is written in: the same server, browser and ears, and the
+// same words for the page's own controls, so the two runs cannot come to mean different things
+// by "the app got past its startup gate".
+export { serve, browse, openPage, fixtures, coreChunk, buttonSaying, tileOf, tile };
+export { SHELL, ALERT, SEARCH_BOX, CARDS_FILE };
 
 // ---------------------------------------------------------------------------------------------
 // A reload that lands inside a synchronous engine call
@@ -1478,6 +1556,20 @@ async function main() {
     `ok  ${hosts.asked.length} requests answered from fixtures, none needing a pre-flight, ` +
       "and none to a host without one",
   );
+  // Live sync's loop has been running in this engine's Worker since the database opened, and
+  // this device is in no sync group, so it must have dialled nobody. A request to the relay has
+  // no fixture and would have failed the run by name above; a socket is no request, so it is
+  // asked of the Worker's own `Network` domain (`watchPolicy`); and the loop's own word for
+  // where it stands is `off`. The run is minutes long, so its five-second read of `sync_group`
+  // has come round many times by now.
+  const live = await engine("sync_live_state");
+  if (live !== "off" || policy.sockets.length > 0) {
+    fail(
+      `in no sync group, live sync reads ${JSON.stringify(live)} and opened ` +
+        `${policy.sockets.length} sockets: ${policy.sockets.map((made) => made.url).join(", ")}`,
+    );
+  }
+  console.log("ok  in no sync group, live sync reads off — no request to the relay, and no socket");
   // No refusal is only worth saying of targets that were listened to: a run that never
   // attached to the engine's Worker, or to a service worker, heard nothing because it asked
   // nobody.
@@ -1494,25 +1586,9 @@ async function main() {
   // The second phase is a first run of its own, on a profile of its own.
   await close();
   await reloadInsideTheIngest(origin, chunk);
-
-  const seconds = ((performance.now() - started) / 1000).toFixed(1);
-  console.log(`web-smoke: passed in ${seconds} s`);
 }
 
-// The one bound on the whole run. `until` polls against it too, but a protocol call that never
-// answers — a navigation, an OPFS walk that never settles — polls nothing, so this is a timer
-// and not a check. Unreferenced, so it never keeps a finished run alive.
-setTimeout(async () => {
-  console.error(`web-smoke: FAILED — still running after ${DEADLINE_MS / 1000} s`);
-  await stopEverything();
-  process.exit(1);
-}, DEADLINE_MS).unref();
-
-main()
-  .catch((error) => {
-    if (process.exitCode !== 1) {
-      console.error(`web-smoke: FAILED — ${error.message}`);
-      process.exitCode = 1;
-    }
-  })
-  .finally(stopEverything);
+// Only as the script Node was started with: imported, this file is the harness and runs nothing.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await runAs(run.name, run.deadlineMs, main);
+}

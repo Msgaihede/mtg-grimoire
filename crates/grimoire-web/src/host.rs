@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use futures_util::future::{FutureExt as _, LocalBoxFuture, Shared};
 use grimoire_core::events::EventSink;
+use grimoire_core::platform::sync::Bell;
 use grimoire_core::state::State;
+use grimoire_core::sync_engine::live;
 use serde_json::Value;
 
 use crate::wire::{self, Opened};
@@ -59,6 +61,10 @@ pub struct Started {
     /// (`grimoire_core::launch::open_single_replacing`). The reader's rows are untouched; the
     /// launch's card sync is what brings the cards back, and the console is told.
     pub corpus_replaced: bool,
+    /// **Live sync's write wake**: the bell the state's one write observer rings on every
+    /// commit, and the one the caller hands to [`live_sync`] — the same bell, or this
+    /// device's own edits wait for somebody else's frame.
+    pub writes: Arc<Bell>,
 }
 
 /// **Everything `open` does once the storage is installed**: the pair on one connection, at
@@ -69,15 +75,15 @@ pub struct Started {
 /// this run on a desktop. `directory` is the OPFS directory's name, for [`shown`]. `events` is
 /// where the engine's events go.
 ///
-/// **It starts nothing else.** The launch's downloads are [`launch_downloads`], which the
-/// caller spawns once this has answered — never inside it, so `open` is not kept waiting on a
-/// network. And no image upkeep: that loop evicts files this host does not have
-/// (`grimoire_core::images::upkeep_tick`).
+/// **It starts nothing else.** The launch's downloads are [`launch_downloads`] and the relay's
+/// doorbell is [`live_sync`], each of which the caller spawns once this has answered — never
+/// inside it, so `open` is not kept waiting on a network. And no image upkeep: that loop
+/// evicts files this host does not have (`grimoire_core::images::upkeep_tick`).
 ///
-/// No write observers: the desktop's three are its mirror, its other windows and live sync's
-/// wake. This host has neither of the first two, and it does not start the core's live-sync
-/// loop — a browser's socket is not written yet (`grimoire_core::platform::socket`) — so it
-/// registers no wake for one either, and `sync_live_state` answers `off`.
+/// **One write observer — live sync's wake**, as on the Android host: the desktop's three are
+/// its mirror, its other windows and this, and a browser has neither of the first two.
+/// Registered here because the connection's hook is installed as the state is built, and an
+/// observer cannot be added afterwards; [`Started::writes`] is the bell it rings.
 ///
 /// **A corpus that will not open stops this**, because nothing here can delete one:
 /// [`start_replacing`] is the same start for a caller that can.
@@ -127,6 +133,7 @@ fn started(
         corpus_journal: opened.corpus_journal.as_str().to_owned(),
         schema_version,
     };
+    let writes = Arc::new(Bell::new());
     let state = Arc::new(State::new(
         opened.write,
         // `None`: this host's storage permits one connection, so reads go through the one
@@ -134,7 +141,7 @@ fn started(
         opened.read,
         data_dir,
         events,
-        Vec::new(),
+        vec![Arc::new(live::WriteWake(Arc::clone(&writes)))],
         opened.client,
         opened.images,
     ));
@@ -146,7 +153,36 @@ fn started(
         opened: ready,
         index,
         corpus_replaced,
+        writes,
     })
+}
+
+/// **Live sync: the core's connection manager, for the life of this Worker.** The caller
+/// spawns it beside [`launch_downloads`], after `open` has answered, and never awaits it — it
+/// does not end.
+///
+/// It is the loop every host runs (`grimoire_core::sync_engine::live::run`), over the
+/// browser's own `WebSocket` (`grimoire_core::platform::socket`): one socket to the relay for
+/// as long as this device is in a sync group, a round trip when a peer pushes or this device
+/// writes, and what it has to say — `sync:live`, `sync:applied` — through the state's event
+/// sink, which on this host is the Worker's `listen` handler. **An install that has paired
+/// nothing opens no socket and asks the relay nothing**: the loop reads `sync_group` once
+/// every five seconds, and that read is the whole of its cost there.
+///
+/// `writes` must be [`Started::writes`], the bell the state's write observer rings.
+///
+/// **One thread, and it is the page's commands' thread too.** Natively each of the loop's
+/// reads and each trip is taken to another thread; here `platform::spawn` runs them where
+/// they stand, between two turns of the Worker's event loop, on the one connection. A trip
+/// holds that connection only for its own SQLite stretches and lets go across every request
+/// (`sync_engine::client`), which is when a page's command is answered.
+///
+/// **No push on the way out**, as on Android: a tab that closes gives a Worker no moment a
+/// request can be awaited in. A write is pushed by the loop's own debounce, three seconds
+/// after the reader stops; one that missed it is still `pushed_at IS NULL`, and goes with the
+/// next launch's first trip.
+pub async fn live_sync(state: Arc<State>, writes: Arc<Bell>) {
+    live::run(state, writes).await
 }
 
 /// **Which of a pool's files are the corpus's, in the order to delete them** — whatever
@@ -370,6 +406,69 @@ mod tests {
         assert!(
             !state.syncing.load(std::sync::atomic::Ordering::SeqCst),
             "and nothing was started"
+        );
+    }
+
+    /// **The start registers live sync's wake on the one connection, and hands back the bell
+    /// it rings** — the same bell, which is the whole of the wiring: a commit through the
+    /// state leaves it a ring for a loop that was not waiting, and nothing else does.
+    #[test]
+    fn a_start_registers_live_syncs_wake_and_a_commit_rings_the_bell_it_hands_back() {
+        let dir = scratch("web-start-wake");
+        let started = start(&dir, "x", Arc::new(Recording::default())).unwrap();
+        // Whatever the start itself committed after the hook went in is one kept ring at most.
+        let _ = started.writes.rung().now_or_never();
+        assert!(
+            started.writes.rung().now_or_never().is_none(),
+            "nothing has been written since"
+        );
+        started
+            .state
+            .lock_db()
+            .execute(
+                "INSERT INTO decks (name, format_key, created_at, updated_at)
+                 VALUES ('kept', 'casual', 0, 0)",
+                [],
+            )
+            .unwrap();
+        assert!(
+            started.writes.rung().now_or_never().is_some(),
+            "a commit on this host's one connection must ring the bell the loop is handed"
+        );
+    }
+
+    /// **On an install that has paired nothing, the loop says `off` once and dials nobody** —
+    /// on one connection and a thread standing in for a Worker, where a lock taken twice is a
+    /// panic. `connecting` is said before anything is dialled, so its absence is the absence
+    /// of a dial; the loop is still running, asleep on its five-second read of `sync_group`.
+    #[tokio::test]
+    async fn live_sync_on_a_device_in_no_group_says_off_once_and_dials_nobody() {
+        let dir = scratch("web-live-no-group");
+        let heard = Arc::new(Recording::default());
+        let started = start(&dir, "x", heard.clone()).unwrap();
+        let _alone = grimoire_core::platform::alone::emulate();
+        let running = tokio::spawn(live_sync(
+            Arc::clone(&started.state),
+            Arc::clone(&started.writes),
+        ));
+
+        let mut events = Vec::new();
+        for _ in 0..500 {
+            events.extend(heard.taken());
+            if !events.is_empty() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        // A beat more, for anything the loop might say right behind it.
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        events.extend(heard.taken());
+        assert!(!running.is_finished(), "the loop never ends");
+        running.abort();
+        assert_eq!(
+            events,
+            [("sync:live".to_owned(), json!({ "state": "off" }))],
+            "one `off`, and nothing that would mean a dial"
         );
     }
 

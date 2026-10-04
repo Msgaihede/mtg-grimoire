@@ -130,7 +130,11 @@ async fn open_once(directory: String) -> String {
             STATE.with(|state| *state.borrow_mut() = Some(Arc::clone(&started.state)));
             // Spawned, never awaited: `open` answers now, and the downloads run between the
             // calls that follow it. Its first poll comes after this function has returned.
-            wasm_bindgen_futures::spawn_local(host::launch_downloads(started.state));
+            wasm_bindgen_futures::spawn_local(host::launch_downloads(Arc::clone(&started.state)));
+            // The relay's doorbell, behind the downloads and for the Worker's life. On an
+            // install in no sync group — every one that has paired nothing — its first poll
+            // is one read of `sync_group` and a five-second timer.
+            wasm_bindgen_futures::spawn_local(host::live_sync(started.state, started.writes));
             started.opened.to_json()
         }
         Err(message) => Opened::Failed { message }.to_json(),
