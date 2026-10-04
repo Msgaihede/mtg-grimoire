@@ -725,6 +725,47 @@ describe("useDeck", () => {
   });
 
   /**
+   * **A caller that already read the card's tags hands them in, and the rule files by those.**
+   *
+   * The docked search is that caller: its Add button names the pile before the press, so it has
+   * read the tags to name it, and the press must file by the very facts the word was drawn from.
+   * The backend's answer here is deliberately a *different* pile — a taxonomy replaced between
+   * the paint and the press — and the card still goes where the button said. No second read.
+   */
+  it("files by the tags a caller hands in, without reading them again", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["removal"] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Sorcery",
+      oracleTags: ["ramp"],
+      quantity: 1,
+    });
+
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Ramp", "live", null, 1);
+  });
+
+  /** `[]` handed in is an answer — a card known to carry no tag — and is not asked about again. */
+  it("takes an empty tag list from a caller as the card having none", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["removal"] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Sorcery",
+      oracleTags: [],
+      quantity: 1,
+    });
+
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Sorcery", "live", null, 1);
+  });
+
+  /**
    * `refileCard` — the quick zones' `Auto` for a card the deck already holds, and the add rule
    * above read backwards.
    *

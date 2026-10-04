@@ -60,6 +60,13 @@ const deckPlayedKeys = vi.hoisted(() => vi.fn());
 // key — so its two reads need answers as well.
 const getMarketplace = vi.hoisted(() => vi.fn());
 const marketplaceFeedStatus = vi.hoisted(() => vi.fn());
+/**
+ * What each drawn card *does* — read for the wall under `Auto`, so an Add button can name the
+ * pile `useDeck.addCard` will file into rather than the one the type line alone would suggest.
+ * Answered `[]` by default, which the hook reads as "asked, and no card here carries a tag": the
+ * type-line floor, and the state every case that is not about tags was written against.
+ */
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -88,6 +95,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckPlayedKeys,
     getMarketplace,
     marketplaceFeedStatus,
+    oracleTagsForPrintings,
   },
 }));
 
@@ -98,6 +106,7 @@ import {
   type DeckSearchTab,
 } from "./DeckSearchPanel";
 import { SEARCH_OPEN_KEY } from "@/features/search/useSearchOpen";
+import { AUTO_CATEGORY } from "./autoCategory";
 import { useDeck } from "./useDeck";
 import { useAppStore } from "@/lib/store";
 
@@ -140,6 +149,39 @@ const RHYSTIC_STUDY: CardSummary = {
   manaCost: "{2}{U}",
   oracleId: "o-rhystic",
   gameChanger: true,
+};
+
+/**
+ * **A card whose type and whose function name two different piles** — a Sorcery that ramps.
+ *
+ * The fixture the Auto label is tested with, and it has to be one of these: with `BOLT` and no
+ * tags the type-line answer and the rule's answer are the same word, so a button computed from
+ * the wrong one of them reads correctly. That is how `Add Rampant Growth to Sorcery` shipped
+ * over a press that filed the card under Ramp (found 2026-10-04).
+ */
+const RAMPANT_GROWTH: CardSummary = {
+  ...BOLT,
+  id: "rg",
+  name: "Rampant Growth",
+  setCode: "m12",
+  setName: "Magic 2012",
+  collectorNumber: "190",
+  typeLine: "Sorcery",
+  manaCost: "{1}{G}",
+  oracleId: "o-rampant",
+};
+
+/** A land with a functional tag — Ancient Tomb is tagged as a mana producer, and is still a land. */
+const ANCIENT_TOMB: CardSummary = {
+  ...BOLT,
+  id: "tomb",
+  name: "Ancient Tomb",
+  setCode: "tmp",
+  setName: "Tempest",
+  collectorNumber: "315",
+  typeLine: "Land",
+  manaCost: null,
+  oracleId: "o-tomb",
 };
 
 /**
@@ -244,6 +286,7 @@ beforeEach(() => {
   deckPlayedKeys.mockReset().mockResolvedValue([OWNED_BOLT.oracleId]);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
 });
 
 /**
@@ -832,6 +875,115 @@ describe("DeckSearchPanel", () => {
     );
 
     expect(deckAddCard).toHaveBeenCalledWith(4, "t1", MAIN.id, null, "live", null, 1);
+  });
+
+  /**
+   * **Under `Auto` the button names the pile the add will file into, and that is decided by what
+   * the card *does*.** The label was computed from the type line alone while `useDeck.addCard`
+   * read the card's Oracle tags first, so with the taxonomy downloaded the button read `Add
+   * Rampant Growth to Sorcery` and the card landed in Ramp (2026-10-04, the light app's desktop
+   * face over the real engine — the desktop draws the same component over the same commands).
+   *
+   * Both halves in one case, because they are one promise: the word on the button, and the word
+   * `deck_add_card` is sent.
+   */
+  it("names the pile an Auto add lands in by what the card does, not by its type", async () => {
+    searchCards.mockResolvedValue(page([RAMPANT_GROWTH]));
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: RAMPANT_GROWTH.id, slugs: ["ramp"] }]);
+    await openPanel({ targetCategoryId: AUTO_CATEGORY });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Rampant Growth to Ramp" }),
+    );
+
+    expect(screen.queryByRole("button", { name: /to Sorcery$/ })).toBeNull();
+    expect(deckAddCard).toHaveBeenCalledWith(4, "rg", null, "Ramp", "live", null, 1);
+  });
+
+  /**
+   * **The press files by the facts the button was drawn from** — the slugs the wall already read
+   * ride along, so the hook does not ask again and cannot come to a different answer between the
+   * label and the write (a taxonomy swapped underneath a cached read is the case).
+   */
+  it("files an Auto add by the tags the button was named from, without reading them twice", async () => {
+    searchCards.mockResolvedValue(page([RAMPANT_GROWTH]));
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: RAMPANT_GROWTH.id, slugs: ["ramp"] }]);
+    await openPanel({ targetCategoryId: AUTO_CATEGORY });
+
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Add Rampant Growth to Ramp" }),
+    );
+    await waitFor(() => expect(deckAddCard).toHaveBeenCalled());
+
+    const asked = oracleTagsForPrintings.mock.calls.filter(([ids]) =>
+      (ids as string[]).includes(RAMPANT_GROWTH.id),
+    );
+    expect(asked).toHaveLength(1);
+  });
+
+  /**
+   * **A pile the button cannot promise is a pile it does not name.** Until the tags answer, the
+   * only word in hand is the type line's — which is exactly the word that was wrong — so the
+   * button says what the press does and nothing about where.
+   */
+  it("names no pile while the card's tags are still being read", async () => {
+    searchCards.mockResolvedValue(page([RAMPANT_GROWTH]));
+    let answer: (tags: { cardId: string; slugs: string[] }[]) => void = () => {};
+    oracleTagsForPrintings.mockReturnValue(
+      new Promise((resolve) => {
+        answer = resolve;
+      }),
+    );
+    await openPanel({ targetCategoryId: AUTO_CATEGORY });
+
+    expect(await screen.findByRole("button", { name: "Add Rampant Growth" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /^Add Rampant Growth to / })).toBeNull();
+
+    await act(async () => answer([{ cardId: RAMPANT_GROWTH.id, slugs: ["ramp"] }]));
+
+    expect(
+      await screen.findByRole("button", { name: "Add Rampant Growth to Ramp" }),
+    ).toBeInTheDocument();
+  });
+
+  /**
+   * **A tag read that fails never fails the add** — `useDeck`'s rule, and it holds from this
+   * side too: the button names no pile it cannot stand behind, the press still goes, and the
+   * hook files the card on the type-line floor exactly as it does with no taxonomy at all.
+   */
+  it("names no pile when the tags cannot be read, and still adds the card", async () => {
+    searchCards.mockResolvedValue(page([RAMPANT_GROWTH]));
+    oracleTagsForPrintings.mockRejectedValue("The database is busy.");
+    await openPanel({ targetCategoryId: AUTO_CATEGORY });
+
+    await userEvent.click(await screen.findByRole("button", { name: "Add Rampant Growth" }));
+
+    await waitFor(() =>
+      expect(deckAddCard).toHaveBeenCalledWith(4, "rg", null, "Sorcery", "live", null, 1),
+    );
+    expect(screen.queryByRole("button", { name: /^Add Rampant Growth to / })).toBeNull();
+  });
+
+  /**
+   * **A land is promised without waiting**, because the Land pin is decided before a tag is
+   * consulted: no answer the read can give moves it, so there is nothing to wait for.
+   */
+  it("names Land for a land before its tags have answered", async () => {
+    searchCards.mockResolvedValue(page([ANCIENT_TOMB]));
+    oracleTagsForPrintings.mockReturnValue(new Promise(() => {}));
+    await openPanel({ targetCategoryId: AUTO_CATEGORY });
+
+    expect(
+      await screen.findByRole("button", { name: "Add Ancient Tomb to Land" }),
+    ).toBeInTheDocument();
+  });
+
+  /** A named pile is the deck's own answer, so there is nothing about the card to look up. */
+  it("reads no tags for a deck that names the pile its adds land in", async () => {
+    await openPanel();
+    await screen.findByRole("button", { name: "Add Lightning Bolt to Main deck" });
+
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
   });
 
   /**

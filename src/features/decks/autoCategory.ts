@@ -306,6 +306,41 @@ export function autoCategoryFor(
 }
 
 /**
+ * The pile {@link autoCategoryFor} is **certain** to answer for this card, or `null` where that
+ * cannot be said yet — what a control may name *before* the press.
+ *
+ * **`undefined` slugs and `[]` are two different facts here, and that is the whole function.**
+ * `[]` is a card that was asked about and carries no tag: the type line is then the rule's whole
+ * answer and may be promised. `undefined` is a read that has not landed, or was refused — and
+ * the type line's pile is then exactly the word that may turn out wrong. The docked search's Add
+ * button shipped that word: it called {@link autoCategoryFor} with the type line alone, which is
+ * correct as a *filing* (the floor) and false as a *promise*, so it read `Add Rampant Growth to
+ * Sorcery` over a press that read the card's tags and filed it under Ramp (found 2026-10-04).
+ *
+ * **Land is the one pile promised with no tags in hand**, because the pin is decided before a tag
+ * is consulted and no slug can move it. It is asked of {@link autoCategoryFor} rather than
+ * re-tested here: with no slugs that function answers `"Land"` only through the pin (it is the
+ * first type bucket for the same front-face test), so there is still one copy of the rule.
+ */
+export function autoCategoryIfKnown(card: {
+  typeLine: string | null;
+  oracleTags: readonly string[] | undefined;
+}): string | null {
+  if (card.oracleTags !== undefined) return autoCategoryFor(card);
+  return autoCategoryFor({ typeLine: card.typeLine }) === "Land" ? "Land" : null;
+}
+
+/**
+ * What an Add control's hint says where {@link autoCategoryIfKnown} answered `null` — the press
+ * is real, and where it lands is the rule's to say once the card's tags are in hand.
+ *
+ * {@link AUTO_CATEGORY_LABEL}'s words on purpose: it is the same rule, and a reader who has seen
+ * `Auto (by what it does)` in Deck settings is being told that this press is that setting at work.
+ * The control's accessible *name* stays `Add <card>` — the card is what tells two of them apart.
+ */
+export const UNNAMED_PILE_TIP = "Add — filed by what it does";
+
+/**
  * Where a bucket sorts **on screen** — {@link AUTO_CATEGORY_DISPLAY_ORDER}, with the fallback
  * last.
  *
