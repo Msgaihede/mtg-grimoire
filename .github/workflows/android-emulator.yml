@@ -1,0 +1,143 @@
+name: Android emulator
+
+# **The light app's first run, measured on an emulator** (phase 4, step 4.5, issue #761). No
+# phone is to hand, so the issue's "corpus ingest time, cold start, APK size — none was ever
+# measured" gets its first figures here: an x86_64 release APK, installed on an x86_64 emulator
+# under KVM, launched, left to download and ingest the whole corpus, and timed. The measuring is
+# `scripts/android-first-run.sh`; light-app.md §8.5 says what each figure means and what an
+# emulator cannot stand in for — a phone's CPU, its storage, its thermal limits, a real metered
+# link.
+#
+# **A measurement, not a gate.** It is not in `ci.yml`, `ci-ok` never reads it, and nothing is
+# branch-protected on it. It runs on dispatch, and on a push to `main` that changed what the APK
+# is built from — the host, the engine, the lockfile, or this file and its script.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "mobile/src-tauri/**"
+      - "crates/grimoire-core/**"
+      - "Cargo.lock"
+      - ".github/workflows/android-emulator.yml"
+      - "scripts/android-first-run.sh"
+  # On a pull request too, with the same paths, so a change to the host is measured before it
+  # merges — the PR that added this workflow among them. Not a required check: `ci-ok` is the gate,
+  # and an emulator's figures inform a review rather than decide one.
+  pull_request:
+    branches: [main]
+    paths:
+      - "mobile/src-tauri/**"
+      - "crates/grimoire-core/**"
+      - "Cargo.lock"
+      - ".github/workflows/android-emulator.yml"
+      - "scripts/android-first-run.sh"
+
+# A newer push makes the older run's figures stale before they exist.
+concurrency:
+  group: android-emulator-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  first-run:
+    name: first run (x86_64 emulator)
+    runs-on: ubuntu-24.04
+    # A release compile of the engine and Gradle, the emulator's boot, a first ingest the script
+    # allows 45 minutes, and three cold starts.
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # The image's preinstalled toolchains this job never uses. The emulator's system image, its
+      # 6 GB data partition and a release `target/` all want the runner's disk; the Android SDK
+      # under /usr/local/lib/android is the one large tree that stays.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /opt/ghc /usr/local/.ghcup /usr/local/share/boost "$AGENT_TOOLSDIRECTORY/CodeQL"
+          df -h /
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # The `android` job's own step: JDK 21 (25 breaks the Android Gradle and Kotlin plugins),
+      # the image's SDK, and its newest NDK.
+      - name: Point the build at JDK 21, the SDK and the NDK
+        run: |
+          set -euo pipefail
+          : "${JAVA_HOME_21_X64:?the runner image did not set JAVA_HOME_21_X64}"
+          : "${ANDROID_HOME:?the runner image did not set ANDROID_HOME}"
+          : "${ANDROID_NDK_LATEST_HOME:?the runner image did not set ANDROID_NDK_LATEST_HOME}"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          "$JAVA_HOME_21_X64/bin/java" -version
+          cat "$ANDROID_NDK_LATEST_HOME/source.properties"
+
+      # x86_64, not the shipped aarch64: an x86_64 emulator under KVM cannot run arm64 code, and
+      # an arm64 image on this runner would be emulated instruction by instruction — a timing of
+      # the emulator, not of the app.
+      - uses: ./.github/actions/rust-toolchain
+        with:
+          targets: x86_64-linux-android
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> src-tauri/target"
+          key: android-x86_64
+
+      # From `mobile/`, so the CLI finds the light host's `tauri.conf.json`, as in `ci.yml`.
+      - name: Build the APK
+        working-directory: mobile
+        run: npx tauri android build --apk --target x86_64 --ci
+
+      - name: Find the APK
+        run: |
+          set -euo pipefail
+          apk=$(find mobile/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          [ -n "$apk" ] || { echo "the build produced no APK" >&2; exit 1; }
+          mkdir -p apk-out && cp "$apk" apk-out/mtg-grimoire-light-x86_64.apk
+          ls -l apk-out
+
+      # The emulator runner's README: KVM is on the runner but its node is root-only.
+      - name: Enable KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+
+      # API 34, `google_apis`: an image whose adbd can run as root, so the script can read the
+      # databases' sizes out of a release build's private folder, which `run-as` cannot (it
+      # needs a debuggable app). Four cores is the runner's all; the 6 GB data partition holds
+      # the ~900 MB corpus, its WAL and the image cache with room over.
+      #
+      # **`script:` is one command.** The action runs each of its lines as a separate shell, so
+      # the measuring lives in a file rather than in a block here.
+      - name: Measure the first run
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          cores: 4
+          ram-size: 4096M
+          disk-size: 6000M
+          script: bash scripts/android-first-run.sh apk-out/mtg-grimoire-light-x86_64.apk first-run
+
+      # Whatever the script got to — a failed or held ingest still leaves its log, the screenshot
+      # of what the phone face showed, and the figures it did take.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: android-first-run
+          path: first-run/
+          retention-days: 30
+          if-no-files-found: warn

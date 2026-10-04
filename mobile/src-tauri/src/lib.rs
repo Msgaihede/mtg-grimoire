@@ -27,6 +27,7 @@
 use std::path::PathBuf;
 use std::sync::Arc;
 
+use grimoire_core::platform::clock::Tick;
 use grimoire_core::state::State;
 use serde_json::Value;
 use tauri::Manager;
@@ -227,8 +228,16 @@ pub(crate) fn spawn_downloads(state: &Arc<State>) {
     };
     let sync_state = Arc::clone(state);
     tauri::async_runtime::spawn(async move {
-        if let Err(e) = grimoire_core::sync::run_sync(Arc::clone(&sync_state), false).await {
-            eprintln!("initial sync failed: {e}");
+        // The two lines `.github/workflows/android-emulator.yml` times a first ingest by (step
+        // 4.5): Tauri's Android shell sends stderr to logcat, tagged `RustStdoutStderr`.
+        eprintln!("launch: card sync started");
+        let began = Tick::now();
+        match grimoire_core::sync::run_sync(Arc::clone(&sync_state), false).await {
+            Ok(_) => eprintln!(
+                "launch: card sync finished in {} ms",
+                began.elapsed().as_millis()
+            ),
+            Err(e) => eprintln!("initial sync failed: {e}"),
         }
         if first_run {
             spawn_optional_feeds(&sync_state);

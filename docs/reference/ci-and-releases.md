@@ -2,9 +2,11 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-- Three workflows — the third, **`scanner-bundle.yml`** (2026-09-15), builds and publishes the
-  card scanner's embedded assets and is recorded in [card-scanner.md](card-scanner.md) §10; this
-  page covers the other two. **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
+- Four workflows — the third, **`scanner-bundle.yml`** (2026-09-15), builds and publishes the
+  card scanner's embedded assets and is recorded in [card-scanner.md](card-scanner.md) §10; the
+  fourth, **`android-emulator.yml`** (2026-10-03), measures the light app's first run and has one
+  bullet below, beside the `android` job; this page covers the other two.
+  **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
   router (below), a `frontend`
   matrix (below — one leg for `npm run build` and `lint`, four for `test:run --shard`), a
   `storybook` job (`npm run build-storybook`), a `rust` matrix over `windows-latest` +
@@ -258,6 +260,29 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `rust`, where `mobile/src-tauri` is a workspace member. Every arm that sets `android` sets
   `rust`. **Nothing in it runs the APK.** Its first run is the PR that adds it, and its numbers
   are that run's summary — [light-app.md](../reference/light-app.md) §8.1.
+- **`.github/workflows/android-emulator.yml` runs the APK, on an emulator** (phase 4, step 4.5,
+  2026-10-03) — a fourth workflow, **outside `ci.yml` and never a gate**: `ci-ok` does not read
+  it and nothing is protected on it. It runs on `workflow_dispatch`, and on a pull request to or a push to `main` that
+  touches `mobile/src-tauri/**`, `crates/grimoire-core/**`, `Cargo.lock`, itself or its script.
+  The build is the `android` job's with **`--target x86_64`** — an x86_64 emulator under KVM
+  cannot run arm64 code — and the same JDK 21, `NDK_HOME`, composite toolchain action and
+  `rust-cache` (keyed `android-x86_64`). It then enables KVM with the udev rule from
+  `reactivecircus/android-emulator-runner`'s README and boots that action's emulator (API 34,
+  `google_apis`, x86_64, 4 cores, 4096M RAM, `disk-size: 6000M` for the ~900 MB corpus), whose
+  `script:` is one line — the action runs each line as its own shell — calling
+  **`scripts/android-first-run.sh`**. That script installs the APK and writes to the step summary
+  and to an artifact (`android-first-run`, 30 days, uploaded `if: always()`): the APK's and the
+  `.so`'s size, the first launch's `am start -W` `TotalTime`, **the first corpus ingest** — the
+  host's own `launch: card sync finished in N ms` line from logcat's `RustStdoutStderr` tag,
+  beside the wall clock from the launch — both databases' size on the device (read through
+  `adb root`, which a `google_apis` image allows and a release build's `run-as` does not), a
+  screenshot, and three cold starts after `force-stop` with their median. **It fails when there
+  is no ingest figure** — a sync that failed, ran past 45 minutes, or never started within 60 s,
+  which it reports as *held — the emulator reported a metered network* (step 4.4's hold). The
+  router sends a change to the workflow to `frontend`, beside `release.yml`, for the two tests
+  that read every workflow; the script is `scripts/*`. **No run had happened when this was written** —
+  the first is the pull request that adds it; [light-app.md](../reference/light-app.md)
+  §8.5 has what each figure means and what an emulator cannot stand in for.
 - **`.github/workflows/release.yml` is one workflow on purpose.** A release created with
   `GITHUB_TOKEN` does not trigger `on: release` in another workflow — GitHub's recursion
   guard — so release-please, the build matrix and the publish step are jobs in one file,

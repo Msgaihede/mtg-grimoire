@@ -1,7 +1,8 @@
 # .github — CI and releases
 
-Three workflows — `ci.yml`, `release.yml` and, since 2026-09-15, `scanner-bundle.yml` — and every
-rule below was measured live unless it says otherwise. Full detail, including the proof runs:
+Four workflows — `ci.yml`, `release.yml`, since 2026-09-15 `scanner-bundle.yml`, and since
+2026-10-03 `android-emulator.yml`, which has never run — and every rule below was measured live
+unless it says otherwise. Full detail, including the proof runs:
 [docs/reference/ci-and-releases.md](../docs/reference/ci-and-releases.md); the scanner bundle's
 record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
 
@@ -33,8 +34,8 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   and so do **the cargo workspace's own files at the root — `Cargo.toml`, `Cargo.lock` and
   `.cargo/**`** — because the lockfile is shared: a dependency bumped for the desktop moves
   what the engine's other two targets compile, and `rust` builds neither of them;
-  `release.yml`, `scanner-bundle.yml` and `dependabot.yml` → `frontend`, because
-  `scripts/toolchain.test.mjs` and `scripts/actions-pinned.test.mjs` read them;
+  `release.yml`, `scanner-bundle.yml`, `android-emulator.yml` and `dependabot.yml` → `frontend`,
+  because `scripts/toolchain.test.mjs` and `scripts/actions-pinned.test.mjs` read them;
   `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router
   itself → every job, `powershell` included; prose and editor bookkeeping → neither; and **anything
   unrecognised → every build job**, `storybook` and `core` included. That last arm is the
@@ -77,7 +78,7 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   **`scripts/toolchain.test.mjs` fences both**: it globs every workflow and fails on a direct
   `dtolnay/rust-toolchain`, a `rustup` install, or a `node-version:`.
 - **Every third-party `uses:` is a full commit SHA with its tag in a trailing comment —
-  `@<40 hex> # v7.0.1` — in all three workflows and the composite action, and never a tag or a
+  `@<40 hex> # v7.0.1` — in every workflow and the composite action, and never a tag or a
   branch** (2026-09-28, issue #545). A tag is whatever its owner last pushed, and `release.yml`
   ran `@v1`-style references beside a write token and a release in progress. The SHA is the one
   the tag named that day (the peeled commit for an annotated tag), so behaviour did not move.
@@ -145,8 +146,9 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   the fail-safe and not `crates/grimoire-core/*`**: an unrecognised path cannot be an input to
   the APK, the engine's Android compile is `core`'s, and its API against the host is compiled by
   `rust`, where `mobile/src-tauri` is a workspace member. Every arm that sets `android` sets
-  `rust`. **Nothing in it runs the APK.** Its first run is the PR that adds it, and its numbers
-  are that run's summary — [light-app.md](../docs/reference/light-app.md) §8.1.
+  `rust`. **Nothing in it runs the APK** — `android-emulator.yml` does, below. Its first run is
+  the PR that adds it, and its numbers are that run's summary —
+  [light-app.md](../docs/reference/light-app.md) §8.1.
 - **The `core` job is a compile gate for `grimoire-core` on the two targets a desktop build
   never touches** (2026-10-02): a matrix over `wasm32-unknown-unknown` and
   `aarch64-linux-android` on `ubuntu-24.04`, each leg `cargo build --lib -p grimoire-core
@@ -297,3 +299,27 @@ Added 2026-09-15 and **green on GitHub** — dispatched on `main` that day (38 m
 - **`release.yml` depends on it having published** (see that section) — which it has since the
   2026-09-15 dispatch. A new `FORMAT_VERSION` moves the tag, so the same holds again for the first
   release after a bump: dispatch it once on `main` first.
+
+## `android-emulator.yml`
+
+Added 2026-10-03 (phase 4, step 4.5) and **never run when this was written** — its first run is
+the pull request that adds it. The record is
+[light-app.md](../docs/reference/light-app.md) §8.5.
+
+- **It runs the light app's APK on an emulator and times the first run, and it gates nothing**:
+  not in `ci.yml`, not read by `ci-ok`, not protected. `workflow_dispatch`, and a pull request to
+  or a push to `main` touching `mobile/src-tauri/**`, `crates/grimoire-core/**`, `Cargo.lock`, itself or
+  `scripts/android-first-run.sh`. The build is the `android` job's with **`--target x86_64`**
+  (an x86_64 emulator under KVM cannot run arm64 code) — JDK 21 from `JAVA_HOME_21_X64`,
+  `NDK_HOME` from the image, the composite toolchain action, `rust-cache` keyed
+  `android-x86_64` — then KVM's udev rule and `reactivecircus/android-emulator-runner` (API 34,
+  `google_apis`, x86_64, 4096M RAM, `disk-size: 6000M`). **The action runs each `script:` line
+  as its own shell**, so the measuring is one line calling `scripts/android-first-run.sh`, never a
+  block in the YAML. It writes the APK and `.so` sizes, the first launch's `TotalTime`, the first
+  corpus ingest (the host's `launch: card sync finished in N ms`, read from logcat's
+  `RustStdoutStderr` tag), both databases' size through `adb root` — a release build is not
+  debuggable, so `run-as` refuses it — a screenshot, and three cold starts to the summary and to
+  an artifact uploaded `if: always()`. **It fails when there is no ingest figure**, and a launch
+  whose sync never started within 60 s is reported as *held — the emulator reported a metered
+  network* rather than passed. Routed to `frontend` beside `release.yml`, for the two tests that
+  read every workflow — **not `android`**: it builds its own APK and is proved by its own run.
