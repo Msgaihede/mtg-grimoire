@@ -84,13 +84,59 @@ describe("the Android window's insets", () => {
       expect(theme).toContain('<item name="android:windowBackground">@color/ground</item>');
     }
   });
+});
 
-  it("leaves Android's back gesture to the WebView's history", () => {
-    // Tauri's `AppPlugin` and wry's `WryActivity` both send the gesture to `webView.goBack()` while
-    // the WebView can go back, and to the activity only from the first entry. The phone router's
-    // pushes are those entries, so the gesture closes a sheet. Turning that off would be here.
+describe("Android's back gesture", () => {
+  // The callback MainActivity adds, from `addCallback(` to the end of its `handleOnBackPressed`.
+  const callback = (() => {
+    const at = mainActivity.indexOf("onBackPressedDispatcher.addCallback(");
+    return at < 0 ? "" : mainActivity.slice(at, mainActivity.indexOf("})", at));
+  })();
+
+  it("leaves the WebView's history to Tauri's AppPlugin", () => {
+    // `AppPlugin` sends the gesture to `webView.goBack()` while the WebView can go back, and to the
+    // activity only from the first entry; the phone router's pushes are those entries, so the
+    // gesture closes a sheet. `TauriActivity` already turns wry's own handler off — turning the
+    // plugin's off, or taking `onBackPressed` over its head, would be here.
     expect(mainActivity).not.toMatch(/handleBackNavigation/);
-    expect(mainActivity).not.toMatch(/onBackPressed/);
+    expect(mainActivity).not.toMatch(/fun onBackPressed/);
+  });
+
+  it("puts the app away from the first page rather than finishing the activity", () => {
+    // A finished activity ends Tauri's event loop, and tao's `std::process::exit` aborted on a
+    // phone (`FORTIFY: pthread_mutex_lock called on a destroyed mutex`, 2026-10-04). The task goes
+    // to the back instead, as Android 12+ does for a root launcher activity.
+    expect(callback).toMatch(/OnBackPressedCallback\(true\)/);
+    expect(callback).toMatch(/moveTaskToBack\(true\)/);
+    expect(callback).not.toMatch(/finish/);
+  });
+
+  it("still walks the WebView's history, should its callback ever be asked first", () => {
+    expect(mainActivity).toMatch(/override fun onWebViewCreate\(webView: WebView\)/);
+    expect(callback).toMatch(/canGoBack\(\)/);
+    expect(callback.indexOf("goBack()")).toBeLessThan(callback.indexOf("moveTaskToBack"));
+  });
+
+  it("is registered in onCreate, ahead of the plugin's, which waits for the WebView", () => {
+    // The dispatcher asks the callback added last first, so registering here — before the WebView
+    // exists, and so before `AppPlugin` is constructed — is what keeps history-back the plugin's.
+    const onCreate = mainActivity.slice(mainActivity.indexOf("override fun onCreate("));
+    expect(onCreate.indexOf("super.onCreate(")).toBeGreaterThan(-1);
+    expect(onCreate.indexOf("onBackPressedDispatcher.addCallback(")).toBeGreaterThan(
+      onCreate.indexOf("super.onCreate("),
+    );
+  });
+
+  it("ends the process with _exit when the activity is destroyed any other way", () => {
+    // tao's `EventLoop::run` would call `std::process::exit`, whose static destructors race the
+    // framework's live threads; the host ends the process from `RunEvent::Exit` first.
+    expect(lightLib).toMatch(/\.build\(tauri::generate_context!\(\)\)/);
+    expect(lightLib).toMatch(/fn end_on_exit\(event: &tauri::RunEvent\)/);
+    expect(lightLib).toMatch(/tauri::RunEvent::Exit/);
+    expect(lightLib).toMatch(/libc::_exit\(0\)/);
+    expect(lightCargo).toMatch(
+      /\[target\.'cfg\(target_os = "android"\)'\.dependencies\][^[]*\blibc = /,
+    );
   });
 });
 

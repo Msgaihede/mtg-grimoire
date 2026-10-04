@@ -1723,6 +1723,7 @@ dependencies = [
  "base64 0.22.1",
  "grimoire-core",
  "jni",
+ "libc",
  "serde",
  "serde_json",
  "tauri",
