@@ -4,7 +4,7 @@ name = "grimoire-core"
 # Scryfall asks for an accurate one. release-please bumps it with `src-tauri`'s
 # (`release-please-config.json`), and `src-tauri`'s `the_core_wears_the_apps_version` goes red
 # on a release that moved one and not the other.
-version = "0.40.0"
+version = "0.41.0"
 edition = "2021"
 license = "AGPL-3.0-or-later"
 description = "MTG Grimoire's engine, with no window: what every host links."
