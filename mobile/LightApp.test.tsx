@@ -14,6 +14,7 @@ vi.mock("./phone/PhoneApp", () => ({
 
 // Stood in for, so the test of where it is mounted does not need a host that answers it.
 vi.mock("./StorageNotice", () => ({ StorageNotice: () => <div>the storage notice</div> }));
+vi.mock("./UpdateNotice", () => ({ UpdateNotice: () => <div>the update notice</div> }));
 
 const startupStatus = vi.hoisted(() => vi.fn());
 /** The gate's one subscription, so a test can be the host saying something after `ready`. */
@@ -124,6 +125,20 @@ describe("LightApp", () => {
     render(<LightApp gate />);
     await screen.findByRole("status");
     expect(screen.queryByText("the storage notice")).toBeNull();
+    expect(screen.queryByText("the update notice")).toBeNull();
+  });
+
+  it("mounts the update notice beside the faces, so a crossing keeps the one that is there", async () => {
+    // Outside the face's boundary: a face that failed still has the notice, and a resize across
+    // the floor neither drops it nor asks the host again.
+    const resize = stubViewport(false);
+    render(<LightApp gate={false} />);
+    await screen.findByText("the phone face");
+    const notice = screen.getByText("the update notice");
+
+    act(() => resize(true));
+    await screen.findByText("the desktop face");
+    expect(screen.getByText("the update notice")).toBe(notice);
   });
 
   it("draws neither face until the data folder is open", async () => {

@@ -16,6 +16,7 @@ import {
   wasmFileOf,
   wasmPath,
 } from "./src/lib/core/web/assets.ts";
+import { serviceWorker } from "./vite.sw.ts";
 
 /** The light app's document, from the repository root. */
 const ENTRY = "mobile/index.html";
@@ -202,7 +203,12 @@ export default defineConfig(({ mode, command, isPreview }) => {
   const engineBuild = building ? buildIdOf(engine) : "dev";
 
   return mergeConfig(base, {
-    plugins: [lightEntry(), ...(web ? [webEngine(engineBuild, engine, building)] : [])],
+    plugins: [
+      lightEntry(),
+      // The web app's two own plugins: its engine, and its service worker (`vite.sw.ts`), which
+      // is written into `dist-web/` after everything else and into no other build.
+      ...(web ? [webEngine(engineBuild, engine, building), serviceWorker("dist-web")] : []),
+    ],
     // The Storybook fake, under the real `ipc.ts` — **the four aliases `.storybook/main.ts`
     // declares, read from the one list both use**, for its reason: the fake sits *under* the
     // hand-written mirror, so the light app in a plain browser exercises the mirror too.

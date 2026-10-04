@@ -53,7 +53,10 @@ run over one. So every way an export can go wrong is an *answer*:
   download only because the download gives the event loop a turn** — every 50 ms of work
   (`grimoire_core::platform::timer::yield_to_host`): an `.await` on a chunk the network has
   already buffered is a microtask, and the Worker's `message` is a task. Without that turn
-  the first measured run answered a page's `sync_status` 3.5–8.4 s late.
+  the first measured run answered a page's `sync_status` 3.5–8.4 s late. **The tag files'
+  finish and the combos' store take the same turn between their batches** (step 5.3) — a
+  `call` taken there is answered from the previous tags or combos — and the card finish,
+  each swap and the price list's store still answer nothing until they end.
 - **No `RefCell` borrow is held across an `.await`**: `call` clones the state's `Arc` out of
   its `thread_local` first. A borrow held there is a `BorrowMutError` the first time a call
   arrives while another is in flight — and that is a trap.
@@ -156,6 +159,11 @@ no write observers, and builds the facet index. `glue`'s `open` then spawns
   looked at again until the next launch, or until a page presses its Refresh.
 - **No image upkeep loop.** `images::upkeep_tick` evicts files this host does not have, and a
   Worker has no thread to sleep on.
+- **No picture is fetched here either.** A page's picture requests are its service worker's,
+  kept in Cache Storage; what the engine answers is *where a picture is* — the table's
+  `card_image_source`, through `call` like any command: a path in, and
+  `{"kind":"uri","uri":…}`, `{"kind":"missing","svg":…}` or `{"kind":"unknown"}` out. The
+  desktop has no such command (`src-tauri`'s `command_table::TABLE_ONLY`).
 - **A corpus that will not open, or will not migrate, is thrown away and built again** — the
   desktop's "replace it and resync", through the pool's own delete. `install_pool` keeps the
   pool's management handle for the length of `open`; the closure `glue` hands

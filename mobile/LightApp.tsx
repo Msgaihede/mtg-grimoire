@@ -4,6 +4,7 @@ import { BootScreen } from "./BootScreen";
 import { DownloadsPrompt } from "./DownloadsPrompt";
 import { FaceBoundary } from "./FaceBoundary";
 import { StorageNotice } from "./StorageNotice";
+import { UpdateNotice } from "./UpdateNotice";
 import { useFace } from "./useFace";
 
 // **Each face is its own chunk.** A phone never downloads the desktop's deck editor and a laptop
@@ -43,6 +44,9 @@ export function LightApp({ gate }: { gate: boolean }) {
       </FaceBoundary>
       {/* Above both faces and outside the boundary, so a crossing neither re-asks nor drops it. */}
       <DownloadsPrompt />
+      {/* A newer build the host is holding back: the same arrangement, on a rung under every
+          dialog, so it is drawn along the bottom of a page and never over a question. */}
+      <UpdateNotice />
       {/* The same arrangement: asked of the host once, and drawn only if it answers. **Last in
           the document on purpose** — it shares a rung with the desktop face's first-run screen,
           and equal rungs paint in document order (`StorageNoticeCard`). */}

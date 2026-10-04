@@ -100,6 +100,7 @@ over there is this crate's item unless that file defines one.
 | `platform::pause(Duration) -> bool` — stand aside for another thread | `thread::sleep`, `true` | **`false`, at once**: a Worker has no other thread to wait for |
 | `platform::timer::sleep`, `timeout` — a wait a future awaits, and a deadline on one | `tokio::time` | a `Promise` around the global `setTimeout`, cleared when the wait is dropped |
 | `platform::timer::yield_to_host`, and `Breather` — a turn of the host's event loop, and one taken every so much work | `tokio::task::yield_now` | **a message posted to itself over a `MessageChannel`**, awaited: a task on the source a page's own messages arrive on, queued behind them. Falls back to a zero `setTimeout` |
+| `platform::timer::Turn`, `NoTurn` and `unbroken` — where a batch loop written once for every host lets the host have a turn; the turn that is none; and a future that never waits, run where it stands | a loop handed `NoTurn` and run through `unbroken` is a function call: one poll, no runtime | the same code handed a `Breather`: one `yield_to_host` each time its budget is spent |
 | `platform::http` — `Client` (`get`, `post`, `deadline`), `Request` (`header`, `body`, `send`, `send_within`), `Response` (`bytes`, `text`), `Body` (`chunk`, `chunk_within`), `Error` | `reqwest` over rustls, with a connect bound and a per-read bound; `deadline` is **not applied** | `reqwest` over `fetch`: **no connect or read bound to set**, so a request is bounded by `deadline` — the whole of it — or, for a body too long for one, by `send_within` and `chunk_within`, which give up on a wait rather than on the request; **no `User-Agent` is set** (a page may not choose one); `is_connect()` is always `false` |
 | `platform::host` — `keeps_files()`, `asks_as_a_page()`: the two facts a download picks its shape by | `true`, `false` | `false`, `true`: a download is streamed into its sink, no request carries a conditional header, and a feed whose server permits no page is not asked |
 | `platform::device::name()` — what this machine is called, for a device's default name | `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere | `None`: a page has no such thing to ask, and `identity::mint_name` falls back to a word |
@@ -107,7 +108,7 @@ over there is this crate's item unless that file defines one.
 | `platform::sync::Semaphore`, `Lock` — a permit and a lock an `async fn` holds across an `.await`, **first come, first served**; `Shared<T>` — a value one holder at a time changes, the same lock with something behind it | `tokio::sync` | `tokio::sync`: it needs no runtime |
 | `platform::Sendable` — what a fence over a future's `Send`-ness bounds by | `Send` | anything: no request is `Send` there, and there is no other thread |
 | `platform::spawn::blocking(f).await` — synchronous work under an `async fn`; `spawn::background(f)` — work nobody waits for | the async runtime's blocking pool, **started by the call**; a thread | **run where it stands**: a Worker has no second thread, so `blocking` runs at its first poll and `background` before it returns |
-| `platform::alone` — **not an interface with two arms: a way for a native test to feel the browser's.** `alone::emulate()` makes the calling thread a host with one: `spawn` runs on the caller, `pause` answers `false`, and a connection or the facet index asked for while held is a panic naming the line. **`host::emulate_page()` is the whole page**: that, plus `files` refusing as the browser arm does and `http` hiding the response headers CORS hides | a `thread_local` flag each, `cfg(test)` and `testing` only; `emulated()` is a constant `false` in a build that ships | nothing: it is what the browser arms already are |
+| `platform::alone` — **not an interface with two arms: a way for a native test to feel the browser's.** `alone::emulate()` makes the calling thread a host with one: `spawn` runs on the caller, `pause` answers `false`, and a connection or the facet index asked for while held is a panic naming the line. **`host::emulate_page()` is the whole page**: that, plus `files` refusing as the browser arm does and `http` hiding the response headers CORS hides | a `thread_local` flag each, `cfg(test)` and `testing` only; `emulated()` is a constant `false` in a build that ships. **`timer::turn_at_every_pass()` is the third such switch**: every `Breather` made on that thread takes a turn at every pass, so a test of a loop's gaps does not turn on how fast the machine is | nothing: it is what the browser arms already are |
 
 `db::lock_for` and `db::lock_background` are why `Tick` and `pause` exist. **A wait that polls is
 a wait that cannot succeed in a browser**, so `lock_for` gives up on its first contended attempt
@@ -156,8 +157,9 @@ yield described below.
     chunk. **A new streamed loop owes the same line**, and holds nothing across it: a turn
     is exactly when a command runs. **Measured on the module that ships** (the same probe,
     the same day): all fifteen calls sent during the card download answered, in 24–440 ms,
-    median 185 ms. The synchronous tails after a download are another matter and take no
-    turn — [light-app.md](../../docs/reference/light-app.md) §9.2 has their lengths.
+    median 185 ms. **What follows the last chunk has a bullet of its own below** (*A finish
+    that writes staging…*): the tag finish and the combo store take the same turns, between
+    their batches; the card finish and the price list's store do not.
   - **No conditional header, and no `ETag`.** `scryfall::Client::check_bulk_dataset` drops an
     `If-None-Match` it is handed, at the one place the header is built, and "unchanged" is the
     descriptor's `updated_at` against the stored one — the test every caller already made for
@@ -197,15 +199,59 @@ yield described below.
     `!host::asks_as_a_page()`. Mana Pool sends no `Access-Control-Allow-Origin`, so on a page
     its refresh is a sentence, `selected_due` never calls it due, and `FeedStatus.reachable`
     is `false`. Natively every feed is reachable.
-  - ⚠️ **The long synchronous tails are still synchronous**: `StreamIngest::finish` (the
-    swap, every index replayed, the FTS rebuild), `StreamTags::finish` (the closure),
-    `combos::store`, `marketplace_feed::store`, `maintenance::reclaim_freed_pages` and the
-    facet index's build each run to their end on the caller. On a host with one thread no
-    command is answered while one runs. Timed on the first browser run: card ingest finish
-    4.7 s, oracle tags 11.3 s, art tags 23.4 s, combos store 3.7 s, Card Kingdom store 0.8 s;
-    the longest single wait for a call was 26.1 s. The two tag tails and the combo store
-    already write staging in short transactions and swap at the end, so each could be driven
-    a batch at a time with a turn between — not done yet.
+  - **A finish that writes staging a batch at a time takes a turn in every gap** (step 5.3,
+    2026-10-04): `tags::StreamTags::finish_in_turns` and `combos::store_in_turns`. Each is
+    the one body of its feed's tail, an `async fn` that awaits a `platform::timer::Turn`
+    where the synchronous loop stood aside — after every batch, with the connection let go
+    and no transaction open. The streamed arm hands it the breather its download kept; the
+    file-backed door (`StreamTags::finish`, `combos::store`) hands it `NoTurn` and runs it
+    through `timer::unbroken`, so **natively it is the function it was, statement for
+    statement** — each module pins its transaction count
+    (`the_file_driver_commits_exactly_the_batches_it_always_did`,
+    `the_store_commits_exactly_the_batches_it_always_did`). A command taken in a gap sees
+    the previous taxonomy or the previous combos, whole: staging is invisible to every
+    reader and the live tables do not move until the swap. **A new loop of this kind owes
+    three things**: the batch written by a function that takes the connection and has let go
+    before it returns, so the `.await` sits between calls; a `Sendable` fence over the
+    `async fn` (`nothing_is_held_across_a_turn`, one in each module); and the turn taken
+    only where nothing is half-written.
+    - **What a command in a gap may do is what another thread could always do between two
+      batches**, and three cases are written down and tested. A second refresh of the same
+      feed is **refused** — the claim is held until after the swap. A cache clear is
+      **refused** for the same claim. A `combos_clear` is **taken**, and the swap that
+      follows it stands: the clear empties the live tables and the watermark, the staging
+      twins are not its to touch, and the swap installs the new file *with* its watermark in
+      one transaction — rows and their record together, which is the only thing that must
+      hold. That is the right end and not a clear undone: the one press that reaches the
+      clear is *discard and download again*.
+      `combos::tests::a_clear_taken_between_two_batches_is_followed_by_the_swap`.
+    - **Measured natively before it was built** (release, WAL, the real art file rebuilt
+      from a dev corpus — 11 603 tags, 488 864 taggings, 979 249 closure rows; 2026-10-04):
+      of a 12–15 s finish the closure's ~490 batches are 11–13 s, the swap 1.3–2.0 s, the
+      edges 70 ms, the tags 50 ms, and **`ancestor_closures` 4.5 ms** — so the graph walk
+      takes no turn and needs none.
+    - ⚠️ **On a host that keeps no files the closure is written in key order, 8 000 rows to
+      a transaction** (`tags::ClosurePlan`), where every other host writes it in the file's
+      order, 2 000 at a time, as it always has — the rows that land are the same
+      (`a_page_writes_the_closure_a_desktop_writes`). A browser's database is on a rollback
+      journal, which writes every touched page twice, and the file's order puts nearly
+      every row on a page of its own. Natively on a rollback journal (the same file,
+      release, NTFS) the closure took 16.6–17.8 s as it was, 10.5 s at 8 000 rows, 5.4–6.1 s
+      in key order, and **2.6–2.8 s with both**. **No browser has timed it**:
+      `CLOSURE_BATCH_WITHOUT_FILES`' doc has the table and what to put back if OPFS says
+      otherwise. A batch is also the longest a command waits, which is why it is not
+      larger. **The desktop would gain as much and was left alone on purpose** — its
+      statements were not to move in this step.
+  - ⚠️ **What is still synchronous, to its end, on the caller**: `StreamIngest::finish` (the
+    card swap, every index replayed, the FTS rebuild — one transaction by need),
+    `marketplace_feed::store` (it writes the live table, so it cannot commit in pieces),
+    **each tag file's swap** (four renames *and the two indexes a rename does not carry*,
+    built over the whole closure inside that one transaction), the combos' swap,
+    `maintenance::reclaim_freed_pages` and the facet index's build. On a host with one
+    thread no command is answered while one runs. Timed in a browser, on the module before
+    the turns (headless Chrome 154, 2026-10-04): card finish 4.3–4.7 s, Card Kingdom's
+    store 0.8 s; the tag swaps were inside the 10.8 s and 23.6 s tails and have not been
+    timed apart there.
 - **`spawn` takes work off the caller only where there is somewhere to put it.** The card
   sync's ingest, its migration pass, its reclaim and its compaction go through `blocking`; the
   facet index's build through `background`. In a browser both run on the caller, to completion —
@@ -457,12 +503,20 @@ exports `call(name, args, body?)` over it (`crates/grimoire-web`) and the Androi
 the fence between them (light-app spec §2.4; [light-app.md](../../docs/reference/light-app.md)
 §6.11). Markus chose (2026-10-03) the machinery and the reads first, and a `macro_rules!` table.
 
+**One entry has no desktop wrapper: `card_image_source`** (step 5.3, 2026-10-04) — where a
+card's picture is, for a host whose page fetches pictures itself. It is on `src-tauri`'s
+`command_table::TABLE_ONLY` with its reason, which is `DESKTOP_ONLY` read from the other
+side: the fence refuses a table command the desktop does not register unless that list names
+it, and refuses one on the list that has a wrapper after all. **A wrapper nobody calls is
+not the way to satisfy it** — a registered command is one a page can invoke.
+
 - **One line per command, in the `commands! { … }` block at the file's foot**:
   `read card_detail in card(id: String, marketplace: Option<String>) = |conn| { … };` — kind,
   name, the module whose items the body names (glob-imported for that entry), the arguments, and
   a body that answers `Result<_, String>` for something that serializes. The macro expands it into
   an argument struct, an arm of `dispatch` and a row of `TABLE`.
-- **The name and the arguments are the desktop wrapper's, exactly** — they are the wire. The
+- **The name and the arguments are the desktop wrapper's, exactly** — they are the wire (a
+  table-only command's entry *is* its wire: nothing else spells it). The
   arguments arrive camelCase (`rename_all`, as Tauri renames a wrapper's own), and an absent
   `Option` is `None`, which is what `ipc.ts` relies on when it leaves one out.
   `every_command_in_the_table_takes_its_wrappers_arguments` compares the two by name, in order
@@ -497,7 +551,8 @@ the fence between them (light-app spec §2.4; [light-app.md](../../docs/referenc
 - **`dispatch` holds nothing across an `.await`** — `nothing_is_held_across_a_call`, the sync
   modules' `Sendable` fence.
 - **A command joins the table by hand**: one line here, and its name taken off `src-tauri`'s
-  `NOT_YET`. `scripts/core-command-table.mjs` drafted the 88 reads from the wrappers once and is a
+  `NOT_YET` — or, for one the desktop will never register, put on its `TABLE_ONLY` with why.
+  `scripts/core-command-table.mjs` drafted the 88 reads from the wrappers once and is a
   record, not a tool to re-run over a table people have edited — it rewrites the whole block.
 
 ## The image cache: the pass is here, the schedule is the host's
@@ -520,8 +575,18 @@ pre-warm fetches, and the eviction pass that spares exactly those.
   seven tests of the answer run through its `to_response`. A web host answers a `fetch`.
 - **In a browser the cache stores nothing, and that is a counted failure rather than a crash**:
   `platform::files` refuses, so every fetch serves its bytes, counts a `store_failure` and
-  folds one `error_log` row. What a web host keeps pictures in — the HTTP cache, the Cache API
-  — is phase 5's decision, and until it is made the cache there is a fetcher.
+  folds one `error_log` row. **A web host's pictures are its service worker's, in Cache
+  Storage** (phase 5's decision, step 5.3), so nothing there should be calling the cache at
+  all; it stays a fetcher that keeps nothing.
+- **`images::image_source(conn, path)` says where a picture is and fetches nothing** — the
+  table's `card_image_source`, for that service worker. `path` is the path `answer` is asked
+  (`/<variant>/<card_id>/<face>`; a leading slash is optional and anything from a `?` or a
+  `#` on is ignored), and the answer is `ImageSource`, tagged by `kind`: `uri` with
+  Scryfall's address, `missing` with the placeholder `answer` would have served as SVG text,
+  or `unknown`. **It is `resolve`'s rule whole** — face first, the host allowlist, the
+  version rule — so a host that fetches for itself is told exactly what this cache would
+  have fetched, and never an address `image_uri::is_fetchable` refuses. A path that is not a
+  picture's is `unknown` and never an error.
 - **`reset::clear_cache` is here with it**, over `platform::files`. Its sweep takes a listing
   that is whole or an error, so one unreadable entry now skips its directory where the old walk
   skipped the entry — and **a directory that would not list is counted once in `failed`**,

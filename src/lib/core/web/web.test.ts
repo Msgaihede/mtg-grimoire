@@ -1,6 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { StartupStatus } from "@/lib/ipc";
+import type { CacheCleared, StartupStatus } from "@/lib/ipc";
 import type { StorageCleared, StoragePersistence } from "../hostStorage";
+import {
+  HOST_UPDATE,
+  HOST_UPDATE_APPLY,
+  HOST_UPDATE_CHANGED,
+  type HostUpdate,
+} from "../hostUpdate";
+import type { Heard } from "./sw/bridge";
+import { PICTURE_CACHE, type CachesLike } from "./sw/pictures";
+import type { Registration, WaitingWorker, WorkerContainer } from "./update";
 import {
   ALREADY_OPEN,
   createWebCore,
@@ -933,5 +942,229 @@ describe("a Worker that died", () => {
       reload: true,
       message: expect.stringMatching(/Worker is not defined/),
     });
+  });
+});
+
+/** `navigator.serviceWorker`, as far as the page's half uses it — and the test is the browser. */
+class FakeWorkers implements WorkerContainer {
+  controller: unknown;
+  registration = {
+    active: null as FakeWaiting | null,
+    waiting: null as FakeWaiting | null,
+    installing: null as FakeWaiting | null,
+    addEventListener: () => undefined,
+    update: async () => undefined,
+  };
+  registered: string[] = [];
+  started = 0;
+  private changed: (() => void)[] = [];
+  private messages: ((event: Heard) => void)[] = [];
+
+  constructor(controller: unknown = {}) {
+    this.controller = controller;
+  }
+  register(url: string): Promise<Registration> {
+    this.registered.push(url);
+    return Promise.resolve(this.registration);
+  }
+  addEventListener(type: "controllerchange", listener: () => void): void;
+  addEventListener(type: "message", listener: (event: Heard) => void): void;
+  addEventListener(type: string, listener: unknown): void {
+    if (type === "controllerchange") this.changed.push(listener as () => void);
+    else this.messages.push(listener as (event: Heard) => void);
+  }
+  startMessages(): void {
+    this.started += 1;
+  }
+  /** The service worker asks this page something; what the page posted back. */
+  ask(data: unknown): unknown[] {
+    const replies: unknown[] = [];
+    for (const listener of this.messages) {
+      listener({ data, ports: [{ postMessage: (reply: unknown) => void replies.push(reply) }] });
+    }
+    return replies;
+  }
+  takeOver(): void {
+    for (const listener of this.changed) listener();
+  }
+}
+
+class FakeWaiting implements WaitingWorker {
+  state = "installed";
+  posted: unknown[] = [];
+  postMessage(message: unknown): void {
+    this.posted.push(message);
+  }
+  addEventListener(): void {}
+}
+
+describe("the service worker's page half", () => {
+  /** A core whose browser has a service worker container, and a page that counts its reloads. */
+  function served(workers = new FakeWorkers(), browser: Partial<Browser> = {}) {
+    const reload = vi.fn();
+    const h = harness({ workers, page: { reload, onVisible: () => undefined }, ...browser });
+    return { ...h, workers, reload };
+  }
+
+  it("is not started by building the core, and is started once however often it is used", async () => {
+    const { core, workers } = served();
+    expect(workers.registered).toEqual([]);
+    void status(core);
+    core.listen("startup:changed", () => {});
+    void status(core);
+    expect(workers.registered).toEqual(["/sw.js"]);
+    expect(workers.started).toBe(1);
+  });
+
+  it("registers nothing in a browser — or a build — that has no worker to register", async () => {
+    const { core, worker } = harness();
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    // And the host still answers its own commands about one: nothing waits.
+    await expect(core.call(HOST_UPDATE)).resolves.toBeNull();
+    await expect(core.call(HOST_UPDATE_APPLY)).resolves.toBeNull();
+  });
+
+  it("answers the worker's ask for a picture's address from the engine's own command", async () => {
+    const { core, worker, workers } = served();
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: true });
+
+    const replies = workers.ask({ kind: "grimoire:picture-source", path: "/display/abc/0" });
+    const call = worker.messages.find((m) => m.kind === "call");
+    expect(call).toMatchObject({ command: "card_image_source", args: { path: "/display/abc/0" } });
+
+    const source = { kind: "uri", uri: "https://cards.scryfall.io/large/front/a/b/abc.webp?1" };
+    worker.say({ kind: "ok", id: (call as { id: number }).id, result: source });
+    await vi.waitFor(() => expect(replies).toEqual([{ kind: "source", source }]));
+  });
+
+  it("holds an ask made while the database is opening, and answers it once it has", async () => {
+    const { core, worker, workers } = served();
+    void status(core);
+    const replies = workers.ask({ kind: "grimoire:picture-source", path: "/display/abc/0" });
+    expect(worker.messages.filter((m) => m.kind === "call")).toEqual([]);
+
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    const call = worker.messages.find((m) => m.kind === "call") as { id: number };
+    worker.say({ kind: "ok", id: call.id, result: { kind: "unknown" } });
+    await vi.waitFor(() =>
+      expect(replies).toEqual([{ kind: "source", source: { kind: "unknown" } }]),
+    );
+  });
+
+  it("refuses the ask at once in a second tab, so the worker does not wait on it", async () => {
+    const { core, worker, workers } = served();
+    void status(core);
+    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    const replies = workers.ask({ kind: "grimoire:picture-source", path: "/display/abc/0" });
+    await vi.waitFor(() => expect(replies).toEqual([{ kind: "refused", message: ALREADY_OPEN }]));
+  });
+
+  it("answers `host_update` with its own words once a newer build waits, and says so as it changes", async () => {
+    const { core, worker } = served();
+    const heard: unknown[] = [];
+    core.listen(HOST_UPDATE_CHANGED, (update) => heard.push(update));
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    await expect(core.call(HOST_UPDATE)).resolves.toBeNull();
+
+    // A newer build was already waiting when the registration answered.
+    const second = served();
+    second.workers.registration.waiting = new FakeWaiting();
+    const said: unknown[] = [];
+    second.core.listen(HOST_UPDATE_CHANGED, (update) => said.push(update));
+    second.worker.say({ kind: "opened", opened: READY, existed: true });
+    const update = await second.core.call<HostUpdate | null>(HOST_UPDATE);
+    expect(update).toEqual({
+      title: "A new version of MTG Grimoire is ready.",
+      action: "Reload to update",
+    });
+    expect(said).toEqual([update]);
+    expect(heard).toEqual([]);
+  });
+
+  it("tells the waiting build to take over only on `host_update_apply`, and reloads when it has", async () => {
+    const { core, worker, workers, reload } = served();
+    const waiting = new FakeWaiting();
+    workers.registration.waiting = waiting;
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    await core.call(HOST_UPDATE);
+    expect(waiting.posted).toEqual([]);
+
+    await expect(core.call(HOST_UPDATE_APPLY)).resolves.toBeNull();
+    expect(waiting.posted).toEqual([{ kind: "grimoire:skip-waiting" }]);
+    expect(reload).not.toHaveBeenCalled();
+
+    workers.takeOver();
+    expect(reload).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not reload a second tab when the first one's press takes the page over", async () => {
+    // The tab that pressed reloads and opens the database again; this one is a boot screen with
+    // a Reload link, and a reload of its own would race the other for the database.
+    const { core, worker, workers, reload } = served();
+    void status(core);
+    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    await status(core);
+    workers.takeOver();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("still opens the database when the service worker cannot be set up at all", async () => {
+    const workers = new FakeWorkers();
+    workers.startMessages = () => {
+      throw new Error("InvalidStateError");
+    };
+    const { core, worker } = served(workers);
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    expect(await status(core)).toEqual({ state: "ready" });
+    expect(warned).toHaveBeenCalledWith(
+      "MTG Grimoire: the service worker could not be set up.",
+      expect.any(Error),
+    );
+  });
+});
+
+describe("clearing the picture cache from Settings", () => {
+  /** A `caches` holding pictures of these sizes under the worker's own cache name. */
+  function fakeCaches(sizes: number[]): CachesLike {
+    const entries = new Map(sizes.map((size, at) => [`https://app.test/mtgimg/display/c${at}/0`, size]));
+    return {
+      keys: async () => [PICTURE_CACHE],
+      delete: async () => true,
+      open: async () => ({
+        match: async (key) =>
+          entries.has(key)
+            ? new Response("", { headers: { "Content-Length": String(entries.get(key)) } })
+            : undefined,
+        put: async () => undefined,
+        delete: async (key) => entries.delete(key),
+        keys: async () => [...entries.keys()].map((url) => ({ url })),
+      }),
+    };
+  }
+
+  it("answers `cache_clear` on the page, in the desktop's shape, and asks the engine nothing", async () => {
+    const { core, worker } = harness({ caches: fakeCaches([93_000, 61_000]) });
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: true });
+
+    await expect(core.call<CacheCleared>("cache_clear")).resolves.toEqual({
+      files: 2,
+      bytes: 154_000,
+      rows: 0,
+      failed: 0,
+    });
+    // The engine's own would sweep a folder a browser does not have.
+    expect(worker.messages.filter((m) => m.kind === "call")).toEqual([]);
+  });
+
+  it("answers that nothing was cached in a browser with no Cache Storage", async () => {
+    const { core, worker } = harness();
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    await expect(core.call("cache_clear")).resolves.toEqual({ files: 0, bytes: 0, rows: 0, failed: 0 });
   });
 });

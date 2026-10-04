@@ -21,6 +21,11 @@
 //! on a budget of work. A loop of `chunk().await` and a synchronous push looks as though it
 //! lets go at every `.await`, and in a browser it does not — the first measured run found a
 //! page's commands waiting 3.5–8.4 s behind a card download for it. Both say why.
+//!
+//! **And a loop written once for both kinds of host**: [`Turn`] is what a batch loop awaits
+//! in the gap where it has let go of the connection — a [`Breather`] where the host has one
+//! thread, [`NoTurn`] where it has many — and [`unbroken`] runs the second kind to its end
+//! where it stands, so the host with threads calls a function, as it always did.
 
 use std::future::Future;
 use std::time::Duration;
@@ -80,7 +85,15 @@ pub struct Breather {
 
 impl Breather {
     /// A breather that takes its first turn once `budget` has passed from now.
+    ///
+    /// On a test's thread that asked for it ([`turn_at_every_pass`]) the budget is nothing,
+    /// so every pass is a turn; a build that ships has no such switch.
     pub fn new(budget: Duration) -> Breather {
+        let budget = if every_pass::asked() {
+            Duration::ZERO
+        } else {
+            budget
+        };
         Breather::starting(budget, super::clock::Tick::now())
     }
 
@@ -120,6 +133,114 @@ impl Breather {
     /// How many turns it has taken.
     pub fn taken(&self) -> u32 {
         self.taken
+    }
+}
+
+/// **Where a loop that is written once for every host lets the host have a turn.**
+///
+/// A feed's finish is a run of short transactions with the connection given back between two
+/// of them. Natively that gap is for another *thread* — [`crate::platform::pause`] parks this
+/// one — and a command is answered there whatever this loop does. In a browser there is no
+/// other thread, `pause` returns at once, and the gap lets nobody in unless the loop returns
+/// to the event loop in it ([`yield_to_host`]). So the loop is an `async fn` that awaits a
+/// `Turn` in each gap, and what it is handed decides what the gap is:
+///
+/// | Handed | The gap |
+/// | --- | --- |
+/// | [`NoTurn`] | nothing — the future never waits, and [`unbroken`] runs it to its end where it stands. What a host with threads passes, so its loop is statement for statement the synchronous one it was |
+/// | a [`Breather`] | one [`yield_to_host`] each time its budget is spent. What a streamed download passes: the same breather its chunk loop kept |
+///
+/// **Hold nothing across `take`** — no guard, no open transaction: a turn is exactly when a
+/// command runs, and on a host with one connection it asks for the one this loop just let go.
+pub trait Turn {
+    /// Give the host a turn if one is owed, and come back after it.
+    fn take(&mut self) -> impl Future<Output = ()>;
+}
+
+/// The turn of a caller with none to give: ready at once. See [`Turn`].
+#[derive(Debug, Clone, Copy, Default)]
+pub struct NoTurn;
+
+impl Turn for NoTurn {
+    async fn take(&mut self) {}
+}
+
+impl Turn for Breather {
+    async fn take(&mut self) {
+        self.breathe().await;
+    }
+}
+
+/// **Run a future that never waits to its end, where it stands** — what makes a loop written
+/// once as an `async fn` ([`Turn`]) the synchronous function a host with threads has always
+/// called: handed [`NoTurn`], every `.await` in it is ready, so one poll is the whole run.
+///
+/// No runtime is needed and none is entered; this is a function call.
+///
+/// # Panics
+///
+/// If the future does wait. That is a caller that handed a loop something other than
+/// [`NoTurn`] and then asked for it synchronously — a mistake in the code, never a state a
+/// run can reach — and the alternative, polling again in a loop, is a thread spinning on a
+/// timer that only its own runtime can fire.
+pub fn unbroken<F: Future>(future: F) -> F::Output {
+    let mut context = std::task::Context::from_waker(std::task::Waker::noop());
+    match std::pin::pin!(future).poll(&mut context) {
+        std::task::Poll::Ready(output) => output,
+        std::task::Poll::Pending => panic!(
+            "a future run where it stands waited for something: it was handed a turn that \
+             is not `NoTurn`, or awaits something besides its turns"
+        ),
+    }
+}
+
+/// **For a test: every [`Breather`] made on this thread takes a turn at every pass**, until
+/// the guard is dropped.
+///
+/// A breather's budget is fifty milliseconds of real work, which a test's fixture finishes
+/// inside of — so a loop that is supposed to let a command in between two batches would run
+/// straight through, and the test of it would pass or fail on how fast the machine is. With
+/// this, the turn after every batch is taken, whatever the clock says. Per thread and never
+/// global, for [`super::alone`]'s reason.
+#[cfg(any(test, feature = "testing"))]
+pub fn turn_at_every_pass() -> EveryPass {
+    every_pass::set(true);
+    EveryPass(())
+}
+
+/// [`turn_at_every_pass`]'s guard.
+#[cfg(any(test, feature = "testing"))]
+pub struct EveryPass(());
+
+#[cfg(any(test, feature = "testing"))]
+impl Drop for EveryPass {
+    fn drop(&mut self) {
+        every_pass::set(false);
+    }
+}
+
+#[cfg(not(any(test, feature = "testing")))]
+mod every_pass {
+    #[inline(always)]
+    pub fn asked() -> bool {
+        false
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
+mod every_pass {
+    use std::cell::Cell;
+
+    thread_local! {
+        static EVERY_PASS: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub fn asked() -> bool {
+        EVERY_PASS.with(Cell::get)
+    }
+
+    pub fn set(every: bool) {
+        EVERY_PASS.with(|flag| flag.set(every));
     }
 }
 
@@ -322,6 +443,54 @@ mod tests {
         assert!(real.breathe().await);
         assert!(!real.breathe().await, "and the budget starts again");
         assert_eq!(real.taken(), 1);
+    }
+
+    /// **A loop handed no turn is a function call**: every `.await` in it is ready, so it runs
+    /// to its end in one poll, with no runtime under it — this test has none.
+    #[test]
+    fn a_loop_handed_no_turn_runs_to_its_end_where_it_stands() {
+        async fn batches(turn: &mut impl Turn) -> u32 {
+            let mut done = 0;
+            for _ in 0..1000 {
+                done += 1;
+                turn.take().await;
+            }
+            done
+        }
+        assert_eq!(unbroken(batches(&mut NoTurn)), 1000);
+    }
+
+    /// …and a future that does wait is refused in words rather than spun on.
+    #[test]
+    fn a_future_that_waits_is_refused_rather_than_polled_again() {
+        let waited = std::panic::catch_unwind(|| unbroken(std::future::pending::<()>()));
+        let said = waited.expect_err("a pending future has no end to run to");
+        let said = said
+            .downcast_ref::<&str>()
+            .map(|s| (*s).to_owned())
+            .or_else(|| said.downcast_ref::<String>().cloned())
+            .unwrap_or_default();
+        assert!(said.contains("waited for something"), "{said}");
+    }
+
+    /// **A breather is a turn**, on its budget — and on a test's thread that asked, at every
+    /// pass, so a test of a loop's gaps does not turn on how fast the machine is.
+    #[tokio::test]
+    async fn a_breather_handed_as_a_turn_breathes_and_a_test_can_make_every_pass_one() {
+        let mut slow = Breather::new(Duration::from_secs(3600));
+        slow.take().await;
+        assert_eq!(slow.taken(), 0, "an hour's budget is not spent yet");
+        {
+            let _every = turn_at_every_pass();
+            let mut breather = Breather::new(Duration::from_secs(3600));
+            for _ in 0..3 {
+                breather.take().await;
+            }
+            assert_eq!(breather.taken(), 3);
+        }
+        let mut after = Breather::new(Duration::from_secs(3600));
+        after.take().await;
+        assert_eq!(after.taken(), 0, "the switch went with its guard");
     }
 
     /// The deadline is what ends the call, and a future that beats it keeps its answer.

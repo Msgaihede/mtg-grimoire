@@ -735,6 +735,12 @@ commands! {
     write set_home_layout in home(layout: HomeLayout) = |conn| store(conn, &layout);
 
     // images: `prefetch_images` and `prewarm_collection` are not here — `command_table::NOT_YET`
+    // **The one entry with no desktop wrapper** (`command_table::TABLE_ONLY`): where a card's
+    // picture is, for a host whose page fetches pictures itself. `path` is the path the
+    // desktop's `mtgimg://` handler is asked — `/<variant>/<card_id>/<face>` — and the answer
+    // is `images::ImageSource`: an address, a placeholder, or `unknown`. It reads `cards` and
+    // nothing else; the fetch and the keeping are the host's.
+    read card_image_source in images(path: String) = |conn| image_source(conn, &path);
 
     // import
     read import_resolve in import(lines: Vec<ResolveLine>) = |conn| resolve_lines(conn, &lines);
@@ -1369,6 +1375,73 @@ mod tests {
             )
             .await,
             Ok(expected)
+        );
+    }
+
+    /// **The one command with no desktop wrapper, through the wire**: `card_image_source` is
+    /// asked a picture's path and answers one object tagged by `kind` — the address, the
+    /// placeholder, or `unknown`. Its three answers and every refusal are `images`' own tests;
+    /// this is the entry: the argument's name, the connection it reads, the JSON it leaves as.
+    #[tokio::test]
+    async fn the_picture_command_says_where_a_picture_is() {
+        let (state, _dir) =
+            crate::state::fixtures::on_files("commands-picture", "http://127.0.0.1:1");
+        let bolt = "0000419b-0bba-4488-8f7a-6194544ce91d";
+        state
+            .lock_db()
+            .execute(
+                "INSERT INTO cards
+                    (id, name, set_code, collector_number, lang, layout, image_uris, raw)
+                 VALUES (?1, 'Bolt', 'lea', '161', 'en', 'normal',
+                         json_object('grid', 'https://cards.scryfall.io/grid/front/0/0/x.webp?17'),
+                         '{}')",
+                [bolt],
+            )
+            .unwrap();
+        let ask = |path: String| {
+            let state = state.clone();
+            async move { dispatch(&state, "card_image_source", json!({ "path": path }), None).await }
+        };
+
+        assert_eq!(
+            ask(format!("/grid/{bolt}/0?v=2")).await,
+            Ok(json!({
+                "kind": "uri",
+                "uri": "https://cards.scryfall.io/grid/front/0/0/x.webp?17"
+            }))
+        );
+        let back = ask(format!("/grid/{bolt}/1")).await.expect("an answer");
+        assert_eq!(back["kind"], json!("missing"));
+        assert!(
+            back["svg"]
+                .as_str()
+                .is_some_and(|svg| svg.starts_with("<svg ") && svg.contains("Card back")),
+            "{back}"
+        );
+        assert_eq!(
+            back.as_object().map(|o| o.len()),
+            Some(2),
+            "kind and svg, and nothing else: {back}"
+        );
+        assert_eq!(
+            ask(format!("/png/{bolt}/0")).await,
+            Ok(json!({ "kind": "unknown" }))
+        );
+        assert_eq!(
+            ask("/nothing".to_owned()).await,
+            Ok(json!({ "kind": "unknown" }))
+        );
+        let missing = dispatch(&state, "card_image_source", json!({}), None)
+            .await
+            .unwrap_err();
+        assert!(missing.contains("path"), "{missing}");
+        let entry = TABLE
+            .iter()
+            .find(|entry| entry.name == "card_image_source")
+            .expect("the entry");
+        assert_eq!(
+            (entry.kind, entry.args, entry.types),
+            (Kind::Read, &["path"][..], &["String"][..])
         );
     }
 

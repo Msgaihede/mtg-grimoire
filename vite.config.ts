@@ -151,6 +151,9 @@ export default defineConfig({
         // loads. Everything it decides is in `engine.ts` beside it, which is covered.
         "src/lib/core/web/worker.ts",
         "src/lib/core/web/grimoire_web.d.ts",
+        // The service worker's entry, for the same reason: four event listeners that only a
+        // real worker has. What it decides is in the modules beside it, which are covered.
+        "src/lib/core/web/sw/sw.ts",
         ".claude/**/*",
       ],
     },
