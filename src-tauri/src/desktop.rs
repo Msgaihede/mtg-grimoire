@@ -857,13 +857,13 @@ pub fn run() {
 /// integrity check that used to hold the launch runs behind it, on a thread of its own.
 fn start(app: &tauri::AppHandle) {
     // The write-side half of live sync's wake. One `Arc` for the whole process: the
-    // commit hook `init_state` installs calls `notify_one` on it, through the
-    // `sync_engine::live::WriteWake` observer, and `sync_engine::live::spawn`'s `select!`
-    // wakes on the same handle — see the warning on `live::spawn` for why it must be
-    // `notify_one` and never `notify_waiters`. Created here rather than on `AppState`
-    // because nothing else needs to reach it: `init_state` and `live::spawn` are the whole
-    // of its life.
-    let writes = Arc::new(tokio::sync::Notify::new());
+    // commit hook `init_state` installs rings it, through the core's
+    // `sync_engine::live::WriteWake` observer, and the loop `sync_engine::live::run` waits on
+    // the same handle — see the warning on `run` for why it must be a bell that keeps a ring
+    // nobody was waiting for (`notify_one`, never `notify_waiters`). Created here rather than
+    // on `AppState` because nothing else needs to reach it: `init_state` and the spawn at the
+    // foot of this function are the whole of its life.
+    let writes = Arc::new(grimoire_core::platform::sync::Bell::new());
 
     // A refusal is drawn by the page, under a title bar that can still close the window, and
     // printed as well for a console that has one. It used to be returned from `setup`, which
@@ -999,7 +999,11 @@ fn start(app: &tauri::AppHandle) {
     // services, five schedules, and none of them may be the reason another stops
     // running. It opens no socket at all until this installation is in a group, which
     // is every installation that has connected nothing.
-    crate::sync_engine::live::spawn(app.clone(), state.clone(), writes.clone());
+    //
+    // The loop is the core's, and spawning it is this host's: a detached task on the runtime
+    // every other launch task is on. What it says — `sync:live`, `sync:applied` — goes through
+    // the state's event sink, which is `WindowEvents` below, to every window.
+    tauri::async_runtime::spawn(crate::sync_engine::live::run(state.core.clone(), writes));
 }
 
 /// Start the launch's optional feeds, each on a task of its own: the selected marketplace's
@@ -1219,7 +1223,7 @@ fn checkpoint_on_exit(app: &tauri::AppHandle) {
 /// one of the three observers that ride it.
 fn init_state(
     app: &tauri::AppHandle,
-    writes: &Arc<tokio::sync::Notify>,
+    writes: &Arc<grimoire_core::platform::sync::Bell>,
 ) -> Result<AppState, String> {
     let exe_dir = std::env::current_exe()
         .ok()
@@ -1335,8 +1339,9 @@ fn init_state(
 ///
 /// **Everything the engine says arrives here**: `sync:progress` and `collection:reconciled`
 /// from the card sync, and each feed's progress — `marketplace:progress`, `combos:progress`
-/// and the two tag bindings' — none of which takes a window. Live sync still names its
-/// `AppHandle`, and moves onto the sink with the sync step. A dropped event is never worth
+/// and the two tag bindings' — none of which takes a window — and, since the connection manager
+/// became the core's, live sync's `sync:live` and its loop's `sync:applied`. (A **Sync now**
+/// press still emits its own `sync:applied` from its wrapper.) A dropped event is never worth
 /// failing anything over.
 struct WindowEvents(tauri::AppHandle);
 

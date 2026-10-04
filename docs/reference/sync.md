@@ -3615,7 +3615,11 @@ frame is a hint and is never itself the cursor advancing.
 
 1. **"`reqwest` has no WebSocket client, and the obvious addition, `tokio-tungstenite`, does not
    compile to `wasm32-unknown-unknown`."** True, and irrelevant: the socket is opened by the
-   desktop's Rust process, and `sync_engine::live` is the only module that touches the crate.
+   host's Rust process — the desktop's when this was written, and the Android host's too since
+   the light app's phase 6 — and one module touches the crate: `grimoire-core`'s
+   `platform::socket`, whose native arm it is (it was `sync_engine::live`, in `src-tauri`, until
+   the connection manager moved; see "The connection manager, too" below). It is still true of a
+   browser, which is why that module has a second arm and the web host does not run the loop yet.
 2. **"A WebSocket from the page would need the CSP widened."** It would not, and this is the half
    the record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the
    **webview's** connections, and the socket that shipped is opened by `tokio-tungstenite` inside
@@ -3640,7 +3644,7 @@ nothing else. tungstenite passes such a request through untouched and its handsh
 without `Sec-WebSocket-Key` before a byte leaves — `WebSocket protocol error: Missing, duplicated
 or incorrect header sec-websocket-key`, folded into one `error_log` row with a rising count. The
 five handshake headers are only generated when the request is built **from the URL**, so
-`live::upgrade_request` does that and then adds the bearer. Sync still worked throughout, because
+`upgrade_request` (in the core's `platform::socket` now) does that and then adds the bearer. Sync still worked throughout, because
 the round trip ahead of the socket is plain HTTPS — one trip per backoff cycle instead of a
 doorbell — which is exactly why it went unnoticed. The route was live the whole time (probed
 2026-10-01: `/g/{group}/ws` **401** from the bearer gate, `/g/{group}/bogus` **404**).
@@ -3915,8 +3919,9 @@ the real relay.**
 **The same day, the code above left `src-tauri`** (the light app's step 6, second part, by
 `scripts/core-step-6b.mjs`): `sync_engine::{client, entitlement, wire, schedule, commands}` and
 `sync_pair::{identity, pairing}` are files under `crates/grimoire-core/src/`, re-exported in
-`src-tauri` at the paths they always had. What stayed is `sync_engine::live` — the socket, its
-timers and the two events it emits through a window — and every `#[tauri::command]`, in
+`src-tauri` at the paths they always had. What stayed that day is `sync_engine::live` — the
+socket, its timers and the two events it emits through a window ("The connection manager, too",
+below, is when it followed) — and every `#[tauri::command]`, in
 `sync_engine/commands/mod.rs` and `sync_pair/pairing/mod.rs`. These changed on the way, and
 nothing a request sends did — a reviewer compared all eight requests, old against new, route,
 verb, headers and body:
@@ -3937,6 +3942,82 @@ after **5 013 ms**; the slow trip 8 014 ms, then the socket's own trip pushing t
 Leave group pressed behind the socket's trip, waiting **6 428 ms** and then clearing the group and
 the grant; the pairing commands as before. The dev copy was in no group before and after, and its
 files were put back.
+
+### The connection manager, too
+
+**`sync_engine::live` is the core's since the light app's phase 6 (step 6.2, 2026-10-04)**, so
+that a host other than the desktop can run it — and the Android host does. What moved is the
+whole loop: the socket's lifetime, the five wakes, the scheduler it asks, `sync:live` and the
+loop's `sync:applied`, the `error_log` note, the write wake and `sync_live_state`'s answer.
+`src-tauri/src/sync_engine/live.rs` re-exports the core's module and keeps the one thing only a
+desktop has a moment for: the bounded push on the way out (`anything_pending`, `push_now`).
+
+| What | Was (`src-tauri`) | Is (`grimoire-core`) |
+| --- | --- | --- |
+| The socket | `tokio-tungstenite`, named in `live.rs` | `platform::socket`: `connect(url, bearer)`, `Socket::next() -> Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`. The native arm is the same crate, version, features and upgrade request; the browser arm compiles and refuses |
+| The five wakes | `tokio::select!` | `futures_util::select!` over fused futures — as fair: whichever is ready is taken in no fixed order. `tokio::select!` cannot be named outside `platform/`, and the core's tokio has no `macros` |
+| The 45 s ping and the 250 ms tick | `tokio::time::interval` | `platform::timer::interval`, on `platform::clock::Tick` and `timer::sleep`, so a browser has it: first tick at once, a late beat keeps the grid, safe to drop mid-wait — and **beats missed outright are dropped, where tokio's default owes them back to back** (below) |
+| The socket's age limit and `lived_ms` | `tokio::time::Instant` | `Tick`, and one `timer::sleep(SOCKET_MAX_AGE)` for the socket's life |
+| The write wake | `Arc<tokio::sync::Notify>` | `Arc<platform::sync::Bell>` — the same `Notify` underneath, `ring()` is `notify_one`, so a commit that lands while the loop is in a trip, asleep on a backoff or dialling is still kept as one permit |
+| A trip, and the token for the upgrade | `sync::on_a_worker` | `platform::spawn::on_a_worker`: natively the same — a pool thread with a current-thread runtime of its own; where there is one thread, awaited where it stands |
+| The idle reads, the outbox gate, the note | `tokio::task::spawn_blocking` | `platform::spawn::blocking` |
+| `sync:live`, and the loop's `sync:applied` | `AppHandle::emit` | the state's `EventSink`, which the desktop forwards to every window as before. The payloads are the same JSON; `sync:applied`'s keys now arrive in the order `serde_json::Value` keeps them, as every other core event's do |
+| `sync_live_state` | a desktop-only command | a `task` entry in the core's table; the desktop's wrapper stays registered and answers the same value |
+| Who starts it | `live::spawn(app, state, writes)` | the host: `tauri::async_runtime::spawn(live::run(state, writes))`, after its launch has settled |
+
+**Two things the loop does differently on every host, the desktop included, and both on
+purpose:**
+
+- **A keepalive that was never answered ends the socket — once its peer has answered one.** A
+  connection that goes without a word — a phone back from the background on another network, a
+  laptop out of range — is closed by nothing this end can see until TCP gives up: about twenty
+  seconds on Windows, on the order of a quarter of an hour on Android's Linux defaults. Until
+  then the socket read `live` and heard no doorbell. `Socket::keepalive` now tracks its ping:
+  `next` notes the pong as it swallows it, and a keepalive that finds the last ping still
+  unanswered looks once at what has already arrived (a loop inside a long trip has not been
+  reading) and then fails — *the relay did not answer the last keepalive* — which is
+  `Disconnect::Failed`, the ordinary backoff and reconnect. So a dead socket is noticed within
+  two ping periods, ninety seconds.
+  ⚠️ **The deadline is held only on a socket that has already seen a pong, which is what makes
+  it safe by construction.** It rests on the relay's edge answering a protocol ping with a pong.
+  Measured locally on 2026-10-04 — the relay under `wrangler dev --local` (workerd, wrangler
+  4.146.0) answered a raw masked ping, opcode 9 and empty, with opcode 10 and empty, on a
+  hibernatable socket, as the 2026-10-01 pass above had seen — and **production is unseen**.
+  If the deployed edge answered no pings at all, a deadline held from the first ping would end
+  every socket on every device at its second keepalive, for ever; with this rule such a peer is
+  pinged and nothing is concluded, exactly as before the deadline existed. What it gives up is
+  a socket that goes half-open before its first pong — the first 45–90 s of a connection —
+  which is left to TCP, as every socket was.
+- **A beat that was missed is not owed.** `tokio::time::interval` bursts by default: a loop
+  that was away takes every missed tick back to back. After an hour frozen — Android freezing a
+  background process, a laptop's lid — that was 14 400 ticks and eighty pings, and
+  `platform::timer`'s interval, with no timer to pass through for a beat already due, would
+  have taken them without once yielding its thread or reading a frame. It takes one and is on
+  a grid from then. On the desktop that removes `take_due` calls that answer `false` and pings
+  into a socket that is probably dead.
+
+**Android runs it** (`mobile/src-tauri`): its `open` registers `live::WriteWake` as the state's
+one write observer and its `start` spawns the loop after `startup::settle`. **It has no push on
+the way out** — the process ends by `_exit` or by the system's kill, neither a hook a request
+can be awaited in — so the loop's 3 s write debounce is what pushes, and an op that missed it is
+still `pushed_at IS NULL` for the next launch's first trip. **The web host does not run it yet**:
+a browser's `WebSocket` cannot set `Authorization`, so its bearer will ride the sub-protocol, and
+its keepalive will be a text frame; that arm of `platform::socket` is the next step's.
+
+**What was run**: the loop's own tests, natively — a device in no group says `off` once over
+twelve idle polls and dials nothing until it is put in a group; a device in a group dials a
+loopback stand-in with its bearer in `Authorization`, says `connecting`, `live`, sends a protocol
+ping first, and on a 4001 close says `offline` and writes the `live` row; and on a state with one
+connection, on a thread standing in for a Worker (`platform::alone`), the loop takes no lock
+twice — once with no socket (the group read, a failed trip and its row, the token, the note) and
+once with one up and a `head` ahead of the cursor (the keepalive, the cursor read, the outbox
+gate). The socket's own: a relay that answers its pings stays up across keepalives, one that
+answered and then went silent fails the keepalive after the next unanswered ping, one that never
+answers any is never failed by a keepalive, and a pong that came in while nobody was reading is
+found. Each was
+seen to fail against a mutation of what it guards. **Not driven**: the desktop app against a
+relay after the move, a phone at all, and an Android build on this machine (no target, no NDK —
+CI's `core (aarch64-linux-android)` job is what compiles it).
 
 ## Schema — user v30
 

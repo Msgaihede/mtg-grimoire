@@ -1,6 +1,6 @@
 //! The sync commands: the `#[tauri::command]` wrappers over `grimoire_core::sync_engine::commands`,
 //! whose functions and DTOs they call through the glob below. The relay socket's state is the
-//! one thing here that is not the core's: it is `super::live`'s.
+//! core's too — `sync_engine::live`'s, reached through `super::live`.
 
 pub use grimoire_core::sync_engine::commands::*;
 
@@ -94,8 +94,8 @@ pub async fn sync_patreon_claim(
 /// the live socket's — answers `BUSY` after five seconds, as it did while that trip held the
 /// connection.
 ///
-/// **Emits `sync:applied`, on the same condition [`live::trip`] uses** (the trip pushed, or it
-/// `changed` the synced tables here, which is wider than applying something), so a manual press
+/// **Emits `sync:applied`, on the same condition the live loop's trip uses** (the trip pushed, or
+/// it `changed` the synced tables here, which is wider than applying something), so a manual press
 /// reports through the one event Task 10's listener invalidates on — the automatic path is not
 /// the only source of that event any more. `app` is taken by value into this function and used
 /// only after the worker has answered; it is never captured *into* the worker's closure, which is

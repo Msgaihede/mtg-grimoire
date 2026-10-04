@@ -7,8 +7,9 @@
 //! tells every [`WriteObserver`] it was given.
 //!
 //! **A host registers observers; it never installs a hook of its own.** The desktop has three:
-//! the plain-text mirror's mask, the other windows' change mask and live sync's wake. A host
-//! with one window and no mirror registers none and still gets the fence.
+//! the plain-text mirror's mask, the other windows' change mask and live sync's wake
+//! ([`crate::sync_engine::live::WriteWake`]). The Android host, with one window and no mirror,
+//! has the wake alone; a host that registers none still gets the fence.
 //!
 //! **The callbacks run inside SQLite**, on the writer's thread, with the write connection's
 //! mutex held. What an observer may do there is what the fence does: an atomic `fetch_or`, a

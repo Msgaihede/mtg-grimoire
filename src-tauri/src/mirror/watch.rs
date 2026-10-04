@@ -289,7 +289,7 @@ impl WriteObserver for Mask {
 pub fn observers(
     mask: Arc<Mask>,
     changes: Arc<crate::changes::Changes>,
-    writes: Arc<tokio::sync::Notify>,
+    writes: Arc<grimoire_core::platform::sync::Bell>,
 ) -> Vec<Arc<dyn WriteObserver>> {
     let wake: Arc<dyn WriteObserver> = Arc::new(crate::sync_engine::live::WriteWake(writes));
     vec![wake, changes, mask]
@@ -313,7 +313,7 @@ pub fn install_hook(
     conn: &Connection,
     mask: Arc<Mask>,
     fence: Arc<crate::db::CrossFileFence>,
-    writes: Arc<tokio::sync::Notify>,
+    writes: Arc<grimoire_core::platform::sync::Bell>,
 ) {
     install_hook_with_changes(
         conn,
@@ -335,7 +335,7 @@ pub fn install_hook_with_changes(
     conn: &Connection,
     mask: Arc<Mask>,
     fence: Arc<crate::db::CrossFileFence>,
-    writes: Arc<tokio::sync::Notify>,
+    writes: Arc<grimoire_core::platform::sync::Bell>,
     changes: Arc<crate::changes::Changes>,
 ) {
     grimoire_core::hooks::install(conn, fence, observers(mask, changes, writes));
@@ -680,7 +680,7 @@ mod tests {
             &conn,
             mask.clone(),
             fence.clone(),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
         );
 
         conn.execute_batch(
@@ -721,7 +721,7 @@ mod tests {
             &conn,
             Arc::new(Mask::default()),
             fence.clone(),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
         );
         conn.execute_batch(
             "BEGIN;
@@ -744,17 +744,17 @@ mod tests {
     }
 
     /// The other half of the fence's own hook: a commit leaves `writes` a permit, not merely
-    /// a woken task. `notify_one` stores that permit even with nobody parked on it yet, which
-    /// is the whole reason `sync_engine::live::spawn` can rely on it — see the warning on that
-    /// function. If this ever regressed to `notify_waiters`, `notified()` below would find
-    /// nothing to return and the test would hang rather than fail cleanly, which is exactly
-    /// the silent loss the doc warns about.
+    /// a woken task. The bell keeps a ring even with nobody parked on it yet (`notify_one`
+    /// underneath), which is the whole reason the core's `sync_engine::live::run` can rely on
+    /// it — see the warning on that function. If this ever regressed to `notify_waiters`,
+    /// `rung()` below would find nothing to take, which is exactly the silent loss the doc
+    /// warns about.
     #[test]
     fn a_commit_leaves_a_permit_on_the_write_wake() {
         use futures_util::FutureExt;
 
         let conn = migrated_memory_db();
-        let writes = Arc::new(tokio::sync::Notify::new());
+        let writes = Arc::new(grimoire_core::platform::sync::Bell::new());
         install_hook(
             &conn,
             Arc::new(Mask::default()),
@@ -769,7 +769,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            writes.notified().now_or_never().is_some(),
+            writes.rung().now_or_never().is_some(),
             "a commit on the write connection must leave a permit behind"
         );
     }
@@ -782,7 +782,7 @@ mod tests {
         use futures_util::FutureExt;
 
         let conn = migrated_memory_db();
-        let writes = Arc::new(tokio::sync::Notify::new());
+        let writes = Arc::new(grimoire_core::platform::sync::Bell::new());
         install_hook(
             &conn,
             Arc::new(Mask::default()),
@@ -798,7 +798,7 @@ mod tests {
         .unwrap();
 
         assert!(
-            writes.notified().now_or_never().is_none(),
+            writes.rung().now_or_never().is_none(),
             "a rollback must not notify the write wake"
         );
     }
@@ -814,7 +814,7 @@ mod tests {
             &conn,
             Arc::new(Mask::default()),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
             changes.clone(),
         );
         crate::app_meta::set_app_meta(&conn, "anything", "at all").unwrap();
@@ -840,7 +840,7 @@ mod tests {
             &conn,
             Arc::new(Mask::default()),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
             changes.clone(),
         );
         conn.execute(
@@ -880,7 +880,7 @@ mod tests {
             &conn,
             Arc::new(Mask::default()),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
             changes.clone(),
         );
         crate::errors::record(
@@ -937,7 +937,7 @@ mod tests {
             &conn,
             Arc::new(Mask::default()),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
             changes.clone(),
         );
         crate::reset::clear_collection(&conn).unwrap();
@@ -970,7 +970,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
         );
 
         conn.execute(
@@ -1279,7 +1279,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
         );
         conn.execute(
             "INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at)
@@ -1300,7 +1300,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
         );
         crate::app_meta::set_app_meta(&conn, "anything", "at all").unwrap();
         assert_eq!(mask.take(), None);
@@ -1315,7 +1315,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
         );
         conn.execute(
             "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
@@ -1347,7 +1347,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
         );
         conn.execute("DELETE FROM wishlist_folders", []).unwrap();
         assert!(
@@ -1379,7 +1379,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
         );
         conn.execute("DELETE FROM collection_entries", []).unwrap();
         assert!(
@@ -1398,7 +1398,7 @@ mod tests {
             &conn,
             mask.clone(),
             Arc::new(crate::db::CrossFileFence::new()),
-            Arc::new(tokio::sync::Notify::new()),
+            Arc::new(grimoire_core::platform::sync::Bell::new()),
         );
         crate::deck::create_deck(
             &conn,

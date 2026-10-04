@@ -144,22 +144,13 @@ tauri-plugin-mcp-bridge = "0.12"
 # must not depend on another crate's feature selection to compile.
 # `sync` is the semaphore that caps concurrent image fetches; `time` is the sleep the
 # image cache's pacer and its 429 penalty are made of.
-# `macros` is `sync_engine::live`'s `tokio::select!` and nothing else. It compiles without it
-# today only because something else in the graph turns it on, and a feature this crate's own
-# source names must be a feature this crate asks for - the artifact is unchanged either way.
-tokio = { version = "1", features = ["fs", "io-util", "macros", "rt", "sync", "time"] }
-# The relay doorbell. **`rustls-tls-webpki-roots` and never the `native-tls` default**:
-# `reqwest` above is `rustls-tls`, and a second TLS stack would put schannel into a portable
-# exe for no gain.
-#
-# **0.28 and not 0.24, because `tauri-plugin-mcp-bridge` already pulls 0.28 and cargo unifies
-# on it.** The version the plan named was a second copy of both this crate and `tungstenite`
-# in one exe, and it dragged `rand 0.8`/`rand_chacha`/`rand_core 0.6` in with it — and with
-# those, `getrandom 0.2`, a third major of that crate. Matching the plugin costs a little API
-# churn (`Utf8Bytes` and `Bytes` payloads) and adds exactly **one** crate to `Cargo.lock`:
-# `webpki-roots`. It is the same argument the paragraph above makes about not admitting a
-# second TLS stack, one crate over.
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
+# **No `macros`**: it was `sync_engine::live`'s `tokio::select!` and nothing else, and that
+# loop is `grimoire-core`'s since the light app's phase 6. The tests' `#[tokio::test]` asks for
+# it under `[dev-dependencies]`.
+tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
+# **`tokio-tungstenite`, the relay doorbell's socket, is `grimoire-core`'s since the light app's
+# phase 6** — `platform::socket` is the one module that names it, and the argument for its
+# version and its TLS roots moved to that manifest with it.
 
 # Waiting for the process an update replaced to actually terminate, which is the one thing
 # std cannot express: there is no portable "is this PID alive". `0.61` is already in the

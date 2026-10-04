@@ -19,7 +19,7 @@ These invariants preserve portability across desktop, Android, and WASM. They ar
 | **No `tauri` dependency** — not the crate, its build script, plugins, `wry`, or `tao`. | `platform::fence` (reads `Cargo.toml`) | The core is headless and must compile for headless targets (WASM, Android services). |
 | **Target CFGs only under `src/platform/`** — `cfg(target_…)`, `cfg(windows)`, and `cfg(unix)` appear nowhere else. | `platform::fence` (scans all source files) | Platform branching is strictly quarantined in `src/platform/`. Domain modules must remain platform-agnostic. |
 | **No `SystemTime`, `UNIX_EPOCH`, or `std::time::Instant` outside `src/platform/`**. | `platform::fence` (scans all source files) | Reading standard clocks compiles cleanly on `wasm32-unknown-unknown` but panics at runtime. Time must come from `platform::clock` (`Tick::now()`, `elapsed()`) or SQLite. |
-| **No `reqwest`, `tokio`, or `std`'s `fs`, `thread`, `net`, `process`, or `env` outside `src/platform/` in shipped code**. No direct disk checks (`.exists()`, `.is_file()`, `.metadata()`). | `platform::fence` (scans shipped code) | I/O, threads, and files have host-specific implementations in `src/platform/`. Domain code never touches the OS directly. |
+| **No `reqwest`, `tokio`, `tokio_tungstenite`/`tungstenite`, or `std`'s `fs`, `thread`, `net`, `process`, or `env` outside `src/platform/` in shipped code**. No direct disk checks (`.exists()`, `.is_file()`, `.metadata()`). | `platform::fence` (scans shipped code) | I/O, threads, and files have host-specific implementations in `src/platform/`. Domain code never touches the OS directly. |
 | **Compiles clean for all three targets**: `x86_64-pc-windows-msvc`, `aarch64-linux-android`, and `wasm32-unknown-unknown`. | CI (`core` and `rust` jobs) | Every change must build across desktop, mobile, and browser targets. |
 
 ---
@@ -61,6 +61,10 @@ All I/O operations go through abstractions defined in `src/platform/`:
 - **Background Tasks & Threading (`platform::threads`)**:
   - Desktop: Standard worker threads and Tokio runtime.
   - Web: Single-threaded async cooperative tasks.
+- **The relay's live socket (`platform::socket`)**:
+  - Desktop / Android: `tokio-tungstenite` over rustls with compiled-in roots; the bearer rides the upgrade's `Authorization` header and the keepalive is a protocol ping, which fails when the one before it got no pong from a peer that has ponged before (a half-open socket is noticed within two ping periods; a peer that never pongs is never failed this way).
+  - Web: the arm compiles and refuses every `connect`; a browser's own `WebSocket` (bearer in the sub-protocol, a text keepalive) is not written yet.
+  - Its one caller is `sync_engine::live::run`, the connection manager — a future each host spawns itself (the desktop and Android do; the web host does not yet). See [sync.md](sync.md), "The connection manager, too".
 
 ---
 
@@ -74,7 +78,7 @@ All I/O operations go through abstractions defined in `src/platform/`:
    - Hosts register lifecycle hooks (e.g. notifications when database writes finish or cache clears occur).
 
 3. **Event Forwarding (`state.events`)**:
-   - The core emits progress and lifecycle events (`sync:progress`, `collection:reconciled`) through `state.events`.
+   - The core emits progress and lifecycle events (`sync:progress`, `collection:reconciled`, live sync's `sync:live` and `sync:applied`) through `state.events`.
    - Host adapters (such as `desktop::WindowEvents`) forward these to active frontend windows.
 
 ---
