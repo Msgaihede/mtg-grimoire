@@ -92,7 +92,8 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
   every install alike. Do not grow a second file module beside either.
 - **What only one host has arrives from the host, in a form both understand**: Android's back
   gesture as History navigation (Tauri's shell sends it to the WebView's `goBack()` while there is
-  an entry to go back to, so the phone router's pushes are what it walks), and the bars, a cutout
+  an entry to go back to, so the phone router's pushes are what it walks; from the first entry the
+  host's `MainActivity` moves the task to the back rather than finishing it), and the bars, a cutout
   and the keyboard as a page that is simply smaller — the Android host pads its content view by
   all three (step 4.3), so `env(safe-area-inset-*)` reads 0 there, and in a browser that has a
   cutout the phone shell's own `env()` insets do the work. Never a banner one install draws and
@@ -377,7 +378,11 @@ and the `mtgimg` protocol over the core's `images::answer`.
   draws nothing, and the page never asks where it runs. Not now is the default and sends nothing.
 - **The insets are the host's**: `MainActivity.kt` pads the content view by the system bars, the
   cutout and the keyboard, draws light icons on both bars, and the window's ground behind them is
-  the web manifest's colour (`themes.xml`, `colors.xml`). `host.test.ts` holds all of it.
+  the web manifest's colour (`themes.xml`, `colors.xml`). **The last back is the host's too**: a
+  callback `MainActivity` registers ahead of Tauri's moves the task to the back instead of letting
+  the activity finish, and on Android `RunEvent::Exit` ends the process with `_exit` — tao's
+  `std::process::exit` ran static destructors under live framework threads and aborted on a real
+  phone (light-app.md §8.6). `host.test.ts` holds all of it.
 - **Never commit a keystore.** `src-tauri/.gitignore` here ignores `*.jks` and `*.keystore`, and
   `gen/android`'s own ignores `key.properties`. Signing is undecided (Markus, 2026-10-03: a
   debug-signed APK until a real phone has run it).

@@ -54,6 +54,9 @@ base64 = { version = "0.22", default-features = false, features = ["alloc"] }
 # major wry and tao link, so the lockfile carries one `jni`.
 [target.'cfg(target_os = "android")'.dependencies]
 jni = "0.21"
+# **`_exit`, for the event loop's end** (`lib.rs`, `end_on_exit`): `std::process::exit` runs static
+# destructors under the framework's live threads and aborts. The same crate tao links.
+libc = "0.2"
 
 [dev-dependencies]
 # The core's test scaffolding (`state::fixtures`), for this crate's tests only — never on the
