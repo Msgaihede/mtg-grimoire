@@ -23,8 +23,8 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
   ipc: { shareList, shareCreate, shareRefresh, shareRevoke, shareOpen, syncSupporterStatus },
 }));
 
-/** The one seam the app names the clipboard through — `@tauri-apps/plugin-clipboard-manager`
- *  behind it, which has no answer in jsdom. */
+/** The one seam a page names the clipboard through. Behind it is the host's (`@/lib/core`) —
+ *  under this suite the desktop's plugin, which has no answer in jsdom. */
 const copyText = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/clipboard", () => ({ copyText }));
 

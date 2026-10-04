@@ -32,7 +32,11 @@ import { join, resolve } from "node:path";
 const MARK = resolve("logos/svg/mtg-grimoire-mark.svg");
 const OUT = resolve("mobile/public/icons");
 
-/** `--color-bg` in sRGB — `logos/README.md`'s field, and the manifest's two colours. */
+/**
+ * `--color-bg` in sRGB — `logos/README.md`'s field, and the manifest's two colours.
+ * `mobile/host.test.ts` holds this line equal to the manifest's `background_color`, so a ground
+ * that moves there goes red until it moves here — which is the reminder to render again.
+ */
 const GROUND = "#0C0D12";
 
 /**
@@ -93,6 +97,9 @@ async function launch(profile) {
   undo.push(() => child.kill());
   let heard = "";
   return new Promise((found, lost) => {
+    // A browser that could not be started at all — a `CHROME` naming nothing — says so here and
+    // nowhere else: with no listener it is an uncaught `error` event and a stack, not a sentence.
+    child.on("error", (error) => lost(new Error(`the browser did not start: ${error.message}`)));
     child.stderr.on("data", (chunk) => {
       heard += chunk;
       const hit = /DevTools listening on (ws:\/\/\S+)/.exec(heard);

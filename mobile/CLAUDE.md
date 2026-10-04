@@ -258,10 +258,18 @@ failure behind each at its own site:
   push `/search` over it.
 - **A write the browser refuses does not strand the reader, and the place is held rather than
   written some other way** (step 5.4). The router keeps the place in memory, tells its listeners
-  and draws it; history is one entry short until the next write the browser takes, or the next
-  Back. **Not a fallback to a replace**: the ration is one counter for both verbs, and a replace
+  and draws it; the next write the browser takes, or the next Back, puts the address in step
+  again. **Not a fallback to a replace**: the ration is one counter for both verbs, and a replace
   that was taken would rename the entry beneath — the page under an open card — and break
-  `PUSHED`'s promise. Leaving a held place is forgetting it, never a Back.
+  `PUSHED`'s promise. Leaving a held place is forgetting it, unless the browser's own entry is a
+  pushed card over the same page — a step between printings was the write refused — where the
+  real Back is still the right close. A hold ends with the address it was made over: a
+  traversal ends it, and so does a write the desktop face made after a crossing.
+- **A card is pushed over its own page or not at all.** A page that was only held has no entry,
+  so a card the browser *did* take would have sat, marked, on whatever the reader had left — and
+  ✕ would go back past the page they were on. The router writes the page first where the
+  browser's entry is not it, and the card only once that landed. A held page a reader leaves by
+  some other push is not paid back: Back's path is then one page short.
 - **`back()` waits a bounded time for its Back** (`BACK_WAIT_MS`). Its one release was the
   `popstate`, so a `history.back()` the browser dropped left ✕ and Escape inert; when the wait is
   up and the reader is still where they pressed, the entry is renamed instead, as a linked card's
@@ -405,8 +413,11 @@ and the `mtgimg` protocol over the core's `images::answer`.
   `http(s)` link that is not one of the app's pages to the system browser (`navigation.rs`'s
   guard), so a deck note's link never replaces the app. **`capabilities/light.json` holds three
   permissions**: `core:default`, and `opener:allow-open-url` with `opener:allow-default-urls` —
-  the desktop's exact pair, never `opener:default` — because the desktop face, drawn on a tablet
-  past 1024px, opens its links through `@tauri-apps/plugin-opener` from the page. No `dialog:`
+  the desktop's exact pair, never `opener:default` — because a press that leaves the app goes
+  through `@tauri-apps/plugin-opener` from the page on this host, by `@/lib/core`'s `host`
+  (step 5.4): the desktop face's `Open on …` on a tablet past 1024px, and *Connect Patreon* on
+  both faces. No clipboard permission, because the host has no clipboard plugin: a copy is the
+  WebView's own `navigator.clipboard`, **which no device has been seen to grant**. No `dialog:`
   or `fs:` permission: both are used from Rust only. `host.test.ts` holds the list. (This said
   the file *stays `core:default` alone*, which the file and that test had both left behind.)
 - **The launch's downloads wait on a metered link** (step 4.4): the host asks Android over JNI

@@ -3714,6 +3714,13 @@ finished and moved to where only the light builds copy it; and phase 1's two his
   only thing that says a pop-up blocker refused one — which is what the Sync panel's *Connect
   Patreon* meets, opening after a round trip to the engine. A refusal is a rejection the panel
   reports: `The link could not be opened. This browser may be blocking new tabs.`
+- **A browser's `openUrl` opens only a whole `http` or `https` address** (added in review). On
+  the desktop the opener's `allow-default-urls` scope refuses anything else whatever a caller
+  hands it; a page's `window.open` refuses nothing, and a `javascript:` URL there would run in
+  the app's own origin, beside the database. Every caller today builds its address or takes it
+  from the note dialect, which keeps only `http(s)`, so this is the fence behind them. No
+  `mailto:` or `tel:`: nothing in the app opens one. The Android host never reaches
+  `window.open` — its arm is the opener — so its fence is still the scope.
 - **The Android host opens through Tauri's opener, which is not what this step's brief said.**
   The brief had neither plugin granted to that page. The opener is: `capabilities/light.json`
   holds the desktop's exact pair and `mobile/host.test.ts` holds the list. It is also the
@@ -3721,7 +3728,11 @@ finished and moved to where only the light builds copy it; and phase 1's two his
   window, and only the host's guard turns that back into a hand-off. The clipboard *is* the
   WebView's own, because the host registers no clipboard plugin; until this step the desktop
   face on a tablet asked for one that was not there (read off `mobile/src-tauri/src/lib.rs`,
-  not driven).
+  not driven). **That an Android WebView grants the write is an assumption**: its origin,
+  `http://tauri.localhost`, is a secure context, so the API is there to call, and no copy has
+  run on a device from either face — the phone's export sheet has called it since phase 3 and
+  no record shows it doing so on a phone. If it is refused the cure is a clipboard plugin on
+  that host, which this step did not add.
 - **`dist-web/` carries neither plugin, and this step's first build of it carried both.** The
   first `tableHost` read
   `browserHost.copyText` and `tauriHost.openUrl` at the top of its module, and a member read
@@ -3754,9 +3765,20 @@ finished and moved to where only the light builds copy it; and phase 1's two his
   `Save as…`, and a browser may not ask where.
 - **The pick is a hidden `<input type="file">`, pressed for the reader**, with the phone
   picker's accept list. `change` answers the file and the input's own `cancel` answers `null`,
-  as the desktop's cancelled dialog does. **A second ask answers the first with `null`**,
-  because a browser that fires neither event would otherwise leave the caller waiting; there
-  is no guess from a focus change, which can land before a slow `change` and drop the file.
+  as the desktop's cancelled dialog does. **Where a browser reports no `cancel`, the window's
+  focus coming back is the fallback** (added in review): a second after it returns with
+  neither event, the input itself is asked — a file on it is the pick, none is a cancel — and
+  a `change` or a `cancel` inside that second wins. The first build had no fallback and said a
+  second ask would rescue the first; the Import dialog greys its button while the pick is
+  pending, so no second ask could come. A second ask still answers the first with `null`, for
+  a caller that can make one. Held by tests with the events simulated; the second is a chosen
+  figure, and a browser that hands a file over later than that after giving the focus back
+  would have the pick read as cancelled.
+- **A download's object URL is released after forty seconds, not after a task** (changed in
+  review). A browser reads the `Blob` through the URL on its own schedule — after a save
+  prompt, in some — and a URL revoked first is a download that fails; forty seconds is
+  FileSaver.js's figure for the same reason. Only headless Chrome was driven, where one task
+  had been enough.
 - **The megabyte and the four readings are shared, not copied**:
   `mobile/phone/transfer/browserFiles.ts` moved to `src/lib/core/browserFiles.ts` — a leaf, so
   `files.ts` and the web host both import it without a cycle — and took `downloadText` with
@@ -3809,11 +3831,25 @@ finished and moved to where only the light builds copy it; and phase 1's two his
 - **The phone router holds a place the browser would not write.** `navigate` writes, then
   reads the address: one browser throws on a rationed call and another drops it without a
   word, and the only thing both leave is an address that did not move. The place is then kept
-  in memory, the listeners are told and the page draws it; history is one entry short until
-  the next write the browser takes, or the next Back. **Not a fallback to a replace**: the
+  in memory, the listeners are told and the page draws it; the next write the browser takes,
+  or the next Back, puts the address in step again. **Not a fallback to a replace**: the
   ration is one counter for both verbs, and a replace that was taken would rename the entry
   beneath — the page under an open card — and break `PUSHED`'s promise. Leaving a held place
   is forgetting it, unless the browser's own entry is a pushed card over the same page.
+- **A card is pushed over its own page, or not at all** (found in review). The first build
+  broke `PUSHED`'s promise itself: a press to `/decks/7` refused and held, then a card opened
+  there and *that* push taken, left a marked card directly over `/collection` — and ✕, which
+  goes back to what the mark promises is beneath, landed the reader on the page they had left.
+  The router now writes the card's page first where the browser's entry is not it, and the
+  card only once that landed; a page the browser still refuses leaves the card held with it.
+  **Paid, rather than pushing the card unmarked**, which would also keep the promise: unmarked,
+  ✕ renames the entry and is right, but Android's back gesture leaves the page with the sheet.
+  It costs one more write from a browser that was rationing them.
+- **Not every held page is paid back.** One the reader leaves by a push elsewhere never gets
+  an entry, and Back's path is then a page short. **And a hold ends with the address it was
+  made over**: a traversal ends it, and so does a write the desktop face made after a resize
+  crossed the floor — the first build kept it until the next `popstate`, and would have drawn
+  it over an address that had moved on.
 - **`back()` waits `BACK_WAIT_MS`, 500 ms, for its Back.** Its one release was the `popstate`.
   When the wait is up and the reader is still where they pressed, the entry is renamed, as a
   linked card's is — which leaves the page as two entries, the cost a rename has there.
@@ -3856,7 +3892,10 @@ unresolvable (`--host-resolver-rules`), so nothing below is over a corpus.
   permalink, EDHREC's router by name and
   `https://www.tcgplayer.com/product/222163?Printing=Normal`; each found by its computed
   accessible name; a press opened the Scryfall address in a new tab with no opener, and the
-  app's own tab did not move.
+  app's own tab did not move. **Over the fake the phone's Copy and *Connect Patreon* are
+  no-ops, and were not driven there**: that build picks the desktop's host, whose two plugin
+  commands the fake accepts and does nothing with — a `Copied.` over it is the press accepted,
+  not text on a clipboard. The copy and the link above are the web build's, over the engine.
 - **The smoke run passed on the merged tree** (`npm run web:smoke`), with no request to a
   host without a fixture. The manifest and the icons are requests to the app's own origin,
   which that run lets through — and which it does not ask for: nothing in CI opens the
@@ -3888,16 +3927,29 @@ each tab's `visibilityState` as the witness for a tab switch.
 - **A real keyboard in a window with a tab strip.** The keys were injected over the DevTools
   protocol into a headless browser. Nor Firefox, Safari, an installed standalone window —
   which has no tabs to switch — or a hardware keyboard on Android.
-- **Anything on an Android device**: the desktop face's copy through the WebView's clipboard,
-  *Connect Patreon* on the phone face through the opener plugin rather than `window.open`, the
-  sheet's `_blank` rows reaching the navigation guard, and the window's new ground.
+- **Anything on an Android device**: a copy through the WebView's clipboard, **from the phone
+  face as much as from the desktop face** — no record shows either; *Connect Patreon* on the
+  phone face through the opener plugin rather than `window.open`; the sheet's `_blank` rows
+  reaching the navigation guard; and the window's new ground. And **`tauri android dev` served
+  from a LAN address is not a secure context**, so there the page has no clipboard at all and
+  a copy is refused in the seam's own sentence.
+- **A copy after an `await`.** `cardMenu`'s *Copy card image* asks the engine for the address
+  before it copies; a browser that ties the clipboard to a user activation may refuse that as a
+  stricter one refuses `window.open` after an `await`. Chrome, with the clipboard permission
+  granted to the test profile, is all that was driven, and of the desktop face's copies only
+  the Export dialog's: not *Copy card image*, *Copy card name*, or `ShareFolderMenu`'s *Copy
+  link*.
 - **`mobile:tauri`**, where the phone face's copy now goes through the desktop's clipboard
   plugin. It takes the `app` lock and was not run.
 - **Any browser but Chromium on Windows.** In particular a stricter browser's rule for
   `window.open` after an `await`, which is *Connect Patreon*'s shape and the TCGplayer press's
   on the desktop face; and a real cancelled picker, which only jsdom has been made to report.
-- **A browser rationing its History API.** All three history fixes are held by tests in which
-  the refusal is simulated, thrown and dropped. No browser was driven to its limit.
+- **A browser rationing its History API.** Every history fix above — the hold, the page paid
+  before its card, the bounded Back, the adapter's late push — is held by tests in which the
+  refusal is simulated, thrown and dropped. No browser was driven to its limit.
+- **The picker's focus fallback, and the forty-second release, in any browser.** Both are for
+  browsers that were not driven; the Chrome that was reports a cancel and reads a `Blob` at
+  once.
 - **An install.** No installability errors is Chrome's reading of the manifest; no prompt was
   accepted, no icon was drawn by a launcher, and no `apple-touch-icon` was added.
 - **The desktop face's dialogs by pointer over a corpus**, for the reason above.

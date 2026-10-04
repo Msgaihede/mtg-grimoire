@@ -11,6 +11,7 @@ import manifestJson from "./public/light.webmanifest?raw";
 import lightMark from "./public/mtg-grimoire-mark.svg?raw";
 import masterMark from "../logos/svg/mtg-grimoire-mark.svg?raw";
 import lightDocument from "./index.html?raw";
+import iconScript from "../scripts/light-icons.mjs?raw";
 import buildTask from "./src-tauri/gen/android/buildSrc/src/main/java/com/mtggrimoire/app/kotlin/BuildTask.kt?raw";
 import packageJson from "../package.json?raw";
 import lightConf from "./src-tauri/tauri.conf.json?raw";
@@ -158,6 +159,13 @@ describe("the light app's web manifest", () => {
     // `public/` is copied into the desktop's bundle and the share viewer's as it stands.
     expect(sharedPublic.length).toBeGreaterThan(0);
     expect(sharedPublic.filter((path) => /\.webmanifest$|\/icons\//.test(path))).toEqual([]);
+  });
+
+  it("draws the maskable icons on the manifest's ground", () => {
+    // The PNGs are rendered and committed (`scripts/light-icons.mjs`), so the colour under the
+    // mark is that script's constant. Held here so a ground that moves is rendered again.
+    expect(iconScript).toContain(`const GROUND = "${manifest.background_color}";`);
+    expect(manifest.background_color).toMatch(/^#[0-9A-F]{6}$/);
   });
 
   it("serves the mark the desktop serves", () => {

@@ -30,10 +30,14 @@ const ROW = cn(
  * setting goes last so they never move.
  *
  * **Real links, where the desktop's are presses.** A reader leaves a phone page by a link — one
- * they can long-press, copy, or open beside the app — and a link needs no host to open it: a
- * browser opens a new tab, and the Android host's navigation guard hands any address that is not
- * the app's to the system browser (`mobile/src-tauri/src/navigation.rs`). So nothing here calls
- * the opener, and `rel` cuts the way back as `noteBody`'s links do.
+ * they can long-press, copy, or open beside the app — and on the two hosts this face ships on a
+ * link needs nothing from the app to open: a browser opens a new tab, and the Android host's
+ * navigation guard hands any address that is not the app's to the system browser
+ * (`mobile/src-tauri/src/navigation.rs`). So nothing here calls the opener, and `rel` cuts the
+ * way back as `noteBody`'s links do. **`mobile:tauri` is the exception, and it is a development
+ * window**: that is the desktop binary, which has no such guard, and there a `_blank` link opens
+ * a bare WebView2 window of its own rather than the reader's browser — as the note links this
+ * face has drawn since phase 3 do.
  *
  * **A link always names a printing** (`docs/reference/external-links.md`), and the addresses are
  * the desktop's own, built by the functions its rows open: Scryfall's permalink for this printing,
