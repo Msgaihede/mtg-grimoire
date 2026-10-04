@@ -5,10 +5,11 @@ build — `dist-web/`, the page and the engine compiled to WASM — at **`https:
 the origin root. It is static assets, one file of response headers, and a script of a few lines.
 
 **It is deployed there since 2026-10-04** — first at 12:47 UTC, from `main` at `d8c3779b`, with
-every probe of step 0 asked of the real address a minute later. **The last deploy was 13:27 UTC
-the same day, from `main` at `4929cc6e`**, rolled back at 13:28 and forward again at 13:30 to
-see a rollback work — so that commit is what production serves, and `main` has moved past it
-since. This paragraph said *nothing is deployed there* until that day. **Ask the host before you
+every probe of step 0 asked of the real address a minute later. **The last deploy was 13:43 UTC
+the same day, from `main` at `e1e76f78`** — the third build, and the first to rename chunks —
+so production is `main`'s code as of that commit. Between the two, a build from `4929cc6e` went
+out at 13:27 and was rolled back at 13:28 and forward again at 13:30, to see a rollback work.
+This paragraph said *nothing is deployed there* until that day. **Ask the host before you
 believe it or its opposite.** This directory is source, configuration and a runbook; `wrangler
 deploy` is Markus's, and each of those was run by an agent because he asked for it. The design is
 [the light-app spec](../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md) §6,
@@ -176,6 +177,9 @@ a request it matches is a 429 once the free plan's day is spent.
 - **`style-src 'self'`, with the desktop's `style-src-attr 'unsafe-inline'`.** The same
   components run here; `src/CLAUDE.md` has what the first forbids. `hosting.test.ts` holds each
   directive the two hosts share to the desktop's shipped policy, so this one is never the looser.
+  ⚠️ **One surface is known to be refused by it on the live site**: the deck note editor, whose
+  library adds a `<style>` element of its own — *What the browser said under it*, 2026-10-04.
+  The answer to that is in the component, not here.
 - **Caching is a default, two trees, and two files.** Everything is `no-cache` — kept, and asked
   about every time: the document, the manifest, the favicon and the manifest's `icons/*.png`,
   whose names carry no hash, so a year for them would be a year an installed app kept an old
@@ -296,11 +300,33 @@ blocked or failed while online, and nothing thrown.**
 
 **And outside that Chrome: the owner used the live site in Firefox that day** and reported one
 sentence — *"it works fine. multiple tabs locks the user out until the first tab is closed."*
-No version and no figure; it is the only word there is from a second engine.
+No version and no figure; it is the only word there is from a second engine. **And on a phone**:
+*"i tested on a phone too. looks good."* — no phone, browser or figure named.
 
-**Still not driven at the real origin**: the app's *own* check for a new build — every check
-was the driver calling `registration.update()`; a deploy that renames a chunk; an installed
-app; Safari; a phone.
+**Across the final deploy, 13:43 UTC the same day** — the first to rename chunks, with two
+headless Chrome 154 browsers held open over it. *What a deploy changes for a reader*, below,
+has what each met. **It also found the one policy violation known on the live site**:
+
+- ⚠️ **Opening the deck note editor — *New note* — raises two `style-src-elem` violations.**
+  An inline `<style>` element, refused by `style-src 'self'`. On the build before the deploy
+  and the build after it alike, so the deploy did not bring it.
+- **The editor opened all the same**, drew its toolbar and took typing. What the refused
+  styles would have changed was not looked at.
+- **The cause, read and not run**: the editor's library is Tiptap, whose `injectCSS` option
+  defaults to true and makes it add a style tag of its own
+  (`node_modules/@tiptap/core/dist/index.js`); `src/features/decks/NoteEditor.tsx`'s
+  `useEditor` does not set it.
+- **No earlier pass saw it because none opened that editor.** Each "no policy violation" above
+  stands for the surfaces its pass drew, and this is the surface none of them drew.
+- ⚠️ **The fix is in the component and never in this policy.** `style-src 'self'` is the
+  desktop's rule, held equal by `hosting.test.ts` — so the packaged desktop presumably refuses
+  the same element, which nobody has checked. Found, not fixed here: handed off as its own
+  task.
+
+**Still not driven at the real origin**: the app's *own* check for a new build, in any browser
+that was measured — the owner's Firefox drew its notice once, by his sentence, and in Chrome
+the app's hourly limit held it every time; a page with no controller at all; an installed
+app; Safari; a phone's first run with a clock on it.
 
 ## Deploying
 
@@ -310,7 +336,8 @@ repository; `npx` fetches it. **The 2026-10-04 deploy was run by an agent becaus
 for it in chat**, as he did for the relay's on 2026-10-01 — and **the ask is per deploy**: it
 lifted this rule for that one deploy and left it standing for the next. The second deploy that
 day, and the rollback and roll-forward after it, were asked for again — he approved a marker
-deploy and a rollback test through the question tool — and nothing else was.
+deploy and a rollback test through the question tool — and so was the third, in chat: *"go
+ahead and run the deploy"*. Nothing else was run.
 
 ### Step 0 — ask the host, never a document
 
@@ -324,11 +351,20 @@ nothing at the address to ask.) **It is that minute's answer and no later one's.
 before believing this file or its opposite, and after every deploy, and write the answers in here
 with the date.
 
-**Production has moved once since the column was written**: version
-`f724bbc1-9853-4978-9ffe-8b3c0af6c339`, `main` at `4929cc6e`, the same engine build. Probes 1–11
-and 14–18 were asked of it after the roll forward, and **each answered as the
-column says** — the policy equal, the 304 carrying it, the document equal to the built one —
-with the module's brotli transfer 2,139,182 bytes that time.
+**Production has moved twice since the column was written, and the probes were asked again each
+time.**
+
+- **Version `f724bbc1-9853-4978-9ffe-8b3c0af6c339`**, `main` at `4929cc6e`, the same engine
+  build. Probes 1–11 and 14–18 were asked of it after the roll forward, and each answered as
+  the column says — the policy equal, the 304 carrying it, the document equal to the built
+  one — with the module's brotli transfer 2,139,182 bytes that time.
+- **Version `e9947184-6ee1-4a07-ad79-841d93196210`, deployed at 13:43:02 UTC from `main` at
+  `e1e76f78` — what production serves.** The same engine build, and a renamed `index` chunk,
+  so `J` is another name. **All eighteen were asked of it and each answered as the column
+  says**: the policy equal byte for byte on every response that carries it, the 304 included;
+  the document equal to the built one; the module 2,138,948 bytes as brotli; probe 12 a `404`;
+  probe 13 still `200` over plain `http` — five minutes before the setting behind it was
+  turned on.
 
 ```
 A=https://mtg-grimoire.app
@@ -352,7 +388,7 @@ H='^HTTP|content-type|cache-control|content-security-policy|x-content-type|refer
 | 10 | `curl -s -o /dev/null -D - "$A/sw.js" \| grep -iE "$H"` | `200`, a JavaScript MIME type, **`cache-control: no-cache`** — one value — and the policy: the service worker's own `fetch` of a card picture is held to the line on *this* response. ⚠️ `404` means the build deployed has no service worker (`web:build` writes `sw.js` last) | **2026-10-04** — `200`, `text/javascript`, `no-cache` — one value — the policy equal byte for byte |
 | 11 | `curl -s -o /dev/null -w "%{http_code}\n" "$A/_headers"` | `404` — the file is parsed, not served, which is why a service worker's precache list must leave it out | **2026-10-04** — `404` |
 | 12 | `curl -s -o /dev/null -w "%{http_code}\n" https://mtg-grimoire-app.denmark-east.workers.dev/` | **not `200`** — there is no second origin | **2026-10-04** — `404` |
-| 13 | `curl -sI http://mtg-grimoire.app/ \| head -3` | a redirect to `https`, if the zone has *Always Use HTTPS* on. A browser never asks: `.app` is HSTS-preloaded | **2026-10-04** — ⚠️ **`HTTP/1.1 200 OK`, `text/html`, and no redirect.** *Always Use HTTPS* is off on the zone, so a `curl http://` is handed the document in the clear. Turning it on is the owner's |
+| 13 | `curl -sI http://mtg-grimoire.app/ \| head -3` | a redirect to `https`, if the zone has *Always Use HTTPS* on. A browser never asks: `.app` is HSTS-preloaded | **2026-10-04** — ⚠️ **`HTTP/1.1 200 OK`, `text/html`, and no redirect.** *Always Use HTTPS* was off on the zone, so a `curl http://` was handed the document in the clear — at 12:48 UTC, and again at 13:43. **Since about 13:48 UTC the same day: `301`, `Location: https://mtg-grimoire.app/`** — the owner asked for the setting to be on; a path and its query are kept (`/decks/12?x=1` to the same on `https`) |
 | 14 | `curl -s -o /dev/null -D - -H "Sec-Fetch-Mode: no-cors" -H "Accept: image/avif,image/webp,image/*,*/*;q=0.8" "$A/mtgimg/display/abc/0" \| grep -iE "$H"` | `404`, `text/plain`, **`cache-control: no-store`** — an `<img>`'s request, as a page no service worker controls makes it. ⚠️ `200 text/html` is the document where a picture was asked | **2026-10-04** — `404`, `text/plain; charset=utf-8`, `no-store`, `nosniff`, and no policy line: the script's own three headers, which `_headers` does not reach |
 | 15 | the same with `-H "Accept: text/html"` and no `Sec-Fetch-Mode` | `404` again — the script holds no place under `/mtgimg/` | **2026-10-04** — `404`, `text/plain; charset=utf-8`, `no-store`, as probe 14's |
 | 16 | `curl -s -o /dev/null -D - "$A/icons/icon-192.png" \| grep -iE "$H"` | `200`, `image/png`, `cache-control: no-cache` | **2026-10-04** — `200`, `image/png`, `no-cache`, the policy equal byte for byte |
@@ -364,7 +400,9 @@ and to a plain `GET /` — was byte for byte `dist-web/index.html`; and `www.mtg
 not resolve, so there is no third name to be a second origin. **Two things the table's *should*
 column did not foresee, neither a fault**: the edge sends `text/html` and `text/javascript` with
 no `charset` (the document declares its own in a `<meta>`), where `wrangler dev` adds
-`; charset=utf-8`; and plain `http` is answered, not redirected — probe 13.
+`; charset=utf-8`; and plain `http` is answered, not redirected — probe 13. **Both halves of
+that are history since about 13:48 UTC**: plain `http` is a `301`, and `www` resolves and is a
+`301` to the apex — *What the zone was asked to do since*, below.
 
 Then open the address in a browser with its console open: no policy violation, the app past its
 gate, and `database open in OPFS` on the console. That is the probe no `curl` can make. ⚠️ **Look
@@ -464,9 +502,48 @@ light entry's HTML carries an `@`, the served document stops equalling the built
 
 **What else the zone said that day**: active, on the Free plan, with **no DNS record at all**
 before the deploy; SSL mode `full`; brotli on; **Always Use HTTPS off**, which is probe 13's
-answer; no HSTS header configured at the zone, `.app` being HSTS-preloaded as a TLD; and the
-account's Workers were `mtg-grimoire-relay` and `mtg-grimoire-share`, neither with a custom
-domain. Nothing was changed.
+first answer; no HSTS header configured at the zone, `.app` being HSTS-preloaded as a TLD; and
+the account's Workers were `mtg-grimoire-relay` and `mtg-grimoire-share`, neither with a custom
+domain. Nothing was changed by that read.
+
+**What the zone was asked to do since — two changes, at about 13:48 UTC the same day.** The
+owner asked for both in chat — *"always use https should be **on** and we should add a redirect
+from www. to the plain domain"* — and an agent made them through Cloudflare's API. They are
+settings of the zone; nothing in this repository holds either, and no deploy of this Worker
+touches them.
+
+- **Always Use HTTPS is on.** `curl -sI http://mtg-grimoire.app/` is a `301` to
+  `https://mtg-grimoire.app/`, and `http://mtg-grimoire.app/decks/12?x=1` a `301` to the same
+  path and query on `https`. A browser never asked — `.app` is preloaded — so what changed is
+  what a `curl`, a crawler or a link preview is handed.
+- **`www.mtg-grimoire.app` redirects to the apex**, in the shape *What a deploy changes for a
+  reader* prescribes: a rule on the zone, and no second Custom Domain on this Worker. It is two
+  things.
+  - **A DNS record that points nowhere**: `AAAA www → 100::`, proxied, with a comment saying
+    it exists only so the rule runs. No origin is behind it and no Worker is attached to it.
+  - **One Single Redirect rule**, in the zone's `http_request_dynamic_redirect` ruleset, which
+    had none: when `http.host eq "www.mtg-grimoire.app"`, a `301` to
+    `concat("https://mtg-grimoire.app", http.request.uri.path)`, the query string preserved.
+  - The zone's certificates already covered `*.mtg-grimoire.app` — an advanced and a universal
+    pack, both active — so none was issued for it.
+- **Probed after**, through Cloudflare's resolver — the local one held a cached *no such name*
+  from the 12:48 probe for a little while:
+
+  | Asked | Answered |
+  | --- | --- |
+  | `https://www.mtg-grimoire.app/` | `301` to `https://mtg-grimoire.app/` |
+  | `https://www.mtg-grimoire.app/decks/12?x=1` | `301` to `https://mtg-grimoire.app/decks/12?x=1` |
+  | `http://www.mtg-grimoire.app/search` | `301` straight to `https://mtg-grimoire.app/search` — one hop, not two |
+  | `http://www.mtg-grimoire.app/decks/12`, followed as a navigation | `200` at `https://mtg-grimoire.app/decks/12`, after one redirect |
+
+  The apex document was still byte for byte the built one, and the policy still equal on every
+  response that carries it.
+- **`www` is not an origin of the app.** A browser that follows the redirect lands on the apex,
+  so there is still exactly one OPFS, one service worker and one install. ⚠️ **That holds only
+  while the name is a redirect**: attach it to this Worker, or point the record at anything
+  that answers 200, and it is the second, empty origin this file warns of.
+- **So the zone now has two DNS records** — the apex's, which the deploy made, and `www`'s.
+- **Email Address Obfuscation is still on**, and still the owner's. Neither change touched it.
 
 ### What a deploy changes for a reader
 
@@ -497,14 +574,41 @@ domain. Nothing was changed.
     build's — the reader's deck, collection and wishlist intact, and the corpus as it was.
   - ⚠️ **The check was the driver's `registration.update()`, never the app's own.** Headless
     Chrome would not fire `visibilitychange`, and the app asks at most hourly. That a reader is
-    offered a build without anybody calling for it is unseen here.
+    offered a build without anybody calling for it is unseen here. (Seen once since, and not
+    in Chrome — the last sub-bullet of the next item.)
   - ⚠️ **No chunk was renamed**, so the first bullet above — a page meeting a renamed chunk
-    across a deploy — is still unseen at the real host.
+    across a deploy — is still unseen at the real host. (Seen since — next.)
+- **Measured on 2026-10-04 at 13:43 UTC: the first deploy that renamed chunks**, seven of them,
+  with the engine and its Worker chunk unchanged — under two headless Chrome 154 browsers held
+  open on the build before it. **The first bullet of this list, in both its halves.**
+  - **A page the service worker controls never met the rename.** The host answered every one
+    of the old names `404`; the page then opened the desktop face, the deck editor and the note
+    editor, none of which it had loaded — and each old chunk came from the worker's own shell
+    cache, with nothing on the wire.
+  - **The update, when taken, cost the chunks that changed and nothing of the engine**: the
+    install was 43 requests and 839,607 bytes, of which the engine's module was 843. The bar
+    came 659 ms after the check; a reload stayed on the old build; the press gave a new
+    document 2.7 s later on the new build's cache alone, with the reader's data intact.
+  - **A page the worker does not serve got a 404 and a sentence — not HTML.** Staged by
+    bypassing the worker for one page: its two lazy chunks were each `404`, `text/plain;
+    charset=utf-8`, `no-store` — the script in this directory doing its one job — and the
+    reader saw the app's mark, *This page could not be drawn.* and a *Reload* link, which drew
+    the new build in 2.1 s with the data intact. ⚠️ A bypass is not a browser with no worker:
+    `navigator.serviceWorker.controller` was still set, and a page with a null controller
+    could not be held to test.
+  - ⚠️ **The app's own check was held by its hourly limit, not by the event.**
+    `visibilitychange` was made to fire three ways on a document 226 s old and the app did not
+    ask; the check was again the driver's. **The one sighting of the app asking by itself is
+    the owner's, in Firefox** — *"i got a little toast notifying me a new version is
+    available"*, at about 13:42 UTC. By the timing, and by nothing his tab reported, the build
+    it offered was the 13:27 one.
 - **The origin is the app's identity and must never move.** A browser keys both OPFS databases,
   the service worker and the install to it. Served from another host, another subdomain or `www`,
   a reader's collection is not there — it is still in their browser, under the address they can no
   longer reach. For the same reason `www.mtg-grimoire.app`, if it is ever wanted, is a **redirect
-  rule on the zone** to the apex and never a second Custom Domain on this Worker.
+  rule on the zone** to the apex and never a second Custom Domain on this Worker. **It was
+  wanted, and that is what it is** — since 2026-10-04, a `301` to the apex with the path and
+  query kept (*Before the first deploy*, above, has the rule and the record behind it).
 - **Phase 6 depends on this exact string.** The relay's CORS allow-list will name
   `https://mtg-grimoire.app`, and `_headers` will name the relay.
 
@@ -525,8 +629,8 @@ test; this section said *none of this has been run* until then. Two builds that 
 | 13:30:22 | `wrangler rollback <the marker's id>` | the first deploy's at the first two looks, 5 s apart; the marker's at the third |
 
 - **A rollback does bring a version's files back with it**, within seconds.
-- **`rollback` takes any version id**, so it rolls forward too — which is how production came to
-  end on the marker without a third upload.
+- **`rollback` takes any version id**, so it rolls forward too — which is how production came
+  back to the marker without a third upload. (A later deploy that day replaced it.)
 - **Non-interactive, `-y` prints *Using fallback value in non-interactive context: yes***, and
   the command warns that it *will not rollback any of the bound resources*. This Worker binds
   nothing but its assets, which are the version's.
@@ -536,7 +640,9 @@ test; this section said *none of this has been run* until then. Two builds that 
   on working on the build it had — *What a deploy changes for a reader*, above.
 
 ⚠️ **What that run was not**: a rollback of a build that renamed chunks, or of one that shipped a
-schema rung. Neither build changed the page's code or the database.
+schema rung. Neither build changed the page's code or the database. **The build production now
+serves did rename chunks, so rolling it back would be the first of that kind** — to a page in
+the worker's control it should be one more update offered, as the forward direction was.
 
 **It does not roll back a reader's data.** If a build migrated a schema in OPFS, the build before
 it is now looking at a database from its future. A page-only fault is safe to roll back; a build
@@ -570,7 +676,7 @@ locally and Cloudflare runs in front of a Worker with assets. Read first, and **
 headers on both documents, the detach, the Worker chunk's 304, `/_headers`, the content types —
 with nothing public, and the edge then answered the same.
 
-**Only a deploy could settle these, and the three on 2026-10-04 settled each but the preview
+**Only a deploy could settle these, and the ones on 2026-10-04 settled each but the preview
 address**:
 
 - **The certificate and the apex**: ~~how long issuance takes, and whether a record was in the
@@ -583,10 +689,12 @@ address**:
   figure for a first visit in that browser. (This line carried an earlier module's figures
   until the deploy — 8,623,589 bytes, and 3.07 MB gzipped by Vite's report.)
 - **That neither alternate origin answers**: the `workers.dev` name is a `404` (probe 12), and
-  `www` does not resolve. ⚠️ **A per-version preview address was not asked** — the table has no
+  `www` did not resolve — and since about 13:48 UTC that day is a `301` to the apex, which is
+  not an origin either. ⚠️ **A per-version preview address was not asked** — the table has no
   probe for one, so `preview_urls: false` is still the configuration's word and not the host's.
-- **What the zone does to plain `http`** (probe 13): it answers it — `200`, the document, no
-  redirect — because *Always Use HTTPS* is off.
+- **What the zone does to plain `http`** (probe 13): ~~it answers it — `200`, the document, no
+  redirect — because *Always Use HTTPS* is off~~ — true at 12:48 and at 13:43 UTC. The owner
+  asked for the setting on, and since about 13:48 it is a `301` to `https`, path and query kept.
 - **What the zone's own features do to the document** — the table above: nothing, for the
   document asked from one country on one day.
 - **That a rollback brings a version's files back with it.** ~~The limits are stated per Worker
@@ -597,22 +705,29 @@ address**:
   `connect-src` was asked from a page at `mtg-grimoire.app` and answered 200, the app asked no
   other host, and nothing was refused.** One run, in one Chrome.
 
-**And no deploy by itself settles these**, which are a browser's and a later day's: any browser
-but one Chrome on Windows, and any phone — the policy and the engine have met no Safari, and of
-Firefox there is the owner's one sentence that it works and nothing measured; and a spent
-free-plan day. (This paragraph ended on a card picture through the service worker as the one
-thing `img-src` had yet to draw. It has drawn them — on `localhost` in light-app.md §9.6, and at
-the real origin on 2026-10-04.)
+**And no deploy by itself settles these**, which are a browser's and a later day's: any
+browser's *figures* but one Chrome's on Windows — the policy and the engine have met no Safari,
+and of Firefox and of a phone there is the owner's one sentence each that it works, and nothing
+measured; and a spent free-plan day. (This paragraph ended on a card picture through the service
+worker as the one thing `img-src` had yet to draw. It has drawn them — on `localhost` in
+light-app.md §9.6, and at the real origin on 2026-10-04.)
 
 **A deploy over a page that is open with its service worker in control was on that list, and
-has been seen** — three times that day, *What a deploy changes for a reader*. **Two halves of
-it are still open, and each needs a deploy to close**:
+has been seen** — four times that day, *What a deploy changes for a reader*. Its two halves
+that stayed open after the first three, as they stand:
 
-- **The app's own check.** Every handover began with the driver calling
-  `registration.update()`.
-- **A renamed chunk.** No build deployed so far differs from another in the page's code. `main`
-  has moved past production by a change that does, so a deploy of it as it stands would be the
-  first to rename one.
+- ~~**A renamed chunk.** No build deployed so far differs from another in the page's code.~~
+  **Answered at 13:43 UTC**: a controlled page is served its old chunks from the worker's
+  cache, and a page the worker does not serve is answered a `404 text/plain` and offers a
+  *Reload*.
+- **The app's own check: seen once, in the owner's Firefox, and in no browser that was
+  measured.** In Chrome the hourly limit held it every time, and no session kept a page open
+  for an hour.
+
+**And three things that deploy left**: a page with no controller at all — a browser with no
+service worker, or an evicted cache under a live page — which a bypass only resembles; a
+rollback of a build that renamed chunks; and the note editor's two violations, which are the
+component's to fix (*What the browser said under it*).
 
 ## Cost
 
