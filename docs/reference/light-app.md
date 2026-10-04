@@ -5966,9 +5966,15 @@ it; the signing script with the real `keytool` and the SDK's three tools stubbed
 - **No release has run these jobs.** The environment handing a value to a job on `main`, the
   artifact hand-off, the APK's upload, a deploy under an API token, the probe at the real
   address, and an APK updating over the last one on a phone are the first release's to show.
-- **The first `ci.yml` `android` run is the signing script's first meeting with the real SDK
-  tools** — `apksigner`'s wording, whether re-signing keeps the alignment Gradle gave, and the
-  `versionCode` read out of a real APK. This machine has no Android SDK.
+- ~~The first `ci.yml` `android` run is the signing script's first meeting with the real SDK
+  tools.~~ **Met, on the pull request (#821), and the first meeting failed**: build-tools 37.0.0
+  words a signer `V2 Signer: certificate SHA-256 digest: …` (`V3.0 Signer:` once re-signed),
+  not the `Signer #1 …` of AOSP's source that the stubs spoke, and the script refused the
+  runner's own build without printing what the tool had said. It now prints every tool's raw
+  answer and reads any of the three wordings. The second run signed, held the APK to its
+  fingerprint, kept the alignment (4 KB and 16 KB, in and out), read `versionCode='40000'
+  versionName='0.40.0'` out of the APK, and refused another key's fingerprint and a debug
+  certificate. **Still a throwaway key**: the release key has signed nothing.
 - **`npm ci --ignore-scripts` and `wrangler` have not run on Linux**, which is what the runner
   is. The lockfile gives a Linux runner its platform packages and `esbuild` finds its binary
   without the script; nobody has watched it.

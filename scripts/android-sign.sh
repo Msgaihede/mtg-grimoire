@@ -113,13 +113,21 @@ verify_certs() {
 
 # `digests <name>`: every signer's certificate SHA-256 in that answer, lower-case, each once.
 #
-# **Matched on what every form of the line shares**, from `ApkSignerTool.java`'s
-# `printCertificate(cert, name, …)`, which prints `<name> certificate SHA-256 digest: <hex>`.
-# The name is `Signer #1` for an APK verified by v1, v2 or v3; and for one verified by v3.1 —
-# a rotated key — it is `Signer (minSdkVersion=33, maxSdkVersion=2147483647)`, once for each
-# v3.1 signer and once for each v3 one, with ` (dev release=true)` inside the brackets for a
-# rotation aimed at a development release. `Source Stamp Signer` is a third name and not a
-# signer of the APK: it is the store's stamp, and is left out.
+# **Matched on what every form of the line shares** — `… certificate SHA-256 digest: <hex>` —
+# because the part in front of it has three wordings, and the first run met the one this script
+# did not know:
+#
+#   - `V2 Signer: certificate SHA-256 digest: …` and `V3.0 Signer: …` — **what build-tools
+#     37.0.0 prints**, measured on the runner (2026-10-04): the scheme that verified, and a
+#     colon. The build's own APK answered `V2 Signer:`, the re-signed one `V3.0 Signer:`.
+#   - `Signer #1 certificate SHA-256 digest: …` — `ApkSignerTool.java` on AOSP's `main` as read
+#     that day, and every older build-tools, for an APK verified by v1, v2 or v3.
+#   - `Signer (minSdkVersion=33, maxSdkVersion=2147483647) certificate SHA-256 digest: …` — the
+#     same source for a rotated key (v3.1), once per v3.1 signer and once per v3 one, with
+#     ` (dev release=true)` inside the brackets for a rotation aimed at a development release.
+#
+# `Source Stamp Signer` is not a signer of the APK — it is a store's stamp — and is left out.
+# A certificate named by two schemes is one certificate: each digest is counted once.
 digests() {
   sed -n '/^Source Stamp Signer/d; s/^.* certificate SHA-256 digest: *\([0-9A-Fa-f]\{64\}\)[[:space:]]*$/\1/p' \
     "$work/$1.txt" | tr 'A-F' 'a-f' | sort -u

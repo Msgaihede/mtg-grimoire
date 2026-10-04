@@ -545,7 +545,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **`scripts/android-sign.sh` refuses to hand back an APK it cannot vouch for.** It signs with
     the SDK's `apksigner` (the newest `build-tools` on the runner), then asks `apksigner` who
     signed the output and compares that certificate's SHA-256 with the keystore's own, taken
-    another way (`keytool -exportcert` through `sha256sum`): one signer, and that one. It
+    another way (`keytool -exportcert` through `sha256sum`): one signer, and that one. **It
+    prints every tool's own answer beside what it read from it** — the build-tools it chose,
+    `apksigner`'s and `aapt2`'s versions, the raw `verify --print-certs` of the input and the
+    output, `zipalign`'s last lines for a check that said no — because a refusal that hides
+    what the tool said cannot be diagnosed from a run (below). It
     refuses an output that lost the alignment Gradle gave the input (`zipalign -c -p 4`, and
     `-P 16` where the tool knows it), and — with `ANDROID_EXPECT_VERSION` set, as both callers
     set it — an APK whose `versionName` is not the version or whose `versionCode` is not Tauri's
@@ -714,6 +718,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     certificate's among them. **On the pull request**: `ci.yml`'s `android` job runs the
     signing script with the real SDK tools — once to sign, once against another key's
     fingerprint and once with a debug certificate, each of the last two required to refuse.
+    **Its first run failed, and its second is the measurement** (#821, 2026-10-04,
+    build-tools 37.0.0, the newest of six on the image; `apksigner` 0.9 on the `PATH`'s Java
+    17, not `JAVA_HOME`'s 21). The stubs had been written from the wording in AOSP's source
+    and build-tools 37 uses another: **`V2 Signer: certificate SHA-256 digest: …`** for the
+    build's own APK and **`V3.0 Signer: certificate SHA-256 digest: …`** for the re-signed
+    one, where the script looked for `Signer #1 certificate SHA-256 digest:`. It read no
+    signer from the runner's own build, refused it before signing anything, and **printed
+    nothing of what the tool had said** — so the run could not say why. Since then the script
+    prints the build-tools it chose, each tool's version and every tool's raw answer beside
+    what it read from it; matches the digest line on the part all three wordings share;
+    counts a certificate once however many schemes name it; and treats who signed the *input*
+    as a note, since nothing depended on it. The second run, on real tools: signed and
+    verified against the fingerprint; **aligned 4 KB / 16 KB — in yes / yes, out yes / yes**,
+    so re-signing keeps what Gradle gave; `aapt2 dump badging` answered `package:
+    name='com.mtggrimoire.app' versionCode='40000' versionName='0.40.0' …`, which is Tauri's
+    arithmetic measured and no longer derived; another key's fingerprint refused; a `CN=Android
+    Debug` keystore refused.
     **Not until a release**: the `release` environment handing its values to a job on `main`;
     the artifact hand-off between jobs; `gh release upload` of the APK; `npm ci
     --ignore-scripts` and `wrangler deploy` on Linux and under an API token; the probe against
