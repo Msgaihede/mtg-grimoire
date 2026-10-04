@@ -402,6 +402,76 @@ describe("a history write the browser refuses", () => {
     expect(pushState).toHaveBeenLastCalledWith(PUSHED, "", "/decks");
   });
 
+  it("pays a held page its entry before a card is pushed over it", async () => {
+    // The page's push was refused and the card's is taken. Pushed alone, the marked card would
+    // sit on the page the reader had *left* — and ✕, which goes back to what the mark promises
+    // is beneath, would land them there instead of on the page they were looking at.
+    const deck: Place = { view: "decks", deckId: 7, cardId: null };
+    window.history.replaceState(null, "", "/collection");
+    const { result } = renderHook(() => usePlace());
+    const pushState = refuse("pushState", "throws");
+    act(() => navigate(deck));
+    expect(url()).toBe("/collection");
+
+    act(() => navigate({ ...deck, cardId: "abc" }));
+
+    // The refused push, then the page, then the card over it.
+    expect(pushState.mock.calls.map(([, , to]) => to)).toEqual([
+      "/decks/7",
+      "/decks/7",
+      "/decks/7?card=abc",
+    ]);
+    expect(window.history.state).toEqual(PUSHED);
+
+    const closed = popped();
+    act(() => back(deck));
+    await act(() => closed);
+    expect(url()).toBe("/decks/7");
+    expect(result.current).toEqual(deck);
+
+    // And the page the reader came from is still one more Back away.
+    const left = popped();
+    act(() => window.history.back());
+    await act(() => left);
+    expect(url()).toBe("/collection");
+  });
+
+  it("holds the card too when the browser still will not take its page", () => {
+    const deck: Place = { view: "decks", deckId: 7, cardId: null };
+    window.history.replaceState(null, "", "/collection");
+    const { result } = renderHook(() => usePlace());
+    const pushState = vi.spyOn(window.history, "pushState").mockImplementation(() => undefined);
+    act(() => navigate(deck));
+
+    act(() => navigate({ ...deck, cardId: "abc" }));
+
+    // The card is on screen, and no marked card was written over a page that is not its own.
+    expect(result.current).toEqual({ ...deck, cardId: "abc" });
+    expect(pushState.mock.calls.map(([, , to]) => to)).toEqual(["/decks/7", "/decks/7"]);
+    expect(url()).toBe("/collection");
+
+    // Closing it forgets the card and leaves the page held: still no Back to make.
+    const goBack = vi.spyOn(window.history, "back");
+    act(() => back(deck));
+    expect(result.current).toEqual(deck);
+    expect(goBack).not.toHaveBeenCalled();
+  });
+
+  it("drops a hold when the address moves by a write that was not this router's", () => {
+    // The desktop face writes history too. After a resize across the floor and back, a place
+    // held from before must not be drawn over an address that has moved on.
+    window.history.replaceState(null, "", "/collection");
+    const { result, rerender } = renderHook(() => usePlace());
+    refuse("pushState", "drops");
+    act(() => navigate(card));
+    expect(result.current.cardId).toBe("abc");
+
+    window.history.replaceState(null, "", "/wishlist");
+    rerender();
+
+    expect(result.current).toEqual({ view: "wishlist", deckId: null, cardId: null });
+  });
+
   it("keeps a step to another printing off the entry beneath a card it could not push", () => {
     window.history.replaceState(null, "", "/collection");
     const { result } = renderHook(() => usePlace());

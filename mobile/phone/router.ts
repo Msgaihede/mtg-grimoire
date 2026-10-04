@@ -25,19 +25,39 @@ const listeners = new Set<() => void>();
  * it renames the entry the reader is standing on: the page beneath an open card becomes the card,
  * the page is gone from the path Back walks, and an entry carrying this router's mark promises a
  * page beneath it that is no longer there (`routes.ts`'s `PUSHED`). Held, history is exactly what
- * the browser has — one entry short — the screen is what the reader asked for, and the next write
- * the browser accepts, or the next Back, puts the two in step again.
+ * the browser has and the screen is what the reader asked for.
+ *
+ * **The next write the browser takes puts the address in step, and not always the history.** A
+ * page that was only ever held has no entry: a later push to somewhere else leaves the path Back
+ * walks one page short, and nothing pays that back. The one debt that *is* paid is the page
+ * under a card, because the mark depends on it — see {@link write}.
+ *
+ * **A hold is made over one address and ends with it** (`over`). A traversal ends it, and so
+ * does any write this router did not make: the desktop face writes history too, and after a
+ * resize has crossed the floor and come back, a place held from before would be drawn over an
+ * address that has moved on.
  */
-let held: string | null = null;
+let hold: { place: string; over: string } | null = null;
 
 /** What the address bar says, whatever the router holds. */
 const actual = (): string => window.location.pathname + window.location.search;
+
+/** The place being held, or `null` — dropping a hold whose address is no longer the browser's. */
+function held(): string | null {
+  if (hold !== null && hold.over !== actual()) hold = null;
+  return hold === null ? null : hold.place;
+}
+
+/** Hold `place` over the address the browser is on now. */
+function holdOver(place: string): void {
+  hold = { place, over: actual() };
+}
 
 // **A traversal ends a hold**: the browser has moved, and where it landed is where the reader is.
 // Registered once, here, ahead of every subscriber's own listener — a `popstate` reaches listeners
 // in the order they were added, so each snapshot read after it finds the hold already gone.
 window.addEventListener("popstate", () => {
-  held = null;
+  hold = null;
 });
 
 function subscribe(onChange: () => void): () => void {
@@ -50,7 +70,7 @@ function subscribe(onChange: () => void): () => void {
 }
 
 /** A string, so `useSyncExternalStore` compares by value and a re-render costs no new object. */
-const href = (): string => held ?? actual();
+const href = (): string => held() ?? actual();
 
 /** The place a `pathname + search` string names. */
 function placeAt(current: string): Place {
@@ -71,15 +91,35 @@ const landed = (next: string): boolean => placeHref(placeAt(actual())) === place
  *
  * A refusal is read off the address rather than off the `catch` alone: a dropped call throws
  * nothing, and the only thing that says a write happened is the address having moved.
+ *
+ * **A card is pushed over its own page, or not at all.** `PUSHED` on a card's entry promises the
+ * same place without the card directly beneath (`routes.ts`), and both faces close a card by
+ * going back to it. That is true of a card opened over the page the address names. It was not
+ * true of one opened over a page this router was only holding: the page's push had been
+ * refused, the card's was taken, and the marked card sat on whatever the reader had left —
+ * so ✕ went back past the page they were on. So the page is written first where the browser's
+ * entry is not already it, and the card only once that landed; a page the browser still will
+ * not take leaves the card held with it. **Paid, rather than pushing the card without its
+ * mark**, which would also have kept the promise: unmarked, the ✕ renames the entry and is
+ * right, but Android's back gesture — the close a phone reader uses — leaves the page with the
+ * sheet. Paid, history is what the reader walked. It costs one more write from a browser that
+ * was just rationing them, and a refusal there is held like any other.
  */
 function write(how: "push" | "replace", next: string): void {
   try {
-    if (how === "push") window.history.pushState(PUSHED, "", next);
-    else window.history.replaceState(window.history.state, "", next);
+    if (how === "replace") window.history.replaceState(window.history.state, "", next);
+    else {
+      const place = placeAt(next);
+      const page = placeHref({ ...place, cardId: null });
+      const overItsPage = place.cardId === null || landed(page);
+      if (!overItsPage) window.history.pushState(PUSHED, "", page);
+      if (overItsPage || landed(page)) window.history.pushState(PUSHED, "", next);
+    }
   } catch {
     // Refused out loud. What follows is the same as for a refusal that said nothing.
   }
-  held = landed(next) ? null : next;
+  if (landed(next)) hold = null;
+  else holdOver(next);
 }
 
 /**
@@ -105,8 +145,8 @@ function write(how: "push" | "replace", next: string): void {
 export function navigate(place: Place, { replace = false }: { replace?: boolean } = {}): void {
   if (isHere(place)) return;
   const next = placeHref(place);
-  if (landed(next)) held = null;
-  else if (held !== null && replace) held = next;
+  if (landed(next)) hold = null;
+  else if (held() !== null && replace) holdOver(next);
   else write(replace ? "replace" : "push", next);
   for (const notify of listeners) notify();
 }
@@ -192,7 +232,7 @@ export function back(fallback: Place): void {
   const entry = placeAt(actual());
   const beneath =
     isPushed(window.history.state) &&
-    (held === null ||
+    (held() === null ||
       (entry.cardId !== null && placeHref({ ...entry, cardId: null }) === placeHref(fallback)));
   if (!beneath) {
     navigate(fallback, { replace: true });
