@@ -124,6 +124,70 @@ mod tests {
         );
     }
 
+    /// **A missing corpus is not an unreadable one.** The first phone run (2026-10-04) logged
+    /// "the card database could not be opened and has been replaced" on a clean install, because
+    /// the probe answered `false` for a file that was not there and the replace path ran. Asked
+    /// first of the step alone — over a folder with nothing in it, and over one holding only the
+    /// reader's file, which is a corpus deleted to force a resync — and then of a whole launch.
+    #[test]
+    fn a_first_launch_replaces_nothing() {
+        let root = crate::scratch::path("launch-nothing-to-replace");
+        let dir = root.join("data");
+        crate::platform::files::create_dir_all(&dir).unwrap();
+        assert!(
+            !schema::replace_unreadable_corpus(&dir),
+            "an empty folder has no corpus to replace"
+        );
+
+        drop(open(&dir).expect("a fresh folder opens"));
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(dir.join(format!("{}{suffix}", db::CORPUS_DB)));
+        }
+        assert!(!dir.join(db::CORPUS_DB).exists());
+        assert!(
+            !schema::replace_unreadable_corpus(&dir),
+            "a corpus the reader deleted is rebuilt by the open, not replaced"
+        );
+        let opened = open(&dir).expect("the open builds it back");
+        assert!(dir.join(db::CORPUS_DB).is_file());
+        assert!(!sync::has_cards(&opened.read));
+    }
+
+    /// The other half: a corpus that is there and will not open is still replaced, and the
+    /// launch goes on over an empty one with the reader's file untouched.
+    #[test]
+    fn an_unreadable_corpus_is_still_replaced() {
+        let root = crate::scratch::path("launch-unreadable-corpus");
+        let dir = root.join("data");
+        {
+            let opened = open(&dir).unwrap();
+            app_meta::set_app_meta(&opened.write, "reader_wrote", "this").unwrap();
+            db::checkpoint_truncate(&opened.write).unwrap();
+        }
+        for suffix in ["-wal", "-shm"] {
+            let _ = std::fs::remove_file(dir.join(format!("{}{suffix}", db::CORPUS_DB)));
+        }
+        std::fs::write(dir.join(db::CORPUS_DB), b"not a database at all").unwrap();
+
+        assert!(
+            schema::replace_unreadable_corpus(&dir),
+            "garbage in the corpus's place is replaced"
+        );
+        assert!(
+            !dir.join(db::CORPUS_DB).exists(),
+            "and deleted for the open"
+        );
+
+        std::fs::write(dir.join(db::CORPUS_DB), b"not a database at all").unwrap();
+        let opened = open(&dir).expect("a launch over a damaged corpus goes on");
+        assert!(!sync::has_cards(&opened.read));
+        assert_eq!(
+            app_meta::get_app_meta(&opened.read, "reader_wrote").as_deref(),
+            Some("this"),
+            "the reader's file is not touched"
+        );
+    }
+
     /// A second launch over the same folder migrates nothing and keeps what the reader wrote.
     #[test]
     fn a_second_launch_keeps_what_the_first_wrote() {

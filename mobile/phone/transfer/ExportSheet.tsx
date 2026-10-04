@@ -38,7 +38,7 @@ export interface ExportSheetScope {
 /** A 44px row a finger presses: a checkbox and its words. */
 const CHECK_ROW = "flex min-h-11 items-center gap-3 text-sm";
 const CHECKBOX = cn("size-5 shrink-0 accent-accent", FOCUS);
-/** Copy and Download — two halves of the foot, each a full 44px. */
+/** Copy and Save file — two halves of the foot, each a full 44px. */
 const ACTION = cn(
   "flex h-11 min-w-0 flex-1 items-center justify-center gap-2 rounded-md border border-border",
   "text-sm aria-disabled:opacity-50",
@@ -48,7 +48,15 @@ const ACTION = cn(
 
 /**
  * **Export**, on the phone: a format, the fields it can say, a look at the text, then Copy or
- * Download.
+ * Save file.
+ *
+ * **`Save file`, never `Download`**, because the one button is two things on two hosts and the
+ * page may not ask which (`fence.test.ts`): the system's save dialog on the Android host, a
+ * download in a browser. Both end in a file the reader keeps, so that is the label; what the host
+ * actually did is the status line's to say, from `saveText`'s answer — `Saved <name>.` when the
+ * dialog wrote one, `Downloading <name>.` when a browser was handed it, and nothing for a dialog
+ * dismissed. `Download` was the label until the first phone run (2026-10-04), where it sat over a
+ * save dialog.
  *
  * **Every decision is the desktop dialog's own** — `useExportModel` is the field intersection, the
  * Arena and switched-off-pile filters, `formatExport` and the three count lines, for both faces,
@@ -79,7 +87,7 @@ export function ExportSheet({
   surface: TransferSurface;
   /** The cards. An argument, never fetched here — `ExportDialog`'s arrangement. */
   cards: readonly TransferCard[];
-  /** The download's name, before the format's extension. */
+  /** The file's suggested name, before the format's extension. */
   suggestedFileName: string;
   scope?: ExportSheetScope;
   onClose: () => void;
@@ -111,8 +119,9 @@ function Body({
 }) {
   const previewId = useId();
   const [showList, setShowList] = useState(false);
-  /** What the last press did, in a sentence — "Copied.", "Downloading Burn.txt." — or `null`.
-   *  A claim about the clipboard or the download, so a change to the text takes it down. */
+  /** What the last press did, in a sentence — "Copied.", "Saved Burn.txt.", "Downloading
+   *  Burn.txt." — or `null`. A claim about the clipboard or the file, so a change to the text
+   *  takes it down. */
   const [done, setDone] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -137,13 +146,14 @@ function Body({
     );
   };
 
-  const download = () => {
+  const save = () => {
     if (notReady) return;
     setError(null);
     const name = `${suggestedFileName}.${EXPORT_FORMAT_EXTENSION[format]}`;
     setDone(null);
-    // A browser downloads (`handed`); the Android host opens the system's save dialog and says
-    // whether the reader kept a file. A cancelled dialog is nothing to report.
+    // A browser downloads (`handed`) and cannot say where the file went, so the line says only
+    // that it was handed over; the Android host opens the system's save dialog and says whether
+    // the reader kept a file. A cancelled dialog is nothing to report.
     saveText(name, text).then(
       (saved) => {
         if (saved === "saved") setDone(`Saved ${name}.`);
@@ -329,11 +339,11 @@ function Body({
             type="button"
             aria-disabled={notReady || undefined}
             aria-busy={scope?.loading || undefined}
-            onClick={download}
+            onClick={save}
             className={ACTION}
           >
             <Download aria-hidden className="size-4 shrink-0" />
-            Download
+            Save file
           </button>
         </div>
         {/* Mounted always, so a sentence arriving in it is announced. */}
