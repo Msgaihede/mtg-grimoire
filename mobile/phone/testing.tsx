@@ -3,6 +3,7 @@ import { QueryClientProvider } from "@tanstack/react-query";
 import { render, type RenderResult } from "@testing-library/react";
 import { onTestFinished, vi } from "vitest";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
+import type { CommandTable } from "../../.storybook/fake/scope";
 import { installWorld, type FakeParams } from "../../.storybook/fake/world";
 
 /**
@@ -54,16 +55,25 @@ export function renderPhone(
     path = "/",
     state = null,
     fake,
+    commands,
   }: {
     path?: string;
     /** The entry's history state — `routes.ts`'s marks, for a test about an entry the other face
      *  wrote. */
     state?: unknown;
     fake?: FakeParams;
+    /** Handlers merged over the world's own **before the first render**, handed the world's own
+     *  table so one can wrap a handler rather than restate it. For an answer the face asks for
+     *  as it mounts — `sync_status`, the wall's first page — where a `registerCommands` after
+     *  the render lands too late. */
+    commands?: (own: CommandTable) => CommandTable;
   } = {},
 ): RenderResult {
   window.history.replaceState(state, "", path);
   const world = installWorld(fake ?? { seed: "starter" });
+  if (commands) {
+    world.scope.commands = { ...world.scope.commands, ...commands(world.scope.commands) };
+  }
   // After the test's own `afterEach`, so the tree — and every subscription it holds in this
   // world — has gone by the time the world does.
   onTestFinished(world.mount());
