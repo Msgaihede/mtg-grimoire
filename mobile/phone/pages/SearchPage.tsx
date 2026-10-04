@@ -4,10 +4,12 @@ import { countOf } from "@/features/search/resultCount";
 import { StatedFiltersLine } from "@/features/search/StatedFiltersLine";
 import { TagQueryRow } from "@/features/search/TagQueryRow";
 import { useCardSearch, type CardSearch } from "@/features/search/useCardSearch";
+import { useCardData } from "../cardData";
 import { CardWall, type WallItem } from "../CardWall";
 import { searchItem } from "../items";
 import { FiltersButton, FiltersSheet } from "../search/FiltersSheet";
-import { DimNote, NextPageRefused, ReadError, useMore } from "./parts";
+import { NoCards } from "../search/NoCards";
+import { NextPageRefused, ReadError, useMore } from "./parts";
 
 /**
  * Card search: one line, what it is narrowed by, and the wall.
@@ -69,10 +71,15 @@ export function SearchResults({
   more: () => void;
 }) {
   const { query } = search;
+  const cardData = useCardData();
   return query.isLoadingError ? (
     <ReadError>The search could not be read.</ReadError>
   ) : !query.isPending && items.length === 0 ? (
-    <DimNote>No cards match.</DimNote>
+    <NoCards
+      empty={cardData.cardCount === 0 || search.unfiltered}
+      sync={cardData.sync}
+      error={cardData.error}
+    />
   ) : (
     <CardWall
       label={label}
@@ -98,8 +105,7 @@ export function SearchLine({ search, label }: { search: CardSearch; label: strin
   const { query, marketplace } = search;
   const [sheetOpen, setSheetOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
-  const filtered = search.activeCount;
-  // Not `filtered`: the box's text is in that count and is no chip — it is on screen in the box.
+  // Not `activeCount`: the box's text is in that count and is no chip — it is on screen in the box.
   const chips = activeChips(search, marketplace.currency).length;
   // The count is worth a line once the reader has narrowed anything — a chip or a word. Over the
   // unfiltered wall it is the size of the database, which nobody asked.
@@ -128,7 +134,7 @@ export function SearchLine({ search, label }: { search: CardSearch; label: strin
           />
           <FiltersButton
             ref={opener}
-            active={filtered}
+            search={search}
             expanded={sheetOpen}
             onClick={() => setSheetOpen(true)}
           />

@@ -311,7 +311,9 @@ failure behind each at its own site:
   modules are `useImportSource`, `useExportModel` and the `*PreviewBody` steps — with the
   remembered choices in `phone/transfer/prefs.ts`, which opens on `@/features/transfer/prefs` as
   the app store does. `phone/transfer/CollectionTransfer.tsx` sits in the collection's figures
-  band. The wishlist's is not built.
+  band, and the deck gallery's foot offers **New deck** (the desktop's `CreateDeckDialog`) and
+  **From a list** (the import sheet over `NewDeckPreviewBody`), each filing the deck in the open
+  folder and landing on its page (light-app.md §8.6). The wishlist's is not built.
 - **The phone face writes decks, the collection, the wishlist and Settings** — each through the
   desktop's own mutation, never a second copy of one. Deck writes (step 3.5a, light-app.md §7.5) go
   through `useDeckCore` — `useDeck` without the app store — and a receipt's undo is the desktop's
@@ -326,8 +328,13 @@ failure behind each at its own site:
 - **The web host opens its database and answers commands, and that is all it does yet** (phase
   5, step 5.1, 2026-10-04 — *The web host* below). **It downloads nothing in a browser**, so a
   web install has no cards; it draws no card picture; **there is no service worker** —
-  `public/light.webmanifest` is the whole of the PWA so far — and nothing is hosted. **And no
-  sync on a light install**: the phone face runs none and draws the mana line at rest.
+  `public/light.webmanifest` is the whole of the PWA so far — and nothing is hosted.
+- **No device sync on a light install**: the phone face pairs with nothing. **It does hear the
+  host's card sync and the feeds** — `phone/cardData.ts`'s `useCardDataWatch`, mounted once in
+  `PhoneFace`, runs the desktop shell's own listeners (`useSyncInvalidation`, the feed hooks) and
+  draws the loudest running job on the mana line; an empty card search says *No cards match.*
+  only over a database that has cards (`phone/search/NoCards.tsx`). Over the fake, and in a
+  browser until the web host downloads anything, no sync event comes, so the line rests.
   `mobile:tauri` is the desktop binary, not a light host.
 
 ## The Android host — `src-tauri/` here

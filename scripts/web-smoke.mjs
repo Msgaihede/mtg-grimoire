@@ -271,11 +271,13 @@ async function main() {
   if (files.length === 0) fail(`OPFS has a ${OPFS_DIRECTORY} folder with nothing in it`);
   console.log(`ok  OPFS holds ${OPFS_DIRECTORY}/ with ${files.length} entries`);
 
-  // An empty corpus: the wall's sentence is `search_cards`' answer, drawn. Nothing else on the
-  // page says it, so it is a read that went to the engine and came back.
+  // An empty corpus, and nothing downloading it: the Search page says so only once two reads
+  // have answered — `search_cards` with no card, and `sync_status` with a count of zero
+  // (`mobile/phone/search/NoCards.tsx`). Nothing else on the page says it, so it is a read that
+  // went to the engine and came back.
   await first.until(
     "a search came back through the engine",
-    `document.body.innerText.includes("No cards match.")`,
+    `document.body.innerText.includes("No card data yet")`,
   );
   console.log("ok  a read came back through the engine");
 

@@ -4,8 +4,8 @@ The Android and web face of MTG Grimoire — card search, decks, collection, wis
 as one second entry over the desktop's own components. **What is built is phase 1, the skeleton,
 and phase 3, the pages:** it runs in a browser over the Storybook fake (§2.1, §7) and in a
 phone-sized window over the real Rust core (§2.2). Underneath it, phase 2 moved the engine into a
-crate those hosts can link (§6), **phase 4 is building the Android host on it** (§8) — an APK
-CI builds, which no phone has run yet — and **phase 5 is building the web host** (§9): since
+crate those hosts can link (§6), **phase 4 built the Android host on it** (§8) — an APK
+CI builds, which a phone first ran on 2026-10-04 (§8.6) — and **phase 5 is building the web host** (§9): since
 step 5.1 (2026-10-04) the engine is a WASM module in a dedicated Worker, and it opens its
 database in a browser's OPFS and answers commands there. **It downloads nothing in a browser
 yet**, so a web install has no cards; there is no service worker, nothing is hosted, and there
@@ -2283,8 +2283,7 @@ so a first export of the collection is CSV on either face and an import's condit
 - `decks/deckExport.ts` — `exportSubject` and `exportFileName`, re-exported from `DeckEditor`.
 
 **Not done**: the wishlist's import and export (its preview reads the store the same way and splits
-the same way — 3.3's); a new deck from a list (`NewDeckPreview` still reads the store, and the
-gallery has no import entry on the phone); a pile's own `Export cards…` and `Import cards…` (the
+the same way — 3.3's); a pile's own `Export cards…` and `Import cards…` (the
 editor's category heading menu); reading a list from the clipboard (a read permission the app has
 never asked for). The desktop previews' own controls — the radios, the commander candidates, the
 dropdowns — are the desktop's sizes inside rows floored to 44px.
@@ -2745,11 +2744,12 @@ show.
 Issue #761's box — *"First run on a real phone: corpus ingest time, cold start, APK size — none was
 ever measured"* — has no phone to answer it, so its first figures come from an **Android emulator
 on a GitHub runner**: `.github/workflows/android-emulator.yml`, with the measuring in
-`scripts/android-first-run.sh`. **No figure exists yet.** The workflow had never run when this was
+`scripts/android-first-run.sh`. The workflow had not run when this was
 written; it runs on a pull request or a push to `main` that touches the host, the core or the
 lockfile (and on a manual dispatch), so its first run is the pull request that adds it, and its
-numbers are that run's step summary and its `android-first-run` artifact. Write them here, with the run's
-date and link, when there is one.
+numbers are that run's step summary and its `android-first-run` artifact. **Its first run, on #800
+(run 37162904846), passed** — the first card sync finished on the emulator; its figures are that
+run's step summary and artifact, not copied here. The phone figures are §8.6.
 
 **What it does.**
 
@@ -2806,7 +2806,142 @@ cellular one, so a real metered link — and whether `isActiveNetworkMetered` sa
 mobile data — is still a device's to show. The emulator draws through SwiftShader, in software
 (the action's default `-gpu swiftshader_indirect`).
 And the APK is x86_64, a different compile of the same source. **Every figure from this workflow
-is an emulator figure and is to be named as one**; the issue's box stays open for a phone.
+is an emulator figure and is to be named as one**; the issue's box stayed open for a phone, which
+§8.6 closed.
+
+### 8.6 The first run on a real phone (2026-10-04)
+
+**Run on Markus's phone on 2026-10-04, 02:17–02:28 CEST**, by a local session that drove it over
+`adb shell input` and `uiautomator dump` (the WebView exposes its accessibility tree to it) and
+changed no code. The APK was CI run 37163586973's `mtg-grimoire-light-arm64` artifact, built from
+`main` at `2abf2d7a` — the arm64 **release** build, signed with the CI debug key — on a clean first
+install (`com.mtggrimoire.app` was not on the phone; a separate `com.mtggrimoire.app.debug` was,
+and was left alone).
+
+| | |
+| --- | --- |
+| Device | OnePlus `CPH2581`, SoC `SM8650`, `arm64-v8a` |
+| Android | **16** (SDK 36); WebView `com.google.android.webview` 153.0.8010.36 |
+| Display | 1080 × 2376 @ 480 dpi (an override of the panel's 1440 × 3168) → **360 × 792 dp** |
+| Navigation | Gesture navigation, guide bar hidden |
+| Network | Wi-Fi, `NOT_METERED`, ≥ 110 Mbps down |
+| App | 0.40.0 (versionCode 40000), targetSdk 36, minSdk 26 |
+
+**The figures** — every one a release build, on that phone:
+
+| | |
+| --- | --- |
+| APK | **35 023 411 B** (33.4 MiB); the zipped CI artifact 12 322 058 B. `adb install` 3.5 s |
+| First launch | `am start -W` → **`TotalTime` 158 ms** (`WaitTime` 162, `COLD`); the loader at +1.0 s, the phone face on Search at +5.4 s; process start to `launch: card sync started` 0.33 s |
+| First card sync | **18 745 ms**, the host's own figure (`launch: card sync finished in 18745 ms`); ≈ 19.2 s wall clock from `am start` |
+| The feeds behind it | Oracle Tags and the combos were on the card sheet by three minutes in, with no log line of their own; the process was at 0 % CPU 70 s after the sync, 48 s of CPU used in all |
+| Later launches' sync | 13, 10 and 7 ms — the daily throttle |
+| Cold starts | `am force-stop`, 5 s, `am start -W`: **108, 113, 112 ms — median 112 ms** (two more later: 117 and 112); the wall drawn with pictures 1.5 s after each. Process-cold, not cache-cold |
+| On-device data size | **Not measurable**: a release build refuses `run-as`, and `dumpsys diskstats` had no row for the package yet |
+
+No `initial sync failed`, no panic, no `E/AndroidRuntime`, no ANR and no tombstone in the
+100 882-line capture. **Against §8.5's emulator caveats**: these are a phone's CPU, flash and
+WebView, over Wi-Fi — what a reader on a fast home link waits — and the APK is the shipped arm64
+compile.
+
+**Ten checks — eight pass, one fails, one not run:**
+
+| # | Check | Result |
+| --- | --- | --- |
+| 1 | Search "lightning bolt" draws results with pictures | Pass — 3 cards, prices in the chins |
+| 2 | The card sheet: printings, prices, legality | Pass — 68 printings · 51 release dates, a price row, *Legal in 15 of 23 formats · banned in 1*, oracle tags and combos |
+| 3 | The back gesture closes the sheet; from the start page it leaves | Pass — a left-edge swipe closed the sheet with the query intact; after three tab moves four backs walked Decks → Collection → Search → launcher (but see finding 2) |
+| 4 | Nothing under the bars, the cutout or the keyboard | Pass, partly exercised — clear in both orientations, landscape padded 120 px on the cutout side; the search box, the results and the tab bar sat above the keyboard. The nav-bar inset was 0 (the gesture bar hidden); 3-button navigation not tried |
+| 5 | A card added to the collection appears in Collection | Pass — *Added 1 × Lightning Bolt…* with Undo, 1 card / 1 unique, still there after a force-stop |
+| 6 | Create a deck and add a card to it | **Fail — not reachable**: the Decks page said *No decks* and offered nothing |
+| 7 | Export: the save dialog opens and the file is written | Pass — the system dialog on `collection.csv`, *Saved collection.csv.*, 84 bytes in `/sdcard/Download` |
+| 8 | The import picker offers `.txt` and `.dec` | Pass — both enabled and read (*2 lines · 3 cards*), a `.json` greyed; the `.txt` reached the preview, not committed |
+| 9 | Landscape: the tab bar becomes a rail | Pass — at 792 dp the five destinations are a rail and the wall four columns |
+| 10 | The mobile-data prompt | Not run — and this phone may not show it: `dumpsys connectivity` has its carrier's cellular network `NOT_METERED` too, so `isActiveNetworkMetered()` may answer *false* on mobile data |
+
+**What it found:**
+
+1. **No deck can be created on the phone face** (check 6). The gallery's empty state was
+   `<DimNote>No decks</DimNote>` and `decks.test.tsx` asserted it offered nothing; the card sheet
+   offers the collection and the wishlist only. A phone never reaches the 1024px face and a light
+   install has no sync, so a light install had no way to its first deck — and no deck write had
+   run through `core_call` on a device.
+2. **The Search wall still said *No cards match.* after the first sync finished** (6 s and 36 s
+   after it), and nothing showed progress during it. Typing a query brought results at once; the
+   next launch drew the wall.
+3. **Leaving by the back gesture ended the process with a bionic abort**, both times:
+   `FORTIFY: pthread_mutex_lock called on a destroyed mutex`, then `has died: cch CRE`. No dialog,
+   no tombstone, data intact, the next launch a normal cold start.
+4. **A first launch logged that the card database "could not be opened and has been replaced"**
+   when there was no database to open. Log only.
+5. **Typing a query lit the Filters button as *1 active*** with no filter chosen in the sheet.
+6. **Export's button said *Download*** on a host where it opens a save dialog and reports *Saved*.
+7. WebView noise, twice at one cold start while the wall drew, with no visible effect:
+   `tile memory limits exceeded, some content may not draw`.
+
+**Fixed since — the three wording findings (4–6), in one pull request.**
+
+- **(4)** `schema::replace_unreadable_corpus` took its replace path whenever
+  `corpus_is_readable` said `false` — and it says `false` for a file that is not there, so a
+  clean install deleted nothing and logged the sentence. A missing, unmarked corpus now answers
+  `false` in silence (the `ATTACH` creates it); a damage mark over a missing file still takes the
+  old path so the mark is cleared, and a corpus that is present and will not open is still
+  replaced with the same sentence. The desktop's first run never hit it — `split::convert`'s
+  fresh arm makes the file first — but a reader who deleted `corpus.db` to force a resync did,
+  and that is quiet now too. `launch.rs`'s `a_first_launch_replaces_nothing` and
+  `an_unreadable_corpus_is_still_replaced` hold both arms.
+- **(5)** The phone's `Filters` button and the sheet's *Reset all* counted the surface's
+  `activeCount`, which counts a non-empty box as one kind. On the phone the box sits beside the
+  button, outside the sheet, so both now count `sheetFilterCount` (`FiltersSheet.tsx`) —
+  `activeCount` less the box — on Search and on both cabinets, and *Reset all* clears what the
+  sheet holds and leaves the query, which is the reader's own words in its own control and would
+  otherwise change out of sight. **The desktop bar is unchanged on purpose**: there the box, the
+  button and *Reset all* are one row, and the button's count is documented as the whole search.
+- **(6)** Export's button reads **Save file** — true on both hosts. The status line still
+  reports what the host did: *Saved <name>.* on Android, *Downloading <name>.* in a browser,
+  nothing for a cancelled dialog.
+
+**Fixed since — a new deck on the phone (1).** The gallery's foot is a bar on every state
+(empty, full, inside a folder, a read error): a gold **New deck** and a bordered **From a list**
+(named *New deck from a list*), both 44px, and the empty state reads *No decks yet.* **New deck is
+the desktop's `CreateDeckDialog`, whole** — `useDecks().create` (`deck_create`), `useNewDeckFormat`,
+the folder select defaulting to the drawer the gallery is open on, and the cover picker — inside a
+`display: contents` wrapper that raises its *Create deck* button to 44px and its text boxes to
+16px; the rest of the form keeps its desktop sizes, as Deck settings does on the phone. **From a
+list is the phone's `ImportSheet` over the desktop's new-deck step**: `NewDeckPreview` was split
+as `DeckPreview` was — `NewDeckPreviewBody` is store-free and takes `importDefaults`,
+`NEW_DECK_DESTINATION` is the shared key and label, `NewDeckPreview` the desktop's store-reading
+wrapper — and `importIntoNewDeck` takes an optional `folderId`, so the phone files the deck in the
+open folder (the desktop passes none and is unchanged). Either door ends on the new deck's page, by
+a push. Every command it calls was already on the core's table. Held by `decks.test.tsx` over the
+fake; **not yet driven on a phone**, so a deck write through `core_call` on a device is still
+unproven.
+
+**Fixed since — the phone face hears the card sync and the feeds (2).** Nothing on the phone face
+listened for the sync's end: `PhoneFace` and `Shell` mounted none of the desktop shell's listeners
+and drew `<ManaLine sync={null} />`, so the wall's `["cards","search",…]` query kept the empty
+answer it got over the empty database — after its 30 s `staleTime` a query refetches only on a
+remount, a focus or a reconnect, which a WebView rarely sees. (The card sheet looked right because
+it mounts fresh queries each time it opens.) `PhoneFace` now mounts the desktop's own listeners
+once — `phone/cardData.ts`'s `useCardDataWatch`: `useSync`, `useSyncProgress`,
+`useSyncInvalidation`, the three feed hooks and `useMarketplace` — plus one trigger the desktop
+lacks: when the polled `sync_status` count leaves zero, it invalidates `SYNC_INVALIDATED`, for a
+`done` event Tauri delivered before the page was listening. `useSyncInvalidation` takes an
+optional query client (the module's by default, so the desktop is unchanged), which is what lets a
+`renderPhone` test see the refresh. The header's mana line carries the loudest running job (the
+card sync, the price feed, Oracle Tags, the combos) as a progress bar named after its phase, and an
+empty card search draws `phone/search/NoCards.tsx`: *No cards match.* only over a database with
+cards; over an empty one, *Setting up your card database* with the phase and its count while a
+sync runs, or *No card data yet* (with the last error, if any) when none does — a *Not now* on a
+metered link, or a failed first download. A deck's Add cards shares the same results, so it says
+the same. `cardData.test.tsx` holds the in-flight text, the refill on a `done` event, the refill on
+the count leaving zero with no event, and the empty seed's sentence. **Not yet driven on a phone.**
+
+**Method notes.** This phone's logcat ring buffers are 256 KiB and had turned over by the end, so
+the record is a `logcat` streamed from before the first launch. The phone's clock ran 9.69 s ahead
+of the PC's (measured); every time above is the phone's. The one manual step was turning the phone
+to landscape (auto-rotate is off on it). Left on the phone: the app with its corpus and one
+collection row, and four small files in `/sdcard`.
 
 ## 9. The web host — phase 5, a step at a time
 
@@ -3039,7 +3174,9 @@ no `wrangler`.
   Chrome 154.0.8037.95, `--headless=new`, an 800-wide window and so the phone face). All five
   checks passed, in 3.4 s to 4.1 s across five runs. The page's console line read `journal
   delete, corpus journal delete, schema 59`; OPFS held `mtg-grimoire/` with 65 entries; the
-  read was the Search wall's "No cards match." over an empty corpus; the reload opened the
+  read was the Search page's sentence over an empty corpus — *No cards match.* on this branch's
+  own tree, and *No card data yet* once `main`'s `NoCards` (§8.6) was merged in, which takes
+  `sync_status`' count as well as the search's answer; the reload opened the
   database again; and the second tab was told *"MTG Grimoire is already open in another tab of this
   browser. Close that tab, then reload this one."* and offered a Reload. `dist-web/` is
   11 996 428 B in total.

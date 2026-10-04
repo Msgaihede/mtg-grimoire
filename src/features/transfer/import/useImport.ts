@@ -80,6 +80,9 @@ export interface ImportAsNewDeck {
   /** Which platform the new deck is for. Optional, and absent is `"any"` in Rust — so this
    *  hook's contract did not change for a caller that has not grown the control. */
   gameKey?: DeckGame;
+  /** The folder the deck is filed in. Optional, and absent is the top level — `deck_create` is an
+   *  INSERT, so an absent folder means exactly that. */
+  folderId?: number;
   items: ImportItem[];
   /** See {@link OwnedCopies}. Absent is the plain decklist import. */
   collectionItems?: OwnedCopies;
@@ -393,10 +396,11 @@ export function useImport() {
       name,
       formatKey,
       gameKey,
+      folderId,
       items,
       collectionItems,
     }: ImportAsNewDeck): Promise<DeckImportResult & { deck: DeckRow }> => {
-      const deck = await ipc.deckCreate({ name, formatKey, gameKey });
+      const deck = await ipc.deckCreate({ name, formatKey, gameKey, folderId });
       let outcome: ImportOutcome;
       try {
         outcome = await ipc.deckImportCommit(deck.id, DEFAULT_VARIANT, "merge", items);

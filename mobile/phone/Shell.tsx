@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { Settings } from "lucide-react";
 import { ManaLine } from "@/components/ManaLine";
+import type { ManaLineSync } from "@/lib/mana";
 import { FOCUS_INSET } from "@/lib/focus";
 import { cn } from "@/lib/utils";
 import { linkTo, usePlace } from "./router";
@@ -28,8 +29,21 @@ import { TabBar } from "./TabBar";
  * inset, and the page takes the bottom inset the bar no longer stands on. The rail comes *after*
  * the page in the document, as the bar does — so the tab order is the same at every width, and
  * `flex-row-reverse` is what draws it on the left.
+ *
+ * **The mana line is the face's progress bar**, as the ribbon's is the desktop's: `activity` is the
+ * loudest job running — the card sync above the feeds, `topActivity`'s fold — and `null` draws the
+ * line at rest. Its label is the bar's accessible name; nothing else on the frame grows a caption,
+ * so a download never pushes the page down. An empty wall over a first run says the rest itself.
  */
-export function Shell({ title, children }: { title: string; children: ReactNode }) {
+export function Shell({
+  title,
+  activity = null,
+  children,
+}: {
+  title: string;
+  activity?: ManaLineSync | null;
+  children: ReactNode;
+}) {
   const place = usePlace();
   const onSettings = place.view === "settings";
 
@@ -54,8 +68,7 @@ export function Shell({ title, children }: { title: string; children: ReactNode 
             <Settings aria-hidden className="size-5" />
           </a>
         </div>
-        {/* `sync={null}` is the line at rest. The phone face runs no card sync of its own yet. */}
-        <ManaLine sync={null} />
+        <ManaLine sync={activity} />
       </header>
 
       <div className="flex min-h-0 flex-1 flex-col min-[600px]:flex-row-reverse">
