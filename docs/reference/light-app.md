@@ -18,8 +18,9 @@ the hosting Worker's source, its policy and its runbook are in `app-worker/`** (
 **since its second half the module's `opt-level` is settled by timings, CI's smoke run is
 served under that policy, and the built app has been driven end to end on both faces against
 the real hosts** (§9.6). **It is deployed at `https://mtg-grimoire.app` since 2026-10-04**
-(§9.7) — the deploy is the owner's, and that one was run by an agent at his ask; nothing but
-one headless Chrome on Windows has run the web host. There is no sync on a light install,
+(§9.7) — the deploy is the owner's, and each one that day was run by an agent at his ask; one
+headless Chrome on Windows has driven the web host, and the owner has used it in Firefox and
+said so in a sentence. There is no sync on a light install,
 which is phase 6 — a browser install says so in a sentence rather than asking the relay.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
@@ -4952,7 +4953,9 @@ during it was not recorded.
    modal is closed leaves the cached figure for up to 30 s on the next open.
 4. **The deck editor's docked search names the wrong category on its add control** — it read
    *Add Rampant Growth to Sorcery* and the card landed in Ramp. **Found, not fixed here**:
-   handed off as its own task.
+   handed off as its own task. (**Fixed in #813**, merged 2026-10-04 at 13:17 UTC — **on
+   `main` and not in production**: the build then deployed was taken from `main` one merge
+   earlier, and the live deck editor still read the old wording. §9.7.)
 5. ***Copy card image* on the web copies the picture's address as text** — the clipboard
    held `text/plain`, a `cards.scryfall.io` URL, and no image. That is what the row's code
    does on every host (`cardMenu.tsx`'s `copyCardImage` copies the address it is answered);
@@ -5003,7 +5006,10 @@ during it was not recorded.
   and idle. The three below stand.
 - **A run in a real phone's browser.** Every figure here is a desktop CPU's.
 - **Firefox and Safari.** One Chrome, headless, on Windows is the whole of what has run the
-  web host — the lock, the pool, the service worker and the policy included.
+  web host — the lock, the pool, the service worker and the policy included. (**Firefox, since:
+  the owner used the live site in it on 2026-10-04 and reported one sentence — §9.7.** That it
+  works and that a second tab is refused is all it says; nothing was measured there. **Safari
+  stands.**)
 - **Android's clipboard on a device** — never run (§9.4).
 
 ### 9.7 The deploy (2026-10-04)
@@ -5015,6 +5021,11 @@ and the next deploy needs its own. [`app-worker/README.md`](../../app-worker/REA
 runbook this followed and now carries each answer in its tables; this section is the day's
 record. **Every figure is one deploy's, one minute's or one run's**, taken from one machine in
 Denmark.
+
+**Where the day ended: production is `main` at `4929cc6e`**, a second build deployed at 13:27
+UTC and then rolled back and forward again to see a rollback work — *Three deploys*, below.
+**That is not `main`**: #813 merged at 13:17 UTC, after that build was taken, and is in no
+build that has been deployed.
 
 **What was deployed.** `main` at `d8c3779b`, the merge of #810, from a clean tree:
 `npm run web:build` over the engine `npm run web:wasm` built from the same source — engine
@@ -5178,23 +5189,179 @@ was not recorded.
   `false`: headless Chrome refused `persist()`. The largest renderer's working set peaked at
   631.1 MB.
 
-**Not driven at the real origin.** The update flow, which needs a second deploy; a second tab;
-a launch after storage was cleared; decks, import and export, a context menu, an *Open on …*
-link; the engine's launch checks with no network — the offline launch fell inside the refresh
-interval; an installed PWA. §9.6 drove each of the first four on `localhost`.
+**Not driven in that first pass**, and driven later the same day, below: a second tab; a launch
+after storage was cleared; decks, import and export, a context menu, an *Open on …* link; the
+engine asked to fetch with no network; the update flow, which needed a second deploy.
 
-**Not proved.**
+**Firefox, by the owner — one sentence.** Markus opened the live site in Firefox that day and
+reported: *"it works fine. multiple tabs locks the user out until the first tab is closed."*
+**That is the whole of the report** — no version, no figure, no console. It is the first run
+of any of this in a second engine, and what it says of the one-tab rule is that a second tab
+is refused there as designed. It does not say by which of §9.6's routes — the Web Lock or the
+pool's own refusal — and it says nothing of the service worker, the policy, the update flow or
+a timing in Firefox.
 
-- **A rollback.** Never exercised: this deploy was the Worker's first, so there has been no
-  version to go back to, and nobody has watched one bring a version's files back.
-- **A deploy over a live page.** The update flow against the real host — a page open with its
-  service worker in control while a second build goes out — has never been seen. §9.6 saw it
-  once, on `localhost`.
+**The rest of a reader's tasks at the real origin.** Headless Chrome 154 again, one fresh
+profile, the real hosts, on the first deploy's build. **Zero policy violations, no request
+blocked or failed while online, and nothing thrown** — across 4 pages, 16 sessions of the
+engine's Worker and the service worker. **The machine was busy**: total CPU read 69–75 %
+through the first two items, so their timings are noisy, and 6–7 % through the cleared-storage
+rebuild.
+
+- **A second tab.** Opened while the first was in the middle of its first run, it was told at
+  130 ms; with the first idle, at 87 ms. The sentence: *MTG Grimoire is already open in another
+  tab of this browser. Close that tab, then reload this one.* No Worker was started and no
+  engine file fetched; `navigator.locks` showed `mtg-grimoire:database` held, exclusive; the
+  first tab was unaffected. With the first closed, the second's *Reload* drew the app at
+  1 967 ms, opened on the first ask.
+- **A reload inside the real card sync's finish** — §9.6's first finding, against the real
+  download. A reload landing 278 ms into the finish: the app at 4 616 ms, *opened on attempt
+  5, 4140 ms after the first*. The tab closed 255 ms into the finish and a new one opened:
+  4 351 ms, attempt 5, 3 869 ms after the first. Each on the first try. **The held pool took
+  longer to come free than on `localhost`** — 4.1 s and 3.9 s against 3.0–3.3 s — under about
+  70 % load, and it was still the fifth ask, inside the 10 s bound.
+  ⚠️ **In both, the interrupted finish left no cards, and the new document started the whole
+  card download again.** That third first run then completed under the same load: cards at
+  31.2 s, the combos — the last feed — at 56.4 s.
+- **A launch after the browser's storage was cleared.** The OPFS folder removed by hand, with
+  `localStorage` keeping its marks. The console warned *…this browser cleared the app's storage
+  since the database was last opened here — a new, empty one was created*; the notice was
+  drawn, through the rebuild and after a reload; *Got it* removed it for good. The rebuild ran
+  by itself — cards at 20.9 s, oracle tags 25.4 s, art tags 44.7 s, combos 51.5 s — with linear
+  memory peaking at 174 522 368 B. The reader's data was gone, as the notice says.
+- **The phone face: every reader task worked.** The filters sheet; the card sheet's sections;
+  ***Open on …* as real links, each opening a tab** — Scryfall, EDHREC, TCGplayer; adds that
+  moved the sheet's figures; a deck created, *Add cards*, a quantity and the commander, an add
+  from the sheet, the check and the bracket; an export, copied and saved as a 51 B file; an
+  import with its one unmatched line named; Card Kingdom's 151 684 rows in 4.8 s, with Mana
+  Pool greyed; and *Clear cache*, which said *Freed 3 MB across 33 files.*
+- **The desktop face: every task worked.** No caption; the wall 25 of 25; the modal and a step
+  through its printings; *Open on Scryfall*; a context menu's copy pasted back; the deck editor;
+  an export of 127 B; an import through *Choose file*; the collection and wishlist pages.
+  **The docked search's control still read *Add Rampant Growth to Sorcery*** — §9.6's fourth
+  finding, as it was. Its fix, #813, is in neither build that has been deployed.
+- **Offline, with the engine asked to fetch** — what §9.6's cut never reached. A browser that
+  resolves no name, so the engine's Worker had no network. The app opened from the service
+  worker in 1 975 ms. A Card Kingdom refresh: *Download failed. No prices yet.*, the alert
+  *could not reach api.cardkingdom.com: error sending request*, and a line in the log. The
+  desktop face's *Refresh data*: the ribbon back at *118,470 cards · data from 2026-10-04*,
+  the alert *http request failed: error sending request*, and `bulk_check` logged.
+  ⚠️ **Those are the engine's raw words, not a sentence written for a reader.** *Refresh
+  combos* stopped at its confirm — it deletes first — and was not driven.
+- **Installability.** `Page.getInstallabilityErrors` returned none. The manifest had no error
+  and the id `https://mtg-grimoire.app/`; it is served 200 as `application/manifest+json`,
+  `no-cache`, with the policy; all five icons answered 200 and decoded. **No install was
+  made**: headless Chrome has no install UI.
+- **At the end**: `persisted()` false, and `persist()` answering false in headless;
+  `estimate()` usage 1 029 148 153 B.
+
+**Two small things that pass found, neither chased.**
+
+- **`/favicon.ico` answers 404.** The app's own document names an SVG icon, so a browser asks
+  for the `.ico` only when it opens a document of the origin that is not the app's.
+- **The phone's Errors group once read *No errors.* about 15 s after a failure was logged.**
+  Seen once.
+
+**Three deploys: the update flow and a rollback.** Markus approved it through the question
+tool — a marker deploy then, and a rollback after it. #812 added two comment lines to
+`app-worker/_headers`, a file the service worker hashes into its build id (§9.5); built from
+`main` at `4929cc6e`, **the only files of `dist-web/` that differed from the first deploy's
+were `_headers` and `sw.js`**. Below, **v1** is the first deploy — version
+`cdee3c1c-d3ae-4246-8e8a-c50eb3025152`, shell cache `grimoire-shell-a893ad74a5be6b00` — and
+**v2** the marker: version `f724bbc1-9853-4978-9ffe-8b3c0af6c339`,
+`grimoire-shell-5ef20f18bbeecb8c`.
+
+| UTC | Command | What the host's `sw.js` then was |
+| --- | --- | --- |
+| 13:27 | `wrangler deploy` of v2 — *Uploaded 1 file (42 already uploaded)* | v2's, 3 s later |
+| 13:28:58 | `wrangler rollback <v1's id> -m … -y` | v2's at the first look, **v1's five seconds later** |
+| 13:30:22 | `wrangler rollback <v2's id>`, to roll forward | v1's at the first two looks, 5 s apart; v2's at the third |
+
+- **A rollback does bring a version's files back.** That was the open question §9.5 left. It
+  is answered for a build that changed no schema and renamed no chunk.
+- **What the command said.** Non-interactive, `-y` printed *Using fallback value in
+  non-interactive context: yes*, and it warned that it *will not rollback any of the bound
+  resources* — this Worker has none but its assets. **`rollback` takes any version id**, so the
+  same command rolled forward. `wrangler deployments list` shows the three deployments with
+  their messages.
+- **Production ends on v2, which is `main` at `4929cc6e`.** The runbook's probes 1–11 and
+  14–18, asked again of it, answered as they had of v1 — the policy equal on each response
+  that should carry it, the 304 included, and the document equal to the built one. The
+  module's brotli transfer was 2 139 182 B this time, 159 B more than v1's for the same bytes.
+
+**One tab held open across all three.** Headless Chrome 154, one profile, with a reader's data
+in it — a deck of two cards, a collection card, a wishlist card — and that profile's own first
+run made on v1 beforehand: cards `done` at 20.5 s, every feed in at 43.2 s. Then three
+handovers, v1 → v2 → v1 → v2:
+
+| | v1 → v2 | v2 → v1 | v1 → v2 |
+| --- | --- | --- | --- |
+| The page open before the check | 107 s | 57 s | 51 s |
+| The bar, after `registration.update()` | 654 ms | 689 ms | 648 ms |
+| The install — the service worker's requests | 43, 35 129 B | 43, 35 107 B | 43, 35 072 B |
+| The module among them, on the wire | 843 B | 843 B | 844 B |
+| A reload while waiting — database open, shell | 1 674 ms, 2 011 ms | 1 876 ms, 2 206 ms | 1 603 ms, 1 931 ms |
+| The press, to the new document | 2 590 ms | 2 596 ms | 2 664 ms |
+| Database open in that document | 2 531 ms | 2 523 ms | 2 589 ms |
+
+- **While a build waits.** The waiting worker was `installed`, both shell caches were held,
+  and `host_update` answered `{ title: "A new version of MTG Grimoire is ready.", action:
+  "Reload to update" }` — the bar's sentence, with its buttons *Reload to update* and *Not
+  now*. **A reload changed nothing**: the old build again, the bar back, and neither the
+  second-tab screen nor the still-held line of §9.6's first finding. *Not now* put the bar
+  away with the worker still waiting, and the next load brought it back.
+- **The press.** A new document, one shell cache — the new build's — no bar, 118 470 cards, and
+  **the reader's data intact every time**: the deck and its two rows, the collection card, the
+  wishlist card.
+- **Nothing was downloaded again.** The install was 43 requests of about 810–845 B each — 35 KB
+  — every one a 200, with no response over 50 KB; the engine's module was 843 B on the wire;
+  and no other host was asked. After the press the new document's requests to the origin were
+  answered by the service worker with nothing on the wire — all but the load of the Worker's
+  script, whose response a page's session is not shown. **That is the engine keeping its
+  address across a deploy that did not change it, seen at the host.**
+- **A rollback is an update to a page that is open.** v1's `sw.js` is different bytes from
+  v2's, so the bar is offered the same way in that direction. Before taking it, the open v2
+  page went on working with the host back on v1 — Settings, the deck, the collection and the
+  wishlist all answered.
+- **Zero violations, failed requests or console errors across the session.** At its end
+  `estimate()` said 1 025 483 513 B, with one shell cache, v2's, of 10 284 648 B.
+
+**Not exercised in that session — and the first of these is the one a reader depends on.**
+
+- ⚠️ **The app's own check for a new build.** Every check was the driver's
+  `registration.update()`. Headless Chrome would not fire `visibilitychange`, and the app asks
+  at most hourly; the page had been open under two minutes each time. So that a reader is
+  *offered* a new build without anybody calling for it has not been seen at the real origin.
+- **Which cache answered a given document** — inferred from the controller, not observed.
+- **A second tab standing by during a handover**, an installed app, any other browser.
+- **Why the database opened at about 2.5 s in the document after a handover**, against
+  1.6–1.9 s on an ordinary reload. Not looked into.
+
+**Not proved**, as the day ended.
+
+- **A deploy that renames a chunk.** v1 and v2 differ in `_headers` and `sw.js` alone, so a
+  page meeting a renamed chunk across a deploy — the case §9.3 built the held cache for — is
+  still unseen at the real host. A deploy of `main` as it stands would be the first to rename
+  one: #813 changed the page's code.
+- **A rollback across a schema rung, or of a build that renamed chunks.** The one made rolled
+  back neither. The runbook's rule for the first is unchanged: fix forwards.
+- **The app's own update check**, above.
 - **A spent free-plan day.** §9.5 has what Cloudflare's source says it does; nobody has seen
   the 429.
-- **Any browser but one Chrome, and any phone.** The policy, the lock, the pool and the service
-  worker have met Chrome 154, headless, on Windows, and nothing else — at this origin as
-  before it.
+- **Any browser but one Chrome and one sentence about Firefox, and any phone.** The policy,
+  the lock, the pool and the service worker have been *measured* in Chrome 154, headless, on
+  Windows, and nowhere else. Safari has not run it at all.
+- **A real install.** Nothing stands in its way by Chrome's own check; none was made.
+- **What a reload inside the card sync's finish costs on a slow link.** It cost the whole card
+  download again both times it was seen; what that is to a reader on a slow link was not
+  measured.
+- ~~**A rollback.** Never exercised: this deploy was the Worker's first, so there has been no
+  version to go back to, and nobody has watched one bring a version's files back.~~ **Run at
+  13:28 UTC — *Three deploys*, above.**
+- ~~**A deploy over a live page.** The update flow against the real host — a page open with its
+  service worker in control while a second build goes out — has never been seen. §9.6 saw it
+  once, on `localhost`.~~ **Seen three times, above** — for a build with no chunk renamed, and
+  by the driver's check rather than the app's.
 - **The zone on any other day, and the document from any other country.** A setting is the
   owner's to change; the read and the `diff` are 2026-10-04's, from Denmark.
 - **Email Address Obfuscation with an address to obfuscate.** It is on, and idle only because

@@ -979,8 +979,13 @@ zone read before it, and then every probe of the runbook at the real address: th
 for byte on every response that should carry it, the 304 included, and the served document
 equal to the built one. One headless Chrome then made a first run there — 118 470 cards
 searchable at 21.4 s, every feed in at 44.1 s, card pictures drawn, a launch with no network,
-and no policy violation. **Not seen**: a rollback, a second deploy under an open page, any
-other browser, a phone. [light-app.md](../../reference/light-app.md) §9.7 is the record.
+and no policy violation. **Later the same day**: a second build deployed at 13:27 UTC from
+`main` at `4929cc6e`, which is what production serves; a rollback and a roll forward, each
+bringing the version's files back within seconds; the update flow of this section's list seen
+across all three under one open tab, with the reader's data intact and nothing downloaded
+again; and the owner's one sentence that it works in Firefox. **Not seen**: a deploy that
+renames a chunk, the app's own check for a new build, Safari, a phone.
+[light-app.md](../../reference/light-app.md) §9.7 is the record.
 
 ---
 
