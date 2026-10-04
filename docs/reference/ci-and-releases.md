@@ -231,6 +231,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     config that stops watching either directory. (It also fenced the update-signing secret to one
     step of a `sign` job until that job was removed on 2026-09-29, below.) Comments are stripped
     before any of it is read, since these files explain themselves in prose that names both.
+- **Every `npm run <name>` a workflow asks for is a script `package.json` has**
+  (`scripts/workflow-scripts.test.mjs`). On 2026-10-04 the edit that added `lint:claude`
+  (`daa70e12`) took `web:smoke`'s line instead of sitting beside it; nothing `npm run verify`
+  runs calls `web:smoke`, so the first thing to notice was the `web` job — `npm error Missing
+  script` on `main`, and again on the release PR (#786) once it merged `main`. The fence globs
+  every workflow and composite action, reads `package.json`'s own scripts too (`lint` calls
+  `lint:claude`, `verify` calls four), strips comment lines first, and carries a guard that it
+  still sees `web:smoke` in `ci.yml` — a census that matched nothing would pass.
 - **A push to `main` gets a concurrency group of its own; PR runs still cancel each other.**
   Routing on a push diffs from `github.event.before`, so a cancelled `main` run's commits were
   never routed by the next one — and turning `cancel-in-progress` off alone would not have

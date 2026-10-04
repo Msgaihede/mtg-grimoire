@@ -172,9 +172,6 @@ fn hex16(bytes: &[u8; 16]) -> String {
 
 /// Start an offer. Mints a token, replaces any offer already in flight.
 pub fn begin(conn: &Connection, pending: &mut Option<Pending>) -> Result<Offer, String> {
-    // No invite for a pairing this host cannot complete: every step after this one is a
-    // request to the relay (`entitlement::not_from_a_page_yet`).
-    entitlement::not_from_a_page_yet()?;
     let me = identity::ensure(conn).map_err(err)?;
     // A device already in a group invites into *that* group; a device in none mints the id now
     // and only writes it at Confirm, so a cancelled pairing leaves nothing behind.
@@ -223,9 +220,6 @@ pub async fn accept(
     pending: &mut Option<Pending>,
     code: &str,
 ) -> Result<Handshake, String> {
-    // The joiner's door, as `begin` is the inviter's: nothing is read out of the code and no
-    // identity is minted for a pairing this host cannot complete.
-    entitlement::not_from_a_page_yet()?;
     let me = db.with(|conn| identity::ensure(conn).map_err(err))?;
     let inv = Invite::decode(code).map_err(err)?;
     let pair_key = crypto::pair_key(

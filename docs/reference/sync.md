@@ -380,10 +380,11 @@ error.
 **The word is the kind of machine, since 2026-10-04** — `platform::device::kind()`: `Desktop`,
 `Android`, `Browser`. It was `Desktop` on every host until the web host's first run drew
 "Desktop — not paired yet." in a browser tab, and this is the name every other device in a
-group files this one under. **A browser install cannot pair yet** — every command that would
-ask the relay is refused there in a sentence (`entitlement::NOT_FROM_A_BROWSER_YET`, until the
-light app's phase 6 gives the relay its CORS answers) — so the word is so far only what its
-own Devices panel reads.
+group files this one under. **A browser install pairs like any other device** — a page asks the
+relay as every host does, bound by CORS, which the relay answers for the origins on its
+allow-list (`relay/src/cors.ts`) — so `Browser` is the word a nameless tab is filed under on a
+paired desktop's roster. ⚠️ **In the tree, and on no host yet**: no build that asks the relay
+from a page has been deployed, and no browser has paired through the deployed relay.
 
 **The privacy trade was made knowingly and is the reader's, not this file's.** The comment on the
 old constant argued the other way — a hostname is often a person's own name and it would travel

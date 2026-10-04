@@ -617,17 +617,26 @@ fn http() -> http::Client {
     build_http()
 }
 
-/// **The only way this module reaches its client**: [`http`], behind
-/// [`entitlement::not_from_a_page_yet`], which has the reason. Every request below is built
-/// from this, so none can be sent from a host the relay cannot answer; the refusal is the
-/// bare sentence, returned before the `say` that logs a failed request — a refusal is not one.
-fn relay() -> Result<http::Client, String> {
-    entitlement::not_from_a_page_yet()?;
-    Ok(http())
-}
-
 /// The one place the client's shape is written down, so the two arms above cannot drift on a
 /// timeout the way two copies of a builder would.
+///
+/// **A page asks the relay through this client like any host.** In a browser it is `fetch`, and
+/// what binds a request there is CORS, which the relay answers for the origins on its allow-list
+/// (`relay/src/cors.ts`). Three things on this side are what that answer covers, and each is a
+/// rule about every request below rather than a habit:
+///
+/// * **The only request headers set are `authorization` and `content-type`** — here and in
+///   [`entitlement`] — which are the two the relay's pre-flight allows. A third is a pre-flight
+///   the relay refuses, and in a browser a refused pre-flight is a request that fails with no
+///   status at all. `the_relay_is_asked_with_two_headers_and_no_other`, in this module's tests,
+///   reads both files for it.
+/// * **No response header is read.** The relay exposes none, so in a browser every one but the
+///   safelisted handful reads as absent; a status and a body are all a request here learns. The
+///   same test holds that, and `commands::tests` runs the commands on a thread standing in for
+///   a page (`platform::host::emulate_page`), where an unexposed header is hidden.
+/// * **The `User-Agent` below is a native host's.** A page may not choose one, so the browser's
+///   own goes out ([`crate::platform::http`]), and nothing on the relay may come to depend on
+///   this one.
 fn build_http() -> http::Client {
     http::Client::new(&http::Config {
         user_agent: crate::scryfall::USER_AGENT,
@@ -849,7 +858,7 @@ async fn fetch_key_page_at(
 ) -> Result<Option<KeyPage>, String> {
     let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
     let url = keys_url(base, device, group, at);
-    let response = match relay()?
+    let response = match http()
         .get(&url)
         .header("authorization", &format!("Bearer {auth}"))
         .send()
@@ -1213,7 +1222,7 @@ pub async fn post_rotation(db: &impl Store, rotation: &identity::Rotation) -> Re
         "keys": keys,
     })
     .to_string();
-    let response = match relay()?
+    let response = match http()
         .post(&url)
         .header("content-type", "application/json")
         .header("authorization", &format!("Bearer {auth}"))
@@ -1272,7 +1281,7 @@ pub async fn post_rendezvous(
     let base = db.with(|conn| Ok(entitlement::base(conn)))?;
     let url = format!("{base}/p/{rv}/{slot}");
     let body = serde_json::json!({ "blob": blob }).to_string();
-    let response = match relay()?
+    let response = match http()
         .post(&url)
         .header("content-type", "application/json")
         .body(body)
@@ -1310,7 +1319,7 @@ pub async fn get_rendezvous(
 ) -> Result<Option<String>, String> {
     let base = db.with(|conn| Ok(entitlement::base(conn)))?;
     let url = format!("{base}/p/{rv}/{slot}");
-    let response = match relay()?.get(&url).send().await {
+    let response = match http().get(&url).send().await {
         Ok(r) => r,
         Err(e) => {
             say(db, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
@@ -1507,8 +1516,7 @@ async fn post_ops(
         }
     };
     let body = serde_json::to_string(&envelope).map_err(|e| Refusal::Failed(e.to_string()))?;
-    let response = relay()
-        .map_err(Refusal::Failed)?
+    let response = http()
         .post(&url)
         .header("content-type", "application/json")
         .header("authorization", &format!("Bearer {token}"))
@@ -2084,7 +2092,7 @@ pub async fn pull(
         "{base}/g/{}/pull?since={cursor}&device={device}",
         group.group_id
     );
-    let response = match relay()?
+    let response = match http()
         .get(&url)
         .header("authorization", &format!("Bearer {token}"))
         .send()
@@ -2480,7 +2488,7 @@ pub async fn ack(db: &impl Store, base: &str, token: &str) -> Result<(), String>
     // enable: `serde_json` is already here, and a feature that changes what every other request
     // in the tree is built from is a wide edit for two call sites.
     let body = serde_json::json!({ "device": device, "cursor": cursor }).to_string();
-    let response = match relay()?
+    let response = match http()
         .post(&url)
         .header("content-type", "application/json")
         .header("authorization", &format!("Bearer {token}"))

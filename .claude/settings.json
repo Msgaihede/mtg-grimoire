@@ -48,6 +48,28 @@
       }
     ]
   },
-  "enabledPlugins": {},
+  "enabledPlugins": {
+    "openrouter@openrouter": false,
+    "typesafe@typesafe-ai": false
+  },
+  "skillOverrides": {
+    "anthropic-skills:docx": "off",
+    "anthropic-skills:pptx": "off",
+    "anthropic-skills:xlsx": "off",
+    "anthropic-skills:pdf": "off",
+    "anthropic-skills:docs": "off",
+    "anthropic-skills:google-workspace": "off",
+    "anthropic-skills:canvas-design": "off",
+    "anthropic-skills:web-artifacts-builder": "off",
+    "anthropic-skills:morning": "off",
+    "anthropic-skills:schedule": "off",
+    "anthropic-skills:import-memory": "off",
+    "anthropic-skills:setup-claude": "off",
+    "anthropic-skills:setup-cowork": "off",
+    "anthropic-skills:deep-research": "off",
+    "anthropic-skills:explain-usage": "user-invocable-only",
+    "anthropic-skills:consolidate-memory": "user-invocable-only",
+    "anthropic-skills:skill-creator": "user-invocable-only"
+  },
   "env": {}
 }

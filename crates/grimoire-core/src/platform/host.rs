@@ -26,6 +26,13 @@
 //!   (`marketplace_feed::FeedProvider::permits_a_page`) and is refused in a sentence, before
 //!   any request, on a host that is one.
 //!
+//! **The sync relay is the one host that answers for the first rule, so it is the one host
+//! asked with a header outside the safelist**: every request to it carries `authorization` or
+//! a JSON `content-type` (`sync_engine::client`, `sync_engine::entitlement`), each costs a
+//! pre-flight, and the relay answers that pre-flight — and stamps the answer after it, a
+//! refusal included — for the origins on its allow-list (`relay/src/cors.ts`). The second rule
+//! holds there unbent: the relay exposes no response header and the sync client reads none.
+//!
 //! **Two questions and one fact.** No host this crate has is a page that keeps files, or a
 //! process with none, so both are answered from one switch. They stay two functions because a
 //! call site asks one of them: `if !host::keeps_files()` reads as the reason for a streamed

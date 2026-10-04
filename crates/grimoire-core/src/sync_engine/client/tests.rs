@@ -864,6 +864,85 @@ async fn every_relay_request_carries_the_bearer_token() {
     }
 }
 
+/// **What a browser's pre-flight is asked to allow, held to the two headers the relay allows.**
+/// From a page every request here is a cross-origin `fetch`: a request header outside
+/// `authorization` and `content-type` is one the relay's `Access-Control-Allow-Headers` does not
+/// name, and a response header is one the relay does not expose — the first fails the request
+/// with no status, the second reads as absent. Neither can be seen by a native test against a
+/// mock, which sends and reads whatever it is given, so this reads the two files that build a
+/// relay request, above their tests.
+///
+/// **A request header is `.header("name", value)` and a response read is `.header("name")`** —
+/// [`crate::platform::http`]'s two methods of that name — so the character after the name tells
+/// them apart.
+#[test]
+fn the_relay_is_asked_with_two_headers_and_no_other() {
+    fn shipped(source: &'static str) -> &'static str {
+        let cut = source
+            .rfind("\n#[cfg(test)]\nmod tests")
+            .expect("the file's test module, where this cuts it");
+        &source[..cut]
+    }
+    let files = [
+        ("client.rs", shipped(include_str!("../client.rs"))),
+        ("entitlement.rs", shipped(include_str!("../entitlement.rs"))),
+    ];
+
+    let mut set = std::collections::BTreeSet::new();
+    let mut calls = 0usize;
+    for (file, text) in files {
+        for (at, _) in text.match_indices(".header(\"") {
+            let rest = &text[at + ".header(\"".len()..];
+            let (name, after) = rest.split_once('"').expect("a closed string");
+            assert!(
+                after.trim_start().starts_with(','),
+                "{file} reads the response header {name:?}: the relay exposes none to a page, \
+                 so in a browser that is `None` whatever the relay sent"
+            );
+            assert_eq!(
+                name,
+                name.to_ascii_lowercase(),
+                "{file}: one spelling of a header, so this list is the list"
+            );
+            set.insert(name);
+            calls += 1;
+        }
+        // Every call, however it is laid out: a name that is not a literal, and a call `rustfmt`
+        // wrapped so its name starts the next line, are both calls the loop above never saw.
+        assert_eq!(
+            text.matches(".header(").count(),
+            text.matches(".header(\"").count(),
+            "{file} sets or reads a header this sweep cannot read — its name is not a literal, \
+             or is not on the line of its call"
+        );
+    }
+    // Both, so a sweep that matched nothing — a renamed method, a moved file — is not a pass.
+    let set: Vec<_> = set.into_iter().collect();
+    assert_eq!(
+        set,
+        ["authorization", "content-type"],
+        "a third request header is a pre-flight the relay refuses: add it to the relay's \
+         allow-list (`relay/src/cors.ts`) in the same change, and to this list"
+    );
+    // And the relay's side of the same fact, read where it is written: nothing compiles the
+    // two together, so a header added on either side alone is green on both.
+    let cors = include_str!("../../../../../relay/src/cors.ts");
+    let allowed = cors
+        .split_once("const ALLOW_HEADERS = \"")
+        .and_then(|(_, rest)| rest.split_once('"'))
+        .map(|(list, _)| list)
+        .expect("relay/src/cors.ts no longer spells ALLOW_HEADERS where this reads it");
+    let mut allowed: Vec<_> = allowed.split(',').map(str::trim).collect();
+    allowed.sort_unstable();
+    assert_eq!(
+        allowed, set,
+        "the relay's pre-flight allows exactly the headers the engine sets"
+    );
+    // Seven requests carry one or both; `GET /p/{rv}/{slot}` carries neither and costs no
+    // pre-flight at all. Counted so a call site that lost its header is seen here too.
+    assert_eq!(calls, 10, "the header calls in the two files");
+}
+
 /// Drive a whole round trip against a relay where **exactly one** of the three sync routes
 /// answers 401 and the other two answer normally, and hand back the device's database.
 ///

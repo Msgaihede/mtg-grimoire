@@ -132,9 +132,9 @@ a request it matches is a 429 once the free plan's day is spent.
   answers 304, and Cloudflare's 304 carries `_headers` — `handleRequest` in the asset worker's
   source wraps every response it returns, the `NotModifiedResponse` included, in
   `attachCustomHeaders`. Without the rule, "one host in `_headers` and a deploy" would have fixed
-  new visitors and nobody who had been before; phase 6 adding the relay is the same trap. The
-  rule is written for the name Vite gives the chunk, and `hosting.test.ts` reads the line that
-  constructs the Worker so a renamed file is a failure there. **The service worker is a second
+  new visitors and nobody who had been before; the relay's host, added for sync, is the same
+  trap. The rule is written for the name Vite gives the chunk, and `hosting.test.ts` reads the
+  line that constructs the Worker so a renamed file is a failure there. **The service worker is a second
   cache with the same property** (step 5.3): it serves the shell, this chunk included, out of
   Cache Storage with the headers it was stored with. That step re-fetches the shell per build and
   hashes `_headers` into its build id, so a policy change is a new build to it — a property of
@@ -142,17 +142,32 @@ a request it matches is a 429 once the free plan's day is spent.
   host's `_headers` changed*), and not something this directory relies on or checks.
 - **`connect-src` is exactly the hosts the engine asks, and `hosting.test.ts` holds it there in
   two halves.** *A host that moved*: the engine's addresses are read by name — `SCRYFALL_API`,
-  `IMAGE_HOST`, `FEED_URL` and Card Kingdom's `url()` — and the policy is held set-equal to
-  their hosts and the bulk files', so a missing entry and an extra one are both red. *A host that is new*: a census of every
+  `IMAGE_HOST`, `FEED_URL`, Card Kingdom's `url()` and the sync relay's `RELAY_BASE` — and the
+  policy is held set-equal to their hosts and the bulk files', so a missing entry and an extra
+  one are both red. *A host that is new*: a census of every
   `https://` literal in the code the three crates **ship** (above each file's test modules, by
   the cut `crates/grimoire-core/CLAUDE.md` states; comments out), each of which must be in
   `connect-src` or on a short list of hosts a browser's engine never asks, with a reason apiece —
-  Mana Pool, the relay until phase 6, Patreon's authorize page, the repository's address in the
-  `User-Agent`, the scanner's debug page. A sixth feed in a file the test has never heard of is
-  red. **Not Mana Pool** (it sends no `Access-Control-Allow-Origin`, so a page cannot read it
-  whatever a policy says). **Not the relay**: sync in a browser is phase 6, and that change adds
-  the host here in the same commit that adds this origin to the relay's CORS allow-list — until
-  then the request fails either way, and a policy that names it is wider for nothing.
+  Mana Pool, Patreon's authorize page, the repository's address in the `User-Agent`, the
+  scanner's debug page. A sixth feed in a file the test has never heard of is red. **Not Mana
+  Pool** (it sends no `Access-Control-Allow-Origin`, so a page cannot read it whatever a policy
+  says).
+- **The relay is in `connect-src`, and it is the one host there that answers this origin by
+  name.** The engine asks it from a page as it does from any host — pairing, the Patreon claim,
+  push, pull, the key check — and each of those is a cross-origin `fetch`; all but the
+  pairing poll carry `authorization` or a JSON `content-type`, and so cost a pre-flight. The
+  relay answers that pre-flight, and stamps every answer after it, only for an origin on its
+  own allow-list
+  (`relay/src/cors.ts`; `APP_ORIGINS` in `relay/wrangler.jsonc`). **So this entry and that list
+  are one fact written in two deploys**, and neither is any use without the other: a policy
+  that names a relay that does not answer lets every request leave and fail, and a relay that
+  answers an origin whose policy does not name it is never asked. *The steps, in order* has
+  the order. ⚠️ **`https:` only — the live socket is not named.** A `wss://` address is
+  another scheme to `connect-src`, and no `wss://` source is written until a browser has
+  opened the socket and shown what the policy needs; `hosting.test.ts` holds every source to
+  `https://` until then. ⚠️ **It names the hosted relay and no other**: the engine's override
+  for a relay of a reader's own (`client::RELAY_URL`, which has no UI) points a request at a
+  host this policy refuses, so the hosted page syncs through the hosted relay or not at all.
 - ⚠️ **What the fence cannot hold: `data.scryfall.io`, which is Scryfall's choice and no line
   of ours.** The card sync and both Tagger feeds download whatever address Scryfall's descriptor
   names; no shipped line says the host, and the census has a test saying so. The fence reads it
@@ -265,7 +280,9 @@ run**; light-app.md §9.7 has every figure.
   wire.
 - **Settings → Sync → *Pair a device*** drew the engine's refusal sentence and made **no
   cross-origin request** — so the relay's absence from `connect-src` was never what a reader
-  met.
+  met. (**True of that build, which is what production still serves.** The engine no longer
+  refuses and the policy names the relay — *The policy*, above. No build that asks the relay
+  from a page has been deployed, so that press has not been seen at the real origin since.)
 
 **Not driven in that pass**, and driven later the same day, next: the update flow, which needed
 a second deploy; a second tab; a launch after storage was cleared; decks, import and export, a
@@ -343,7 +360,10 @@ for it in chat**, as he did for the relay's on 2026-10-01 — and **the ask is p
 lifted this rule for that one deploy and left it standing for the next. The second deploy that
 day, and the rollback and roll-forward after it, were asked for again — he approved a marker
 deploy and a rollback test through the question tool — and so was the third, in chat: *"go
-ahead and run the deploy"*. Nothing else was run.
+ahead and run the deploy"*. Nothing else was run. **For the light app's phase 6 he asked once
+for the phase** (2026-10-04: *"you should deploy the changes we need, when we need them"*): the
+relay's deploy and this Worker's, as that phase's steps need them, and nothing after it. The
+steps below bind whoever runs them.
 
 ### Step 0 — ask the host, never a document
 
@@ -400,6 +420,8 @@ H='^HTTP|content-type|cache-control|content-security-policy|x-content-type|refer
 | 16 | `curl -s -o /dev/null -D - "$A/icons/icon-192.png" \| grep -iE "$H"` | `200`, `image/png`, `cache-control: no-cache` | **2026-10-04** — `200`, `image/png`, `no-cache`, the policy equal byte for byte |
 | 17 | `curl -s -o /dev/null -D - "$A/assets/$W" \| grep -iE "$H"` | `200`, a JavaScript MIME type, **`cache-control: no-cache`** — one value, not a year and not three joined — the policy, and an `etag` | **2026-10-04** — `200`, `text/javascript`, `no-cache` — one value — the policy equal byte for byte, and a strong `ETag` |
 | 18 | `E=$(curl -s -o /dev/null -D - "$A/assets/$W" \| grep -i '^etag' \| cut -d' ' -f2 \| tr -d '\r')`, then `curl -s -o /dev/null -D - -H "If-None-Match: $E" "$A/assets/$W" \| grep -iE "$H"` | **`304`, with the policy line on it.** This is the response that re-governs a returning reader's engine after a change to `_headers`; a 304 without the policy leaves the old one in force (measured) | **2026-10-04** — **`304 Not Modified`, with the policy on it, equal byte for byte**, `no-cache`, and probe 17's `ETag` |
+| 19 | `curl -s -o /dev/null -D - "$A/" \| grep -i '^content-security-policy' \| grep -c 'connect-src[^;]* https://mtg-grimoire-relay\.denmark-east\.workers\.dev[ ;]'` | `1` — the policy the host sends names the relay. `0` is a build from before the engine asked it from a page, and that build's sync panel answers the refusal sentence instead | **2026-10-04, 15:59 UTC** — `0`: production is a build from before this entry. *Not yet run* against one that should answer `1` |
+| 20 | `curl -s -o /dev/null -D - -X OPTIONS -H "Origin: $A" -H "Access-Control-Request-Method: POST" -H "Access-Control-Request-Headers: authorization,content-type" https://mtg-grimoire-relay.denmark-east.workers.dev/token \| grep -iE '^HTTP\|^access-control'` | `204`, **`access-control-allow-origin: https://mtg-grimoire.app`**, and an `access-control-allow-headers` that names `authorization` and `content-type` — the two request headers the engine sets, and the pre-flight every sync request from a page costs. ⚠️ **Asked of the relay, not of this Worker, and asked BEFORE this Worker's deploy** (*The steps, in order*): no allow-origin line is a relay that cannot answer a page | **2026-10-04, 15:59 UTC** — `405 Method Not Allowed`, `Allow: POST`, **and no `access-control-*` line**: the relay deployed that minute predates its allow-list, which is the answer that means *stop*. *Not yet run* against a relay that has one |
 
 **Beside the table, the same minute**: the document served — to `-H "Sec-Fetch-Mode: navigate"`
 and to a plain `GET /` — was byte for byte `dist-web/index.html`; and `www.mtg-grimoire.app` did
@@ -417,10 +439,39 @@ rewriting the page — *Before the first deploy*, below. **Made on 2026-10-04 at
 headless Chrome 154.0.8037.95: no violation, the app past its gate, that console line, and one
 `<script>` in the source and in the live DOM — *What the browser said under it* has the run.
 
+⚠️ **The tree is ahead of the host by one source, and "byte for byte the line in `_headers`"
+means the `_headers` of the build that was deployed** — `dist-web/_headers`, never this
+directory's on another commit. Since the engine asks the relay from a page, this directory's
+policy names `https://mtg-grimoire-relay.denmark-east.workers.dev` in `connect-src`; every
+*Answered* cell above is from a build without it, and stays true of that build. Probes 19 and
+20 are the two that came with it. Each was asked once, that day at 15:59 UTC, of hosts that
+should *not* pass yet, and neither did — so both can fail; neither has been asked of a host
+that should pass.
+
 **On a day the account's free limit is spent, probes 3–5, 11, 14 and 15 answer `429 text/html`**
 — Cloudflare's own page, not the script's 404 — and the rest are unchanged. *Cost* has why.
 
 ### The steps, in order
+
+⚠️ **The relay's deploy comes first, whenever the two have to agree.** The web app asks the
+relay from a page, and the relay answers a page only for an origin on its allow-list. Deployed
+in the other order — a web build that asks, in front of a relay that does not answer — **every
+sync request fails, loudly**: the pre-flight is refused, the engine reports `error sending
+request`, and the console fills. How fast it fills was measured once, by the mistake next
+door: on the first run of the hosted app (2026-10-04) one press of *Pair a device* made
+thirteen requests in fifteen seconds, each refused — by the policy that day, which did not
+name the relay. The other order costs nothing: a relay that answers an origin nobody asks
+from yet is a header on no request. So:
+
+- **Before step 7, ask the relay** — probe 20 above. No `access-control-allow-origin` on its
+  answer means the relay that is deployed predates its allow-list: stop, and deploy the relay
+  (`docs/reference/hosted-relay-deploy.md`) before this.
+- **A changed `_headers` is a new build to every reader.** The service worker hashes the file
+  into its build id, so the deploy that adds a host to `connect-src` offers the update bar to
+  everybody who has been before, and the engine's Worker chunk is revalidated into the new
+  policy (*The policy*, above). What that update costs a reader was measured for a
+  `_headers`-only deploy — *What a deploy changes for a reader*: 43 small requests, the engine
+  not downloaded again.
 
 1. **`npm ci`**, on Node from `.nvmrc`.
 2. **`npm run web:wasm`** — the engine, into `dist-wasm/`. It needs the `wasm32-unknown-unknown`
@@ -615,8 +666,10 @@ touches them.
   rule on the zone** to the apex and never a second Custom Domain on this Worker. **It was
   wanted, and that is what it is** — since 2026-10-04, a `301` to the apex with the path and
   query kept (*Before the first deploy*, above, has the rule and the record behind it).
-- **Phase 6 depends on this exact string.** The relay's CORS allow-list will name
-  `https://mtg-grimoire.app`, and `_headers` will name the relay.
+- **The relay knows this origin by its exact string.** Its CORS allow-list names
+  `https://mtg-grimoire.app` (`APP_ORIGINS`, `relay/wrangler.jsonc`) and `_headers` names the
+  relay, so an origin that moved would also be one the relay refuses on every request — sync
+  would stop for the readers the move had already cost their collections.
 
 ### Rolling back
 
@@ -710,6 +763,12 @@ address**:
   browser did the same day (*What the browser said under it*, above): **every host in
   `connect-src` was asked from a page at `mtg-grimoire.app` and answered 200, the app asked no
   other host, and nothing was refused.** One run, in one Chrome.
+
+**Open again, and only a deploy of both Workers settles it**: the relay asked from a page at
+this origin. The policy names it and the engine asks it, in no build that has been deployed;
+the relay's allow-list has answered no browser. Until a pairing has been driven at
+`mtg-grimoire.app` against the deployed relay, "every host in `connect-src` was asked and
+answered 200" is a sentence about five hosts and not six.
 
 **And no deploy by itself settles these**, which are a browser's and a later day's: any
 browser's *figures* but one Chrome's on Windows — the policy and the engine have met no Safari,
