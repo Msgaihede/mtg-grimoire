@@ -1,9 +1,12 @@
 {
+  // Resolves once `npm ci --ignore-scripts --prefix app-worker` has run: this directory's own
+  // `package.json` and lockfile pin the `wrangler` that deploys it (README, "Deploying").
   "$schema": "node_modules/wrangler/config-schema.json",
   // The light app's web host: `dist-web/` at an origin root. A third Worker beside the relay and
   // the share Worker and never either of them (light-app spec §6) — for the share Worker's
-  // reason, blast radius: every deploy is done by hand by one person, and a bad deploy of a page
-  // must not be a sync outage. It shares nothing with the other two: no database, no secret, no
+  // reason, blast radius: a bad deploy of a page must not be a sync outage — the more so since
+  // 2026-10-04, when a release began deploying this Worker by a job (`release.yml`,
+  // `web-deploy`) while the relay's deploys stayed by hand. It shares nothing with the other two: no database, no secret, no
   // service binding.
   "name": "mtg-grimoire-app",
 

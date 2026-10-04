@@ -185,10 +185,20 @@ tree is ahead of both hosts. **An address a server sends is not**
 a browser's first run fails. **The last deploy was 2026-10-04 at 13:27 UTC, from `main` at
 `4929cc6e`** — the second that day, rolled back at 13:28 and forward again at 13:30 to see a
 rollback work, so **production is that commit and not `main`**, which has moved past it. This
-paragraph said *not deployed* until then. No job deploys it and no agent may unasked: each of
+paragraph said *not deployed* until then. No agent may deploy it unasked: each of
 those was run by an agent because Markus asked for it, and **the ask is per deploy** — except
 that for the light app's phase 6 he asked once for the phase's deploys, the relay's and this
-Worker's (2026-10-04), and for nothing after it.
+Worker's (2026-10-04), and for nothing after it. **One job deploys it, and it is the only job
+that deploys anything** (decided 2026-10-04): `release.yml`'s `web-deploy`, at a release tag,
+once the values it needs exist in the `release` environment — the three hosts ship from one
+tag, because a web app ahead of the last release sends paired desktops ops they must hold
+([ci-and-releases.md](../reference/ci-and-releases.md), *The release rule*). **So merging the
+release PR is a deploy of this Worker.** The tool is `wrangler` at the version
+`app-worker/package-lock.json` pins, with everything under it — installed with no lifecycle
+script run, by the job and by hand alike. Between releases a deploy is still by hand and still
+asked for, and **`npm run web:deploy-guard` is run first**: it refuses a tree whose user schema
+is not the last release's, or whose last release is still a draft — and it cannot see a wire
+change that is not a schema rung. The relay and the share Worker are deployed by no job.
 [`app-worker/README.md`](../../app-worker/README.md) is the runbook, with every probe in it answered
 at the real address that day. **Who has run it**: headless Chrome 154, driven and measured; the
 owner's Firefox and the owner's phone, a sentence each. What nobody has seen — Safari, an

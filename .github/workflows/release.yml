@@ -20,6 +20,25 @@ permissions: {}
 # Dependabot (`.github/dependabot.yml`) moves the SHA and the comment together, and
 # `scripts/actions-pinned.test.mjs` fails on any `uses:` that is neither local nor a 40-character
 # SHA, and on any checkout that leaves its token behind (`persist-credentials: false`).
+#
+# **The three hosts ship from one tag** (light app phase 6, step 6.6, 2026-10-04). One core means
+# one user schema per commit, and sync stamps every op with the sender's: a device on an older
+# build holds an op stamped newer until it updates. So a host that ships ahead of the others
+# strands them, and this file is where they are kept together:
+#
+#   release-please ─┬─ build (windows, linux) ──────────────┬─ web-deploy ── publish
+#                   ├─ android ── android-sign ─────────────┤
+#                   └─ web ──────────────────────────────────┘
+#                                         (publish also needs build and android-sign)
+#
+# The two jobs that hold a secret — `android-sign`, `web-deploy` — build nothing, take what they
+# hold from the `release` environment (which only `main` may use), and each ends green and says
+# so when its values are not set. docs/reference/ci-and-releases.md, "The release rule", has the
+# reasons and what only the owner can do.
+#
+# **`on:` is a push to `main` and nothing else.** Not `workflow_dispatch`, not `pull_request`:
+# either would let a branch's copy of this file ask for the release environment's values, and
+# the environment's branch rule would be the only thing between them and a pull request.
 jobs:
   release-please:
     name: release-please
@@ -151,9 +170,514 @@ jobs:
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
             "$PORTABLE_ZIP" --clobber --repo "${{ github.repository }}"
 
+  # **The light app's APK, built at the tag** — `ci.yml`'s `android` job, step for step: the same
+  # runner, JDK 21, NDK, toolchain action, cache key and `npx tauri android build`. It holds no
+  # secret, so what Gradle signs it with is the runner's debug key, exactly as in a pull request.
+  # That signature never reaches a release: `android-sign` below replaces it, or nothing is
+  # attached.
+  #
+  # **It runs whether or not there is a key to sign with.** A tag the APK cannot be built from is
+  # a release that would ship two hosts and not the third, and that is a red run, not a skip.
+  android:
+    name: android (build)
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    # A cold release compile of the engine for arm64, then Gradle. A job has six hours by
+    # default, and `publish` waits on this one.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - name: Point the build at JDK 21, the SDK and the NDK
+        run: |
+          set -euo pipefail
+          : "${JAVA_HOME_21_X64:?the runner image did not set JAVA_HOME_21_X64}"
+          : "${ANDROID_HOME:?the runner image did not set ANDROID_HOME}"
+          : "${ANDROID_NDK_LATEST_HOME:?the runner image did not set ANDROID_NDK_LATEST_HOME}"
+          echo "JAVA_HOME=$JAVA_HOME_21_X64" >> "$GITHUB_ENV"
+          echo "NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          "$JAVA_HOME_21_X64/bin/java" -version
+          cat "$ANDROID_NDK_LATEST_HOME/source.properties"
+
+      - uses: ./.github/actions/rust-toolchain
+        with:
+          targets: aarch64-linux-android
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> src-tauri/target"
+          key: android-aarch64
+
+      # From `mobile/`, so the CLI finds the light host's `tauri.conf.json`, as in `ci.yml`. The
+      # APK's `versionName` and `versionCode` come from that file's `version`, which
+      # release-please bumped in the commit this run is on.
+      - name: Build the APK
+        working-directory: mobile
+        run: npx tauri android build --apk --target aarch64 --ci
+
+      - name: Find the APK
+        shell: bash
+        run: |
+          set -euo pipefail
+          apk=$(find mobile/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          [ -n "$apk" ] || { echo "the build produced no APK" >&2; exit 1; }
+          mkdir -p apk-out && cp "$apk" apk-out/mtg-grimoire-light-arm64.apk
+          ls -l apk-out
+
+      # Handed to `android-sign`, and to nobody else: this is the debug-signed build, and its
+      # name says so. Fourteen days, so a sign job that failed can be run again.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: android-apk-debug-signed
+          path: apk-out/mtg-grimoire-light-arm64.apk
+          retention-days: 14
+          if-no-files-found: error
+
+  # **The release key, in a job of its own.** This is the one structural rule the removed `sign`
+  # job left behind (docs/reference/ci-and-releases.md): a signing secret never sits in a build
+  # leg, because a build leg runs every npm lifecycle script, every cargo build script and every
+  # Gradle plugin, and any of them can read a file or an environment. So this job runs none of
+  # them — no `npm ci`, no cargo, no Gradle. It checks out one script, downloads the APK the
+  # job above built, and re-signs it with the Android SDK's own `apksigner`
+  # (`scripts/android-sign.sh`, which `ci.yml`'s `android` job proves on a throwaway key in every
+  # pull request that can have changed the APK). `scripts/release-rule.test.mjs` holds the rule.
+  #
+  # **With no key it attaches nothing and ends green**, saying so in the summary. It never
+  # attaches the debug-signed build: each runner mints its own debug key, so that APK could not
+  # update over any other, and an update that will not install is an uninstall — which wipes
+  # `user.db` and a paired identity. **With some of the three key values and not all, it
+  # fails**: that is a mistake in the settings, and a skip would hide it for as long as nobody
+  # looked.
+  #
+  # **And with a key but no committed fingerprint it attaches nothing either**
+  # (`mobile/src-tauri/release-signer.sha256`). "Signed by the keystore in the settings" is not
+  # "signed by the key the last release was": a keystore made a second time would sign happily
+  # and strand every phone. The fingerprint is public and the owner has it the moment he makes
+  # the key, so the rule is the strict one — no fingerprint in the tree, no APK on the release —
+  # and the script refuses a keystore that is not the one it names.
+  #
+  # **`environment: release`**, and with it the key: a repository-level value is handed to any
+  # workflow on any branch of this repository that asks for it, where an environment's is handed
+  # only to a job that names the environment, from a branch the environment allows — `main`
+  # alone, set up once by the owner (docs/reference/ci-and-releases.md).
+  android-sign:
+    name: android (sign and attach)
+    needs: [release-please, android]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: release
+    # Uploads the signed APK to the draft.
+    permissions:
+      contents: write
+    steps:
+      # The script, and the fingerprint the next step looks for. Nothing is installed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # A job's `if:` cannot ask whether a value is set, so a step does and says what it found.
+      # **It is told whether each is set, never what it is**: the expressions below are `true`
+      # or `false`, so no key material is in this step's environment.
+      - name: Is there a key to sign with, and a fingerprint to hold it to
+        id: key
+        shell: bash
+        env:
+          HAS_KEYSTORE: ${{ secrets.ANDROID_KEYSTORE_BASE64 != '' }}
+          HAS_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD != '' }}
+          HAS_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD != '' }}
+          PIN: mobile/src-tauri/release-signer.sha256
+        run: |
+          set -euo pipefail
+          missing=""
+          found=0
+          has() { if [ "$2" = true ]; then found=$((found + 1)); else missing="$missing $1"; fi; }
+          has ANDROID_KEYSTORE_BASE64 "$HAS_KEYSTORE"
+          has ANDROID_KEYSTORE_PASSWORD "$HAS_KEYSTORE_PASSWORD"
+          has ANDROID_KEY_PASSWORD "$HAS_KEY_PASSWORD"
+          if [ -n "$missing" ] && [ "$found" -gt 0 ]; then
+            echo "Some of the signing key's values are set in the release environment and these are not:$missing" >&2
+            echo "Set all three or none — docs/reference/ci-and-releases.md, 'What only the owner can do'." >&2
+            exit 1
+          fi
+          if [ -z "$missing" ] && [ -f "$PIN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Android APK — not attached"
+            echo
+            if [ -n "$missing" ]; then
+              echo "This release has **no Android APK**. The \`release\` environment holds no signing"
+              echo "key (\`ANDROID_KEYSTORE_BASE64\`, \`ANDROID_KEYSTORE_PASSWORD\`,"
+              echo "\`ANDROID_KEY_PASSWORD\`), and a debug-signed APK is never attached: it could not"
+              echo "update over any other build, and an update that will not install is an uninstall."
+            else
+              echo "⚠️ This release has **no Android APK, although the signing key is set**: this tag"
+              echo "holds no \`$PIN\`. Without the certificate's fingerprint in the tree nothing says"
+              echo "the key in the settings is the key the last release was signed with, and an APK"
+              echo "signed by another key installs over nothing. Commit the fingerprint; the next"
+              echo "release attaches an APK."
+            fi
+            echo "The APK was built at this tag, so the tag is known to build one."
+            echo
+            echo "\`docs/reference/ci-and-releases.md\`, *What only the owner can do*, has the commands."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.key.outputs.present == 'true'
+        with:
+          name: android-apk-debug-signed
+          path: apk-in
+
+      # The only step the key reaches. The keystore is decoded into the runner's temp folder,
+      # outside the checkout, readable by this user alone (`umask 077`), and deleted when the
+      # step ends, however it ends. **The alias is a plain word and not a secret**: it is no
+      # secret, and GitHub would mask every `mtg-grimoire` in this job's log — the APK's own
+      # name among them — if it were one.
+      - name: Sign the APK with the release key
+        if: steps.key.outputs.present == 'true'
+        shell: bash
+        env:
+          ANDROID_KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+          ANDROID_KEY_ALIAS: mtg-grimoire
+          ANDROID_SIGNER_PIN: mobile/src-tauri/release-signer.sha256
+          VERSION: ${{ needs.release-please.outputs.version }}
+        run: |
+          set -euo pipefail
+          : "${JAVA_HOME_21_X64:?the runner image did not set JAVA_HOME_21_X64}"
+          : "${ANDROID_HOME:?the runner image did not set ANDROID_HOME}"
+          export JAVA_HOME="$JAVA_HOME_21_X64"
+          export ANDROID_KEYSTORE="$RUNNER_TEMP/release.keystore"
+          trap 'rm -f "$ANDROID_KEYSTORE"' EXIT
+          umask 077
+          printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE"
+          apk="mtg-grimoire-$VERSION-android-arm64.apk"
+          # The APK must say it is this release, with the versionCode that makes it an update.
+          export ANDROID_EXPECT_VERSION="$VERSION"
+          bash scripts/android-sign.sh apk-in/mtg-grimoire-light-arm64.apk "$apk"
+          echo "SIGNED_APK=$apk" >> "$GITHUB_ENV"
+
+      - name: Attach the APK to the draft release
+        if: steps.key.outputs.present == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release upload "${{ needs.release-please.outputs.tag_name }}" \
+            "$SIGNED_APK" --clobber --repo "${{ github.repository }}"
+
+  # **The web app, built at the tag and opened in a browser** — `ci.yml`'s `web` job, step for
+  # step, less the lint and the size report: clang 18, the wasm target, the `wasm-bindgen` CLI at
+  # the lockfile's version, `web:wasm`, `web:build`, and the offline first run in the image's own
+  # Chrome. It holds no secret and deploys nothing; what it leaves is `dist-web/`, as an artifact
+  # for `web-deploy`.
+  #
+  # **It runs whether or not there is a token to deploy with**, for `android`'s reason: a tag the
+  # web app cannot be built from, or whose first run fails in a browser, is not a release.
+  web:
+    name: web (build)
+    needs: release-please
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    # The `wasm-bindgen` CLI compiled from source on a cold cache, the module, the page and the
+    # smoke run, which has ten minutes of its own.
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install clang
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang
+          clang --version
+          major=$(clang --version | sed -n 's/.*clang version \([0-9]*\).*/\1/p' | head -1)
+          if ! [ "${major:-0}" -ge 18 ]; then
+            echo "clang '${major}' is too old or unreadable: sqlite-wasm-rs's shim needs C23 attributes (clang 18+)" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      - uses: ./.github/actions/rust-toolchain
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> src-tauri/target"
+          key: web-wasm32
+
+      # Read from `Cargo.lock`, never typed here — `ci.yml` has the argument, and
+      # `scripts/toolchain.test.mjs` holds every workflow to this line's shape.
+      - name: Install the wasm-bindgen CLI the lockfile resolves
+        shell: bash
+        run: |
+          set -euo pipefail
+          versions=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; print }' Cargo.lock \
+            | sed -n 's/^version = "\([^"]*\)"$/\1/p')
+          count=$(grep -c . <<< "$versions" || true)
+          if [ "$count" != 1 ]; then
+            echo "Cargo.lock resolves the wasm-bindgen crate $count times; the CLI can match exactly one:" >&2
+            echo "$versions" >&2
+            exit 1
+          fi
+          bindgen=$versions
+          echo "Cargo.lock resolves wasm-bindgen $bindgen"
+          cargo install wasm-bindgen-cli --version "$bindgen" --locked
+          installed=$(wasm-bindgen --version)
+          echo "$installed"
+          case "$installed" in
+            "wasm-bindgen $bindgen" | "wasm-bindgen $bindgen "*) ;;
+            *)
+              echo "the wasm-bindgen on PATH is '$installed', not $bindgen" >&2
+              exit 1
+              ;;
+          esac
+
+      - name: Build the module
+        run: npm run web:wasm
+
+      - name: Build the page
+        run: npm run web:build
+
+      # What a deploy cannot do without: the document, the policy and caching rules
+      # (`_headers`, parsed at deploy and never served), and the service worker, which
+      # `web:build` writes last.
+      - name: Check the bundle is whole
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in index.html _headers sw.js; do
+            [ -s "dist-web/$file" ] || { echo "dist-web/$file is missing or empty" >&2; exit 1; }
+          done
+          ls dist-web
+
+      - name: Find Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          chrome=$(command -v google-chrome || command -v google-chrome-stable || true)
+          if [ -z "$chrome" ] && [ -n "${CHROME_BIN:-}" ] && [ -x "$CHROME_BIN" ]; then
+            chrome=$CHROME_BIN
+          fi
+          if [ -z "$chrome" ]; then
+            echo "this runner has no google-chrome on PATH and no usable CHROME_BIN" >&2
+            exit 1
+          fi
+          version=$("$chrome" --version)
+          echo "$chrome: $version"
+          echo "CHROME=$chrome" >> "$GITHUB_ENV"
+
+      - name: Open the built app in headless Chrome
+        timeout-minutes: 10
+        run: npm run web:smoke
+
+      # The bundle `web-deploy` uploads, and the record of what a release deployed.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: web-bundle
+          path: dist-web/
+          retention-days: 14
+          if-no-files-found: error
+
+  # **The one job in this repository that deploys anything, and it deploys one Worker**: the web
+  # app's hosting, `app-worker/`, to https://mtg-grimoire.app. The owner decided on 2026-10-04
+  # that a release deploys it — one core means one user schema per commit, so the three hosts
+  # ship from one tag (docs/reference/ci-and-releases.md, "The release rule"). **The relay is
+  # deployed by no job**: it holds secrets and a D1 with real entitlements, and its deploys stay
+  # by hand. `scripts/release-rule.test.mjs` fails a second `wrangler` line in any workflow.
+  #
+  # **The token, in a job of its own**, for `android-sign`'s reason and a wider blast radius: a
+  # token that can deploy this Worker can, unless it was scoped down, deploy over the relay on the
+  # same account. So this job runs no build: no root `npm ci`, no cargo. It checks out the
+  # Worker's configuration and downloads the bundle `web` built and opened in a browser.
+  #
+  # **`wrangler` is pinned by a lockfile, and installed with no script run and no token in
+  # reach.** `npx wrangler@4.146.0` pinned one package of ninety-one: the rest came through
+  # floating ranges, resolved on the day, and two of them (`esbuild`, `workerd`) run a
+  # `postinstall` — in the step that held the token. So `app-worker/package-lock.json` names
+  # every one with its integrity hash, `npm ci --ignore-scripts` installs exactly those in a step
+  # whose environment holds nothing, and the step that holds the token runs
+  # `npx --no-install wrangler`, which installs nothing and fails if it is not there.
+  # `scripts/release-rule.test.mjs` holds both lines to the letter.
+  # The account id is kept out of the tree too: it is in no file of this repository.
+  #
+  # **It waits for the desktop builds and the APK**, and is the last thing before `publish`. A
+  # deploy is live the moment it returns, and a release is a draft until `publish` — so the
+  # deploy goes as late as it can, when nothing but its own probe and the flip of the draft can
+  # still fail.
+  #
+  # **With no token it deploys nothing and ends green**, saying so in the summary — and saying
+  # what that leaves: the address serves the previous deploy until somebody deploys this tag by
+  # hand. With one of the two values and not the other, it fails.
+  #
+  # **`environment: release`**, for `android-sign`'s reason: the token is handed only to a job
+  # that names the environment, from `main`.
+  web-deploy:
+    name: web (deploy)
+    needs: [release-please, build, android-sign, web]
+    if: needs.release-please.outputs.release_created == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    environment: release
+    permissions:
+      contents: read
+    steps:
+      # `app-worker/` — `wrangler.jsonc`, the script, the lockfile — and the probe.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Told whether each is set, never what it is — as in `android-sign`.
+      - name: Is there a token to deploy with
+        id: token
+        shell: bash
+        env:
+          HAS_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN != '' }}
+          HAS_ACCOUNT: ${{ secrets.CLOUDFLARE_ACCOUNT_ID != '' }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+        run: |
+          set -euo pipefail
+          missing=""
+          found=0
+          has() { if [ "$2" = true ]; then found=$((found + 1)); else missing="$missing $1"; fi; }
+          has CLOUDFLARE_API_TOKEN "$HAS_TOKEN"
+          has CLOUDFLARE_ACCOUNT_ID "$HAS_ACCOUNT"
+          if [ -z "$missing" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$found" -gt 0 ]; then
+            echo "One of the deploy's two values is set in the release environment and this one is not:$missing" >&2
+            echo "Set both or neither — docs/reference/ci-and-releases.md, 'What only the owner can do'." >&2
+            exit 1
+          fi
+          echo "present=false" >> "$GITHUB_OUTPUT"
+          {
+            echo "### Web app — not deployed"
+            echo
+            echo "**https://mtg-grimoire.app still serves the previous deploy.** The \`release\`"
+            echo "environment holds no \`CLOUDFLARE_API_TOKEN\` and \`CLOUDFLARE_ACCOUNT_ID\`, so this"
+            echo "release deployed nothing. The web app was built at $TAG and opened in a browser,"
+            echo "so the tag is known to build one."
+            echo
+            echo "If this release moved the user schema, a browser paired with a desktop that"
+            echo "updates to it holds that desktop's changes until the web app is deployed from"
+            echo "$TAG by hand — \`app-worker/README.md\`, *The steps, in order*."
+            echo
+            echo "\`docs/reference/ci-and-releases.md\`, *What only the owner can do*, has the commands."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # **A deploy is not a release's to make twice.** This job can be run again long after its
+      # run — *Re-run jobs* — and it would upload this tag's bundle over whatever a later release
+      # deployed: an older user schema in front of desktops that have moved on. So it asks which
+      # release is the newest published one and refuses to deploy anything older. On a first run
+      # that is the previous release (this one is still a draft), which is older, and it goes on.
+      - name: Refuse to deploy an older release over a newer one
+        if: steps.token.outputs.present == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ needs.release-please.outputs.tag_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)
+          newest=$(printf '%s\n%s\n' "$latest" "$TAG" | sort -V | tail -1)
+          echo "this run's tag: $TAG; the newest published release: $latest"
+          if [ "$newest" != "$TAG" ]; then
+            echo "$latest is published and is newer than $TAG: deploying $TAG's bundle would put an older web app in front of it. Nothing was deployed." >&2
+            exit 1
+          fi
+
+      # For `npm ci`, `npx` and the probe, which is a plain `.mjs`. No `cache:` — a cache is
+      # one more thing that could hand this job bytes the lockfile did not name.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        if: steps.token.outputs.present == 'true'
+        with:
+          node-version-file: .nvmrc
+
+      # Where `wrangler.jsonc`'s `assets.directory` (`../dist-web`) looks.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        if: steps.token.outputs.present == 'true'
+        with:
+          name: web-bundle
+          path: dist-web
+
+      # `web` checked this before it uploaded; asked again here because after the next step is
+      # too late. `wrangler deploy` uploads whatever the directory holds, and a bundle without
+      # `_headers` deploys as an app with no policy and no caching rules.
+      - name: Check the bundle arrived whole
+        if: steps.token.outputs.present == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          for file in index.html _headers sw.js; do
+            [ -s "dist-web/$file" ] || { echo "dist-web/$file is missing or empty" >&2; exit 1; }
+          done
+
+      # `wrangler` and everything under it, from `app-worker/package-lock.json` and nowhere else:
+      # each tarball checked against the hash the lockfile holds, and **no lifecycle script run**
+      # — `esbuild`'s and `workerd`'s `postinstall` only swap a JS launcher for the native binary
+      # it would start anyway, and each finds its platform package without it. This step's
+      # environment holds no token: what it installs is not run until the next one.
+      - name: Install the lockfile's packages, running no script
+        if: steps.token.outputs.present == 'true'
+        working-directory: app-worker
+        run: npm ci --ignore-scripts
+
+      # The only step the token reaches, and the only `wrangler` in any workflow.
+      # `--no-install`: what runs is what the step above installed, or nothing.
+      - name: Deploy the Worker
+        if: steps.token.outputs.present == 'true'
+        working-directory: app-worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_SEND_METRICS: "false"
+        run: npx --no-install wrangler deploy
+
+      # The runbook's cheapest probes, asked of the real address: the document answers 200, its
+      # Content-Security-Policy is the built `_headers` line, and the document is this bundle's.
+      # ⚠️ **A failure here leaves the web app deployed and the release a draft** — the summary
+      # says which question failed, and docs/reference/ci-and-releases.md says what to do then.
+      - name: Ask the host
+        if: steps.token.outputs.present == 'true'
+        timeout-minutes: 5
+        run: node scripts/web-deploy-probe.mjs dist-web
+
+  # **Publishes only when all three hosts are through.** `build` is the desktop's; `android-sign`
+  # ends green with the APK attached or with no key to sign it; `web-deploy` ends green with the
+  # address serving this tag or with no token to deploy it. A failure in any of them — or in
+  # `android` or `web`, which those two need — leaves the release a draft: a release that
+  # publishes two hosts and not the third is what the rule exists to prevent.
   publish:
     name: publish
-    needs: [release-please, build]
+    needs: [release-please, build, android-sign, web-deploy]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-22.04
     # Flips the draft to published, and nothing else.

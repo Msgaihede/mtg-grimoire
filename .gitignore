@@ -69,6 +69,20 @@ ds-bundle/
 .dev.vars.*
 .wrangler/
 
+# An Android signing key, in every form `keytool` and a signing guide leave one in — the
+# keystore, its base64 for `gh secret set`, and the properties file Tauri's signing guide has
+# Gradle read. The release key lives in GitHub's secrets and in the owner's own backup, and is
+# made **outside this folder** (docs/reference/ci-and-releases.md, "What only the owner can do");
+# these lines are for the day it is made here anyway. This repo is public, and a lost key is
+# every phone uninstalling — a leaked one is worse.
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.keystore.b64
+keystore.properties
+key.properties
+
 # Transcripts from `tauri dev`, redirected so they can be grepped.
 devlog*.txt
 
