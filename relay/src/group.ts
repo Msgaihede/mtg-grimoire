@@ -1,5 +1,6 @@
 import { admitToLog, isEnvelope } from "./admit";
 import {
+  CLOSE_REMOVED,
   compact,
   departures,
   deviceTag,
@@ -8,7 +9,9 @@ import {
   notifyTargets,
   isNewerRoster,
   parseRoster,
+  removedSockets,
   since,
+  taggedDevice,
   type Ack,
   type Row,
 } from "./log";
@@ -470,10 +473,18 @@ export class Group implements DurableObject {
     }
     const named = roster.devices;
 
+    // **A device holding a socket is one this object knows of**, whether or not it has acked or
+    // pushed yet — a device removed minutes after it joined has done neither — so it is marked
+    // departed with the rest, and its socket is closed below.
+    const sockets = this.sockets();
+    const connected = sockets
+      .map((socket) => taggedDevice(socket.tag))
+      .filter((device): device is string => device !== undefined);
     const known = this.sql
       .exec<{ device: string }>(`SELECT device FROM acks UNION SELECT device FROM log`)
       .toArray()
-      .map((row) => row.device);
+      .map((row) => row.device)
+      .concat(connected);
     const now = Date.now();
     for (const device of departures(known, named)) {
       // `DO NOTHING`: a device omitted by two rosters left at the first, and `at` says when.
@@ -491,8 +502,26 @@ export class Group implements DurableObject {
       roster.epoch,
     );
 
+    // **And the removed devices are told**, which until 2026-10-04 nothing did: each socket of a
+    // device this roster does not name is closed with the code `drop` uses for a whole group.
+    // `log.ts`'s `removedSockets` is which, and why a rotation that took a device out left it
+    // reading *live* before. Read off the same `named` the marks above were, so the two cannot
+    // disagree about who left.
+    for (const gone of removedSockets(sockets, named)) {
+      gone.ws.close(CLOSE_REMOVED, "removed from the group");
+    }
+
     this.compactNow();
     return new Response(null, { status: 204 });
+  }
+
+  /** Every socket this object holds, hibernated ones included, as `log.ts` reads one. */
+  private sockets(): { ws: WebSocket; tag: string | undefined; open: boolean }[] {
+    return this.state.getWebSockets().map((ws) => ({
+      ws,
+      tag: this.state.getTags(ws)[0],
+      open: ws.readyState === WebSocket.OPEN,
+    }));
   }
 
   /**
@@ -506,13 +535,8 @@ export class Group implements DurableObject {
    * the final chunk of a push run — named so it is not re-derived, and not built.
    */
   private notify(cursor: number, from: string): void {
-    const sockets = this.state.getWebSockets().map((ws) => ({
-      ws,
-      tag: this.state.getTags(ws)[0],
-      open: ws.readyState === WebSocket.OPEN,
-    }));
     const frame = headFrame(cursor, from);
-    for (const target of notifyTargets(sockets, from)) {
+    for (const target of notifyTargets(this.sockets(), from)) {
       target.ws.send(frame);
     }
   }
@@ -623,7 +647,7 @@ export class Group implements DurableObject {
     // transport-level close. There is no close-all API; the loop is it. `state.abort()` would
     // also do it and is the wrong tool — it logs an error application code cannot catch.
     for (const ws of this.state.getWebSockets()) {
-      ws.close(4001, "group dropped");
+      ws.close(CLOSE_REMOVED, "group dropped");
     }
     return new Response(null, { status: 204 });
   }

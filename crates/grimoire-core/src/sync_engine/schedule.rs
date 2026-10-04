@@ -27,6 +27,17 @@ pub const WRITE_DEBOUNCE_MS: u64 = 3_000;
 /// billed — the only keepalive that keeps hibernation.
 pub const PING_SECS: u64 = 45;
 
+/// How long a dial may take before the socket is called failed.
+///
+/// An upgrade is a connection and one small answer, and each of the relay's other clients gives
+/// those ten seconds apiece (`entitlement::http`'s `connect_timeout` and `read_timeout`); this is
+/// the two added. A healthy dial takes a fraction of a second — 50–150 ms measured against a
+/// relay on loopback — so twenty is far outside anything a working network does, and well inside
+/// the first rung of patience a reader has for the word `connecting`. It is also about where
+/// Windows' own TCP stack gives up on a host that answers nothing (three SYNs, ~21 s), so a
+/// desktop whose network is simply gone hears from its stack first, in the stack's own words.
+pub const CONNECT_SECS: u64 = 20;
+
 /// The shortest wait, and the cap on the **base** the jitter is then added to.
 ///
 /// ⚠️ `BACKOFF_MAX_MS` is not the longest a reconnect waits, and reading it as one has already
@@ -182,6 +193,60 @@ pub enum Disconnect {
     Failed,
     /// The socket reached `live`'s age limit and was replaced on purpose.
     Aged,
+    /// **This device is no longer in the group the socket was opened for** — it left, it was
+    /// removed and has since learned so, or it is in another group now — and the loop let go of
+    /// the socket itself. [`let_go`] is the test; nothing failed.
+    Left,
+}
+
+/// What a look at this device's own `sync_group` found, for a loop that is holding a socket.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Membership<'a> {
+    /// The look could not be taken — the connection was busy past the wait, or the read failed.
+    Unknown,
+    /// In no group.
+    Nowhere,
+    /// In the group with this id.
+    In(&'a str),
+}
+
+/// Whether a socket opened for `socket_group` should be let go of, given what the device's
+/// membership is now.
+///
+/// **A socket belongs to a group, and the loop used to ask which group only between sockets.**
+/// The Durable Object a socket reaches is its group's, so a device that left, or left and joined
+/// another, went on holding the *old* group's doorbell for as long as that socket lived — up to
+/// its twelve hours — reading `live`, and deaf to the group it was actually in. Every host,
+/// since the socket was built.
+///
+/// **`Unknown` keeps the socket.** A look that could not be taken proves nothing, and a socket
+/// dropped on a busy connection is a reconnect for no reason; the loop looks again at the next
+/// commit and at every keepalive, so a missed look is late by one ping period at most.
+pub fn let_go(socket_group: &str, now: Membership<'_>) -> bool {
+    match now {
+        Membership::Unknown => false,
+        Membership::Nowhere => true,
+        Membership::In(group) => group != socket_group,
+    }
+}
+
+/// What a close with the relay's 4001 was, given the device's membership **once any sync
+/// operation in flight has finished**.
+///
+/// The relay closes with 4001 for a group that is gone and — since it tells a removed device —
+/// for a device a rotation's manifest no longer names. **A device that leaves a group publishes
+/// exactly such a manifest**, so its own *Leave group* closes its own socket, a moment before
+/// the press has cleared `sync_group` locally. Read at once, that is a removal: a backoff, the
+/// word `offline` and an `error_log` row, for something the reader just chose. So the loop asks
+/// behind the sync lane, which the leave holds until its last write: by then the group is gone
+/// from this device and the close is [`Disconnect::Left`], which is quiet. A device somebody
+/// else removed is still in the group as far as it knows, and that is [`Disconnect::Removed`].
+pub fn closed_as_gone(socket_group: &str, now: Membership<'_>) -> Disconnect {
+    if let_go(socket_group, now) {
+        Disconnect::Left
+    } else {
+        Disconnect::Removed
+    }
 }
 
 /// Whether the loop waits before reconnecting after `cause`.
@@ -197,6 +262,12 @@ pub fn deserves_backoff(cause: Disconnect) -> bool {
         // Not a failure: the age limit is a socket replaced deliberately. Making it wait
         // punishes the healthy case.
         Disconnect::Aged => false,
+        // Not a failure either, and the wait would be the bug: a device that has just joined
+        // another group is owed that group's socket now, and one in no group is owed the word
+        // `off` now — not a second of `offline` first, which is the word for a broken sync.
+        // It cannot spin: the loop dials only for a device that is in a group, and a socket it
+        // then opens is for that group, which is not one to let go of.
+        Disconnect::Left => false,
     }
 }
 
@@ -222,8 +293,10 @@ const FORGIVEN_AFTER_MS: u64 = BACKOFF_MAX_MS;
 pub fn next_attempt(attempt: u32, cause: Disconnect, socket_lifetime_ms: u64) -> u32 {
     match cause {
         // Evidence of nothing, so the count is left exactly as it was: a socket retired at its
-        // age limit has not failed at all.
-        Disconnect::Aged => attempt,
+        // age limit has not failed at all — and neither has one the loop let go of because its
+        // device changed groups. Unchanged also means no `error_log` row: `live` writes one only
+        // for an attempt that was spent.
+        Disconnect::Aged | Disconnect::Left => attempt,
         // **Never forgiven by lifetime.** A group that is gone is gone however long this socket
         // had been up, and the reconnect that follows will be refused the same way.
         Disconnect::Removed => attempt.saturating_add(1),
@@ -291,6 +364,16 @@ mod tests {
         // The frame debounce only coalesces a burst that has already happened; the write
         // debounce waits for a human to stop typing.
         assert!(FRAME_DEBOUNCE_MS < WRITE_DEBOUNCE_MS);
+    }
+
+    /// The dial's bound sits where its doc says: past a slow network, short of the keepalive —
+    /// a dial that outlasted a ping period would be a socket the keepalive could never have
+    /// found dead in time either.
+    #[test]
+    #[allow(clippy::assertions_on_constants)]
+    fn a_dial_is_given_longer_than_a_slow_network_and_less_than_a_ping_period() {
+        assert!(CONNECT_SECS >= 10);
+        assert!(CONNECT_SECS < PING_SECS);
     }
 
     #[test]
@@ -365,6 +448,52 @@ mod tests {
         assert!(!deserves_backoff(Disconnect::Aged));
         // Twelve hours, which is `live::SOCKET_MAX_AGE`.
         assert_eq!(next_attempt(4, Disconnect::Aged, 12 * 60 * 60 * 1_000), 4);
+    }
+
+    /// **A socket is let go of when its device is in no group, or in another one** — and kept
+    /// when it is in the same group, or when nobody could look.
+    #[test]
+    fn a_socket_is_let_go_of_when_its_device_is_no_longer_in_its_group() {
+        assert!(let_go("g1", Membership::Nowhere), "it left");
+        assert!(let_go("g1", Membership::In("g2")), "it is in another group");
+        assert!(!let_go("g1", Membership::In("g1")), "it is where it was");
+        // A look that could not be taken is not a departure: dropping a healthy socket because
+        // the connection was busy would be a reconnect for nothing.
+        assert!(!let_go("g1", Membership::Unknown));
+        // Ids are compared whole: a prefix is another group.
+        assert!(let_go("g1", Membership::In("g10")));
+    }
+
+    /// **Letting go is not a failure**: no wait before the loop looks again, the attempt count
+    /// where it was — whatever it was and however long the socket lived — and so no row.
+    #[test]
+    fn letting_go_neither_backs_off_nor_spends_an_attempt() {
+        assert!(!deserves_backoff(Disconnect::Left));
+        for attempt in [0, 3, u32::MAX] {
+            assert_eq!(next_attempt(attempt, Disconnect::Left, 0), attempt);
+            assert_eq!(
+                next_attempt(attempt, Disconnect::Left, 10 * BACKOFF_MAX_MS),
+                attempt,
+                "neither spent nor forgiven: the endpoint has shown nothing"
+            );
+        }
+    }
+
+    /// **The relay's 4001 is a removal for a device that still thinks it is in the group, and
+    /// its own doing for one that has left** — the leave's own manifest is what closed it.
+    #[test]
+    fn a_4001_is_a_removal_unless_the_device_has_already_left() {
+        assert_eq!(
+            closed_as_gone("g1", Membership::In("g1")),
+            Disconnect::Removed
+        );
+        assert_eq!(closed_as_gone("g1", Membership::Nowhere), Disconnect::Left);
+        assert_eq!(closed_as_gone("g1", Membership::In("g2")), Disconnect::Left);
+        // Could not look: the cautious reading, which backs off and writes the row.
+        assert_eq!(
+            closed_as_gone("g1", Membership::Unknown),
+            Disconnect::Removed
+        );
     }
 
     #[test]

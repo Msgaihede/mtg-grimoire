@@ -102,6 +102,42 @@ nothing: until a page asks, no request carries an `Origin` and the new code is n
 `app-worker/README.md` is that deploy's runbook; "The order" below says the same thing where the
 order is decided.
 
+**A ninth half — a removed device is told (light app phase 6, step 6.3b) — is written and NOT
+deployed.** Written 2026-10-04. What the next deploy carries, beside anything above that is still
+waiting:
+
+- **A rotation's roster closes the sockets of the devices it leaves out**, with `4001` — the
+  code `drop` has always closed a whole group's with. `group.ts`'s `roster` asks `log.ts`'s
+  `removedSockets` which: every open socket whose device the adopted manifest does not name.
+  Until now a rotation closed nothing, and a removed device went on reading *live* over a roster
+  it was no longer on until its own next round trip.
+- **A device holding a socket counts as one the object knows of**, so it is marked `departed`
+  with the rest even when it has not yet acked or pushed.
+
+**No migration, no secret, no var, no route.** Internal to the Durable Object: `/roster` is still
+reached only by the Worker, from inside an accepted `/rotate`.
+
+**There is no probe for it without a credential** — nothing an outsider can ask shows whether a
+roster closes sockets. With a membership it is one look: pair two devices, remove one from the
+other, and **watch the removed one's Sync panel without touching it** — within about five
+seconds it reads *not paired yet* (after a moment of *Not connected to the relay*). Left reading
+its old roster until *Sync now* is pressed, the relay answering is the old one.
+
+**Each side with the other's old build:**
+
+| Relay | Client | A removed device | A device that presses *Leave group* |
+| --- | --- | --- | --- |
+| old | released, or new | is told nothing, as today: it learns at its next round trip. **A new client then lets go of its socket** at that trip's commit and reads `off`; a released one keeps the socket, reading `live`, until it ends by itself | a new client lets go of its socket at once and reads `off`; a released one keeps it — for up to its twelve hours, on the group it left, which is the defect step 6.3b is about |
+| new | new | socket closed `4001` → `offline` for one backoff (2–4 s) → the round trip a reconnect starts with finds the manifest without it and clears the group → `off`. One `live` row in its Errors panel | socket closed `4001`, read behind its own departure: `off` at once, no row |
+| new | released | the same close, and the same trip clears the group — then the released loop still tries to dial, fails for want of a group, and reads `offline` through a second backoff (4–8 s) before `off`. Up to two `live` rows | **the relay alone fixes the twelve-hour socket**: the close ends it. The released loop reads its own departure as a removal — a few seconds of `offline` and one `live` row saying the group no longer exists — and then `off` |
+
+So the two ship in either order, and nothing in the field breaks on either. What a released
+desktop pays for the new relay is a spurious row in its Errors panel when it leaves a group; what
+it gets is not listening to a group it left.
+
+A deploy disconnects every live socket once, as every deploy does. It is step 6 and nothing else,
+with step 0's probes before and after.
+
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
 [2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
 [2026-08-30-leave-group-and-device-caps-design.md](../superpowers/specs/2026-08-30-leave-group-and-device-caps-design.md)
@@ -857,11 +893,12 @@ two profiles of headless Chrome 154 reaching it by its real name):
   `observability.logs.invocation_logs` to `false`, which costs every route its invocation log.
   **Chosen on 2026-10-04: accepted.** Nothing is changed, and the read above is now only a
   confirmation of what is being accepted.
-- **A removed device's socket.** The local run found that a rotation closes no socket: the
+- ~~**A removed device's socket.** The local run found that a rotation closes no socket: the
   removed device keeps its own, its panel reads the old group, and it learns at its next round
   trip — its own write, a *Sync now*, or the next push by anybody left. If that is wanted
   sooner it is a change to `group.ts`'s `roster` — close the departed devices' sockets — and a
-  deploy of its own.
+  deploy of its own.~~ **Written, in step 6.3b — the ninth half, at the top of this page — and
+  waiting on that deploy.**
 - **A pre-flight's cache, and a pull's lack of one.** A browser files a pre-flight under the whole
   URL, so `/pull?since=…` is asked about again whenever the cursor has moved. Count the `OPTIONS`
   in the page's network panel across a few edits: one in front of most pulls is the design, and

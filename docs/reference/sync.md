@@ -4044,15 +4044,82 @@ survives the tab being frozen. `timer::interval` drops the beats a frozen Worker
 comes back to one tick and one ping, and a socket that died meanwhile is found by that ping's
 missing `pong` within two periods.
 
-⚠️ **Seen in that run, and true of every host: the loop asks whether the device is in a group
-only between sockets.** A device removed from the roster — or one that leaves — while its socket
-is up keeps the socket: the relay closes nothing on a rotation (4001 is for a group that is
-gone), the device learns it was removed at its next round trip — its own write, a *Sync now*, or
-the next push by a device still in the group, which still rings it — and after that trip has
-cleared `sync_group` the loop still holds the socket, still pings, and still reads `live` until
-the socket ends by itself or reaches its twelve hours. Nothing is synced over it: a ring there
-schedules a trip that finds no group and asks nobody. So the cost is a wrong state behind the
-panel and a keepalive nobody needs.
+#### A device that left, was removed or changed group lets go of its socket (step 6.3b)
+
+**The defect, on every host since the socket was built**: the loop asked whether its device was
+in a group *between* sockets and never while it held one, and a socket is its group's — the
+Durable Object it reaches is addressed by the group id. So a device that pressed *Leave group*
+kept the socket, reading `live`; and one that left and then joined another group went on
+listening to the group it had **left**, for as long as that socket lived — up to its twelve
+hours — while the group it was in rang on nobody. A device removed by another fared the same:
+the relay closed nothing, and the trip on which it learned it was removed cleared its group and
+left its socket up. Seen in step 6.3's walk; fixed here, in the loop and in the relay.
+
+**The loop's rules now** (`sync_engine::live`; every consequence is `schedule.rs`'s, with tests):
+
+- **A socket knows which group it was opened for**, and the loop looks at `sync_group` on the
+  commit that could have changed it — the write wake's arm, ahead of the outbox's question —
+  and again on every keepalive beat, as the backstop for a look that could not be taken. A
+  device in no group, or in another one, ends the socket as `Disconnect::Left`: **no backoff,
+  no `error_log` row, the attempt counter where it was**. The loop's top then says `off`, or
+  `connecting` for the group it is in now.
+- **The look is taken on the write connection, behind the writer.** The commit hook fires before
+  the commit is anybody else's to see, so the read connection, asked as the bell rings, still
+  answers the group that is being deleted — which would keep the socket, with no second commit
+  coming. `State::db`'s mutex is held by the writer until its commit is done, as the outbox's
+  question already relied on. On a host with one connection there is no other to be wrong on.
+  A look that cannot have the connection inside a second decides nothing (`Membership::Unknown`
+  keeps the socket) and is taken again at the next commit, and at the next ping.
+- **A 4001 is read behind the sync lane.** The relay closes with 4001 a device a rotation's
+  manifest leaves out — and a device that *leaves* publishes exactly that manifest, so its own
+  press closes its own socket a moment before it clears the group locally. The lane is held by
+  that press to its last write, so a look taken on the lane sees the group gone: `Left`, quiet.
+  A device somebody else removed still thinks it is in the group: `Removed`, as before — a
+  backoff, the row, and then the reconnect's first act, the round trip on which it finds the
+  manifest without it and clears its group.
+- **A dial with no group to dial for is not a failure.** That round trip is in front of every
+  dial, so a removed device reaches `credentials` with no group; it is `Left`, where it was a
+  failed socket — a second backoff, `offline` again and a second row.
+- **A dial has a deadline**, `CONNECT_SECS` (20 s: the relay's other clients' connect and read
+  bounds added). A relay that takes the connection and never answers the upgrade used to hold
+  the loop at `connecting`, with no trip, for as long as the stack underneath allowed — minutes,
+  in a browser. It is a failed socket now, in a sentence.
+- **What the loop records** is asked as the Settings panel asks it: a lapse is the one failure
+  left out of `error_log`, and "lapsed" is `!commands::entitled && entitlement::membership_ended`.
+  It asked the second alone, which is also true of a healthy device that joined by pairing — no
+  refresh secret, and the `active` the group door answered — so such a device recorded **no
+  background failure at all**.
+- **A token refused across a rotation is asked again, once** (`client::token_across_a_rotation`,
+  in every round trip — the loop's, a press's, a join's). A trip's key check and its group door
+  are two requests, and a sibling's rotation can land between them: the door is then asked with
+  the auth of the epoch the check just confirmed and refused it bare. Pairing does exactly that
+  to a joiner — the confirming device seals at the current epoch and publishes the join's
+  rotation a moment later, while the joiner's first trip is running — and the walk met it three
+  runs in twenty-one. The refusal is taken to `/keys`, as `push` takes a `stale_epoch`: adopted
+  → the door again under the new key; removed → the trip ends quietly; the relay still on this
+  device's epoch → the refusal stands, as it did.
+
+**What a desktop does differently, each one**: (1) it lets go of its socket at once when it
+leaves its group, is removed, or changes group, and says `off` rather than going on reading
+`live`; (2) joined to another group, its socket is that group's within the loop's five-second
+read rather than after up to twelve hours; (3) a removed desktop, once the relay tells it, reads
+`offline` for one backoff and then `off`, with one row — *the relay says this device is no
+longer in its sync group*, which replaces *…this device's sync group no longer exists* as the
+4001's sentence; (4) a dial the relay never answers fails after twenty seconds; (5) **a desktop
+that joined by pairing starts recording its background relay failures** — its Errors panel was
+silently dropping every one — folded on the message as on every other device; (6) each commit
+on the write connection costs the loop one more read, of `sync_group`; (7) a round trip whose
+token is refused behind a rotation adopts it and asks once more, where the trip failed.
+
+**The relay's half** — a rotation's roster closes the sockets of the devices it leaves out — is
+`relay/README.md`'s, and is not deployed. The two ship in either order;
+[hosted-relay-deploy.md](hosted-relay-deploy.md)'s ninth half has what each side does with the
+other's old build.
+
+**Still true**: a Sync panel left open on a device that is then removed goes on showing its old
+roster until its own query is read again — the engine says `off` through `sync:live`, and
+nothing on the page re-reads the pairing for that. Nothing syncs meanwhile; the sentence is
+simply late.
 
 **What was run**: the loop's own tests, natively — a device in no group says `off` once over
 twelve idle polls and dials nothing until it is put in a group; a device in a group dials a

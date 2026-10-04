@@ -30,7 +30,7 @@ import { isNavigation } from "../../src/lib/core/web/assets.ts";
 
 export const DIST = resolve("dist-web");
 /** What the hosts answer with: this file's own folder, found whatever the working directory. */
-export const FIXTURES = dirname(fileURLToPath(import.meta.url));
+const FIXTURES = dirname(fileURLToPath(import.meta.url));
 /**
  * Which run this is — the name a failure is said under — and how long the whole of it may take.
  * {@link runAs} sets both. CI's step has a longer bound of its own behind the second.
@@ -882,6 +882,35 @@ async function browse(origin, routes, own = {}) {
   return { browser, hosts, policy, close, problems };
 }
 
+/**
+ * The card file, grown: the six fixture lines over and over, each copy under an `id` and a
+ * collector number of its own, so every line is another printing to the engine. Made in memory and
+ * never committed — it is tens of megabytes of text, and a megabyte or so gzipped.
+ */
+function grownCards(count) {
+  const lines = readFileSync(join(FIXTURES, "default-cards.jsonl"), "utf8")
+    .split("\n")
+    .filter((line) => line !== "");
+  const grown = [];
+  for (let index = 0; grown.length < count; index += 1) {
+    const line = lines[index % lines.length];
+    // The first round is the fixture as committed, so the cards a wall draws are still there.
+    if (index < lines.length) {
+      grown.push(line);
+      continue;
+    }
+    const renamed = line
+      .replace(
+        /"id":"[0-9a-f-]{36}"/,
+        `"id":"aaaaaaaa-0000-4000-8000-${index.toString(16).padStart(12, "0")}"`,
+      )
+      .replace(/"collector_number":"[^"]*"/, `"collector_number":"G${index}"`);
+    if (renamed === line) fail("a fixture card has no id or collector number to rename");
+    grown.push(renamed);
+  }
+  return Buffer.from(`${grown.join("\n")}\n`);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Two things both runs ask a page, in the same words
 // ---------------------------------------------------------------------------------------------
@@ -894,7 +923,7 @@ const buttonSaying = (words, within = "") =>
     (button) => button.innerText.trim() === ${JSON.stringify(words)},
   )`;
 
-export { serve, browse, openPage, fixtures, fixtureCards, pictureAddress, coreChunk };
+export { serve, browse, openPage, fixtures, fixtureCards, grownCards, pictureAddress, coreChunk };
 export { ALERT, buttonSaying };
 // The fixture hosts' addresses, for a run that holds one, waits for one or counts the asks.
 export { CARDS_LISTING, CARDS_FILE, ORACLE_LISTING, ORACLE_FILE, ART_LISTING, ART_FILE };

@@ -2787,6 +2787,41 @@ pub async fn run_once_without_baselines(db: &impl Store) -> Result<Option<RelayO
     round_trip(db, false).await
 }
 
+/// The trip's token — **asked again, once, when a rotation landed between the key check and the
+/// group door.**
+///
+/// The two are two requests, and a sibling's rotation can land between them: the check answers
+/// the epoch this device holds, the door is then asked with that epoch's auth, and the relay —
+/// one rotation on — refuses it bare, [`entitlement::STALE_GROUP_AUTH`]. That is not a rare
+/// alignment but pairing's ordinary one: the device that pressed *Codes match* seals the key at
+/// the current epoch and publishes the join's rotation a moment later, which is the moment the
+/// joiner's first trip is running. Seen in the sync smoke, two runs in fourteen, as a `/token`
+/// 401 behind a `/rotate` 200 — and, on a device that joined by pairing, as a trip that failed
+/// and a row in its log for a group working as intended.
+///
+/// So the refusal is taken to `/keys`, as [`push`] takes a `stale_epoch`: a rotation adopted
+/// there is the reason, and the door is asked under the new key; a removal is the trip's quiet
+/// end; and **a relay still on this device's epoch is a refusal that stands** — nothing changed,
+/// so asking again would be the same answer, and it is returned for the caller to record. One
+/// retry, never a loop. `keys` is replaced by the second check, whose epoch is the one [`pull`]
+/// must measure against.
+async fn token_across_a_rotation(
+    db: &impl Store,
+    keys: &mut KeyCheck,
+) -> Result<Option<String>, String> {
+    match entitlement::access_token(db).await {
+        Err(refused) if refused == entitlement::STALE_GROUP_AUTH => {
+            *keys = check_keys(db).await?;
+            match keys.outcome {
+                KeyOutcome::Adopted => entitlement::access_token(db).await,
+                KeyOutcome::Removed => Ok(None),
+                KeyOutcome::Current => Err(refused),
+            }
+        }
+        answer => answer,
+    }
+}
+
 /// The body both of the above share. `baselines` is the only difference between them.
 ///
 /// **[`check_keys`] runs first, above the token fetch, and that ordering is the whole reason it
@@ -2808,7 +2843,7 @@ pub async fn run_once_without_baselines(db: &impl Store) -> Result<Option<RelayO
 /// ended while this device happened to be unpaired must still clear itself rather than wait for a
 /// pairing.
 async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutcome>, String> {
-    let keys = check_keys(db).await?;
+    let mut keys = check_keys(db).await?;
     if keys.outcome == KeyOutcome::Removed {
         return Ok(None);
     }
@@ -2827,7 +2862,7 @@ async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutc
     if db.with(|conn| Ok(identity::roster_is_dirty(conn)? && me(conn)?.is_some()))? {
         let _ = publish_join(db).await;
     }
-    let Some(token) = entitlement::access_token(db).await? else {
+    let Some(token) = token_across_a_rotation(db, &mut keys).await? else {
         return Ok(None);
     };
     let Some((_, _, base)) = db.with(whereabouts)? else {

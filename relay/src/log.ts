@@ -307,12 +307,61 @@ export interface Notifiable {
   open: boolean;
 }
 
+const DEVICE_TAG = "d:";
+
 /**
  * The one tag a socket carries. Namespaced because `acceptWebSocket` allows ten tags and a
  * future one — a group, a protocol version — must not be mistaken for a device id.
  */
 export function deviceTag(device: string): string {
-  return `d:${device}`;
+  return `${DEVICE_TAG}${device}`;
+}
+
+/**
+ * The device a socket's tag names — {@link deviceTag}, read back — or `undefined` for a socket
+ * with no tag, or one from a namespace this does not know.
+ */
+export function taggedDevice(tag: string | undefined): string | undefined {
+  return tag?.startsWith(DEVICE_TAG) === true ? tag.slice(DEVICE_TAG.length) : undefined;
+}
+
+/**
+ * The close a device is sent when it is no longer in the group its socket is for: the whole group
+ * was dropped, or a rotation's manifest no longer names the device. In the private range, so a
+ * client can tell it from any transport-level close; `sync_engine::live` reads it as *removed* —
+ * a backoff, and then the round trip on which the device finds itself off the manifest and
+ * clears its group.
+ */
+export const CLOSE_REMOVED = 4001;
+
+/**
+ * The sockets a roster closes: every open one whose device the adopted manifest does not name.
+ *
+ * **Until 2026-10-04 a rotation closed nothing.** The removed device's ack was deleted and its
+ * rows compacted, and its socket stayed up: it went on reading *live*, with a roster of a group
+ * it was no longer in, until its own next round trip — its next edit, or a press of Sync now —
+ * found the manifest without it. Nothing told it. Closing its socket is the telling: the client
+ * backs off, makes the round trip a reconnect always starts with, and learns there.
+ *
+ * **The manifest is the roster**, so "not named" is the same test the device itself applies to
+ * `/keys` — a socket this closes belongs to a device that would conclude the same on its next
+ * trip. It includes a device that *left*: its own departure is a manifest without it.
+ *
+ * **Which is why {@link notifyTargets} needs no rule about departed devices**: after this, a
+ * device a roster took out holds no socket to be told on. One that dials again inside its
+ * token's day would be accepted and rung — and a client only dials behind a round trip, which
+ * is where it clears the group it would have dialled for.
+ *
+ * **An untagged socket is left alone**, for `notifyTargets`' reason turned round: it cannot be
+ * proved to be a removed device's, and closing a member's socket costs a reconnect where leaving
+ * a stranger's open costs a frame that carries no data. A socket already closing is skipped.
+ */
+export function removedSockets<T extends Notifiable>(sockets: T[], named: string[]): T[] {
+  const kept = new Set(named);
+  return sockets.filter((socket) => {
+    const device = taggedDevice(socket.tag);
+    return socket.open && device !== undefined && !kept.has(device);
+  });
 }
 
 /**
