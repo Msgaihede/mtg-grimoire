@@ -113,7 +113,7 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   service worker and a WASM module need, its `wrangler.jsonc` with `mtg-grimoire.app` as its
   custom domain, and a runbook that opens with asking the host. Then the built app driven end to end against round one's
   figures — the module's size, the first run, a search, storage.
-  **The hosting half is built and not deployed** (`app-worker/`;
+  **The hosting half is built and not deployed** (deployed 2026-10-04 — below) (`app-worker/`;
   [light-app.md](../../reference/light-app.md) §9.5 is the record), **differently in one
   place**: the Worker is not assets alone — the fallback by itself answers a missing file with
   the document, so a script of a few lines makes that a 404. The headers are a `_headers` file
@@ -124,6 +124,12 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   real hosts. ([light-app.md](../../reference/light-app.md) §9.6 is the record, with what the
   run found, fixed and left.)
 
-What only Markus can close stays open on the issue: the deploy itself — `wrangler dev` first,
-then the zone checks `app-worker/README.md` lists — a run in a real phone's browser over
+What only Markus can close stays open on the issue: ~~the deploy itself — `wrangler dev` first,
+then the zone checks `app-worker/README.md` lists~~ — a run in a real phone's browser over
 `adb reverse`, Firefox and Safari, and Android's clipboard on a device.
+
+**The deploy is done: 2026-10-04, 12:47 UTC, `https://mtg-grimoire.app`.** He asked for it in
+chat and an agent ran it — `wrangler dev --local` first, the zone read through Cloudflare's API,
+then the runbook's probes and one browser run at the real address. The table's *Who deploys*
+row stands; the ask was for one deploy.
+([light-app.md](../../reference/light-app.md) §9.7 is the record, with what it has not proved.)

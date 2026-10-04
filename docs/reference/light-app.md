@@ -5,7 +5,7 @@ as one second entry over the desktop's own components. **What is built is phase 
 and phase 3, the pages:** it runs in a browser over the Storybook fake (§2.1, §7) and in a
 phone-sized window over the real Rust core (§2.2). Underneath it, phase 2 moved the engine into a
 crate those hosts can link (§6), **phase 4 built the Android host on it** (§8) — an APK
-CI builds, which a phone first ran on 2026-10-04 (§8.6) — and **phase 5 is building the web host** (§9): since
+CI builds, which a phone first ran on 2026-10-04 (§8.6) — and **phase 5 built the web host** (§9): since
 step 5.1 (2026-10-04) the engine is a WASM module in a dedicated Worker, and it opens its
 database in a browser's OPFS and answers commands there, and **since step 5.2 (the same day) it
 builds its corpus there** — the launch's downloads streamed into their sinks, run once against
@@ -17,7 +17,8 @@ draws its pictures and opens with the network gone — and **since the first hal
 the hosting Worker's source, its policy and its runbook are in `app-worker/`** (§9.5), and
 **since its second half the module's `opt-level` is settled by timings, CI's smoke run is
 served under that policy, and the built app has been driven end to end on both faces against
-the real hosts** (§9.6). **Nothing is deployed**, and the deploy is the owner's; nothing but
+the real hosts** (§9.6). **It is deployed at `https://mtg-grimoire.app` since 2026-10-04**
+(§9.7) — the deploy is the owner's, and that one was run by an agent at his ask; nothing but
 one headless Chrome on Windows has run the web host. There is no sync on a light install,
 which is phase 6 — a browser install says so in a sentence rather than asking the relay.
 
@@ -3046,12 +3047,13 @@ request each; the rules for the host crate are
   download is streamed into its sink, and card images are the service worker's, in Cache
   Storage.
 - **Nobody here deploys.** The hosting Worker's source and its `wrangler.jsonc` are committed;
-  Markus runs `wrangler deploy`.
+  Markus runs `wrangler deploy`. (The rule stands. The 2026-10-04 deploy was run by an agent
+  because he asked for it in chat, and that ask was for one deploy — §9.7.)
 - **The web app's origin is `https://mtg-grimoire.app`** (Markus, 2026-10-04) — a domain he
   bought on Cloudflare for it, rather than a `workers.dev` name beside the relay's. An origin is
   a PWA's identity: both OPFS databases and the install are bound to it, and the relay's CORS
   allow-list (phase 6) names it. **Nothing is deployed there**; the Worker that will serve it is
-  step 5.5's, §9.5.
+  step 5.5's, §9.5. (Deployed 2026-10-04, §9.7.)
 
 **What the tree held before the phase started** (surveyed 2026-10-04, `main` at `2abf2d7a`):
 
@@ -3341,7 +3343,7 @@ What follows for the engine in a browser:
 - **Clipboard, links and files on the desktop face** in a browser (step 5.4 — **built and
   driven 2026-10-04, §9.4**), **a service worker** (5.3 — **built and driven 2026-10-04,
   §9.3**) and **hosting** (5.5 — **the Worker, its policy and its runbook built 2026-10-04,
-  §9.5; not deployed**).
+  §9.5; not deployed** — deployed 2026-10-04, §9.7).
 - **CI's `web` job has not run.** Its first run is this step's pull request, and its sizes are
   that run's summary — a Linux Chrome's, not the one above.
   - **It has since, on this step's pull request** (#805, merged 2026-10-04): the job's first
@@ -3415,7 +3417,8 @@ and eight things that claimed more than they did — each closed in the same cha
   thing built differently from the plan's line as it stood: the Android host opens a link
   through Tauri's opener, which its capability grants, rather than through the WebView.
 - **5.5 — hosting, and the phase's own run.** ~~The Cloudflare Worker with static assets at
-  `mtg-grimoire.app`, its runbook~~ — **built 2026-10-04, §9.5, and not deployed**, with one
+  `mtg-grimoire.app`, its runbook~~ — **built 2026-10-04, §9.5, and not deployed** (deployed
+  later that day, §9.7), with one
   thing this line did not say: the Worker has a script, because the single-page fallback alone
   answers a missing file with the document. **Still to come**: the module's size taken up with
   timings, CI's smoke run served under the policy (§9.5's foot has what that takes), and the
@@ -4389,7 +4392,7 @@ each tab's `visibilityState` as the witness for a tab switch.
 Where the web build is served from, and under what policy: a third Cloudflare Worker,
 `app-worker/`, for `https://mtg-grimoire.app`. **This is the step's first half.** The module's
 size taken up with timings, and the built app driven end to end against round one's figures,
-are not in this section — they are the second half, §9.6. **Nothing is deployed**: what was committed is
+are not in this section — they are the second half, §9.6. **Nothing is deployed** (deployed 2026-10-04, §9.7): what was committed is
 source, configuration and a runbook, and [`app-worker/README.md`](../../app-worker/README.md)
 is that runbook — the probes, the steps in order, rollback and cost. Numbered for its step; 5.3
 was still in flight when this was written, on a tree with no service worker in it, and §9.3
@@ -4685,7 +4688,8 @@ from the wrong place and called every run red.
   text/html` there means the script is not deployed**); the module's content type, caching and
   compression; the Worker chunk's `no-cache`, and **the `304` that must carry the policy**;
   `/sw.js`; `/_headers`; the `workers.dev` name; and an `<img>`'s request for `/mtgimg/…`, which
-  must be a `no-store` 404.
+  must be a `no-store` 404. (**Each run on 2026-10-04, locally and then at the real address —
+  §9.7.**)
 - **`npx wrangler dev`, which would settle most of them before anything is public.** It runs
   the asset worker and the router locally over this configuration and this `dist-web/`, and so
   answers the navigation split, the headers on both documents, the detach, the Worker chunk's
@@ -4694,18 +4698,20 @@ from the wrong place and called every run red.
   says why it matters more here than for the other two Workers: with both alternate origins
   off, the first deploy is live on the apex the moment it finishes. **Not run** — wrangler is
   not installed here and no agent may add or run it. Until it is, what stands is the source
-  above, read.
+  above, read. (**Run on 2026-10-04 as `wrangler dev --local`, which reaches nothing — §9.7.**)
 - **What only a deploy can settle**, now that the rest has somewhere else to be asked: how long
   the certificate takes and whether the apex had a record in the way; what the edge compresses
   the module with, and so what a first visit downloads; that neither alternate origin answers;
   that a rollback brings a version's files back; the real hosts' own CORS answers to a page at
-  this origin.
+  this origin. (**The 2026-10-04 deploy settled each but the rollback — §9.7.**)
 - **What the zone does to the page.** A Cloudflare zone has features that rewrite proxied HTML
   to add a script — Web Analytics' automatic setup (`static.cloudflareinsights.com/beacon.min.js`,
   and its *exclude EU visitors* option would hide that from an owner in Denmark), Rocket Loader,
   Email Address Obfuscation, the bot settings' JavaScript Detections (an inline script) — and
   `script-src 'self'` refuses each on every load. **Nobody here has seen the zone.** The runbook
   has a check before the first deploy: each off, and the served document equal to the built one.
+  (**Read through Cloudflare's API on 2026-10-04: three off, Email Address Obfuscation on and
+  idle, and the document equal — §9.7.**)
 - **A spent day** — the source above, not seen: every request the script would have answered is
   Cloudflare's `429 text/html`; files and browser navigations are untouched. (This line read one
   sentence of the billing page backwards for two commits and said a miss would fall back to the
@@ -4720,7 +4726,9 @@ from the wrong place and called every run red.
   address; the review read it as not governed by that key; nobody has run it.
 - **What a card picture costs before the service worker controls its page**: each `/mtgimg/…`
   that reaches the network is one Worker request, from the 100,000 a day the relay's sync
-  shares. Nobody has counted a first visit.
+  shares. Nobody has counted a first visit. (**One has been since, at the real origin: every
+  answer the page had from it was a 200, so no picture reached the script — §9.7's request
+  table. One run.**)
 - **The desktop face over a corpus under the policy** — the smoke's fixtures drive the phone
   face, and at 1280 an empty database draws its *No card data yet* wall — **a card picture
   drawn**, **a service worker** (built since, in step 5.3, and driven with no policy — §9.3;
@@ -4741,7 +4749,8 @@ from the wrong place and called every run red.
 
 The module's size taken up with timings, and the built app driven as a reader would use it —
 both faces, under the hosting policy, against the real hosts. **Nothing is deployed, and no
-figure below was taken at `https://mtg-grimoire.app`**: each is the built app on `localhost`,
+figure below was taken at `https://mtg-grimoire.app`** (it was deployed later that day, and
+§9.7 has the figures that were taken there): each is the built app on `localhost`,
 answered as §9.5 reads the host to answer, in headless Chrome 154.0.8037.95 on Windows 11
 (Ryzen 9 5900X) — one browser, one machine, one day. What the run found is listed with what
 became of each, and what only the owner can close is at the foot.
@@ -4984,12 +4993,216 @@ during it was not recorded.
 
 **What only the owner can close.**
 
-- **The deploy itself.** `npx wrangler dev` first — Cloudflare's own asset worker and router
+- ~~**The deploy itself.** `npx wrangler dev` first — Cloudflare's own asset worker and router
   over this configuration, before anything is public — and then the checks
   [`app-worker/README.md`](../../app-worker/README.md) lists for the zone: each feature that
   rewrites HTML off, and the served document equal to the built one. Every probe in that
-  runbook is still marked not yet run.
+  runbook is still marked not yet run.~~ **Closed on 2026-10-04 — §9.7**: he asked for the
+  deploy in chat and an agent ran it, `wrangler dev` first, the zone read before it, and every
+  probe answered at the real address afterwards. One feature that rewrites HTML was found on,
+  and idle. The three below stand.
 - **A run in a real phone's browser.** Every figure here is a desktop CPU's.
 - **Firefox and Safari.** One Chrome, headless, on Windows is the whole of what has run the
   web host — the lock, the pool, the service worker and the policy included.
 - **Android's clipboard on a device** — never run (§9.4).
+
+### 9.7 The deploy (2026-10-04)
+
+**The web host is at `https://mtg-grimoire.app` since 2026-10-04, 12:47 UTC.** Markus asked for
+the deploy in chat, and an agent ran it. **The rule did not change**: no agent deploys, and no
+job does; his asking lifted it for this one deploy, as it had for the relay's on 2026-10-01,
+and the next deploy needs its own. [`app-worker/README.md`](../../app-worker/README.md) is the
+runbook this followed and now carries each answer in its tables; this section is the day's
+record. **Every figure is one deploy's, one minute's or one run's**, taken from one machine in
+Denmark.
+
+**What was deployed.** `main` at `d8c3779b`, the merge of #810, from a clean tree:
+`npm run web:build` over the engine `npm run web:wasm` built from the same source — engine
+build id `6d63009f7fa1062b`, the module 6 767 338 B, which is §9.6's *module that ships* to the
+byte. `npm run web:smoke` passed on that bundle (17.0 s).
+
+**The runbook's step 5, run for the first time: `wrangler dev --local`** (wrangler 4.146.0,
+port 8787) — Cloudflare's asset worker and router over this `wrangler.jsonc` and this
+`dist-web/`, reaching nothing. Every probe that can be asked locally — all but the
+`workers.dev` name and plain `http` — answered as the runbook's table says it should, the 304
+with the policy on it among them, and the document served equalled the built one. So what §9.5
+could only read off Cloudflare's source was run before anything was public. Three things it
+answered differently from the edge, none a fault: text types carried `; charset=utf-8` where
+the edge sends none; every `ETag` was another value for the same bytes; and the module's
+brotli transfer was 1 986 553 B, which is not what the edge sends.
+
+**The zone, read through Cloudflare's API before the deploy** — read-only, and nothing was
+changed.
+
+| Read | 2026-10-04 |
+| --- | --- |
+| The zone | `mtg-grimoire.app`, active, Free plan |
+| DNS | **no record at all** — nothing in the apex's way |
+| Rocket Loader | off |
+| Bot JavaScript Detections (`enable_js`), bot fight mode | off, off |
+| Web Analytics | no site on the account |
+| **Email Address Obfuscation** | ⚠️ **on** — the zone's default. Idle: the built document contains no `@`. Left as found; it is the owner's setting |
+| **Always Use HTTPS** | ⚠️ **off** |
+| SSL mode, brotli | `full`, on |
+| HSTS at the zone | none configured; `.app` is HSTS-preloaded as a TLD |
+| The account's Workers | `mtg-grimoire-relay` and `mtg-grimoire-share`, and no Worker custom domain |
+
+**The deploy.** `wrangler deploy --dry-run`, then `wrangler deploy` at 12:47 UTC. It read 48
+files from `dist-web/` and uploaded 43 assets in 3.80 s — why the two differ was not looked
+into — with a script of 1.09 KiB (0.61 KiB gzipped) and a startup of 1 ms; bound `env.ASSETS`;
+attached `mtg-grimoire.app (custom domain)`; version
+`cdee3c1c-d3ae-4246-8e8a-c50eb3025152`.
+
+- ⚠️ **It printed no line about `_headers`.** The runbook told its reader to read how many
+  rules were parsed; wrangler 4.146.0 says nothing of them. **What proves the rules were taken
+  is the probes answering with each rule's `Cache-Control`** — the default, both trees, `sw.js`
+  and the engine's Worker — and the runbook's step is corrected to say so.
+- **The apex answered 200 with the document on the first request after the command returned.**
+  The deploy made the DNS record and the certificate; no wait for either was observed, and no
+  duration was measured.
+
+**Step 0's probes against the real address, 12:48 UTC** — `curl`, each row's answer written
+into the runbook's table. **The policy line was compared byte for byte with
+`dist-web/_headers`' and was equal on every response that should carry it**, the 304 included.
+
+- **Everything §9.5 read, the edge does.** The document at `/`, at a deep link asked as a
+  navigation, and at one asked with `Accept: text/html` alone were one response — one `ETag`,
+  `no-cache`, the policy — so `_headers` reaches the fallback and the document the script
+  fetches through its binding. A deep link and a missing chunk asked as `curl` asks were the
+  script's `Not found 404 text/plain; charset=utf-8`; a missing chunk asked as a navigation was
+  `200 text/html`, Cloudflare's rule. `/_headers` was a 404. An `<img>`'s request under
+  `/mtgimg/` was a `no-store` 404 with the script's own three headers and no policy line, and
+  so was one that accepted HTML.
+- **Each caching rule yields one value**: `public, max-age=31536000, immutable` on the module
+  and on a hashed chunk; `no-cache` on the document, an icon, `sw.js` and the engine's Worker.
+  **The Worker chunk's conditional request was a `304` with the policy on it** — the response
+  §9.5's third finding turns on.
+- **What the module costs to download**, 6 767 338 B before encoding:
+
+  | Asked by | Sent as | On the wire |
+  | --- | --- | --- |
+  | `curl`, offering `br, gzip` | `br` | 2 139 023 B |
+  | `curl`, offering gzip alone | `gzip` | 2 373 483 B |
+  | Chrome 154, in the run below | **`zstd`** | **2 176 146 B** |
+  | `wrangler dev --local`, offering `br, gzip` | `br` | 1 986 553 B — not the edge's |
+
+  The edge's `ETag` turns weak, `W/"…"`, on a compressed response. **The figure for a reader
+  is the browser's**, and in this Chrome that is zstd, 37 123 B more than the brotli `curl`
+  was sent.
+- **The edge sends `text/html` and `text/javascript` with no `charset`.** The document
+  declares its own.
+- **The `workers.dev` name is a 404, and `www.mtg-grimoire.app` does not resolve.** ⚠️ A
+  per-version preview address was not asked; the runbook has no probe for one.
+- ⚠️ **Plain `http` is answered: `HTTP/1.1 200 OK`, the document, no redirect.** *Always Use
+  HTTPS* is off. A browser never asks — `.app` is preloaded — but a `curl http://` is handed
+  the document in the clear. Turning the setting on is the owner's.
+- **The document served is the document built** — `diff` against `dist-web/index.html` printed
+  nothing, for a navigation and for a plain `GET /`. That is the check no zone feature can
+  pass by being off in a dashboard; it was made from Denmark and from nowhere else.
+
+**A browser at the real origin, started 12:50 UTC.** Headless Chrome 154.0.8037.95 on Windows,
+a fresh temporary profile, listening only — the page, each session of the engine's Worker and
+the service worker. **One pass, one run**, three minutes after the deploy; the machine's load
+was not recorded.
+
+- **The first load.** Database open at 1 155 ms and the shell drawn at 1 484 ms, on a cold
+  profile; the console said `database open in OPFS — journal delete, corpus journal delete,
+  schema 59`. The service worker was activated and in control by 1 553 ms, with one shell
+  cache of 42 entries. **Its precache requests were each a 200, and a file the page had just
+  fetched cost it 810–848 B on the wire** — so the module was downloaded once. On the wire,
+  all zstd: the document 1 568 B, the index chunk 127 060 B, the stylesheet 36 824 B, the
+  engine's glue 11 242 B, the module 2 176 146 B.
+- **The document in the browser was the built one, byte for byte**, with one `<script>` in the
+  HTML and one in the live DOM, and none of `cloudflare-static`, `email-decode`,
+  `beacon.min.js`, `__cf_email__`, `rocket-loader` or `cdn-cgi` in either.
+- **The first run against the real hosts, from this origin**, in time after navigation.
+  §9.6's column is the build before the engine's last change, on `localhost` two hours
+  earlier — **not like for like**, and beside it only to show nothing moved by much:
+
+  | | At `mtg-grimoire.app` | §9.6, on `localhost` |
+  | --- | --- | --- |
+  | Module | 6 767 338 B | 6 801 761 B |
+  | Database open | 1 155 ms | 892 ms |
+  | Card download and ingest | 15.06 s | 14.48 s, as *card download* |
+  | The card sync's finish | 3.70 s | — |
+  | Cards `done` — **118 470 cards searchable** | **21.4 s** | 20.88 s |
+  | Oracle tags `done`, 4 561 tags | 24.8 s | — |
+  | Art tags `done`, 11 612 tags | 36.3 s | — |
+  | Combos `done`, 111 486 — the last feed | **44.1 s** | 43.81 s |
+  | Linear memory, peak (sampled every 2 s) | 201 785 344 B | 198 377 472 B |
+
+  The error log was empty.
+- **Zero Content-Security-Policy violations** — on the page, in three sessions of the engine's
+  Worker and in the service worker — with no request blocked or failed, no console error and
+  nothing thrown while online.
+- **Who asked whom, across the online session.** Every host in `connect-src` was asked and
+  answered, and the app asked no other:
+
+  | From | To | Requests |
+  | --- | --- | --- |
+  | The page | `mtg-grimoire.app` | 94 — 91 a 200, and 3 loads of the Worker's script, whose responses a page's session is not shown |
+  | The service worker | `mtg-grimoire.app` | 42, each a 200 |
+  | The engine's Worker | `mtg-grimoire.app` | 6, each a 200 |
+  | The engine's Worker | `api.scryfall.com` | 4, each a 200 |
+  | The engine's Worker | `data.scryfall.io` | 3, each a 200 |
+  | The engine's Worker | `json.commanderspellbook.com` | 1, a 200 |
+  | The engine's Worker | `api.cardkingdom.com` | 1, a 200 |
+  | The service worker | `cards.scryfall.io` | 33, each a 200 |
+
+  **This is the answer no fixture and no `localhost` could give**: each host's own CORS reply
+  to a page at this origin. (The listener also recorded one request by a service worker that
+  is not the app's, to an id of the shape Chrome gives an extension. Not looked into.)
+- **Card pictures, drawn under the policy as the host sends it.** The phone face at 360 × 800:
+  the first wall 12 of 12 decoded and a typed search 5 of 5, each 672 × 936 and each asked of
+  `/mtgimg/display/…` on the app's own origin; 17 asked, 17 answered 200 by the service
+  worker, and `grimoire-pictures-v1` holding 17 `image/webp` entries, 1 312 870 B. **An
+  uncached picture took a median of 995 ms, at most 1 106 ms** — against 402.5 ms in §9.6's
+  local run; Scryfall's share of it was not separated. The desktop face at 1280 × 800: 25 of
+  25 in the wall, and Lightning Bolt's modal with 67 printing rows.
+- **The card sheet and Settings.** Sol Ring's sheet had its price, *140 printings · 97 release
+  dates* and *118 combos*; an add moved *Owned 0* to *Owned 1* in 440 ms with no reload, which
+  is §9.6's third finding fixed and seen. Card Kingdom's list was 151 684 rows in 4.6 s; Mana
+  Pool was greyed with its sentence.
+- **A deep link, a reload, and a launch with no network.** `/decks` in the same profile: the
+  document answered by the service worker, the database open at 1 615 ms and the shell at
+  1 941 ms. A reload: 1 529 ms and 1 853 ms. **Then the same profile in a new browser that
+  resolves no name**: the database open at 1 614 ms, the shell at 1 946 ms, 12 of 12 cached
+  wall pictures drawn, and a picture never cached reading *Retrying…* over the service
+  worker's 502.
+- **Settings → Sync → *Pair a device*.** The device line read *Browser — not paired yet.*, one
+  `role="alert"` carried `NOT_FROM_A_BROWSER_YET`'s sentence, and **no cross-origin request
+  was made** — no violation, because nothing was asked.
+- **Storage at the end.** `estimate()` said 1 036 968 697 B used of 11 774 386 937 B. OPFS held
+  64 files, 959 324 160 B — the corpus 958 197 760 B and the reader's database 872 448 B. The
+  shell cache was 10 284 648 B; the pictures' 33 entries, 2 476 978 B. `persisted()` was
+  `false`: headless Chrome refused `persist()`. The largest renderer's working set peaked at
+  631.1 MB.
+
+**Not driven at the real origin.** The update flow, which needs a second deploy; a second tab;
+a launch after storage was cleared; decks, import and export, a context menu, an *Open on …*
+link; the engine's launch checks with no network — the offline launch fell inside the refresh
+interval; an installed PWA. §9.6 drove each of the first four on `localhost`.
+
+**Not proved.**
+
+- **A rollback.** Never exercised: this deploy was the Worker's first, so there has been no
+  version to go back to, and nobody has watched one bring a version's files back.
+- **A deploy over a live page.** The update flow against the real host — a page open with its
+  service worker in control while a second build goes out — has never been seen. §9.6 saw it
+  once, on `localhost`.
+- **A spent free-plan day.** §9.5 has what Cloudflare's source says it does; nobody has seen
+  the 429.
+- **Any browser but one Chrome, and any phone.** The policy, the lock, the pool and the service
+  worker have met Chrome 154, headless, on Windows, and nothing else — at this origin as
+  before it.
+- **The zone on any other day, and the document from any other country.** A setting is the
+  owner's to change; the read and the `diff` are 2026-10-04's, from Denmark.
+- **Email Address Obfuscation with an address to obfuscate.** It is on, and idle only because
+  the document has no `@`. Nothing in the repository keeps one out; the `diff` is what would
+  say so.
+- **That no per-version preview address answers.** `preview_urls` is `false` in the
+  configuration, and no probe asked the host.
+- **How long a certificate takes.** None was waited for.
+- **The offline launch's wall.** The driver's own clock put the twelve cached pictures
+  complete at 19 195 ms in that launch, beside tiles at 2 127 ms. What it waited on was not
+  looked into.

@@ -4,10 +4,14 @@ A third Cloudflare Worker, beside `relay/` and `share-worker/`. It serves the li
 build — `dist-web/`, the page and the engine compiled to WASM — at **`https://mtg-grimoire.app`**,
 the origin root. It is static assets, one file of response headers, and a script of a few lines.
 
-**Nothing is deployed there.** This directory is source, configuration and a runbook; Markus runs
-`wrangler deploy`. The design is
+**It is deployed there since 2026-10-04** — at 12:47 UTC, from `main` at `d8c3779b`, and every
+probe of step 0 was asked of the real address a minute later. This paragraph said *nothing is
+deployed there* until that day. **Ask the host before you believe it or its opposite.** This
+directory is source, configuration and a runbook; `wrangler deploy` is Markus's, and that one was
+run by an agent because he asked for it in chat. The design is
 [the light-app spec](../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md) §6,
-and the build it serves is [light-app.md](../docs/reference/light-app.md) §9.
+and the build it serves is [light-app.md](../docs/reference/light-app.md) §9 — whose §9.7 is the
+deploy's own record, with what it has not proved.
 
 | File | What it is |
 | --- | --- |
@@ -207,7 +211,9 @@ report).
   policy where before it was a connection nobody accepted — the tile draws its retry either way.
   (**True of the tree that run was made on.** Step 5.3 has since landed beside this directory:
   the page asks `/mtgimg/…` and the service worker answers. That run has not been made again, so
-  no card picture has yet been seen drawn under this policy.)
+  no card picture has yet been seen drawn under this policy.) **Answered since, twice**: the
+  phase's own run drew them under this policy on `localhost` (light-app.md §9.6), and the run at
+  the real origin, below, drew them there.
 - **That count is not a vacuous one.** The same run with `data.scryfall.io` taken out of
   `connect-src` failed at the card sync — the page said `http request failed: error sending
   request` — and reported the Worker's three refused downloads by name. That sentence is also
@@ -219,21 +225,65 @@ report).
 
 **What stayed unexercised**: the desktop face over a corpus — the fixtures drive the phone face,
 and at 1280 the empty database shows its *No card data yet* wall rather than a table, a dialog or
-a menu; a card picture actually drawn; a service worker; any browser but this one.
+a menu; a card picture actually drawn; a service worker; any browser but this one. (**Of that
+run.** The first three have been driven since — §9.6 on `localhost`, and the run below.)
+
+**At the real origin, 2026-10-04, started 12:50 UTC** — three minutes after the first deploy.
+The same headless Chrome, 154.0.8037.95 on Windows, a fresh temporary profile, listening only,
+against `https://mtg-grimoire.app` serving engine build `6d63009f7fa1062b`. **One pass, one
+run**; light-app.md §9.7 has every figure.
+
+- **Zero policy violations** — on the page, in three sessions of the engine's Worker and in the
+  service worker — with no request blocked or failed, no console error and nothing thrown. The
+  console said `database open in OPFS — journal delete, corpus journal delete, schema 59`.
+- **The first run against the real hosts, from this origin, finished**: 118,470 cards
+  searchable at 21.4 s, and every launch feed in at 44.1 s, with the error log empty. **Every
+  host in `connect-src` was asked and answered 200** — the engine's Worker asked
+  `api.scryfall.com`, `data.scryfall.io`, `json.commanderspellbook.com` and
+  `api.cardkingdom.com`, the service worker asked `cards.scryfall.io` — **and the app asked no
+  host outside it.** That is the hosts' own CORS answer to this origin, which no fixture and no
+  `localhost` could give.
+- **Card pictures were drawn under the policy as the host sends it**: the phone face's first
+  wall and a typed search, every picture asked of `/mtgimg/display/…` on this origin and
+  answered 200 by the service worker, each stored as `image/webp`; and the desktop face's wall
+  at 1280 × 800. An uncached picture took a median of 995 ms against 402 ms in §9.6's local
+  run — Scryfall's share of that not separated.
+- **The service worker took control on the first visit** and precached the shell, every request
+  a 200; a deep link to `/decks` in the same profile was answered by it; and **a launch with no
+  name resolvable opened the app**, with its cached pictures drawn and *Retrying…* over the
+  worker's 502 for one never cached.
+- **The document the browser was served was the built one, byte for byte**, with one `<script>`
+  in the HTML and in the live DOM, and none of the zone features' marks in either.
+- **Chrome was sent `zstd`, not the brotli `curl` was**: the module was 2,176,146 bytes on the
+  wire.
+- **Settings → Sync → *Pair a device*** drew the engine's refusal sentence and made **no
+  cross-origin request** — so the relay's absence from `connect-src` was never what a reader
+  met.
+
+**Not driven at the real origin**: the update flow, which needs a second deploy; a second tab;
+a launch after storage was cleared; decks, import and export, a context menu, an *Open on …*
+link; the engine's own launch checks with no network — the offline launch fell inside the
+refresh interval; an installed app; any other browser; a phone.
 
 ## Deploying
 
 ⚠️ **No agent runs `wrangler deploy`, or any wrangler command that reaches Cloudflare.** That is
 the repo owner's, as it is for the other two Workers. `wrangler` is not a dependency of this
-repository; `npx` fetches it.
+repository; `npx` fetches it. **The 2026-10-04 deploy was run by an agent because Markus asked
+for it in chat**, as he did for the relay's on 2026-10-01 — and **the ask is per deploy**: it
+lifted this rule for that one deploy and left it standing for the next.
 
 ### Step 0 — ask the host, never a document
 
 `relay/README.md` was wrong twice in one week about what was deployed, and five files once agreed
 the relay did not exist while it was answering requests. The only sentence that cannot rot is a
-`curl`. **Every answer below is what the configuration *should* give and none has been run** —
-there is nothing at the address to ask. Run them before believing this file or its opposite, and
-write the answers in here with the date.
+`curl`. **The *Answered* column is what the real address said on 2026-10-04 at 12:48 UTC** — a
+minute after the first deploy, asked with `curl` from one machine in Denmark, of version
+`cdee3c1c-d3ae-4246-8e8a-c50eb3025152`: `main` at `d8c3779b`, engine build id `6d63009f7fa1062b`.
+(Until that day the column read *not yet run* in every row, and this paragraph said there was
+nothing at the address to ask.) **It is that minute's answer and no later one's.** Run them again
+before believing this file or its opposite, and after every deploy, and write the answers in here
+with the date.
 
 ```
 A=https://mtg-grimoire.app
@@ -245,29 +295,38 @@ H='^HTTP|content-type|cache-control|content-security-policy|x-content-type|refer
 
 | # | Probe | Should answer | Answered |
 | --- | --- | --- | --- |
-| 1 | `curl -s -o /dev/null -D - "$A/" \| grep -iE "$H"` | `200`, `text/html`, `cache-control: no-cache`, `nosniff`, `strict-origin-when-cross-origin`, and the policy — **byte for byte the line in `_headers`** | **not yet run** |
-| 2 | `curl -s -o /dev/null -D - -H "Sec-Fetch-Mode: navigate" "$A/decks/12" \| grep -iE "$H"` | `200`, `text/html`, **and the same policy line and `cache-control: no-cache`** — the fallback document, answered at the edge with the script not run. This is the document every deep link and every reload of one gets; a policy on `/` alone would not be a policy | **not yet run** |
-| 3 | `curl -s -w " %{http_code} %{content_type}\n" "$A/decks/12"` | `Not found 404 text/plain; charset=utf-8` — curl accepts `*/*`, so the script refuses it | **not yet run** |
-| 4 | `curl -s -o /dev/null -D - -H "Accept: text/html" "$A/decks/12" \| grep -iE "$H"` | `200`, `text/html`, the policy and `no-cache` — the script, through the binding. The docs do not say `_headers` reaches this one; the asset worker's source does (`attachCustomHeaders` wraps every response, matched on the path the script asked — `/`) | **not yet run** |
-| 5 | `curl -s -w " %{http_code} %{content_type}\n" "$A/assets/nope.js"` | `Not found 404 text/plain; charset=utf-8`. ⚠️ **`200 text/html` here means the script is not deployed** and every renamed chunk is being answered with the document | **not yet run** |
-| 6 | `curl -s -o /dev/null -w "%{http_code} %{content_type}\n" -H "Sec-Fetch-Mode: navigate" "$A/assets/nope.js"` | `200 text/html` — Cloudflare's rule for a navigation, harmless | **not yet run** |
-| 7 | `curl -s -o /dev/null -D - "$A/wasm/$B/grimoire_web_bg.wasm" \| grep -iE "$H"` | `200`, **`application/wasm`**, `public, max-age=31536000, immutable`, and the policy | **not yet run** |
-| 8 | the same with `-H "Accept-Encoding: br, gzip"` | a `content-encoding` — `application/wasm` is on Cloudflare's default list. **Record which**: it is the size a reader downloads | **not yet run** |
-| 9 | `curl -s -o /dev/null -D - "$A/assets/$J" \| grep -iE "$H"` | `200`, a JavaScript MIME type (wrangler's table says `application/javascript`; the preview says `text/javascript`; a browser takes either), a year, immutable — and **not** `no-cache, public, …`, which is the detach not working | **not yet run** |
-| 10 | `curl -s -o /dev/null -D - "$A/sw.js" \| grep -iE "$H"` | `200`, a JavaScript MIME type, **`cache-control: no-cache`** — one value — and the policy: the service worker's own `fetch` of a card picture is held to the line on *this* response. ⚠️ `404` means the build deployed has no service worker (`web:build` writes `sw.js` last) | **not yet run** |
-| 11 | `curl -s -o /dev/null -w "%{http_code}\n" "$A/_headers"` | `404` — the file is parsed, not served, which is why a service worker's precache list must leave it out | **not yet run** |
-| 12 | `curl -s -o /dev/null -w "%{http_code}\n" https://mtg-grimoire-app.denmark-east.workers.dev/` | **not `200`** — there is no second origin | **not yet run** |
-| 13 | `curl -sI http://mtg-grimoire.app/ \| head -3` | a redirect to `https`, if the zone has *Always Use HTTPS* on. A browser never asks: `.app` is HSTS-preloaded | **not yet run** |
-| 14 | `curl -s -o /dev/null -D - -H "Sec-Fetch-Mode: no-cors" -H "Accept: image/avif,image/webp,image/*,*/*;q=0.8" "$A/mtgimg/display/abc/0" \| grep -iE "$H"` | `404`, `text/plain`, **`cache-control: no-store`** — an `<img>`'s request, as a page no service worker controls makes it. ⚠️ `200 text/html` is the document where a picture was asked | **not yet run** |
-| 15 | the same with `-H "Accept: text/html"` and no `Sec-Fetch-Mode` | `404` again — the script holds no place under `/mtgimg/` | **not yet run** |
-| 16 | `curl -s -o /dev/null -D - "$A/icons/icon-192.png" \| grep -iE "$H"` | `200`, `image/png`, `cache-control: no-cache` | **not yet run** |
-| 17 | `curl -s -o /dev/null -D - "$A/assets/$W" \| grep -iE "$H"` | `200`, a JavaScript MIME type, **`cache-control: no-cache`** — one value, not a year and not three joined — the policy, and an `etag` | **not yet run** |
-| 18 | `E=$(curl -s -o /dev/null -D - "$A/assets/$W" \| grep -i '^etag' \| cut -d' ' -f2 \| tr -d '\r')`, then `curl -s -o /dev/null -D - -H "If-None-Match: $E" "$A/assets/$W" \| grep -iE "$H"` | **`304`, with the policy line on it.** This is the response that re-governs a returning reader's engine after a change to `_headers`; a 304 without the policy leaves the old one in force (measured) | **not yet run** |
+| 1 | `curl -s -o /dev/null -D - "$A/" \| grep -iE "$H"` | `200`, `text/html`, `cache-control: no-cache`, `nosniff`, `strict-origin-when-cross-origin`, and the policy — **byte for byte the line in `_headers`** | **2026-10-04** — `200`, `text/html` with no charset, `no-cache`, `nosniff`, `strict-origin-when-cross-origin`, and the policy equal byte for byte |
+| 2 | `curl -s -o /dev/null -D - -H "Sec-Fetch-Mode: navigate" "$A/decks/12" \| grep -iE "$H"` | `200`, `text/html`, **and the same policy line and `cache-control: no-cache`** — the fallback document, answered at the edge with the script not run. This is the document every deep link and every reload of one gets; a policy on `/` alone would not be a policy | **2026-10-04** — `200`, `text/html`, `no-cache`, the policy equal byte for byte, and probe 1's `ETag` |
+| 3 | `curl -s -w " %{http_code} %{content_type}\n" "$A/decks/12"` | `Not found 404 text/plain; charset=utf-8` — curl accepts `*/*`, so the script refuses it | **2026-10-04** — `Not found 404 text/plain; charset=utf-8` |
+| 4 | `curl -s -o /dev/null -D - -H "Accept: text/html" "$A/decks/12" \| grep -iE "$H"` | `200`, `text/html`, the policy and `no-cache` — the script, through the binding. The docs do not say `_headers` reaches this one; the asset worker's source does (`attachCustomHeaders` wraps every response, matched on the path the script asked — `/`) | **2026-10-04** — `200`, `text/html`, `no-cache`, the policy equal byte for byte, and probe 1's `ETag` again — so `_headers` does reach it |
+| 5 | `curl -s -w " %{http_code} %{content_type}\n" "$A/assets/nope.js"` | `Not found 404 text/plain; charset=utf-8`. ⚠️ **`200 text/html` here means the script is not deployed** and every renamed chunk is being answered with the document | **2026-10-04** — `Not found 404 text/plain; charset=utf-8` |
+| 6 | `curl -s -o /dev/null -w "%{http_code} %{content_type}\n" -H "Sec-Fetch-Mode: navigate" "$A/assets/nope.js"` | `200 text/html` — Cloudflare's rule for a navigation, harmless | **2026-10-04** — `200 text/html` |
+| 7 | `curl -s -o /dev/null -D - "$A/wasm/$B/grimoire_web_bg.wasm" \| grep -iE "$H"` | `200`, **`application/wasm`**, `public, max-age=31536000, immutable`, and the policy | **2026-10-04** — `200`, `application/wasm`, `public, max-age=31536000, immutable`, the policy equal byte for byte |
+| 8 | the same with `-H "Accept-Encoding: br, gzip"` | a `content-encoding` — `application/wasm` is on Cloudflare's default list. **Record which**: it is the size a reader downloads | **2026-10-04** — **`content-encoding: br`, 2,139,023 bytes on the wire** for a module of 6,767,338; 2,373,483 when only gzip is offered. The `ETag` turns weak, `W/"…"`, on the compressed response; the caching and the policy are probe 7's. ⚠️ A browser that offers `zstd` is sent that instead — Chrome 154 downloaded 2,176,146 bytes the same day |
+| 9 | `curl -s -o /dev/null -D - "$A/assets/$J" \| grep -iE "$H"` | `200`, a JavaScript MIME type (wrangler's table says `application/javascript`; the preview says `text/javascript`; a browser takes either), a year, immutable — and **not** `no-cache, public, …`, which is the detach not working | **2026-10-04** — `200`, `text/javascript` with no charset, `public, max-age=31536000, immutable` — one value — the policy equal byte for byte |
+| 10 | `curl -s -o /dev/null -D - "$A/sw.js" \| grep -iE "$H"` | `200`, a JavaScript MIME type, **`cache-control: no-cache`** — one value — and the policy: the service worker's own `fetch` of a card picture is held to the line on *this* response. ⚠️ `404` means the build deployed has no service worker (`web:build` writes `sw.js` last) | **2026-10-04** — `200`, `text/javascript`, `no-cache` — one value — the policy equal byte for byte |
+| 11 | `curl -s -o /dev/null -w "%{http_code}\n" "$A/_headers"` | `404` — the file is parsed, not served, which is why a service worker's precache list must leave it out | **2026-10-04** — `404` |
+| 12 | `curl -s -o /dev/null -w "%{http_code}\n" https://mtg-grimoire-app.denmark-east.workers.dev/` | **not `200`** — there is no second origin | **2026-10-04** — `404` |
+| 13 | `curl -sI http://mtg-grimoire.app/ \| head -3` | a redirect to `https`, if the zone has *Always Use HTTPS* on. A browser never asks: `.app` is HSTS-preloaded | **2026-10-04** — ⚠️ **`HTTP/1.1 200 OK`, `text/html`, and no redirect.** *Always Use HTTPS* is off on the zone, so a `curl http://` is handed the document in the clear. Turning it on is the owner's |
+| 14 | `curl -s -o /dev/null -D - -H "Sec-Fetch-Mode: no-cors" -H "Accept: image/avif,image/webp,image/*,*/*;q=0.8" "$A/mtgimg/display/abc/0" \| grep -iE "$H"` | `404`, `text/plain`, **`cache-control: no-store`** — an `<img>`'s request, as a page no service worker controls makes it. ⚠️ `200 text/html` is the document where a picture was asked | **2026-10-04** — `404`, `text/plain; charset=utf-8`, `no-store`, `nosniff`, and no policy line: the script's own three headers, which `_headers` does not reach |
+| 15 | the same with `-H "Accept: text/html"` and no `Sec-Fetch-Mode` | `404` again — the script holds no place under `/mtgimg/` | **2026-10-04** — `404`, `text/plain; charset=utf-8`, `no-store`, as probe 14's |
+| 16 | `curl -s -o /dev/null -D - "$A/icons/icon-192.png" \| grep -iE "$H"` | `200`, `image/png`, `cache-control: no-cache` | **2026-10-04** — `200`, `image/png`, `no-cache`, the policy equal byte for byte |
+| 17 | `curl -s -o /dev/null -D - "$A/assets/$W" \| grep -iE "$H"` | `200`, a JavaScript MIME type, **`cache-control: no-cache`** — one value, not a year and not three joined — the policy, and an `etag` | **2026-10-04** — `200`, `text/javascript`, `no-cache` — one value — the policy equal byte for byte, and a strong `ETag` |
+| 18 | `E=$(curl -s -o /dev/null -D - "$A/assets/$W" \| grep -i '^etag' \| cut -d' ' -f2 \| tr -d '\r')`, then `curl -s -o /dev/null -D - -H "If-None-Match: $E" "$A/assets/$W" \| grep -iE "$H"` | **`304`, with the policy line on it.** This is the response that re-governs a returning reader's engine after a change to `_headers`; a 304 without the policy leaves the old one in force (measured) | **2026-10-04** — **`304 Not Modified`, with the policy on it, equal byte for byte**, `no-cache`, and probe 17's `ETag` |
+
+**Beside the table, the same minute**: the document served — to `-H "Sec-Fetch-Mode: navigate"`
+and to a plain `GET /` — was byte for byte `dist-web/index.html`; and `www.mtg-grimoire.app` did
+not resolve, so there is no third name to be a second origin. **Two things the table's *should*
+column did not foresee, neither a fault**: the edge sends `text/html` and `text/javascript` with
+no `charset` (the document declares its own in a `<meta>`), where `wrangler dev` adds
+`; charset=utf-8`; and plain `http` is answered, not redirected — probe 13.
 
 Then open the address in a browser with its console open: no policy violation, the app past its
 gate, and `database open in OPFS` on the console. That is the probe no `curl` can make. ⚠️ **Look
 at the document's source while there**: a `<script>` the build did not write is a zone feature
-rewriting the page — *Before the first deploy*, below.
+rewriting the page — *Before the first deploy*, below. **Made on 2026-10-04 at 12:50 UTC**, in
+headless Chrome 154.0.8037.95: no violation, the app past its gate, that console line, and one
+`<script>` in the source and in the live DOM — *What the browser said under it* has the run.
 
 **On a day the account's free limit is spent, probes 3–5, 11, 14 and 15 answer `429 text/html`**
 — Cloudflare's own page, not the script's 404 — and the rest are unchanged. *Cost* has why.
@@ -298,16 +357,28 @@ rewriting the page — *Before the first deploy*, below.
    this configuration, which `web:preview` can only answer in this repository's own words.
    ⚠️ **This step matters more here than for the other two Workers**: with both alternate
    origins off there is no `workers.dev` address to look at first, so the first deploy is live
-   on the apex the moment it finishes. **Not run by anybody yet** — `wrangler` is not installed
-   in this repository and no agent may add or run it. If it asks to log in, it is not in local
-   mode: stop.
+   on the apex the moment it finishes. **Run once, on 2026-10-04, as `wrangler dev --local`**
+   (wrangler 4.146.0, port 8787), over the build deployed later that day: probes 1–11 and 14–18
+   each answered as the table says it should, and the document served equalled the built one.
+   Probes 12 and 13 have nothing local to ask. **What differed from the edge, none of it a
+   fault**: text types carried `; charset=utf-8`, every `ETag` was another value for the same
+   bytes, the compressed module kept a strong one, and its brotli transfer was 1,986,553 bytes
+   against the edge's 2,139,023 — so the local figure is not the size a reader downloads.
+   `--local` reaches nothing, which is what the rule above turns on; if it asks to log in, it is
+   not in local mode: stop.
 6. **Before the first deploy, look at the zone** — *Before the first deploy*, below.
-7. **`npx wrangler deploy`**, from `app-worker/`. Read what it prints: how many header rules it
-   parsed — every rule in `_headers`, or one was refused — the files it uploaded, and the custom
-   domain it attached. The first deploy creates the DNS record and the certificate for
-   `mtg-grimoire.app`; ⚠️ a Custom Domain cannot be created over a hostname that already has a
-   CNAME record, so a parking record on the apex has to go first. The certificate can take some
-   minutes.
+7. **`npx wrangler deploy`**, from `app-worker/` — `--dry-run` first, which uploads nothing. Read
+   what it prints: the files it read and uploaded, the binding, the custom domain it attached and
+   the version id. ⚠️ **It does not say how many `_headers` rules it parsed.** This step told its
+   reader to read that count until 2026-10-04, when wrangler 4.146.0 printed no such line.
+   **The proof the rules were taken is step 8's probes 1, 7, 9, 10 and 17 answering with the
+   `Cache-Control` each should** — the default, the two trees and the two files. The first
+   deploy created the DNS record and the certificate for `mtg-grimoire.app`: the zone held no
+   DNS record at all that day, so nothing was in the apex's way, and **the apex answered 200
+   with the document on the first request after the command returned** — no wait for the
+   certificate was observed, which is one deploy's experience and not a figure. ⚠️ A Custom
+   Domain cannot be created over a hostname that already has a CNAME record; if the domain is
+   ever detached and attached again, a record on the apex has to go first.
 8. **Step 0's probes, all of them, against the real address**, and the answers written into the
    table above with the date.
 
@@ -322,20 +393,35 @@ and a reader's collection is not the thing to find out with.
 The policy is `script-src 'self'`, and a Cloudflare zone has features that **rewrite proxied
 HTML** to add a script of their own. Each would be refused by the policy on every load — a
 console error a reader never sees and a feature that silently does nothing — or, worse, would be
-"fixed" by loosening the policy. **Nobody writing this has seen the zone**; these are the ones
-the documentation names, each to be confirmed **off** for `mtg-grimoire.app` before the first
-deploy:
+"fixed" by loosening the policy. **The zone was read through Cloudflare's API on 2026-10-04,
+before the first deploy** — read-only, by the agent that then deployed — and the last column is
+what it said. (This sentence read *nobody writing this has seen the zone* until then.) **A
+setting is the owner's to change on any day, so the column is that day's and no later one's**;
+these are the ones the documentation names, each to be confirmed **off** for `mtg-grimoire.app`:
 
-| Feature | What it does to the page | Where the docs put it |
-| --- | --- | --- |
-| **Web Analytics, automatic setup** | injects `<script src="https://static.cloudflareinsights.com/beacon.min.js">` into every proxied page of the zone | `web-analytics/` — the dashboard's Web Analytics section, *Manage Site* for the hostname. ⚠️ Its *exclude EU visitors* option means an owner in Denmark may never be served the script that every reader outside the EU is — check the setting, not the page |
-| **Rocket Loader** | rewrites `<script>` tags and adds its own loader | `speed/optimization/content/rocket-loader/` — "If you have a Content Security Policy … you will need to update your headers" |
-| **Email Address Obfuscation** | rewrites e-mail addresses it finds in the HTML — idle while the document has none, which is today | named beside Rocket Loader on that page as using non-standard tags |
-| **JavaScript Detections** (bot settings) | injects an **inline** script; the docs quote the console error `script-src 'self'` produces. It also strips the `ETag` from HTML it touches | `cloudflare-challenges/challenge-types/javascript-detections/` |
+| Feature | What it does to the page | Where the docs put it | Read 2026-10-04 |
+| --- | --- | --- | --- |
+| **Web Analytics, automatic setup** | injects `<script src="https://static.cloudflareinsights.com/beacon.min.js">` into every proxied page of the zone | `web-analytics/` — the dashboard's Web Analytics section, *Manage Site* for the hostname. ⚠️ Its *exclude EU visitors* option means an owner in Denmark may never be served the script that every reader outside the EU is — check the setting, not the page | **no Web Analytics site on the account** |
+| **Rocket Loader** | rewrites `<script>` tags and adds its own loader | `speed/optimization/content/rocket-loader/` — "If you have a Content Security Policy … you will need to update your headers" | **off** |
+| **Email Address Obfuscation** | rewrites e-mail addresses it finds in the HTML — idle while the document has none, which is today | named beside Rocket Loader on that page as using non-standard tags | ⚠️ **on** — the zone's default, and idle: the built document contains no `@`. Left as found; it is the owner's setting |
+| **JavaScript Detections** (bot settings) | injects an **inline** script; the docs quote the console error `script-src 'self'` produces. It also strips the `ETag` from HTML it touches | `cloudflare-challenges/challenge-types/javascript-detections/` | **off** (`enable_js`), and bot fight mode off |
 
 None of them is turned on by anything in this repository; each is a setting of the zone. **The check that cannot be fooled** is the document a reader gets: `curl -s
 -H "Sec-Fetch-Mode: navigate" https://mtg-grimoire.app/ | diff - ../dist-web/index.html` — from
-outside the EU as well, if Web Analytics was ever on — must print nothing.
+outside the EU as well, if Web Analytics was ever on — must print nothing. **It printed nothing
+on 2026-10-04**, for the navigation and for a plain `GET /` alike — asked from Denmark and from
+nowhere else.
+
+**The one of the four that is on is the one to watch.** Email Address Obfuscation does nothing
+to a document with no address in it, and nothing in this repository keeps one out: the day the
+light entry's HTML carries an `@`, the served document stops equalling the built one, and that
+`diff` is the only thing that would say so.
+
+**What else the zone said that day**: active, on the Free plan, with **no DNS record at all**
+before the deploy; SSL mode `full`; brotli on; **Always Use HTTPS off**, which is probe 13's
+answer; no HSTS header configured at the zone, `.app` being HSTS-preloaded as a TLD; and the
+account's Workers were `mtg-grimoire-relay` and `mtg-grimoire-share`, neither with a custom
+domain. Nothing was changed.
 
 ### What a deploy changes for a reader
 
@@ -369,52 +455,74 @@ wrangler versions list` shows what there is to go back to (the 100 most recent).
 rollback is another deploy**: the chunk names change again, and a page opened on the bad build
 meets the same 404 on its next lazy import.
 
+**None of this has been run against this Worker.** The 2026-10-04 deploy was its first, so there
+has been no version to go back to.
+
 **It does not roll back a reader's data.** If a build migrated a schema in OPFS, the build before
 it is now looking at a database from its future. A page-only fault is safe to roll back; a build
 that shipped a schema rung is fixed forwards.
 
 ### What is settled, what `wrangler dev` settles, and what only a deploy can
 
-**Nothing in the probe table has been run, anywhere.** But the questions are not all the same
-kind, and most of them do not need a public address.
+**Every probe in the table has been run — on 2026-10-04, locally where it can be asked and then
+at the real address.** This section opened *nothing in the probe table has been run, anywhere*
+until that day. The questions are still not all the same kind, and most of them do not need a
+public address — which is what step 5 is for on every deploy after the first.
 
 **Read off Cloudflare's own source** (`cloudflare/workers-sdk`, `packages/workers-shared`, at
 `f025bbfd`, 2026-10-03) — the asset worker and the router worker that `wrangler dev` runs
-locally and Cloudflare runs in front of a Worker with assets. Read, not run:
+locally and Cloudflare runs in front of a Worker with assets. Read first, and **since
+2026-10-04 run**, by the probes named at each:
 
 - **`_headers` reaches the fallback document and a document the script fetched through the
   binding.** `handleRequest` (asset-worker) wraps *every* response it returns in
   `attachCustomHeaders`, matched on the path of the request it was given — the 200, the
-  single-page fallback, the 304.
+  single-page fallback, the 304. (Probes 2, 4 and 18.)
 - **The navigation split.** `canFetch` keeps `not_found_handling` only when the request carries
   `Sec-Fetch-Mode: navigate` (and the flag is on); for every other request a miss is "no asset",
-  and the router sends it to the script.
-- **Detach, then set, yields one value**; rules apply in the file's order; two rules for one
-  path are one rule, the last (`constructHeaders` stores them by path); a rule with nothing
-  under it is dropped.
+  and the router sends it to the script. (Probes 2, 3, 5, 6, 14 and 15.)
+- **Detach, then set, yields one value** (probes 7, 9, 10 and 17); rules apply in the file's
+  order; two rules for one path are one rule, the last (`constructHeaders` stores them by path);
+  a rule with nothing under it is dropped. **Those last two are still read and not run** —
+  `src/headers.ts` refuses a file that would show either, so no build can carry one to a host.
 
-**Step 5, `wrangler dev`, turns each of those from read to run** — the navigation split, the
+**Step 5, `wrangler dev`, turned each of those from read to run** — the navigation split, the
 headers on both documents, the detach, the Worker chunk's 304, `/_headers`, the content types —
-with nothing public.
+with nothing public, and the edge then answered the same.
 
-**Only a deploy** can settle these:
+**Only a deploy could settle these, and the one on 2026-10-04 settled all but the rollback**:
 
-- **The certificate and the apex**: how long issuance takes, and whether a record was in the way.
-- **What the edge compresses the module with** (probe 8), and so what a first visit downloads.
-  The module this was checked against was 8,623,589 bytes, and 3.07 MB gzipped by Vite's report.
-- **That neither alternate origin answers** (probe 12), and what the zone does to plain `http`
-  (probe 13).
-- **What the zone's own features do to the document** — the table above.
+- **The certificate and the apex**: ~~how long issuance takes, and whether a record was in the
+  way~~ — no record was (the zone had none), and the apex answered 200 on the first request
+  after the deploy returned. No wait was observed; no duration was measured.
+- **What the edge compresses the module with** (probe 8), and so what a first visit downloads:
+  **brotli, 2,139,023 bytes on the wire** for the 6,767,338-byte module, and 2,373,483 where
+  only gzip is offered. ⚠️ **That is `curl`'s answer and not a reader's**: Chrome 154 offers
+  `zstd`, the edge chose it, and the module was **2,176,146 bytes** on the wire there — the
+  figure for a first visit in that browser. (This line carried an earlier module's figures
+  until the deploy — 8,623,589 bytes, and 3.07 MB gzipped by Vite's report.)
+- **That neither alternate origin answers**: the `workers.dev` name is a `404` (probe 12), and
+  `www` does not resolve. ⚠️ **A per-version preview address was not asked** — the table has no
+  probe for one, so `preview_urls: false` is still the configuration's word and not the host's.
+- **What the zone does to plain `http`** (probe 13): it answers it — `200`, the document, no
+  redirect — because *Always Use HTTPS* is off.
+- **What the zone's own features do to the document** — the table above: nothing, for the
+  document asked from one country on one day.
 - **That a rollback brings a version's files back with it.** The limits are stated per Worker
-  version, which says so; nobody here has watched it.
-- **The policy against the real hosts, from this origin.** Every host in `connect-src` has been
-  asked under it and answered from a fixture; none has been asked for real from a page at
-  `mtg-grimoire.app`, where the CORS answers are the hosts' own.
+  version, which says so; **nobody has watched it, and that deploy was the Worker's first, so
+  there has been no version to go back to.**
+- **The policy against the real hosts, from this origin** — which `curl` cannot ask, and a
+  browser did the same day (*What the browser said under it*, above): **every host in
+  `connect-src` was asked from a page at `mtg-grimoire.app` and answered 200, the app asked no
+  other host, and nothing was refused.** One run, in one Chrome.
 
-**And neither can settle these**, which are a browser's and a later step's: any browser but one
-Chrome on Windows, and any phone — the policy has met no Safari and no Firefox, and neither has
-the engine; and a card picture through the service worker (5.3 — built since, and not yet driven
-in a browser under this policy), which is the one thing `img-src` has yet to draw.
+**And no deploy by itself settles these**, which are a browser's and a later day's: any browser
+but one Chrome on Windows, and any phone — the policy has met no Safari and no Firefox, and
+neither has the engine; **a deploy over a page that is open with its service worker in
+control**, which is the update flow against the real host and needs a second deploy to be seen;
+and a spent free-plan day. (This paragraph ended on a card picture through the service worker
+as the one thing `img-src` had yet to draw. It has drawn them — on `localhost` in light-app.md
+§9.6, and at the real origin on 2026-10-04.)
 
 ## Cost
 
@@ -434,7 +542,11 @@ Read from Cloudflare's documentation on 2026-10-04; none of it measured here.
   service worker controls it**: each `/mtgimg/…` that reaches the network is one Worker request
   for a 404. A first visit that draws a wall of cards ahead of the worker taking control spends
   one per tile, so how soon that worker claims its page is a cost on this budget, not only a
-  matter of broken pictures. Nobody has counted it.
+  matter of broken pictures. Nobody has counted it. (**One first visit has been since**, at the
+  real origin on 2026-10-04: none of the page's requests to this origin was a 404. The worker
+  was in control at 1,553 ms, and a fresh profile has no card to draw until its corpus is built,
+  21.4 s in. One run, in one Chrome; a returning reader whose worker was evicted is the case it
+  does not cover.)
 - **A flood of misses is the exposure**, and unlike the two `workers.dev` Workers this one sits
   behind a zone: a rate-limiting rule on `mtg-grimoire.app` can refuse a caller *before* the Worker
   is invoked, which `relay/src/ratelimit.ts` could not do for the relay. **None is configured.**
