@@ -4379,7 +4379,9 @@ size taken up with timings, and the built app driven end to end against round on
 are still to come and are not in this section. **Nothing is deployed**: what was committed is
 source, configuration and a runbook, and [`app-worker/README.md`](../../app-worker/README.md)
 is that runbook — the probes, the steps in order, rollback and cost. Numbered for its step; 5.3
-was still in flight, so there is no §9.3 above it yet.
+was still in flight when this was written, on a tree with no service worker in it, and §9.3
+arrived above it when the two met (2026-10-04). **What that meeting changed is marked where it
+stands below**; every measurement here is still of the tree it names.
 
 **What was built.**
 
@@ -4414,7 +4416,9 @@ was still in flight, so there is no §9.3 above it yet.
 - **`app-worker/_headers`, emitted into `dist-web/` and nowhere else.** `vite.mobile.config.ts`
   gained a second `web`-mode plugin, `web:hosting`, which copies the file to the build's root —
   where `wrangler deploy` parses it — and fails the build, by line, on a file that does not
-  parse. **In neither public directory**: the root's is copied into `dist/` and `dist-share/`,
+  parse. (**Three, with step 5.3's**: `web:hosting` is listed first, so its headers are on a
+  preview response before any other plugin's middleware answers it — `sw.js` included — and
+  `web:service-worker` last, so the build id it hashes covers the emitted `_headers`.) **In neither public directory**: the root's is copied into `dist/` and `dist-share/`,
   and `mobile/public/` into the APK's `dist-mobile/`.
 
   | Build, listed 2026-10-04 | `_headers` | Manifest and icons | Engine and its Worker |
@@ -4523,8 +4527,8 @@ object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; fo
   at every route, the manifest, the favicon and the manifest's `icons/*.png`, whose names carry
   no hash. A year, `immutable`, for `/assets/*` and `/wasm/*`, which are content-addressed —
   **less `assets/worker-<hash>.js`, the engine's Worker, which is `no-cache`** (the third
-  finding). `/sw.js` restates `no-cache` by a rule of its own, written before the file exists,
-  so loosening `/*` cannot take it along. Each narrower rule detaches before it sets, or the
+  finding). `/sw.js` restates `no-cache` by a rule of its own, written before the file existed
+  (it does since step 5.3 — §9.3), so loosening `/*` cannot take it along. Each narrower rule detaches before it sets, or the
   two values would be joined.
 
 **Three findings, in headless Chrome 154.0.8037.95 on Windows 11, 2026-10-04.**
@@ -4566,7 +4570,8 @@ object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; fo
   **The service worker is a second cache with the same property** — it serves the shell out of
   Cache Storage with the headers it stored. Step 5.3 re-fetches the shell per build and hashes
   `_headers` into its build id; that is a property of that step, to be pinned by a test there,
-  and nothing here relies on it or checks it.
+  and nothing here relies on it or checks it. (**Pinned there**: `shell.test.ts`'s *moves when
+  only the host's `_headers` changed* — §9.3.)
 
 **What a browser said under the policy** — the same Chrome, over `npm run web:build` of `main`
 at `92cbc02b` with this step merged in. **The module was a copy from the phase's working tree
@@ -4585,7 +4590,10 @@ gzipped by Vite's report.
 - **One violation, seventeen times: `img-src` refusing `http://mtgimg.localhost/…`.** `main`'s
   page still names the desktop's image protocol; 5.3 moves pictures to `/mtgimg/…`. Until then a
   card picture in a browser is refused by the policy where before it was a connection nobody
-  accepted, and the tile draws its retry either way.
+  accepted, and the tile draws its retry either way. (**True of the tree this run was made
+  on.** With step 5.3 beside it the page asks `/mtgimg/…` of its own origin and the service
+  worker answers with a response rebuilt from the bytes. This run has not been made again, so
+  no card picture has been seen drawn under the policy.)
 - **The zero for the Worker is not a vacuous one.** With `data.scryfall.io` taken out of
   `connect-src`, the same run stopped at the card sync and named the Worker's three refused
   downloads.
@@ -4697,8 +4705,9 @@ from the wrong place and called every run red.
   shares. Nobody has counted a first visit.
 - **The desktop face over a corpus under the policy** — the smoke's fixtures drive the phone
   face, and at 1280 an empty database draws its *No card data yet* wall — **a card picture
-  drawn**, **a service worker**, **the real hosts** rather than fixtures, **any browser but one
-  Chrome**, and any phone.
+  drawn**, **a service worker** (built since, in step 5.3, and driven with no policy — §9.3;
+  the two have not been driven together in a browser), **the real hosts** rather than
+  fixtures, **any browser but one Chrome**, and any phone.
 - **`scripts/web-smoke.mjs` runs with no policy.** CI's `web` job therefore proves the build
   and not the build as served. What it would take: serve through `headersFor`, answer a miss
   and `/_headers` with a 404, and listen for violations in the Worker as well as on the page.

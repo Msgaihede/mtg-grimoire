@@ -129,7 +129,8 @@ const engineBuilt = (files: { name: string }[]): boolean =>
   [GLUE_FILE, WASM_FILE].every((wanted) => files.some(({ name }) => name === wanted));
 
 /**
- * **The web app's engine, served and shipped** — the `web` mode's one plugin.
+ * **The web app's engine, served and shipped** — one of the `web` mode's three plugins, with
+ * `webHosting` below and `vite.sw.ts`'s service worker.
  *
  * The Worker loads the glue from `/wasm/<build>/grimoire_web.js` and the module from beside it
  * (`src/lib/core/web/worker.ts`); `assets.ts` has why the build id is a directory. Neither file is
@@ -200,7 +201,7 @@ const HEADERS_SOURCE = fileURLToPath(new URL("./app-worker/_headers", import.met
 const WEB_BUILD = fileURLToPath(new URL("./dist-web", import.meta.url));
 
 /**
- * **The web build's hosting file, shipped and enforced** — the `web` mode's second plugin.
+ * **The web build's hosting file, shipped and enforced** — the `web` mode's first-listed plugin.
  *
  * - **In a build**, `app-worker/_headers` is emitted at the root of `dist-web/`, where
  *   `wrangler deploy` reads it. Emitted here and **kept in neither public directory**: the root's
@@ -220,7 +221,9 @@ const WEB_BUILD = fileURLToPath(new URL("./dist-web", import.meta.url));
  * to the page over a WebSocket, each of which the shipped policy forbids on purpose.
  *
  * Listed **before** `web:engine`: that plugin rewrites a navigation to `/index.html`, and a
- * rule is matched against the address the reader asked for.
+ * rule is matched against the address the reader asked for. And before `web:service-worker`,
+ * whose middleware ends the response for `/sw.js` itself: a service worker's `fetch` is held to
+ * the policy on that script's response, so it has to be on it by then.
  */
 function webHosting(): Plugin {
   return {

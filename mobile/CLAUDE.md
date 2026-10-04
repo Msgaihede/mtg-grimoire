@@ -380,7 +380,8 @@ failure behind each at its own site:
   from Cache Storage, and a newer build held until the reader takes it. **The manifest and its
   icons** are in `mobile/public/`, the light builds' own public directory since step 5.4, so no
   other build carries them; `scripts/light-icons.mjs` renders the icons from the mark, and
-  **there is no install button**: a browser's own install UI is the install. Nothing is hosted.
+  **there is no install button**: a browser's own install UI is the install. **Nothing is deployed**: the
+  hosting Worker and its policy are source in `app-worker/` (step 5.5's first half).
 - **No device sync on a light install**: the phone face pairs with nothing. **It does hear the
   host's card sync and the feeds** — `phone/cardData.ts`'s `useCardDataWatch`, mounted once in
   `PhoneFace`, runs the desktop shell's own listeners (`useSyncInvalidation`, the feed hooks) and

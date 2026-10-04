@@ -55,6 +55,10 @@ function filesUnder(dir: string): string[] {
  *   exits non-zero, and `web:build` with it. (Settled by pointing the entry at nothing.)
  * - **The preview serves it `no-cache`**, as a host must: a worker the HTTP cache may keep is a
  *   new build found a day late. (The page also registers it with `updateViaCache: "none"`.)
+ *   **This middleware ends the response, so whatever else the script must carry has to be on it
+ *   already**: the hosting's Content-Security-Policy is put there by `web:hosting`, which
+ *   `vite.mobile.config.ts` lists before this plugin for that reason — a worker's `fetch` is
+ *   held to the policy on its own script's response, and one sent with none is held to nothing.
  *
  * `outDir` is from the repository root, as the config that calls this spells it.
  */

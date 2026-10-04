@@ -46,9 +46,9 @@ reader's data.
 
 | Request | Answer | Who answers |
 | --- | --- | --- |
-| A file that exists — `/`, `/assets/…`, `/wasm/<build>/…`, the manifest | the file, with `_headers` applied | the edge; **the script does not run and the request is free** |
+| A file that exists — `/`, `/assets/…`, `/wasm/<build>/…`, the manifest, `/sw.js` | the file, with `_headers` applied | the edge; **the script does not run and the request is free** |
 | A browser's navigation to a place in the app — `/decks/12` | the document, 200, with `_headers` applied | the edge, the same way |
-| Anything else that matches no file — a chunk a deploy renamed, `/sw.js` before step 5.3 | **404**, `text/plain`, `no-store` | the script |
+| Anything else that matches no file — a chunk a deploy renamed | **404**, `text/plain`, `no-store` | the script |
 | A card picture, `/mtgimg/…`, from a page no service worker controls yet | **404**, `no-store` — whatever the caller accepts | the script |
 | A navigation that did not say so — `curl -H "Accept: text/html" /decks/12` | the document, 200, with `_headers` applied | the script, through the binding |
 | `/_headers` itself | **404** — the file is parsed, not served | the script |
@@ -131,7 +131,8 @@ a request it matches is a 429 once the free plan's day is spent.
   cache with the same property** (step 5.3): it serves the shell, this chunk included, out of
   Cache Storage with the headers it was stored with. That step re-fetches the shell per build and
   hashes `_headers` into its build id, so a policy change is a new build to it — a property of
-  that step, to be pinned by a test there, and not something this directory relies on or checks.
+  that step, pinned by a test there (`src/lib/core/web/sw/shell.test.ts`, *moves when only the
+  host's `_headers` changed*), and not something this directory relies on or checks.
 - **`connect-src` is exactly the hosts the engine asks, and `hosting.test.ts` holds it there in
   two halves.** *A host that moved*: the engine's addresses are read by name — `SCRYFALL_API`,
   `IMAGE_HOST`, `FEED_URL` and Card Kingdom's `url()` — and the policy is held set-equal to
@@ -204,6 +205,9 @@ report).
   `main` the page still names the desktop's image protocol; step 5.3 moves pictures to
   `/mtgimg/…` on this origin. Until it lands, a card picture in a browser is blocked by this
   policy where before it was a connection nobody accepted — the tile draws its retry either way.
+  (**True of the tree that run was made on.** Step 5.3 has since landed beside this directory:
+  the page asks `/mtgimg/…` and the service worker answers. That run has not been made again, so
+  no card picture has yet been seen drawn under this policy.)
 - **That count is not a vacuous one.** The same run with `data.scryfall.io` taken out of
   `connect-src` failed at the card sync — the page said `http request failed: error sending
   request` — and reported the Worker's three refused downloads by name. That sentence is also
@@ -250,7 +254,7 @@ H='^HTTP|content-type|cache-control|content-security-policy|x-content-type|refer
 | 7 | `curl -s -o /dev/null -D - "$A/wasm/$B/grimoire_web_bg.wasm" \| grep -iE "$H"` | `200`, **`application/wasm`**, `public, max-age=31536000, immutable`, and the policy | **not yet run** |
 | 8 | the same with `-H "Accept-Encoding: br, gzip"` | a `content-encoding` — `application/wasm` is on Cloudflare's default list. **Record which**: it is the size a reader downloads | **not yet run** |
 | 9 | `curl -s -o /dev/null -D - "$A/assets/$J" \| grep -iE "$H"` | `200`, a JavaScript MIME type (wrangler's table says `application/javascript`; the preview says `text/javascript`; a browser takes either), a year, immutable — and **not** `no-cache, public, …`, which is the detach not working | **not yet run** |
-| 10 | `curl -s -o /dev/null -w "%{http_code}\n" "$A/sw.js"` | `404` until step 5.3 ships the file; then `200` with `cache-control: no-cache` | **not yet run** |
+| 10 | `curl -s -o /dev/null -D - "$A/sw.js" \| grep -iE "$H"` | `200`, a JavaScript MIME type, **`cache-control: no-cache`** — one value — and the policy: the service worker's own `fetch` of a card picture is held to the line on *this* response. ⚠️ `404` means the build deployed has no service worker (`web:build` writes `sw.js` last) | **not yet run** |
 | 11 | `curl -s -o /dev/null -w "%{http_code}\n" "$A/_headers"` | `404` — the file is parsed, not served, which is why a service worker's precache list must leave it out | **not yet run** |
 | 12 | `curl -s -o /dev/null -w "%{http_code}\n" https://mtg-grimoire-app.denmark-east.workers.dev/` | **not `200`** — there is no second origin | **not yet run** |
 | 13 | `curl -sI http://mtg-grimoire.app/ \| head -3` | a redirect to `https`, if the zone has *Always Use HTTPS* on. A browser never asks: `.app` is HSTS-preloaded | **not yet run** |
@@ -265,8 +269,7 @@ gate, and `database open in OPFS` on the console. That is the probe no `curl` ca
 at the document's source while there**: a `<script>` the build did not write is a zone feature
 rewriting the page — *Before the first deploy*, below.
 
-**On a day the account's free limit is spent, probes 3–5, 10 (until 5.3 ships the file), 11, 14
-and 15 answer `429 text/html`**
+**On a day the account's free limit is spent, probes 3–5, 11, 14 and 15 answer `429 text/html`**
 — Cloudflare's own page, not the script's 404 — and the rest are unchanged. *Cost* has why.
 
 ### The steps, in order
@@ -338,9 +341,12 @@ outside the EU as well, if Web Analytics was ever on — must print nothing.
 
 - **Every deploy renames the chunks that changed.** A page already open keeps running on what it
   loaded, and its next lazy import of a renamed chunk is a 404 — which the app has to recover
-  from. That recovery, and the bar that offers the new version, are step 5.3's; until it ships, a
-  reader who navigates inside an open app across a deploy can meet a face that fails to load, and
-  a reload cures it.
+  from. Step 5.3's service worker takes that case away rather than recovering from it: a page it
+  controls is served its own build, whole, out of a cache named for that build for as long as the
+  page is open, and a bar offers the new version, which only the reader's press activates
+  (light-app.md §9.3). A page no worker controls — a browser with none, or one that evicted the
+  cache under a live page — can still meet a face that fails to load across a deploy, and a
+  reload cures it.
 - **The engine keeps its address across a deploy that did not change it.** Its directory is a
   hash of its own bytes, so a deploy of the page alone does not make anybody download the module
   again.
@@ -407,8 +413,8 @@ with nothing public.
 
 **And neither can settle these**, which are a browser's and a later step's: any browser but one
 Chrome on Windows, and any phone — the policy has met no Safari and no Firefox, and neither has
-the engine; and a card picture through the service worker (5.3), which is the one thing
-`img-src` has yet to draw.
+the engine; and a card picture through the service worker (5.3 — built since, and not yet driven
+in a browser under this policy), which is the one thing `img-src` has yet to draw.
 
 ## Cost
 
@@ -423,7 +429,7 @@ Read from Cloudflare's documentation on 2026-10-04; none of it measured here.
   the free plan (`workers/platform/limits`). ⚠️ **That is the same budget the relay's sync
   spends**, the cliff `relay/README.md` describes: past it every reader's sync errors at once.
   What reaches the script is a miss that is not a browser's navigation — a renamed chunk asked for
-  by a page that predates a deploy, `/sw.js` until 5.3, a crawler. In ordinary use that is a
+  by a page that predates a deploy, a crawler. In ordinary use that is a
   handful per reader per deploy. ⚠️ **And, from 5.3 on, every card picture a page asks before its
   service worker controls it**: each `/mtgimg/…` that reaches the network is one Worker request
   for a 404. A first visit that draws a wall of cards ahead of the worker taking control spends

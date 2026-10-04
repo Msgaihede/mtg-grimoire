@@ -57,7 +57,9 @@ describe("a file that is not there", () => {
     ["a stylesheet", "/assets/index-91ab.css"],
     ["the engine's module", "/wasm/0123456789abcdef/grimoire_web_bg.wasm"],
     ["the engine's glue", "/wasm/0123456789abcdef/grimoire_web.js"],
-    ["the service worker before step 5.3 ships one", "/sw.js"],
+    // A build always writes one now (`vite.sw.ts`, step 5.3) and the edge serves it; this is the
+    // deploy that somehow lacks it, where the registration must fail on a 404 and not on HTML.
+    ["the service worker's script, from a build that has none", "/sw.js"],
     ["the manifest", "/light.webmanifest"],
   ])("is a 404 and never the document: %s", async (_what, path) => {
     const { env, asked } = hosting();
