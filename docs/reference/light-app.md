@@ -5450,18 +5450,86 @@ question**, what a page meets when a deploy renames a chunk it has not loaded ye
 note* on the desktop face logged two `style-src-elem` violations — an inline `<style>` element
 refused by `style-src 'self'` — on v2 and on v3 alike, so the deploy did not bring it.
 
-- **The editor still opened**, drew its toolbar and took typing. What the refused styles would
-  have changed was not looked at.
+- **The editor still opened**, drew its toolbar and took typing. ~~What the refused styles would
+  have changed was not looked at.~~ **Nothing on screen — below.**
 - **The cause, read and not run.** The editor is Tiptap, whose `injectCSS` option defaults to
   true — `node_modules/@tiptap/core/dist/index.js` builds a style tag with
   `createStyleTag(style, this.options.injectNonce)` when it is — and `NoteEditor.tsx`'s
   `useEditor` does not set it.
 - ⚠️ **The packaged desktop sends the same `style-src 'self'`, so it is presumably refused
-  there too. Not checked.**
+  there too.** ~~**Not checked.**~~ **Checked, and it is — below.**
 - **Why no earlier pass saw it: none opened the note editor.** Every "zero violations" in this
   section and in §9.5 and §9.6 stands for the surfaces that pass drew; this is the one surface
   on the live site known to break the policy.
-- **Found, not fixed here**: handed off as its own task.
+- ~~**Found, not fixed here**: handed off as its own task.~~ **Fixed — below.**
+
+**That finding, taken up the same day: measured on both hosts, and fixed.** The handover
+asked for the packaged desktop to be checked first, and for whatever the refused sheet
+carried to be put in the app's own stylesheet. The first found what was presumed; the second
+found there was nothing to put. **Every measurement below is 2026-10-04, one machine, debug
+or `wasm`-profile builds as named; the machine's load was not recorded.**
+
+- **The cause.** Tiptap's editor class (`@tiptap/core` 3.31.3) appends a
+  `<style data-tiptap-style>` to `<head>` as it builds a view, unless its `injectCSS` option is
+  off; it is on by default and `NoteEditor.tsx` did not set it. That file's header had checked
+  for exactly this on 2026-09-10 — in `prosemirror-view`, which appends nothing. The injection is
+  one library up.
+- **The packaged desktop app has it too — measured, where the handover could only presume.** A
+  `tauri build --debug --no-bundle` binary of `main` at `ca2f1493` (which enforces the shipped
+  policy; `tauri dev` has none), WebView2 154.0.4258.53, driven over CDP on a copy of the dev
+  database. *New note*: one `securitypolicyviolation` (`style-src-elem`, `inline`), one console
+  error, and one `<style data-tiptap-style>` in `<head>` whose `sheet` was `null`. Closing the
+  dialog took the element away; *New to-do list* appended it again, for a second violation.
+  **One per editor built**, because the library removes the element with its last editor.
+- **Two on the web is two editors, not two sheets and not the to-do editor.** On the built web
+  app under the hosting policy — `web:smoke`'s server, headless Chrome 154.0.8037.95, the phone
+  face — one press appended the element twice, and the page heard two violations with one
+  editor on screen. The stacks: `@tiptap/react`'s hook built an editor during render
+  (`getInitialEditor`); the library's own 1 ms *never mounted* timer destroyed it 4 ms later,
+  taking the element with it; and the hook's effect built a second at commit, 232 ms after the
+  first (`refreshEditorInstance`). The packaged desktop window built one, on each of two opens.
+  ⚠️ **Why the commit came 232 ms after the render was not looked into** — the editor is a lazy
+  chunk behind `Suspense`, and that is as far as it was read. One run.
+- **Nothing was missing on screen, which is why nobody had seen it — and the handover's premise
+  was wrong.** It read that every shipped build had run the editor without the sheet's rules.
+  `NoteEditor.tsx` imports `prosemirror-view/style/prosemirror.css`, which Vite bundles, and the
+  refused sheet is those rules over again plus three things. In the packaged window *before* the
+  fix the surface computed `white-space: break-spaces`, `position: relative`,
+  `overflow-wrap: break-word` and ligatures `none`, and ProseMirror's console warning for a
+  missing `white-space` was not printed. The three, each measured in that window:
+
+  | In Tiptap's sheet and not ProseMirror's | What was found |
+  | --- | --- |
+  | `white-space: normal` on `contenteditable="false"` | A to-do list with a nested to-do has four such islands — two boxes, two delete buttons — and no whitespace-only text node in any. All 22 elements' rectangles were identical with the rule forced on them and without |
+  | The gap cursor's drawing | No position in either dialect can hold one. ArrowDown and ArrowRight at the end of a note that ends in a quote made none; `NoteEditor.test.tsx` now asks the library's own rule of every position in both committed corpora, and finds none |
+  | `width: 0; height: 0` on `img.ProseMirror-separator` | 0 × 0 without it |
+
+  **So no rule was added to any stylesheet.** The gap cursor is the one to watch: a kit that
+  gains a rule line, an image or a code block makes it reachable, and unstyled it is an empty
+  `<div>` with the real caret hidden — the new test goes red on that day and says which rules to
+  bundle. **One sentence in `NoteEditor.tsx` was wrong and is corrected**: the gap cursor is not
+  how a caret gets past a quote that ends a note. Enter on the quote's empty last line is —
+  driven: `<blockquote><p>quote</p></blockquote><p>out</p>`.
+- **The fix is one line and three fences.** `injectCSS: false` on the app's one editor.
+  `src/lib/tokens.test.ts`: every `useEditor(` and `new Editor(` outside a test sets it, the
+  sweep names `NoteEditor.tsx` so it cannot pass over nothing, the library's component form is
+  refused, and every file that builds an editor imports ProseMirror's sheet. `NoteEditor.test.tsx`:
+  the option has one spelling in the file, and the gap-cursor sweep above with a stock kit to
+  prove it can find a stop. `web:smoke`: a seventeenth check, fourteenth in order — a deck made,
+  *New note*, a sentence typed, no `<style>` element on the page.
+- **After, on the same two hosts.** The packaged window rebuilt from the branch, *New note* and
+  *New to-do list*: no violation, no console error, no `<style>` element, and the same four
+  computed values. A run of spaces typed was kept (`a  b   c `); a node selection hid the caret
+  — on the surface and, by inheritance, on its children — and outlined the node
+  `rgb(136, 204, 255) solid 2px`, which is ProseMirror's own light blue and not a colour of this
+  app's. Noted, not changed. The web build: `web:smoke` passed all seventeen in 17.8 s, the
+  module 6 767 338 B. **On the same tree with the one line taken out, the new check
+  failed the run** — `style-src-elem (kInlineViolation)`, two issues — with the thirteen before
+  it green, which is the run that would have caught this before the deploy.
+- **Not done.** ⚠️ **The live site still raises them**: this is in no build that has been
+  deployed, and the deploy is the owner's to ask for. Android carries the same policy line
+  (`mobile/src-tauri/tauri.conf.json`) and the same editor, and was not run. No browser but
+  Chrome 154 and WebView2 154 has been asked.
 
 **Two zone settings, changed at the owner's ask.** In chat: *"always use https should be
 **on** and we should add a redirect from www. to the plain domain"*. An agent made both
@@ -5518,7 +5586,8 @@ the Worker touches either.**
 - **A phone's first run** — how long it takes, what the browser answers when asked for the
   storage, whether the corpus survives there.
 - **A real install.** Nothing stands in its way by Chrome's own check; none was made.
-- **What the note editor's refused styles cost**, on the web and on the packaged desktop.
+- ~~**What the note editor's refused styles cost**, on the web and on the packaged desktop.~~
+  **Nothing on screen, and a console error for each editor built — measured on both, above.**
 - **What a reload inside the card sync's finish costs on a slow link.** It cost the whole card
   download again both times it was seen; what that is to a reader on a slow link was not
   measured.

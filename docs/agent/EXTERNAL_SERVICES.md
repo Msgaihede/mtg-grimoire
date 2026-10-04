@@ -178,6 +178,7 @@ was run by an agent because Markus asked for it, and **the ask is per deploy**.
 at the real address that day. **Who has run it**: headless Chrome 154, driven and measured; the
 owner's Firefox and the owner's phone, a sentence each. What nobody has seen — Safari, an
 installed app, a phone's figures, the app's own update check in a browser that was measured —
-and the one policy violation known on the live site, the deck note editor's, are in
+and the one policy violation known on the live site, the deck note editor's — **fixed in the
+source that day, and raised by the deployed build until the next deploy** — are in
 [light-app.md](../reference/light-app.md) §9.7. Ask the host before you believe this or its
 opposite.

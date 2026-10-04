@@ -81,6 +81,7 @@ Normalized via `deckKind.ts` (`regular`, `theory`, `virtual`):
 - **Tokens & Emblems (`DeckTokensPanel`)**: Dedicated token management (`deck_token_printings`), supporting three modes (`managed`, `collection`, `hidden`).
 - **Notes & To-dos**:
   - Notes band: Titled multi-document rich text notes (`deck_notes`) with Markdown/ProseMirror formatting.
+  - `NoteEditor.tsx` (both bands' editor) passes `injectCSS: false`: Tiptap's default appends a runtime stylesheet the shipped CSP refuses. Its header has what that sheet carried and why no rule replaced it.
   - To-do band: Structured deck checklists (`deck_todo_lists`) supporting item completion and ordering.
 - **Keyboard focus handling**: Floating toolbars automatically avoid intercepting typing gestures while text inputs or note editors have active focus.
 
