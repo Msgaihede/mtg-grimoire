@@ -8,12 +8,14 @@ import {
   handleWebhook,
   reconcile,
 } from "./claim";
+import { allowedOrigin, preflight, withCors, type CorsEnv } from "./cors";
 import { groupEpoch } from "./groupauth";
 import { handlePair } from "./pair";
 import { required } from "./patreon";
 import { limited, type LimitedRoute, type Limiters } from "./ratelimit";
 import { handleRendezvousGet, handleRendezvousPut, sweepRendezvous } from "./rendezvous";
 import { handleKeys, handleRotate } from "./rotate";
+import { bearerTicket } from "./ticket";
 import { verify } from "./token";
 
 /**
@@ -52,9 +54,19 @@ import { verify } from "./token";
  * them. `ratelimit.ts` refuses a caller past its limit ahead of that read, after the method check
  * so a 405 spends none of anybody's budget. The routes behind the gate take no limit: an HMAC over
  * memory already refuses their junk for free.
+ *
+ * **Since 2026-10-04 a browser is a caller too, and it changes the wrapping and nothing inside
+ * it.** The web app at `https://mtg-grimoire.app` asks every route a device asks, cross-origin, so
+ * `fetch` below answers a pre-flight ahead of everything — the limiter, D1, the HMAC, any object —
+ * and puts `Access-Control-Allow-Origin` on whatever the router then says, refusals included.
+ * `cors.ts` is why that weakens nothing. **A request with no `Origin` takes neither step**, and
+ * that is every native client: `route` is the router as it stood, and its answer goes back
+ * untouched. The socket is the one route that differs in kind — CORS does not cover an upgrade —
+ * so `/ws` checks the origin itself and takes its bearer from a sub-protocol when there is no
+ * header; `ticket.ts` is why.
  */
 
-export interface Env extends Limiters {
+export interface Env extends Limiters, CorsEnv {
   GROUP: DurableObjectNamespace;
 
   /** The entitlement store. `relay/schema.sql` is its shape. */
@@ -136,24 +148,59 @@ const METHOD: Record<string, string> = {
  * **`limit` is on the two that read D1 for a caller who has shown nothing yet.** The callback is
  * refused by Patreon's own answer to a code it never issued and the webhook by an HMAC over
  * memory, so neither has anything a limit would spare; `/pair` is a static page.
+ *
+ * **`cors` is on the same two, and for a different reason: they are the two a device calls.** The
+ * web app's engine posts to `/claim` and `/token` with `fetch`, so a browser has to be told its
+ * origin may read the answer. The other three are never asked by script — the callback and `/pair`
+ * are pages a browser *navigates* to, which no CORS rule governs, and the webhook is Patreon's
+ * server — so a header there would be an invitation with nobody to accept it.
  */
 const CLAIM_ROUTES = new Map<
   string,
   {
     method: string;
     limit?: LimitedRoute;
+    cors?: true;
     handle: (request: Request, env: Env) => Promise<Response>;
   }
 >([
   ["/oauth/patreon/callback", { method: "GET", handle: handleCallback }],
-  ["/claim", { method: "POST", limit: "claim", handle: handleClaim }],
-  ["/token", { method: "POST", limit: "token", handle: handleToken }],
+  ["/claim", { method: "POST", limit: "claim", cors: true, handle: handleClaim }],
+  ["/token", { method: "POST", limit: "token", cors: true, handle: handleToken }],
   ["/webhook/patreon", { method: "POST", handle: handleWebhook }],
   ["/pair", { method: "GET", handle: (_request, env) => Promise.resolve(handlePair(env)) }],
 ]);
 
+/** The rendezvous takes both, on either slot — the `allow` of its 405 and of its pre-flight. */
+const RENDEZVOUS_METHODS = "GET, POST";
+
 function methodNotAllowed(expected: string): Response {
   return new Response("method not allowed", { status: 405, headers: { allow: expected } });
+}
+
+/**
+ * The methods a path takes when it is one a browser may ask cross-origin, and `null` when it is
+ * not — the question `fetch` asks before anything else, from the path alone.
+ *
+ * **Every route a device calls with `fetch`, and no other**: `/claim`, `/token`, the pairing
+ * rendezvous, and the `/g/…` actions but one. What is left out is left out on purpose —
+ * `CLAIM_ROUTES` says why for its three, a path that is no route has no answer worth reading, and
+ * **`ws` is absent because CORS does not apply to a WebSocket upgrade**: a browser enforces
+ * nothing about a 101's headers, and `withCors` would have to rebuild a response that carries a
+ * socket. `route` checks that upgrade's origin itself.
+ *
+ * The answer is the pre-flight's `Access-Control-Allow-Methods`, read off the same tables the
+ * router's 405 is, so the two cannot name different methods for one path.
+ */
+function corsMethods(pathname: string): string | null {
+  const fixed = CLAIM_ROUTES.get(pathname);
+  if (fixed !== undefined) return fixed.cors === true ? fixed.method : null;
+  if (RENDEZVOUS.test(pathname)) return RENDEZVOUS_METHODS;
+
+  const match = ROUTE.exec(pathname);
+  if (!match) return null;
+  const action = match[2];
+  return action === "ws" ? null : METHOD[action];
 }
 
 function json(body: unknown, status: number): Response {
@@ -227,87 +274,147 @@ async function admitPush(request: Request, env: Env, group: string): Promise<Req
   });
 }
 
+/**
+ * The router, the gate and the hop — everything `fetch` did before a browser was a caller, and
+ * still the whole of what a native client meets. It knows nothing about CORS: `fetch` decides
+ * whether its answer needs dressing, and for a request with no `Origin` hands that answer back as
+ * it is.
+ */
+async function route(request: Request, env: Env, url: URL): Promise<Response> {
+  const entitlement = CLAIM_ROUTES.get(url.pathname);
+  if (entitlement !== undefined) {
+    if (request.method !== entitlement.method) return methodNotAllowed(entitlement.method);
+    const refused = entitlement.limit ? await limited(request, env, entitlement.limit) : null;
+    return refused ?? entitlement.handle(request, env);
+  }
+
+  const rv = RENDEZVOUS.exec(url.pathname);
+  if (rv) {
+    const [, id, slot] = rv;
+    if (request.method !== "POST" && request.method !== "GET") {
+      return methodNotAllowed(RENDEZVOUS_METHODS);
+    }
+    // One bucket for both slots and both methods: a pairing is one offer, one answer and the
+    // polls between them, and junk aimed at either slot is the same junk.
+    const refused = await limited(request, env, "rendezvous");
+    if (refused) return refused;
+    // D1 only, never a Durable Object — which is what lets it stand ahead of the gate.
+    return request.method === "POST"
+      ? handleRendezvousPut(request, env, id, slot, Date.now())
+      : handleRendezvousGet(env, id, slot, Date.now());
+  }
+
+  const match = ROUTE.exec(url.pathname);
+  if (!match) return new Response("not found", { status: 404 });
+
+  const [, group, action] = match;
+  const expected = METHOD[action];
+  if (request.method !== expected) return methodNotAllowed(expected);
+
+  // **Ahead of the bearer gate and never behind it, and that is the whole point of these two
+  // routes.** A device that has just been rotated away from cannot mint a token — its auth is
+  // stale — so a `/keys` behind the gate would refuse exactly the caller it exists to serve.
+  // They carry their own credential and refuse out of D1; the one Durable Object request either
+  // makes is an accepted rotation's roster post, which only the group's current auth can cause,
+  // so nothing metered is exposed by their standing outside it. What standing outside it does
+  // cost is a D1 read per request from anyone, which is what the limit in front of each bounds.
+  if (action === "rotate") {
+    return (await limited(request, env, "rotate")) ?? handleRotate(request, env, group);
+  }
+  if (action === "keys") {
+    return (await limited(request, env, "keys")) ?? handleKeys(request, url, env, group);
+  }
+
+  // **The socket's origin, checked here because nothing else will.** CORS does not cover a
+  // WebSocket upgrade: a browser sends `Origin` with one and then opens the socket whatever the
+  // answer's headers say, so the allow-list `fetch` applies to every other route has to be
+  // enforced by hand for this one. An `Origin` that is present and not on the list is refused
+  // before the gate — no HMAC, and above all no Durable Object, which is the request that bills.
+  //
+  // **Absent is not foreign.** The desktop and Android open this socket from Rust and send no
+  // `Origin` at all; they pass through to the gate exactly as they did. Like the list itself this
+  // is no access control against a caller that is not a browser — such a caller simply omits the
+  // header — and it does not need to be: the token is what guards the socket. What it stops is a
+  // foreign page that got hold of a token opening a live socket from a reader's browser.
+  if (action === "ws" && request.headers.has("origin") && allowedOrigin(request, env) === null) {
+    return new Response("origin not allowed", { status: 403 });
+  }
+
+  // **The gate stands here and not inside the Durable Object, and the reason is the bill.**
+  // A request that reaches a DO costs a Durable Object request whether it is honoured or
+  // refused, and that is the line that actually meters (spec §8). Verifying an HMAC here
+  // costs microseconds and touches no storage, so junk is refused for the price of a Worker
+  // invocation alone.
+  //
+  // The header is coalesced to `null` before `verify` is called and never passed through:
+  // `verify` splits the token, so `null` throws where a 401 belongs — an error page and an
+  // alert for what is simply a request without a ticket.
+  //
+  // **For the socket alone, a request with no `Authorization: Bearer` may carry the token as a
+  // sub-protocol instead** — a browser's `WebSocket` cannot set a header, and `ticket.ts` is the
+  // whole argument. The header still wins when it is there, which is every released desktop, and
+  // what comes out of either place goes through the same `verify` and the same group comparison
+  // to the same 401. `push`, `pull` and `ack` read the header and nothing else: a `fetch` can set
+  // one, so a second place to look would be a second way in that no caller needs.
+  const auth = request.headers.get("authorization");
+  const header = auth?.startsWith("Bearer ") === true ? auth.slice(7) : null;
+  const bearer =
+    header ??
+    (action === "ws" ? bearerTicket(request.headers.get("sec-websocket-protocol")) : null);
+  const claims = bearer
+    ? await verify(bearer, required(env.RELAY_HMAC_KEY, "RELAY_HMAC_KEY"), Date.now())
+    : null;
+  // **`claims.grp !== group` is not redundant with the signature check.** A validly signed
+  // token for *your own* group is exactly what an attacker has; without this line it would
+  // open every group on the relay.
+  if (!claims || claims.grp !== group) {
+    return new Response("unauthorized", { status: 401 });
+  }
+
+  let forward = request;
+  if (action === "push") {
+    const admitted = await admitPush(request, env, group);
+    if (admitted instanceof Response) return admitted;
+    forward = admitted;
+  }
+
+  // `idFromName` and not `newUniqueId`: the group id *is* the address, so every device in a
+  // pairing group reaches the same object from anywhere in the world without the relay
+  // holding a directory of any kind.
+  const stub = env.GROUP.get(env.GROUP.idFromName(group));
+  return stub.fetch(forward);
+}
+
 export default {
+  /**
+   * `route`, and around it the two things a browser needs and a native client must never see.
+   *
+   * **The order is the point.** Whether the path takes CORS and whether the `Origin` is on the
+   * list are both read off the request and `wrangler.jsonc`'s `APP_ORIGINS` — no storage, no
+   * secret — so a pre-flight is answered here, **before `route` is entered at all**: it spends
+   * none of the caller's rate-limit budget, reads no D1 row, verifies no HMAC and reaches no
+   * Durable Object. A browser sends a pre-flight unasked and without credentials; billing one as a
+   * request to an object, or counting it against `/token`'s thirty a minute, would charge the web
+   * app double for being a web app.
+   *
+   * **Everything else from an allowed origin is `route`'s own answer, made readable** — a 200 and
+   * a 401 alike, the limiter's 429, a 405, the push admission's refusals, and whatever a Durable
+   * Object said. `cors.ts`'s `withCors` is why the refusals matter most.
+   *
+   * **And a request that is not both — a path that takes no CORS, no `Origin`, an `Origin` that
+   * is not listed — gets the very `Response` `route` built.** Not a copy with nothing added: the
+   * same object, so the socket's 101 passes through with its `webSocket` attached and a native
+   * client's bytes cannot differ from what they were. An `OPTIONS` from a foreign origin is in
+   * that group, and gets the 405 it always got.
+   */
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
-    const entitlement = CLAIM_ROUTES.get(url.pathname);
-    if (entitlement !== undefined) {
-      if (request.method !== entitlement.method) return methodNotAllowed(entitlement.method);
-      const refused = entitlement.limit ? await limited(request, env, entitlement.limit) : null;
-      return refused ?? entitlement.handle(request, env);
-    }
+    const methods = corsMethods(url.pathname);
+    const origin = methods === null ? null : allowedOrigin(request, env);
+    if (methods === null || origin === null) return route(request, env, url);
 
-    const rv = RENDEZVOUS.exec(url.pathname);
-    if (rv) {
-      const [, id, slot] = rv;
-      if (request.method !== "POST" && request.method !== "GET") {
-        return methodNotAllowed("GET, POST");
-      }
-      // One bucket for both slots and both methods: a pairing is one offer, one answer and the
-      // polls between them, and junk aimed at either slot is the same junk.
-      const refused = await limited(request, env, "rendezvous");
-      if (refused) return refused;
-      // D1 only, never a Durable Object — which is what lets it stand ahead of the gate.
-      return request.method === "POST"
-        ? handleRendezvousPut(request, env, id, slot, Date.now())
-        : handleRendezvousGet(env, id, slot, Date.now());
-    }
-
-    const match = ROUTE.exec(url.pathname);
-    if (!match) return new Response("not found", { status: 404 });
-
-    const [, group, action] = match;
-    const expected = METHOD[action];
-    if (request.method !== expected) return methodNotAllowed(expected);
-
-    // **Ahead of the bearer gate and never behind it, and that is the whole point of these two
-    // routes.** A device that has just been rotated away from cannot mint a token — its auth is
-    // stale — so a `/keys` behind the gate would refuse exactly the caller it exists to serve.
-    // They carry their own credential and refuse out of D1; the one Durable Object request either
-    // makes is an accepted rotation's roster post, which only the group's current auth can cause,
-    // so nothing metered is exposed by their standing outside it. What standing outside it does
-    // cost is a D1 read per request from anyone, which is what the limit in front of each bounds.
-    if (action === "rotate") {
-      return (await limited(request, env, "rotate")) ?? handleRotate(request, env, group);
-    }
-    if (action === "keys") {
-      return (await limited(request, env, "keys")) ?? handleKeys(request, url, env, group);
-    }
-
-    // **The gate stands here and not inside the Durable Object, and the reason is the bill.**
-    // A request that reaches a DO costs a Durable Object request whether it is honoured or
-    // refused, and that is the line that actually meters (spec §8). Verifying an HMAC here
-    // costs microseconds and touches no storage, so junk is refused for the price of a Worker
-    // invocation alone.
-    //
-    // The header is coalesced to `null` before `verify` is called and never passed through:
-    // `verify` splits the token, so `null` throws where a 401 belongs — an error page and an
-    // alert for what is simply a request without a ticket.
-    const auth = request.headers.get("authorization");
-    const bearer = auth?.startsWith("Bearer ") === true ? auth.slice(7) : null;
-    const claims = bearer
-      ? await verify(bearer, required(env.RELAY_HMAC_KEY, "RELAY_HMAC_KEY"), Date.now())
-      : null;
-    // **`claims.grp !== group` is not redundant with the signature check.** A validly signed
-    // token for *your own* group is exactly what an attacker has; without this line it would
-    // open every group on the relay.
-    if (!claims || claims.grp !== group) {
-      return new Response("unauthorized", { status: 401 });
-    }
-
-    let forward = request;
-    if (action === "push") {
-      const admitted = await admitPush(request, env, group);
-      if (admitted instanceof Response) return admitted;
-      forward = admitted;
-    }
-
-    // `idFromName` and not `newUniqueId`: the group id *is* the address, so every device in a
-    // pairing group reaches the same object from anywhere in the world without the relay
-    // holding a directory of any kind.
-    const stub = env.GROUP.get(env.GROUP.idFromName(group));
-    return stub.fetch(forward);
+    return preflight(request, origin, methods) ?? withCors(await route(request, env, url), origin);
   },
 
   /**

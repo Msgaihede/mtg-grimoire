@@ -29,8 +29,8 @@
   //
   // ⚠️ **This value is the app's identity, not an address that can be moved later.** A browser
   // keys both OPFS databases, the service worker and the install to the origin: served from any
-  // other one, a reader's collection is simply not there. Phase 6 adds this exact string to the
-  // relay's CORS allow-list. `hosting.test.ts` pins it.
+  // other one, a reader's collection is simply not there. The relay's CORS allow-list names this
+  // exact string (`APP_ORIGINS`, `relay/wrangler.jsonc`). `hosting.test.ts` pins it.
   "routes": [{ "pattern": "mtg-grimoire.app", "custom_domain": true }],
 
   // **No second origin, either of the two a deploy would otherwise hand out.** A

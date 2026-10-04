@@ -22,8 +22,8 @@ import { headersFor, parseHeaders } from "./headers";
  * **What it holds, exactly, in two halves:**
  *
  * - *A host that moved.* The engine's addresses are read by name — `SCRYFALL_API`, `IMAGE_HOST`,
- *   `FEED_URL` and Card Kingdom's `url()` — and `connect-src` is held set-equal to their hosts
- *   and the bulk files'. Change one in the Rust and this is red.
+ *   `FEED_URL`, Card Kingdom's `url()` and the sync relay's `RELAY_BASE` — and `connect-src` is
+ *   held set-equal to their hosts and the bulk files'. Change one in the Rust and this is red.
  * - *A host that is new.* A census of every `https://` literal in the code the three crates
  *   **ship** — above each file's test modules, comments out — each of which has to be a host in
  *   `connect-src` or on a short list of hosts no browser's engine asks, with the reason. A sixth
@@ -208,8 +208,6 @@ const SHIPPED_HOSTS = (() => {
 const NOT_ASKED_FROM_A_BROWSER: Record<string, string> = {
   "manapool.com":
     "it sends no Access-Control-Allow-Origin, and the engine refuses the feed on a host that cannot reach it before any request (step 5.2)",
-  "mtg-grimoire-relay.denmark-east.workers.dev":
-    "sync in a browser is phase 6, which moves this entry into the policy with the relay's CORS allow-list",
   "www.patreon.com":
     "the authorize address the engine builds for the page to open in a new tab — a navigation, which connect-src does not govern",
   "github.com": "the repository's address inside the User-Agent's text, not an address anything asks",
@@ -270,6 +268,10 @@ describe("connect-src, against the hosts the engine asks", () => {
     ["the card pictures", IMAGE_HOST],
     ["Commander Spellbook's combos", COMBO_FEED],
     ["Card Kingdom's pricelist", CARD_KINGDOM],
+    // The one host here that answers this origin *by name*: the relay's CORS allow-list
+    // (`relay/src/cors.ts`) and this entry are one fact in two deploys, the relay's first. A
+    // relay that moves is a new `RELAY_BASE`, and red here until `_headers` follows it.
+    ["the sync relay", RELAY_BASE],
     ...BULK_FILES.map((url): [string, string] => ["a bulk file", url]),
   ])("allows %s — %s", (_what, url) => {
     expect(csp["connect-src"]).toContain(origin(url));
@@ -280,7 +282,9 @@ describe("connect-src, against the hosts the engine asks", () => {
     // nothing behind it is red: an entry nobody asks is one nobody will remember to take out.
     // **This is the half that sees a host leave or move, not one arrive** — a new feed is the
     // census's to catch, and its host then has to be named here too before this passes.
-    const asked = [SCRYFALL_API, IMAGE_HOST, COMBO_FEED, CARD_KINGDOM, ...BULK_FILES].map(origin);
+    const asked = [SCRYFALL_API, IMAGE_HOST, COMBO_FEED, CARD_KINGDOM, RELAY_BASE, ...BULK_FILES].map(
+      origin,
+    );
     expect([...csp["connect-src"]].sort()).toEqual(["'self'", ...new Set(asked)].sort());
   });
 
@@ -290,18 +294,13 @@ describe("connect-src, against the hosts the engine asks", () => {
     expect(csp["connect-src"]).not.toContain(origin(MANA_POOL));
   });
 
-  it("does not allow the relay until phase 6 adds it", () => {
-    // Sync in a browser is not built, and the relay's CORS allow-list does not name this origin,
-    // so the request fails either way. **Phase 6 deletes this test** in the change that adds
-    // the host here and the origin there — and replaces it with the row above.
-    //
-    // Since step 5.5b the engine refuses a relay call on a page before anything is sent
-    // (`sync_engine::entitlement::NOT_FROM_A_BROWSER_YET`), so this absence is no longer what
-    // a reader hits first: it is the fence behind that refusal, and goes in the same change.
-    expect(csp["connect-src"]).not.toContain(origin(RELAY_BASE));
-  });
-
   it("names each host by scheme and name, and never by a wildcard", () => {
+    // `https:` and nothing else — so the relay is here for its requests and **not for its
+    // socket**: `wss://` is another scheme to this directive, and by the matching rule in the
+    // CSP specification an `https://` source does not cover it (read there, measured nowhere).
+    // No `wss://` source is written, on purpose, until a browser has opened the live socket and
+    // shown what its policy has to say — the step that builds the browser's socket loosens this
+    // rule by what it measured, and not before.
     for (const source of csp["connect-src"].filter((s) => s !== "'self'")) {
       expect(source).toMatch(/^https:\/\/[a-z0-9.-]+$/);
     }

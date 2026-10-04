@@ -25,6 +25,7 @@
     "web:dev": "vite --config vite.mobile.config.ts --mode web",
     "web:build": "tsc && tsc -p tsconfig.web-worker.json && tsc -p tsconfig.web-sw.json && vite build --config vite.mobile.config.ts --mode web",
     "web:preview": "vite preview --config vite.mobile.config.ts --mode web",
+    "web:smoke": "node scripts/web-smoke.mjs",
     "lint:claude": "node scripts/check-claude-md.mjs",
     "lint": "eslint . --max-warnings 0 && npm run lint:claude",
     "lint:rust": "cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web --check && cargo clippy --workspace --all-targets --locked -- -D warnings && cargo check -p mtg-grimoire -p grimoire-light --locked",

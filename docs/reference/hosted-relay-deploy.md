@@ -71,13 +71,48 @@ change it is known to be live from the tree that was deployed. Step 0's six prob
 secret probes of item 8 were re-run straight after and answered as before. It was the first deploy
 an agent ran, at Markus's instruction that day; the rule below is otherwise unchanged.
 
+**An eighth half — the browser's, light app phase 6 (issue #761) — is written and NOT deployed.**
+Written 2026-10-04, after step 8's rate limits, which this page never numbered as a half. What the
+next deploy carries:
+
+- **`APP_ORIGINS`**, a new entry in `wrangler.jsonc`'s `vars`, shipped as exactly
+  `https://mtg-grimoire.app`. It is a var and not a secret, so `wrangler deploy` carries it and no
+  other command sets it.
+- **CORS** on the routes a device calls with `fetch` — `/claim`, `/token`, `/p/{rv}/{slot}` and
+  `/g/{group}/{rotate,keys,push,pull,ack}` — for a request whose `Origin` is on that list: a
+  pre-flight answered `204` before the limiter, D1, the HMAC and any object, and
+  `Access-Control-Allow-Origin` with `Vary: Origin` on every other answer, refusals included.
+- **The socket ticket**: `GET /g/{group}/ws` takes its bearer from a `bearer.<access>` sub-protocol
+  when there is no `Authorization` header, selects `grimoire.live.v1` in its 101 when that was
+  offered, and refuses an `Origin` that is present and not on the list with a `403`.
+- **The auto-response**: each group's object registers `ping` → `pong` with the runtime, so a
+  browser's keepalive is answered without waking it.
+
+**No migration, no secret, no new route path.** A request with no `Origin` and no sub-protocol —
+every released desktop and Android build — is answered as before, so nothing in the field waits on
+it or is changed by it. **It is an update of a Worker whose D1 holds real entitlements**, like
+every deploy since the first; it is step 6 and nothing else, with step 0's last three pairs before
+and after. A deploy disconnects every live socket once — true of any deploy, not of this one in
+particular — and the desktop's live loop reconnects on its own backoff (`sync_engine::live`).
+
+⚠️ **The web app's deploy comes AFTER this one, never before.** A page that asks a relay which
+answers no pre-flight has every request refused by its own browser, and the engine sees a network
+error with no status — not a 401 it could act on, not a 404 it could report. The relay first costs
+nothing: until a page asks, no request carries an `Origin` and the new code is never entered.
+`app-worker/README.md` is that deploy's runbook; "The order" below says the same thing where the
+order is decided.
+
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
 [2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
 [2026-08-30-leave-group-and-device-caps-design.md](../superpowers/specs/2026-08-30-leave-group-and-device-caps-design.md)
 and [2026-08-31-one-sided-pairing-and-qr-design.md](../superpowers/specs/2026-08-31-one-sided-pairing-and-qr-design.md).
 
-**No agent may run any of this.** `wrangler dev --local` is the only wrangler command an agent may
-run — it runs workerd locally, contacts nothing and needs no login. Everything below is Markus's.
+**No agent may run any of this unless Markus has asked for that deploy.** `wrangler dev --local`
+is the only wrangler command an agent may run unasked — it runs workerd locally, contacts nothing
+and needs no login. Everything below is Markus's, or an agent's at his ask: he asked for the
+seventh half's on 2026-10-01, and **for the light app's phase 6 he asked once for the whole
+phase** (2026-10-04: "you should deploy the changes we need, when we need them") — which covers
+the eighth half's deploy and nothing after that phase. Whoever runs it follows every step.
 
 ---
 
@@ -94,16 +129,18 @@ run — it runs workerd locally, contacts nothing and needs no login. Everything
 | Issue #546's **half** | **deployed 2026-09-28 at 19:57 UTC, and no public route path gives it away.** The tell is a query parameter: `/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400 `that is not an epoch`** from this tree — `handleKeys` checks the epoch's shape before the credential's value — and **401** from a Worker that ignores `epoch`. **Probed 2026-10-01: 400.** ⚠️ **This row said "not deployed" until then**, with a probe read off the code and never run. From inside a group the same fact is a `/keys` 200 that carries `removalStep: 2`. |
 | Issue #548's **`dev` claim** | **deployed 2026-10-01**, from `main` at `2b845048`. No probe without a credential can see it. |
 | The **rate limits** | **deployed 2026-10-01 at 22:09 UTC.** `settings` on the script lists `RL_CLAIM`, `RL_MINT` and `RL_READ` as `ratelimit` bindings, and a 400-request flood at `/claim` drew 347 `429`s. No small probe can see them — sixteen requests against a limit of ten drew none. Step 8 has the measurement. |
+| The **browser's half** — CORS, the socket ticket, the auto-response | **not deployed.** `OPTIONS /token` with `Origin: https://mtg-grimoire.app` and `Access-Control-Request-Method: POST` answered **405** on 2026-10-04 at 15:49 UTC, where this tree answers **204**; the same request from `https://example.com` answered 405 too, which it does on both sides of the deploy. An upgrade to `/g/abc/ws` from `Origin: https://example.com` answered **401**, where this tree answers **403**. Step 0's last three pairs are the probes. |
 | The D1 database | **exists.** `wrangler.jsonc`'s `database_id` is a real uuid, and has been since before this branch. It holds live entitlement rows, so step 2's `ALTER TABLE`s run against real data. `sqlite_master` listed `entitlements`, `claim_codes`, `group_keys`, `group_devices` and `pairing_rendezvous` on 2026-09-28, beside D1's own `_cf_KV`. **On 2026-10-01** `entitlements` carried fourteen columns, `refresh_device` and `reconciled_at` among them, with both CHECKs of item 5 in its stored SQL and the `entitlements_reconcile` index beside it — and the share Worker's `shares` table was added that day. |
 | The Patreon OAuth app | **the client exists.** `PATREON_CLIENT_ID` is real in `entitlement.rs` since `a0eb0c6` (2026-08-30) and was verified live: `GET /oauth2/authorize` with it and `/oauth/patreon/callback` answered 302 to Patreon's login, preserving both parameters, which an unregistered id or an unregistered redirect does not do. **`wrangler.jsonc`'s `vars` carry the relay's own copy of it and `PATREON_CAMPAIGN_ID`**, both real, the client id byte for byte equal to the Rust constant. |
 
 A device pointed at that host today reaches a relay that speaks the whole membership flow, the
-whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-10-01,
-22:09 UTC, nothing in `relay/` is undeployed: the host runs `claude/relay-rate-limits` at
-`7f6d6f50`, which is `main` plus step 8's rate limits.** That is the sentence on
+whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-10-04,
+one thing in `relay/` is undeployed — the browser's half, the table's last row — and the host
+still runs the 2026-10-01 22:09 UTC deploy, `claude/relay-rate-limits` at `7f6d6f50`.** Until that
+day this sentence read "nothing in `relay/` is undeployed". It is the sentence on
 this page most certain to rot, because the next branch that touches `relay/` makes it false
 without editing it — the last two that did each left it wrong, once in each direction, and the
-third edited it in the commit that made it false. Step 0
+two since each edited it in the change that made it false. Step 0
 is the authority, not it; so is `deployments` on the script, which dates every deploy whether or
 not anybody wrote one down.
 
@@ -159,6 +196,15 @@ catch-up — reasoned from the trip's order, `check_keys` before `push`, and not
 either half alone does not buy is the lapse fix**: a device that only ever uses the group door
 learns its membership ended only once this relay sends `membership_ended` *and* its build reads it.
 Until both are out, that device goes on saying *Supporting since …*, as it always has.
+
+⚠️ **The browser's half ships relay first, web app second, and that order is not a preference.**
+The other way round, the web app at `https://mtg-grimoire.app` asks a relay that answers its
+pre-flight with a 405 and no `Access-Control-Allow-Origin`: the browser refuses to send the real
+request, every route fails alike, and the engine is told nothing but that the network failed — so
+a signed-in reader sees sync as unreachable, on a page that was deployed minutes ago. Relay first
+is inert until a page asks: a native client sends no `Origin`, takes neither new step, and is
+answered by the same code path as today. **Neither side waits on an app release** — no desktop or
+Android build sends an `Origin` or a sub-protocol, and none ever needs to.
 
 0. **Ask the host what is actually there, and branch on the answer rather than on this file.**
    Six `curl`s settle it in ten seconds and cost nothing:
@@ -218,6 +264,58 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
    and `device` is the next thing the refresh door reads. **Pair every body probe with a control
    that differs by one field**, as the fourth does — a refusal read alone may come from an earlier
    check than the one you meant.
+
+   **Three more pairs, for the browser's half — and what they ask is a header, not a path or a
+   body.** Each is a probe and its control, differing by the `Origin` and nothing else; all six are
+   a `GET` or an `OPTIONS` that is answered before the rate limiter, D1 and any Durable Object, so
+   they spend six Worker requests and nothing more.
+   ```
+   H=https://mtg-grimoire-relay.denmark-east.workers.dev
+   A='Origin: https://mtg-grimoire.app'
+   X='Origin: https://example.com'
+   # (a) the pre-flight, then its control
+   curl -si -X OPTIONS "$H/token" -H "$A" -H 'Access-Control-Request-Method: POST'
+   curl -si -X OPTIONS "$H/token" -H "$X" -H 'Access-Control-Request-Method: POST'
+   # (b) a refusal a page can read, then its control
+   curl -si "$H/g/abc/pull" -H "$A"
+   curl -si "$H/g/abc/pull" -H "$X"
+   # (c) the socket's origin check, then its control
+   W=(--http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13'
+      -H "Sec-WebSocket-Key: $(printf 'a%.0s' {1..22})=="
+      -H 'Sec-WebSocket-Protocol: grimoire.live.v1, bearer.x')
+   curl -si "${W[@]}" "$H/g/abc/ws?device=deadbeef" -H "$X"
+   curl -si "${W[@]}" "$H/g/abc/ws?device=deadbeef" -H "$A"
+   ```
+   | | Before the deploy — **run 2026-10-04, 15:49 UTC** | After it — ⚠️ **not yet run** |
+   | --- | --- | --- |
+   | (a) from the app | `405`, `allow: POST`, no `access-control-` line | **`204`**, `access-control-allow-origin: https://mtg-grimoire.app`, `access-control-allow-methods: POST`, `access-control-allow-headers: authorization, content-type`, `access-control-max-age: 86400`, `vary: Origin` |
+   | (a) control, from `example.com` | `405`, `allow: POST` | the same `405`, and **no** `access-control-` line |
+   | (b) from the app | `401`, no `access-control-` line | `401` **with** `access-control-allow-origin: https://mtg-grimoire.app` and `vary: Origin` |
+   | (b) control | `401` | `401`, and **no** such line |
+   | (c) from `example.com` | `401` | **`403`** `origin not allowed` |
+   | (c) control, from the app | `401` | `401` — the origin passes, and `bearer.x` is no token |
+
+   - **405 on both of (a) is how "not deployed yet" reads**: a Worker without this half has never
+     heard of either origin and gives each the router's method refusal. **204 on the first with
+     405 on the second** is the half deployed *and* its list holding. **204 on both** would be a
+     relay that reflects any origin — stop and read `APP_ORIGINS` on the script's `settings`
+     before anything else. **405 on both after a deploy** is `APP_ORIGINS` unset or misspelled on
+     the script — a trailing slash is enough — and (c) then answers `403` to the app's own origin
+     too, which is the tell that separates it from a deploy that did not land.
+   - **(b) is the one that matters to the app and the one (a) cannot stand in for.** A relay that
+     answered every pre-flight and left the header off its refusals would pass (a) and turn every
+     401, 403, 409 and 429 into a network error in the page. A `GET` to the bearer gate, because
+     it is the refusal that costs nothing: no limiter, no D1.
+   - **(c) asks about the origin check, and the ticket itself has no tell without a credential** —
+     the refresh-secret change's position exactly. `bearer.x` is refused by a relay that reads the
+     sub-protocol (it is no token) and by one that does not (there is no header), with the same
+     `401`; that is the control's row, and it is why the probe is the *foreign* origin, which only
+     this tree refuses with a `403`. That the ticket opens a socket is proved by the web app's
+     socket opening and by nothing here. ⚠️ **The probe first proposed for this step was the ticket
+     alone, expecting `401` after the deploy** — the answer it also gets before one.
+   - `--http1.1` because an upgrade is an HTTP/1.1 request; without it `curl` may negotiate
+     HTTP/2 and drop `Connection` and `Upgrade`. Header names print in whatever case the edge
+     sends, so read them case-insensitively.
 1. **`npx wrangler d1 create mtg-grimoire-relay`**, then put the real `database_id` into
    `relay/wrangler.jsonc`.
 2. **Apply the schema to an empty database**, and verify rather than trusting exit 0 —
@@ -388,7 +486,10 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
    `members:pledge:delete` and `members:update`, pointing at `/webhook/patreon`.
 6. **`npx wrangler deploy`.** **Last run 2026-10-01 at 22:09 UTC, from `claude/relay-rate-limits`
    at `7f6d6f50`** with step 8's rate limits — after 19:17 UTC the same day from `main` at
-   `2b845048`, and twice on 2026-09-28, at `1512ea68` and then with issue #546's half. Both bullets below are
+   `2b845048`, and twice on 2026-09-28, at `1512ea68` and then with issue #546's half. **The next
+   run carries the browser's half** — the list at the top of this page — with step 0's three
+   `Origin` pairs before and after it, and the web app's own deploy only once they answer `204`,
+   `401` with the header, and `403`. Both bullets below are
    still open. Then, for the refresh-secret change:
    - **Press Connect Patreon once on the paying device.** Not required, but it records which
      device holds the secret, so the group's next rotation keeps it rather than retiring it as
@@ -504,9 +605,9 @@ Until both are out, that device goes on saying *Supporting since …*, as it alw
 
 ## What only the deploy can settle
 
-**Twelve things**, in the order they will bite. ⚠️ **Re-counted 2026-09-28** — it was eleven until
-issue #546's half added item 12, ten until the device roll added item 11, and nine until the group
-key store added item 10.
+**Thirteen things**, in the order they will bite. ⚠️ **Re-counted 2026-10-04** — it was twelve
+until the browser's half added item 13, eleven until issue #546's half added item 12, ten until
+the device roll added item 11, and nine until the group key store added item 10.
 
 ### 1. `include=memberships.campaign` — the highest-value check here
 
@@ -689,6 +790,47 @@ the one that can take sync down.
   on the *other* device: it must say **Membership ended** within one sync, where before this it
   went on saying *Supporting since …* for as long as the group door kept answering a bare 401. It
   needs this relay and a build that reads the code — see "The order".
+
+### 13. The browser's half — a 101 no browser has read, and a keepalive nobody has seen billed
+
+Added 2026-10-04. **Not deployed, so none of these five has been driven.** Step 0's three pairs
+settle the CORS headers and the origin check from outside; these are what only a real browser, or
+the account's own dashboard, can say. `relay/src/cors.test.ts` and `ticket.test.ts` run the
+router, and the real `Group` over stand-ins for three of workerd's globals — Node's `Response`
+refuses a status of 101 — so everything below is exactly what those suites could not reach.
+
+- ⚠️ **The 101's `Sec-WebSocket-Protocol`, through the Worker, to a browser.** `Group.ws()` puts
+  `grimoire.live.v1` on its 101 when the request offered it, and the Worker hands that response
+  back untouched. That workerd carries a header on a 101 out to the client is how every
+  sub-protocol server on Workers is written and is in no page of Cloudflare's documentation that a
+  search on 2026-10-04 found. **Open the web app signed in, and confirm the socket stays open**:
+  one that opens and closes at once, with Chromium's console naming a sub-protocol, is this. The
+  fix is in `group.ts`, and until it lands the web app has no live sync and loses nothing else:
+  push, pull and ack are HTTP and never touch the socket.
+- **The desktop's socket, straight after the deploy.** It offers no sub-protocol and sends no
+  `Origin`, and `ticket.test.ts` holds its 101 to no header at all — but it is the client every
+  reader has, and a `Sec-WebSocket-Protocol` it did not ask for is a failed handshake. **Edit a
+  card on one desktop and watch a second pick it up without a press.**
+- ⚠️ **What a tab's keepalive costs.** The pricing page bills incoming WebSocket messages at
+  twenty to one and exempts protocol pings by name; of `setWebSocketAutoResponse` it says only
+  that the answer costs no *duration*. Read as written, a browser's `ping` every 45 s is 1 920
+  messages a day — **96 billed Durable Object requests for a tab open all day, 32 for eight
+  hours** — where the desktop's protocol ping is free. Leave one tab connected for an hour with
+  nothing else syncing and read the namespace's request metrics, which the same page says count
+  messages one for one, the twenty-to-one being applied only on the bill: **about 81 says they
+  are counted, about 1 — the upgrade alone — says they are not.** Step 7's alarm is still not
+  built, and a tab is the first client that spends on the metered line by sitting still.
+- **The access token in Workers Logs.** Invocation logs redact a request header by name —
+  `cookie`, or one containing `auth`, `key`, `secret`, `token` or `jwt` — and
+  `sec-websocket-protocol` is none of them, so a browser's socket upgrade should show its
+  `bearer.<access>` in the clear where a desktop's `authorization` reads `REDACTED`. **Open one
+  socket from the web app and read that invocation's headers.** If it is there, the choices are to
+  accept it — a day-long token in the account's own three-day log — or to set
+  `observability.logs.invocation_logs` to `false`, which costs every route its invocation log.
+- **A pre-flight's cache, and a pull's lack of one.** A browser files a pre-flight under the whole
+  URL, so `/pull?since=…` is asked about again whenever the cursor has moved. Count the `OPTIONS`
+  in the page's network panel across a few edits: one in front of most pulls is the design, and
+  one in front of every push would mean `Access-Control-Max-Age` is not being honoured.
 
 ---
 
