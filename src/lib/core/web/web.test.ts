@@ -16,6 +16,7 @@ import {
   OPFS_DIRECTORY,
   type Browser,
   type WorkerPort,
+  NOTHING_WAITING,
 } from "./index";
 import type { FromWorker, Opening, ToWorker } from "./protocol";
 import {
@@ -1020,9 +1021,18 @@ describe("the service worker's page half", () => {
     const { core, worker } = harness();
     void status(core);
     worker.say({ kind: "opened", opened: READY, existed: true });
-    // And the host still answers its own commands about one: nothing waits.
+    // And the host still answers its own commands about one: nothing waits, and a press for
+    // nothing is refused in a sentence — so a control that greyed itself on it comes back.
     await expect(core.call(HOST_UPDATE)).resolves.toBeNull();
-    await expect(core.call(HOST_UPDATE_APPLY)).resolves.toBeNull();
+    await expect(core.call(HOST_UPDATE_APPLY)).rejects.toBe(NOTHING_WAITING);
+    expect(NOTHING_WAITING).toBe("There is no newer version of MTG Grimoire waiting.");
+  });
+
+  it("refuses `host_update_apply` when the build has stopped waiting since the bar was drawn", async () => {
+    const { core, worker } = served();
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    await expect(core.call(HOST_UPDATE_APPLY)).rejects.toBe(NOTHING_WAITING);
   });
 
   it("answers the worker's ask for a picture's address from the engine's own command", async () => {
@@ -1109,6 +1119,39 @@ describe("the service worker's page half", () => {
     await status(core);
     workers.takeOver();
     expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("does not reload a tab that is still opening its database, either", async () => {
+    // Only the page that holds the database starts again: it is the one the bar was drawn on.
+    // A tab still opening holds nothing yet, and reloading too it could win the database from
+    // the tab the reader pressed in.
+    const { core, workers, reload } = served();
+    void status(core);
+    workers.takeOver();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("does not reload a page whose engine stopped: it is a boot screen with its own way out", async () => {
+    const { core, worker, workers, reload } = served();
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    worker.crash("RuntimeError: unreachable");
+    workers.takeOver();
+    expect(reload).not.toHaveBeenCalled();
+  });
+
+  it("says once, on the console, that the worker could not install", async () => {
+    const { core, worker, workers } = served(new FakeWorkers(null));
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    workers.ask({ kind: "grimoire:install-failed", reason: "UnknownError: Unexpected internal error" });
+    workers.ask({ kind: "grimoire:install-failed", reason: "UnknownError: Unexpected internal error" });
+    expect(warned).toHaveBeenCalledTimes(1);
+    expect(warned.mock.calls[0][0]).toMatch(
+      /^MTG Grimoire: this browser could not save the app for offline use.*\(UnknownError: Unexpected internal error\)\.$/,
+    );
+    // And the app is an app all the same.
+    expect(await status(core)).toEqual({ state: "ready" });
   });
 
   it("still opens the database when the service worker cannot be set up at all", async () => {

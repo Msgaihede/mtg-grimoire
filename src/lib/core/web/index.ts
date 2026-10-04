@@ -89,6 +89,9 @@ export const IMAGE_SOURCE_COMMAND = "card_image_source";
 /** Settings' *Clear cache*. Answered here: in a browser the pictures are in Cache Storage. */
 export const CACHE_CLEAR_COMMAND = "cache_clear";
 
+/** What `host_update_apply` is refused with when no newer build is waiting to be told. */
+export const NOTHING_WAITING = "There is no newer version of MTG Grimoire waiting.";
+
 /** The page itself, as far as the update flow touches it. */
 export interface Page {
   /** Start this document again. */
@@ -337,12 +340,13 @@ export function createWebCore(
       case HOST_UPDATE:
         return () => (updates?.waiting() ? UPDATE_READY : null);
       case HOST_UPDATE_APPLY:
-        return () => {
-          // The press. Nothing else on this page tells a waiting build to take over, and the
-          // reload is not made here: it follows the new worker's `controllerchange`.
-          updates?.apply();
-          return null;
-        };
+        // The press. Nothing else on this page tells a waiting build to take over, and the
+        // reload is not made here: it follows the new worker's `controllerchange`.
+        //
+        // **Refused when there was nothing to tell** — the build stopped waiting between the
+        // bar being drawn and the press, or there is no worker here at all. Answered `null`
+        // either way, a page would grey its control for a start-again that is not coming.
+        return () => (updates?.apply() ? null : Promise.reject(NOTHING_WAITING));
       case CACHE_CLEAR_COMMAND:
         return clearCache;
       default:
@@ -381,9 +385,13 @@ export function createWebCore(
       workers.startMessages();
       updates = watchUpdates(workers, {
         onChange: () => emit(HOST_UPDATE_CHANGED, updates?.waiting() ? UPDATE_READY : null),
-        // A page whose database never opened is a boot screen with a link to a fresh document.
-        // Reloading it under the tab that pressed would race that tab for the database.
-        mayReload: () => status.state !== "failed",
+        // **Only the page that holds the database starts again.** That is the page the bar was
+        // drawn on, so it is the one that pressed — or, in a build with a second page that
+        // could press, the one with the reader's work in it. A page whose database never opened
+        // is a boot screen with a link to a fresh document, and one still opening holds nothing
+        // yet: each, reloading too, would race the first for the database, and if it won, the
+        // tab the reader pressed in would be the one told the app is open elsewhere.
+        mayReload: () => status.state === "ready",
         reload: () => browser.page?.reload(),
         onVisible: browser.page ? (heard) => browser.page?.onVisible(heard) : undefined,
         now: browser.now,

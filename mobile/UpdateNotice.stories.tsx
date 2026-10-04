@@ -19,7 +19,7 @@ const meta = {
   title: "Light/UpdateNotice",
   component: UpdateNoticeBar,
   tags: ["autodocs"],
-  args: { update: UPDATE_READY, busy: false, onApply: fn() },
+  args: { update: UPDATE_READY, busy: false, onApply: fn(), onDismiss: fn() },
   decorators: [
     (Story, { parameters }) => (
       <div
@@ -39,8 +39,10 @@ const meta = {
         component:
           "Shown when a newer build of the app has been fetched and is waiting. Not a modal: a " +
           "bar along the bottom of the window, clear of the phone face's tab bar, that a reader " +
-          "may leave for the rest of the session. Only its button takes the newer build, and " +
-          "the app then starts again on it.",
+          "may put away with Not now — it comes back when the host next says a build is " +
+          "waiting, or on the next load. Only its button takes the newer build, and the app " +
+          "then starts again on it. It is drawn under anything a reader opened: a menu, a " +
+          "picker, a dialog.",
       },
     },
   },
@@ -57,6 +59,10 @@ export const Phone: Story = {
       "A new version of MTG Grimoire is ready.",
     );
     await userEvent.click(canvas.getByRole("button", { name: "Reload to update" }));
+    await expect(args.onApply).toHaveBeenCalledOnce();
+    // Putting it away is its own control, and takes nothing.
+    await userEvent.click(canvas.getByRole("button", { name: "Not now" }));
+    await expect(args.onDismiss).toHaveBeenCalledOnce();
     await expect(args.onApply).toHaveBeenCalledOnce();
   },
 };

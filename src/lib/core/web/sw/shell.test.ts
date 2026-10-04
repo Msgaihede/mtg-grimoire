@@ -3,6 +3,7 @@ import {
   DOCUMENT,
   precacheList,
   routeFor,
+  shellBuildId,
   shellCacheName,
   staleShells,
   type Routable,
@@ -73,6 +74,52 @@ describe("what a build precaches", () => {
   });
 });
 
+describe("a build's id", () => {
+  const bytes = (text: string) => new TextEncoder().encode(text);
+  const build = (headers: string) => [
+    { name: "index.html", bytes: bytes("<html></html>") },
+    { name: "assets/index-a.js", bytes: bytes("console.log('a')") },
+    { name: "_headers", bytes: bytes(headers) },
+  ];
+  const POLICY = "/*\n  Content-Security-Policy: default-src 'self'\n";
+
+  /**
+   * What the hosting step rests on: the policy is a file the host reads and never serves, so
+   * nothing precaches it — and a deploy that changed only the policy must still be a new worker,
+   * or a returning reader keeps the old headers on every file their shell cache holds.
+   */
+  it("moves when only the host's `_headers` changed, though the precache list does not", () => {
+    const before = build(POLICY);
+    const after = build(POLICY.replace("'self'", "'self' https://cards.scryfall.io"));
+
+    expect(shellBuildId(after)).not.toBe(shellBuildId(before));
+    const names = (files: { name: string }[]) => files.map(({ name }) => name);
+    expect(precacheList(names(after))).toEqual(precacheList(names(before)));
+    expect(precacheList(names(after))).not.toContain("/_headers");
+  });
+
+  it("moves when any served file changed by a byte, and not when nothing did", () => {
+    const one = build(POLICY);
+    const same = build(POLICY);
+    expect(shellBuildId(same)).toBe(shellBuildId(one));
+    same[1] = { name: "assets/index-a.js", bytes: bytes("console.log('b')") };
+    expect(shellBuildId(same)).not.toBe(shellBuildId(one));
+  });
+
+  it("does not hash the worker itself — its bytes hold the id", () => {
+    // On a second build over the same folder the last build's `sw.js` is on disk. Hashed, the
+    // id would never settle: every build's worker would be new.
+    const files = build(POLICY);
+    const again = [...files, { name: "sw.js", bytes: bytes("the last build's worker") }];
+    expect(shellBuildId(again)).toBe(shellBuildId(files));
+  });
+
+  it("does not move with the order the files were listed in", () => {
+    const files = build(POLICY);
+    expect(shellBuildId([...files].reverse())).toBe(shellBuildId(files));
+  });
+});
+
 describe("which request is whose", () => {
   it("answers a navigation to any place with the document's route", () => {
     for (const path of ["/", "/search", "/decks/12", "/collection?card=abc", "/v1.2/notes"]) {
@@ -123,11 +170,20 @@ describe("which request is whose", () => {
     });
   });
 
-  it("reads a picture by its path, before it reads the mode", () => {
+  it("reads a picture by its path, however an `<img>` or a script asks for it", () => {
     const ask = { key: `${ORIGIN}/mtgimg/display/abc/0`, path: "/display/abc/0" };
-    expect(route(get("/mtgimg/display/abc/0"))).toEqual({ kind: "picture", ask });
-    // Opened in a tab of its own: still the picture, never the app.
-    expect(route(get("/mtgimg/display/abc/0", "navigate"))).toEqual({ kind: "picture", ask });
+    for (const mode of ["no-cors", "cors", "same-origin"]) {
+      expect(route(get("/mtgimg/display/abc/0", mode))).toEqual({ kind: "picture", ask });
+    }
+  });
+
+  it("answers a navigation to a picture's address with neither the picture nor the app", () => {
+    // A tab, a frame, a link. The app's document there would be a place that does not exist;
+    // the stored response there would be the one way a stored body could be run as a document
+    // on the app's own origin. A refusal is both answers.
+    expect(route(get("/mtgimg/display/abc/0", "navigate"))).toEqual({ kind: "not-a-picture" });
+    expect(route(get("/mtgimg/display/abc/0?retry=1", "navigate"))).toEqual({ kind: "not-a-picture" });
+    expect(route(get("/mtgimg", "navigate"))).toEqual({ kind: "not-a-picture" });
   });
 
   it("refuses what is under the picture prefix and is not a picture", () => {

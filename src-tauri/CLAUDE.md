@@ -96,7 +96,12 @@ capture spec is edited there.
   `src/command_table.rs` lists it as desktop-only with a reason, or as not yet in the table.
   `every_registered_command_is_in_the_table_or_on_one_list` reads `generate_handler!` and goes red
   for a command in none of the three; a command in the table must take exactly its wrapper's
-  arguments. See [`crates/grimoire-core/CLAUDE.md`](../crates/grimoire-core/CLAUDE.md), *The
+  arguments. **There is a fourth list since 2026-10-04, and it runs the other way**:
+  `TABLE_ONLY`, for a command the core's table has and this app will never register, each with
+  its reason — `card_image_source`, which the web host's service worker asks, is the first. The
+  same test refuses a table command with no wrapper unless that list names it, and refuses one
+  on the list that has a wrapper after all; **do not write a wrapper nobody calls to satisfy
+  it** — a registered command is one a page can invoke. See [`crates/grimoire-core/CLAUDE.md`](../crates/grimoire-core/CLAUDE.md), *The
   command table*.
 - **`sync::with_write` is the core's `state::with_write`**, re-exported under its old name; it
   takes `&State`, which an `&AppState` derefs to. `collection_source::with_write_owned` is the

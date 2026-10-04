@@ -1,4 +1,4 @@
-import { isClaim, isSkipWaiting } from "./bridge";
+import { INSTALL_FAILED, isClaim, isSkipWaiting, reasonOf, type InstallFailed } from "./bridge";
 import { createWorker } from "./serve";
 
 /**
@@ -17,7 +17,11 @@ import { createWorker } from "./serve";
  */
 declare const self: ServiceWorkerGlobalScope;
 
-/** This build's id — a hash of every file below, so a build that changed nothing is no update. */
+/**
+ * This build's id — `shell.ts`'s `shellBuildId`: a hash of every file the build wrote but this
+ * one, the host's `_headers` included though it is not precached. A build that changed nothing
+ * is no update.
+ */
 declare const __SW_BUILD__: string;
 /** What to precache: `shell.ts`'s `precacheList` of `dist-web/`, the document first. */
 declare const __SW_PRECACHE__: readonly string[];
@@ -45,20 +49,37 @@ const worker = createWorker({
  * install has no old worker to wait for, and activates by itself.
  */
 self.addEventListener("install", (event) => {
-  event.waitUntil(worker.install());
+  event.waitUntil(
+    worker.install().catch(async (error: unknown) => {
+      // **Said to the pages before it is let fail.** The browser drops a worker whose install
+      // rejects and tells nobody why; the page then runs with no worker and no pictures. Driven
+      // on 2026-10-04: `caches.open` threw `UnknownError` under a long profile path on Windows,
+      // and the page said nothing at all. What the page prints is `../update.ts`'s.
+      const message: InstallFailed = { kind: INSTALL_FAILED, reason: reasonOf(error) };
+      try {
+        const pages = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+        for (const page of pages) page.postMessage(message);
+      } catch {
+        // No page could be told; the page's own watch still says that it failed.
+      }
+      throw error;
+    }),
+  );
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    (async () => {
-      await worker.activate();
+    // The housekeeping never rejects (`serve.ts`), and the `finally` is for the day it does:
+    // **the claim follows whatever the housekeeping did.** Behind a failed `caches.keys()` it
+    // was a first visit's page never taken, for the sake of a cache that was not deleted.
+    worker.activate().finally(() =>
       // **Claimed on every activation, the first included.** On a first visit it is what puts
       // the page already open under this worker without a reload, so the pictures it asks for
       // from then on are answered here; after the reader's press it is what makes every open
       // page hear `controllerchange`. The page's own guard keeps the first of those from being
       // a reload (`../update.ts`).
-      await self.clients.claim();
-    })(),
+      self.clients.claim(),
+    ),
   );
 });
 

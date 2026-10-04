@@ -76,7 +76,7 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   once, whatever StrictMode does; the startup gate answered by the Worker; a second tab told so
   in a sentence with a Reload. `scripts/build-wasm.mjs`, `npm run web:build` into `dist-web/`, and
   a CI `web` job that builds both and opens the database in a headless browser.
-- [ ] **5.2 — the first run.** The launch's downloads without a temp file: the card sync, both
+- [x] **5.2 — the first run** (#806, merged 2026-10-04). The launch's downloads without a temp file: the card sync, both
   tagger feeds, the combos and the Card Kingdom list, each streamed into its sink; CORS and the
   pacing clock measured, which phase 2 left as this phase's first measurements; a stall bound on
   each wait of a download — the answer, and every chunk — rather than a deadline on the whole
@@ -87,11 +87,19 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   Chromium decides at the call and a first visit's no would otherwise stand after an install —
   and recorded. The marketplace picker offers what the host can reach.
   ([light-app.md](../../reference/light-app.md) §9.2 is the record.)
-- [ ] **5.3 — the service worker.** The shell precached; card images answered from Cache Storage
-  on the app's own origin, the Scryfall address asked of the core; the image-cache panel over
-  it; the update flow — a waiting worker, a bar, and only that press activates it; a face whose
-  chunk a deploy renamed recovers instead of offering a reload that cannot work.
-- [ ] **5.4 — the browser's seams and the manifest.** Clipboard and open-a-link below
+- [ ] **5.3 — the service worker.** The shell precached, one cache per build; card images
+  answered from Cache Storage on the app's own origin (`/mtgimg/…`), the Scryfall address asked
+  of the core **through the page that asked**, because a service worker cannot reach the
+  database Worker, and the stored response rebuilt from its bytes; Settings' *Clear cache*
+  answered on the page over that cache — the desktop's panel, not a fork of it; the update
+  flow — a waiting worker, a bar drawn from what the host answers, and only that press
+  activates it. **Built differently in two places**: a face whose chunk a deploy renamed does
+  not *recover* — the case is taken away, since a page's own build is held whole while the
+  page is open, and `FaceBoundary` offers the waiting build when the host says there is one;
+  and the step also made the tagger feeds' and the combos' finishes take a turn between their
+  batches, which 5.2 had measured and left.
+  ([light-app.md](../../reference/light-app.md) §9.3 is the record.)
+- [x] **5.4 — the browser's seams and the manifest** (#807, merged 2026-10-04). Clipboard and open-a-link below
   `@/lib/core` on both faces; file open and save on the desktop face in a browser; the phone
   card sheet's `Open on …` rows. The manifest finished — raster and maskable icons, an `id`,
   installable by the browser's own install UI and by no button of the app's — and moved out of

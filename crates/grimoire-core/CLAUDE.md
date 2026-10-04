@@ -237,10 +237,17 @@ yield described below.
       journal, which writes every touched page twice, and the file's order puts nearly
       every row on a page of its own. Natively on a rollback journal (the same file,
       release, NTFS) the closure took 16.6–17.8 s as it was, 10.5 s at 8 000 rows, 5.4–6.1 s
-      in key order, and **2.6–2.8 s with both**. **No browser has timed it**:
-      `CLOSURE_BATCH_WITHOUT_FILES`' doc has the table and what to put back if OPFS says
-      otherwise. A batch is also the longest a command waits, which is why it is not
-      larger. **The desktop would gain as much and was left alone on purpose** — its
+      in key order, and **2.6–2.8 s with both**. **A browser has timed the finish it is
+      part of, once, and not the closure apart from it** (headless Chrome 154.0.8037.95,
+      Windows 11, 2026-10-04, the built app against the real hosts —
+      [light-app.md](../../docs/reference/light-app.md) §9.3): the oracle tags' finish took
+      **1.74 s** where the module before the turns took 10.76 s and 11.34 s, and the art
+      tags' **4.11 s** against 23.56 s and 23.38 s. One run of one plan cannot say how much
+      is the order and how much the batch. `CLOSURE_BATCH_WITHOUT_FILES`' doc has the native table
+      and what to put back if another browser says otherwise. A batch is also the longest
+      a command waits, which is why it is not larger: on that run a `sync_status` sent once
+      a second waited at most 53 ms inside the oracle finish and 1.10 s inside the art
+      one. **The desktop would gain as much and was left alone on purpose** — its
       statements were not to move in this step.
   - ⚠️ **What is still synchronous, to its end, on the caller**: `StreamIngest::finish` (the
     card swap, every index replayed, the FTS rebuild — one transaction by need),
@@ -248,10 +255,15 @@ yield described below.
     **each tag file's swap** (four renames *and the two indexes a rename does not carry*,
     built over the whole closure inside that one transaction), the combos' swap,
     `maintenance::reclaim_freed_pages` and the facet index's build. On a host with one
-    thread no command is answered while one runs. Timed in a browser, on the module before
-    the turns (headless Chrome 154, 2026-10-04): card finish 4.3–4.7 s, Card Kingdom's
-    store 0.8 s; the tag swaps were inside the 10.8 s and 23.6 s tails and have not been
-    timed apart there.
+    thread no command is answered while one runs. Timed in a browser (headless Chrome 154,
+    2026-10-04): the card finish 4.28 s and 4.70 s on the module before the turns and
+    **5.26 s** on the one with them — which makes it the longest single wait of a first
+    run, 4.79 s, where the art tags' finish used to be at 23.57 s; Card Kingdom's store
+    0.8 s. **The tag swaps have still not been timed apart in a browser**: on the run with
+    the turns, the longest stretch in which nothing was answered was the last one before
+    `done` in each feed — 0.96 s for the oracle tags, 2.06 s for the art tags, 1.65 s for
+    the combos — which is where a swap would be, and is its position rather than its
+    cause. Natively each tag swap is 1.1–2.0 s.
 - **`spawn` takes work off the caller only where there is somewhere to put it.** The card
   sync's ingest, its migration pass, its reclaim and its compaction go through `blocking`; the
   facet index's build through `background`. In a browser both run on the caller, to completion —

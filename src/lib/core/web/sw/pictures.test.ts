@@ -8,6 +8,8 @@ import {
   PICTURE_CACHE,
   PICTURE_LIMIT,
   pictureOf,
+  PICTURE_TYPES,
+  pictureType,
   readSource,
   REFRESH_AFTER_MS,
   type CacheLike,
@@ -57,6 +59,16 @@ describe("a picture's path", () => {
       expect(pictureOf(ORIGIN, path), path).toBe("malformed");
     }
   });
+
+  it("takes face 0 and face 1 and no other spelling of a number", () => {
+    // The engine serves two faces. `00`, `01` and `2` would each be a cache key of its own for
+    // a picture already kept under another.
+    for (const face of ["2", "7", "00", "01", "10", "1.0", "+1", "-1"]) {
+      expect(pictureOf(ORIGIN, `/mtgimg/display/${ID}/${face}`), face).toBe("malformed");
+    }
+    expect(pictureOf(ORIGIN, `/mtgimg/display/${ID}/0`)).not.toBe("malformed");
+    expect(pictureOf(ORIGIN, `/mtgimg/display/${ID}/1`)).not.toBe("malformed");
+  });
 });
 
 describe("the engine's answer", () => {
@@ -88,6 +100,36 @@ describe("the engine's answer", () => {
     ]) {
       expect(isFetchable(uri), uri).toBe(false);
     }
+  });
+});
+
+describe("what a fetched picture may say it is", () => {
+  it("is a raster image, read from the header's essence", () => {
+    expect(pictureType("image/webp")).toBe("image/webp");
+    expect(pictureType("IMAGE/WebP")).toBe("image/webp");
+    expect(pictureType("image/jpeg; charset=binary")).toBe("image/jpeg");
+    expect(pictureType(" image/png ")).toBe("image/png");
+    expect(pictureType("image/avif")).toBe("image/avif");
+  });
+
+  it("is nothing a browser would run, and nothing unnamed", () => {
+    for (const header of [
+      null,
+      "",
+      "text/html",
+      "text/html; charset=utf-8",
+      "image/svg+xml",
+      "application/octet-stream",
+      "application/json",
+      "text/plain",
+      "image/webp, text/html",
+      "text/html;image/webp",
+    ]) {
+      expect(pictureType(header), String(header)).toBeNull();
+    }
+    // The list itself: SVG is an image a browser *runs*, and it is not on it.
+    expect(PICTURE_TYPES).not.toContain("image/svg+xml");
+    expect(PICTURE_TYPES.every((type) => type.startsWith("image/"))).toBe(true);
   });
 });
 

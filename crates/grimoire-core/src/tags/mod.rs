@@ -221,8 +221,7 @@ const BATCH: usize = 2_000;
 /// file order nearly every row lands on a page of its own. In key order the table is filled
 /// from one end and a page is written when it is full.
 ///
-/// **Chosen from a native measurement and not from a browser's**, which is the thing to
-/// re-time. The real art file as a dev corpus held it (11 603 tags, 53 237 illustrations,
+/// **Chosen from a native measurement, and then run in a browser.** The real art file as a dev corpus held it (11 603 tags, 53 237 illustrations,
 /// 979 249 closure rows), a release build, NTFS, 2026-10-04, two runs each — the closure's
 /// write alone, in seconds:
 ///
@@ -234,7 +233,10 @@ const BATCH: usize = 2_000;
 /// (File order at 32 000 rows, from an earlier pass of the same probe: 7.4–7.6 s on DELETE,
 /// 6.1–6.9 s on WAL.) Sorting the subjects took 6–13 ms. In a browser the same loop, in file
 /// order at 2 000 rows, ran at about 49 ms a batch — most of a 23.6 s art finish (headless
-/// Chrome 154) — and **no browser has run it in key order**.
+/// Chrome 154). **In key order at 8 000 rows the whole art finish was 4.11 s there, and the
+/// oracle tags' 1.74 s where it had been 10.76 s** (the same browser, the same day, one run,
+/// `docs/reference/light-app.md` §9.3) — the two changes were made together, so which of
+/// order and batch size bought how much in a browser is not on record.
 ///
 /// **Eight thousand and not more**: a turn is taken only between two batches, so a batch is
 /// also the longest a command waits behind this loop. If a browser shows neither change is

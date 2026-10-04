@@ -6,41 +6,53 @@
 // A green suite proves the host it ran on, and no suite runs the WASM module: vitest drives the
 // Worker's logic over a fake, and cargo compiles the engine for a browser without starting one.
 // This is the run that instantiates it. It serves `dist-web/`, opens it in headless Chromium over
-// the DevTools protocol, and asks nine things, in this order:
+// the DevTools protocol, and asks fourteen things, in this order:
 //
 //   1. the app got past its startup gate — the engine loaded, and opened and migrated a database
 //      on a rollback journal, which the page says on its console
 //   2. that database is in OPFS, in the folder the page names
-//   3. an empty card database reads as a first run: the page says it is setting one up, with the
+//   3. the service worker registered and took the page: scope `/`, script `/sw.js`, and one
+//      shell cache holding the document, the database Worker's chunk and both engine files
+//   4. an empty card database reads as a first run: the page says it is setting one up, with the
 //      sync's phase beside it, while the card file is still on its way
-//   4. the card sync finishes, and a search typed into the page's own box draws that card's tile
-//   5. the launch's three feeds — both Tagger files and the combos — finish with rows stored and
+//   5. the card sync finishes, and a search typed into the page's own box draws that card's tile
+//   6. the tile's picture decoded, and is in the picture cache under the app's own address with
+//      the Scryfall address it came from; asked again, it is answered without asking Scryfall
+//   7. the launch's three feeds — both Tagger files and the combos — finish with rows stored and
 //      nothing in the error log
-//   6. Settings offers the price lists this host can reach: Mana Pool greyed, and Card Kingdom
+//   8. Settings offers the price lists this host can reach: Mana Pool greyed, and Card Kingdom
 //      downloaded and stored when it is picked
-//   7. a reload opens the database again, still holding the cards, and asks no host for anything;
-//      a check forced past its interval asks for the card listing and for no card file
-//   8. a second tab is told the app is open elsewhere, and offered a reload
-//   9. no request the engine made would cost a CORS pre-flight, and none went to a host this
-//      script has no answer for
+//   9. **offline** — the server refusing every connection and every other host gone — a reload
+//      draws the app, opens the database, answers a search and draws the cached picture, having
+//      asked no host for anything; back online, a check forced past its interval asks for the
+//      card listing and for no card file
+//  10. Settings' Clear cache empties the picture cache and leaves the shell
+//  11. a second tab is told the app is open elsewhere, and offered a reload
+//  12. a new build of the worker installs and *waits*: the page draws its bar, a second shell
+//      cache stands beside the first, and a reload leaves all of that as it is
+//  13. the bar's button, and nothing else, hands over: the page starts again once, on the new
+//      build's shell alone, with no bar — and the second tab is neither told nor reloaded
+//  14. no request would cost a CORS pre-flight — the worker's picture fetch included — and none
+//      went to a host this script has no answer for
 //
-// **No request leaves the machine.** Since step 5.2 the engine starts the launch's downloads the
-// moment the database opens, so every cross-origin request is paused by the DevTools `Fetch`
-// domain and answered from `scripts/web-smoke/` with the headers the real host sends. Two fences
-// stand behind that: a request to a host with no fixture is failed *and fails the run* (one
-// host is excused by name, with the step that owes it — `UNREACHABLE`), and the browser is
-// started with a resolver that knows no name but `localhost`, so a request the interception
-// never saw cannot be answered by anyone.
+// **No request leaves the machine.** The engine starts the launch's downloads the moment the
+// database opens, and the service worker fetches a picture for every tile, so every
+// cross-origin request is paused by the DevTools `Fetch` domain and answered from
+// `scripts/web-smoke/` with the headers the real host sends. Two fences stand behind that: a
+// request to a host with no fixture is failed *and fails the run*, and the browser is started
+// with a resolver that knows no name but `localhost`, so a request the interception never saw
+// cannot be answered by anyone.
 //
-// **Where a Worker's `fetch` can be caught** (measured, Chrome 154, 2026-10-04): the requests
-// are the dedicated Worker's, and the Worker's own DevTools session has no `Fetch` domain —
-// `Fetch.enable` there answers "wasn't found"; it only *reports* them, through `Network`. They
-// are paused on the page's session and on the browser's. This uses the browser's: one enable,
-// before any tab exists, for every tab this script opens.
+// **Where a Worker's `fetch` can be caught** (measured, Chrome 154, 2026-10-04): the engine's
+// requests are the dedicated Worker's, and that Worker's own DevTools session has no `Fetch`
+// domain — `Fetch.enable` there answers "wasn't found"; it only *reports* them, through
+// `Network`. They are paused on the page's session and on the browser's, and so are the
+// service worker's. This uses the browser's: one enable, before any tab exists, for every tab
+// and every worker.
 //
 // **Four things here go through the engine and not the page's own controls**, by importing the
 // chunk the page already loaded (`assets/web-*.js`, whose `webCore` is the page's one `Core`):
-// the feeds' status reads, the error log, the card count, and the forced check of step 7. The
+// the feeds' status reads, the error log, the card count, and the forced check of step 9. The
 // phone face draws no status for a tag or combo feed and has no Refresh for the cards.
 //
 // No dependencies, like `cdp.mjs`: Node has a global `WebSocket`, and Chromium prints its
@@ -53,7 +65,7 @@ import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, normalize, resolve, sep } from "node:path";
-import { fileURLToPath, URL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
 const DIST = resolve("dist-web");
@@ -115,17 +127,33 @@ const MIGRATIONS = "https://api.scryfall.com/migrations";
 const CARD_KINGDOM = "https://api.cardkingdom.com/api/v2/pricelist";
 const SPELLBOOK = "https://json.commanderspellbook.com/variants.json.gz";
 
+/** The four picture sizes the engine names an address for (`schema::IMAGE_VARIANTS`). */
+const PICTURE_VARIANTS = ["thumb", "grid", "display", "art"];
+/** Where the web app asks for a picture — its own origin (`src/lib/images.ts`). */
+const PICTURE_PREFIX = "/mtgimg";
+/** The service worker's two caches (`src/lib/core/web/sw/`): one shell per build, one of pictures. */
+const SHELL_PREFIX = "grimoire-shell-";
+const PICTURE_CACHE = "grimoire-pictures-v1";
+
+/** The fixture cards, as the engine ingests them. */
+function fixtureCards() {
+  return readFileSync(join(FIXTURES, "default-cards.jsonl"), "utf8")
+    .split("\n")
+    .filter((line) => line !== "")
+    .map((line) => JSON.parse(line));
+}
+
 /**
- * A host the page asks that no browser can reach, and why that is not this run's failure. Its
- * requests are refused as a browser's would be — a connection nobody accepts — and counted.
- * **An entry here is a debt with an owner**: when the step it names lands, the entry goes and a
- * request to that host fails the run like any other with no fixture.
+ * The Scryfall address the engine answers for one of the app's own picture paths —
+ * `/mtgimg/<variant>/<card id>/<face>` — read off the fixture card as the engine reads it: the
+ * card's own `image_uris`, or that face's for a card whose pictures are per face.
  */
-const UNREACHABLE = new Map([
-  // `src/lib/images.ts` still names the desktop's image protocol. Card pictures in a browser are
-  // the service worker's (step 5.3); until then every tile asks this and draws its retry.
-  ["mtgimg.localhost", "card pictures, until step 5.3 serves them from Cache Storage"],
-]);
+function pictureAddress(path) {
+  const [variant, id, face] = path.slice(PICTURE_PREFIX.length + 1).split("/");
+  const card = fixtureCards().find((entry) => entry.id === id);
+  const uris = card?.image_uris ?? card?.card_faces?.[Number(face)]?.image_uris;
+  return uris?.[variant] ?? null;
+}
 
 /**
  * Every fixture URL and what it is answered with: a body, and the response headers the real
@@ -150,6 +178,9 @@ const UNREACHABLE = new Map([
  *   takes for these hosts.
  * - **Card Kingdom's price list is `text/html`**, and is JSON. That is what the host says of
  *   it, to a browser as to `curl`; an engine that came to trust the type would lose the feed.
+ * - **Every picture address the six cards name is answered with one small WebP** (`card.webp`,
+ *   50 × 70, encoded by Chrome's own canvas): four sizes of each card or face. The service
+ *   worker asks with CORS and rebuilds what it stores from the bytes and the `Content-Type`.
  */
 function fixtures() {
   const read = (name) => readFileSync(join(FIXTURES, name));
@@ -195,8 +226,18 @@ function fixtures() {
   const cards = gzipSync(read("default-cards.jsonl"));
   const oracle = gzipSync(read("oracle-tags.jsonl"));
   const art = gzipSync(read("art-tags.jsonl"));
+  const picture = {
+    body: read("card.webp"),
+    headers: { "Content-Type": "image/webp", "Cache-Control": "public, max-age=31536000" },
+  };
+  const pictures = fixtureCards()
+    .flatMap((card) => [card, ...(card.card_faces ?? [])])
+    .flatMap((side) => PICTURE_VARIANTS.map((variant) => side.image_uris?.[variant]))
+    .filter((address) => typeof address === "string")
+    .map((address) => [address, picture]);
 
   return new Map([
+    ...pictures,
     [CARDS_LISTING, listing("default_cards", CARDS_FILE, cards)],
     [CARDS_FILE, { body: cards, headers: file }],
     [SETS, encoded(read("sets.json"), api, false)],
@@ -302,24 +343,51 @@ function preflightCost(request, userAgent) {
 // The server and the browser
 // ---------------------------------------------------------------------------------------------
 
-/** `dist-web/` on a port of the system's choosing, with the history fallback a host gives it. */
+/**
+ * `dist-web/` on a port of the system's choosing, as a static host serves it — and two things a
+ * check changes about that host while the run goes on (`site`).
+ *
+ * - **A place gets the document; a file gets itself or a bare 404.** An address with no
+ *   extension is a place in the app — except under the picture prefix, which is the service
+ *   worker's alone: a host that handed the document to `/mtgimg/…` would be a 200 of HTML to a
+ *   page nothing controls yet, where the truth is that there is no picture there.
+ * - **Everything is `no-cache`**, as the preview serves it: kept, and never used without asking
+ *   again. So a new `sw.js` is found, and nothing this run reads offline can have come from the
+ *   HTTP cache rather than from Cache Storage — a revalidation has nobody to ask.
+ *   **Not `no-store`, which hangs the worker's install on this server** (measured, Chrome 154):
+ *   the precache starts all its fetches at once and reads no body until every one has
+ *   answered, an uncacheable body leaves its socket only as fast as its reader takes it, and
+ *   HTTP/1.1 has six sockets to a host. Seven of the 42 requests reached the server, and the
+ *   worker stayed `installing` for good.
+ * - **`site.refusing` is the host gone**: every connection is dropped unanswered.
+ * - **`site.build` is a second deploy**: `sw.js` is served with its build id — a literal in the
+ *   file, and the whole of what names its shell cache — swapped for another, and nothing else
+ *   changed. To a browser that is a new worker.
+ */
 async function serve() {
   if (!existsSync(join(DIST, "index.html"))) {
     fail("dist-web/index.html is missing. Run `npm run web:wasm` and `npm run web:build` first.");
   }
+  const site = { refusing: false, build: null };
   const server = createServer(async (request, response) => {
+    if (site.refusing) return void request.socket.destroy();
     const path = decodeURIComponent((request.url ?? "/").split("?")[0]);
     const file = normalize(join(DIST, path));
     // A path that climbs out of the folder is nobody's request.
     const inside = file === DIST || file.startsWith(DIST + sep);
+    const picture = path === PICTURE_PREFIX || path.startsWith(`${PICTURE_PREFIX}/`);
     // An address with no extension is a place in the app, and every place is the one document.
-    const target = !inside ? null : extname(file) === "" ? join(DIST, "index.html") : file;
+    const target =
+      !inside || picture ? null : extname(file) === "" ? join(DIST, "index.html") : file;
     try {
       if (target === null) throw new Error("outside");
-      const body = await readFile(target);
+      let body = await readFile(target);
+      if (path === "/sw.js" && site.build) {
+        body = Buffer.from(body.toString("utf8").replace(site.build.from, site.build.to));
+      }
       response.writeHead(200, {
         "Content-Type": TYPES[extname(target)] ?? "application/octet-stream",
-        "Cache-Control": "no-store",
+        "Cache-Control": "no-cache",
       });
       response.end(body);
     } catch {
@@ -333,7 +401,7 @@ async function serve() {
     // `close` waits for kept-alive sockets, which a killed browser may never hang up.
     server.closeAllConnections();
   });
-  return `http://localhost:${server.address().port}`;
+  return { origin: `http://localhost:${server.address().port}`, site };
 }
 
 function browserPath() {
@@ -424,9 +492,10 @@ async function connect(address) {
 }
 
 /**
- * Pause every `http(s)` request the browser makes, in any tab and from any Worker, and answer
- * it: the app's own origin goes through to the server, a fixture URL is fulfilled, and the rest
- * is failed. Answers what was asked, so a check can read the log.
+ * Pause every `http(s)` request the browser makes — in any tab, from the database Worker and
+ * from the service worker — and answer it: the app's own origin goes through to the server, a
+ * fixture URL is fulfilled, and the rest is failed. Answers what was asked, so a check can read
+ * the log.
  *
  * **A request with no fixture, and one that would cost a pre-flight, are written down rather
  * than thrown**: this runs in the socket's listener, where a throw reaches nobody. `problems`
@@ -434,13 +503,13 @@ async function connect(address) {
  */
 async function intercept(browser, origin, userAgent) {
   const routes = fixtures();
-  /** Each cross-origin request answered from a fixture, in order: `{ method, url, headers }`. */
+  /** Each cross-origin request that has a fixture, in order: `{ method, url, headers }`. */
   const asked = [];
-  /** How many requests went to each {@link UNREACHABLE} host. */
-  const refused = new Map();
   const problems = [];
   /** URLs whose answer waits on a caller: `url -> promise`. */
   const held = new Map();
+  /** No network: a request that has a fixture is still written down, and then fails. */
+  let offline = false;
 
   browser.on("Fetch.requestPaused", async ({ requestId, request }) => {
     const answer = (method, params) =>
@@ -448,11 +517,6 @@ async function intercept(browser, origin, userAgent) {
       browser.send(method, { requestId, ...params }).catch(() => undefined);
     if (request.url === origin || request.url.startsWith(`${origin}/`)) {
       return answer("Fetch.continueRequest");
-    }
-    const { hostname } = new URL(request.url);
-    if (UNREACHABLE.has(hostname)) {
-      refused.set(hostname, (refused.get(hostname) ?? 0) + 1);
-      return answer("Fetch.failRequest", { errorReason: "ConnectionRefused" });
     }
     // The fragment-free URL as asked, query included: a fixture answers one address.
     const route = routes.get(request.url);
@@ -468,6 +532,7 @@ async function intercept(browser, origin, userAgent) {
           `refuses: ${cost}. Its headers: ${JSON.stringify(request.headers)}`,
       );
     }
+    if (offline) return answer("Fetch.failRequest", { errorReason: "InternetDisconnected" });
     await held.get(request.url);
     const headers = {
       "Access-Control-Allow-Origin": "*",
@@ -489,7 +554,10 @@ async function intercept(browser, origin, userAgent) {
 
   return {
     asked,
-    refused,
+    /** Take every other host away, or give them back. */
+    offline(gone) {
+      offline = gone;
+    },
     /** Fail the run on anything written down so far. */
     check() {
       if (problems.length > 0) fail(problems.join("\n"));
@@ -605,15 +673,63 @@ const OPFS = `(async () => {
 })()`;
 /** The phone Search page's box. */
 const SEARCH_BOX = `document.querySelector('input[type="search"][aria-label="Search cards"]')`;
-/** Whether the wall draws a card's tile, by the card's name — a tile's button is named for its
- *  printing (`Lightning Bolt, LEA 161`). A boolean: an element does not cross the protocol. */
-const tile = (name) =>
-  `!!document.querySelector('[aria-label="Search results"] button[aria-label^=${JSON.stringify(`${name},`)}]')`;
+/** A card's tile on the wall, by the card's name — a tile's button is named for its printing
+ *  (`Lightning Bolt, LEA 161`). An element: for a press, or to ask something of. */
+const tileOf = (name) =>
+  `document.querySelector('[aria-label="Search results"] button[aria-label^=${JSON.stringify(`${name},`)}]')`;
+/** Whether the wall draws that tile. A boolean: an element does not cross the protocol. */
+const tile = (name) => `!!${tileOf(name)}`;
+/** The path of the picture a tile drew — once it has decoded — or `null` while it has not. */
+const pictureIn = (name) =>
+  `(() => {
+    const img = ${tileOf(name)}?.querySelector("img");
+    return img && img.complete && img.naturalWidth > 0 ? new URL(img.currentSrc).pathname : null;
+  })()`;
 /** A row of Settings' marketplace picker, by the name it is drawn under. */
 const marketplaceRow = (label) =>
   `[...document.querySelectorAll("button[aria-pressed]")].find(
     (row) => row.querySelector("span[id$='-name']")?.textContent === ${JSON.stringify(label)},
   )`;
+/** A button by the words on it, inside `within` (a selector) when one is given. */
+const buttonSaying = (words, within = "") =>
+  `[...document.querySelectorAll(${JSON.stringify(`${within} button`.trim())})].find(
+    (button) => button.innerText.trim() === ${JSON.stringify(words)},
+  )`;
+/** The update bar's two halves: the sentence, which a live region always holds, and the button. */
+const BAR_SAYS = "A new version of MTG Grimoire is ready.";
+const BAR_BUTTON = "Reload to update";
+const BAR = `!!${buttonSaying(BAR_BUTTON)} && document.body.innerText.includes(${JSON.stringify(BAR_SAYS)})`;
+/**
+ * The service worker as a page sees it: who controls the page, the registration's scope and
+ * its workers' states, and every shell cache with the paths it holds.
+ */
+const WORKER = `(async () => {
+  const registration = await navigator.serviceWorker.getRegistration();
+  const shells = {};
+  for (const name of await caches.keys()) {
+    if (!name.startsWith(${JSON.stringify(SHELL_PREFIX)})) continue;
+    const held = await (await caches.open(name)).keys();
+    shells[name] = held.map((request) => new URL(request.url).pathname);
+  }
+  return {
+    controller: navigator.serviceWorker.controller?.scriptURL ?? null,
+    scope: registration?.scope ?? null,
+    active: registration?.active?.state ?? null,
+    waiting: registration?.waiting?.state ?? null,
+    shells,
+  };
+})()`;
+/** The picture cache: every path it holds, and what it kept beside the one at `path`. */
+const pictures = (path) => `(async () => {
+  if (!(await caches.keys()).includes(${JSON.stringify(PICTURE_CACHE)})) return { keys: [] };
+  const cache = await caches.open(${JSON.stringify(PICTURE_CACHE)});
+  const hit = await cache.match(${JSON.stringify(path)});
+  return {
+    keys: (await cache.keys()).map((request) => new URL(request.url).pathname),
+    source: hit?.headers.get("X-Grimoire-Source") ?? null,
+    type: hit?.headers.get("Content-Type") ?? null,
+  };
+})()`;
 
 /**
  * The page's own `Core`, reached through the chunk the page already loaded: a module is
@@ -626,8 +742,20 @@ function coreChunk() {
   return `/assets/${name}`;
 }
 
+/** The three files a shell cache must hold beside the document for the engine to start offline. */
+function engineFiles() {
+  const chunk = readdirSync(join(DIST, "assets")).find((file) => /^worker-[\w-]+\.js$/.test(file));
+  const build = readdirSync(join(DIST, "wasm"))[0];
+  if (!chunk || !build) fail("dist-web has no database Worker chunk, or no engine folder.");
+  return [
+    `/assets/${chunk}`,
+    `/wasm/${build}/grimoire_web.js`,
+    `/wasm/${build}/grimoire_web_bg.wasm`,
+  ];
+}
+
 async function main() {
-  const origin = await serve();
+  const { origin, site } = await serve();
   const chunk = coreChunk();
   const profile = await mkdtemp(join(tmpdir(), "grimoire-web-smoke-"));
   undo.push(async () => {
@@ -647,9 +775,21 @@ async function main() {
   // file is ingested inside one poll of this script and the sentence is never on screen.
   const releaseCards = hosts.hold(CARDS_FILE);
 
-  /** How many times the page has said its database opened. */
+  /** How many times the page has said its database opened — once per document that got one. */
   const OPENED = "database open in OPFS";
   const opens = (page) => page.said().filter((text) => text.includes(OPENED)).length;
+  /** Wait for the document after this one to open its database and draw its shell. */
+  const reopened = async (page, before, what) => {
+    // By the console line and not by the tab bar: for a moment after a reload the document
+    // still answering is the old one, whose bar is already drawn.
+    for (const stop = performance.now() + 60_000; opens(page) <= before; await pause(100)) {
+      hosts.check();
+      if (performance.now() > stop) fail(`${what}: the page never opened its database again`);
+    }
+    await page.until(`${what}: the app came back`, `${SHELL} || ${ALERT}`);
+    const refused = await page.evaluate(ALERT);
+    if (refused) fail(`${what}: the database did not open again:\n${refused}`);
+  };
 
   // A headless window is 800 wide — under the 1024 floor — so the face is the phone's, and its
   // tab bar is the thing to wait for.
@@ -664,10 +804,29 @@ async function main() {
     if (answer.refused !== undefined) fail(`${command} was refused: ${answer.refused}`);
     return answer.value;
   };
+  const errors = async (when) => {
+    const log = await engine("error_log_list", { limit: 50 });
+    if (log.length > 0) fail(`the error log ${when}:\n${JSON.stringify(log, null, 2)}`);
+  };
+  /** Type `text` into the Search page's box, from whichever page of the app is showing. */
+  const search = async (text) => {
+    await first.press(
+      "the Search tab",
+      `document.querySelector('nav[aria-label="Views"] a[href="/search"]')`,
+    );
+    await first.press("the search box", SEARCH_BOX);
+    await first.type(text);
+  };
 
   await first.until("the app got past its startup gate", `${SHELL} || ${ALERT}`);
   const refusedOpen = await first.evaluate(ALERT);
-  if (refusedOpen) fail(`the first tab did not open its database:\n${refusedOpen}`);
+  if (refusedOpen) {
+    fail(
+      `the first tab did not open its database:\n${refusedOpen}\n` +
+        `Console: ${first.said().join(" | ") || "nothing"}\n` +
+        `Thrown: ${first.thrown().join(" | ") || "nothing"}`,
+    );
+  }
   // The page says which journal each file got (`src/lib/core/web/index.ts`). The OPFS pool
   // refuses WAL, so anything but `delete` on either is a browser doing something new.
   const line = first.said().find((text) => text.includes(OPENED));
@@ -681,6 +840,28 @@ async function main() {
   const files = await first.until("the database is in OPFS", OPFS);
   if (files.length === 0) fail(`OPFS has a ${OPFS_DIRECTORY} folder with nothing in it`);
   console.log(`ok  OPFS holds ${OPFS_DIRECTORY}/ with ${files.length} entries`);
+
+  // A first visit starts with no worker: it installs — the whole shell fetched before any of it
+  // is kept — activates, and claims the page already open. Waited for here, before the first
+  // card exists, so that the first picture the wall asks for is asked of the worker.
+  await first.until(
+    "the service worker took the page",
+    `navigator.serviceWorker.controller?.state === "activated"`,
+    60_000,
+  );
+  const worker = await first.evaluate(WORKER);
+  if (worker.controller !== `${origin}/sw.js` || worker.scope !== `${origin}/`) {
+    fail(`the service worker is not the app's own: ${JSON.stringify(worker)}`);
+  }
+  const shells = Object.keys(worker.shells);
+  if (shells.length !== 1) fail(`one build, and ${shells.length} shell caches: ${shells}`);
+  const build = shells[0].slice(SHELL_PREFIX.length);
+  const missing = ["/", ...engineFiles()].filter((path) => !worker.shells[shells[0]].includes(path));
+  if (missing.length > 0) fail(`${shells[0]} holds no ${missing.join(", ")}`);
+  console.log(
+    `ok  the service worker controls the page — ${shells[0]}, ` +
+      `${worker.shells[shells[0]].length} files`,
+  );
 
   // An empty corpus with a sync running over it: the Search page says so where its wall would
   // be, with the sync's phase in a live region beside it (`mobile/phone/search/NoCards.tsx`).
@@ -719,6 +900,36 @@ async function main() {
   }
   console.log(`ok  the card sync ingested ${cards.cardCount} cards and a typed search drew one`);
 
+  // The tile's picture, all the way round: the page asks its own origin, the worker asks the
+  // page where the picture is, the page asks the engine, the worker fetches that address from
+  // Scryfall and answers with a response built from the bytes — which is also what it keeps.
+  const path = await first.until("the tile's picture decoded", pictureIn("Rhystic Study"), 30_000);
+  const address = pictureAddress(path);
+  if (address === null) fail(`the tile drew ${path}, which names no fixture picture`);
+  const fetches = () => hosts.asked.filter((entry) => entry.url === address);
+  const kept = await first.evaluate(pictures(path));
+  if (kept.source !== address || kept.type !== "image/webp") {
+    fail(`the picture cache holds ${path} as ${JSON.stringify(kept)}, not from ${address}`);
+  }
+  // Asked again, by address: the cache answers, and Scryfall is not asked a second time.
+  const again = await first.evaluate(
+    `fetch(${JSON.stringify(path)}).then(async (response) => ({
+      status: response.status,
+      source: response.headers.get("X-Grimoire-Source"),
+      bytes: (await response.arrayBuffer()).byteLength,
+    }))`,
+  );
+  if (again.status !== 200 || again.source !== address || fetches().length !== 1) {
+    fail(
+      `asked a second time, ${path} answered ${JSON.stringify(again)} after ` +
+        `${fetches().length} requests to ${address}`,
+    );
+  }
+  console.log(
+    `ok  the picture decoded and is kept as ${path}; a second ask did not reach Scryfall — ` +
+      `the worker's request carried ${Object.keys(fetches()[0].headers).join(", ")}`,
+  );
+
   // The feeds a first run holds back until the cards are in, one after another. Nothing on the
   // phone face draws a tag or combo feed's state, so each is read from the engine: rows stored,
   // no refresh still in flight, and — the half a count cannot say — nothing in the error log.
@@ -740,10 +951,6 @@ async function main() {
   for (const url of [ORACLE_LISTING, ORACLE_FILE, ART_LISTING, ART_FILE, SPELLBOOK, SETS]) {
     if (!hosts.asked.some((entry) => entry.url === url)) fail(`${url} was never asked for`);
   }
-  const errors = async (when) => {
-    const log = await engine("error_log_list", { limit: 50 });
-    if (log.length > 0) fail(`the error log ${when}:\n${JSON.stringify(log, null, 2)}`);
-  };
   await errors("after the launch's feeds");
   console.log(
     `ok  the feeds finished — ${feeds.oracle.tagCount} oracle tags, ${feeds.art.tagCount} art ` +
@@ -788,30 +995,30 @@ async function main() {
   await errors("after Card Kingdom's price list");
   console.log(`ok  Settings greys Mana Pool and stored ${prices.rowCount} Card Kingdom prices`);
 
-  // Waited for by the console line and not by the tab bar: for a moment after `Page.reload` the
-  // document still answering is the old one, whose bar is already drawn.
-  const before = opens(first);
+  // Offline, for real: the server drops every connection and every other host is gone. What
+  // draws now is drawn from Cache Storage and OPFS — nothing here is in the HTTP cache, which
+  // the server forbids — so a browser that wiped either between the two documents is a blank
+  // page, a first-run screen or an empty frame.
   const mark = hosts.asked.length;
+  site.refusing = true;
+  hosts.offline(true);
+  let documents = opens(first);
   await first.reload();
-  for (const stop = performance.now() + 60_000; opens(first) <= before; await pause(250)) {
-    if (performance.now() > stop) fail("the page never opened its database after a reload");
-  }
-  await first.until("the app came back after a reload", `${SHELL} || ${ALERT}`);
-  const again = await first.evaluate(ALERT);
-  if (again) fail(`the database did not open a second time:\n${again}`);
-  // The cards, through the page again: a browser that wiped OPFS between the two opens is a
-  // first-run screen here, and no tile.
-  await first.press(
-    "the Search tab",
-    `document.querySelector('nav[aria-label="Views"] a[href="/search"]')`,
+  await reopened(first, documents, "offline");
+  await search("Rhystic");
+  await first.until(
+    "offline, a search answered",
+    `${tile("Rhystic Study")} && !${tile("Lightning Bolt")}`,
+    30_000,
   );
-  await first.press("the search box", SEARCH_BOX);
-  await first.type("Lightning");
-  await first.until("the cards are still there after a reload", tile("Lightning Bolt"), 30_000);
+  const offline = await first.until("offline, the cached picture drew", pictureIn("Rhystic Study"), 30_000);
+  if (offline !== path) fail(`offline the tile drew ${offline}, and the cache holds ${path}`);
   // A launch inside every feed's interval asks nobody anything — and by now it has had its
   // turn: `open` spawns the downloads before it answers, ahead of the Worker's first call.
   const quiet = hosts.since(mark);
-  if (quiet.length > 0) fail(`a reload asked for:\n${quiet.join("\n")}`);
+  if (quiet.length > 0) fail(`offline, the reload asked for:\n${quiet.join("\n")}`);
+  site.refusing = false;
+  hosts.offline(false);
   // Past the interval, which is what tomorrow's launch is: the listing is asked, its
   // `updated_at` is the one stored, and the file it names is not downloaded again. No ETag
   // decides that in a browser — nobody exposes one — so this is the only test of the stamp.
@@ -824,9 +1031,28 @@ async function main() {
     );
   }
   console.log(
-    `ok  a reload kept ${forced.cardCount} cards and asked no host; a forced check asked the ` +
-      "listing and no card file",
+    `ok  offline, a reload drew the app, its ${forced.cardCount} cards and the cached picture, ` +
+      "asking no host; online, a forced check asked the listing and no card file",
   );
+
+  // Settings' Clear cache, which on this host is the picture cache and nothing of the app's own.
+  await first.press("the Settings link", `document.querySelector('a[aria-label="Settings"]')`);
+  await first.press(
+    "Settings' Storage and data group",
+    `document.querySelector('button[aria-label="Storage and data"]')`,
+  );
+  await first.press("Clear cache", buttonSaying("Clear cache"));
+  await first.press("the confirmation's Clear cache", buttonSaying("Clear cache", '[role="dialog"]'));
+  await first.until(
+    "the picture cache was emptied",
+    `(async () => (await ${pictures(path)}).keys.length === 0)()`,
+    30_000,
+  );
+  const afterClear = await first.evaluate(WORKER);
+  if (Object.keys(afterClear.shells).join() !== shells[0]) {
+    fail(`Clear cache left these shell caches: ${Object.keys(afterClear.shells)}`);
+  }
+  console.log(`ok  Clear cache emptied ${PICTURE_CACHE} and left ${shells[0]}`);
 
   const second = await openPage(browser, `${origin}/search`, hosts.check);
   const told = await second.until("a second tab was told", `${ALERT} || ${SHELL}`);
@@ -838,15 +1064,80 @@ async function main() {
   if (!offered) fail("the second tab was told, and offered no Reload");
   console.log("ok  a second tab was told, and offered a reload");
 
+  // A second deploy: the same files under a worker whose build id differs. The browser finds
+  // it byte-different, installs it — a second shell cache — and keeps it waiting, because two
+  // pages of the old build are open. Nothing but the reader's press may end that wait.
+  const next = `${build}-next`;
+  const source = readFileSync(join(DIST, "sw.js"), "utf8");
+  if (source.split(build).length !== 2) {
+    fail(`sw.js names its build id ${source.split(build).length - 1} times, not once`);
+  }
+  site.build = { from: build, to: next };
+  // A mark on each document: gone from one is that tab having started again.
+  await first.evaluate("window.__smokeDocument = true");
+  await second.evaluate("window.__smokeDocument = true");
+  await first.evaluate(
+    "navigator.serviceWorker.getRegistration().then((registration) => registration.update()).then(() => true)",
+  );
+  await first.until("the new build is waiting and the bar is drawn", `${BAR}`, 60_000);
+  const waiting = await first.evaluate(WORKER);
+  const both = Object.keys(waiting.shells).sort().join();
+  if (waiting.waiting !== "installed" || both !== [shells[0], `${SHELL_PREFIX}${next}`].join()) {
+    fail(`a waiting build left ${JSON.stringify({ ...waiting, shells: both })}`);
+  }
+  if (await second.evaluate(BAR)) fail("the second tab draws the update bar");
+  // A reload is not an update: the old worker answers it from the old shell, the new one goes
+  // on waiting, and the bar is drawn again by the document that arrives.
+  documents = opens(first);
+  await first.reload();
+  await reopened(first, documents, "under a waiting build");
+  await first.until("the bar is drawn again after a reload", BAR, 30_000);
+  const still = await first.evaluate(WORKER);
+  if (still.waiting !== "installed" || Object.keys(still.shells).length !== 2) {
+    fail(`a reload moved the waiting build: ${JSON.stringify(still)}`);
+  }
+  console.log(`ok  a new build waits — the bar is drawn, two shell caches, and a reload changes nothing`);
+
+  // The press. The new worker takes over, deletes the old shell and claims both tabs; the tab
+  // that pressed starts again, once, and the tab with no database stays as it was.
+  documents = opens(first);
+  await first.evaluate("window.__smokeDocument = true");
+  await first.press("the bar's button", buttonSaying(BAR_BUTTON));
+  await reopened(first, documents, "after the press");
+  await first.until(
+    "the new build's shell is the only one",
+    `(async () => {
+      const worker = await ${WORKER};
+      return window.__smokeDocument === undefined && worker.waiting === null &&
+        worker.active === "activated" &&
+        Object.keys(worker.shells).join() === ${JSON.stringify(`${SHELL_PREFIX}${next}`)};
+    })()`,
+    30_000,
+  );
+  if (await first.evaluate(BAR)) fail("the update bar is still drawn after the update");
+  if (opens(first) !== documents + 1) {
+    fail(`the press started ${opens(first) - documents} documents, not one`);
+  }
+  const bystander = await second.evaluate(
+    `({ stayed: window.__smokeDocument === true, bar: ${BAR}, says: ${ALERT} ?? "" })`,
+  );
+  if (!bystander.stayed || bystander.bar || !/already open in another tab/.test(bystander.says)) {
+    fail(`the second tab did not sit the update out: ${JSON.stringify(bystander)}`);
+  }
+  console.log(
+    `ok  the press handed over — one new document on ${SHELL_PREFIX}${next}, no bar, ` +
+      "and the second tab was neither told nor reloaded",
+  );
+
   const thrown = [...first.thrown(), ...second.thrown()];
   if (thrown.length > 0) fail(`the page threw:\n${thrown.join("\n")}`);
   hosts.check();
-  const unreachable = [...hosts.refused].map(
-    ([host, count]) => `${count} to ${host} (${UNREACHABLE.get(host)})`,
-  );
+  // One document per reload this script made and one for the press, and no other: a page that
+  // reloaded itself — on being claimed, or twice on the handover — would have opened again.
+  if (opens(first) !== 4) fail(`the first tab opened its database ${opens(first)} times, not 4`);
   console.log(
-    `ok  ${hosts.asked.length} requests answered from fixtures, none needing a pre-flight` +
-      (unreachable.length > 0 ? `; refused as a browser would: ${unreachable.join(", ")}` : ""),
+    `ok  ${hosts.asked.length} requests answered from fixtures, none needing a pre-flight, ` +
+      "and none to a host without one",
   );
 
   const seconds = ((performance.now() - started) / 1000).toFixed(1);

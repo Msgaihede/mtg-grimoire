@@ -24,6 +24,35 @@ export const SKIP_WAITING = "grimoire:skip-waiting";
  */
 export const CLAIM = "grimoire:claim";
 
+/**
+ * Worker → every window of the app: **this worker's install failed, and why.**
+ *
+ * A worker that cannot install says so nowhere a page can hear by itself: the browser drops it,
+ * the page runs on with no worker — no card picture, no offline shell — and nothing is written
+ * anywhere a reader or a bug report would look. Its own `console` is the worker's, not the
+ * page's. So the reason is posted to the pages before the install is let fail, and the page
+ * says it once (`../update.ts`).
+ */
+export const INSTALL_FAILED = "grimoire:install-failed";
+
+export interface InstallFailed {
+  kind: typeof INSTALL_FAILED;
+  /** The error as one line: its name and its message. */
+  reason: string;
+}
+
+/** The reason an {@link INSTALL_FAILED} message carries, or `null` for any other message. */
+export function installFailure(data: unknown): string | null {
+  if (!isKind(data, INSTALL_FAILED)) return null;
+  const { reason } = data as Partial<InstallFailed>;
+  return typeof reason === "string" ? reason : "";
+}
+
+/** An error as the one line {@link InstallFailed} carries. */
+export function reasonOf(error: unknown): string {
+  return error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+}
+
 const isKind = (data: unknown, kind: string): boolean =>
   typeof data === "object" && data !== null && "kind" in data && data.kind === kind;
 
@@ -61,7 +90,8 @@ export type Asked = SourceReply | { kind: "silent" } | { kind: "nobody" };
  *
  * Longer than it looks like it should be, on purpose. The engine has one connection, and a call
  * made during an ingest's tail waits for it — 26 s was the longest single wait measured on a
- * first run (light-app.md §9.2). A short bound would turn every picture asked for in that window
+ * first run when this bound was chosen (light-app.md §9.2), and 4.8 s once the feeds' finishes
+ * took turns (§9.3); no picture has yet been seen to wait it out. A short bound would turn every picture asked for in that window
  * into a refusal, and `useImageRetry` comes back only twice; a long one costs nothing, because
  * the frame's own stall watchdog (`CardImage`, 5 s) asks again and **joins the ask already in
  * flight** (`serve.ts` keeps one per picture), so the picture is fetched and stored the moment

@@ -56,7 +56,11 @@ run over one. So every way an export can go wrong is an *answer*:
   the first measured run answered a page's `sync_status` 3.5–8.4 s late. **The tag files'
   finish and the combos' store take the same turn between their batches** (step 5.3) — a
   `call` taken there is answered from the previous tags or combos — and the card finish,
-  each swap and the price list's store still answer nothing until they end.
+  each swap and the price list's store still answer nothing until they end. **Timed once
+  in a browser** (headless Chrome 154, 2026-10-04, light-app.md §9.3): a `sync_status`
+  sent once a second waited at most 53 ms inside the oracle tags' finish, 1.10 s inside
+  the art tags' and 0.81 s inside the combos', and 4.79 s across the card finish — the
+  longest single wait of that first run, where it had been 23.57 s and 26.1 s.
 - **No `RefCell` borrow is held across an `.await`**: `call` clones the state's `Arc` out of
   its `thread_local` first. A borrow held there is a `BorrowMutError` the first time a call
   arrives while another is in flight — and that is a trap.
@@ -148,7 +152,8 @@ no write observers, and builds the facet index. `glue`'s `open` then spawns
   Each is still its own run with its own claim and its own stall bound, so none can stop the
   next. ⚠️ It costs the feeds a wait behind a slow card sync. Chosen by reasoning, not by
   comparison: a browser has run this arrangement (all launch feeds done 76 s after
-  navigation, light-app.md §9.2) and never the other.
+  navigation, light-app.md §9.2 — and 50.84 s on the one run since the tag and combo
+  finishes take turns, §9.3) and never the other.
 - **How a download works here is the core's**: no temp file, a body streamed into its sink,
   no conditional header, a stall bound on every wait
   ([`crates/grimoire-core/CLAUDE.md`](../grimoire-core/CLAUDE.md), *A download has two
@@ -163,7 +168,11 @@ no write observers, and builds the facet index. `glue`'s `open` then spawns
   kept in Cache Storage; what the engine answers is *where a picture is* — the table's
   `card_image_source`, through `call` like any command: a path in, and
   `{"kind":"uri","uri":…}`, `{"kind":"missing","svg":…}` or `{"kind":"unknown"}` out. The
-  desktop has no such command (`src-tauri`'s `command_table::TABLE_ONLY`).
+  desktop has no such command (`src-tauri`'s `command_table::TABLE_ONLY`). **A browser has
+  asked it** (the same run): all 105 picture requests the page made were answered 200 by
+  the service worker — 24 uncached pictures among them asked inside the art tags' finish
+  — so no `unknown` was answered there. A back face was not reached against the real
+  hosts; the smoke run's fixtures reach a transform card's.
 - **A corpus that will not open, or will not migrate, is thrown away and built again** — the
   desktop's "replace it and resync", through the pool's own delete. `install_pool` keeps the
   pool's management handle for the length of `open`; the closure `glue` hands
@@ -192,9 +201,9 @@ no write observers, and builds the facet index. `glue`'s `open` then spawns
 | `cargo test -p grimoire-web` | The crate's decisions, natively |
 | `npm run web:wasm` | The module into `dist-wasm/`: `cargo build -p grimoire-web --lib --target wasm32-unknown-unknown --profile wasm --locked`, then `wasm-bindgen --target web`. Prints the module's size and the build's time. `-- --names` keeps the function names, for a readable wasm stack |
 | `npm run web:dev` | The dev server on port 5176, over whatever `dist-wasm/` holds at that moment |
-| `npm run web:build` | `tsc`, the Worker's `tsc` program, and the page into `dist-web/` with the engine under `wasm/<build id>/` |
-| `npm run web:smoke` | The built app in headless Chromium, as an offline first run: every request the engine makes is answered from `scripts/web-smoke/` or fails the run. The module instantiates, the database opens on a rollback journal, the card sync and the launch's feeds finish, a typed search draws a card, Settings greys Mana Pool and downloads Card Kingdom, a reload still holds the cards, a second tab is refused |
-| `npm run web:preview` | The built app on port 4176 |
+| `npm run web:build` | `tsc`, the Worker's and the service worker's `tsc` programs, and the page into `dist-web/` with the engine under `wasm/<build id>/` and, last, `sw.js` at its root |
+| `npm run web:smoke` | The built app in headless Chromium, as an offline first run: every request the engine and the service worker make is answered from `scripts/web-smoke/` or fails the run. The module instantiates, the database opens on a rollback journal, the card sync and the launch's feeds finish, a typed search draws a card and its picture, Settings greys Mana Pool and downloads Card Kingdom, a reload with the server gone still holds the cards and draws the cached picture, a second tab is refused, and a newer worker waits for the press |
+| `npm run web:preview` | The built app on port 4176, with its service worker — the one of these that draws card pictures besides the smoke run; `web:dev` registers no worker |
 
 - **`web:wasm` finds clang by itself on this machine** — `C:\Program Files\LLVM\bin`, which is
   not on `PATH` — and refuses a clang older than 18. **A bare `cargo` for the target does not**,

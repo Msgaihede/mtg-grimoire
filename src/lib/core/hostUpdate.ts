@@ -20,6 +20,8 @@ export const HOST_UPDATE = "host_update";
 /**
  * Says the reader chose the newer build. Takes nothing and answers `null`; the host then starts
  * the app again on that build by itself, which for the web host is one reload of the page.
+ * **Refused, in a sentence, when no build is waiting** — so a control that greyed itself on the
+ * press knows to come back.
  */
 export const HOST_UPDATE_APPLY = "host_update_apply";
 

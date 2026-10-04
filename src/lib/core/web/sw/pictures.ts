@@ -71,6 +71,33 @@ export function isFetchable(uri: string): boolean {
   }
 }
 
+/**
+ * The types a fetched picture may declare: **raster images, and nothing a browser would run.**
+ *
+ * The desktop serves fetched bytes under one constant type (`images.rs`'s `WEBP`) and never
+ * reads what the CDN called them. A browser cannot be that blunt — the response is stored and
+ * served again on the app's own origin, beside the database — so the declared type is checked
+ * instead: the engine names WEBP files only, and the other three are what Scryfall serves a
+ * card as elsewhere. **Not SVG, and not anything else**: a `200` that says `text/html` is an
+ * error page, and kept as a picture it would be that card's picture until 3 000 newer ones
+ * pushed it out — the weekly re-check puts the same bytes back while the address stands.
+ */
+export const PICTURE_TYPES: readonly string[] = [
+  "image/webp",
+  "image/jpeg",
+  "image/png",
+  "image/avif",
+];
+
+/**
+ * The picture type a `Content-Type` header declares — its essence, lower-cased, without
+ * parameters — or `null` for a header that is absent or declares anything else.
+ */
+export function pictureType(header: string | null): string | null {
+  const essence = (header ?? "").split(";")[0].trim().toLowerCase();
+  return PICTURE_TYPES.includes(essence) ? essence : null;
+}
+
 /** One picture request, read: the key it is cached under and the path the engine is asked by. */
 export interface PictureAsk {
   /**
@@ -97,7 +124,10 @@ const VARIANTS: readonly string[] = IMAGE_VARIANTS;
 export function pictureOf(origin: string, pathname: string): PictureAsk | "malformed" | null {
   if (pathname !== WEB_IMAGE_PREFIX && !pathname.startsWith(`${WEB_IMAGE_PREFIX}/`)) return null;
   const path = pathname.slice(WEB_IMAGE_PREFIX.length);
-  const match = /^\/([a-z]+)\/([^/]+)\/(\d{1,3})$/.exec(path);
+  // **The face is `0` or `1` and nothing else** — the two the engine serves. A looser number
+  // (`00`, `7`) would be a second and a third cache key for a picture the engine answers under
+  // the first, by a URL nobody but its author would write.
+  const match = /^\/([a-z]+)\/([^/]+)\/([01])$/.exec(path);
   if (!match || !VARIANTS.includes(match[1])) return "malformed";
   return { key: `${origin}${pathname}`, path };
 }
@@ -131,6 +161,12 @@ export const SWEEP_SLACK = 100;
  * a picture only once it is {@link REFRESH_AFTER_MS} old, so the order is least-recently-used at
  * a week's resolution. The desktop's stamp has a day's (`image-cache.md`); both are fine for a
  * queue this long.
+ *
+ * **"Listed first" is "put first" only because every stored response is built immediately
+ * before its `put`** (`serve.ts`'s `pictureResponse`, at both of its puts): the order is the
+ * cache's own insertion order, and a put over an existing key moves it to the young end
+ * (measured, Chrome 154). A response built early and put late would carry an older stamp than
+ * its place in the queue says.
  */
 export function overBudget(keys: readonly string[], limit: number = PICTURE_LIMIT): string[] {
   return keys.length > limit ? keys.slice(0, keys.length - limit) : [];

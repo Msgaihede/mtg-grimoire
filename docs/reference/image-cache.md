@@ -350,3 +350,96 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   fetched. The handler reads through `db_read`, never the write connection. `app.security.csp`
   is not `null` any more — a new remote source needs a deliberate edit and the
   `the_shipped_csp_allows_ipc_and_images_and_nothing_wild` test updated with it.
+  (**The light app's web build has no protocol**: the same path is asked of the app's own
+  origin under `/mtgimg`, and a service worker answers it — the section below.)
+
+## In a browser: Cache Storage, and a service worker
+
+The light app's web host (phase 5, step 5.3, 2026-10-04) keeps its pictures somewhere else
+entirely, and **nothing above this heading is true of it**: no `data/images`, no `image_cache`
+row, no upkeep thread, no pre-warm, and `images::Cache` is not called at all. The code is
+`src/lib/core/web/sw/`; what was driven and timed is
+[light-app.md](light-app.md) §9.3.
+
+- **Cache Storage rather than files.** `platform::files` refuses in a browser, so the core's
+  cache there could only fetch a picture, serve it and count a store failure. The pictures
+  are the service worker's instead, in one cache, **`grimoire-pictures-v1`** — not per build,
+  because a deploy that threw the pictures away would undo the point of keeping them. The
+  `v1` moves only when the *stored shape* does.
+- **The address keeps the protocol's shape on the app's own origin**:
+  `<origin>/mtgimg/<variant>/<card_id>/<face>`, built by the same `cardImageUrl`
+  (`src/lib/images.ts`'s `imageOrigin` answers the origin by the build's mode). The cache key
+  is that address **without its query**, so a `?retry=N` or a `?stall=N` is the same picture.
+- **The engine says where a picture is, and the worker fetches it.** A service worker cannot
+  reach the database Worker, so it asks the page that made the request, over a
+  `MessageChannel`, and the page asks the engine's `card_image_source` — `images::image_source`,
+  which is `resolve`'s rule whole and fetches nothing. The answer is `uri`, `missing` or
+  `unknown`, and a `uri` is only ever one `image_uri::is_fetchable` passes. The worker applies
+  the same host rule again before it fetches (`pictures.ts`'s `isFetchable`): the answer is
+  data from a database a sync wrote.
+- **A stored picture is a response rebuilt from its bytes, never the one `fetch` returned —
+  and that is a rule with a measurement behind it.** A page's `img-src` is checked against
+  the *response's* URL even when a service worker answered. Measured on the hosting step's
+  branch in Chrome 154: Scryfall's own response, passed through, is refused by
+  `img-src 'self'`, and only a response built from the bytes loads — it has no URL of its own
+  and takes the request's. So the hosting policy's `img-src` needs `'self'` and no card host.
+  Rebuilding is also what lets three headers ride on the entry: `Content-Length` at the size
+  the body was measured, `X-Grimoire-Stored` (when, in Unix milliseconds) and
+  `X-Grimoire-Source` (Scryfall's address, `?<epoch>` included — this cache's one
+  invalidation signal, as `source_uri` is the desktop's).
+- **The statuses are this protocol's**, so `useImageRetry` and `CardImage`'s watchdog heal a
+  browser's refusals as they heal the desktop's:
+
+  | | Answer |
+  | --- | --- |
+  | A picture in the cache | 200; the engine is not asked, so it draws offline and while a finish holds the engine |
+  | `uri`, fetched | 200, stored |
+  | `missing` | 200, the placeholder SVG the desktop serves, `no-store`, **never stored** |
+  | `unknown`; a path under the prefix that is no picture's — the face is `0` or `1` and the variant one of the four; or a picture asked for **as a page** | 404 |
+  | No page to ask, a page or an engine that does not answer, a 429 from Scryfall | 503 with `Retry-After` |
+  | A fetch that failed, any other status, a 200 that is not a raster image, an empty body | 502 |
+
+  A refusal is `no-store` and is never kept. **One ask per picture in flight** — this
+  cache's single-flight — and the wait on a page is bounded at 20 s.
+- **A 200 is not yet a picture, and a stored body is never a document.** The desktop serves
+  fetched bytes under one constant type and never reads what the CDN called them; a browser
+  serves what it stored again, on the app's own origin, beside the database. So three locks:
+  only a response that declares a raster image (`pictures.ts`'s `PICTURE_TYPES`: WEBP, JPEG,
+  PNG, AVIF — never SVG) and has bytes in it is stored; a navigation under `/mtgimg` is a 404,
+  so a picture is drawn by an `<img>` and by nothing else; and every answer under the prefix
+  carries `X-Content-Type-Options: nosniff`. An error page under a 200 would otherwise have
+  been that card's picture until 3 000 newer ones pushed it out.
+- **A Cache Storage that throws is no cache, not no picture**: the picture is asked for,
+  fetched and answered, and only not kept.
+- **The budget is entries, not bytes: 3 000, swept once the cache is past 3 100, oldest
+  first.** Cache Storage answers neither a size nor an access time, and a ledger beside it is
+  a second record that can disagree with the first — round one's counted 9 of 78 pictures
+  after one wall. The count is the one figure the cache answers exactly (`keys()`), and the
+  order is the cache's own insertion order. At `display`'s ~93 KB that is about 280 MB, as a
+  ceiling rather than a target.
+- **No used-stamp, but a weekly re-put.** A hit rewrites nothing. A picture stored more than
+  **7 days** ago is served first and then checked against the engine: the same address puts
+  the same bytes back under a new stamp — which moves it to the young end of the cache's
+  order (a put over an existing key does; measured, Chrome 154) — and a changed one fetches
+  the new picture. `missing` deletes the entry; **`unknown` leaves it**, because after a
+  card-data clear or a replaced corpus the engine knows no card until the sync has run again.
+  So the order is least-recently-used at a week's resolution, where the desktop's stamp has
+  about a day's.
+- **Nothing is spared, because nothing is pre-warmed.** The desktop spares what the pre-warm
+  owns so that the two cannot fight. Neither `prefetch_images` nor `prewarm_collection` is in
+  the core's command table (`src-tauri`'s `command_table::NOT_YET` has both), so a light host
+  refuses them and there is nothing for a spared set to protect.
+- **Settings' *Clear cache* is answered on the page**, from Cache Storage, in `CacheCleared`'s
+  shape with `rows: 0`: entry by entry rather than `caches.delete`, because the worker holds
+  the cache open, and the bytes are a sum of each entry's own `Content-Length`. The engine's
+  `cache_clear` is not called — on this host it holds no picture.
+- **`web:dev` draws no picture**, because the dev server registers no worker; `web:preview`
+  does.
+
+**Measured once** (headless Chrome 154.0.8037.95, Windows 11, 2026-10-04, the built app
+against the real hosts — light-app.md §9.3 has the run): an uncached picture took 1.15–1.72 s
+from mount to decoded, median 1.70 s, which is the fetch from `cards.scryfall.io`; a cached
+one after a reload 22–27 ms; with the server stopped, 19–25 ms. All 105 requests the page
+made were answered 200. **Not measured**: the sweep and the weekly re-check, which ran over a
+fake cache only; a real eviction by the browser; any browser but Chromium. **Known and left**:
+a picture is stored twice, in the HTTP cache and in Cache Storage.

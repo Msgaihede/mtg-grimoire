@@ -105,29 +105,77 @@ describe("the update notice", () => {
     await userEvent.click(button);
     await waitFor(() => expect(button).not.toHaveAttribute("aria-disabled"));
   });
+
+  it("gives the control back when the host speaks of an update again after the press", async () => {
+    // The press was for one answer. A host that says anything new — a newer build still, or
+    // this one found waiting again — has not started the app, and the control is live again.
+    answer(READY);
+    render(<UpdateNotice />);
+    await userEvent.click(await screen.findByRole("button", { name: "Reload to update" }));
+    expect(screen.getByRole("button", { name: "Reload to update" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    act(() => events.get("host-update:changed")?.({ payload: READY }));
+    expect(screen.getByRole("button", { name: "Reload to update" })).not.toHaveAttribute(
+      "aria-disabled",
+    );
+  });
+
+  it("is put away by Not now, takes nothing with it, and stays away", async () => {
+    answer(READY);
+    const { rerender } = render(<UpdateNotice />);
+    await screen.findByRole("button", { name: "Reload to update" });
+
+    await userEvent.click(screen.getByRole("button", { name: "Not now" }));
+    expect(screen.queryByRole("button")).toBeNull();
+    // Nothing left to announce, and nothing was said to the host: the build still waits.
+    expect(screen.getByRole("status")).toBeEmptyDOMElement();
+    expect(invoke).not.toHaveBeenCalledWith("host_update_apply");
+
+    // A render for any other reason does not bring it back.
+    rerender(<UpdateNotice />);
+    expect(screen.queryByRole("button")).toBeNull();
+  });
+
+  it("comes back, after being put away, when the host says a build is waiting", async () => {
+    answer(READY);
+    render(<UpdateNotice />);
+    await userEvent.click(await screen.findByRole("button", { name: "Not now" }));
+    expect(screen.queryByRole("button")).toBeNull();
+
+    // The same words are still a new answer: a still newer build says exactly this.
+    act(() => events.get("host-update:changed")?.({ payload: { ...READY } }));
+    expect(screen.getByRole("button", { name: "Reload to update" })).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("A new version is ready.");
+  });
 });
 
 describe("the notice's bar", () => {
   it("is not a modal: it takes no focus and claims nothing about the page behind it", () => {
-    render(<UpdateNoticeBar update={READY} busy={false} onApply={() => {}} />);
+    render(<UpdateNoticeBar update={READY} busy={false} onApply={() => {}} onDismiss={() => {}} />);
     expect(screen.queryByRole("dialog")).toBeNull();
     expect(document.activeElement).toBe(document.body);
   });
 
-  it("is drawn over a page and under a dialog, and only the bar takes a press", () => {
+  it("is drawn over a page and under anything a reader opened, and only the bar takes a press", () => {
     // jsdom stacks nothing, so the classes are what can be pinned: the rung, and a strip that
-    // lets presses through to the tab bar and the page on either side of the bar.
-    render(<UpdateNoticeBar update={READY} busy={false} onApply={() => {}} />);
+    // lets presses through to the tab bar and the page on either side of the bar. The rung is
+    // the highest a page draws on, and below a menu's: on `popup`, later in the document than
+    // either face, it painted over a context menu opened near the foot of the window.
+    render(<UpdateNoticeBar update={READY} busy={false} onApply={() => {}} onDismiss={() => {}} />);
     const strip = screen.getByRole("status").parentElement;
-    expect(strip?.classList.contains(LAYER.popup)).toBe(true);
+    expect(strip?.classList.contains(LAYER.header)).toBe(true);
+    expect(strip?.classList.contains(LAYER.popup)).toBe(false);
     expect(strip?.classList.contains("pointer-events-none")).toBe(true);
-    expect(screen.getByRole("button").parentElement?.classList.contains("pointer-events-auto")).toBe(
+    expect(screen.getByRole("button", { name: "Reload to update" }).parentElement?.classList.contains("pointer-events-auto")).toBe(
       true,
     );
   });
 
   it("says the sentence once to a screen reader: in the live region, not where it is drawn", () => {
-    render(<UpdateNoticeBar update={READY} busy={false} onApply={() => {}} />);
+    render(<UpdateNoticeBar update={READY} busy={false} onApply={() => {}} onDismiss={() => {}} />);
     const said = screen.getAllByText("A new version is ready.");
     expect(said).toHaveLength(2);
     expect(said.filter((el) => el.getAttribute("aria-hidden") === "true")).toHaveLength(1);

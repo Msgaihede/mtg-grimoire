@@ -1,3 +1,4 @@
+import { buildIdOf } from "../assets";
 import { pictureOf, type PictureAsk } from "./pictures";
 
 /**
@@ -57,6 +58,25 @@ export function precacheList(files: readonly string[]): string[] {
   return [DOCUMENT, ...served.map((file) => `/${file}`).sort()];
 }
 
+/**
+ * A build's id: a hash of **every file the build wrote but the worker itself** — path, length
+ * and bytes (`assets.ts`'s `buildIdOf`, the engine's own).
+ *
+ * **Every file, and not only the precached ones.** A file the host reads rather than serves —
+ * `_headers`, the hosting policy — is left out of {@link precacheList} and is still part of what
+ * a deploy *is*: a deploy that changed only the policy must reach a reader who already has the
+ * app, and the one way anything reaches them is a worker whose bytes differ. The id is a literal
+ * in the worker, so a changed `_headers` is a new worker, a new shell cache, and every file
+ * fetched again past the HTTP cache — under the new headers.
+ *
+ * **The bytes and never the clock**: a browser finds an update by comparing the worker's bytes,
+ * so a rebuild that changed nothing must write the same worker, or a reader is told a new
+ * version is ready that is the one they have.
+ */
+export function shellBuildId(files: readonly { name: string; bytes: Uint8Array }[]): string {
+  return buildIdOf(files.filter(({ name }) => name !== WORKER_FILE));
+}
+
 /** What the worker does with one request. */
 export type Route =
   /** Not this worker's: no `respondWith` at all, and the request goes on as if there were none. */
@@ -66,7 +86,7 @@ export type Route =
   /** One of this build's own files: cache first, by its path. */
   | { kind: "shell"; key: string }
   | { kind: "picture"; ask: PictureAsk }
-  /** Under the picture prefix and not a picture: a 404, asked of nobody. */
+  /** Under the picture prefix and not a picture — or one asked for as a page: a 404, asked of nobody. */
   | { kind: "not-a-picture" };
 
 /** The three fields of a `Request` the router reads. A real one is assignable. */
@@ -84,8 +104,11 @@ export interface Routable {
  * a handler that answered either would put the whole body through this one for nothing. So a
  * request to another origin, and anything that is not a `GET`, is never touched.
  *
- * **The picture prefix is read before the mode.** It is a path nothing else lives under, so a
- * picture's address opened in a tab of its own is the picture or a refusal, never the app.
+ * **The picture prefix is read before the mode, and a navigation under it is refused.** It is a
+ * path nothing else lives under, so a picture's address opened as a page is never the app — and
+ * never the picture either: a response this worker stores is served on the app's own origin,
+ * beside the database, and the one way a stored body could be *run* rather than drawn is as a
+ * document. A picture is drawn by an `<img>`; a tab, a frame and a link are each answered 404.
  *
  * **A same-origin file that is not a navigation is never answered with the document** — it is
  * `shell` when it is one of the build's (`/assets/`, `/wasm/` and whatever else was precached)
@@ -103,8 +126,10 @@ export function routeFor(request: Routable, origin: string, precached: ReadonlyS
   if (url.origin !== origin) return { kind: "passthrough" };
 
   const picture = pictureOf(origin, url.pathname);
-  if (picture === "malformed") return { kind: "not-a-picture" };
-  if (picture !== null) return { kind: "picture", ask: picture };
+  if (picture !== null) {
+    if (picture === "malformed" || request.mode === "navigate") return { kind: "not-a-picture" };
+    return { kind: "picture", ask: picture };
+  }
 
   const path = url.pathname;
   // A place has no extension in its last segment (`assets.ts`'s `isNavigation`, the rule the

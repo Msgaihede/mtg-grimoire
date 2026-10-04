@@ -228,6 +228,7 @@ describe("the arms", () => {
     ["eslint.config.js", T, F, F, F, T, F, F],
     ["scripts/golden.mjs", T, F, F, F, F, F, F],
     // The web build's two scripts, which `scripts/*` would lint and never run.
+    ["vite.sw.ts", T, F, F, F, F, F, T],
     ["scripts/build-wasm.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke/default-cards.jsonl", T, F, F, F, F, F, T],

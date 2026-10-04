@@ -290,7 +290,7 @@ failure behind each at its own site:
 | `npm run web:dev` | **The web host**: the real engine in a Worker, its databases in this browser's OPFS | The web app in a browser on port 5176 — driven in Chrome only so far. No Rust process, **no lock**. A `web:wasm` beside a running server is picked up by a reload. **Registers no service worker, so it draws no card picture** — `web:preview` does |
 | `npm run web:build` | — | `tsc`, the Worker's and the service worker's own `tsc` programs, then the bundle into `dist-web/` with the engine under `wasm/<build id>/` — and last, `sw.js` at its root, built from the list of what was just written. Fails, in a sentence, when `dist-wasm/` is not built |
 | `npm run web:preview` | The same engine, from `dist-web/` | The built app on port 4176, where a missing file is a 404 as on a real host and `sw.js` is served `no-cache`. **The one command here that runs the service worker**: pictures, the offline shell, the update bar |
-| `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP as an **offline first run**: every request the engine makes is answered from `scripts/web-smoke/`, and nine checks run over it — the card sync, the feeds, the picker and a second tab's refusal among them. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
+| `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP as an **offline first run**: every request the engine and the service worker make is answered from `scripts/web-smoke/`, and the checks in the script's header run over it — the card sync, the feeds, the picker, a card picture, a reload with the server gone, a waiting build and its press, and a second tab's refusal among them. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
 
 - **`mobile:tauri` is the desktop binary with a config overlay** (`src-tauri/tauri.light.conf.json`):
   it **takes the `app` lock** and reads `src-tauri/target/debug/data`. Read the `running-the-app`
@@ -537,14 +537,20 @@ built in the `web` mode.
     changed. The worker answers it from Cache Storage, asking the engine where the picture is
     *through the page* (`card_image_source`; a service worker cannot reach the database
     Worker). A refusal is the desktop protocol's — 502, 503, 404 — so `useImageRetry` and
-    `CardImage`'s watchdog heal it as they heal the desktop's.
+    `CardImage`'s watchdog heal it as they heal the desktop's. **Only a raster image is ever
+    kept or served there** — a 200 that declares anything else, or has no bytes, is a 502 —
+    and the address answers an `<img>` or a script, never a navigation.
   - **A newer build waits, and the host says so.** `UpdateNotice.tsx`, which `LightApp` mounts
     beside the faces, asks `host_update` and listens for `host-update:changed`
     (`src/lib/core/hostUpdate.ts`), and draws only an answer, in the host's words —
     `StorageNotice`'s arrangement. Only its press (`host_update_apply`) tells the waiting
     build to take over; a reload does not, and a second tab does not. The Android host and
     the desktop refuse the names, which is nothing to draw. **These are not the desktop's
-    `update_status` and `update_apply`**, which are its own updater's.
+    `update_status` and `update_apply`**, which are its own updater's. The bar is drawn on
+    `LAYER.header` — under any menu, picker or dialog a reader opened — and its *Not now*
+    puts it away until the host next says a build is waiting, or the next load; the press is
+    refused in a sentence when nothing waits, and only the page that holds the database
+    starts again when the new build takes over.
   - **Settings' *Clear cache* empties the pictures.** The web core answers `cache_clear` on
     the page, from Cache Storage, in the shape the panel already reads; no panel was forked.
   - **A first visit is claimed, not reloaded**: the worker takes the open page over when it

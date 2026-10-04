@@ -11,7 +11,7 @@ import {
   type CachesLike,
   type ImageSource,
 } from "./pictures";
-import { createWorker, type WorkerEnv } from "./serve";
+import { createWorker, PRECACHE_LANES, type WorkerEnv } from "./serve";
 import { precacheList, shellCacheName, type Routable } from "./shell";
 
 const ORIGIN = "https://mtg-grimoire.app";
@@ -171,6 +171,116 @@ describe("installing a build", () => {
     await expect(stored?.text()).resolves.toBe("<html>build a</html>");
   });
 
+  /**
+   * An HTTP/1.1 host: six connections, and one is free again only when the body on it has been
+   * read to its end. Measured against a host serving the shell `no-store` (Chrome 154): an
+   * install that started every fetch and read no body until all had answered held all six with
+   * unread bodies, 7 of 42 requests reached the server, and the worker stayed `installing`.
+   */
+  function sixSockets(paths: readonly string[]) {
+    let free = 6;
+    let unread = 0;
+    let peak = 0;
+    const queued: (() => void)[] = [];
+    const asked: string[] = [];
+    const fetch = async (input: Routable | string): Promise<Response> => {
+      const path = typeof input === "string" ? input : input.url;
+      if (free > 0) free -= 1;
+      else await new Promise<void>((turn) => queued.push(turn));
+      asked.push(path);
+      unread += 1;
+      peak = Math.max(peak, unread);
+      const type = path.endsWith(".js") ? "text/javascript" : "text/html";
+      const response = new Response(`the bytes of ${path}`, { headers: { "Content-Type": type } });
+      const read = response.arrayBuffer.bind(response);
+      Object.defineProperty(response, "arrayBuffer", {
+        value: async () => {
+          const bytes = await read();
+          unread -= 1;
+          const next = queued.shift();
+          if (next) next();
+          else free += 1;
+          return bytes;
+        },
+      });
+      return response;
+    };
+    return { fetch, asked, peak: () => peak, expected: paths.length };
+  }
+
+  it("installs through a host with six connections that frees one only when a body is read", async () => {
+    const precache = ["/", ...Array.from({ length: 41 }, (_, at) => `/assets/chunk-${at}.js`)];
+    const sockets = sixSockets(precache);
+    const { worker, caches } = harness({ precache, fetch: sockets.fetch });
+
+    const outcome = await Promise.race([
+      worker.install().then(() => "installed"),
+      new Promise((done) => setTimeout(() => done("still installing"), 2_000)),
+    ]);
+
+    expect(outcome).toBe("installed");
+    expect(sockets.asked).toHaveLength(42);
+    const shell = caches.named.get(shellCacheName("aaaa"));
+    expect(shell?.entries.size).toBe(42);
+    await expect((await shell?.match("/assets/chunk-40.js"))?.text()).resolves.toBe(
+      "the bytes of /assets/chunk-40.js",
+    );
+  });
+
+  it("fetches a few files at a time, and reads each before it takes the next", async () => {
+    const precache = ["/", ...Array.from({ length: 20 }, (_, at) => `/assets/chunk-${at}.js`)];
+    const sockets = sixSockets(precache);
+    const { worker } = harness({ precache, fetch: sockets.fetch });
+    await worker.install();
+    // Never more unread bodies than lanes — and fewer lanes than the host has connections, so
+    // the page's own requests still have one to arrive on.
+    expect(sockets.peak()).toBe(PRECACHE_LANES);
+    expect(PRECACHE_LANES).toBeLessThan(6);
+  });
+
+  it("writes nothing unless every file arrived, however far the others had got", async () => {
+    const precache = ["/", ...Array.from({ length: 12 }, (_, at) => `/assets/chunk-${at}.js`)];
+    const files: Record<string, string> = { "/": "<html></html>" };
+    for (const path of precache.slice(1)) files[path] = "console.log()";
+    delete files["/assets/chunk-9.js"];
+    const { worker, caches, network } = harness({ precache, files });
+
+    await expect(worker.install()).rejects.toThrow("/assets/chunk-9.js answered 404");
+    expect(caches.named.has(shellCacheName("aaaa"))).toBe(false);
+    // And the lanes stopped taking files once one had failed.
+    expect(network.asked.length).toBeLessThan(precache.length);
+  });
+
+  it("keeps each file as it was served, under headers that describe the body it holds", async () => {
+    const gzipped = new Response("console.log('a')", {
+      headers: {
+        "Content-Type": "text/javascript",
+        "Content-Encoding": "gzip",
+        "Content-Length": "9",
+        "Cache-Control": "no-cache",
+      },
+    });
+    const { worker, caches } = harness({ files: { ...files, "/assets/index-a.js": gzipped } });
+    await worker.install();
+    const stored = await (await caches.open(shellCacheName("aaaa"))).match("/assets/index-a.js");
+    // `fetch` undid the transfer's encoding: the stored body is the script, and says its length.
+    expect(stored?.headers.get("Content-Type")).toBe("text/javascript");
+    expect(stored?.headers.get("Content-Encoding")).toBeNull();
+    expect(stored?.headers.get("Content-Length")).toBe(String("console.log('a')".length));
+    await expect(stored?.text()).resolves.toBe("console.log('a')");
+  });
+
+  it("fails — so the page can be told — when Cache Storage will not open", async () => {
+    // Driven on 2026-10-04: `caches.open` threw under a long profile path on Windows.
+    const broken: CachesLike = {
+      open: () => Promise.reject(new DOMException("Unexpected internal error", "UnknownError")),
+      keys: async () => [],
+      delete: () => Promise.reject(new DOMException("Unexpected internal error", "UnknownError")),
+    };
+    const { worker } = harness({ files, caches: broken });
+    await expect(worker.install()).rejects.toThrow("Unexpected internal error");
+  });
+
   it("precaches a real build's list, document first", async () => {
     const list = precacheList(["index.html", "assets/index-a.js", "sw.js"]);
     const { worker, caches } = harness({ files, precache: list });
@@ -216,6 +326,61 @@ describe("answering the shell", () => {
     const answer = await ask("/assets/gone-123.js", "cors");
     expect(answer?.status).toBe(404);
     await expect(answer?.text()).resolves.not.toContain("<html>");
+  });
+
+  /**
+   * A worker whose Cache Storage throws is still the reader's worker, and they cannot get rid of
+   * it short of clearing the site's data — which takes the collection in OPFS with it. With the
+   * host online, it has to be as good as no worker.
+   */
+  describe("when Cache Storage throws", () => {
+    const broken: CachesLike = {
+      open: () => Promise.reject(new DOMException("Unexpected internal error", "UnknownError")),
+      keys: () => Promise.reject(new DOMException("Unexpected internal error", "UnknownError")),
+      delete: () => Promise.reject(new DOMException("Unexpected internal error", "UnknownError")),
+    };
+
+    it("answers a navigation and an asset from the network", async () => {
+      // The host's own history fallback: a place is answered with the document.
+      const host = { ...files, "/decks/12": files["/"] };
+      const { ask, network } = harness({ files: host, caches: broken });
+      const page = await ask("/decks/12", "navigate");
+      await expect(page?.text()).resolves.toBe("<html>build a</html>");
+      const script = await ask("/assets/index-a.js", "cors");
+      await expect(script?.text()).resolves.toBe("console.log('a')");
+      // Each was the request itself, handed on: the host answers a place with the document.
+      expect(network.asked.map(({ url }) => url)).toEqual([
+        `${ORIGIN}/decks/12`,
+        `${ORIGIN}/assets/index-a.js`,
+      ]);
+    });
+
+    it("answers from the network when the cache opens and then will not be read", async () => {
+      const caches = new FakeCaches();
+      const cache = await caches.open(shellCacheName("aaaa"));
+      vi.spyOn(cache, "match").mockRejectedValue(new Error("the backing store is gone"));
+      const { ask } = harness({ files, caches });
+      await expect((await ask("/assets/index-a.js", "cors"))?.text()).resolves.toBe(
+        "console.log('a')",
+      );
+    });
+
+    it("does not fail the activation — the claim comes after it", async () => {
+      const { worker } = harness({ files, caches: broken });
+      await expect(worker.activate()).resolves.toBeUndefined();
+    });
+
+    it("still answers a picture: asked for, fetched, and only not kept", async () => {
+      const page = enginePage({ "/display/abc/0": { kind: "uri", uri: URI } });
+      const { ask } = harness({
+        caches: broken,
+        files: { [URI]: picture() },
+        pages: async () => [page.client],
+      });
+      const answer = await ask("/mtgimg/display/abc/0");
+      expect(answer?.status).toBe(200);
+      await expect(answer?.text()).resolves.toBe("the bytes of a card");
+    });
   });
 
   it("does not answer what is not its own", async () => {
@@ -341,6 +506,117 @@ describe("answering a card picture", () => {
     const answer = await ask(PATH);
     expect(answer).not.toBe(theirs);
     expect(answer?.url).toBe("");
+  });
+
+  /**
+   * What is kept is served again for as long as the address stands — the weekly re-check puts
+   * the same bytes back — so a 200 that is not a picture must never be kept as one.
+   */
+  describe("a 200 that is not a picture", () => {
+    const refusedFor = async (response: Response) => {
+      const page = enginePage({ "/display/abc/0": { kind: "uri", uri: URI } });
+      const h = harness({ files: { [URI]: response }, pages: async () => [page.client] });
+      const answer = await h.ask(PATH);
+      await h.settle();
+      return { answer, kept: await (await h.caches.open(PICTURE_CACHE)).keys() };
+    };
+
+    it("is a 502 and is not kept when it is an error page", async () => {
+      const html = new Response("<html><script>alert(document.domain)</script></html>", {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
+      const { answer, kept } = await refusedFor(html);
+      expect(answer?.status).toBe(502);
+      expect(answer?.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+      await expect(answer?.text()).resolves.toBe("Scryfall answered something that is not a picture.");
+      expect(kept).toEqual([]);
+    });
+
+    it("is a 502 and is not kept when it is empty", async () => {
+      const empty = new Response(new ArrayBuffer(0), { headers: { "Content-Type": "image/webp" } });
+      const { answer, kept } = await refusedFor(empty);
+      expect(answer?.status).toBe(502);
+      await expect(answer?.text()).resolves.toBe("Scryfall answered an empty picture.");
+      expect(kept).toEqual([]);
+    });
+
+    it("is a 502 when it says nothing of what it is, or says it is an SVG", async () => {
+      // No header to pass along and nothing sniffed: a body is only ever what it declares.
+      const unnamed = new Response(new Uint8Array([1, 2, 3]));
+      expect((await refusedFor(unnamed)).answer?.status).toBe(502);
+      const svg = new Response("<svg xmlns='http://www.w3.org/2000/svg'/>", {
+        headers: { "Content-Type": "image/svg+xml" },
+      });
+      const { answer, kept } = await refusedFor(svg);
+      expect(answer?.status).toBe(502);
+      expect(kept).toEqual([]);
+    });
+
+    it("heals on the retry, once Scryfall answers the picture", async () => {
+      let broken = true;
+      const page = enginePage({ "/display/abc/0": { kind: "uri", uri: URI } });
+      const { ask } = harness({
+        pages: async () => [page.client],
+        files: {
+          [URI]: () =>
+            broken
+              ? new Response("<html></html>", { headers: { "Content-Type": "text/html" } })
+              : picture(),
+        },
+      });
+      expect((await ask(PATH))?.status).toBe(502);
+      broken = false;
+      expect((await ask(`${PATH}?retry=1`))?.status).toBe(200);
+    });
+  });
+
+  it("says, on everything it answers under the prefix, that the body is what it declares", async () => {
+    const page = enginePage({
+      "/display/abc/0": { kind: "uri", uri: URI },
+      "/display/noart/0": { kind: "missing", svg: "<svg>no art</svg>" },
+    });
+    const { ask, caches, settle } = harness({
+      files: { [URI]: picture() },
+      pages: async () => [page.client],
+    });
+    const fresh = await ask(PATH);
+    await settle();
+    const hit = await ask(PATH);
+    const placeholder = await ask("/mtgimg/display/noart/0");
+    const unknown = await ask("/mtgimg/display/nocard/0");
+    const stored = await (await caches.open(PICTURE_CACHE)).match(`${ORIGIN}${PATH}`);
+    for (const response of [fresh, hit, placeholder, unknown, stored]) {
+      expect(response?.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    }
+  });
+
+  it("keeps the type the picture declared, as its essence and from the list", async () => {
+    const page = enginePage({ "/display/abc/0": { kind: "uri", uri: URI } });
+    const jpeg = new Response("the bytes of a card", {
+      headers: { "Content-Type": "IMAGE/JPEG; charset=binary" },
+    });
+    const { ask } = harness({ files: { [URI]: jpeg }, pages: async () => [page.client] });
+    expect((await ask(PATH))?.headers.get("Content-Type")).toBe("image/jpeg");
+  });
+
+  it("refuses a navigation to a picture's address — cached or not — and asks nobody", async () => {
+    const page = enginePage({ "/display/abc/0": { kind: "uri", uri: URI } });
+    const { ask, network, settle } = harness({
+      files: { [URI]: picture() },
+      pages: async () => [page.client],
+    });
+    // Not cached: no ask, no fetch.
+    const cold = await ask(PATH, "navigate", "");
+    expect(cold?.status).toBe(404);
+    expect(cold?.headers.get("Content-Type")).toBe("text/plain; charset=utf-8");
+    expect(page.asked).toEqual([]);
+    expect(network.asked).toEqual([]);
+    // Cached: the stored response is still not a document's to be.
+    await ask(PATH);
+    await settle();
+    const warm = await ask(PATH, "navigate", "");
+    expect(warm?.status).toBe(404);
+    await expect(warm?.text()).resolves.toBe("Not a picture.");
   });
 
   it("answers from the cache without asking the engine or the network — offline included", async () => {
@@ -604,11 +880,44 @@ describe("answering a card picture", () => {
       expect(stored?.headers.get(SOURCE_HEADER)).toBe(URI);
     });
 
-    it("is deleted when the card has no picture any more", async () => {
-      const { ask, cache, settle } = await aged({ kind: "unknown" });
+    it("is deleted when the card is known and has no picture any more", async () => {
+      const { ask, cache, settle } = await aged({ kind: "missing", svg: "<svg>no art</svg>" });
       await ask(PATH);
       await settle();
       expect(cache.has(PATH)).toBe(false);
+    });
+
+    it("is kept when the engine does not know the card just now", async () => {
+      // After a card-data clear, or a corpus the engine replaced, every card is unknown until
+      // the sync has run again. A stale picture beats none, and a later hit asks again.
+      const { ask, cache, asked, settle } = await aged({ kind: "unknown" });
+      await ask(PATH);
+      await settle();
+      expect(cache.has(PATH)).toBe(true);
+      const stored = await cache.match(`${ORIGIN}${PATH}`);
+      expect(stored?.headers.get(STORED_HEADER)).toBe(String(NOW));
+      await ask(PATH);
+      await settle();
+      expect(asked).toHaveLength(3);
+    });
+
+    it("is deleted, not put back, when what was stored is not a picture this worker would keep", async () => {
+      // An entry from before the type was checked, or one a page wrote: re-put with a new stamp
+      // it would be that card's picture for good.
+      for (const bad of [
+        new Response("<html></html>", {
+          headers: { "Content-Type": "text/html", [SOURCE_HEADER]: URI, [STORED_HEADER]: String(NOW) },
+        }),
+        new Response(new ArrayBuffer(0), {
+          headers: { "Content-Type": "image/webp", [SOURCE_HEADER]: URI, [STORED_HEADER]: String(NOW) },
+        }),
+      ]) {
+        const { ask, cache, settle } = await aged({ kind: "uri", uri: URI });
+        cache.entries.set(`${ORIGIN}${PATH}`, bad);
+        await ask(PATH);
+        await settle();
+        expect(cache.has(PATH)).toBe(false);
+      }
     });
 
     it("is not asked about before the week is out", async () => {
@@ -626,7 +935,7 @@ describe("answering a card picture", () => {
     });
   });
 
-  it("answers a 503 rather than rejecting when Cache Storage itself fails", async () => {
+  it("answers a 503 rather than rejecting when nothing can be asked and nothing is cached", async () => {
     const broken: CachesLike = {
       open: () => Promise.reject(new Error("quota")),
       keys: async () => [],

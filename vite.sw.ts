@@ -3,14 +3,12 @@
 // `dist-mobile/` (the APK's) or `dist-share/`.
 //
 // Node's own modules in a file `tsc` never reads, like the config that imports it. What this
-// decides that can be wrong is in `src/lib/core/web/sw/shell.ts` (`precacheList`) and
-// `src/lib/core/web/assets.ts` (`buildIdOf`), where the suite covers it; what stays here is the
-// filesystem and one nested build.
+// decides that can be wrong is in `src/lib/core/web/sw/shell.ts` (`precacheList`, `shellBuildId`),
+// where the suite covers it; what stays here is the filesystem and one nested build.
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { build, type Plugin } from "vite";
-import { buildIdOf } from "./src/lib/core/web/assets.ts";
-import { precacheList, WORKER_FILE } from "./src/lib/core/web/sw/shell.ts";
+import { precacheList, shellBuildId, WORKER_FILE } from "./src/lib/core/web/sw/shell.ts";
 
 /** The repository root: where this file is, whatever the working directory. */
 const ROOT = fileURLToPath(new URL("./", import.meta.url));
@@ -42,11 +40,19 @@ function filesUnder(dir: string): string[] {
  *   no hash. A worker registered as a classic script cannot import the app's chunks, and its
  *   address is the one thing in the build that must not move — the browser finds a new build by
  *   asking for this file again.
- * - **The build's id is a hash of every precached file's path and bytes** (`buildIdOf`, the
- *   engine's own). A browser decides there is an update by comparing this file's *bytes*, so a
- *   rebuild that changed nothing must write a byte-identical worker — a timestamp here would put
- *   "a new version is ready" in front of a reader with nothing to gain — and a build that
- *   changed one byte anywhere must not.
+ * - **The build's id is a hash of every file in the output but the worker — path and bytes**
+ *   (`shellBuildId`), the ones the precache leaves out included: a deploy that changed only the
+ *   host's `_headers` is a new id, so it reaches a reader who already has the app. A browser
+ *   decides there is an update by comparing this file's *bytes*, so a rebuild that changed
+ *   nothing must write a byte-identical worker — a timestamp here would put "a new version is
+ *   ready" in front of a reader with nothing to gain — and a build that changed one byte
+ *   anywhere must not.
+ * - **Only after a build that wrote its files**, which `writeBundle` is the word for. The
+ *   document being on disk says nothing: Vite empties the output at `renderStart`, so a build
+ *   that failed before then leaves the *last* build's document — and a worker built now would
+ *   name that build's files as this one's.
+ * - **A nested build that fails, fails this one**: the error leaves `closeBundle`, Vite's CLI
+ *   exits non-zero, and `web:build` with it. (Settled by pointing the entry at nothing.)
  * - **The preview serves it `no-cache`**, as a host must: a worker the HTTP cache may keep is a
  *   new build found a day late. (The page also registers it with `updateViaCache: "none"`.)
  *
@@ -54,6 +60,7 @@ function filesUnder(dir: string): string[] {
  */
 export function serviceWorker(outDir: string): Plugin {
   const out = `${ROOT}${outDir}/`;
+  let written = false;
   return {
     name: "web:service-worker",
     apply: (_config, { command, isPreview }) => command === "build" || isPreview === true,
@@ -69,13 +76,16 @@ export function serviceWorker(outDir: string): Plugin {
         res.end(readFileSync(onDisk));
       });
     },
+    writeBundle() {
+      written = true;
+    },
     async closeBundle() {
-      // A build that failed wrote no document; there is nothing to precache and no page to
-      // register a worker.
-      if (!existsSync(`${out}index.html`)) return;
+      // `closeBundle` runs after a failed build too. One that did not write its files has no
+      // list to precache, and whatever is on disk is not its own.
+      if (!written || !existsSync(`${out}index.html`)) return;
       const files = filesUnder(out).filter((file) => file !== WORKER_FILE);
       const precache = precacheList(files);
-      const id = buildIdOf(files.map((name) => ({ name, bytes: readFileSync(out + name) })));
+      const id = shellBuildId(files.map((name) => ({ name, bytes: readFileSync(out + name) })));
       await build({
         configFile: false,
         root: ROOT,

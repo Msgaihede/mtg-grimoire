@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { CLAIM, SKIP_WAITING, type Heard } from "./sw/bridge";
+import { CLAIM, INSTALL_FAILED, SKIP_WAITING, type Heard } from "./sw/bridge";
 import {
+  installFailedLine,
   RECHECK_MS,
   watchUpdates,
   WORKER_URL,
@@ -47,7 +48,12 @@ class FakeContainer implements WorkerContainer {
   registration = new FakeRegistration();
   refuse: Error | undefined;
   private changed: (() => void)[] = [];
+  private messages: ((event: Heard) => void)[] = [];
   constructor(public controller: unknown) {}
+  /** The worker posts something to this page. */
+  post(data: unknown): void {
+    for (const listener of this.messages) listener({ data, ports: [] });
+  }
   register(url: string, options: { updateViaCache: "none" }): Promise<Registration> {
     this.registered.push({ url, options });
     return this.refuse ? Promise.reject(this.refuse) : Promise.resolve(this.registration);
@@ -56,6 +62,7 @@ class FakeContainer implements WorkerContainer {
   addEventListener(type: "message", listener: (event: Heard) => void): void;
   addEventListener(type: string, listener: unknown): void {
     if (type === "controllerchange") this.changed.push(listener as () => void);
+    else this.messages.push(listener as (event: Heard) => void);
   }
   startMessages(): void {}
   /** A worker takes this page over. */
@@ -245,6 +252,88 @@ describe("a newer build", () => {
     const watch = start();
     await registered();
     expect(watch.apply()).toBe(false);
+  });
+});
+
+/**
+ * A worker that cannot install is dropped by the browser and says so nowhere a page hears by
+ * itself. Driven on 2026-10-04: Cache Storage threw on open, the install failed, and the page
+ * ran with no worker and no pictures, in silence.
+ */
+describe("an install that fails", () => {
+  const REASON = "UnknownError: Unexpected internal error";
+
+  it("is said once on the page's console, with the worker's own reason, on a first visit", async () => {
+    const { container, start } = harness(null);
+    start();
+    await registered();
+    const first = new FakeWorker("installing");
+    container.registration.find(first);
+
+    container.post({ kind: INSTALL_FAILED, reason: REASON });
+    first.become("redundant");
+
+    expect(warned).toHaveBeenCalledTimes(1);
+    expect(warned).toHaveBeenCalledWith(installFailedLine(false, REASON));
+    // The sentence, pinned: it is what a bug report will carry.
+    expect(installFailedLine(false, REASON)).toBe(
+      "MTG Grimoire: this browser could not save the app for offline use, so card pictures " +
+        "will not load and the app will not open without a connection. A reload tries again " +
+        "(UnknownError: Unexpected internal error).",
+    );
+  });
+
+  it("is said even when the worker got no word across: it went redundant without installing", async () => {
+    const { container, start } = harness(null);
+    const watch = start();
+    await registered();
+    const first = new FakeWorker("installing");
+    container.registration.find(first);
+    first.become("redundant");
+
+    expect(warned).toHaveBeenCalledTimes(1);
+    expect(warned).toHaveBeenCalledWith(installFailedLine(false, undefined));
+    expect(installFailedLine(false, undefined)).toMatch(/A reload tries again\.$/);
+    expect(watch.waiting()).toBe(false);
+  });
+
+  it("says something else on a page an older build still serves: nothing was lost", async () => {
+    const { container, onChange, start } = harness({});
+    const watch = start();
+    await registered();
+    const next = new FakeWorker("installing");
+    container.registration.find(next);
+    container.post({ kind: INSTALL_FAILED, reason: "/assets/index-b.js answered 404" });
+    next.become("redundant");
+
+    expect(warned).toHaveBeenCalledTimes(1);
+    expect(warned).toHaveBeenCalledWith(
+      "MTG Grimoire: a newer version could not be saved, so this one keeps running " +
+        "(/assets/index-b.js answered 404).",
+    );
+    // And it is not an update: nothing waits, and no bar is drawn for it.
+    expect(watch.waiting()).toBe(false);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it("is not said for a build that installed and was later replaced", async () => {
+    const { container, start } = harness({});
+    start();
+    await registered();
+    const second = new FakeWorker("installing");
+    container.registration.find(second);
+    second.become("installed");
+    second.become("redundant");
+    expect(warned).not.toHaveBeenCalled();
+  });
+
+  it("is not said for any other message from the worker", async () => {
+    const { container, start } = harness({});
+    start();
+    await registered();
+    container.post({ kind: "grimoire:picture-source", path: "/display/abc/0" });
+    container.post(null);
+    expect(warned).not.toHaveBeenCalled();
   });
 });
 

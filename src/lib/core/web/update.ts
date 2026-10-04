@@ -1,5 +1,5 @@
 import type { HostUpdate } from "../hostUpdate";
-import { CLAIM, SKIP_WAITING, type Heard } from "./sw/bridge";
+import { CLAIM, installFailure, SKIP_WAITING, type Heard } from "./sw/bridge";
 
 /**
  * **The page's half of the service worker: registering it, and the update flow** (the light-app
@@ -24,6 +24,27 @@ export const UPDATE_READY: HostUpdate = {
   title: "A new version of MTG Grimoire is ready.",
   action: "Reload to update",
 };
+
+/**
+ * What the page's console says, once, when the worker could not install — `reason` is the
+ * worker's own account of why, where it got one across (`sw/bridge.ts`'s `INSTALL_FAILED`).
+ *
+ * **Two sentences, because the two cases cost different things.** On a page nothing controls
+ * there is then no worker at all: no card picture, no offline shell, and — until this was
+ * written — not a word anywhere (driven 2026-10-04: Cache Storage threw `UnknownError` on open,
+ * the install failed, and the page ran on in silence). On a page an older build controls,
+ * nothing the reader has is lost: only the newer build did not arrive.
+ *
+ * On the console and not on the page: the app works, a reload retries the install, and a notice
+ * a reader could do nothing about would be worse than a tile's own "Retrying…".
+ */
+export function installFailedLine(controlled: boolean, reason: string | undefined): string {
+  const why = reason ? ` (${reason})` : "";
+  return controlled
+    ? `MTG Grimoire: a newer version could not be saved, so this one keeps running${why}.`
+    : "MTG Grimoire: this browser could not save the app for offline use, so card pictures " +
+        `will not load and the app will not open without a connection. A reload tries again${why}.`;
+}
 
 /** As much of a `ServiceWorker` as a waiting one is used for. */
 export interface WaitingWorker {
@@ -70,8 +91,9 @@ export interface WatchOptions {
   onChange(): void;
   /**
    * Whether this page should start again when a new worker takes it over. The web core answers
-   * *no* for a page whose database never opened — a second tab — whose only control is already
-   * a link to a fresh document, and which must not race the tab that pressed for the database.
+   * *yes* only for the page that holds the database: a second tab is a boot screen whose one
+   * control is already a link to a fresh document, and a tab still opening has nothing a reload
+   * would bring — and either, reloading, would race the tab that pressed for the database.
    */
   mayReload(): boolean;
   reload(): void;
@@ -99,6 +121,9 @@ export interface WatchOptions {
  * - **`updateViaCache: "none"`**: the browser checks the worker's script — and what it imports —
  *   against the network, whatever the HTTP cache says. With the host's `no-cache` on the file
  *   that is belt and braces; without either, a new build is found a day late.
+ * - **An install that fails is said, once** ({@link installFailedLine}): by the worker's own
+ *   message when it got one across, and otherwise by its going `redundant` without ever having
+ *   installed — which is all a page can see of a failed install by itself.
  */
 export function watchUpdates(container: WorkerContainer, options: WatchOptions): UpdateWatch {
   let waiting: WaitingWorker | null = null;
@@ -119,14 +144,35 @@ export function watchUpdates(container: WorkerContainer, options: WatchOptions):
     options.onChange();
   };
 
+  let said = false;
+  /** Say that an install failed — once a page, whichever of the two ways it was heard first. */
+  const failed = (reason: string | undefined): void => {
+    if (said) return;
+    said = true;
+    console.warn(installFailedLine(controlled, reason));
+  };
+
   /** A worker on its way in: reported the moment it has installed, if it then has to wait. */
   const track = (worker: WaitingWorker | null): void => {
     if (!worker) return;
     if (worker.state === "installed") return found(worker);
+    let installed = false;
     worker.addEventListener("statechange", () => {
-      if (worker.state === "installed") found(worker);
+      if (worker.state === "installed") {
+        installed = true;
+        found(worker);
+      } else if (worker.state === "redundant" && !installed) {
+        // Dropped before it ever installed: its install failed. (One that installed and was
+        // then replaced also ends `redundant`, and that is no failure.)
+        failed(undefined);
+      }
     });
   };
+
+  container.addEventListener("message", (event) => {
+    const reason = installFailure(event.data);
+    if (reason !== null) failed(reason || undefined);
+  });
 
   container.addEventListener("controllerchange", () => {
     const taken = controlled;

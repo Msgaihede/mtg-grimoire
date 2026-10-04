@@ -5,7 +5,10 @@ import {
   askPage,
   askPages,
   CLAIM,
+  INSTALL_FAILED,
+  installFailure,
   isClaim,
+  reasonOf,
   isSkipWaiting,
   readReply,
   SKIP_WAITING,
@@ -38,6 +41,19 @@ describe("the strings on the wire", () => {
     expect(isClaim({ kind: CLAIM })).toBe(true);
     expect(isClaim({ kind: SKIP_WAITING })).toBe(false);
     expect(isSkipWaiting({ kind: CLAIM })).toBe(false);
+  });
+
+  it("carries a failed install's reason, and reads no other message as one", () => {
+    expect(INSTALL_FAILED).toBe("grimoire:install-failed");
+    expect(installFailure({ kind: INSTALL_FAILED, reason: "UnknownError: Unexpected internal error" }))
+      .toBe("UnknownError: Unexpected internal error");
+    // A failure with no reason it could put into words is still a failure.
+    expect(installFailure({ kind: INSTALL_FAILED })).toBe("");
+    for (const data of [null, "grimoire:install-failed", {}, { kind: SKIP_WAITING }, { kind: ASK_SOURCE, path: "/display/a/0" }]) {
+      expect(installFailure(data)).toBeNull();
+    }
+    expect(reasonOf(new TypeError("Failed to fetch"))).toBe("TypeError: Failed to fetch");
+    expect(reasonOf("/assets/x.js answered 404")).toBe("/assets/x.js answered 404");
   });
 
   it("knows the reader's press from every other message", () => {
