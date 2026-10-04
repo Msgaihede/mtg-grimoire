@@ -871,6 +871,19 @@ two profiles of headless Chrome 154 reaching it by its real name):
 
 ## Known limitations, written down rather than discovered
 
+- **A group's whole log goes through the isolate's memory, on three routes.** `pull` reads every
+  row past the cursor and serialises them into one answer; `ack`, whenever it moves a cursor,
+  runs `compactNow`, which reads every row with its `sealed`; and a push refused for the quota
+  does the same before it refuses. Measured locally, request by request with the heap collected
+  between them ([light-app.md](light-app.md) §10.5): **a pull costs the isolate's JS heap
+  twice the log** — 18 MB for a 9 MB log, 89 MB for a 45 MB one, a 50 000-row import — **and
+  a compaction once**, 9 and 45 MB; the importing device's own pull, which reads the rows it
+  just pushed in order to drop them, costs the log once as well. A push costs nothing that
+  lasts. Local workerd enforces no memory limit; production allows an isolate 128 MB, shared
+  by every group it hosts, so by these figures a pull meets it at a log of about 64 MB and a
+  compaction near the quota. **No deployed relay has been asked for a log that size**, so what happens there — to
+  the request, the group's socket and the isolate's other groups — is not known. The quota
+  (128 MiB of sealed text a group) bounds the log, not what reading it costs.
 - **A claim founds a group of one**, so a device that has claimed can no longer *join* another
   group — `pairing::complete` refuses a differing group id. **Connect on the device you will pair
   *from*, or pair first.** The panel says so; this is the note for when somebody asks why.

@@ -58,30 +58,23 @@
 // the one version that directory's lockfile pins, which is what CI does — and then at the path
 // in `WRANGLER`, a `wrangler.js`. The only wrangler commands this runs are `d1 execute --local`
 // and `dev --local`: nothing here reaches Cloudflare.
+//
+// **The relay, the devices, the claim and the pairing are `web-smoke/sync-harness.mjs`'s**, so
+// that `web-sync-pull.mjs` — the measurement of one large `pull` — means the same things by them.
 
-import { spawn, spawnSync } from "node:child_process";
-import { randomBytes } from "node:crypto";
-import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { rm } from "node:fs/promises";
-import { createServer } from "node:net";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { ALERT, buttonSaying, coreChunk, fail, pause, runAs, serve } from "./web-smoke/harness.mjs";
 import {
-  ALERT,
-  atExit,
-  browse,
-  buttonSaying,
-  coreChunk,
-  fail,
-  fixtures,
-  openPage,
-  pause,
-  runAs,
-  serve,
-  undo,
-} from "./web-smoke/harness.mjs";
+  claim,
+  device,
+  listenToSync,
+  median,
+  pair,
+  relayAddress,
+  seen,
+  shape,
+  startRelay,
+} from "./web-smoke/sync-harness.mjs";
 
-const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 /** Also profile the engine's Worker for a minute, idle, unpaired and then paired. */
 const MEASURE = process.argv.includes("--measure");
 /** How long the whole walk may take; the idle minutes are on top when they are asked for. */
@@ -89,422 +82,9 @@ const DEADLINE_MS = MEASURE ? 420_000 : 240_000;
 /** How long one idle profile runs. */
 const IDLE_MS = 60_000;
 
-/** The claim code the local D1 is seeded with, as a reader would type it. */
-const CLAIM_CODE = "TEST-CARD-SYNC";
-
 /** The two fixture cards the walk wishes for, one in each direction. */
 const FIRST_WISH = "Rhystic Study";
 const SECOND_WISH = "Lightning Bolt";
-
-// ---------------------------------------------------------------------------------------------
-// The relay, under workerd
-// ---------------------------------------------------------------------------------------------
-
-/** The engine's own relay address, read from the Rust — and where its socket is, by the rule
- *  `platform::socket::ws_origin` applies. */
-function relayBase() {
-  const source = readFileSync(
-    join(ROOT, "crates/grimoire-core/src/sync_engine/entitlement.rs"),
-    "utf8",
-  );
-  const found = /pub const RELAY_BASE: &str = "(https:\/\/[a-z0-9.-]+)"/.exec(source)?.[1];
-  if (!found)
-    fail("entitlement.rs no longer spells RELAY_BASE, as an https origin, where this reads it");
-  return found;
-}
-
-/** `wrangler.js`, or a sentence saying how to provide one. */
-function wranglerScript() {
-  const beside = join(ROOT, "app-worker/node_modules/wrangler/bin/wrangler.js");
-  if (existsSync(beside)) return beside;
-  const named = process.env.WRANGLER;
-  if (named && existsSync(named)) return named;
-  return fail(
-    "no wrangler to run the relay with. Install app-worker's own " +
-      "(`npm ci --ignore-scripts --prefix app-worker`), " +
-      "or set WRANGLER to a wrangler.js — for example the one `npx wrangler` keeps in npm's cache.",
-  );
-}
-
-/** A port nobody is listening on, as of now. */
-function freePort() {
-  return new Promise((found, lost) => {
-    const probe = createServer();
-    probe.once("error", lost);
-    probe.listen(0, "127.0.0.1", () => {
-      const { port } = probe.address();
-      probe.close(() => found(port));
-    });
-  });
-}
-
-/**
- * Stop a process and everything it started, **synchronously** — it is called from the process's
- * own `exit` as well as from the orderly stop, and nothing can be awaited there.
- *
- * wrangler's child is workerd, which holds the port and the database files, and a plain kill of
- * the parent leaves it running on either kind of host. On Windows `taskkill /T` walks the tree.
- * On POSIX the relay is started as the leader of a process group of its own (`detached`), and
- * the signal goes to the group — `kill(-pid)` — so workerd gets it whether or not wrangler passes
- * it on. Safe to call twice: a tree that has gone is a `taskkill` that finds nothing, or an
- * `ESRCH`.
- */
-function stopTree(child) {
-  if (child.pid === undefined) return;
-  if (process.platform === "win32") {
-    if (child.exitCode !== null) return;
-    spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-    return;
-  }
-  try {
-    process.kill(-child.pid, "SIGTERM");
-  } catch {
-    // No such group: it has already gone.
-  }
-}
-
-/**
- * Start the relay for `pageOrigin`, with one membership and one claim code in its D1. Answers
- * the port it listens on and its request log.
- *
- * **The state directory is under `relay/.wrangler/` and is named relatively.** wrangler 4.146 on
- * Windows turns an absolute `--persist-to` into `./C:\…` and its D1 then answers "internal
- * error" (measured 2026-10-04); a relative path works on every host. `.wrangler/` is ignored by
- * git everywhere, and the directory is removed when the run ends.
- */
-async function startRelay(pageOrigin) {
-  const script = wranglerScript();
-  const config = "relay/wrangler.jsonc";
-  const persist = `relay/.wrangler/sync-smoke-${process.pid}`;
-  const env = { ...process.env, WRANGLER_SEND_METRICS: "false", NO_COLOR: "1", FORCE_COLOR: "0" };
-  // What wrangler keeps beside the Worker while it runs: the bundle it built, in `tmp/`. A
-  // wrangler told to stop removes its own; one stopped as Windows stops a process tree does
-  // not, so whatever is there afterwards that was not there before is this run's, and goes.
-  const scratch = join(ROOT, "relay/.wrangler/tmp");
-  const before = new Set(existsSync(scratch) ? readdirSync(scratch) : []);
-  const mine = () => [
-    join(ROOT, persist),
-    ...(existsSync(scratch) ? readdirSync(scratch) : [])
-      .filter((entry) => !before.has(entry))
-      .map((entry) => join(scratch, entry)),
-  ];
-  undo.push(async () => {
-    for (const path of mine()) await rm(path, { recursive: true, force: true, maxRetries: 10 });
-  });
-  // And on the way out by any other road ({@link atExit}): the same, without waiting. Best
-  // effort — workerd may still be letting go of a file, and a directory left behind is ignored
-  // by git and by the lint, where a process left behind holds a port.
-  atExit.push(() => {
-    for (const path of mine()) {
-      rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
-    }
-  });
-
-  const d1 = (...args) => {
-    const ran = spawnSync(
-      process.execPath,
-      [
-        script,
-        "d1",
-        "execute",
-        "mtg-grimoire-relay",
-        "--local",
-        "--persist-to",
-        persist,
-        "--config",
-        config,
-        ...args,
-      ],
-      { cwd: ROOT, env, encoding: "utf8" },
-    );
-    if (ran.status !== 0) fail(`seeding the local D1 failed:\n${ran.stdout}\n${ran.stderr}`);
-  };
-  // `schema.sql` is for a database that has never been migrated, which this one is.
-  d1("--file", "relay/schema.sql");
-  const now = Date.now();
-  d1(
-    "--command",
-    "INSERT INTO entitlements (subject, source, external_id, status, created_at, checked_at) " +
-      `VALUES ('smoke-subject', 'patreon', 'smoke-patron', 'active', ${now}, ${now}); ` +
-      "INSERT INTO claim_codes (code, subject, expires_at) " +
-      `VALUES ('${CLAIM_CODE.replaceAll("-", "")}', 'smoke-subject', ${now + 10 * 60 * 1000});`,
-  );
-
-  const port = await freePort();
-  const inspector = await freePort();
-  // **The relay's signing key, made here and kept nowhere.** `RELAY_HMAC_KEY` never has a value
-  // in a file of this repository — a throwaway one included, and this script is such a file —
-  // so each run draws its own, hands it to this one relay on its command line, and forgets it
-  // when the process ends. Nothing else needs to know it: the tokens it signs are minted and
-  // verified by that same relay.
-  const signingKey = randomBytes(32).toString("hex");
-  const child = spawn(
-    process.execPath,
-    [
-      script,
-      "dev",
-      "--local",
-      "--config",
-      config,
-      "--ip",
-      "127.0.0.1",
-      "--port",
-      String(port),
-      "--inspector-port",
-      String(inspector),
-      "--local-protocol",
-      "https",
-      "--persist-to",
-      persist,
-      "--var",
-      `RELAY_HMAC_KEY:${signingKey}`,
-      "--var",
-      `APP_ORIGINS:${pageOrigin}`,
-      "--show-interactive-dev-session=false",
-    ],
-    {
-      cwd: ROOT,
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-      // A process group of its own where there is such a thing, so the whole tree can be
-      // signalled at once (`stopTree`). Not on Windows, where it would open a console window.
-      detached: process.platform !== "win32",
-    },
-  );
-  // Ahead of the state directory's removal on both lists, so it is stopped first.
-  undo.push(async () => {
-    stopTree(child);
-    // workerd lets go of its files a moment after it is told to stop.
-    await pause(800);
-  });
-  atExit.push(() => stopTree(child));
-
-  /** Every request the relay answered, in order: `{ method, path, status, at }`. */
-  const log = [];
-  /** Whatever it said that was not a request line or its banner — an exception, a warning. */
-  const said = [];
-  let ready;
-  let failed;
-  const listening = new Promise((found, lost) => ((ready = found), (failed = lost)));
-  let pending = "";
-  const hear = (chunk) => {
-    pending += chunk;
-    const lines = pending.split(/\r?\n/);
-    pending = lines.pop();
-    for (const line of lines) {
-      const request = /\[wrangler:info\] ([A-Z]+) (\S+) (\d{3}) /.exec(line);
-      if (request) {
-        log.push({
-          method: request[1],
-          path: request[2],
-          status: Number(request[3]),
-          at: Date.now(),
-        });
-      } else if (/\[wrangler:info\] Ready on https:\/\/127\.0\.0\.1:/.test(line)) {
-        ready();
-      } else if (/\[ERROR\]|Uncaught|exception/i.test(line)) {
-        said.push(line.trim());
-      }
-    }
-  };
-  child.stdout.on("data", hear);
-  child.stderr.on("data", hear);
-  child.on("exit", (code) =>
-    failed(new Error(`the local relay exited (${code}): ${said.join(" | ")}`)),
-  );
-  setTimeout(() => failed(new Error("the local relay never said it was ready")), 90_000).unref();
-  await listening;
-  return { port, log, said };
-}
-
-// ---------------------------------------------------------------------------------------------
-// A device: one browser on one profile, one page of the app
-// ---------------------------------------------------------------------------------------------
-
-/** A viewport exactly this size, whatever the headless window's own minimum is. */
-const viewport = (browser, width, height) => (sessionId) =>
-  browser.send(
-    "Emulation.setDeviceMetricsOverride",
-    { width, height, deviceScaleFactor: 1, mobile: false },
-    sessionId,
-  );
-
-/**
- * One device of the walk. `face` is which of the app's two it mounts, by the viewport alone, and
- * so which controls the walk presses on it.
- */
-async function device(name, face, origin, relay, chunk) {
-  const [width, height] = face === "desktop" ? [1280, 800] : [412, 915];
-  const { browser, hosts, policy, close, problems } = await browse(origin, fixtures(), {
-    args: [
-      // The relay's name is the local relay; every other name still resolves to nothing.
-      `--host-resolver-rules=MAP ${relay.host} 127.0.0.1:${relay.port}, MAP * ~NOTFOUND, EXCLUDE localhost`,
-      // wrangler's certificate is self-signed, and for another name.
-      "--ignore-certificate-errors",
-    ],
-    through: (url) => url.startsWith(`${relay.base}/`),
-    socket: (url) => url.startsWith(`${relay.socket}/`),
-  });
-  const page = await openPage(
-    browser,
-    `${origin}/settings`,
-    hosts.check,
-    policy,
-    viewport(browser, width, height),
-  );
-  // The page's own requests and their failures; the engine's are its Worker's, switched on by
-  // the harness as the Worker starts.
-  await browser.send("Network.enable", {}, page.sessionId);
-
-  /** One command through the page's `Core`; a refusal is the engine's sentence, and fails. */
-  const engine = async (command, args) => {
-    const answer = await page.evaluate(
-      `import(${JSON.stringify(chunk)})
-        .then((module) => module.webCore.call(${JSON.stringify(command)}, ${JSON.stringify(args)}))
-        .then((value) => ({ value }), (refused) => ({ refused: String(refused) }))`,
-    );
-    if (answer.refused !== undefined) fail(`${name}: ${command} was refused: ${answer.refused}`);
-    return answer.value;
-  };
-  /** Poll the engine until `done(answer)`; answers the answer. */
-  const engineUntil = async (what, command, done, withinMs = 60_000) => {
-    for (const stop = performance.now() + withinMs; ; await pause(100)) {
-      hosts.check();
-      const answer = await engine(command);
-      if (done(answer)) return answer;
-      if (performance.now() > stop) {
-        fail(`${name}: ${what} — never happened. ${command} answers ${JSON.stringify(answer)}`);
-      }
-    }
-  };
-  /** Every event of this kind the browser reported for this device's targets, in order. */
-  const events = (method) => browser.heard.filter((message) => message.method === method);
-  /** What the page was told about live sync since it started listening (`listenToSync`). */
-  const told = () => page.evaluate("window.__sync");
-
-  /** A main destination of the app, by the control this face draws for it. */
-  const go = (view) => {
-    const word = view[0].toUpperCase() + view.slice(1);
-    return face === "desktop"
-      ? page.press(`${name}: the rail's ${word}`, buttonSaying(word))
-      : page.press(
-          `${name}: the ${word} tab`,
-          view === "settings"
-            ? `document.querySelector('a[aria-label="Settings"]')`
-            : `document.querySelector('nav[aria-label="Views"] a[href="/${view}"]')`,
-        );
-  };
-  /** Settings' Sync group, open. Both faces draw it behind the same row. */
-  const openSync = async () => {
-    if (await page.evaluate(`!!${buttonSaying("Pair a device")}`)) return;
-    await page.press(
-      `${name}: Settings' Sync group`,
-      `document.querySelector('button[aria-label="Sync"]')`,
-    );
-    await page.until(`${name}: the Sync panel drew`, `!!${buttonSaying("Pair a device")}`, 30_000);
-  };
-  /** Search for `card`, open it, and press its *Add to wishlist*. Answers when the press landed. */
-  const wish = async (card) => {
-    await go("search");
-    const box =
-      face === "desktop"
-        ? `document.querySelector("#card-search-text")`
-        : `document.querySelector('input[type="search"][aria-label="Search cards"]')`;
-    await page.press(`${name}: the search box`, box);
-    // The box may hold the last search: replaced, not appended to.
-    await page.evaluate(`${box}.select()`);
-    await page.type(card);
-    const tile =
-      face === "desktop"
-        ? `document.querySelector('img[alt^=${JSON.stringify(card)}]')?.closest("button")`
-        : `document.querySelector('button[aria-label^=${JSON.stringify(`${card},`)}]')`;
-    await page.press(`${name}: ${card}'s tile`, tile);
-    // The desktop's is greyed until the card's own read has answered, and a press on a greyed
-    // button is no press: `:enabled` is the control a reader could use.
-    const add =
-      face === "desktop"
-        ? `document.querySelector('[role="dialog"] button[aria-label="Add to wishlist"]:enabled')`
-        : buttonSaying("Add to wishlist");
-    const wishes = async () =>
-      (await engine("wishlist_summary", { marketplace: "tcgplayer" })).wishes;
-    const before = await wishes();
-    // Found and then pressed, so the moment of the press is the moment answered.
-    await page.until(`${name}: ${card}'s Add to wishlist is drawn`, `!!${add}`, 30_000);
-    const pressed = Date.now();
-    await page.press(`${name}: Add to wishlist`, add);
-    // The press wrote, or the run stops here saying so — not a minute later on the other
-    // device, as a doorbell that never rang.
-    for (const stop = performance.now() + 10_000; (await wishes()) === before; await pause(50)) {
-      if (performance.now() > stop)
-        fail(`${name}: pressing Add to wishlist for ${card} wrote nothing`);
-    }
-    return pressed;
-  };
-  /** Close whatever card is open over the page. */
-  const closeCard = () =>
-    page.press(
-      `${name}: the card's close`,
-      face === "desktop"
-        ? `document.querySelector('button[aria-label="Close card details"]')`
-        : `document.querySelector('button[aria-label="Close card"]')`,
-    );
-  /** Whether the page — its wishlist, when that is the page — draws `card`. */
-  const draws = (card) =>
-    `[...document.querySelectorAll("main [aria-label], main img[alt]")].some((el) =>
-      (el.getAttribute("aria-label") ?? el.getAttribute("alt") ?? "").startsWith(${JSON.stringify(card)}))`;
-
-  return {
-    name,
-    face,
-    browser,
-    hosts,
-    policy,
-    page,
-    close,
-    problems,
-    engine,
-    engineUntil,
-    events,
-    told,
-    go,
-    openSync,
-    wish,
-    closeCard,
-    draws,
-  };
-}
-
-/** A relay path with its group and its rendezvous taken out, so one route reads as one. */
-const shape = (path) =>
-  path
-    .replace(/\/g\/[^/]+/, "/g/{group}")
-    .replace(/\/p\/[0-9a-f]+/, "/p/{rv}")
-    .replace(/\?.*/, "");
-
-/** Keep, on the page, every `sync:live` and `sync:applied` it is told from now on. */
-const listenToSync = (chunk) => `import(${JSON.stringify(chunk)}).then(({ webCore }) => {
-  if (window.__sync) return true;
-  window.__sync = { live: [], applied: [] };
-  webCore.listen("sync:live", (event) => window.__sync.live.push({ state: event.state, at: Date.now() }));
-  webCore.listen("sync:applied", (outcome) => window.__sync.applied.push({ ...outcome, at: Date.now() }));
-  return true;
-})`;
-
-/**
- * Wait, finely, for `expression` on `page`; answers when it was first seen, in unix ms. `more`
- * is what else to say when it never is — where along the way the thing stopped.
- */
-async function seen(dev, what, expression, more = async () => "", withinMs = 60_000) {
-  for (const stop = performance.now() + withinMs; ; await pause(40)) {
-    dev.hosts.check();
-    if (await dev.page.evaluate(expression).catch(() => false)) return Date.now();
-    if (performance.now() > stop) {
-      const shown = await dev.page.evaluate("document.body.innerText").catch(() => "(no document)");
-      const also = await more().catch((error) => `(and asking why failed: ${error.message})`);
-      fail(`${dev.name}: ${what} — never happened. ${also}\nThe page shows:\n${shown}`);
-    }
-  }
-}
 
 // ---------------------------------------------------------------------------------------------
 // What the loop costs, when it is asked (`--measure`)
@@ -572,20 +152,12 @@ const STARVATION = (chunk) => `(async () => {
   const outcome = await trip;
   return { alone, beside, tripMs: performance.now() - from, outcome };
 })()`;
-const median = (list) => [...list].sort((a, b) => a - b)[Math.floor(list.length / 2)] ?? 0;
-
 // ---------------------------------------------------------------------------------------------
 // The walk
 // ---------------------------------------------------------------------------------------------
 
 async function main() {
-  const base = relayBase();
-  // `RELAY_BASE` is an origin — a scheme and a host, no path — which `relayBase` holds it to.
-  const relayAt = {
-    base,
-    host: base.slice("https://".length),
-    socket: base.replace(/^https:\/\//, "wss://"),
-  };
+  const relayAt = relayAddress();
   const { origin } = await serve();
   const chunk = coreChunk();
 
@@ -636,31 +208,7 @@ async function main() {
   }
 
   // ---- the claim -------------------------------------------------------------------------
-  await first.openSync();
-  await first.page.press("the claim-code field", `document.querySelector("#patreon-claim")`);
-  await first.page.type(CLAIM_CODE);
-  const claimed = Date.now();
-  await first.page.press("the claim's Connect", buttonSaying("Connect"));
-  await first.page.until(
-    "the panel said the membership is connected",
-    `/Supporting/.test(document.body.innerText)`,
-    30_000,
-  );
-  const founded = await first.engineUntil(
-    "the claim founded a group",
-    "sync_pairing_status",
-    (s) => s.groupId !== null,
-  );
-  await first.engineUntil(
-    "the first device's socket came up",
-    "sync_live_state",
-    (s) => s === "live",
-  );
-  const firstLive = (await first.told()).live;
-  const dialled = firstLive.find((event) => event.state === "connecting");
-  const up = firstLive.find((event) => event.state === "live");
-  if (!dialled || !up)
-    fail(`the first device never said connecting and live: ${JSON.stringify(firstLive)}`);
+  const { founded, claimed, dialled, up } = await claim(first);
   console.log(
     `ok  ${first.name} claimed with the code a reader types, founded a group of one ` +
       `(${founded.deviceName}), and its socket is live — ${dialled.at - claimed} ms from the ` +
@@ -669,40 +217,7 @@ async function main() {
   );
 
   // ---- the pairing -----------------------------------------------------------------------
-  await first.page.press("Pair a device", buttonSaying("Pair a device"));
-  const code = await first.page.until(
-    "the offer drew its code",
-    `document.querySelector('[aria-label="Pairing code as a QR code"]')?.parentElement?.querySelector("p")?.innerText.trim()`,
-    30_000,
-  );
-  await second.openSync();
-  await second.page.press("Enter a code", buttonSaying("Enter a code from another device"));
-  await second.page.press("the code box", `document.querySelector("textarea")`);
-  await second.page.type(code);
-  await second.page.press("Read the code", buttonSaying("Read the code"));
-  const DIGITS = `document.querySelector('[data-testid="pairing-sas"]')?.innerText.trim()`;
-  const joining = await second.page.until("the joining device drew six digits", DIGITS, 30_000);
-  const offering = await first.page.until("the offering device drew six digits", DIGITS, 30_000);
-  if (!/^\d{6}$/.test(joining) || joining !== offering) {
-    fail(`the two devices show different digits: ${offering} and ${joining}`);
-  }
-  await first.page.press("Codes match", buttonSaying("Codes match"));
-  for (const dev of both) {
-    await dev.engineUntil(
-      "the roster holds two devices",
-      "sync_pairing_status",
-      (s) => s.devices.length === 2,
-    );
-    await dev.page.until(
-      `${dev.name}'s panel reads a group of two`,
-      `/in a group of 2 devices/.test(document.body.innerText)`,
-      30_000,
-    );
-    await dev.engineUntil("the socket is live", "sync_live_state", (s) => s === "live");
-  }
-  const secondLive = (await second.told()).live;
-  const joined = secondLive.find((event) => event.state === "connecting");
-  const joinedUp = secondLive.find((event) => event.state === "live");
+  const { code, offering, joined, joinedUp } = await pair(first, second);
   console.log(
     `ok  paired — a ${code.length}-character code typed into ${second.name}, ${offering} on both, ` +
       `Codes match on ${first.name}; both read a group of 2 devices and both are live ` +

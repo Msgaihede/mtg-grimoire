@@ -498,7 +498,8 @@ function browserPath() {
 }
 
 /** Start the browser and answer its DevTools address, which it prints once it is listening,
- *  and the way to stop it. `extra` is a run's own switches, after this file's. */
+ *  the way to stop it, and its process id — for a run that reads what its tab cost the machine.
+ *  `extra` is a run's own switches, after this file's. */
 async function launch(profile, extra = []) {
   const args = [
     "--headless=new",
@@ -529,7 +530,7 @@ async function launch(profile, extra = []) {
     child.stderr.on("data", (chunk) => {
       heard += chunk;
       const hit = /DevTools listening on (ws:\/\/\S+)/.exec(heard);
-      if (hit) found({ address: hit[1], kill });
+      if (hit) found({ address: hit[1], kill, pid: child.pid });
     });
     child.on("exit", (code) => lost(new Error(`the browser exited (${code}): ${heard}`)));
     // Unreferenced: a timer still pending must not hold a finished run open for its length.
@@ -588,8 +589,21 @@ async function connect(address) {
  * `through` is a run's own host that really answers — the sync smoke's local relay: a request
  * it says yes to is let through to wherever the browser's own rules send it, and is none of
  * this function's to write down or to hold to the no-pre-flight rule. This run has none.
+ *
+ * `gate` is awaited before such a request is let through — how a measurement keeps a device from
+ * hearing the relay for a while and then lets it (`scripts/web-sync-pull.mjs`): the request
+ * stays paused in the browser, unanswered, as one on a stalled link would. No other run hands
+ * one in.
  */
-async function intercept(browser, origin, userAgent, problems, routes, through = () => false) {
+async function intercept(
+  browser,
+  origin,
+  userAgent,
+  problems,
+  routes,
+  through = () => false,
+  gate = () => undefined,
+) {
   /** Each cross-origin request that has a fixture, in order: `{ method, url, headers }`. */
   const asked = [];
   /** URLs whose answer waits on a caller: `url -> promise`. */
@@ -601,7 +615,11 @@ async function intercept(browser, origin, userAgent, problems, routes, through =
     const answer = (method, params) =>
       // A tab that closed, or a browser on its way down, has no request left to answer.
       browser.send(method, { requestId, ...params }).catch(() => undefined);
-    if (request.url === origin || request.url.startsWith(`${origin}/`) || through(request.url)) {
+    if (request.url === origin || request.url.startsWith(`${origin}/`)) {
+      return answer("Fetch.continueRequest");
+    }
+    if (through(request.url)) {
+      await gate(request);
       return answer("Fetch.continueRequest");
     }
     // The fragment-free URL as asked, query included: a fixture answers one address.
@@ -850,7 +868,8 @@ function coreChunk() {
  * the profile; it is on the undo list too, so a run that fails anywhere leaves neither behind.
  *
  * `own` is what a run adds for itself: `args`, more switches for the browser; `through`, a host
- * that really answers ({@link intercept}); `socket`, the sockets it expects ({@link watchPolicy}).
+ * that really answers, and `gate`, what a request to it waits on ({@link intercept}); `socket`,
+ * the sockets it expects ({@link watchPolicy}). `pid` is the browser's own process.
  */
 async function browse(origin, routes, own = {}) {
   const profile = await mkdtemp(join(tmpdir(), "grimoire-web-smoke-"));
@@ -867,7 +886,7 @@ async function browse(origin, routes, own = {}) {
     await rm(profile, { recursive: true, force: true, maxRetries: 5 });
   };
   undo.push(close);
-  const { address, kill } = await launch(profile, own.args);
+  const { address, kill, pid } = await launch(profile, own.args);
   stop = kill;
   const browser = (socket = await connect(address));
 
@@ -877,9 +896,17 @@ async function browse(origin, routes, own = {}) {
   const userAgent = await blank.evaluate("navigator.userAgent");
   /** Everything that fails the run without throwing where it happened. */
   const problems = [];
-  const hosts = await intercept(browser, origin, userAgent, problems, routes, own.through);
+  const hosts = await intercept(
+    browser,
+    origin,
+    userAgent,
+    problems,
+    routes,
+    own.through,
+    own.gate,
+  );
   const policy = await watchPolicy(browser, problems, own.socket);
-  return { browser, hosts, policy, close, problems };
+  return { browser, hosts, policy, close, problems, pid };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -894,7 +921,45 @@ const buttonSaying = (words, within = "") =>
     (button) => button.innerText.trim() === ${JSON.stringify(words)},
   )`;
 
+// ---------------------------------------------------------------------------------------------
+// A card file of many printings
+// ---------------------------------------------------------------------------------------------
+
+/** The id of the grown card file's line `index`, past the committed six — the one rule
+ *  {@link grownCards} writes ids by, so a run that names those cards cannot spell another. */
+const grownCardId = (index) => `aaaaaaaa-0000-4000-8000-${index.toString(16).padStart(12, "0")}`;
+
+/**
+ * The card file, grown: the six fixture lines over and over, each copy under an `id` and a
+ * collector number of its own, so every line is another printing to the engine. Made when it is
+ * asked for and never committed — it is tens of megabytes of text, and a megabyte or so gzipped.
+ *
+ * Two runs ask: `web-smoke.mjs`'s reload check, which needs an ingest long enough to land a
+ * reload inside, and `web-sync-pull.mjs`, which needs a collection of that many rows to import.
+ */
+function grownCards(count) {
+  const lines = readFileSync(join(FIXTURES, "default-cards.jsonl"), "utf8")
+    .split("\n")
+    .filter((line) => line !== "");
+  const grown = [];
+  for (let index = 0; grown.length < count; index += 1) {
+    const line = lines[index % lines.length];
+    // The first round is the fixture as committed, so the cards a wall draws are still there.
+    if (index < lines.length) {
+      grown.push(line);
+      continue;
+    }
+    const renamed = line
+      .replace(/"id":"[0-9a-f-]{36}"/, `"id":"${grownCardId(index)}"`)
+      .replace(/"collector_number":"[^"]*"/, `"collector_number":"G${index}"`);
+    if (renamed === line) fail("a fixture card has no id or collector number to rename");
+    grown.push(renamed);
+  }
+  return Buffer.from(`${grown.join("\n")}\n`);
+}
+
 export { serve, browse, openPage, fixtures, fixtureCards, pictureAddress, coreChunk };
+export { grownCards, grownCardId };
 export { ALERT, buttonSaying };
 // The fixture hosts' addresses, for a run that holds one, waits for one or counts the asks.
 export { CARDS_LISTING, CARDS_FILE, ORACLE_LISTING, ORACLE_FILE, ART_LISTING, ART_FILE };

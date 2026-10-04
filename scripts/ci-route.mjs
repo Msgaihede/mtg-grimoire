@@ -278,7 +278,10 @@ export const ARMS = [
   // 6.3, `harness.mjs` beside them**: the server, the browser and the two fences, a module both
   // browser runs are written in — a change to it is a change to both.
   // **`scripts/web-sync-smoke.mjs`** (phase 6, step 6.3) is the third script: it pairs two
-  // browsers through the relay's own code under workerd.
+  // browsers through the relay's own code under workerd — out of `web-smoke/sync-harness.mjs`
+  // since step 6.5, which the same glob routes. **`scripts/web-sync-pull.mjs` is not here on
+  // purpose**: it measures a large pull on that harness and no job runs it, so `scripts/*`
+  // lints it and that is all a change to it needs.
   {
     match: [
       "scripts/build-wasm.mjs",
