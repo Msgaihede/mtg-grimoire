@@ -101,7 +101,8 @@ key distribution are all live. This sentence briefly said `/rotate` and `/keys` 
 routes still missing; that was true for part of one day. **The device roll and the pairing
 rendezvous are deployed too**, which this file denied until 2026-09-28 on a probe that could not
 fail — [the runbook](../reference/hosted-relay-deploy.md)'s step 0 has one that can. **The last
-deploy was 2026-10-01 at 22:09 UTC**, and carried rate limits on the five routes a caller reaches
+deploy was 2026-10-04 at 17:22 UTC** (the browser's half, below); **the one before it, on
+2026-10-01 at 22:09 UTC**, carried rate limits on the five routes a caller reaches
 with no token — in the Worker, because `workers.dev` has no zone for a rule, so they spare the D1
 read and not the request, and they bound a flood rather than metering a trickle. The deploy before
 it, the same day from `main` at `2b845048`, carried issue #548's `dev` claim on the tokens the
@@ -113,9 +114,14 @@ and a native client never did** — an allow-list of origins a page may ask from
 `relay/src/cors.ts`), the pre-flight answered ahead of every limiter and every Durable Object, and
 `/ws` taking its bearer from the socket's sub-protocol, which is the only place a browser can put
 one (`relay/src/ticket.ts`). A request with no `Origin` is answered byte for byte as before, so no
-released build notices. **Written and not deployed**: asked that day, the deployed relay answered
-an `OPTIONS` from the web app's origin 405, and the runbook's step 0 has the probes that say when
-that has changed. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
+released build notices. **Deployed 2026-10-04 at 17:22:12 UTC, from `main` at `ea0aa88e` (#818)
+— the last deploy — and verified**: version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, by an agent at
+the owner's standing ask for this phase. Asked before it, the relay answered an `OPTIONS` from the
+web app's origin 405; asked at 23:09:03 UTC, **204 with `Access-Control-Allow-Origin:
+https://mtg-grimoire.app`**, a 401 a page can read, and 403 to a foreign origin's socket — the
+runbook's step 0 has every answer. No browser has opened a socket in production yet. **Written
+and not deployed since**: a rotation's roster closing the removed devices' sockets with 4002
+(light app step 6.3b; the runbook's ninth half). **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
 real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
 
 ## Entitlements, removal and leaving

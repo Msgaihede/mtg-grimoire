@@ -38,7 +38,7 @@
 //! synced ones are exactly that.
 //!
 //! **That hook fires for every transaction, so the debounce is armed only after the outbox has
-//! been asked** — `sync_ops WHERE pushed_at IS NULL`, in `live`'s `outbox_has_work`.
+//! been asked** — `sync_ops WHERE pushed_at IS NULL`, in `live`'s `after_a_commit`.
 //! Spec §6.3 states it as two halves and both are load-bearing: without the second, [`run_once`]
 //! stamping [`LAST_SYNC_AT`] at the end of every trip would arm the debounce that runs the next
 //! trip, for ever, and the Scryfall ingest's commit per 2 000 rows would ring the relay's
@@ -2795,9 +2795,11 @@ pub async fn run_once_without_baselines(db: &impl Store) -> Result<Option<RelayO
 /// one rotation on — refuses it bare, [`entitlement::STALE_GROUP_AUTH`]. That is not a rare
 /// alignment but pairing's ordinary one: the device that pressed *Codes match* seals the key at
 /// the current epoch and publishes the join's rotation a moment later, which is the moment the
-/// joiner's first trip is running. Seen in the sync smoke, two runs in fourteen, as a `/token`
-/// 401 behind a `/rotate` 200 — and, on a device that joined by pairing, as a trip that failed
-/// and a row in its log for a group working as intended.
+/// joiner's first trip is running. Seen in the sync smoke, three runs in twenty-one, as a
+/// `/token` 401 behind a `/rotate` 200 and a joiner's first trip failed. The relay's own source
+/// has said since the group door was built that the app re-checks `/keys` once on this 401
+/// (`relay/src/claim.ts`, `groupDoor`), and [`entitlement::STALE_GROUP_AUTH`] was named "so
+/// `client` can act on it" — and until this, nothing in `client` did.
 ///
 /// So the refusal is taken to `/keys`, as [`push`] takes a `stale_epoch`: a rotation adopted
 /// there is the reason, and the door is asked under the new key; a removal is the trip's quiet

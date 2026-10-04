@@ -326,13 +326,29 @@ export function taggedDevice(tag: string | undefined): string | undefined {
 }
 
 /**
- * The close a device is sent when it is no longer in the group its socket is for: the whole group
- * was dropped, or a rotation's manifest no longer names the device. In the private range, so a
- * client can tell it from any transport-level close; `sync_engine::live` reads it as *removed* —
- * a backoff, and then the round trip on which the device finds itself off the manifest and
- * clears its group.
+ * The close every socket of a group is sent when the group's log is **dropped** — a membership
+ * ended (`group.ts`'s `drop`). In the private range, so a client can tell it from any
+ * transport-level close. It has meant this, and only this, in every build that has shipped.
  */
-export const CLOSE_REMOVED = 4001;
+export const CLOSE_DROPPED = 4001;
+
+/**
+ * The close one device is sent when **a rotation's manifest no longer names it** — it was
+ * removed, or it left. A code of its own, and not {@link CLOSE_DROPPED}, because the two are read
+ * differently and neither reading survives the other's event:
+ *
+ * - **a released client reads 4001 as "the group no longer exists"**, with a row in its Errors
+ *   panel and seconds of *offline*. A device's own *Leave group* is a manifest without it, and the
+ *   relay cannot spare the leaver — `/rotate` authenticates with the group's shared auth and does
+ *   not know which device published — so reusing 4001 would have written that row on every
+ *   released desktop that left a group. 4002 is a code it has never heard of: a plain close.
+ * - **a lapse must write no row at all**, and a client that read 4001 as a removal would write
+ *   one for it, before any round trip had learned the membership ended.
+ *
+ * `sync_engine::live` reads 4002 as *removed* — a backoff, then the round trip on which the device
+ * finds itself off the manifest and clears its group — unless the device has itself just left.
+ */
+export const CLOSE_REMOVED = 4002;
 
 /**
  * The sockets a roster closes: every open one whose device the adopted manifest does not name.

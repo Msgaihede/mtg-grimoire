@@ -184,8 +184,15 @@ pub fn backoff_ms(attempt: u32, jitter: f64) -> u64 {
 /// socket now says only what happened to it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Disconnect {
-    /// The relay closed with 4001: this group no longer exists.
+    /// The relay closed with 4002: a rotation's manifest no longer names this device — somebody
+    /// removed it — and the device has not itself left. The one close that is news worth a row.
     Removed,
+    /// The relay closed with 4001: the group's log was dropped, which is a membership ending.
+    /// **Nothing is concluded from it and nothing is recorded** ([`recorded`]): the device is
+    /// still in its group and its stored status still says `active`, so nothing here can tell a
+    /// lapse from anything else yet. It backs off, and the round trip in front of the next dial
+    /// is what learns which — and that path already knows a lapse is never a row.
+    Dropped,
     /// The relay closed the socket, or the stream simply ended.
     Closed,
     /// The connection, the upgrade or a write failed — or a keepalive went unanswered, which is
@@ -230,35 +237,85 @@ pub fn let_go(socket_group: &str, now: Membership<'_>) -> bool {
     }
 }
 
-/// What a close with the relay's 4001 was, given the device's membership **once any sync
-/// operation in flight has finished**.
+/// The two closes with which the relay says a socket's group is no longer this device's.
 ///
-/// The relay closes with 4001 for a group that is gone and — since it tells a removed device —
-/// for a device a rotation's manifest no longer names. **A device that leaves a group publishes
-/// exactly such a manifest**, so its own *Leave group* closes its own socket, a moment before
-/// the press has cleared `sync_group` locally. Read at once, that is a removal: a backoff, the
-/// word `offline` and an `error_log` row, for something the reader just chose. So the loop asks
-/// behind the sync lane, which the leave holds until its last write: by then the group is gone
-/// from this device and the close is [`Disconnect::Left`], which is quiet. A device somebody
-/// else removed is still in the group as far as it knows, and that is [`Disconnect::Removed`].
-pub fn closed_as_gone(socket_group: &str, now: Membership<'_>) -> Disconnect {
+/// **Two codes because they are two events, read differently**, and a build that gave both one
+/// code got each wrong on somebody: see `relay/src/log.ts`'s `CLOSE_REMOVED`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Gone {
+    /// 4002 — a rotation's manifest no longer names this device.
+    OffTheManifest,
+    /// 4001 — the group's log was dropped: a membership ended.
+    GroupDropped,
+}
+
+/// The close the relay sends one device when a rotation's manifest no longer names it —
+/// `relay/src/log.ts`'s `CLOSE_REMOVED`.
+pub const CLOSE_REMOVED: u16 = 4002;
+
+/// The close the relay sends every socket of a group whose log it drops — `relay/src/log.ts`'s
+/// `CLOSE_DROPPED`, and the only one of the two a released client has heard of.
+pub const CLOSE_DROPPED: u16 = 4001;
+
+/// The relay's close code as a [`Gone`], or `None` for any other close — which is an ordinary
+/// one ([`Disconnect::Closed`]). A code this build has never heard of is ordinary too, which is
+/// what lets the relay add one: a released client reads 4002 exactly so.
+pub fn gone(code: Option<u16>) -> Option<Gone> {
+    match code {
+        Some(CLOSE_REMOVED) => Some(Gone::OffTheManifest),
+        Some(CLOSE_DROPPED) => Some(Gone::GroupDropped),
+        _ => None,
+    }
+}
+
+/// What a close with one of the relay's two codes was, given the device's membership **once any
+/// sync operation in flight has finished**.
+///
+/// **A device that leaves a group publishes a manifest without itself**, so its own *Leave
+/// group* closes its own socket with 4002, a moment before the press has cleared `sync_group`
+/// locally. Read at once, that is a removal: a backoff, the word `offline` and an `error_log`
+/// row, for something the reader just chose. So the loop asks behind the sync lane, which the
+/// leave holds until its last write: by then the group is gone from this device and the close is
+/// [`Disconnect::Left`], which is quiet — under either code, since a device in no group, or in
+/// another, has nothing to back off from whatever became of the group it left. A device somebody
+/// else removed is still in the group as far as it knows: [`Disconnect::Removed`]. One whose
+/// group was dropped under it is too: [`Disconnect::Dropped`].
+pub fn closed_as_gone(why: Gone, socket_group: &str, now: Membership<'_>) -> Disconnect {
     if let_go(socket_group, now) {
-        Disconnect::Left
-    } else {
-        Disconnect::Removed
+        return Disconnect::Left;
+    }
+    match why {
+        Gone::OffTheManifest => Disconnect::Removed,
+        Gone::GroupDropped => Disconnect::Dropped,
+    }
+}
+
+/// Whether a socket that ended for `cause` is worth an `error_log` row, **when it also spent an
+/// attempt** ([`next_attempt`] — a failure the counter forgave is never one).
+///
+/// **[`Disconnect::Dropped`] is the one failure that backs off and writes nothing.** A dropped
+/// group is how a lapse first reaches a connected device — before any round trip has been
+/// refused, while the device's own state still reads entitled — and a row there would be the
+/// one `live`'s `note` exists never to write: "your sync is broken", to a reader whose pledge
+/// ended. Asking the database cannot save it, because nothing in it has changed yet. So the
+/// close itself is not recorded, and whatever the following trip finds is that trip's to say.
+pub fn recorded(cause: Disconnect) -> bool {
+    match cause {
+        Disconnect::Removed | Disconnect::Closed | Disconnect::Failed => true,
+        Disconnect::Dropped | Disconnect::Aged | Disconnect::Left => false,
     }
 }
 
 /// Whether the loop waits before reconnecting after `cause`.
 ///
-/// **`Removed` is on the waiting side, and that is most of why this function exists.** "We have
-/// been removed, so there is nothing to back off from" assumes local state has already caught up
-/// with the close frame — nothing is cleared by a close, so a device that reconnects at once is
-/// told 4001 again and spins against the one endpoint, which is the thundering herd
-/// [`backoff_ms`]'s jitter exists to break arriving by a different road.
+/// **`Removed` and `Dropped` are on the waiting side, and that is most of why this function
+/// exists.** "We have been removed, so there is nothing to back off from" assumes local state
+/// has already caught up with the close frame — nothing is cleared by a close, so a device that
+/// reconnects at once is closed on again and spins against the one endpoint, which is the
+/// thundering herd [`backoff_ms`]'s jitter exists to break arriving by a different road.
 pub fn deserves_backoff(cause: Disconnect) -> bool {
     match cause {
-        Disconnect::Removed | Disconnect::Closed | Disconnect::Failed => true,
+        Disconnect::Removed | Disconnect::Dropped | Disconnect::Closed | Disconnect::Failed => true,
         // Not a failure: the age limit is a socket replaced deliberately. Making it wait
         // punishes the healthy case.
         Disconnect::Aged => false,
@@ -299,7 +356,7 @@ pub fn next_attempt(attempt: u32, cause: Disconnect, socket_lifetime_ms: u64) ->
         Disconnect::Aged | Disconnect::Left => attempt,
         // **Never forgiven by lifetime.** A group that is gone is gone however long this socket
         // had been up, and the reconnect that follows will be refused the same way.
-        Disconnect::Removed => attempt.saturating_add(1),
+        Disconnect::Removed | Disconnect::Dropped => attempt.saturating_add(1),
         Disconnect::Closed | Disconnect::Failed => {
             if socket_lifetime_ms >= FORGIVEN_AFTER_MS {
                 0
@@ -479,21 +536,83 @@ mod tests {
         }
     }
 
-    /// **The relay's 4001 is a removal for a device that still thinks it is in the group, and
+    /// **The relay's 4002 is a removal for a device that still thinks it is in the group, and
     /// its own doing for one that has left** — the leave's own manifest is what closed it.
     #[test]
-    fn a_4001_is_a_removal_unless_the_device_has_already_left() {
+    fn a_4002_is_a_removal_unless_the_device_has_already_left() {
+        let why = Gone::OffTheManifest;
         assert_eq!(
-            closed_as_gone("g1", Membership::In("g1")),
+            closed_as_gone(why, "g1", Membership::In("g1")),
             Disconnect::Removed
         );
-        assert_eq!(closed_as_gone("g1", Membership::Nowhere), Disconnect::Left);
-        assert_eq!(closed_as_gone("g1", Membership::In("g2")), Disconnect::Left);
+        assert_eq!(
+            closed_as_gone(why, "g1", Membership::Nowhere),
+            Disconnect::Left
+        );
+        assert_eq!(
+            closed_as_gone(why, "g1", Membership::In("g2")),
+            Disconnect::Left
+        );
         // Could not look: the cautious reading, which backs off and writes the row.
         assert_eq!(
-            closed_as_gone("g1", Membership::Unknown),
+            closed_as_gone(why, "g1", Membership::Unknown),
             Disconnect::Removed
         );
+    }
+
+    /// **The relay's 4001 is a dropped group — never a removal** — for a device still in it,
+    /// and nothing at all for one that has left.
+    #[test]
+    fn a_4001_is_a_dropped_group_and_never_a_removal() {
+        let why = Gone::GroupDropped;
+        for still_in in [Membership::In("g1"), Membership::Unknown] {
+            assert_eq!(closed_as_gone(why, "g1", still_in), Disconnect::Dropped);
+        }
+        assert_eq!(
+            closed_as_gone(why, "g1", Membership::Nowhere),
+            Disconnect::Left
+        );
+        assert_eq!(
+            closed_as_gone(why, "g1", Membership::In("g2")),
+            Disconnect::Left
+        );
+    }
+
+    /// **Which close is which, by its code** — and any other code is an ordinary close, the one
+    /// a released client reads 4002 as.
+    #[test]
+    fn the_relays_two_codes_are_read_apart_and_no_other_is_read_at_all() {
+        assert_eq!(gone(Some(4002)), Some(Gone::OffTheManifest));
+        assert_eq!(gone(Some(4001)), Some(Gone::GroupDropped));
+        // The numbers are the relay's, and it must be these two this way round: 4001 is the
+        // only one a released client knows, and it reads it as "the group no longer exists".
+        assert_eq!((CLOSE_REMOVED, CLOSE_DROPPED), (4002, 4001));
+        let relay = include_str!("../../../../relay/src/log.ts");
+        assert!(relay.contains("export const CLOSE_REMOVED = 4002;"));
+        assert!(relay.contains("export const CLOSE_DROPPED = 4001;"));
+        for ordinary in [None, Some(1000), Some(1006), Some(4000), Some(4003)] {
+            assert_eq!(gone(ordinary), None, "{ordinary:?}");
+        }
+    }
+
+    /// **A dropped group backs off, spends an attempt, and is never a row** — it is how a lapse
+    /// first reaches a connected device, and a lapse is the one failure never recorded. The
+    /// other failures are rows; the two that are not failures are not.
+    #[test]
+    fn a_dropped_group_backs_off_and_is_never_recorded() {
+        assert!(deserves_backoff(Disconnect::Dropped));
+        assert_eq!(next_attempt(2, Disconnect::Dropped, 0), 3);
+        // Not forgiven by lifetime either, for a removal's reason: a relay that upgrades and
+        // then closes 4001 must not zero the counter every cycle.
+        assert_eq!(next_attempt(2, Disconnect::Dropped, 10 * BACKOFF_MAX_MS), 3);
+        assert!(!recorded(Disconnect::Dropped));
+
+        for row in [Disconnect::Removed, Disconnect::Closed, Disconnect::Failed] {
+            assert!(recorded(row), "{row:?}");
+        }
+        for quiet in [Disconnect::Aged, Disconnect::Left] {
+            assert!(!recorded(quiet), "{quiet:?}");
+        }
     }
 
     #[test]

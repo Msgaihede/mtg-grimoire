@@ -4291,6 +4291,113 @@ async fn a_token_refused_across_a_rotation_is_asked_again_under_the_new_key() {
     assert!(error_rows(&conn).is_empty(), "{:?}", error_rows(&conn));
 }
 
+/// ⚠ **And a round trip is what takes it** — the wiring, on the trip itself: `run_once` against a
+/// relay that answers the opening key check at this device's epoch, refuses the token asked
+/// with that epoch's auth, and from then on answers `/keys` one rotation on. The trip adopts the
+/// rotation, is given a token under the new key, and goes on to pull and ack.
+///
+/// The three tests around this one call `token_across_a_rotation` themselves, and every one of
+/// them passes with `round_trip` asking `entitlement::access_token` directly.
+///
+/// **What makes it red**: exactly that — the trip is the refusal, and nothing is pulled.
+#[tokio::test]
+async fn a_round_trip_that_meets_a_rotation_at_the_group_door_goes_on_under_the_new_key() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    let server = MockServer::start_async().await;
+    let (conn, me, desk_keys, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    let behind = auth_held(&conn);
+    // The rotation lands when the door first refuses: before that `/keys` answers this epoch,
+    // after it the next one, sealed to this device.
+    let rotated = std::sync::Arc::new(AtomicBool::new(false));
+    let before = {
+        let rotated = rotated.clone();
+        server.mock(|when, then| {
+            when.method(GET)
+                .path(format!("/g/{group}/keys"))
+                .is_true(move |_| !rotated.load(Ordering::SeqCst));
+            then.status(200).json_body(
+                serde_json::json!({ "epoch": 0, "blob": serde_json::Value::Null, "devices": [] }),
+            );
+        })
+    };
+    let after = {
+        let rotated = rotated.clone();
+        let blob = crypto::wrap_group_key(
+            &desk_keys.secret,
+            &me.keypair.public,
+            &group,
+            &me.device_id,
+            1,
+            &[41u8; 32],
+        )
+        .unwrap();
+        let devices = [me.device_id.as_str(), "dev-remover", "tablet"];
+        server.mock(|when, then| {
+            when.method(GET)
+                .path(format!("/g/{group}/keys"))
+                .is_true(move |_| rotated.load(Ordering::SeqCst));
+            then.status(200).json_body(serde_json::json!({
+                "epoch": 1,
+                "blob": URL_SAFE_NO_PAD.encode(&blob),
+                "devices": devices,
+            }));
+        })
+    };
+    let stale = {
+        let (rotated, behind) = (rotated.clone(), behind.clone());
+        server.mock(|when, then| {
+            when.method(POST).path("/token").is_true(move |req| {
+                let stale = req.body_string().contains(&behind);
+                if stale {
+                    rotated.store(true, Ordering::SeqCst);
+                }
+                stale
+            });
+            then.status(401)
+                .json_body(serde_json::json!({ "error": "unauthorized" }));
+        })
+    };
+    let fresh = server.mock(|when, then| {
+        when.method(POST)
+            .path("/token")
+            .is_true(asked_with(behind.clone(), false));
+        then.status(200)
+            .body(r#"{"access":"a2","expires":1900000000,"status":"active","since":1740000000}"#);
+    });
+    let pulled = server.mock(|when, then| {
+        when.method(GET)
+            .path(format!("/g/{group}/pull"))
+            .header("authorization", "Bearer a2");
+        then.status(200)
+            .json_body(serde_json::json!({ "envelopes": [], "cursor": 0 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/push"));
+        then.status(200)
+            .json_body(serde_json::json!({ "cursor": 1 }));
+    });
+    server.mock(|when, then| {
+        when.method(POST).path(format!("/g/{group}/ack"));
+        then.status(204);
+    });
+
+    let outcome = run_once(&conn).await;
+
+    assert!(
+        matches!(outcome, Ok(Some(_))),
+        "the trip went on: {outcome:?}"
+    );
+    assert_eq!((stale.calls(), fresh.calls()), (1, 1));
+    assert_eq!((before.calls(), after.calls()), (1, 1));
+    assert!(
+        pulled.calls() >= 1,
+        "and pulled, with the token it was given"
+    );
+    assert_eq!(identity::group(&conn).unwrap().unwrap().epoch, 1);
+    assert!(error_rows(&conn).is_empty(), "{:?}", error_rows(&conn));
+}
+
 /// ...and **a refusal from a relay still on this device's epoch stands, asked once**: nothing
 /// rotated, so a second ask would be the same answer, and the trip fails in the sentence the
 /// door has always answered.

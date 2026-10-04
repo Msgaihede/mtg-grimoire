@@ -33,8 +33,9 @@ live Worker (2026-09-28), and **401** once `"device":"deadbeef"` is added. ⚠�
 it was not deployed until that day**, on a `{"group":…,"auth":…}` probe the group door refuses as
 `malformed token request` — its `auth` was not 64 hex — before it reads `device` at all. **The
 pairing rendezvous is live too**: `GET /p/{32 hex}/offer` answers a JSON `nothing there`, not the
-router's plain-text `not found`. **The last deploy was 2026-10-01 at 22:09 UTC, from
-`claude/relay-rate-limits` at `7f6d6f50`**, and carried the rate limits below; the one before it,
+router's plain-text `not found`. **The last deploy was 2026-10-04 at 17:22:12 UTC, from `main`
+at `ea0aa88e`**, and carried the browser's half, below. **The one before it was 2026-10-01 at
+22:09 UTC, from `claude/relay-rate-limits` at `7f6d6f50`**, and carried the rate limits below; the one before that,
 the same day from `main` at `2b845048`, carried issue #548's `dev` claim — `token.ts` and
 `claim.ts`, no migration, and nothing a probe without a credential can see. Deploying this tree is `npx wrangler deploy` from here, and it
 is the last of the steps under **Deploying** below rather than the whole of them.
@@ -50,16 +51,28 @@ minutes after the half merged — and nobody recorded it; the probe had been rea
 and never run. A device meets the same fact from inside: its own `/keys` 200 carries
 `removalStep: 2`.
 
-**What is written and not deployed is the browser's half** (light app phase 6, issue #761): CORS
-for the web app at `https://mtg-grimoire.app`, the `APP_ORIGINS` var that lists it, the socket's
-bearer as a sub-protocol, the socket's own origin check, and the `ping`/`pong` auto-response. It
-adds no route and no migration. Its tell is a pre-flight: `OPTIONS /token` carrying `Origin:
-https://mtg-grimoire.app` and `Access-Control-Request-Method: POST` answers **204** from this tree
-and **405** from a Worker without it. **Probed 2026-10-04 at 15:49 UTC: 405**, with the same 405
-for `Origin: https://example.com` — the control, and the answer both origins get from a Worker
-that has never heard of either. The runbook's step 0 has the three pairs. ⚠️ **The web app must be
-deployed after this and never before**: a page asking a relay that answers no pre-flight fails
-every request, and what its engine sees is a network error with no status to act on.
+**The browser's half is deployed, and verified from outside** (light app phase 6, issue #761):
+CORS for the web app at `https://mtg-grimoire.app`, the `APP_ORIGINS` var that lists it, the
+socket's bearer as a sub-protocol, the socket's own origin check, and the `ping`/`pong`
+auto-response. It added no route and no migration. **Deployed 2026-10-04 at 17:22:12 UTC from
+`main` at `ea0aa88e` (#818), version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`**, by an agent at the
+owner's standing ask for this phase; wrangler 4.146.0, `--dry-run` first, no secret touched. Its
+tell is a pre-flight: `OPTIONS /token` carrying `Origin: https://mtg-grimoire.app` and
+`Access-Control-Request-Method: POST` answers **204** from this tree and **405** from a Worker
+without it. **Probed 2026-10-04 at 15:49 and 17:21 UTC, before: 405**, with the same 405 for
+`Origin: https://example.com`. **Probed at 23:09:03 UTC, after: 204**, with
+`Access-Control-Allow-Origin: https://mtg-grimoire.app`, `Vary: Origin`, the allowed headers
+`authorization, content-type`, the method `POST` and a max-age of 86400 — and still 405, with no
+`access-control-` line, for `example.com`. The runbook's step 0 has all three pairs, both
+columns. **What no probe has seen is a browser's socket**: the 101's sub-protocol and the pong
+were settled under local workerd, and nothing in production has opened a socket from a page.
+⚠️ **The web app must be deployed after this and never before** — which is now the order they
+are in: a page asking a relay that answers no pre-flight fails every request, and what its
+engine sees is a network error with no status to act on.
+
+**What is written and not deployed is the removal's close** — a rotation's roster closing the
+sockets of the devices it leaves out, with 4002 (light app step 6.3b; further down, and the
+runbook's ninth half).
 
 ## What it cannot do
 
@@ -659,17 +672,26 @@ and `dev --local`.
 
 **A removed device is told: a rotation's roster closes its socket** (light app step 6.3b,
 2026-10-04 — written, and waiting on a deploy; `docs/reference/hosted-relay-deploy.md`'s ninth
-half). `group.ts`'s `roster` closes, with `4001`, every open socket whose device the adopted
-manifest does not name (`log.ts`'s `removedSockets`) — the code `drop` closes a whole group's
-with, which a client reads as *removed*: a backoff, then the round trip a reconnect starts with,
-on which `/keys` answers a manifest without it and it clears its own group. Nothing is pressed
-on the removed device; in the smoke run it read as in no group 2–3 s after the press on the
-other one. A device holding a socket is also marked `departed`, whether or not it had acked.
+half). `group.ts`'s `roster` closes, with **`4002`** (`log.ts`'s `CLOSE_REMOVED`), every open
+socket whose device the adopted manifest does not name (`removedSockets`), which a client reads
+as *removed*: a backoff, then the round trip a reconnect starts with, on which `/keys` answers a
+manifest without it and it clears its own group. Nothing is pressed on the removed device; in
+the smoke run it read as in no group 2–4 s after the press on the other one. A device holding a
+socket is also marked `departed`, whether or not it had acked. The roster compacts first and
+closes after, each close on its own: one that throws costs nothing else.
 
-- **It includes a device that leaves**: its own departure is a manifest without it, so its own
-  socket is closed too — which is what ends the old group's socket on a *released* client that
-  would otherwise keep it for twelve hours. A current client reads that close behind its own
-  departure and says nothing.
+- **Two closes, two codes.** `4001` (`CLOSE_DROPPED`) is `drop`'s — every socket of a group
+  whose membership ended — and has meant only that in every build that shipped. `4002` is one
+  device off a manifest. They are read differently: a removal is a row in the removed device's
+  Errors panel; a dropped group is a lapse, which is never a row. And every released client
+  reads 4001 as *"this device's sync group no longer exists"* — which is why the roster may not
+  use it: see the next point.
+- **It includes a device that leaves**: its own departure is a manifest without it, and the
+  relay cannot spare the leaver — `/rotate` is authenticated by the group's shared auth and
+  says nothing of which device published — so its own socket is closed too. That is what ends
+  the old group's socket on a *released* client that would otherwise keep it for twelve hours,
+  and to that client 4002 is a plain close: a second or two of *offline*, then *off*. A current
+  client reads the close behind its own departure and says nothing.
 - **Until then a rotation closed nothing**, and the smoke run is where that was seen: the removed
   device went on reading *live*, over a roster it was no longer on, until its own next round
   trip — an edit, a press of *Sync now*, or the next push by a device still in the group.

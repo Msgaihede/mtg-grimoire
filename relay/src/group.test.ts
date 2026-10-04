@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Group } from "./group";
-import { CLOSE_REMOVED, deviceTag } from "./log";
+import { CLOSE_DROPPED, CLOSE_REMOVED, deviceTag } from "./log";
 
 /**
  * **A rotation's roster tells the devices it took out** (light app phase 6, step 6.3b): the real
@@ -101,7 +101,7 @@ describe("a roster, and the sockets of the devices it leaves out", () => {
     vi.unstubAllGlobals();
   });
 
-  it("closes a removed device's socket with 4001, and nobody else's", async () => {
+  it("closes a removed device's socket with 4002, and nobody else's", async () => {
     stubWorkerd();
     const desk = socket("desk");
     const phone = socket("phone");
@@ -112,7 +112,9 @@ describe("a roster, and the sockets of the devices it leaves out", () => {
     expect(response.status).toBe(204);
     expect(phone.close).toHaveBeenCalledTimes(1);
     expect(phone.close).toHaveBeenCalledWith(CLOSE_REMOVED, "removed from the group");
-    expect(CLOSE_REMOVED).toBe(4001);
+    // Never the dropped group's 4001: a released client reads that as "the group no longer
+    // exists", and a new one as a lapse.
+    expect(CLOSE_REMOVED).toBe(4002);
     expect(desk.close).not.toHaveBeenCalled();
     // A close, and nothing sent: a removed device is owed no frame about a log it cannot read.
     expect(phone.send).not.toHaveBeenCalled();
@@ -192,7 +194,29 @@ describe("a roster, and the sockets of the devices it leaves out", () => {
     expect(untagged.close).not.toHaveBeenCalled();
   });
 
-  it("still closes every socket when the whole group is dropped", async () => {
+  it("a socket that throws on close leaves the roster applied and the rest told", async () => {
+    // One the runtime tore down between the listing and the close. The roster is recorded and
+    // compacted, the next removed device is still told, and the answer is still the 204 its
+    // caller reads as applied.
+    stubWorkerd();
+    const torn = socket("phone");
+    torn.close.mockImplementation(() => {
+      throw new Error("the socket is gone");
+    });
+    const tablet = socket("tablet");
+    const { state, written } = fakeState([torn, tablet], { known: ["desk", "phone", "tablet"] });
+    const said = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const response = await new Group(state).fetch(roster(2, ["desk"]));
+
+    expect(response.status).toBe(204);
+    expect(tablet.close).toHaveBeenCalledWith(CLOSE_REMOVED, "removed from the group");
+    expect(written.some((w) => w.sql.startsWith("INSERT INTO roster_epoch"))).toBe(true);
+    expect(said).toHaveBeenCalledTimes(1);
+    said.mockRestore();
+  });
+
+  it("still closes every socket when the whole group is dropped — with 4001, as it always has", async () => {
     stubWorkerd();
     const sockets = [socket("desk"), socket("phone")];
     const { state } = fakeState(sockets);
@@ -202,7 +226,9 @@ describe("a roster, and the sockets of the devices it leaves out", () => {
     );
 
     for (const each of sockets) {
-      expect(each.close).toHaveBeenCalledWith(CLOSE_REMOVED, "group dropped");
+      expect(each.close).toHaveBeenCalledWith(CLOSE_DROPPED, "group dropped");
+      expect(each.close).not.toHaveBeenCalledWith(CLOSE_REMOVED, expect.anything());
     }
+    expect(CLOSE_DROPPED).toBe(4001);
   });
 });
