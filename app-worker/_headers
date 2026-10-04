@@ -34,9 +34,13 @@
 #                NOT manapool.com: it sends no Access-Control-Allow-Origin, so a page cannot read
 #                it whatever this says. NOT the relay: sync in a browser is phase 6, which adds the
 #                host here in the change that adds this origin to the relay's CORS allow-list.
-#   img-src      cards.scryfall.io beside `'self'`: a card picture is asked of this origin and
-#                answered by the service worker, and Chrome checks the address of the response a
-#                service worker hands back, not only the address the page asked.
+#   img-src      This origin and `data:`, and NOT cards.scryfall.io although every card picture
+#                comes from there. A picture is asked of this origin (`/mtgimg/…`) and answered by
+#                the service worker — which must hand back a response REBUILT FROM THE BYTES.
+#                Chrome checks the address of the response a service worker returns as well as
+#                the address the page asked: Scryfall's response passed along as it came, or out
+#                of Cache Storage, is refused by this line (measured, Chrome 154 — README). The
+#                host is in `connect-src`, which is what the service worker's own `fetch` needs.
 #   frame-ancestors, object-src, frame-src, base-uri, form-action — nothing embeds this app, and
 #                it embeds, rebases and posts nothing.
 #
@@ -45,14 +49,16 @@
 # is the app's name and not which deck was open.
 #
 # `Cache-Control: no-cache` is the default for every address: the document (at `/` and at every
-# route the single-page fallback answers), the manifest, the icons — each is revalidated before
-# use, so a deploy is seen on the next load. The two trees below are the exception.
+# route the single-page fallback answers), the manifest, the favicon and `icons/*.png` — each is
+# revalidated before use, so a deploy is seen on the next load. The manifest's icons are in that
+# list on purpose: their names carry no hash, so a year for them would be a year an installed
+# app kept an old icon, and a revalidation is a 304. The two trees below are the exception.
 #
 # No `Strict-Transport-Security`: the whole `.app` top-level domain is on the browsers' HSTS
 # preload list. No `Cross-Origin-Opener-Policy` or `-Embedder-Policy`: the OPFS pool needs neither
 # (the August spike ran it both ways), and `require-corp` would refuse every card picture.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data: https://cards.scryfall.io; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Cache-Control: no-cache

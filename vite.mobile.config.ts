@@ -213,6 +213,7 @@ const WEB_BUILD = fileURLToPath(new URL("./dist-web", import.meta.url));
  *   The *built* copy, because a preview serves the build. **A file that is not there gets none
  *   of them**, as on the host: there the 404 is the Worker's own answer, which `_headers` does
  *   not reach — and a year's `immutable` on a 404 is a chunk no rebuild could bring back.
+ *   **`/_headers` itself is a 404**, as on the host, which parses the file and does not serve it.
  *
  * **Not in dev.** Vite's dev server injects `<style>` elements and an inline preamble and talks
  * to the page over a WebSocket, each of which the shipped policy forbids on purpose.
@@ -231,10 +232,19 @@ function webHosting(): Plugin {
       server.middlewares.use((request, response, next) => {
         const req = request as unknown as Asked;
         const path = pathOf(req);
+        const res = response as unknown as Answer;
+        // The host parses this file and does not serve it. Served here, a service worker whose
+        // precache list named it would install in the preview and fail on the day of a deploy.
+        if (path === "/_headers") {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader("Cache-Control", "no-store");
+          res.end("Not found");
+          return;
+        }
         const answered =
           isNavigation(req.method, req.headers.accept, path) || existsSync(WEB_BUILD + path);
         if (answered) {
-          const res = response as unknown as Answer;
           for (const [name, value] of Object.entries(headersFor(rules, path))) {
             res.setHeader(name, value);
           }

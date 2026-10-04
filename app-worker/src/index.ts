@@ -26,6 +26,14 @@ import { isNavigation } from "../../src/lib/core/web/assets";
  * whose last segment has no extension is a place in the app, and every place is the one
  * document. Imported rather than restated, so the three servers cannot come to disagree.
  *
+ * **And three trees hold no place at all**, whatever the caller accepts ({@link NOT_A_PLACE}):
+ * the two a build writes its files into, and `/mtgimg/`, where step 5.3's service worker answers
+ * card pictures. A page that worker does not control yet asks `/mtgimg/display/…` over the
+ * network, and the answer has to be a 404 nothing keeps — the document there would be drawn as
+ * a broken picture, and is a 200 a cache has no reason to refuse. An `<img>`'s request is never
+ * a navigation, so the edge sends it here; this is the half that makes sure *here* cannot hand
+ * it the document either, for a path whose last segment happens to have no extension.
+ *
  * **No state and no secret**: no D1, no R2, no KV, no Durable Object, no `vars`. A request that
  * reaches this file costs one of the account's 100,000 a day and nothing else; a request for a
  * file that exists costs nothing at all, which is why nothing here is `run_worker_first`.
@@ -47,11 +55,18 @@ const REFUSAL = {
   "cache-control": "no-store",
 };
 
+/**
+ * Where nothing is a page: the bundle's hashed files, the engine's, and the card pictures the
+ * service worker answers (step 5.3). A miss under any of them is a 404 to every caller.
+ */
+const NOT_A_PLACE = ["/assets/", "/wasm/", "/mtgimg/"];
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const accept = request.headers.get("accept") ?? undefined;
-    if (isNavigation(request.method, accept, url.pathname)) {
+    const place = !NOT_A_PLACE.some((tree) => url.pathname.startsWith(tree));
+    if (place && isNavigation(request.method, accept, url.pathname)) {
       // **Asked for `/` by name, not handed the request.** The binding applies
       // `not_found_handling` to what it is given, so the request as it came would get the
       // document too — until the day somebody changes that setting, when it would get a 404 this

@@ -45,7 +45,8 @@ reader's data.
 | --- | --- | --- |
 | A file that exists — `/`, `/assets/…`, `/wasm/<build>/…`, the manifest | the file, with `_headers` applied | the edge; **the script does not run and the request is free** |
 | A browser's navigation to a place in the app — `/decks/12` | the document, 200, with `_headers` applied | the edge, the same way |
-| Anything else that matches no file — a chunk a deploy renamed, `/sw.js` before step 5.3 | **404**, `text/plain` | the script |
+| Anything else that matches no file — a chunk a deploy renamed, `/sw.js` before step 5.3 | **404**, `text/plain`, `no-store` | the script |
+| A card picture, `/mtgimg/…`, from a page no service worker controls yet | **404**, `no-store` — whatever the caller accepts | the script |
 | A navigation that did not say so — `curl -H "Accept: text/html" /decks/12` | the document, 200 | the script, through the binding |
 
 **The third row is the reason there is a script at all.** `not_found_handling:
@@ -64,10 +65,21 @@ is the header a browser sends. The script's, for the clients that send none, is 
 has no extension — which is the rule `npm run web:dev` and `web:preview` serve by, imported so the
 three cannot come to disagree.
 
+**Three trees hold no place at all**: under `/assets/`, `/wasm/` and `/mtgimg/` the script
+answers a miss with the 404 whatever the caller accepts. The third is step 5.3's: card pictures
+are asked of this origin at `/mtgimg/…` and answered by the service worker, so a page that worker
+does not control yet asks the network — and the document there would be drawn as a broken picture,
+with a 200 a cache has no reason to refuse. An `<img>`'s request is `Sec-Fetch-Mode: no-cors`, so
+the edge never gives it the fallback; the tree is named in the script so that the script cannot
+either, for a path whose last segment happens to have no extension.
+
 ⚠️ **A browser that *navigates* to a missing file gets the document**, by Cloudflare's rule:
-typing `/assets/gone.js` into the address bar shows the app. Nothing in the app navigates to a
-file, so nothing is handed HTML where it asked for code; it is written down so the probe below
-does not read as a bug.
+typing `/assets/gone.js` or `/mtgimg/display/abc/0` into the address bar shows the app. Nothing in
+the app navigates to a file or a picture, so nothing is handed HTML where it asked for code or
+pixels; it is written down so the probe below does not read as a bug. **The one setting that could
+close it is not taken**: `run_worker_first` with a list of patterns "disables the automatic
+`Sec-Fetch-Mode: navigate` detection" (the single-page-application page) — for the whole Worker,
+by that sentence — and a request it matches is a 429 once the free plan's day is spent.
 
 ## The policy
 
@@ -94,45 +106,63 @@ does not read as a bug.
   anywhere; a browser under this policy follows it only to that host. If Scryfall moves its bulk
   files, the web app's first run fails with a policy violation in the console while the desktop
   keeps working — and the fix is one host in `_headers` and a deploy.
-- **`img-src` names `cards.scryfall.io` although the page never asks it.** Step 5.3's service
-  worker answers a picture on this origin with Scryfall's bytes. Measured the same day: with
-  `img-src 'self'` alone, Chrome **blocks** that picture when the service worker hands back
-  Scryfall's response as it came — fetched, opaque, or out of Cache Storage, under either key —
-  because the check is made against the *response's* address as well. Only a response rebuilt
-  from its bytes passed. Naming the host lets 5.3 keep the response it was given.
+- **`img-src` is this origin and `data:`, and does not name `cards.scryfall.io`** — though every
+  card picture comes from there. Step 5.3's service worker answers a picture at `/mtgimg/…` with
+  Scryfall's bytes, and **it has to hand back a response rebuilt from those bytes**. Measured the
+  same day, on two `localhost` origins: with `img-src 'self'` alone, Chrome **blocks** the picture
+  when the service worker returns Scryfall's response as it came — fetched, opaque, or out of
+  Cache Storage, under either key — because the check is made against the *response's* address as
+  well as the one the page asked. Only `new Response(bytes)` was drawn. That is what 5.3 builds, so
+  the host stays out: the policy is tighter, and a service worker that ever stops rebuilding goes
+  wrong where it can be seen. It is in `connect-src`, which is what that worker's `fetch` needs.
+  (The first commit of this file named the host in `img-src`, before 5.3 was built to rebuild.)
 - **`style-src 'self'`, with the desktop's `style-src-attr 'unsafe-inline'`.** The same
   components run here; `src/CLAUDE.md` has what the first forbids. `hosting.test.ts` holds each
   directive the two hosts share to the desktop's shipped policy, so this one is never the looser.
 - **Caching is two rules and a default.** Everything is `no-cache` — kept, and asked about every
-  time. `/assets/*` and `/wasm/*` are content-addressed and kept for a year. `/sw.js` restates the
+  time: the document, the manifest, the favicon and the manifest's `icons/*.png`, whose names
+  carry no hash, so a year for them would be a year an installed app kept an old icon.
+  `/assets/*` and `/wasm/*` are content-addressed and kept for a year. `/sw.js` restates the
   default by a rule of its own, so loosening `/*` cannot take it along. ⚠️ **A header two matching
   rules both set is joined with a comma**, so each narrower rule detaches first (`! Cache-Control`).
 - **No isolation headers.** The OPFS pool needs neither `Cross-Origin-Opener-Policy` nor
   `-Embedder-Policy`, and `require-corp` would refuse every card picture.
 
 **`npm run web:preview` sends the same headers**, read from the built `dist-web/_headers` by
-`src/headers.ts`, and answers a missing file with a bare 404 as the script does. The dev server
-does not: Vite injects `<style>` elements and talks over a WebSocket, which the policy forbids on
-purpose.
+`src/headers.ts`, answers a missing file with a bare 404 as the script does, and answers
+`/_headers` itself with a 404, as the host does. The dev server sends none of it: Vite injects
+`<style>` elements and talks over a WebSocket, which the policy forbids on purpose.
 
 ### What the browser said under it
 
-Headless Chrome 154.0.8037.95 on Windows 11, 2026-10-04, `npm run web:build` served by
-`web:preview` with real hosts made unresolvable. **The engine was not this commit's**: it was a
-copy of step 5.2's module as it stood that day, which starts the launch's downloads, under this
-commit's page. At **360 × 800** (the phone face) and
-**1280 × 800** (the desktop face), each of `/search`, `/collection`, `/decks`, `/wishlist` and
-`/settings` loaded as a deep link: **no policy violation on the page or in the Worker, nothing
-thrown**, the engine instantiated, and the page's console said `database open in OPFS — journal
-delete, corpus journal delete, schema 59` every time. The Worker asked `api.scryfall.com` and
-`json.commanderspellbook.com`, and the policy let both leave.
+Headless Chrome 154.0.8037.95 on Windows 11, 2026-10-04, over `npm run web:build` of `main` at
+`92cbc02b` with this directory merged in. **The module was a copy, not this tree's own build**:
+8,623,589 bytes, taken from the phase's working tree that day (3.07 MB gzipped by Vite's
+report).
 
-**That zero is not a vacuous one**: the same run with `api.scryfall.com` taken out of
-`connect-src` logged a violation for every request the Worker made to it, so a refusal inside
-the Worker is something this run can see. **And it is a narrow one**: an empty corpus
-on a machine with no network, so no card picture was drawn, no download reached its second host,
-and the desktop face showed its *No card data yet* wall rather than a dialog or a menu. No other
-browser was run.
+- **A first run, under the policy.** A scratch copy of `scripts/web-smoke.mjs` that serves
+  `dist-web/` through `headersFor` and listens for violations on the page and in the Worker —
+  the repository's script does neither. All nine of its checks passed: the engine compiled and
+  opened its database, the card sync asked `api.scryfall.com` and followed the descriptor to
+  `data.scryfall.io`, both Tagger files and the combos finished with rows stored, a typed search
+  drew a tile, Settings downloaded Card Kingdom's pricelist, a reload kept the cards, a second
+  tab was told. **Every host in `connect-src` was asked and let through.**
+- **The one violation, seventeen times: `img-src` refusing `http://mtgimg.localhost/…`.** On
+  `main` the page still names the desktop's image protocol; step 5.3 moves pictures to
+  `/mtgimg/…` on this origin. Until it lands, a card picture in a browser is blocked by this
+  policy where before it was a connection nobody accepted — the tile draws its retry either way.
+- **That count is not a vacuous one.** The same run with `data.scryfall.io` taken out of
+  `connect-src` failed at the card sync — the page said `http request failed: error sending
+  request` — and reported the Worker's three refused downloads by name. That sentence is also
+  what a reader sees on the day Scryfall moves its bulk files.
+- **Both faces, as deep links**, through `npm run web:preview` with real hosts unresolvable: at
+  360 × 800 and 1280 × 800, each of `/search`, `/collection`, `/decks`, `/wishlist` and
+  `/settings` reached its shell with no violation and nothing thrown, and the console said
+  `database open in OPFS — journal delete, corpus journal delete, schema 59` every time.
+
+**What stayed unexercised**: the desktop face over a corpus — the fixtures drive the phone face,
+and at 1280 the empty database shows its *No card data yet* wall rather than a table, a dialog or
+a menu; a card picture actually drawn; a service worker; any browser but this one.
 
 ## Deploying
 
@@ -167,9 +197,12 @@ H='^HTTP|content-type|cache-control|content-security-policy|x-content-type|refer
 | 8 | the same with `-H "Accept-Encoding: br, gzip"` | a `content-encoding` — `application/wasm` is on Cloudflare's default list. **Record which**: it is the size a reader downloads | **not yet run** |
 | 9 | `curl -s -o /dev/null -D - "$A/assets/$J" \| grep -iE "$H"` | `200`, `text/javascript`, a year, immutable — and **not** `no-cache, public, …`, which is the detach not working | **not yet run** |
 | 10 | `curl -s -o /dev/null -w "%{http_code}\n" "$A/sw.js"` | `404` until step 5.3 ships the file; then `200` with `cache-control: no-cache` | **not yet run** |
-| 11 | `curl -s -o /dev/null -w "%{http_code}\n" "$A/_headers"` | `404` — the file is parsed, not served | **not yet run** |
+| 11 | `curl -s -o /dev/null -w "%{http_code}\n" "$A/_headers"` | `404` — the file is parsed, not served, which is why a service worker's precache list must leave it out | **not yet run** |
 | 12 | `curl -s -o /dev/null -w "%{http_code}\n" https://mtg-grimoire-app.denmark-east.workers.dev/` | **not `200`** — there is no second origin | **not yet run** |
 | 13 | `curl -sI http://mtg-grimoire.app/ \| head -3` | a redirect to `https`, if the zone has *Always Use HTTPS* on. A browser never asks: `.app` is HSTS-preloaded | **not yet run** |
+| 14 | `curl -s -o /dev/null -D - -H "Sec-Fetch-Mode: no-cors" -H "Accept: image/avif,image/webp,image/*,*/*;q=0.8" "$A/mtgimg/display/abc/0" \| grep -iE "$H"` | `404`, `text/plain`, **`cache-control: no-store`** — an `<img>`'s request, as a page no service worker controls makes it. ⚠️ `200 text/html` is the document where a picture was asked | **not yet run** |
+| 15 | the same with `-H "Accept: text/html"` and no `Sec-Fetch-Mode` | `404` again — the script holds no place under `/mtgimg/` | **not yet run** |
+| 16 | `curl -s -o /dev/null -D - "$A/icons/icon-192.png" \| grep -iE "$H"` | `200`, `image/png`, `cache-control: no-cache` | **not yet run** |
 
 Then open the address in a browser with its console open: no policy violation, the app past its
 gate, and `database open in OPFS` on the console. That is the probe no `curl` can make.
@@ -233,12 +266,13 @@ that shipped a schema rung is fixed forwards.
   docs say the file is "not applied to responses generated by your Worker code"; whether an asset
   the script *asked for* counts is not said. Either answer is safe — the only clients on that path
   send no Fetch Metadata, which no browser that can run the app does — but it should be known.
-- **That the navigation split is as the docs describe** (probes 2, 5 and 6): the document at the
-  edge for a navigation, the script for every other miss. Probe 5 is the one that matters.
+- **That the navigation split is as the docs describe** (probes 2, 5, 6 and 14): the document at
+  the edge for a navigation, the script for every other miss. Probes 5 and 14 are the ones that
+  matter — a renamed chunk and a card picture, each a 404 and not the document.
 - **The `Content-Type` of the module** (probe 7). The docs say only that wrangler takes it from
   the extension. `WebAssembly.instantiateStreaming` refuses anything but `application/wasm`.
 - **What the edge compresses the module with** (probe 8), and so what a first visit downloads.
-  The module built on 2026-10-04 was 8,592,080 bytes, and 3.06 MB gzipped by Vite's report.
+  The module this was checked against was 8,623,589 bytes, and 3.07 MB gzipped by Vite's report.
 - **That the detach works as written** (probe 9), and that `no-cache` *replaces* Cloudflare's own
   default `Cache-Control` rather than joining it.
 - **How long the certificate takes**, and whether the apex had a record in the way.
@@ -246,8 +280,9 @@ that shipped a schema rung is fixed forwards.
   version, which says so; nobody here has watched it.
 - **Any browser but one Chrome on Windows, and any phone.** The policy has met no Safari and no
   Firefox, and neither has the engine.
-- **The policy against real traffic**: a card picture through a service worker (5.3), a download
-  that follows the descriptor to `data.scryfall.io`, Card Kingdom's pricelist.
+- **The policy against the real hosts.** Every host in `connect-src` has been asked under it and
+  answered from a fixture; none has been asked for real from a page at this origin. **And a card
+  picture through the service worker** (5.3), which is the one thing `img-src` has yet to draw.
 
 ## Cost
 
@@ -263,7 +298,11 @@ Read from Cloudflare's documentation on 2026-10-04; none of it measured here.
   spends**, the cliff `relay/README.md` describes: past it every reader's sync errors at once.
   What reaches the script is a miss that is not a browser's navigation — a renamed chunk asked for
   by a page that predates a deploy, `/sw.js` until 5.3, a crawler. In ordinary use that is a
-  handful per reader per deploy.
+  handful per reader per deploy. ⚠️ **And, from 5.3 on, every card picture a page asks before its
+  service worker controls it**: each `/mtgimg/…` that reaches the network is one Worker request
+  for a 404. A first visit that draws a wall of cards ahead of the worker taking control spends
+  one per tile, so how soon that worker claims its page is a cost on this budget, not only a
+  matter of broken pictures. Nobody has counted it.
 - **A flood of misses is the exposure**, and unlike the two `workers.dev` Workers this one sits
   behind a zone: a rate-limiting rule on `mtg-grimoire.app` can refuse a caller *before* the Worker
   is invoked, which `relay/src/ratelimit.ts` could not do for the relay. **None is configured.**

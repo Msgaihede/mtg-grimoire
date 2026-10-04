@@ -78,6 +78,18 @@ describe("a file that is not there", () => {
     expect(asked).toEqual([]);
   });
 
+  // A path with no extension under a tree of files: `isNavigation` alone would call it a place.
+  it.each(["/assets/chunk", "/wasm/0123456789abcdef/grimoire_web", "/mtgimg/display/abc/0"])(
+    "is a 404 to a caller that accepts a page, under a tree that holds none: %s",
+    async (path) => {
+      const { env, asked } = hosting();
+      const response = await worker.fetch(ask(path, { accept: PAGE }), env);
+
+      expect(response.status).toBe(404);
+      expect(asked).toEqual([]);
+    },
+  );
+
   it("may not be sniffed and may not be kept", async () => {
     const { env } = hosting();
     const response = await worker.fetch(ask("/assets/gone.js", { accept: ANYTHING }), env);
@@ -86,6 +98,34 @@ describe("a file that is not there", () => {
     // The same address is a real file the moment a deploy puts one there.
     expect(response.headers.get("cache-control")).toBe("no-store");
   });
+});
+
+describe("a card picture, asked of the network by a page no service worker controls yet", () => {
+  /** What Chrome sends for an `<img>`: never a navigation, and no `text/html` in what it takes. */
+  function picture(path: string): Request {
+    return new Request(ORIGIN + path, {
+      headers: {
+        accept: "image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8",
+        "sec-fetch-mode": "no-cors",
+        "sec-fetch-dest": "image",
+      },
+    });
+  }
+
+  it.each(["/mtgimg/display/abc/0", "/mtgimg/grid/0f3a/1", "/mtgimg/art/abc/0.webp"])(
+    "is a 404 that nothing keeps, and never the document: %s",
+    async (path) => {
+      const { env, asked } = hosting();
+      const response = await worker.fetch(picture(path), env);
+
+      expect(response.status).toBe(404);
+      // The document here would be a 200 a cache had no reason to refuse.
+      expect(response.headers.get("cache-control")).toBe("no-store");
+      expect(response.headers.get("content-type")).toBe("text/plain; charset=utf-8");
+      expect(await response.text()).not.toContain("<");
+      expect(asked).toEqual([]);
+    },
+  );
 });
 
 describe("a place in the app, asked for without saying it is a navigation", () => {

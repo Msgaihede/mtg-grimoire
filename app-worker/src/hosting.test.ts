@@ -34,7 +34,13 @@ const ENGINE = [
   "/wasm/0123456789abcdef/grimoire_web.js",
   "/wasm/0123456789abcdef/grimoire_web_bg.wasm",
 ];
-const UNHASHED = ["/light.webmanifest", "/mtg-grimoire-mark.svg"];
+/** What `mobile/public/` puts at the root: fixed names, so nothing here may be kept for long. */
+const UNHASHED = [
+  "/light.webmanifest",
+  "/mtg-grimoire-mark.svg",
+  "/icons/icon-192.png",
+  "/icons/maskable-512.png",
+];
 const SERVICE_WORKER = "/sw.js";
 const EVERY = [...DOCUMENT, ...HASHED, ...ENGINE, ...UNHASHED, SERVICE_WORKER];
 
@@ -190,8 +196,20 @@ describe("the policy", () => {
     expect(csp["script-src"].filter((s) => s !== "'wasm-unsafe-eval'")).toEqual(
       desktop["script-src"],
     );
-    // Its two image sources that are not a Tauri protocol.
-    expect(csp["img-src"]).toEqual(["'self'", "data:", origin(IMAGE_HOST)]);
+    // Its image sources that are not a Tauri protocol, and nothing added.
+    expect(csp["img-src"]).toEqual(desktop["img-src"].filter((s) => !s.includes("mtgimg")));
+  });
+
+  it("draws pictures from this origin alone, though every one comes from Scryfall", () => {
+    // A card picture is asked of `/mtgimg/…` and answered by the service worker with a response
+    // **rebuilt from the bytes** (step 5.3). Chrome holds `img-src` to the address of the
+    // response a service worker returns as well as to the address asked — measured, Chrome 154:
+    // Scryfall's response handed back as it came, opaque, or out of Cache Storage is refused
+    // under this line, and only a rebuilt one is drawn. So the host is *not* named here, which
+    // is the tighter policy and the one that goes red, in a browser, if the service worker ever
+    // stops rebuilding. What it needs is to *fetch* the picture, and that is `connect-src`.
+    expect(csp["img-src"]).toEqual(["'self'", "data:"]);
+    expect(csp["connect-src"]).toContain(origin(IMAGE_HOST));
   });
 
   it("may be framed by nobody and names its manifest's origin", () => {
@@ -341,15 +359,30 @@ describe("what must not be in this directory, or in any build but the web's", ()
     expect(Object.keys(files).filter((name) => /\.dev\.vars|\.env/.test(name))).toEqual([]);
   });
 
-  it("keeps `_headers` out of `public/`, which every build copies", () => {
-    // The desktop's `dist/`, the APK's `dist-mobile/` and the share viewer's `dist-share/` each
-    // take `public/` whole. The web build emits this one file itself, in `web` mode alone.
+  it("keeps `_headers` out of both public directories, which builds copy whole", () => {
+    // The root's goes into the desktop's `dist/` and the share viewer's `dist-share/`;
+    // `mobile/public/` into the APK's `dist-mobile/` as well as `dist-web/`. The web build emits
+    // this one file itself, in `web` mode alone.
     // (`**`, because a pattern with nothing to expand is one the glob import refuses.)
-    const copied = import.meta.glob("/public/**/_headers", {
+    const copied = import.meta.glob(["/public/**/_headers", "/mobile/public/**/_headers"], {
       query: "?raw",
       import: "default",
       eager: true,
     });
     expect(Object.keys(copied)).toEqual([]);
+  });
+
+  it("is the only file at the build's root a host does not serve", () => {
+    // Cloudflare parses `_headers` and answers its address with a 404, so a service worker's
+    // precache list that named it would fail its install. The list leaves out what starts with
+    // `_` at the root; nothing the light builds copy there may start with one and want serving.
+    const atRoot = import.meta.glob("/mobile/public/*", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+    });
+    const names = Object.keys(atRoot).map((path) => path.slice(path.lastIndexOf("/") + 1));
+    expect(names).toContain("light.webmanifest");
+    expect(names.filter((name) => name.startsWith("_"))).toEqual([]);
   });
 });
