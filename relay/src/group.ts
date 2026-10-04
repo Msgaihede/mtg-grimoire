@@ -1,5 +1,6 @@
 import { admitToLog, isEnvelope } from "./admit";
 import {
+  CLOSE_DROPPED,
   CLOSE_REMOVED,
   compact,
   departures,
@@ -502,16 +503,27 @@ export class Group implements DurableObject {
       roster.epoch,
     );
 
+    // The floor has just moved. **Before the sockets below**, so nothing a close can do stands
+    // between a roster that was applied and the compaction it owes.
+    this.compactNow();
+
     // **And the removed devices are told**, which until 2026-10-04 nothing did: each socket of a
-    // device this roster does not name is closed with the code `drop` uses for a whole group.
-    // `log.ts`'s `removedSockets` is which, and why a rotation that took a device out left it
-    // reading *live* before. Read off the same `named` the marks above were, so the two cannot
-    // disagree about who left.
+    // device this roster does not name is closed with `CLOSE_REMOVED` — 4002, a code of its own
+    // and not the 4001 `drop` closes a whole group with; `log.ts` has why. `removedSockets` is
+    // which, and why a rotation that took a device out left it reading *live* before. Read off
+    // the same `named` the marks above were, so the two cannot disagree about who left.
+    //
+    // Best effort, each on its own: a socket that throws on `close` — one the runtime has already
+    // torn down — must not leave the next removed device untold, nor turn an applied roster
+    // into a 500 its caller would read as not applied.
     for (const gone of removedSockets(sockets, named)) {
-      gone.ws.close(CLOSE_REMOVED, "removed from the group");
+      try {
+        gone.ws.close(CLOSE_REMOVED, "removed from the group");
+      } catch (error) {
+        console.error("roster close", error);
+      }
     }
 
-    this.compactNow();
     return new Response(null, { status: 204 });
   }
 
@@ -643,11 +655,12 @@ export class Group implements DurableObject {
     this.sql.exec(`DELETE FROM log`);
     this.sql.exec(`DELETE FROM acks`);
     this.sql.exec(`UPDATE log_size SET chars = 0 WHERE id = 1`);
-    // 4001 is in the private range, so the Rust client can tell "you were removed" from any
-    // transport-level close. There is no close-all API; the loop is it. `state.abort()` would
-    // also do it and is the wrong tool — it logs an error application code cannot catch.
+    // 4001 is in the private range, so the Rust client can tell "this group was dropped" from
+    // any transport-level close — and from 4002, which is one device taken off a manifest
+    // (`log.ts`'s `CLOSE_REMOVED`). There is no close-all API; the loop is it. `state.abort()`
+    // would also do it and is the wrong tool — it logs an error application code cannot catch.
     for (const ws of this.state.getWebSockets()) {
-      ws.close(CLOSE_REMOVED, "group dropped");
+      ws.close(CLOSE_DROPPED, "group dropped");
     }
     return new Response(null, { status: 204 });
   }

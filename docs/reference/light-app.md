@@ -5656,7 +5656,8 @@ request each.
 ### 10.1 Step 6.1 — the relay answers a page, and the engine asks it (2026-10-04)
 
 Three things the code said move together, and did: the relay's CORS answers, the engine's
-refusal, and the policy's `connect-src`. **Written and not deployed** — asked at 15:49 and again
+refusal, and the policy's `connect-src`. **Written and not deployed** (**Deployed 2026-10-04 at
+17:22 UTC and verified at 23:09 — the runbook's step 0 has both columns.**) — asked at 15:49 and again
 at 15:59 UTC, the deployed relay answered an `OPTIONS /token` from `https://mtg-grimoire.app`
 with `405`, `Allow: POST` and no `access-control-*` line, and the live site's policy does not
 name the relay. The tree is ahead of both hosts until the deploys below.
@@ -5982,26 +5983,52 @@ socket was built. Fixed as one thing, on both sides.
   the outbox's question — and on every keepalive beat. A device in no group, or in another, ends
   the socket as `Disconnect::Left`: no backoff, no row, the attempt counter untouched; the loop
   then says `off`, or dials for the group it is in now.
-- **The look is on the write connection, and a test holds why**: with a commit hook held open
+- **The look is on the write connection, and two tests hold why**: with a commit hook held open
   mid-commit, the read connection still answered the group being deleted — the look that would
-  have kept the socket — while the loop's look waited for the writer and answered none. On two
-  connections and on one.
-- **A 4001 is read behind the sync lane**, because a device's own departure is a manifest
-  without it and the relay now closes its socket for that: asked at once it is a removal —
-  `offline`, a row — over something the reader just chose. The press holds the lane to its last
-  write, so behind it the group is gone and the close is quiet.
+  have kept the socket — while a look on the write connection waited for the writer and
+  answered none; and **the loop itself**, rung by the real hook and driven with that commit
+  held, says `off` on the one ring its departure gave (asked of the read connection it never
+  does). The first runs on two connections and on one — and its one-connection arm is a second
+  native thread waiting on a mutex, which is the mutex's order and not a browser: on wasm the
+  look runs between two turns of the event loop, and a connection found taken answers "unknown"
+  at once, which keeps the socket until the next commit or ping.
+- **Both of the write wake's questions — which group, anything to push — are one taking of the
+  write connection**, where two made a batch ingest stand aside twice per commit.
+- **The relay's close for a removal is 4002, and it is read behind the sync lane**, because a
+  device's own departure is a manifest without it and the relay now closes its socket for
+  that: asked at once it is a removal — `offline`, a row — over something the reader just
+  chose. The press holds the lane to its last write, so behind it the group is gone and the
+  close is quiet.
+- **4001 is left to mean what it always has — a dropped group, a membership ended — and is now
+  never a row.** The step's first commit closed removed devices with 4001 too, and review
+  found two wrong rows in that: a *released* desktop reads 4001 as "the group no longer
+  exists", so its own *Leave group* would have logged one once this relay deployed; and at a
+  lapse the close arrives while the device is still in its group with a stored `active`, so the
+  loop — asking its database, which knows nothing yet — wrote a row for a lapse, one per
+  connected device. Now: 4002 → the removal path; 4001 → back off, write nothing, conclude
+  nothing, and let the trip behind the backoff speak. Tested on a device that pressed Connect
+  and on one that only paired.
 - **No group is not a failed dial.** A removed device clears its group on the trip in front of
   its reconnect; reaching the dial with none is `Left`, where it was a second backoff and a
   second row.
 - **A dial has a deadline** — twenty seconds, the relay's other clients' connect and read bounds
   added. A relay that took the connection and never answered held the loop at `connecting`, with
-  no trip, for as long as the stack allowed; a browser allows minutes.
+  no trip, for as long as the stack allowed; a browser allows minutes. **It takes one last turn
+  before it gives up**: in a browser the deadline and the socket's `open` are both queued
+  tasks, and behind a stretch that holds the thread past twenty seconds — this section's own
+  relaunch held it ten, and nineteen once, at 30 000 cards; a real first ingest is ~117 000 —
+  both are waiting when the thread comes back. Deadline first, and an opened socket was dropped
+  with a row saying the relay never answered. So at the deadline the dial yields once to the
+  host and polls the connect once more (`timer::timeout_after_a_last_turn`). Tested natively,
+  on a runtime whose order is known; **a browser's task order is not specified**, and no
+  browser run has staged it.
 
 **The relay** (`relay/src/group.ts`, `log.ts`; **not deployed**): a rotation's roster closes,
-with 4001, every open socket whose device the adopted manifest does not name, and marks a device
-it knows only by its socket departed with the rest. The client's next act after that close is
-the round trip on which it finds itself off the manifest, so it cannot spin: removed → 4001 →
-one backoff → the trip → no group → `off`. `notifyTargets` is unchanged — a device a roster took
+with **4002**, every open socket whose device the adopted manifest does not name, and marks a
+device it knows only by its socket departed with the rest; it compacts first, and a close that
+throws costs nothing else. `drop` still closes a whole group with 4001. The client's next act
+after a 4002 is the round trip on which it finds itself off the manifest, so it cannot spin:
+removed → 4002 → one backoff → the trip → no group → `off`. `notifyTargets` is unchanged — a device a roster took
 out holds no socket to tell. No upgrade is refused on the `departed` mark: a lost roster post
 would then leave a re-paired device with no doorbell.
 
@@ -6012,6 +6039,13 @@ a device recorded nothing: found here as a removed browser whose log stayed empt
 behind `commands::entitled` now, as that function's doc said and the Settings panel does. Tests
 on both kinds of device: a failed background trip and a fallen socket are each a row; a lapse —
 the relay's 401 on a sync route — is none, and neither is what follows it.
+
+**How a lapse is said in production, as far as the source says.** A device with no refresh
+secret learns of one from the group door's 401 carrying `membership_ended`. The relay deployed
+on 2026-10-04 is `main` at `ea0aa88e`; `relay/src/claim.ts` there defines that code and stamps
+it on that 401, and nothing under `relay/src` changed between that commit and this step's base.
+So the code is there to be answered. **Production itself has not been asked with a lapsed
+membership** — nobody has let one lapse to see.
 
 **A joiner's first trip met the join's rotation — found by the walk, three runs in twenty-one,
 and not asked for by this step.** The device that confirms a pairing seals the key at the
@@ -6032,13 +6066,16 @@ it in exactly that shape, once, and says so when it does.
 1. It lets go of its socket the moment it leaves its group, is removed, or changes group, and
    reads `off` — where it read `live` until the socket ended.
 2. Joined to another group, its socket is that group's within five seconds, not twelve hours.
-3. Removed, once the relay tells it: `offline` for one backoff, then `off`, and one row — *the
-   relay says this device is no longer in its sync group*, the 4001's sentence now, in place of
-   *…this device's sync group no longer exists*.
+3. Removed, once a relay that sends 4002 tells it: `offline` for one backoff, then `off`, and
+   one row — *the relay says this device is no longer in its sync group*. **And a 4001 — a
+   dropped group — writes no row**, where it wrote *…this device's sync group no longer
+   exists*: `offline` for a backoff, and the trip behind it speaks. That one is live against
+   the relay deployed today.
 4. A dial the relay never answers fails after twenty seconds.
 5. **A desktop that joined by pairing starts showing background relay failures in its Errors
    panel**, which it was silently dropping — folded on the message, as on every other device.
-6. Each commit on its write connection costs the loop one more read, of `sync_group`.
+6. Each commit on its write connection costs the loop one more read, of `sync_group` — in the
+   same taking of the connection as the outbox's, so no more waiting than before.
 7. A round trip whose token is refused because a rotation landed behind its key check adopts
    the rotation and asks once more, where it failed and waited for the next trip.
 
@@ -6081,9 +6118,12 @@ longer in proportion.
 - **The relay's half is not deployed.** Until it is, a removed device learns at its own next
   round trip, as before — and then lets go of its socket, which is new. The runbook's ninth half
   has what each side does with the other's old build, and the one look that says it is live.
-- **A released desktop against the new relay** reads its own *Leave group* as a removal: a few
-  seconds of `offline` and one row saying its group no longer exists. Read off the released
-  loop's code, not driven.
+- **A released desktop against the new relay** reads the 4002 its own *Leave group* earns as a
+  plain close: a second or two of `offline`, then `off`, and a row (*the relay closed the
+  socket*) only if its socket was under a minute old. Read off the released loop's code
+  (v0.40.0, `daa70e12`), not driven; the runbook's table has every cell.
+- **The dial's last turn in a browser**: no run has staged a deadline and an `open` queued
+  together, and the dial itself has no test of its own for it — the timer it calls has.
 - **A Sync panel left open on a removed device keeps its old roster** until its own query is
   read again: the engine says `off` on `sync:live`, and nothing on the page re-reads the pairing
   for that.

@@ -3,6 +3,7 @@ import { MAX_GROUP_DEVICES } from "./groupauth";
 import {
   ACK_TTL_MS,
   compact,
+  CLOSE_DROPPED,
   CLOSE_REMOVED,
   departures,
   deviceTag,
@@ -413,8 +414,12 @@ describe("removedSockets", () => {
     expect(notifyTargets(after, "laptop").map((s) => s.tag)).toEqual(["d:desk"]);
   });
 
-  it("uses the code a dropped group's sockets are closed with", () => {
-    // The one close a client reads differently (`sync_engine::live`'s `CLOSE_GROUP_GONE`).
-    expect(CLOSE_REMOVED).toBe(4001);
+  it("closes with a code of its own, which is not a dropped group's", () => {
+    // `sync_engine::live` reads the two differently (`CLOSE_REMOVED` and `CLOSE_DROPPED` there):
+    // a removal is one row and the removal's sentence; a dropped group is a lapse, and no row.
+    // And every released client reads 4001 as "the group no longer exists" — which a device's
+    // own Leave must never be told.
+    expect(CLOSE_REMOVED).toBe(4002);
+    expect(CLOSE_DROPPED).toBe(4001);
   });
 });

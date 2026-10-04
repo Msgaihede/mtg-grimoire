@@ -32,8 +32,8 @@ use std::time::Duration;
 use futures_util::{pin_mut, select, FutureExt};
 
 use super::schedule::{
-    backoff_ms, closed_as_gone, deserves_backoff, let_go, next_attempt, Disconnect, Membership,
-    Scheduler, Wake, CONNECT_SECS, PING_SECS,
+    backoff_ms, closed_as_gone, deserves_backoff, gone, let_go, next_attempt, recorded, Disconnect,
+    Membership, Scheduler, Wake, CONNECT_SECS, PING_SECS,
 };
 use super::{client, commands, entitlement};
 use crate::errors::{Kind, Source};
@@ -123,7 +123,7 @@ pub fn current() -> LiveState {
 /// row-level wake would silently never sync a mute or a rename.
 ///
 /// **This says only "a transaction committed", and deciding is somebody else's job** — spec
-/// §6.3's "`commit_hook` wakes, the outbox decides". The decider is `outbox_has_work`, on the arm
+/// §6.3's "`commit_hook` wakes, the outbox decides". The decider is `after_a_commit`, on the arm
 /// that receives this signal: `sync_ops WHERE pushed_at IS NULL`, one partial-index scan. That is
 /// what keeps the Scryfall ingest, the image cache, the price and tag feeds and every `error_log`
 /// row off the relay — none of them is a synced table — and it is what closes the loop a round
@@ -222,7 +222,10 @@ pub async fn run(state: Arc<State>, writes: Arc<Bell>) {
         // recycling a connection, not a broken sync — and these rows fold on the message, so
         // logging every one would leave the panel showing a rising count for the app working
         // exactly as intended.
-        if next > attempt {
+        //
+        // **Nor is a dropped group** ([`recorded`]): that close is how a lapse first reaches a
+        // connected device, and a lapse is never a row.
+        if next > attempt && recorded(ended.cause) {
             if let Some(reason) = ended.error {
                 note(&state, reason).await;
             }
@@ -258,19 +261,18 @@ fn the_loop_can_be_handed_to_a_hosts_runtime(state: Arc<State>, writes: Arc<Bell
 /// connection per device per day.
 const SOCKET_MAX_AGE: Duration = Duration::from_secs(12 * 60 * 60);
 
-/// What a 4001 is recorded as. **One sentence for both things the relay means by it** — the
-/// group was dropped, or a rotation took this device off it — because the close says which of
-/// the two no more than this does. (It read *"this device's sync group no longer exists"* while
-/// a dropped group was the only cause.)
-const GROUP_GONE: &str = "the relay says this device is no longer in its sync group";
+/// What a removal is recorded as — the relay's 4002, on a device that has not itself left
+/// ([`Disconnect::Removed`]). True of the one event that code is sent for: a rotation's manifest
+/// no longer names this device.
+///
+/// **The relay's other close, 4001 — a dropped group — has no sentence, because it is never
+/// recorded** ([`recorded`]). It read *"this device's sync group no longer exists"* in every
+/// build before the light app's step 6.3b, which a released client still writes.
+const REMOVED: &str = "the relay says this device is no longer in its sync group";
 const SOCKET_CLOSED: &str = "the relay closed the socket";
 
 /// What a dial that got no answer says.
 const NO_ANSWER: &str = "the relay did not answer the live socket's upgrade in time";
-
-/// The close code the relay sends for a group that is gone, and — since the light app's step
-/// 6.3b — to a device a rotation's manifest no longer names.
-const CLOSE_GROUP_GONE: u16 = 4001;
 
 /// What one socket did before it stopped.
 ///
@@ -320,8 +322,14 @@ impl Ended {
 /// Past [`CONNECT_SECS`] the dial is dropped — which closes whatever it had opened, on either
 /// host — and the socket has failed in a sentence: the ordinary backoff, and the trip in front
 /// of the next attempt.
+///
+/// **Not before one last look, though** ([`timer::timeout_after_a_last_turn`]). In a browser the
+/// deadline and the socket's `open` are both queued tasks, and behind a first ingest — which
+/// holds the engine's one thread past twenty seconds on a real corpus — both can be waiting
+/// when the thread comes back. Deadline first, and a socket that had opened was dropped, with
+/// this function's sentence and a backoff, for a relay that had answered.
 async fn dial(url: &str, token: &str) -> Result<socket::Socket, String> {
-    match timer::timeout(
+    match timer::timeout_after_a_last_turn(
         Duration::from_secs(CONNECT_SECS),
         socket::connect(url, token),
     )
@@ -439,7 +447,7 @@ async fn connect_once(
             // A transaction committed on this device. See [`run`] on why the bell this waits
             // on must keep a ring nobody was waiting for.
             //
-            // **Spec §6.3's second half: `commit_hook` wakes, [`the outbox`](outbox_has_work)
+            // **Spec §6.3's second half: `commit_hook` wakes, [`the outbox`](after_a_commit)
             // decides.** The wake is deliberately indiscriminate — one signal per transaction,
             // whatever it wrote — so *this* is the only place that can tell a user edit from
             // everything else that commits on this connection, and without it the loop does not
@@ -456,11 +464,16 @@ async fn connect_once(
             // let go of here ([`let_go`]); the loop above then says `off`, or dials for the
             // group the device is in now. Until this look existed the socket was kept for its
             // whole twelve hours, on the old group's object.
+            //
+            // **Both questions in one taking of the write connection** ([`after_a_commit`]):
+            // each waits up to a second for it, and two takings made a batch ingest — one commit
+            // per 2 000 rows — stand aside twice per commit.
             Woke::Wrote => {
-                if let_go(&group, as_membership(&membership(state).await)) {
+                let seen = after_a_commit(state).await;
+                if let_go(&group, as_membership(&seen.group)) {
                     break (Disconnect::Left, None);
                 }
-                if outbox_has_work(state).await {
+                if seen.unpushed {
                     sched.wake(Wake::LocalWrite, now_ms(), 0);
                 }
             }
@@ -488,24 +501,28 @@ async fn connect_once(
                     }
                 }
             }
-            // 4001 is the relay saying this group is gone, or that this device is no longer in
-            // it. It reports as [`Disconnect::Removed`], which **backs off like any other
-            // disconnect** — that variant is where the reason the naive reading is a trap is
-            // written down, and where it is tested.
+            // The relay's two closes that say this socket's group is no longer this device's
+            // ([`gone`]): 4002, a rotation's manifest without this device, and 4001, the group's
+            // log dropped. Each **backs off like any other disconnect** —
+            // [`Disconnect::Removed`] is where the reason the naive reading is a trap is
+            // written down, and where it is tested — and only the first is recorded.
             //
             // **Unless this device has itself just left**: its own departure is a manifest
             // without it, so the relay closes its socket a moment before the press clears the
             // group here. Asked behind the sync lane, which that press holds to its last write
             // ([`closed_as_gone`]) — and then it is a socket let go of, with nothing to record.
-            Woke::Frame(Event::Closed(Some(CLOSE_GROUP_GONE))) => {
+            //
+            // Any other close, a code this build has never heard of included, is ordinary.
+            Woke::Frame(Event::Closed(code)) => {
+                let Some(why) = gone(code) else {
+                    break (Disconnect::Closed, Some(SOCKET_CLOSED.to_owned()));
+                };
                 let now = membership_behind_the_lane(state).await;
-                match closed_as_gone(&group, as_membership(&now)) {
-                    Disconnect::Left => break (Disconnect::Left, None),
-                    cause => break (cause, Some(GROUP_GONE.to_owned())),
+                match closed_as_gone(why, &group, as_membership(&now)) {
+                    Disconnect::Removed => break (Disconnect::Removed, Some(REMOVED.to_owned())),
+                    // `Dropped` says nothing: see [`recorded`]. `Left` has nothing to say.
+                    cause => break (cause, None),
                 }
-            }
-            Woke::Frame(Event::Closed(_)) => {
-                break (Disconnect::Closed, Some(SOCKET_CLOSED.to_owned()));
             }
             Woke::Frame(Event::Failed(e)) => break (Disconnect::Failed, Some(e)),
         }
@@ -693,9 +710,70 @@ async fn in_a_group(state: &Arc<State>) -> bool {
 /// long that caller will wait.
 fn group_on(db: &std::sync::Mutex<rusqlite::Connection>, wait: Duration) -> Option<Option<String>> {
     let conn = crate::db::lock_for(db, wait)?;
-    identity::group(&conn)
+    group_of(&conn)
+}
+
+/// [`group_on`]'s read, on a connection already had.
+fn group_of(conn: &rusqlite::Connection) -> Option<Option<String>> {
+    identity::group(conn)
         .ok()
         .map(|group| group.map(|group| group.group_id))
+}
+
+/// What the loop reads behind a commit: which group the device is in, and whether the outbox
+/// holds anything — [`membership`]'s answer, and [`unpushed`]'s: the outbox's gate.
+struct AfterACommit {
+    group: Option<Option<String>>,
+    unpushed: bool,
+}
+
+/// Both of the write wake's questions, **in one taking of the write connection**, by `db`.
+///
+/// A connection not had inside `wait` answers neither: the group unknown, which keeps the
+/// socket, and nothing to push, which the next commit, frame or reconnect asks again — each
+/// question's own answer for "could not ask".
+fn after_a_commit_on(db: &std::sync::Mutex<rusqlite::Connection>, wait: Duration) -> AfterACommit {
+    match crate::db::lock_for(db, wait) {
+        Some(conn) => AfterACommit {
+            group: group_of(&conn),
+            unpushed: unpushed_on(&conn),
+        },
+        None => AfterACommit {
+            group: None,
+            unpushed: false,
+        },
+    }
+}
+
+/// After the commit that just rang the doorbell: is this device still in its socket's group,
+/// and is there anything for the relay? [`after_a_commit_on`] the write connection.
+///
+/// **The write connection and not the read one, and that is the whole correctness of both
+/// answers.** A commit hook fires *before* its transaction commits — that is exactly why
+/// returning `true` from one aborts the write, as [`crate::hooks::install`] says — so a read
+/// taken off the other connection the moment the notification arrives may still be looking at
+/// the snapshot the commit is in the middle of replacing. Answering "nothing to push" there
+/// would drop a real edit on the floor with nothing to raise it again; answering the group the
+/// commit is deleting would keep a socket that nothing would look at again. The writer holds
+/// [`State::db`] for the whole of [`crate::state::with_write`], so taking that same mutex is
+/// what orders these questions *after* the commit that asked them.
+///
+/// **It contends with a round trip for a stretch at most**, which is the other reason it can
+/// afford the write connection: this loop's own [`trip`] is awaited inside the same loop as
+/// this arm, so the loop is never in both places at once, and a *press's* trip — which used to
+/// hold the connection for its whole length, a second longer than this waits — now holds it only
+/// while it reads or writes.
+///
+/// On the blocking pool because the wait for the connection blocks, and a `MutexGuard` on one
+/// is not `Send` and must not be held across an `.await`.
+async fn after_a_commit(state: &Arc<State>) -> AfterACommit {
+    let owned = state.clone();
+    spawn::blocking(move || after_a_commit_on(&owned.db, WAKE_LOCK_WAIT))
+        .await
+        .unwrap_or(AfterACommit {
+            group: None,
+            unpushed: false,
+        })
 }
 
 /// [`group_on`]'s answer as the scheduler reads one.
@@ -709,7 +787,7 @@ fn as_membership(seen: &Option<Option<String>>) -> Membership<'_> {
 
 /// Which group this device is in, **after the commit that just rang the doorbell**.
 ///
-/// **The write connection, for [`outbox_has_work`]'s reason and with its wait**: a commit hook
+/// **The write connection, for [`after_a_commit`]'s reason and with its wait**: a commit hook
 /// fires before its transaction is visible to anybody else, so the read connection, asked the
 /// moment the bell rings, can still answer the group the commit is in the middle of deleting —
 /// and the loop would keep the socket, with no second commit coming to make it look again. The
@@ -812,7 +890,7 @@ async fn trip(state: &Arc<State>, sched: &mut Scheduler) {
 // The local-write gate
 // ---------------------------------------------------------------------------------------
 
-/// The one `count(*)` both gates are — this loop's [`outbox_has_work`], and the desktop's
+/// The one `count(*)` both gates are — this loop's ([`after_a_commit`]), and the desktop's
 /// `anything_pending` on its way out — over whichever connection the caller can afford and for
 /// however long that caller is willing to wait for it: `sync_ops WHERE pushed_at IS NULL`,
 /// served by a partial index.
@@ -821,9 +899,11 @@ async fn trip(state: &Arc<State>, sched: &mut Scheduler) {
 /// than an error: both callers have a real one for "could not ask", and both are documented
 /// where they call this.
 pub fn unpushed(db: &std::sync::Mutex<rusqlite::Connection>, wait: Duration) -> bool {
-    let Some(conn) = crate::db::lock_for(db, wait) else {
-        return false;
-    };
+    crate::db::lock_for(db, wait).is_some_and(|conn| unpushed_on(&conn))
+}
+
+/// [`unpushed`]'s read, on a connection already had.
+fn unpushed_on(conn: &rusqlite::Connection) -> bool {
     conn.query_row(
         "SELECT count(*) FROM sync_ops WHERE pushed_at IS NULL",
         [],
@@ -843,34 +923,9 @@ pub fn unpushed(db: &std::sync::Mutex<rusqlite::Connection>, wait: Duration) -> 
 /// the write connection happened to be busy for a moment is a real edit that never syncs.
 const WAKE_LOCK_WAIT: Duration = Duration::from_secs(1);
 
-/// Is there anything for the relay after the commit that just rang the doorbell?
-///
-/// **The write connection and not the read one, and that is the whole correctness of this
-/// gate.** A commit hook fires *before* its transaction commits — that is exactly why returning
-/// `true` from one aborts the write, as [`crate::hooks::install`] says — so a read taken off the
-/// other connection the moment the notification arrives may still be looking at the snapshot the
-/// commit is in the middle of replacing, and answering `false` there would drop a real edit on
-/// the floor with nothing to raise it again. The writer holds [`State::db`] for the whole of
-/// [`crate::state::with_write`], so taking that same mutex is what orders this question *after*
-/// the commit that asked it.
-///
-/// **It contends with a round trip for a stretch at most**, which is the other reason it can
-/// afford the write connection: this loop's own [`trip`] is awaited inside the same loop as
-/// this arm, so the loop is never in both places at once, and a *press's* trip — which used to
-/// hold the connection for its whole length, a second longer than this waits — now holds it only
-/// while it reads or writes.
-///
-/// On the blocking pool because the wait for the connection blocks, and a `MutexGuard` on one
-/// is not `Send` and must not be held across an `.await`.
-async fn outbox_has_work(state: &Arc<State>) -> bool {
-    let owned = state.clone();
-    spawn::blocking(move || unpushed(&owned.db, WAKE_LOCK_WAIT))
-        .await
-        .unwrap_or(false)
-}
-
 #[cfg(test)]
 mod tests {
+    use super::super::schedule::{CLOSE_DROPPED, CLOSE_REMOVED};
     use super::*;
     use crate::events::fixtures::Recording;
     use futures_util::StreamExt;
@@ -939,7 +994,7 @@ mod tests {
             client::set_state(&conn, client::LAST_SYNC_AT, "1756600000").unwrap();
         }
         assert!(
-            !outbox_has_work(&state).await,
+            !after_a_commit(&state).await.unpushed,
             "the round trip's own stamp must not schedule the next round trip"
         );
     }
@@ -966,7 +1021,7 @@ mod tests {
             );
         }
         assert!(
-            !outbox_has_work(&state).await,
+            !after_a_commit(&state).await.unpushed,
             "a background failure must not schedule its own retry storm"
         );
     }
@@ -986,7 +1041,7 @@ mod tests {
             .unwrap();
         }
         assert!(
-            outbox_has_work(&state).await,
+            after_a_commit(&state).await.unpushed,
             "an edit to a synced table is exactly what the doorbell is for"
         );
     }
@@ -1299,8 +1354,8 @@ mod tests {
 
     /// **The whole loop against a socket that really answers**: a device in a group, holding a
     /// token, dials the relay's address as a WebSocket with its bearer in `Authorization`, says
-    /// `connecting` and then `live`, pings at once, and — told its group is gone — says
-    /// `offline` and writes the row a reader can find.
+    /// `connecting` and then `live`, pings at once, and — told a rotation took it out of its
+    /// group, the relay's 4002 — says `offline` and writes the row a reader can find.
     ///
     /// The stand-in is a listener on loopback that upgrades whatever asks to. It is no relay:
     /// the round trips the loop makes around the socket are plain HTTP requests it cannot
@@ -1333,8 +1388,8 @@ mod tests {
 
         // The relay's side: every connection is offered an upgrade, each on a task of its own —
         // a round trip's request must fall away at once while the socket is being held. The
-        // one that takes the upgrade is the socket: it is heard once, told its group is gone,
-        // and read to its end.
+        // one that takes the upgrade is the socket: it is heard once, told it was removed, and
+        // read to its end.
         let (tell, mut told) = tokio::sync::mpsc::unbounded_channel();
         let relay = tokio::spawn(async move {
             loop {
@@ -1348,8 +1403,8 @@ mod tests {
                     let first = peer.next().await;
                     let _ = peer
                         .close(Some(CloseFrame {
-                            code: CloseCode::from(CLOSE_GROUP_GONE),
-                            reason: "gone".into(),
+                            code: CloseCode::from(CLOSE_REMOVED),
+                            reason: "removed from the group".into(),
                         }))
                         .await;
                     // Read to the end, so the close handshake completes.
@@ -1405,11 +1460,11 @@ mod tests {
         );
 
         assert!(
-            rows.iter().any(|(m, _)| m == GROUP_GONE),
+            rows.iter().any(|(m, _)| m == REMOVED),
             "the removal is a row a reader can find: {rows:?}"
         );
         assert!(
-            rows.iter().any(|(m, _)| m != GROUP_GONE),
+            rows.iter().any(|(m, _)| m != REMOVED),
             "and the launch's trip, which this stand-in cannot answer, is another: {rows:?}"
         );
     }
@@ -1644,6 +1699,14 @@ mod tests {
     /// ([`group_on`], over [`State::db`]) waits for the writer and then answers no group. On a
     /// host with one connection there is no other connection to be wrong on, and the same look
     /// gives the same answer.
+    ///
+    /// ⚠️ **The one-connection arm is a native stand-in, and it shows the order of a mutex — not
+    /// a browser.** Here the look runs on a second thread and *waits* for the writer. On wasm
+    /// there is no second thread: the look runs on the caller, between two turns of the event
+    /// loop, when no write is open — and an ask that did find the connection taken answers
+    /// `None` at once rather than waiting (`db::lock_for`'s browser arm), which [`let_go`]
+    /// reads as "keep the socket". That it is the *loop* that asks this connection is
+    /// `the_loop_looks_behind_the_commit_that_took_its_device_out_of_its_group`.
     #[test]
     fn the_look_behind_a_commit_sees_what_it_committed() {
         let soon = Duration::from_secs(20);
@@ -1894,14 +1957,14 @@ mod tests {
         );
     }
 
-    /// **A 4001 on a device that is itself leaving is its own doing, and is quiet.** The
+    /// **A 4002 on a device that is itself leaving is its own doing, and is quiet.** The
     /// departure it published is what made the relay close the socket, a moment before the
     /// press clears the group here; the loop asks behind the sync lane, which the press holds,
     /// so it reads the close after the group has gone: `off`, never `offline`, and no row
-    /// saying the relay removed it. (The control — a 4001 on a device still in its group — is
+    /// saying the relay removed it. (The control — a 4002 on a device still in its group — is
     /// `a_device_in_a_group_dials_with_its_bearer_goes_live_and_backs_off_when_removed`.)
     #[tokio::test]
-    async fn a_4001_that_lands_inside_this_devices_own_departure_is_not_a_removal() {
+    async fn a_4002_that_lands_inside_this_devices_own_departure_is_not_a_removal() {
         let _turn = ONE_LOOP.lock().await;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
@@ -1914,8 +1977,8 @@ mod tests {
                     close.notified().await;
                     let _ = peer
                         .close(Some(CloseFrame {
-                            code: CloseCode::from(CLOSE_GROUP_GONE),
-                            reason: "removed".into(),
+                            code: CloseCode::from(CLOSE_REMOVED),
+                            reason: "removed from the group".into(),
                         }))
                         .await;
                     while peer.next().await.is_some() {}
@@ -1960,8 +2023,208 @@ mod tests {
             "its own departure is not a broken sync"
         );
         assert!(
-            !rows.iter().any(|(m, _)| m == GROUP_GONE),
+            !rows.iter().any(|(m, _)| m == REMOVED),
             "and is not recorded as the relay removing it: {rows:?}"
+        );
+    }
+
+    /// **A dropped group — the relay's 4001, a membership ended — backs off and writes
+    /// nothing, on a device that pressed Connect and on one that only paired.** When the close
+    /// arrives the device is still in its group and its stored status still says `active`:
+    /// [`lapsed`] is false, so a row asked of the database would be written — "your sync is
+    /// broken", to a reader whose pledge ended, one per connected device per lapse. The close
+    /// is never recorded ([`recorded`]); the trip behind the backoff is what learns it is a
+    /// lapse, and `a_lapse_is_never_recorded_whichever_door_the_device_is_entitled_through` is
+    /// that trip.
+    ///
+    /// **What makes it red**: reading 4001 as the removal (the removal's row), or as an ordinary
+    /// close (`the relay closed the socket`).
+    #[tokio::test]
+    async fn a_dropped_group_backs_off_and_writes_no_row_whichever_door_the_device_came_through() {
+        let _turn = ONE_LOOP.lock().await;
+        for door in [Door::Claimed, Door::PairedOnly] {
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let close = Arc::new(tokio::sync::Notify::new());
+            let (relay, _dialled) = stand_in(listener, {
+                let close = close.clone();
+                move |mut peer| {
+                    let close = close.clone();
+                    async move {
+                        close.notified().await;
+                        let _ = peer
+                            .close(Some(CloseFrame {
+                                code: CloseCode::from(CLOSE_DROPPED),
+                                reason: "group dropped".into(),
+                            }))
+                            .await;
+                        while peer.next().await.is_some() {}
+                    }
+                }
+            });
+            let (state, heard, _group) = paired(&format!("live-loop-dropped-{door:?}"), port);
+            {
+                let conn = state.lock_db();
+                let now = crate::platform::clock::now_secs();
+                if matches!(door, Door::PairedOnly) {
+                    // What a device that only paired holds: a token and no secret.
+                    entitlement::clear(&conn).unwrap();
+                    entitlement::store_access(&conn, "tok", now + 24 * 60 * 60).unwrap();
+                }
+                entitlement::store_status(&conn, "active", Some(now)).unwrap();
+                assert!(
+                    !lapsed(&conn),
+                    "{door:?}: nothing here knows of a lapse yet"
+                );
+            }
+            let running = tokio::spawn(run(state.clone(), Arc::new(Bell::new())));
+            let mut events = Vec::new();
+            until_said(&heard, &mut events, "live").await;
+            // The two trips around a fresh socket, which the stand-in cannot answer, are rows.
+            while noted(&state) < 2 {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+            let before = live_rows(&state);
+
+            close.notify_one();
+            // A row is written before `offline` is said, so one for this close would be there.
+            until_said(&heard, &mut events, "offline").await;
+            let rows = live_rows(&state);
+            running.abort();
+            relay.abort();
+
+            assert_eq!(
+                events.get(..3),
+                Some(&[said("connecting"), said("live"), said("offline")][..]),
+                "{door:?}: it backs off — the reconnect would be closed on again"
+            );
+            assert_eq!(
+                rows, before,
+                "{door:?}: a dropped group is how a lapse arrives, and is never a row"
+            );
+            assert!(
+                !rows.iter().any(|(m, _)| m == REMOVED || m == SOCKET_CLOSED),
+                "{door:?}: {rows:?}"
+            );
+        }
+    }
+
+    /// **The loop's own look is behind the commit that rang it — driven as the loop, with the
+    /// commit held open.** `the_look_behind_a_commit_sees_what_it_committed` shows which
+    /// connection sees the departure; this shows the loop *asks that one*. The bell here is the
+    /// real one, rung from the commit hook ([`WriteWake`]) before the departure is visible to
+    /// the read connection, and the hook is then held: the loop is awake, and looking, while
+    /// the read connection still answers the group being deleted. Asked there, it would keep
+    /// the socket — and nothing would ring again to make it look.
+    ///
+    /// **What makes it red**: taking either of [`after_a_commit`]'s reads off the read
+    /// connection (`off` is never said: the next look is the keepalive's, 45 s on).
+    #[tokio::test]
+    async fn the_loop_looks_behind_the_commit_that_took_its_device_out_of_its_group() {
+        let _turn = ONE_LOOP.lock().await;
+        let soon = Duration::from_secs(20);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let (closed, mut ended) = tokio::sync::mpsc::unbounded_channel();
+        let (relay, _dialled) = stand_in(listener, move |mut peer| {
+            let closed = closed.clone();
+            async move {
+                while let Some(Ok(_)) = peer.next().await {}
+                let _ = closed.send(());
+            }
+        });
+
+        // Two connections, the hook's real bell first among its observers, and then the hold.
+        let dir = crate::scratch::path("live-loop-looks-behind-the-commit");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = crate::db::open_write(&dir).unwrap();
+        crate::schema::build_pair(&write);
+        let read = crate::db::open_read(&dir).unwrap();
+        let (fired, hook_fired) = std::sync::mpsc::channel();
+        let (go_on, waiting) = std::sync::mpsc::channel();
+        let held = Arc::new(HeldCommit {
+            armed: std::sync::atomic::AtomicBool::new(false),
+            fired: std::sync::Mutex::new(fired),
+            go_on: std::sync::Mutex::new(waiting),
+        });
+        let writes = Arc::new(Bell::new());
+        let heard = Arc::new(Recording::default());
+        let observers: Vec<Arc<dyn crate::hooks::WriteObserver>> =
+            vec![Arc::new(WriteWake(writes.clone())), held.clone()];
+        let state = Arc::new(State::new(
+            write,
+            Some(read),
+            dir.clone(),
+            heard.clone(),
+            observers,
+            crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            crate::images::Cache::new(dir.join("images")),
+        ));
+        {
+            let conn = state.lock_db();
+            client::set_state(
+                &conn,
+                client::RELAY_URL,
+                &format!("http://127.0.0.1:{port}"),
+            )
+            .unwrap();
+            let me = identity::ensure(&conn).unwrap();
+            identity::create_group(&conn, &me).unwrap();
+            let tomorrow = crate::platform::clock::now_secs() + 24 * 60 * 60;
+            entitlement::store_grant(&conn, "tok", "refresh", tomorrow).unwrap();
+        }
+
+        let running = tokio::spawn(run(state.clone(), writes));
+        let mut events = Vec::new();
+        until_said(&heard, &mut events, "live").await;
+        // Past the two trips around a fresh socket, so the next commit is the departure's.
+        while noted(&state) < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+
+        // The departure — one transaction, so one commit and one ring — stopped in its hook.
+        held.armed.store(true, Ordering::SeqCst);
+        let writer = {
+            let state = state.clone();
+            std::thread::spawn(move || {
+                let conn = state.lock_db();
+                identity::leave_group(&conn).unwrap();
+            })
+        };
+        tokio::task::spawn_blocking(move || hook_fired.recv_timeout(soon))
+            .await
+            .unwrap()
+            .expect("the commit hook fired");
+
+        // The bell has rung and the loop is looking. Long enough for a look taken on the read
+        // connection to have answered — it would answer at once — and to have kept the socket.
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(
+            identity::group(&state.lock_db_read()).unwrap().is_some(),
+            "the premise: the read connection has not seen the departure yet"
+        );
+        events.extend(heard.taken());
+        assert!(
+            !events.contains(&said("off")),
+            "nothing is decided while the commit is still under way: {events:?}"
+        );
+        go_on.send(()).unwrap();
+
+        until_said(&heard, &mut events, "off").await;
+        tokio::time::timeout(soon, ended.recv())
+            .await
+            .expect("the relay's end never saw the socket close")
+            .unwrap();
+        tokio::task::spawn_blocking(move || writer.join().unwrap())
+            .await
+            .unwrap();
+        running.abort();
+        relay.abort();
+        assert_eq!(
+            events,
+            [said("connecting"), said("live"), said("off")],
+            "let go of on the one ring its departure gave"
         );
     }
 

@@ -71,9 +71,14 @@ change it is known to be live from the tree that was deployed. Step 0's six prob
 secret probes of item 8 were re-run straight after and answered as before. It was the first deploy
 an agent ran, at Markus's instruction that day; the rule below is otherwise unchanged.
 
-**An eighth half — the browser's, light app phase 6 (issue #761) — is written and NOT deployed.**
-Written 2026-10-04, after step 8's rate limits, which this page never numbered as a half. What the
-next deploy carries:
+**An eighth half — the browser's, light app phase 6 (issue #761) — is deployed and verified.**
+Written 2026-10-04, after step 8's rate limits, which this page never numbered as a half.
+**Deployed 2026-10-04 at 17:22:12 UTC from `main` at `ea0aa88e` (#818), version
+`75f903b6-94c3-431c-bf83-3ce36ed5d9e8`**, by an agent at the owner's standing ask for this phase;
+wrangler 4.146.0, `--dry-run` first; no migration, and no secret touched. Step 0's twelve probes
+were asked at 17:21:24 UTC, before, and at **23:09:03 UTC, after** — five and three-quarter hours
+late, because the permission classifier refused the probe script straight after the deploy and
+the owner allowed it at 23:09. Every answer is in step 0's table. What that deploy carried:
 
 - **`APP_ORIGINS`**, a new entry in `wrangler.jsonc`'s `vars`, shipped as exactly
   `https://mtg-grimoire.app`. It is a var and not a secret, so `wrangler deploy` carries it and no
@@ -106,13 +111,22 @@ order is decided.
 deployed.** Written 2026-10-04. What the next deploy carries, beside anything above that is still
 waiting:
 
-- **A rotation's roster closes the sockets of the devices it leaves out**, with `4001` — the
-  code `drop` has always closed a whole group's with. `group.ts`'s `roster` asks `log.ts`'s
-  `removedSockets` which: every open socket whose device the adopted manifest does not name.
-  Until now a rotation closed nothing, and a removed device went on reading *live* over a roster
-  it was no longer on until its own next round trip.
+- **A rotation's roster closes the sockets of the devices it leaves out**, with **`4002`** — a
+  code of its own (`log.ts`'s `CLOSE_REMOVED`). `group.ts`'s `roster` asks `removedSockets`
+  which: every open socket whose device the adopted manifest does not name. Until now a rotation
+  closed nothing, and a removed device went on reading *live* over a roster it was no longer on
+  until its own next round trip.
+- **`4001` stays what it has always been, and only that**: `drop`'s close of a whole group whose
+  membership ended (`CLOSE_DROPPED`). The first draft of this half reused it for the roster, and
+  two wrong rows followed: every **released** desktop reads 4001 as *"this device's sync group
+  no longer exists"*, so its own *Leave group* — a manifest without it, which the relay cannot
+  tell from a removal, since `/rotate` authenticates with the group's shared auth — would have
+  been a row and seconds of *offline*; and a client that read 4001 as a removal wrote a row for
+  a **lapse**, before any trip had learned of it. Two events, two codes.
 - **A device holding a socket counts as one the object knows of**, so it is marked `departed`
   with the rest even when it has not yet acked or pushed.
+- The roster compacts **before** it closes anything, and each close is best effort: a socket
+  that throws leaves the roster applied, the others told, and the answer the 204 it was.
 
 **No migration, no secret, no var, no route.** Internal to the Durable Object: `/roster` is still
 reached only by the Worker, from inside an accepted `/rotate`.
@@ -123,17 +137,28 @@ other, and **watch the removed one's Sync panel without touching it** — within
 seconds it reads *not paired yet* (after a moment of *Not connected to the relay*). Left reading
 its old roster until *Sync now* is pressed, the relay answering is the old one.
 
-**Each side with the other's old build:**
+**Each side with the other's old build**, cell by cell. *Released* is v0.40.0's loop
+(`src-tauri/src/sync_engine/live.rs` at `daa70e12`), read, not driven: 4001 is `Removed` — a row
+saying *the relay says this device's sync group no longer exists*, and a backoff — and **any
+other close code is a plain close**: a backoff, and a row saying *the relay closed the socket*
+only when the socket had been up under a minute (a longer-lived one is forgiven, and writes
+nothing). *New* is the client this step builds.
 
-| Relay | Client | A removed device | A device that presses *Leave group* |
-| --- | --- | --- | --- |
-| old | released, or new | is told nothing, as today: it learns at its next round trip. **A new client then lets go of its socket** at that trip's commit and reads `off`; a released one keeps the socket, reading `live`, until it ends by itself | a new client lets go of its socket at once and reads `off`; a released one keeps it — for up to its twelve hours, on the group it left, which is the defect step 6.3b is about |
-| new | new | socket closed `4001` → `offline` for one backoff (2–4 s) → the round trip a reconnect starts with finds the manifest without it and clears the group → `off`. One `live` row in its Errors panel | socket closed `4001`, read behind its own departure: `off` at once, no row |
-| new | released | the same close, and the same trip clears the group — then the released loop still tries to dial, fails for want of a group, and reads `offline` through a second backoff (4–8 s) before `off`. Up to two `live` rows | **the relay alone fixes the twelve-hour socket**: the close ends it. The released loop reads its own departure as a removal — a few seconds of `offline` and one `live` row saying the group no longer exists — and then `off` |
+| Relay | Client | A removed device | A device that presses *Leave group* | A membership that ends (`drop`, 4001) |
+| --- | --- | --- | --- | --- |
+| old | released | told nothing, as today: it learns at its next round trip, and keeps the socket, reading `live`, until it ends by itself | keeps its socket for up to its twelve hours, on the group it left — the defect step 6.3b is about | 4001: `offline` for a backoff and **a row saying the group no longer exists** — a row for a lapse, as today |
+| old | new | told nothing; learns at its next round trip, **then lets go of its socket** at that trip's commit and reads `off`. No row | lets go at once and reads `off`. No row | 4001: `offline` for one backoff (2–4 s) and **no row**; the trip behind the backoff is what finds the lapse, and says nothing either |
+| new | released | **4002, a plain close to it**: `offline` 1–2 s (no row if the socket had been up a minute; else *the relay closed the socket* and 2–4 s). The reconnect's trip finds the manifest without it and clears the group; the loop then still dials, fails for want of a group — a second backoff, and a row on a device that pressed Connect — and reads `off` | **the relay alone ends the twelve-hour socket.** 4002, a plain close: 1–2 s of `offline`, then `off`. No row — unless the socket was under a minute old, then *the relay closed the socket*. **Never "the group no longer exists"**, which is what reusing 4001 would have written | as old relay, released client: nothing about `drop` changed |
+| new | new | 4002 → `offline` for one backoff (2–4 s) → the reconnect's trip finds the manifest without it and clears the group → `off`. **One row**: *the relay says this device is no longer in its sync group* | 4002, read behind its own departure: `off` at once, never `offline`, no row | as old relay, new client |
 
 So the two ship in either order, and nothing in the field breaks on either. What a released
-desktop pays for the new relay is a spurious row in its Errors panel when it leaves a group; what
-it gets is not listening to a group it left.
+desktop pays for the new relay is a second or two of *offline* when it leaves a group; what it
+gets is not listening to a group it left.
+
+**The codes had to be right before any client carrying this step ships, and they are: none
+has.** A client built from the step's first commit (`c3bd78ee`, pushed and never released) reads
+4001 as the removal and has never heard of 4002 — against this relay it would read its own
+*Leave group* as a plain close. Nothing was built from it for anybody.
 
 A deploy disconnects every live socket once, as every deploy does. It is step 6 and nothing else,
 with step 0's probes before and after.
@@ -322,14 +347,19 @@ Android build sends an `Origin` or a sub-protocol, and none ever needs to.
    curl -si "${W[@]}" "$H/g/abc/ws?device=deadbeef" -H "$X"
    curl -si "${W[@]}" "$H/g/abc/ws?device=deadbeef" -H "$A"
    ```
-   | | Before the deploy — **run 2026-10-04, 15:49 UTC** | After it — ⚠️ **not yet run** |
+   | | Before the deploy — **run 2026-10-04, 15:49 UTC, and again at 17:21:24 UTC**, the same | After it — **run 2026-10-04, 23:09:03 UTC**, against version `75f903b6` (deployed 17:22:12 UTC) |
    | --- | --- | --- |
-   | (a) from the app | `405`, `allow: POST`, no `access-control-` line | **`204`**, `access-control-allow-origin: https://mtg-grimoire.app`, `access-control-allow-methods: POST`, `access-control-allow-headers: authorization, content-type`, `access-control-max-age: 86400`, `vary: Origin` |
-   | (a) control, from `example.com` | `405`, `allow: POST` | the same `405`, and **no** `access-control-` line |
-   | (b) from the app | `401`, no `access-control-` line | `401` **with** `access-control-allow-origin: https://mtg-grimoire.app` and `vary: Origin` |
-   | (b) control | `401` | `401`, and **no** such line |
-   | (c) from `example.com` | `401` | **`403`** `origin not allowed` |
-   | (c) control, from the app | `401` | `401` — the origin passes, and `bearer.x` is no token |
+   | (a) from the app | `405`, `allow: POST`, no `access-control-` line | **`204`**, `access-control-allow-origin: https://mtg-grimoire.app`, `access-control-allow-methods: POST`, `access-control-allow-headers: authorization, content-type`, `access-control-max-age: 86400`, `vary: Origin` — **answered so** |
+   | (a) control, from `example.com` | `405`, `allow: POST` | the same `405`, `allow: POST`, and **no** `access-control-` line — **answered so** |
+   | (b) from the app | `401`, no `access-control-` line | `401` **with** `access-control-allow-origin: https://mtg-grimoire.app` and `vary: Origin` — **answered so** |
+   | (b) control | `401` | `401`, and **no** such line — **answered so** |
+   | (c) from `example.com` | `401` | **`403`** `origin not allowed` — **answered so** |
+   | (c) control, from the app | `401` | `401` — the origin passes, and `bearer.x` is no token — **answered so** |
+
+   The six bodiless probes above these were asked at the same two moments and answered the same
+   before and after: `400 {"error":"malformed token request"}`, `401`, `400 {"error":"that is not
+   a device id"}`, `401 {"error":"unauthorized"}`, `404 {"error":"nothing there"}`, `400
+   {"error":"that is not an epoch"}`.
 
    - **405 on both of (a) is how "not deployed yet" reads**: a Worker without this half has never
      heard of either origin and gives each the router's method refusal. **204 on the first with
@@ -520,12 +550,14 @@ Android build sends an `Origin` or a sub-protocol, and none ever needs to.
    ```
 5. **Register the webhook** for `members:pledge:create`, `members:pledge:update`,
    `members:pledge:delete` and `members:update`, pointing at `/webhook/patreon`.
-6. **`npx wrangler deploy`.** **Last run 2026-10-01 at 22:09 UTC, from `claude/relay-rate-limits`
-   at `7f6d6f50`** with step 8's rate limits — after 19:17 UTC the same day from `main` at
-   `2b845048`, and twice on 2026-09-28, at `1512ea68` and then with issue #546's half. **The next
-   run carries the browser's half** — the list at the top of this page — with step 0's three
-   `Origin` pairs before and after it, and the web app's own deploy only once they answer `204`,
-   `401` with the header, and `403`. Both bullets below are
+6. **`npx wrangler deploy`.** **Last run 2026-10-04 at 17:22:12 UTC, from `main` at `ea0aa88e`
+   (#818)** — version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, wrangler 4.146.0, `--dry-run`
+   first — **with the browser's half**, the eighth, and step 0's three `Origin` pairs before and
+   after it: they answer `204`, `401` with the header, and `403`, which is what the web app's own
+   deploy waited on. Before it: 2026-10-01 at 22:09 UTC from `claude/relay-rate-limits` at
+   `7f6d6f50` with step 8's rate limits, after 19:17 UTC the same day from `main` at `2b845048`,
+   and twice on 2026-09-28, at `1512ea68` and then with issue #546's half. **The next run carries
+   the ninth half** — a removed device is told, at the top of this page. Both bullets below are
    still open. Then, for the refresh-secret change:
    - **Press Connect Patreon once on the paying device.** Not required, but it records which
      device holds the secret, so the group's next rotation keeps it rather than retiring it as
@@ -830,7 +862,11 @@ the one that can take sync down.
 ### 13. The browser's half — a 101 no browser has read, and a keepalive nobody has seen billed
 
 Added 2026-10-04, and deployed that day at 17:22 UTC. Step 0's three pairs
-settle the CORS headers and the origin check from outside; these are what only a real browser, or
+settle the CORS headers and the origin check from outside — **asked of the deployed Worker at
+23:09 UTC that day, and answered as that table says**. That is all production has been asked:
+**the 101's sub-protocol and the pong below were settled under local workerd, not in production,
+and nothing in production has opened a socket from a browser yet.** These are what only a real
+browser, or
 the account's own dashboard, can say. `relay/src/cors.test.ts` and `ticket.test.ts` run the
 router, and the real `Group` over stand-ins for three of workerd's globals — Node's `Response`
 refuses a status of 101 — so everything below is exactly what those suites could not reach.
@@ -843,7 +879,7 @@ two profiles of headless Chrome 154 reaching it by its real name):
 | --- | --- | --- |
 | The 101's `Sec-WebSocket-Protocol` reaches a browser | **yes** — both sockets read `grimoire.live.v1` and stayed open | not seen: it needs a real membership in a real browser, which is the owner's |
 | The text `ping` is answered `pong` | **yes** — every `ping` either device sent, the second 45 s after the first | not seen |
-| A page's requests pass CORS, refusals included | **yes** — a claim, a token, a pairing, pushes, pulls and acks, with no failed request | step 0's probes, from outside |
+| A page's requests pass CORS, refusals included | **yes** — a claim, a token, a pairing, pushes, pulls and acks, with no failed request | step 0's probes, from outside: **answered 2026-10-04 at 23:09 UTC** — `204` with the allow-origin line, `401` with it, `403` to a foreign origin. No page has asked yet |
 | The page's policy lets the socket through | only with the relay's `wss://` source in `connect-src` — `https://` alone is refused by Chrome | the web app's next deploy carries it |
 | What a keepalive is billed | nothing a local run can say | the one-hour check below |
 | The token in Workers Logs | nothing a local run can say | **decided, not measured**: accepted by the owner on 2026-10-04, `invocation_logs` stays on |

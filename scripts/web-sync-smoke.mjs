@@ -454,10 +454,38 @@ async function main() {
   // runs in twenty-one here — the rotation lands between that trip's key check and its group
   // door. The relay then refuses, correctly, the auth of the epoch it has just left, and the
   // engine asks `/keys` and the door again (`token_across_a_rotation`, step 6.3b; before it the
-  // trip failed there). Allowed only in that shape — behind a `/rotate`, and answered by a
-  // `/keys` and a `/token` that is given — and only once.
+  // trip failed there). Allowed only in that shape — the joiner's, at the group door, behind a
+  // `/rotate`, and answered by a `/keys` and a `/token` that is given — and only once.
+  //
+  // Whose request one was is read off that device's own engine, as it saw it answered — and for
+  // `/token`, which has two doors at one path, which door: a refusal is read differently on each.
+  const asker = (entry) =>
+    both
+      .flatMap((dev) =>
+        dev
+          .events("Network.responseReceived")
+          .filter(
+            (event) =>
+              event.params.response.status === entry.status &&
+              event.params.response.url.split("?")[0].endsWith(entry.path.split("?")[0]),
+          )
+          .map((event) => {
+            const body =
+              dev
+                .events("Network.requestWillBeSent")
+                .find(
+                  (sent) =>
+                    sent.sessionId === event.sessionId &&
+                    sent.params.requestId === event.params.requestId,
+                )?.params.request.postData ?? "";
+            const door = /"refresh"/.test(body) ? ", the refresh door" : "";
+            return `${dev.name}${/"auth"/.test(body) ? ", the group door" : door}`;
+          }),
+      )
+      .join(" and ") || "a device the walk did not hear";
   const acrossARotation = (entry) => {
     if (entry.method !== "POST" || entry.path !== "/token" || entry.status !== 401) return false;
+    if (asker(entry) !== `${second.name}, the group door`) return false;
     const at = requests.indexOf(entry);
     const rotated = requests
       .slice(Math.max(0, at - 3), at)
@@ -479,32 +507,6 @@ async function main() {
   const refusals =
     reasked.length > 1 ? refused : refused.filter((entry) => !reasked.includes(entry));
   if (refusals.length > 0) {
-    // Whose request it was, as that device's own engine saw it answered — and for `/token`,
-    // which has two doors at one path, which door: a refusal is read differently on each.
-    const asker = (entry) =>
-      both
-        .flatMap((dev) =>
-          dev
-            .events("Network.responseReceived")
-            .filter(
-              (event) =>
-                event.params.response.status === entry.status &&
-                event.params.response.url.split("?")[0].endsWith(entry.path.split("?")[0]),
-            )
-            .map((event) => {
-              const body =
-                dev
-                  .events("Network.requestWillBeSent")
-                  .find(
-                    (sent) =>
-                      sent.sessionId === event.sessionId &&
-                      sent.params.requestId === event.params.requestId,
-                  )?.params.request.postData ?? "";
-              const door = /"refresh"/.test(body) ? ", the refresh door" : "";
-              return `${dev.name}${/"auth"/.test(body) ? ", the group door" : door}`;
-            }),
-        )
-        .join(" and ") || "a device the walk did not hear";
     const before = (entry) =>
       asked
         .slice(0, asked.indexOf(entry))
@@ -619,7 +621,7 @@ async function main() {
   );
   const rotated = Date.now();
   // **The relay tells the removed device, and nothing is pressed on it.** The rotation's roster
-  // closes its socket with 4001; its loop backs off — `offline`, a second or a few — and then
+  // closes its socket with 4002; its loop backs off — `offline`, a second or a few — and then
   // does what a reconnect always starts with, a round trip, on which `/keys` answers a manifest
   // without it and it clears its own group; with no group there is nothing to dial for, and it
   // says `off`. (Until step 6.3b the relay closed nothing, and this step pressed Sync now.)
@@ -637,7 +639,8 @@ async function main() {
     fail(`${second.name} was removed and said ${removedSaid.join(", ")}`);
   }
   // What it recorded of it: the removal, in one sentence, once — and nothing else is a failure
-  // here. This device joined by pairing, so the row is also the walk's look at what the loop
+  // here. The sentence is also the walk's look at the code the relay closed with: a dropped
+  // group's 4001 writes no row, and any other close writes "the relay closed the socket". This device joined by pairing, so the row is also the walk's look at what the loop
   // records on one: until step 6.3b it asked `entitlement::membership_ended` alone, which
   // answers yes for every device that holds no refresh secret, and this log stayed empty.
   const removedLog = (await second.engine("error_log_list", { limit: 50 })).map(
