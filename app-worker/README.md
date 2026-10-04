@@ -179,7 +179,8 @@ a request it matches is a 429 once the free plan's day is spent.
   directive the two hosts share to the desktop's shipped policy, so this one is never the looser.
   ⚠️ **One surface is known to be refused by it on the live site**: the deck note editor, whose
   library adds a `<style>` element of its own — *What the browser said under it*, 2026-10-04.
-  The answer to that is in the component, not here.
+  The answer to that is in the component, not here — **and is there since that day
+  (`injectCSS: false`), in no build that has been deployed.**
 - **Caching is a default, two trees, and two files.** Everything is `no-cache` — kept, and asked
   about every time: the document, the manifest, the favicon and the manifest's `icons/*.png`,
   whose names carry no hash, so a year for them would be a year an installed app kept an old
@@ -310,8 +311,9 @@ has what each met. **It also found the one policy violation known on the live si
 - ⚠️ **Opening the deck note editor — *New note* — raises two `style-src-elem` violations.**
   An inline `<style>` element, refused by `style-src 'self'`. On the build before the deploy
   and the build after it alike, so the deploy did not bring it.
-- **The editor opened all the same**, drew its toolbar and took typing. What the refused
-  styles would have changed was not looked at.
+- **The editor opened all the same**, drew its toolbar and took typing. ~~What the refused
+  styles would have changed was not looked at.~~ **Nothing on screen: ProseMirror's own sheet
+  is bundled, and the refused one is those rules again.**
 - **The cause, read and not run**: the editor's library is Tiptap, whose `injectCSS` option
   defaults to true and makes it add a style tag of its own
   (`node_modules/@tiptap/core/dist/index.js`); `src/features/decks/NoteEditor.tsx`'s
@@ -320,8 +322,12 @@ has what each met. **It also found the one policy violation known on the live si
   stands for the surfaces its pass drew, and this is the surface none of them drew.
 - ⚠️ **The fix is in the component and never in this policy.** `style-src 'self'` is the
   desktop's rule, held equal by `hosting.test.ts` — so the packaged desktop presumably refuses
-  the same element, which nobody has checked. Found, not fixed here: handed off as its own
-  task.
+  the same element, ~~which nobody has checked. Found, not fixed here: handed off as its own
+  task.~~ **Checked the same day: it does, once for each editor built. Fixed in
+  `NoteEditor.tsx`, fenced in `tokens.test.ts`, and asked on every `web:smoke` since — which
+  opens a note under this policy.** ⚠️ **The deployed build still raises it**, until a deploy
+  carries the fix — and that is the owner's to ask for.
+  [light-app.md](../docs/reference/light-app.md) §9.7 has each measurement.
 
 **Still not driven at the real origin**: the app's *own* check for a new build, in any browser
 that was measured — the owner's Firefox drew its notice once, by his sentence, and in Chrome
@@ -726,8 +732,9 @@ that stayed open after the first three, as they stand:
 
 **And three things that deploy left**: a page with no controller at all — a browser with no
 service worker, or an evicted cache under a live page — which a bypass only resembles; a
-rollback of a build that renamed chunks; and the note editor's two violations, which are the
-component's to fix (*What the browser said under it*).
+rollback of a build that renamed chunks; and the note editor's two violations, which the
+component has since fixed and the next deploy is the first to carry (*What the browser said
+under it*).
 
 ## Cost
 

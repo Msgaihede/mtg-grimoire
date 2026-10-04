@@ -80,6 +80,7 @@ For global repo workflow, style, and testing conventions, refer to:
 - **Animation presets (`src/lib/motion.ts`)**:
   - Standard timings and curves (`scrim`, `dialog`, `popup`, `press`).
   - Forbidden APIs: `AnimatePresence mode="popLayout"` and `animateView()` (append runtime styles blocked by CSP `style-src 'self'`).
+  - Same policy, any library: a Tiptap editor is built with `injectCSS: false` and imports `prosemirror-view/style/prosemirror.css` for the bundler (`tokens.test.ts` enforces both). Before a new dependency draws anything, grep its `dist/` for `createElement("style")`.
   - `<MotionConfig reducedMotion="user">` mounted once per face (in `App.tsx` and `PhoneApp.tsx`). Non-positional animations require explicit `useReducedMotion()`.
 - **Press feedback**: Use `PRESS` recipe from `src/lib/motion.ts`. Never apply press scaling to text input fields.
 - **Keyboard navigation**:

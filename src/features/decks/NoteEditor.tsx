@@ -63,6 +63,26 @@
  * so a doc comment naming the property would fail it. `motion.ts` spells `<style>` without its
  * angle bracket for the same reason.)
  *
+ * ⚠️ **`prosemirror-view` was the wrong library to have read, and the paragraph above was true of
+ * it while the editor injected a sheet anyway** (found 2026-10-04, on the live web app). Tiptap's
+ * own editor class appends a style element of its own to the page's head as each view is built,
+ * unless its `injectCSS` option is off — and it is on by default. Every shipped host refused it:
+ * one `style-src-elem` violation and one console error **per editor built**, since the element
+ * is taken away with the last editor and made again for the next. Measured in the packaged
+ * desktop window that day (a `--debug` build, which enforces the shipped policy): the element's
+ * `sheet` was `null`, and the surface computed `white-space: break-spaces` and
+ * `position: relative` regardless — from the import below, which is why nobody had seen it.
+ *
+ * **So the option is off, and nothing was added in the refused sheet's place.** It is
+ * ProseMirror's base rules over again, plus three things the import does not carry, each
+ * measured in that window rather than assumed: a `white-space: normal` on non-editable islands
+ * (a to-do's box and its delete button hold no whitespace to collapse — all 22 rectangles of a
+ * nested list were identical with and without it); the gap cursor's drawing (no position in
+ * either dialect can hold one — `NoteEditor.test.tsx` sweeps both corpora and goes red when that
+ * stops being true); and a zero size on ProseMirror's separator image, which is 0 × 0 here
+ * without it. `src/lib/tokens.test.ts` refuses an editor built with the option left on, anywhere
+ * in the app. [light-app.md](../../../docs/reference/light-app.md) §9.7 has the day.
+ *
  * **Every hint is `useTooltip()`'s spread and never a `title`**, which matters more here than on
  * an ordinary row: the toolbar is icon-only, so the hint is the whole of what a pointer gets. The
  * checklist's per-row delete button is the one control here that binds none, and not by choice:
@@ -176,12 +196,19 @@ export const NOTE_PLACEHOLDER = "Start typing. The first line becomes the title.
  * document, which comes back out as trailing blank lines and makes the round trip fail on every
  * body at once.
  *
- * The three that stay on and are *not* in the dialect list are behaviour rather than schema, and
- * each earns its place: `undoRedo` is Ctrl+Z, `listKeymap` is Enter and Backspace inside a list,
- * and `gapcursor` is how a caret gets past a blockquote that is the last thing in the document —
- * which matters here precisely because `trailingNode` is off and there is no spare paragraph to
- * land in. None of them can put a node or a mark into a body. `dropcursor` is off because
- * dragging inside a note is not a gesture this app offers.
+ * The three that stay on and are *not* in the dialect list are behaviour rather than schema:
+ * `undoRedo` is Ctrl+Z, `listKeymap` is Enter and Backspace inside a list, and `gapcursor` is on
+ * only because it cannot be named (below). None of them can put a node or a mark into a body.
+ * `dropcursor` is off because dragging inside a note is not a gesture this app offers.
+ *
+ * ⚠️ **`gapcursor` does nothing in this dialect, and this paragraph claimed otherwise until
+ * 2026-10-04** — that it "is how a caret gets past a blockquote that is the last thing in the
+ * document". It is not: a gap cursor stands only beside a *closed* node (an atom, an isolating
+ * node, an empty one), and a quote ends in a paragraph a real caret can enter. Driven in the
+ * packaged window that day, neither ArrowDown nor ArrowRight at the end of a trailing quote made
+ * one; the way out of a quote is Enter on its empty last line. `NoteEditor.test.tsx` asks the
+ * library's own validity rule of every position in both corpora and finds none — which is also
+ * why the app bundles no rule to draw one.
  *
  * **A fourth behaviour extension is added below rather than configured in there**, because it is
  * not a StarterKit option: {@link Placeholder}, which paints the empty surface's prompt. The
@@ -1685,6 +1712,10 @@ export default function NoteEditor({
     extensions,
     content: value,
     contentType: "markdown",
+    // ⚠️ **Never left to its default**, which appends a sheet at runtime that every shipped host
+    // refuses, with a console error for each editor opened. The module header has what it
+    // carried and why nothing replaces it; `tokens.test.ts` goes red for an editor without this.
+    injectCSS: false,
     editorProps: { attributes: surfaceAttributes(ariaLabel, surface) },
     onUpdate: ({ editor: instance }) => onChangeRef.current(instance.getMarkdown()),
   });

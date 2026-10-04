@@ -248,6 +248,105 @@ describe("motion vocabulary", () => {
 });
 
 /**
+ * Every way this app's source can build a Tiptap editor: the React hook and the bare class.
+ * `\b` on both, so a longer identifier that merely ends in one of them is not a call.
+ */
+const EDITOR_CALL = /\b(?:useEditor|new Editor)\(/g;
+
+/** The editor library's component form, which takes the same options as JSX props. */
+const EDITOR_PROVIDER = /<EditorProvider\b/;
+
+/** The one spelling of the option that counts — `true`, a variable and absence all inject. */
+const INJECT_CSS_OFF = /\binjectCSS:\s*false\b/;
+
+/** The import that puts ProseMirror's base rules in the bundle, where the policy permits them. */
+const PROSEMIRROR_SHEET = 'import "prosemirror-view/style/prosemirror.css"';
+
+/**
+ * The text of a call's arguments: from just after its opening parenthesis to the one that
+ * closes it. Counted rather than cut at a fixed width, because the options object of the one
+ * real call runs to a dozen lines and will grow, and a window that stopped short of the line
+ * would report a fenced editor as an offender.
+ *
+ * It reads parentheses inside strings and comments as code, which can only run the text long
+ * or short by a balanced pair in prose — and an unbalanced one that ran it to the end of the
+ * file would find the option in some later call and pass. That is the one way past this, and
+ * it needs a lone parenthesis written inside an editor's own options.
+ */
+function callArguments(source: string, open: number): string {
+  let depth = 1;
+  let at = open;
+  while (at < source.length && depth > 0) {
+    const char = source[at];
+    if (char === "(") depth += 1;
+    else if (char === ")") depth -= 1;
+    at += 1;
+  }
+  return source.slice(open, at);
+}
+
+describe("an editor's stylesheet", () => {
+  /**
+   * **The same policy as the motion sweep above, and the same reason a sweep is the only fence.**
+   *
+   * Tiptap's `injectCSS` option defaults to on, and on it appends a `<style>` element to
+   * `<head>` for every editor it builds. `style-src 'self'` refuses that — in the packaged
+   * desktop app, in the Android app and at `mtg-grimoire.app` — so the sheet is applied nowhere a
+   * reader runs the app, and costs a console error each time. `tauri dev`, Storybook and jsdom
+   * carry no policy and apply all of it. It shipped that way from the day the editor landed
+   * until 2026-10-04, when the live site said so; `NoteEditor.tsx`'s header has what the sheet
+   * carried and why nothing had to replace it.
+   *
+   * So an editor built with the option left on is green in every suite and every story, and
+   * wrong only in a shipped window. `scripts/web-smoke.mjs` opens a note under the hosting
+   * policy and hears it, but `npm run verify` does not run that — this does.
+   *
+   * Tests are skipped: `NoteEditor.test.tsx` builds bare editors by the dozen to drive commands,
+   * under jsdom, where a `<style>` in `<head>` is neither refused nor read.
+   */
+  it("turns the library's injected sheet off on every editor the app builds", () => {
+    const calls: [path: string, args: string][] = [];
+    const providers: string[] = [];
+    for (const [path, source] of Object.entries(SOURCES)) {
+      if (path.includes(".test.")) continue;
+      if (EDITOR_PROVIDER.test(source)) providers.push(path);
+      for (const match of source.matchAll(EDITOR_CALL)) {
+        calls.push([path, callArguments(source, match.index + match[0].length)]);
+      }
+    }
+
+    // A sweep that finds no editor passes over a codebase where every editor injects. The app
+    // has one, and this names its file so that a moved or renamed editor is a red test to read
+    // rather than a guarantee that quietly became about nothing.
+    expect(calls.map(([path]) => path)).toContain("/src/features/decks/NoteEditor.tsx");
+
+    const offenders = calls
+      .filter(([, args]) => !INJECT_CSS_OFF.test(args))
+      .map(([path, args]) => `${path}: ${args.slice(0, 60)}`);
+    expect(offenders).toEqual([]);
+
+    // The component form spells the option as a prop, which the test above cannot read. Nothing
+    // uses it; an editor that wants it has to teach this sweep its spelling first.
+    expect(providers).toEqual([]);
+  });
+
+  /**
+   * The other half, and what makes the first one safe to ask for: with the injection off, the
+   * rules ProseMirror cannot work without — `white-space` above all, which it warns on the
+   * console for the want of — reach the page only where the module that builds the editor
+   * imports them for the bundler. `NoteEditor.tsx` does; a second editor in a second file that
+   * copied the option and not the import would have no such rule on any host, dev included.
+   */
+  it("bundles ProseMirror's own sheet wherever an editor is built", () => {
+    const bare = Object.entries(SOURCES)
+      .filter(([path, source]) => !path.includes(".test.") && source.search(EDITOR_CALL) !== -1)
+      .filter(([, source]) => !source.includes(PROSEMIRROR_SHEET))
+      .map(([path]) => path);
+    expect(bare).toEqual([]);
+  });
+});
+
+/**
  * **The two mounts that make `useTooltip` do anything.**
  *
  * The hook falls back to a no-op API when no provider is above it — deliberately, because after

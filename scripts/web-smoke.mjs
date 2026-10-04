@@ -8,8 +8,8 @@
 // This is the run that instantiates it. It serves `dist-web/` **as the production host will** —
 // every response under the headers `dist-web/_headers` gives its address, the
 // Content-Security-Policy among them, and a miss as the hosting Worker's own 404 — opens it in
-// headless Chromium over the DevTools protocol, and asks sixteen things, in this order — the
-// first fifteen of one browser, and the last of a second, because it needs a first run of its
+// headless Chromium over the DevTools protocol, and asks seventeen things, in this order — the
+// first sixteen of one browser, and the last of a second, because it needs a first run of its
 // own:
 //
 //   1. the app got past its startup gate — the engine loaded, and opened and migrated a database
@@ -36,11 +36,14 @@
 //      cache stands beside the first, and a reload leaves all of that as it is
 //  13. the bar's button, and nothing else, hands over: the page starts again once, on the new
 //      build's shell alone, with no bar — and the second tab is neither told nor reloaded
-//  14. no request would cost a CORS pre-flight — the worker's picture fetch included — and none
+//  14. a deck is made and a note opened in it: the editor — the app's one lazily loaded chunk,
+//      over a library that appends a stylesheet of its own unless told not to — draws, takes
+//      typing, and leaves no style element on the page
+//  15. no request would cost a CORS pre-flight — the worker's picture fetch included — and none
 //      went to a host this script has no answer for
-//  15. the host's Content-Security-Policy refused nothing, anywhere: not in a page, not in the
+//  16. the host's Content-Security-Policy refused nothing, anywhere: not in a page, not in the
 //      engine's Worker, not in the service worker (`watchPolicy` has why those are three)
-//  16. on a fresh profile whose card file is thirty thousand cards, a reload made the moment
+//  17. on a fresh profile whose card file is thirty thousand cards, a reload made the moment
 //      the engine stops answering — it is inside a synchronous call, and the Worker the page
 //      leaves behind still holds the database — draws the app and no refusal, and the page says
 //      it had to ask again (`reloadInsideTheIngest` has why that line is the check, and what
@@ -49,7 +52,7 @@
 // **No request leaves the machine.** The engine starts the launch's downloads the moment the
 // database opens, and the service worker fetches a picture for every tile, so every
 // cross-origin request is paused by the DevTools `Fetch` domain and answered from
-// `scripts/web-smoke/` with the headers the real host sends — the sixteenth check's card file
+// `scripts/web-smoke/` with the headers the real host sends — the seventeenth check's card file
 // excepted, which is those six cards grown in memory. Two fences stand behind that: a
 // request to a host with no fixture is failed *and fails the run*, and the browser is started
 // with a resolver that knows no name but `localhost`, so a request the interception never saw
@@ -809,6 +812,8 @@ const buttonSaying = (words, within = "") =>
   `[...document.querySelectorAll(${JSON.stringify(`${within} button`.trim())})].find(
     (button) => button.innerText.trim() === ${JSON.stringify(words)},
   )`;
+/** The note editor's writing surface, in the dialog a deck's New note opens. */
+const NOTE_SURFACE = `document.querySelector('[role="dialog"] [role="textbox"][aria-multiline="true"]')`;
 /** The update bar's two halves: the sentence, which a live region always holds, and the button. */
 const BAR_SAYS = "A new version of MTG Grimoire is ready.";
 const BAR_BUTTON = "Reload to update";
@@ -1410,6 +1415,57 @@ async function main() {
   console.log(
     `ok  the press handed over — one new document on ${SHELL_PREFIX}${next}, no bar, ` +
       "and the second tab was neither told nor reloaded",
+  );
+
+  // A deck note, opened and typed into. The editor is a chunk nothing above loads, and the
+  // library under it (Tiptap) appends a style element to the page as it builds a view unless it
+  // is told not to. This host's `style-src` refuses one — which is how the live site found it on
+  // 2026-10-04, with every check above green: the policy can only refuse what a run asks for.
+  // Last of this tab's checks because it writes, and a database with a deck in it is asked
+  // different things at its next launch than the first run the checks above are about.
+  await first.press(
+    "the Decks tab",
+    `document.querySelector('nav[aria-label="Views"] a[href="/decks"]')`,
+  );
+  await first.press("New deck", buttonSaying("New deck"));
+  await first.press(
+    "the new deck's name field",
+    `document.querySelector('[role="dialog"] input[id$="-name"]')`,
+  );
+  await first.type("Smoke");
+  await first.press("Create deck", buttonSaying("Create deck", '[role="dialog"]'));
+  await first.press("the deck's New note", buttonSaying("New note"));
+  await first.press("the note's writing surface", NOTE_SURFACE);
+  await first.type("Cut a land.");
+  const note = await first.until(
+    "the note editor took typing",
+    `(() => {
+      const surface = ${NOTE_SURFACE};
+      if (!surface?.innerText.includes("Cut a land.")) return null;
+      return {
+        whiteSpace: getComputedStyle(surface).whiteSpace,
+        injected: [...document.querySelectorAll("style")].map(
+          (sheet) => sheet.getAttributeNames().join(" ") || "(no attributes)",
+        ),
+      };
+    })()`,
+    30_000,
+  );
+  // Asked of the page as well as of the policy: a refused sheet is still an element, so this
+  // names the library that put it there where the policy's issue names only a directive.
+  if (note.injected.length > 0) {
+    fail(`opening a note left style elements on the page: ${note.injected.join(", ")}`);
+  }
+  // The one rule ProseMirror cannot work without, which only a bundled sheet can supply here.
+  if (!/^(pre-wrap|break-spaces)$/.test(note.whiteSpace)) {
+    fail(`the note's writing surface computes white-space: ${note.whiteSpace}`);
+  }
+  // An issue is reported a moment after the act that raised it.
+  await pause(500);
+  hosts.check();
+  console.log(
+    `ok  a deck note opened and took typing — white-space ${note.whiteSpace}, ` +
+      "and no style element was put on the page",
   );
 
   const thrown = [...first.thrown(), ...second.thrown()];
