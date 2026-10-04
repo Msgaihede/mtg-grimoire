@@ -5956,10 +5956,140 @@ is this step's own pull request.
 - **A phone's browser freezing the Worker.** `timer::interval` drops the beats a frozen Worker
   missed and the pong rule ends a socket that died meanwhile, by reasoning; no backgrounded tab
   has been watched coming back.
-- **The removed device's stale socket**, above: a relay that closed a departed device's socket,
-  or a loop that asked about its group while connected, would each end it. Neither is built.
-- **The sync smoke on a runner**: Linux, wrangler installed without its lifecycle scripts, a
-  runner's clock under every wait. The pull request's own `web` job is the first.
+- ~~**The removed device's stale socket**, above: a relay that closed a departed device's socket,
+  or a loop that asked about its group while connected, would each end it. Neither is built.~~
+  **answered — both are built, in step 6.3b (§10.3b)**: the loop lets go of a socket whose
+  group its device is no longer in, and a rotation's roster closes the sockets of the devices it
+  leaves out. The relay's half waits on a deploy.
+- ~~**The sync smoke on a runner**: Linux, wrangler installed without its lifecycle scripts, a
+  runner's clock under every wait. The pull request's own `web` job is the first.~~ **answered —
+  it ran green there**: pull request #823's `web` job, on `ubuntu-24.04`, merged 2026-10-04.
+
+### 10.3b Step 6.3b — a device that left lets go of its socket (2026-10-04)
+
+Step 6.3's walk found two things wrong that were not the browser's, and review found the second
+worse than it looked. **A socket is its group's** — the relay's object is addressed by the group
+id — **and the loop asked which group its device was in only between sockets.** So a device that
+pressed *Leave group* kept its socket and read `live`; one that left and then joined another
+group listened to the group it had **left**, for up to the socket's twelve hours, while the group
+it was in rang on nobody; and one that was removed was told nothing by the relay, and kept the
+socket even after the trip on which it learned. Every host, the desktop included, since the
+socket was built. Fixed as one thing, on both sides.
+
+**The loop** (`sync_engine::live`, every consequence in `schedule.rs`):
+
+- **It looks at its group on the commit that could have changed it** — the write wake, ahead of
+  the outbox's question — and on every keepalive beat. A device in no group, or in another, ends
+  the socket as `Disconnect::Left`: no backoff, no row, the attempt counter untouched; the loop
+  then says `off`, or dials for the group it is in now.
+- **The look is on the write connection, and a test holds why**: with a commit hook held open
+  mid-commit, the read connection still answered the group being deleted — the look that would
+  have kept the socket — while the loop's look waited for the writer and answered none. On two
+  connections and on one.
+- **A 4001 is read behind the sync lane**, because a device's own departure is a manifest
+  without it and the relay now closes its socket for that: asked at once it is a removal —
+  `offline`, a row — over something the reader just chose. The press holds the lane to its last
+  write, so behind it the group is gone and the close is quiet.
+- **No group is not a failed dial.** A removed device clears its group on the trip in front of
+  its reconnect; reaching the dial with none is `Left`, where it was a second backoff and a
+  second row.
+- **A dial has a deadline** — twenty seconds, the relay's other clients' connect and read bounds
+  added. A relay that took the connection and never answered held the loop at `connecting`, with
+  no trip, for as long as the stack allowed; a browser allows minutes.
+
+**The relay** (`relay/src/group.ts`, `log.ts`; **not deployed**): a rotation's roster closes,
+with 4001, every open socket whose device the adopted manifest does not name, and marks a device
+it knows only by its socket departed with the rest. The client's next act after that close is
+the round trip on which it finds itself off the manifest, so it cannot spin: removed → 4001 →
+one backoff → the trip → no group → `off`. `notifyTargets` is unchanged — a device a roster took
+out holds no socket to tell. No upgrade is refused on the `departed` mark: a lost roster post
+would then leave a re-paired device with no doorbell.
+
+**What the loop records.** A lapse is the one background failure kept out of `error_log`, and the
+loop asked `entitlement::membership_ended` for it — alone, which is also true of every healthy
+device that joined by pairing: no refresh secret, and the `active` the group door answered. Such
+a device recorded nothing: found here as a removed browser whose log stayed empty. It asks
+behind `commands::entitled` now, as that function's doc said and the Settings panel does. Tests
+on both kinds of device: a failed background trip and a fallen socket are each a row; a lapse —
+the relay's 401 on a sync route — is none, and neither is what follows it.
+
+**A joiner's first trip met the join's rotation — found by the walk, three runs in twenty-one,
+and not asked for by this step.** The device that confirms a pairing seals the key at the
+group's epoch and publishes the join's rotation a moment later; the joiner's page runs a trip
+the moment it holds the key (20 ms after, here). A trip opens with `/keys` and then asks the
+group door for a token — two requests, and the rotation landed between them: the check answered
+the epoch the joiner held, the door was asked with that epoch's auth, and the relay, one
+rotation on, refused it. `POST /token 401`, the trip failed, and the device waited for its next
+one. It has always been there on every host; the old walk's timing never met it. **A trip now
+takes that refusal to `/keys`, as a push takes a `stale_epoch`** (`client::
+token_across_a_rotation`): a rotation adopted there is the reason and the door is asked again
+under the new key; a removal ends the trip quietly; a relay still on this device's epoch is a
+refusal that stands. One retry. The relay's 401 is right and still happens — the walk allows
+it in exactly that shape, once, and says so when it does.
+
+**What a desktop does differently:**
+
+1. It lets go of its socket the moment it leaves its group, is removed, or changes group, and
+   reads `off` — where it read `live` until the socket ended.
+2. Joined to another group, its socket is that group's within five seconds, not twelve hours.
+3. Removed, once the relay tells it: `offline` for one backoff, then `off`, and one row — *the
+   relay says this device is no longer in its sync group*, the 4001's sentence now, in place of
+   *…this device's sync group no longer exists*.
+4. A dial the relay never answers fails after twenty seconds.
+5. **A desktop that joined by pairing starts showing background relay failures in its Errors
+   panel**, which it was silently dropping — folded on the message, as on every other device.
+6. Each commit on its write connection costs the loop one more read, of `sync_group`.
+7. A round trip whose token is refused because a rotation landed behind its key check adopts
+   the rotation and asks once more, where it failed and waited for the next trip.
+
+**The walk, extended** (`npm run web:sync-smoke`; three more steps, 41–54 s for the whole of it
+over some thirty runs on a machine other work was loading, and up to 72 s at its worst):
+
+| | |
+| --- | --- |
+| The phone face founds a group of its own, goes `live`, and presses *Leave group* | `off` **72–134 ms** after the press; never `offline`; its socket closed; nothing logged |
+| It then joins the desktop face's group | its socket is that group's address, not the one it left's — the regression test: with the old loop the second doorbell below never rings |
+| It relaunches, paired, into a first ingest of 30 000 cards | below |
+| The desktop face removes it from the roster | in no group **2.2–4.2 s** after the press (the backoff's two to four seconds, and a trip), **with nothing pressed on it**: it said `offline`, `connecting`, `off`, its socket closed, and its log holds one row, the removal's sentence — on a device that joined by pairing, which logged nothing before this step. (Step 6.3 pressed *Sync now* here, and said so.) |
+
+**A paired browser's relaunch — the one thing nothing covered.** A paired device's launch is two
+things on the engine's one connection and one thread: the launch's downloads, and the loop's
+first act — a round trip, then the socket. No earlier run put them together: a first run is in
+no group, and a relaunch inside a day downloads nothing. So the phone face pairs with its card
+file *held* — in a group, with no card — and is then reloaded with the file let go. **It does
+not deadlock and does not panic.** Every run alike, the quiet ones first and a loaded machine's
+in brackets:
+
+- the loop's launch trip asked the relay **3.2–3.7 s** after the reload, as the database
+  opened, and got as far as its pull (read off the device's own requests: the relay's log
+  cannot tell its `/keys` from the other device's);
+- then it was **deaf for as long as the ingest held the thread**: no ack and no dial until the
+  ingest's synchronous tail ended. The longest any read of the engine waited was **4.6–5.8 s**
+  (to 10 s, and 19 s once);
+- the socket was upgraded at **9.0–10.4 s** (to 15 s, and 26 s once), `live` was read some
+  30–300 ms later, and the ingest was done within 60 ms of that;
+- a wish made on the other device meanwhile was on its wishlist about 70 ms after that. Nothing
+  was lost: the launch trip's own pull and the reconnect's trip take whatever was missed.
+- No console error, no `error_log` row, no policy refusal.
+
+That silence is the ingest's shape, not the loop's — §9's figures for a page's own commands
+during an ingest are the same wait — and on a real first run of ~117 000 cards it will be
+longer in proportion.
+
+**Open after this step:**
+
+- **The relay's half is not deployed.** Until it is, a removed device learns at its own next
+  round trip, as before — and then lets go of its socket, which is new. The runbook's ninth half
+  has what each side does with the other's old build, and the one look that says it is live.
+- **A released desktop against the new relay** reads its own *Leave group* as a removal: a few
+  seconds of `offline` and one row saying its group no longer exists. Read off the released
+  loop's code, not driven.
+- **A Sync panel left open on a removed device keeps its old roster** until its own query is
+  read again: the engine says `off` on `sync:live`, and nothing on the page re-reads the pairing
+  for that.
+- **No desktop has been driven through any of it**: the loop's tests are native and its walk is
+  two browsers.
+- **The relaunch on a real corpus, and on a phone's browser.**
 
 ### 10.4 Step 6.4 — pairing on the phone face (2026-10-04)
 

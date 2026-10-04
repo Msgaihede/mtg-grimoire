@@ -657,13 +657,29 @@ It runs the wrangler `app-worker/`'s lockfile pins (`npm ci --ignore-scripts --p
 app-worker`) — the one tool that deploys anything here — and of it only `d1 execute --local`
 and `dev --local`.
 
-⚠️ **A removed device is told nothing, and the smoke run is where that was seen.** A rotation's
-roster marks the device departed in the group's object and closes no socket — 4001 is for a
-group that is gone — so the device goes on holding its socket and learns it was removed at its
-next round trip, when `/keys` answers a manifest without it: after a write of its own, a press
-of *Sync now*, or the next push by a device still in the group, which still rings it
-(`notifyTargets` is every open socket but the pusher's). Until then its panel reads a group it
-is no longer in. True of every host; a page is only where it was watched.
+**A removed device is told: a rotation's roster closes its socket** (light app step 6.3b,
+2026-10-04 — written, and waiting on a deploy; `docs/reference/hosted-relay-deploy.md`'s ninth
+half). `group.ts`'s `roster` closes, with `4001`, every open socket whose device the adopted
+manifest does not name (`log.ts`'s `removedSockets`) — the code `drop` closes a whole group's
+with, which a client reads as *removed*: a backoff, then the round trip a reconnect starts with,
+on which `/keys` answers a manifest without it and it clears its own group. Nothing is pressed
+on the removed device; in the smoke run it read as in no group 2–3 s after the press on the
+other one. A device holding a socket is also marked `departed`, whether or not it had acked.
+
+- **It includes a device that leaves**: its own departure is a manifest without it, so its own
+  socket is closed too — which is what ends the old group's socket on a *released* client that
+  would otherwise keep it for twelve hours. A current client reads that close behind its own
+  departure and says nothing.
+- **Until then a rotation closed nothing**, and the smoke run is where that was seen: the removed
+  device went on reading *live*, over a roster it was no longer on, until its own next round
+  trip — an edit, a press of *Sync now*, or the next push by a device still in the group.
+- **`notifyTargets` has no rule about departed devices, and needs none**: after the close they
+  hold no socket to be told on. A removed device that dialled again inside its token's day would
+  be accepted and rung, and a client only dials behind the round trip on which it clears the
+  group it would have dialled for. No upgrade is refused on the `departed` mark, deliberately:
+  that mark is lifted only by a later roster, the post that carries one is best effort, and a
+  device paired back in whose post was lost would be left with no doorbell and no word why.
+- **An untagged socket is left open**, for `notifyTargets`' reason turned round.
 
 ⚠️ **Three things about it that are stated rather than discovered:**
 

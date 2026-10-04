@@ -3,12 +3,15 @@ import { MAX_GROUP_DEVICES } from "./groupauth";
 import {
   ACK_TTL_MS,
   compact,
+  CLOSE_REMOVED,
   departures,
   deviceTag,
   headFrame,
   notifyTargets,
   isNewerRoster,
   parseRoster,
+  removedSockets,
+  taggedDevice,
   since,
   TAIL_MS,
   type Ack,
@@ -360,5 +363,58 @@ describe("notifyTargets", () => {
     const sockets = [open("d:me"), open("d:you")];
     notifyTargets(sockets, "me");
     expect(sockets).toHaveLength(2);
+  });
+});
+
+describe("taggedDevice", () => {
+  it("reads a device back out of its tag, and nothing out of any other", () => {
+    expect(taggedDevice(deviceTag("abc123"))).toBe("abc123");
+    // The id may itself contain the namespace's characters: only the prefix is taken off.
+    expect(taggedDevice(deviceTag("d:odd"))).toBe("d:odd");
+    expect(taggedDevice(undefined)).toBeUndefined();
+    expect(taggedDevice("g:group")).toBeUndefined();
+    expect(taggedDevice("abc123")).toBeUndefined();
+  });
+});
+
+describe("removedSockets", () => {
+  const open = (tag: string | undefined) => ({ tag, open: true });
+
+  it("closes every socket of a device the manifest does not name, and no other", () => {
+    const sockets = [open("d:desk"), open("d:phone"), open("d:phone"), open("d:laptop")];
+    // A device may hold two sockets for a moment — a reconnect ahead of the old one's close.
+    expect(removedSockets(sockets, ["desk", "laptop"])).toEqual([open("d:phone"), open("d:phone")]);
+    expect(removedSockets(sockets, ["desk", "phone", "laptop"])).toEqual([]);
+  });
+
+  it("closes everybody's for an empty roster — the last device leaving", () => {
+    expect(removedSockets([open("d:desk")], [])).toEqual([open("d:desk")]);
+  });
+
+  it("names a device whole: a prefix of a kept id is another device", () => {
+    expect(removedSockets([open("d:desk"), open("d:desk2")], ["desk2"])).toEqual([open("d:desk")]);
+  });
+
+  it("leaves a socket it cannot prove is a removed device's", () => {
+    // Untagged, or tagged in a namespace that is not a device's: closing a member's socket costs
+    // a reconnect, and leaving a stranger's open costs a frame with no data in it.
+    expect(removedSockets([open(undefined), open("g:other")], [])).toEqual([]);
+  });
+
+  it("skips a socket that is already closing", () => {
+    expect(removedSockets([{ tag: "d:phone", open: false }], ["desk"])).toEqual([]);
+  });
+
+  it("is the pusher's rule's other half: what it closes is never told of a push again", () => {
+    const sockets = [open("d:desk"), open("d:phone")];
+    const gone = new Set(removedSockets(sockets, ["desk"]));
+    // Closed, the removed device's socket is not `open`, which is what `notifyTargets` reads.
+    const after = sockets.map((socket) => ({ ...socket, open: !gone.has(socket) }));
+    expect(notifyTargets(after, "laptop").map((s) => s.tag)).toEqual(["d:desk"]);
+  });
+
+  it("uses the code a dropped group's sockets are closed with", () => {
+    // The one close a client reads differently (`sync_engine::live`'s `CLOSE_GROUP_GONE`).
+    expect(CLOSE_REMOVED).toBe(4001);
   });
 });

@@ -4212,6 +4212,146 @@ async fn a_push_that_catches_up_to_its_own_removal_stops_without_an_error() {
 }
 
 // ---------------------------------------------------------------------------------------
+// A token refused across a rotation — light app phase 6, step 6.3b
+// ---------------------------------------------------------------------------------------
+
+/// The auth the group door is asked with while this device holds the key it holds now.
+fn auth_held(conn: &Connection) -> String {
+    let held = identity::group(conn).unwrap().unwrap();
+    crypto::relay_auth(&held.group_key, &held.group_id, held.epoch)
+}
+
+/// Matches a request whose body carries `auth` — or, with `carries` false, one that does not.
+fn asked_with(
+    auth: String,
+    carries: bool,
+) -> impl Fn(&httpmock::prelude::HttpMockRequest) -> bool + Send + Sync + 'static {
+    move |req: &httpmock::prelude::HttpMockRequest| req.body_string().contains(&auth) == carries
+}
+
+/// What a trip's opening key check answered before the rotation landed.
+fn checked_at_zero() -> KeyCheck {
+    KeyCheck {
+        outcome: KeyOutcome::Current,
+        relay_epoch: Some(0),
+    }
+}
+
+/// ⚠ **A rotation that lands between a trip's key check and its group door costs one more ask,
+/// not the trip.** The door refuses the auth of the epoch the check just confirmed; `/keys` says
+/// why, the new key is adopted, and the door is asked under it. Pairing does this to every
+/// joiner whose first trip meets the join's rotation — on a device with no refresh secret, which
+/// is the only kind that takes this door.
+///
+/// **What makes it red**: failing the trip on the refusal (an `Err`), or asking again under the
+/// key that was refused (a second 401).
+#[tokio::test]
+async fn a_token_refused_across_a_rotation_is_asked_again_under_the_new_key() {
+    let server = MockServer::start_async().await;
+    let (conn, me, desk_keys, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    let behind = auth_held(&conn);
+    rotated_to(
+        &server,
+        &group,
+        &desk_keys,
+        &me,
+        1,
+        &[&me.device_id, "dev-remover", "tablet"],
+    );
+    let stale = server.mock(|when, then| {
+        when.method(POST)
+            .path("/token")
+            .is_true(asked_with(behind.clone(), true));
+        then.status(401)
+            .json_body(serde_json::json!({ "error": "unauthorized" }));
+    });
+    let fresh = server.mock(|when, then| {
+        when.method(POST)
+            .path("/token")
+            .is_true(asked_with(behind.clone(), false));
+        then.status(200)
+            .body(r#"{"access":"a2","expires":1900000000,"status":"active","since":1740000000}"#);
+    });
+    let mut keys = checked_at_zero();
+
+    let token = token_across_a_rotation(&conn, &mut keys).await.unwrap();
+
+    assert_eq!(token.as_deref(), Some("a2"));
+    assert_eq!((stale.calls(), fresh.calls()), (1, 1));
+    assert_eq!(
+        keys,
+        KeyCheck {
+            outcome: KeyOutcome::Adopted,
+            relay_epoch: Some(1),
+        },
+        "the pull measures against the epoch the second check answered"
+    );
+    assert_eq!(identity::group(&conn).unwrap().unwrap().epoch, 1);
+    assert!(error_rows(&conn).is_empty(), "{:?}", error_rows(&conn));
+}
+
+/// ...and **a refusal from a relay still on this device's epoch stands, asked once**: nothing
+/// rotated, so a second ask would be the same answer, and the trip fails in the sentence the
+/// door has always answered.
+///
+/// **What makes it red**: retrying whatever `/keys` said (two asks), or swallowing the refusal.
+#[tokio::test]
+async fn a_token_refused_with_no_rotation_behind_it_is_a_refusal_that_stands() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _desk_keys, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    keys_answering(
+        &server,
+        &group,
+        serde_json::json!({ "epoch": 0, "blob": serde_json::Value::Null, "devices": [] }),
+    );
+    let refused = server.mock(|when, then| {
+        when.method(POST).path("/token");
+        then.status(401)
+            .json_body(serde_json::json!({ "error": "unauthorized" }));
+    });
+    let mut keys = checked_at_zero();
+
+    let error = token_across_a_rotation(&conn, &mut keys).await.unwrap_err();
+
+    assert_eq!(error, entitlement::STALE_GROUP_AUTH);
+    assert_eq!(refused.calls(), 1);
+    assert_eq!(identity::group(&conn).unwrap().unwrap().epoch, 0);
+}
+
+/// ...and **a refusal that turns out to be this device's removal ends the trip quietly**, as a
+/// removal found by the opening check does.
+#[tokio::test]
+async fn a_token_refused_because_the_device_was_removed_ends_the_trip_quietly() {
+    let server = MockServer::start_async().await;
+    let (conn, _me, _desk_keys, group) = keyed_group();
+    set_state(&conn, RELAY_URL, &server.base_url()).unwrap();
+    keys_answering(
+        &server,
+        &group,
+        serde_json::json!({
+            "epoch": 1,
+            "blob": serde_json::Value::Null,
+            "devices": ["dev-remover"],
+        }),
+    );
+    let refused = server.mock(|when, then| {
+        when.method(POST).path("/token");
+        then.status(401)
+            .json_body(serde_json::json!({ "error": "unauthorized" }));
+    });
+    let mut keys = checked_at_zero();
+
+    let token = token_across_a_rotation(&conn, &mut keys).await.unwrap();
+
+    assert_eq!(token, None);
+    assert_eq!(refused.calls(), 1);
+    assert!(identity::group(&conn).unwrap().is_none());
+    assert!(error_rows(&conn).is_empty(), "{:?}", error_rows(&conn));
+}
+
+// ---------------------------------------------------------------------------------------
 // Pushing by bytes, and an op that can never be sent — issue #546 item 4, the client half
 // ---------------------------------------------------------------------------------------
 
