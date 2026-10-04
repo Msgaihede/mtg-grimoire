@@ -13,14 +13,14 @@ Also supports a light app (Android APK via Tauri and Web via WebAssembly in a Cl
 - [`docs/agent/DOMAIN_VOCABULARY.md`](docs/agent/DOMAIN_VOCABULARY.md) — Critical domain taxonomy: tags vs labels vs keywords vs notes, and how to avoid confusing them.
 - [`docs/agent/EXTERNAL_SERVICES.md`](docs/agent/EXTERNAL_SERVICES.md) — Scryfall, price feeds, Spellbook combos, sync relay, Workers, secrets policy, and deploy rules.
 - [`docs/agent/RUNNING_AND_VERIFYING.md`](docs/agent/RUNNING_AND_VERIFYING.md) — Full command catalog, database paths, single-instance traps, and CDP UI verification.
-- [`docs/agent/WORKFLOW.md`](docs/agent/WORKFLOW.md) — Subagent fan-out, git worktrees, project skills, language server caveats, and documentation maintenance.
+- [`docs/agent/WORKFLOW.md`](docs/agent/WORKFLOW.md) — Subagent fan-out, git worktrees, project skills, and documentation maintenance.
 
 ### Sections in this Document
 
 - [Primary Commands](#primary-commands) — Key commands needed across everyday tasks.
 - [Architecture & Responsibilities](#architecture--responsibilities) — The fundamental Rust vs TypeScript separation.
 - [Area-Specific Guides](#area-specific-guides) — Directory-level `CLAUDE.md` files governing specific parts of the codebase.
-- [Project Skills & Workflows](#project-skills--workflows) — Worktree workflows, app locks, and branch shipping.
+- [Project Skills & Workflows](#project-skills--workflows) — Worktree workflows and app locks.
 - [Global Rules](#global-rules) — Invariants binding every agent and every commit.
 - [Working Style](#working-style) — Subagents, testing, and user interaction standards.
 

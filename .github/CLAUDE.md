@@ -123,7 +123,7 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   with a grant per job. **`scripts/actions-pinned.test.mjs` fences all of it**; a new workflow or
   composite action is globbed in the day it lands.
 - **The `powershell` job runs the repo's `.ps1` tests on `windows-latest`** — `lock.test.ps1`
-  for the worktree locks and `pr-auto.test.ps1` for the auto-PR guard — and its arm in
+  for the worktree locks — and its arm in
   `ci-route.mjs` must stay **above** `src-tauri/*` and `scripts/*` — first-match-wins, and
   `scripts/` is on the frontend list because `eslint .` lints it, which a `.ps1` is not. It
   matches `.psm1` and `.psd1` too, because **the fail-safe does not set `powershell`**: a module
