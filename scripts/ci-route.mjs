@@ -266,6 +266,10 @@ export const ARMS = [
   // sets `android` sets `rust`, and the fail-safe was already running it for this path.
   // Not `storybook`, which loads `vite.config.ts` and never this file.
   { match: ["vite.mobile.config.ts"], jobs: ["frontend", "rust", "android", "web"] },
+  // `vite.sw.ts` is the web mode's own plugin — it builds `dist-web/sw.js` after the bundle and
+  // into no other build — so it is `web`'s alone to run, and `frontend` lints it. Named here
+  // rather than left to the fail-safe, which would run the whole Rust matrix for a service worker.
+  { match: ["vite.sw.ts"], jobs: ["frontend", "web"] },
   // The web build's two scripts: `web:wasm`, which compiles the module and runs `wasm-bindgen`
   // over it, and `web:smoke`, which serves `dist-web/` and opens it in a headless browser.
   // `frontend` lints them like the rest of `scripts/`; `web` is the job that runs them.

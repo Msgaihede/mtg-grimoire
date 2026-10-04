@@ -806,12 +806,67 @@ pub struct Ingested {
 /// and holding it for the length of an insert is what turns a reader's edit into a frozen
 /// button. This is where the module parts company with [`crate::marketplace_feed::store`],
 /// which writes the *live* table and therefore cannot commit in pieces.
+///
+/// # One body for every host
+///
+/// This is [`store_in_turns`] with no turn to take, run where it stands
+/// (`platform::timer::unbroken`) — on a host with threads, the synchronous function it always
+/// was, statement for statement.
 pub fn store(
     db: &Mutex<Connection>,
     file: &ComboFile,
     etag: Option<&str>,
     fetched_at: i64,
     progress: &mut dyn FnMut(u64, u64),
+) -> Result<Ingested, ComboError> {
+    crate::platform::timer::unbroken(store_in_turns(
+        db,
+        file,
+        etag,
+        fetched_at,
+        progress,
+        &mut crate::platform::timer::NoTurn,
+    ))
+}
+
+/// [`store`], **giving the host a turn in the gap after every batch**.
+///
+/// Each batch takes the write connection, commits and lets go; what it wrote is in the
+/// staging twins, which no reader can see, and the live tables are the previous combos until
+/// the swap. In that gap `turn` is awaited: handed a `platform::timer::Breather`, the engine
+/// goes back to its event loop there on a budget of work, so a command a page sent is
+/// answered — from the previous combos — before the next batch. On a host with one thread
+/// nothing else could let it in: the first measured browser run answered nothing for 3.8 s of
+/// this write (`docs/reference/light-app.md` §9.2). `tags::StreamTags::finish_in_turns` is the
+/// same arrangement, one feed over.
+///
+/// **Nothing is held across a turn**: [`store_batch`] takes the connection and has let go
+/// before it returns, and the swap is one scope with no `.await` in it —
+/// `nothing_is_held_across_a_turn` is the compiler's word for it.
+///
+/// # What a command in a gap can and cannot do
+///
+/// * **A second refresh is refused**: the claim ([`RefreshGuard`]) is held by the refresh
+///   this write belongs to, from before its request until after the swap.
+/// * **A [`clear`] is not, and the swap that follows it stands.** The clear empties the live
+///   tables and deletes the watermark; the staging twins are not its to touch; and the swap
+///   then installs the file this run downloaded, with its watermark, in one transaction. That
+///   is the right end state rather than a clear undone: the one press that reaches `clear` is
+///   *discard and download again* — the page follows it with a forced refresh, and a launch
+///   fetches the combos uninvited anyway — and a file fetched a moment ago is exactly what
+///   that asks for. What the reader sees in between is the forced refresh refused as *already
+///   being refreshed*, which is also true. It was already so natively, where the clear is
+///   another thread's write between two batches;
+///   `a_clear_taken_between_two_batches_is_followed_by_the_swap` holds it.
+/// * **A cache clear is refused** (`reset::cache_clear_refusal`) for as long as the claim is
+///   held, on every host.
+pub async fn store_in_turns<P: FnMut(u64, u64) + ?Sized>(
+    db: &Mutex<Connection>,
+    file: &ComboFile,
+    etag: Option<&str>,
+    fetched_at: i64,
+    progress: &mut P,
+    turn: &mut impl crate::platform::timer::Turn,
 ) -> Result<Ingested, ComboError> {
     // Before a single staging table is created, so a refused file costs the database nothing
     // at all — not even a table to drop next time.
@@ -841,63 +896,10 @@ pub fn store(
     progress(0, total);
 
     for chunk in file.combos.chunks(BATCH) {
-        let mut conn = crate::db::lock_background(db);
-        let tx = conn.transaction()?;
-        {
-            // **Every column named, and that is the whole of the defence.** The four prose
-            // columns were added to `combos` and `combos_staging` after this statement was
-            // first written, and `INSERT INTO t VALUES (…)` binds by *position* — so a column
-            // list is what makes the schema's order and this statement's order two separate
-            // facts rather than one silent dependency. `TEXT NOT NULL DEFAULT ''` on the
-            // schema side and a named column here means a rung that inserts one of them
-            // somewhere else in the table cannot quietly file a description under `identity`.
-            let mut combo = tx.prepare_cached(
-                "INSERT INTO combos_staging
-                    (id, bracket_tag, card_count, template_count, identity, produces,
-                     popularity, description, easy_prerequisites, notable_prerequisites,
-                     mana_needed)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
-            )?;
-            let mut card = tx.prepare_cached(
-                "INSERT INTO combo_cards_staging
-                    (combo_id, oracle_id, name, quantity, must_be_commander)
-                 VALUES (?1, ?2, ?3, ?4, ?5)",
-            )?;
-            for c in chunk {
-                combo.execute(params![
-                    c.id,
-                    c.bracket_tag,
-                    c.card_count,
-                    c.template_count,
-                    c.identity,
-                    c.produces,
-                    c.popularity,
-                    c.description,
-                    c.easy_prerequisites,
-                    c.notable_prerequisites,
-                    c.mana_needed
-                ])?;
-                // **In the file's order, and that is load-bearing**: `combo_cards` has no
-                // ordinal column, so insert order is rowid order and rowid order is what
-                // `combos_for_cards` reads the names back in. A rename carries rowids, so the
-                // swap preserves it.
-                for u in &c.cards {
-                    card.execute(params![
-                        c.id,
-                        u.oracle_id,
-                        u.name,
-                        u.quantity,
-                        u.must_be_commander
-                    ])?;
-                    cards_written += 1;
-                }
-            }
-        }
-        tx.commit()?;
-        drop(conn);
-        stand_aside();
+        cards_written += store_batch(db, chunk)?;
         written += chunk.len() as u64;
         progress(written, total);
+        turn.take().await;
     }
 
     {
@@ -934,6 +936,68 @@ pub fn store(
         skipped: file.skipped,
         seen: file.seen,
     })
+}
+
+/// One batch of [`store_in_turns`]: these variants and their cards into the staging twins,
+/// in one transaction, then let go of the connection. Answers how many card rows it wrote.
+fn store_batch(db: &Mutex<Connection>, chunk: &[Combo]) -> Result<usize, ComboError> {
+    let mut cards_written = 0usize;
+    let mut conn = crate::db::lock_background(db);
+    let tx = conn.transaction()?;
+    {
+        // **Every column named, and that is the whole of the defence.** The four prose
+        // columns were added to `combos` and `combos_staging` after this statement was
+        // first written, and `INSERT INTO t VALUES (…)` binds by *position* — so a column
+        // list is what makes the schema's order and this statement's order two separate
+        // facts rather than one silent dependency. `TEXT NOT NULL DEFAULT ''` on the
+        // schema side and a named column here means a rung that inserts one of them
+        // somewhere else in the table cannot quietly file a description under `identity`.
+        let mut combo = tx.prepare_cached(
+            "INSERT INTO combos_staging
+                (id, bracket_tag, card_count, template_count, identity, produces,
+                 popularity, description, easy_prerequisites, notable_prerequisites,
+                 mana_needed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        )?;
+        let mut card = tx.prepare_cached(
+            "INSERT INTO combo_cards_staging
+                (combo_id, oracle_id, name, quantity, must_be_commander)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+        )?;
+        for c in chunk {
+            combo.execute(params![
+                c.id,
+                c.bracket_tag,
+                c.card_count,
+                c.template_count,
+                c.identity,
+                c.produces,
+                c.popularity,
+                c.description,
+                c.easy_prerequisites,
+                c.notable_prerequisites,
+                c.mana_needed
+            ])?;
+            // **In the file's order, and that is load-bearing**: `combo_cards` has no
+            // ordinal column, so insert order is rowid order and rowid order is what
+            // `combos_for_cards` reads the names back in. A rename carries rowids, so the
+            // swap preserves it.
+            for u in &c.cards {
+                card.execute(params![
+                    c.id,
+                    u.oracle_id,
+                    u.name,
+                    u.quantity,
+                    u.must_be_commander
+                ])?;
+                cards_written += 1;
+            }
+        }
+    }
+    tx.commit()?;
+    drop(conn);
+    stand_aside();
+    Ok(cards_written)
 }
 
 /// Decompress a downloaded `variants.json.gz`, reduce it, and replace the stored combos.
@@ -1007,6 +1071,11 @@ pub fn ingest_stream(
 /// is gone with the row, but even if it were not, that helper asks whether there are *rows*
 /// before replaying one — so a cleared database really re-downloads rather than being told 304
 /// into staying empty. The caller is expected to follow this with a forced refresh.
+///
+/// **A clear that lands while a refresh is writing does not stop it**, on any host: it empties
+/// the live tables, the refresh's staging twins are not its to touch, and the swap that
+/// follows installs the new file with its watermark. [`store_in_turns`] has why that is the
+/// right end.
 ///
 /// Takes a `&Connection` and not a [`State`], so the rule can be asserted against
 /// [`crate::schema::memory_pair`] with no state built — the split every other helper here uses.
@@ -2302,9 +2371,10 @@ const MAX_DECODED_FEED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// database with no rows ([`conditional_etag`]), which must download whatever it is told.
 ///
 /// **No lock crosses an `.await`, and none is taken while the body arrives**: [`StreamRead`]
-/// never touches the database. The write is [`store`], after the last chunk, in its own
-/// batches — synchronous from there to the swap, so on a host with one thread nothing else
-/// runs until it returns.
+/// never touches the database. The write is [`store_in_turns`], after the last chunk, in its
+/// own batches **with a turn for the host after each**, so a command a page sends during it
+/// is answered from the previous combos; only the swap, one transaction, answers nothing
+/// until it has committed.
 ///
 /// **Two bounds on the body.** Every wait — for the answer, and for each chunk — gives up
 /// after `stall`. And the bytes received are counted against `max_bytes` when they arrive
@@ -2349,13 +2419,19 @@ async fn refresh_streamed(
     };
 
     progress("ingesting", 0, 0);
-    match store(
+    // A breather of its own, on the budget the download's kept: the write is a run of short
+    // transactions, and a command a page sent is answered in the gap after any of them.
+    let mut breather = crate::platform::timer::Breather::new(crate::feed::WORK_BUDGET);
+    let stored = store_in_turns(
         &state.db,
         &file,
         validator.as_deref(),
         unix_now(),
         &mut |_, _| {},
-    ) {
+        &mut breather,
+    )
+    .await;
+    match stored {
         Ok(_) => {
             if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
                 let _ = crate::feed::backoff::clear(&conn, BACKOFF_FEED);
@@ -2537,6 +2613,20 @@ pub fn emit(state: &State, phase: &str, done: u64, total: u64) {
             total,
         },
     );
+}
+
+/// **The fence, and it is the compiler's**: a store that takes turns may hold no lock across
+/// one, and a future that keeps a `MutexGuard` across an `.await` is not `Send`.
+/// `sync_engine::client`'s has the argument, and why the bound is
+/// [`crate::platform::Sendable`] rather than `Send`. Never called.
+#[allow(dead_code)]
+fn nothing_is_held_across_a_turn(
+    db: &Mutex<Connection>,
+    file: &ComboFile,
+    breather: &mut crate::platform::timer::Breather,
+) {
+    fn sendable<T: crate::platform::Sendable>(_: T) {}
+    sendable(store_in_turns(db, file, None, 0, &mut |_, _| {}, breather));
 }
 
 #[cfg(test)]
@@ -3004,6 +3094,51 @@ mod tests {
             .unwrap();
         assert_eq!(staging, 0);
     }
+
+    /// `n` storable two-card variants, as a parsed file.
+    fn file_of(n: usize, prefix: &str) -> ComboFile {
+        let variants: Vec<String> = (0..n)
+            .map(|i| {
+                ok_variant(
+                    &format!("{prefix}{i}"),
+                    "C",
+                    &[("A", &format!("{prefix}-o{i}")), ("B", "o-shared")],
+                )
+            })
+            .collect();
+        parse(&document(&variants))
+    }
+
+    /// Every transaction `db` commits from here on, counted by SQLite itself.
+    fn count_commits(db: &Mutex<Connection>) -> Arc<std::sync::atomic::AtomicUsize> {
+        let commits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counted = commits.clone();
+        crate::db::lock_blocking(db)
+            .commit_hook(Some(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                false
+            }))
+            .unwrap();
+        commits
+    }
+
+    /// **The store commits exactly what it did before it learned to take turns**: the same
+    /// batches, so the same transactions, counted by SQLite's commit hook. Read off the tree
+    /// before the store was restated (2026-10-04) and pinned as a number on purpose — three
+    /// batches of variants and the swap, and the two `CREATE`s that make the staging tables, each
+    /// its own transaction.
+    #[test]
+    fn the_store_commits_exactly_the_batches_it_always_did() {
+        let file = file_of(2 * BATCH + 137, "v");
+        let db = mem_db();
+        let commits = count_commits(&db);
+        let done = store(&db, &file, None, 1_800_000_000, &mut |_, _| {}).unwrap();
+        assert_eq!(done.combos, 2 * BATCH + 137);
+        assert_eq!(commits.load(Ordering::SeqCst), NATIVE_COMMITS);
+    }
+
+    /// What [`the_store_commits_exactly_the_batches_it_always_did`] pins.
+    const NATIVE_COMMITS: usize = 6;
 
     /// **A file that yields nothing is refused, and the previous combos stand.** A swap here
     /// would promote two empty tables *and* stamp the ETag in one transaction, so the next
@@ -5642,6 +5777,249 @@ mod tests {
             "and the validator is yesterday's, so the next refresh downloads again"
         );
         assert_eq!(fetched_at, Some(1));
+        assert!(!any_refresh_running());
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- a store that takes turns --------------------------------------------------------
+
+    /// One gap's answers: what each command the page sent in it was told.
+    type Gap = Vec<Result<serde_json::Value, String>>;
+
+    /// **A forced refresh as the web host runs it, with a page asking in every gap of its
+    /// write.** The page is the second future of a `join!`: on one thread it runs only when
+    /// the refresh gives the event loop a turn, which is a Worker's rule — and `biased`, so
+    /// each turn the refresh takes is followed by one pass of the page, never two or none.
+    /// So what it is told while the phase is `ingesting` was asked between two batches of
+    /// [`store`]. `asks(n)` is what the page sends in the `n`th such gap.
+    ///
+    /// `platform::timer::turn_at_every_pass` makes every gap a turn, so nothing here turns on
+    /// whether this machine spends the breather's fifty milliseconds.
+    async fn refresh_with_a_page_asking(
+        state: &Arc<State>,
+        url: &str,
+        asks: impl Fn(usize) -> Vec<(&'static str, serde_json::Value)>,
+    ) -> (Result<ComboStatus, String>, Vec<Gap>) {
+        let _every = crate::platform::timer::turn_at_every_pass();
+        loop {
+            let phases: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+            let finished = AtomicBool::new(false);
+            let refreshing = async {
+                let said = phases.clone();
+                let answer = refresh_from(state, url, true, &mut |phase, _, _| {
+                    said.lock().unwrap().push(phase.to_owned())
+                })
+                .await;
+                finished.store(true, Ordering::SeqCst);
+                answer
+            };
+            let page = async {
+                let mut gaps: Vec<Gap> = Vec::new();
+                while !finished.load(Ordering::SeqCst) {
+                    let phase = phases.lock().unwrap().last().cloned();
+                    if phase.as_deref() == Some("ingesting") {
+                        let mut gap = Gap::new();
+                        for (name, args) in asks(gaps.len()) {
+                            gap.push(crate::commands::dispatch(state, name, args, None).await);
+                        }
+                        gaps.push(gap);
+                    }
+                    tokio::task::yield_now().await;
+                }
+                gaps
+            };
+            let (answer, gaps) = tokio::join!(biased; refreshing, page);
+            match answer {
+                // The one other test in this binary that claims the refresh in passing.
+                Err(e) if gaps.is_empty() && e.contains("already being refreshed") => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                answer => return (answer, gaps),
+            }
+        }
+    }
+
+    /// A mock Spellbook serving `body`, and the address to ask it at.
+    async fn serving(body: Vec<u8>, last_modified: &str) -> (httpmock::MockServer, String) {
+        use httpmock::prelude::*;
+        let server = MockServer::start_async().await;
+        let stamp = last_modified.to_owned();
+        server.mock(move |when, then| {
+            when.method(GET).path("/variants.json.gz");
+            then.status(200).header("last-modified", stamp).body(body);
+        });
+        let url = server.url("/variants.json.gz");
+        (server, url)
+    }
+
+    /// The previous combos a page should go on being told about: one, with its watermark.
+    fn hold_one_previous_combo(state: &State) {
+        seed_one(&state.db, "kept", "o-kept");
+        state
+            .lock_db()
+            .execute(
+                "INSERT INTO combo_meta (id, etag, stamp, fetched_at, checked_at, combo_count, skipped)
+                 VALUES (1, 'Sat, 03 Oct 2026 08:00:00 GMT', 'the-old-file', 1, 1, 1, 0)",
+                [],
+            )
+            .unwrap();
+    }
+
+    /// **A command a page sends while the combos are being written is answered — from the
+    /// previous combos — and the write then lands the new ones.** With [`store`] handed no
+    /// turn there is no gap at all, which is the 3.8 s the first browser run measured.
+    ///
+    /// What each gap is asked, and what it must be told: the status and a card's combos, as
+    /// they were before the refresh; **a second refresh**, refused, because the claim is held
+    /// until the swap; and **a cache clear**, refused for the same claim.
+    #[tokio::test]
+    async fn a_command_sent_during_a_streamed_store_is_answered_from_the_previous_combos() {
+        let _serial = PAGE_REFRESHES.lock().await;
+        use serde_json::{json, Value};
+        let variants: Vec<String> = (0..2 * BATCH + 137)
+            .map(|i| ok_variant(&format!("v{i}"), "C", &[("A", &format!("o{i}"))]))
+            .collect();
+        let (_server, url) = serving(
+            gzipped(&document(&variants)),
+            "Sun, 04 Oct 2026 08:00:00 GMT",
+        )
+        .await;
+
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("combos-page-turns", "http://127.0.0.1:1");
+        hold_one_previous_combo(&state);
+
+        let (after, gaps) = refresh_with_a_page_asking(&state, &url, |_| {
+            vec![
+                ("combos_status", Value::Null),
+                (
+                    "combos_for_card",
+                    json!({ "oracleId": "o-kept", "ownedOnly": false, "limit": 5, "offset": 0 }),
+                ),
+                ("combos_refresh", json!({ "force": true })),
+                ("cache_clear", Value::Null),
+            ]
+        })
+        .await;
+        let after = after.unwrap();
+
+        assert_eq!(gaps.len(), 3, "one gap after each batch of variants");
+        for (n, gap) in gaps.iter().enumerate() {
+            let status = gap[0].as_ref().expect("the status answers");
+            assert_eq!(status["combos"], json!(1), "gap {n}: {status}");
+            assert_eq!(status["stamp"], json!("the-old-file"), "gap {n}: {status}");
+            assert_eq!(status["fetchedAt"], json!(1), "gap {n}: {status}");
+            let named = gap[1].as_ref().expect("the read answers");
+            assert_eq!(named["total"], json!(1), "gap {n}: {named}");
+            assert_eq!(
+                gap[2].as_ref().unwrap_err(),
+                "Combo data is already being refreshed.",
+                "gap {n}"
+            );
+            let clear = gap[3].as_ref().unwrap_err();
+            assert!(clear.contains("download is running"), "gap {n}: {clear}");
+        }
+
+        assert_eq!(after.combos as usize, 2 * BATCH + 137);
+        assert_eq!(after.stamp.as_deref(), Some("2026-08-27T03:12:44Z"));
+        let kept: i64 = state
+            .lock_db()
+            .query_row("SELECT count(*) FROM combos WHERE id = 'kept'", [], |r| {
+                r.get(0)
+            })
+            .unwrap();
+        assert_eq!(kept, 0, "the previous combos went with the swap");
+        assert!(!any_refresh_running(), "the claim is given back");
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A clear taken between two batches is followed by the swap, and the swap stands** —
+    /// the race [`store_in_turns`] writes down. The clear is answered, and truthfully: the
+    /// combos are gone and the watermark with them. The staging twins are not its to touch,
+    /// so the write goes on, and its one closing transaction installs the file this run
+    /// downloaded *with* its watermark: rows and the record of where they came from, never
+    /// one without the other, which is the only state that could strand a database.
+    ///
+    /// The page's own next step, a forced refresh, is refused in the same gap — the claim is
+    /// still held — and that refusal is what the reader is shown; the combos arrive anyway.
+    #[tokio::test]
+    async fn a_clear_taken_between_two_batches_is_followed_by_the_swap() {
+        let _serial = PAGE_REFRESHES.lock().await;
+        use serde_json::{json, Value};
+        let variants: Vec<String> = (0..2 * BATCH + 137)
+            .map(|i| ok_variant(&format!("v{i}"), "C", &[("A", &format!("o{i}"))]))
+            .collect();
+        let (_server, url) = serving(
+            gzipped(&document(&variants)),
+            "Sun, 04 Oct 2026 08:00:00 GMT",
+        )
+        .await;
+
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("combos-page-clear", "http://127.0.0.1:1");
+        hold_one_previous_combo(&state);
+
+        // The Settings press, in the first gap: clear, then refresh. Then a status in each.
+        let (after, gaps) = refresh_with_a_page_asking(&state, &url, |gap| {
+            let mut asks = Vec::new();
+            if gap == 0 {
+                asks.push(("combos_clear", Value::Null));
+                asks.push(("combos_refresh", json!({ "force": true })));
+            }
+            asks.push(("combos_status", Value::Null));
+            asks
+        })
+        .await;
+        let after = after.unwrap();
+        assert_eq!(gaps.len(), 3);
+
+        // The clear's own answer: a database that has never ingested.
+        let cleared = gaps[0][0].as_ref().expect("the clear is taken");
+        assert_eq!(cleared["combos"], json!(0), "{cleared}");
+        assert_eq!(cleared["fetchedAt"], Value::Null, "{cleared}");
+        assert_eq!(cleared["stale"], json!(true), "{cleared}");
+        assert_eq!(
+            gaps[0][1].as_ref().unwrap_err(),
+            "Combo data is already being refreshed."
+        );
+        // …and it stays that way for as long as the write is still staging.
+        for gap in &gaps {
+            let status = gap.last().unwrap().as_ref().unwrap();
+            assert_eq!(status["combos"], json!(0), "{status}");
+            assert_eq!(status["fetchedAt"], Value::Null, "{status}");
+        }
+
+        // Then the swap: the new file's rows, and its watermark with them.
+        assert_eq!(after.combos as usize, 2 * BATCH + 137);
+        assert_eq!(after.stamp.as_deref(), Some("2026-08-27T03:12:44Z"));
+        assert!(after.fetched_at.is_some());
+        let (rows, cards, held, staging): (i64, i64, Option<String>, i64) = {
+            let conn = state.lock_db();
+            (
+                conn.query_row("SELECT count(*) FROM combos", [], |r| r.get(0))
+                    .unwrap(),
+                conn.query_row("SELECT count(*) FROM combo_cards", [], |r| r.get(0))
+                    .unwrap(),
+                conn.query_row("SELECT etag FROM combo_meta", [], |r| r.get(0))
+                    .unwrap(),
+                conn.query_row(
+                    "SELECT count(*) FROM corpus.sqlite_master WHERE name LIKE 'combo%_staging'",
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap(),
+            )
+        };
+        assert_eq!(rows as usize, 2 * BATCH + 137);
+        assert_eq!(cards as usize, 2 * BATCH + 137);
+        assert_eq!(held.as_deref(), Some("Sun, 04 Oct 2026 08:00:00 GMT"));
+        assert_eq!(staging, 0);
         assert!(!any_refresh_running());
 
         drop(state);

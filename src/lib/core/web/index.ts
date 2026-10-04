@@ -1,7 +1,11 @@
-import type { StartupStatus } from "@/lib/ipc";
+import type { CacheCleared, StartupStatus } from "@/lib/ipc";
 import { STARTUP_CHANGED, STARTUP_COMMAND } from "../deferred";
 import { STORAGE_CLEARED, STORAGE_CLEARED_DISMISS, STORAGE_PERSISTENCE } from "../hostStorage";
+import { HOST_UPDATE, HOST_UPDATE_APPLY, HOST_UPDATE_CHANGED } from "../hostUpdate";
 import type { CallArgs, CallOptions, Core } from "../types";
+import { answerAsk } from "./sw/bridge";
+import { clearPictures, type CachesLike } from "./sw/pictures";
+import { UPDATE_READY, watchUpdates, type UpdateWatch, type WorkerContainer } from "./update";
 import {
   callMessage,
   type FromWorker,
@@ -79,16 +83,42 @@ export interface WorkerPort {
   addEventListener(type: "error", listener: (event: { message?: string }) => void): void;
 }
 
+/** The engine's command for where a picture is — asked on the service worker's behalf. */
+export const IMAGE_SOURCE_COMMAND = "card_image_source";
+
+/** Settings' *Clear cache*. Answered here: in a browser the pictures are in Cache Storage. */
+export const CACHE_CLEAR_COMMAND = "cache_clear";
+
+/** What `host_update_apply` is refused with when no newer build is waiting to be told. */
+export const NOTHING_WAITING = "There is no newer version of MTG Grimoire waiting.";
+
+/** The page itself, as far as the update flow touches it. */
+export interface Page {
+  /** Start this document again. */
+  reload(): void;
+  /** Subscribes to the page coming back into view. */
+  onVisible(heard: () => void): void;
+}
+
 /**
  * What the page's half asks of the browser itself, apart from the Worker — handed in so the
- * suite gives it a store and a clock of its own. `store` and `storage` are each absent in a
- * browser that has none, and neither may be a reason the database does not open.
+ * suite gives it a store and a clock of its own. Every field but the clock is absent in a
+ * browser that has none, and none may be a reason the database does not open.
  */
 export interface Browser {
   /** `localStorage`: where the host's own records about storage are kept (`storage.ts`). */
   store?: KeyStore;
   /** `navigator.storage`: who is asked to keep this origin's data. */
   storage?: PersistManager;
+  /** `caches`: where the service worker keeps card pictures, and what Settings' clear empties. */
+  caches?: CachesLike;
+  /**
+   * `navigator.serviceWorker`, **in a build that has a worker to register** — absent from the
+   * dev server's, and from a browser or a context (plain `http` off `localhost`) with none.
+   */
+  workers?: WorkerContainer;
+  /** The document, for the update flow's one reload. */
+  page?: Page;
   /** Unix milliseconds. */
   now: () => number;
 }
@@ -96,6 +126,12 @@ export interface Browser {
 /**
  * The page's own. **Each global is reached inside a `try`**: naming `localStorage` throws in a
  * profile that blocks site data, and this runs on the way to opening the database.
+ *
+ * **The service worker is the built app's alone** — `import.meta.env.PROD`, which Vite folds at
+ * compile time as it folds the mode. `npm run web:dev` registers nothing: a dev server behind a
+ * service worker goes on serving the last build it cached, and round one recorded what that
+ * looks like — "a build that looked like a failed port because the worker was serving the old
+ * one". (So the dev server draws no card picture; `web:preview` does.)
  */
 function pageBrowser(): Browser {
   const reach = <T>(get: () => T): T | undefined => {
@@ -108,6 +144,15 @@ function pageBrowser(): Browser {
   return {
     store: reach(() => globalThis.localStorage),
     storage: reach(() => globalThis.navigator.storage),
+    caches: reach(() => globalThis.caches),
+    workers: import.meta.env.PROD ? reach(() => globalThis.navigator.serviceWorker) : undefined,
+    page: {
+      reload: () => globalThis.location.reload(),
+      onVisible: (heard) =>
+        globalThis.document.addEventListener("visibilitychange", () => {
+          if (globalThis.document.visibilityState === "visible") heard();
+        }),
+    },
     now: () => Date.now(),
   };
 }
@@ -147,6 +192,13 @@ interface Pending {
  *   held gone. Both are said on the console beside the open's own line, and both are read back
  *   by a page through a command only this host answers, so the page never has to know it is in
  *   a browser to ask.
+ * - **The service worker's page half is here too** (step 5.3), started with the Worker and for
+ *   the same once: the worker is registered, its asks for a picture's address are answered by
+ *   this core's own `card_image_source` — a service worker cannot reach the database Worker, so
+ *   it asks the page that can (`sw/bridge.ts`) — and a newer build found waiting is answered to
+ *   `host_update` and announced on `host-update:changed` (`../hostUpdate.ts`). Settings'
+ *   `cache_clear` is answered here as well, from Cache Storage, in the shape the panel already
+ *   reads: the engine's own sweeps a folder a browser does not have.
  * - **One subscriber's throw is that subscriber's alone.** Tauri calls each registration by
  *   itself; here one message fans out to every handler of the name in a loop, so a throw left to
  *   climb would take the event from every handler behind it — and the sync's `done` reaches the
@@ -175,6 +227,8 @@ export function createWebCore(
   /** Resolved when the gate leaves `loading`: what this host's own answers about storage wait on. */
   let settled!: () => void;
   const whenSettled = new Promise<void>((resolve) => (settled = resolve));
+  /** The service worker's registration and its waiting build. Unset where there is no worker. */
+  let updates: UpdateWatch | undefined;
 
   const emit = (event: string, payload: unknown): void => {
     // A copy: a handler may unsubscribe itself, and the gate's does.
@@ -265,8 +319,9 @@ export function createWebCore(
   }
 
   /**
-   * The commands this host answers itself, about the browser's storage. Each waits for the gate
-   * to leave `loading`, because what an open found is half of every answer here.
+   * The commands this host answers itself: about the browser's storage, about a newer build its
+   * service worker is holding, and Settings' clear of the picture cache. Each waits for the gate
+   * to leave `loading`, because what an open found is half of every storage answer here.
    */
   function own(command: string): (() => unknown) | undefined {
     switch (command) {
@@ -282,8 +337,67 @@ export function createWebCore(
         // a fresh ask, which may be waiting on a reader. A host that never opened looked at
         // nothing: what an earlier launch recorded.
         return () => (persistence ?? Promise.resolve()).then(() => readPersistence(store));
+      case HOST_UPDATE:
+        return () => (updates?.waiting() ? UPDATE_READY : null);
+      case HOST_UPDATE_APPLY:
+        // The press. Nothing else on this page tells a waiting build to take over, and the
+        // reload is not made here: it follows the new worker's `controllerchange`.
+        //
+        // **Refused when there was nothing to tell** — the build stopped waiting between the
+        // bar being drawn and the press, or there is no worker here at all. Answered `null`
+        // either way, a page would grey its control for a start-again that is not coming.
+        return () => (updates?.apply() ? null : Promise.reject(NOTHING_WAITING));
+      case CACHE_CLEAR_COMMAND:
+        return clearCache;
       default:
         return undefined;
+    }
+  }
+
+  /**
+   * Settings' *Clear cache*, in the desktop's shape. **The page empties the cache itself**: the
+   * pictures are Cache Storage's, which a page reads as well as its worker does, and a clear
+   * that went through the worker would be a clear a hard-reloaded page — one no worker controls
+   * — could not make.
+   *
+   * `rows` is the desktop's `image_cache` bookkeeping. This host writes none, and the panel's
+   * sentence never prints it. A browser with no Cache Storage has nothing cached, which is the
+   * panel's own sentence for a zero.
+   */
+  async function clearCache(): Promise<CacheCleared> {
+    const cleared = browser.caches
+      ? await clearPictures(browser.caches)
+      : { files: 0, bytes: 0, failed: 0 };
+    return { ...cleared, rows: 0 };
+  }
+
+  /**
+   * The service worker's page half: answer its asks, register it, watch for a newer build.
+   * Started once, with the database Worker, and never a reason that Worker does not start.
+   */
+  function serve(core: Core, workers: WorkerContainer): void {
+    try {
+      // Before the registration, so a page a worker already controls is answering by the time
+      // its first picture is asked for.
+      workers.addEventListener("message", (event) => {
+        answerAsk(event, (path) => core.call(IMAGE_SOURCE_COMMAND, { path }));
+      });
+      workers.startMessages();
+      updates = watchUpdates(workers, {
+        onChange: () => emit(HOST_UPDATE_CHANGED, updates?.waiting() ? UPDATE_READY : null),
+        // **Only the page that holds the database starts again.** That is the page the bar was
+        // drawn on, so it is the one that pressed — or, in a build with a second page that
+        // could press, the one with the reader's work in it. A page whose database never opened
+        // is a boot screen with a link to a fresh document, and one still opening holds nothing
+        // yet: each, reloading too, would race the first for the database, and if it won, the
+        // tab the reader pressed in would be the one told the app is open elsewhere.
+        mayReload: () => status.state === "ready",
+        reload: () => browser.page?.reload(),
+        onVisible: browser.page ? (heard) => browser.page?.onVisible(heard) : undefined,
+        now: browser.now,
+      });
+    } catch (error) {
+      console.warn("MTG Grimoire: the service worker could not be set up.", error);
     }
   }
 
@@ -354,6 +468,7 @@ export function createWebCore(
   function start(): void {
     if (started) return;
     started = true;
+    if (browser.workers) serve(core, browser.workers);
     try {
       worker = spawn();
       worker.addEventListener("message", (event) => receive(event.data));
@@ -365,7 +480,7 @@ export function createWebCore(
     }
   }
 
-  return {
+  const core: Core = {
     call<T>(command: string, args?: CallArgs, options?: CallOptions): Promise<T> {
       start();
       if (command === STARTUP_COMMAND) return Promise.resolve(status as T);
@@ -403,6 +518,7 @@ export function createWebCore(
       };
     },
   };
+  return core;
 }
 
 /**

@@ -1133,7 +1133,12 @@ Every one of these has its measurement and its story in
   the values a colour picker opens on and a reader's choice replaces, so they cannot be a
   reference to something the palette decides later.
 - Card images arrive over `mtgimg://`; `mtgimg:` is an `img-src` and nothing else — **read images
-  with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design).
+  with `<img>`, never with `fetch`** (a `fetch()` at it fails CORS by design). **In the light
+  app's web build there is no protocol**: the same path is asked of the app's own origin,
+  `<origin>/mtgimg/<variant>/<card id>/<face>`, and the service worker answers it from Cache
+  Storage (`lib/core/web/sw/`, step 5.3) with the protocol's own statuses — so the rule is
+  unchanged there, and `cardImageUrl` is still the only thing that spells the address:
+  `imageOrigin` picks the origin by the build's mode, and no call site knows.
 - **There is no viewport branch in the app, and the light app's is not in `src/`.** The desktop
   window's floor is `DESKTOP_FLOOR_PX` (1024, quoted from `tauri.conf.json`) and every fold answers
   its own box; the one branch there was, `useNarrowWindow`, went with the phone layout on
@@ -1155,8 +1160,13 @@ Every one of these has its measurement and its story in
   chooses between them**: Tauri's `invoke` on the desktop, one `core_call` naming the command on
   the light app's Android host, and — in the `web` build alone, reached by a dynamic import so
   no other bundle carries it — a message to the database Worker (`lib/core/web/`), except
-  `startup_status` and the three `storage_*` commands (`lib/core/hostStorage.ts`), which the web
-  core answers itself, on the page. **A refusal
+  the commands the web core answers itself, on the page, without the engine: `startup_status`,
+  the three `storage_*` commands (`lib/core/hostStorage.ts`), and since step 5.3 `host_update`
+  and `host_update_apply` (`lib/core/hostUpdate.ts` — a newer build its service worker is
+  holding; **not** the desktop updater's `update_status` and `update_apply`) and `cache_clear`,
+  which there empties the pictures in Cache Storage in the shape the Settings panel already
+  reads. Two more are answered in front of the Worker by `lib/core/web/files.ts`:
+  `export_save_file` and `import_pick_file`. **A refusal
   is a bare string on all three**, which is what `ipcError` and every page above it reads.
 - **A JSON header value must be written with `asciiJson`, never with bare `JSON.stringify`.** A
   header value is bytes, and three layers disagree about which bytes are allowed: `JSON.stringify`

@@ -23,7 +23,9 @@ pub fn mostly_unusable(kept: u64, skipped: u64) -> bool {
 /// **How much work a streamed download does before it gives the host's event loop a turn.**
 ///
 /// Every streamed loop — the card sync's, both tag files', the combos' and the price list's —
-/// keeps a `platform::timer::Breather` on this budget and breathes once per chunk. On a host
+/// keeps a `platform::timer::Breather` on this budget and breathes once per chunk, and the
+/// two finishes that write staging a batch at a time (`tags::StreamTags::finish_in_turns`,
+/// `combos::store_in_turns`) breathe on it once per batch. On a host
 /// with one thread that turn is the only moment a command can be answered while a body that
 /// the network has already buffered is being ingested: without it the first measured run
 /// answered a page's `sync_status` 3.5–8.4 s late through a 16.4 s card download

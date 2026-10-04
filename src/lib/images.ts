@@ -1,6 +1,7 @@
 /**
  * Naming a card image. The renderer never sees a file path — it asks the `mtgimg://` protocol
- * for `<variant>/<card id>/<face>` and Rust decides where the bytes come from.
+ * for `<variant>/<card id>/<face>` and Rust decides where the bytes come from. (In the web app
+ * the same path is asked of the app's own origin, and its service worker decides.)
  *
  * Written out rather than delegated to `@tauri-apps/api`'s `convertFileSrc`, which reads
  * `window.__TAURI_INTERNALS__` — undefined in jsdom, so every component test that renders
@@ -64,12 +65,36 @@ export const CARD_ASPECT = "5 / 7";
 export const ART_ASPECT = "626 / 457";
 
 /**
- * Where a Tauri custom protocol lives, which is not the same string on every platform:
- * `http://<scheme>.localhost` on Windows and on Android (the light app's host, phase 4 —
- * Android's WebView serves a custom scheme from that origin, as WebView2 does), and
- * `<scheme>://localhost` elsewhere.
+ * Where the web app's pictures live on its own origin: `<origin>/mtgimg/<variant>/<id>/<face>`.
+ *
+ * A browser has no custom protocol, so the same path is asked of the app's own origin and the
+ * service worker answers it (`core/web/sw/`, the light-app spec §3.5). **A prefix and not the
+ * root**, because the root's first segments are the app's places — `/search`, `/decks/12` — and a
+ * variant is a word a place could one day be. Named for the protocol it stands in for, and the
+ * service worker reads this constant: the two ends cannot come to spell it differently.
+ */
+export const WEB_IMAGE_PREFIX = "/mtgimg";
+
+/** The web app's picture origin on `origin` — {@link imageOrigin}'s answer in that build. */
+export function webImageOrigin(origin: string): string {
+  return `${origin}${WEB_IMAGE_PREFIX}`;
+}
+
+/**
+ * Where a card picture is asked for, which is not the same string on every host.
+ *
+ * A Tauri custom protocol lives at `http://<scheme>.localhost` on Windows and on Android (the
+ * light app's host, phase 4 — Android's WebView serves a custom scheme from that origin, as
+ * WebView2 does), and at `<scheme>://localhost` elsewhere. **The web app's build has no
+ * protocol and answers its own origin plus {@link WEB_IMAGE_PREFIX}** (phase 5, step 5.3).
+ *
+ * **Which build this is, is `import.meta.env.MODE`** — `core/index.ts`'s rule and its reason: it
+ * is replaced at compile time and asks nothing of the window, so the web branch is not in the
+ * desktop's or the Android app's bundle at all, and every other build answers exactly what it
+ * answered before there was one.
  */
 export function imageOrigin(userAgent: string): string {
+  if (import.meta.env.MODE === "web") return webImageOrigin(globalThis.location.origin);
   return userAgent.includes("Windows") || userAgent.includes("Android")
     ? "http://mtgimg.localhost"
     : "mtgimg://localhost";

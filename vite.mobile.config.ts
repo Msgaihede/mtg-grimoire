@@ -17,6 +17,7 @@ import {
   wasmFileOf,
   wasmPath,
 } from "./src/lib/core/web/assets.ts";
+import { serviceWorker } from "./vite.sw.ts";
 
 /** The light app's document, from the repository root. */
 const ENTRY = "mobile/index.html";
@@ -128,7 +129,8 @@ const engineBuilt = (files: { name: string }[]): boolean =>
   [GLUE_FILE, WASM_FILE].every((wanted) => files.some(({ name }) => name === wanted));
 
 /**
- * **The web app's engine, served and shipped** — the `web` mode's one plugin.
+ * **The web app's engine, served and shipped** — one of the `web` mode's three plugins, with
+ * `webHosting` below and `vite.sw.ts`'s service worker.
  *
  * The Worker loads the glue from `/wasm/<build>/grimoire_web.js` and the module from beside it
  * (`src/lib/core/web/worker.ts`); `assets.ts` has why the build id is a directory. Neither file is
@@ -199,7 +201,7 @@ const HEADERS_SOURCE = fileURLToPath(new URL("./app-worker/_headers", import.met
 const WEB_BUILD = fileURLToPath(new URL("./dist-web", import.meta.url));
 
 /**
- * **The web build's hosting file, shipped and enforced** — the `web` mode's second plugin.
+ * **The web build's hosting file, shipped and enforced** — the `web` mode's first-listed plugin.
  *
  * - **In a build**, `app-worker/_headers` is emitted at the root of `dist-web/`, where
  *   `wrangler deploy` reads it. Emitted here and **kept in neither public directory**: the root's
@@ -219,7 +221,9 @@ const WEB_BUILD = fileURLToPath(new URL("./dist-web", import.meta.url));
  * to the page over a WebSocket, each of which the shipped policy forbids on purpose.
  *
  * Listed **before** `web:engine`: that plugin rewrites a navigation to `/index.html`, and a
- * rule is matched against the address the reader asked for.
+ * rule is matched against the address the reader asked for. And before `web:service-worker`,
+ * whose middleware ends the response for `/sw.js` itself: a service worker's `fetch` is held to
+ * the policy on that script's response, so it has to be on it by then.
  */
 function webHosting(): Plugin {
   return {
@@ -277,12 +281,21 @@ export default defineConfig(({ mode, command, isPreview }) => {
   return mergeConfig(base, {
     // **`webHosting()` stays first among the `web` plugins.** A preview middleware answers in the
     // order its plugin is listed, and this one only *sets headers and passes on*: listed after a
-    // plugin that answers — `web:engine`'s rewrite of a navigation, or a service worker's
-    // middleware for `/sw.js` — that answer would leave without the policy, and the one local
-    // server that enforces it would have a hole exactly where a worker's script is served.
+    // plugin that answers — `web:engine`'s rewrite of a navigation, or the service worker's
+    // middleware for `/sw.js` (`vite.sw.ts`), which ends the response itself — that answer would
+    // leave without the policy, and the one local server that enforces it would have a hole
+    // exactly where a worker's script is served. Listed first, its headers are already on the
+    // response when the service worker's middleware writes its own `Cache-Control: no-cache` over
+    // the same value and ends it.
+    //
+    // **`serviceWorker()` stays last.** It is written into `dist-web/` after everything else and
+    // into no other build, and its build id hashes every file the other plugins put there — the
+    // emitted `_headers` included, which its precache list leaves out.
     plugins: [
       lightEntry(),
-      ...(web ? [webHosting(), webEngine(engineBuild, engine, building)] : []),
+      ...(web
+        ? [webHosting(), webEngine(engineBuild, engine, building), serviceWorker("dist-web")]
+        : []),
     ],
     // **The light builds' own public directory**: the web manifest, its icons and the favicon.
     // Vite copies a public directory into every build that names it, and the one at the root is

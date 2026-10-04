@@ -102,12 +102,15 @@
 
 # --- The service worker's script ----------------------------------------------------------------
 #
-# THE FILE ARRIVES IN STEP 5.3; until then this rule matches nothing, and a request for `/sw.js`
-# is the Worker's 404. It is written now because it is the one address whose caching decides
-# whether a deploy can ever be seen: a service worker script kept by the HTTP cache is an update
-# no reader is offered. The value is the default's, restated so that loosening `/*` cannot take
-# this with it. It must stay at the root and unhashed — a service worker controls its own path
-# and below — so it must never be given the year the two trees above have.
+# `sw.js` is the web build's last file (`vite.sw.ts`, step 5.3), written at the root of `dist-web/`
+# after everything else. This rule was written before it existed, because it is the one address
+# whose caching decides whether a deploy can ever be seen: a service worker script kept by the
+# HTTP cache is an update no reader is offered. The value is the default's, restated so that
+# loosening `/*` cannot take this with it. It must stay at the root and unhashed — a service
+# worker controls its own path and below — so it must never be given the year the two trees above
+# have. Its bytes carry a hash of every other file in the build, THIS ONE INCLUDED, so a deploy
+# that changes only this file is a new worker — which is how a changed policy reaches the shell
+# a returning reader's worker already holds in Cache Storage.
 /sw.js
   ! Cache-Control
   Cache-Control: no-cache

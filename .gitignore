@@ -88,3 +88,6 @@ crates/*/target/
 # `rerun-if-changed` on a missing directory would rerun `build.rs` on every build.
 src-tauri/scanner-assets/*
 !src-tauri/scanner-assets/README.md
+
+# A vitest JSON reporter's output, when a run asks for one.
+.vitest/

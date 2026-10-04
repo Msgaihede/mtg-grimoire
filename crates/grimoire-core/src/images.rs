@@ -491,6 +491,60 @@ pub async fn answer(state: &State, path: &str) -> Reply {
     )
 }
 
+/// **Where a card's picture is — said, and not fetched.** What a host whose page fetches
+/// pictures itself asks: a web host's service worker answers a picture request on the app's
+/// own origin, and needs to know which Scryfall address the path names (the light-app spec
+/// §3.5). [`answer`] is the other shape of the same question, for a host that keeps the
+/// pictures: it resolves, fetches and stores in one call.
+///
+/// On the wire, tagged by `kind`:
+///
+/// | | |
+/// | --- | --- |
+/// | `{"kind":"uri","uri":"https://cards.scryfall.io/…"}` | the picture's address, cache-buster and all — the one string that is both where to fetch it and which version it is |
+/// | `{"kind":"missing","svg":"<svg …>"}` | a card or a face with no picture: the placeholder [`answer`] serves for it, as text, at that variant's size |
+/// | `{"kind":"unknown"}` | the path names no card, no face or no variant — a 404, not a picture |
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+#[serde(tag = "kind", rename_all = "lowercase")]
+pub enum ImageSource {
+    /// Scryfall has this picture, here. Only ever a URI [`crate::image_uri::is_fetchable`]
+    /// passes — the card CDN's host, with a version — because [`resolve`] answers nothing
+    /// else as one.
+    Uri { uri: String },
+    /// There is no picture to fetch, and there is nothing to retry: [`placeholder_svg`] for
+    /// what is missing ([`Placeholder`]) at the variant asked for.
+    Missing { svg: String },
+    /// Not a picture this app has: a path that is not `/<variant>/<card id>/<face>`, or a
+    /// card id no row holds.
+    Unknown,
+}
+
+/// What `path` names, read from `conn` and from nothing else: no file is touched and nothing
+/// is fetched.
+///
+/// `path` is the path a host's picture request carries — `/<variant>/<card_id>/<face>`, the
+/// one [`answer`] is asked. The leading slash is optional ([`parse_request_path`]) and
+/// **anything from a `?` or a `#` on is ignored**: a page may put a cache-buster of its own
+/// on the address, and it is no part of which picture is meant.
+///
+/// The rule is [`resolve`]'s, whole — the face-first precedence, the host allowlist and the
+/// version rule — so a host that fetches for itself is told exactly what this crate's own
+/// cache would have fetched, and is told *missing* for exactly what it would have drawn a
+/// placeholder for.
+pub fn image_source(conn: &Connection, path: &str) -> Result<ImageSource, String> {
+    let path = path.split(['?', '#']).next().unwrap_or_default();
+    let Some(key) = parse_request_path(path) else {
+        return Ok(ImageSource::Unknown);
+    };
+    Ok(match resolve(conn, &key)? {
+        Resolution::Uri(uri) => ImageSource::Uri { uri },
+        Resolution::Missing(kind) => ImageSource::Missing {
+            svg: placeholder_svg(kind, key.variant),
+        },
+        Resolution::Unknown => ImageSource::Unknown,
+    })
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum ImageError {
     #[error("no card with that id")]
@@ -2102,6 +2156,163 @@ mod tests {
                 "{variant:?} must not resolve to an error page: {r:?}"
             );
         }
+    }
+
+    // ---- where a picture is, for a host that fetches for itself ------------------------
+
+    // `BOLT` is the fetch tests' own constant, further down: the same seeded card.
+    const DELVER: &str = "ab000000-0000-0000-0000-000000000001";
+    const NAMELESS: &str = "cd000000-0000-0000-0000-000000000002";
+
+    fn uri(of: &str) -> ImageSource {
+        ImageSource::Uri { uri: of.to_owned() }
+    }
+
+    /// **A picture Scryfall has is its address, version and all** — for the variant asked,
+    /// and for each face of a card that has two.
+    #[test]
+    fn a_picture_path_answers_the_scryfall_address_for_that_variant_and_face() {
+        let conn = seeded();
+        assert_eq!(
+            image_source(&conn, &format!("/display/{BOLT}/0")).unwrap(),
+            uri("https://cards.scryfall.io/display/front/0/0/x.webp?17")
+        );
+        assert_eq!(
+            image_source(&conn, &format!("/thumb/{BOLT}/0")).unwrap(),
+            uri("https://cards.scryfall.io/thumb/front/0/0/x.webp?17")
+        );
+        // Both faces of a two-faced card, each its own.
+        assert_eq!(
+            image_source(&conn, &format!("/grid/{DELVER}/0")).unwrap(),
+            uri("https://cards.scryfall.io/grid/front/a/b/y.webp?9")
+        );
+        assert_eq!(
+            image_source(&conn, &format!("/grid/{DELVER}/1")).unwrap(),
+            uri("https://cards.scryfall.io/grid/back/a/b/y.webp?9")
+        );
+    }
+
+    /// The leading slash is optional, and a query string or a fragment is no part of which
+    /// picture is meant.
+    #[test]
+    fn a_picture_path_is_read_without_its_slash_its_query_or_its_fragment() {
+        let conn = seeded();
+        let bolt = uri("https://cards.scryfall.io/grid/front/0/0/x.webp?17");
+        for path in [
+            format!("/grid/{BOLT}/0"),
+            format!("grid/{BOLT}/0"),
+            format!("/grid/{BOLT}/0?v=3"),
+            format!("/grid/{BOLT}/0?"),
+            format!("/grid/{BOLT}/0#top"),
+            format!("grid/{BOLT}/0?a=/thumb/x/1#y"),
+        ] {
+            assert_eq!(image_source(&conn, &path).unwrap(), bolt, "{path}");
+        }
+    }
+
+    /// **A card or a face with no picture is the placeholder the desktop serves for it**, as
+    /// text: *Card back* for a face the card does not have, *No image* for a printing with
+    /// no art and for one whose only address is Scryfall's error page — each at the size of
+    /// the variant asked for.
+    #[test]
+    fn a_missing_picture_answers_the_placeholder_the_desktop_serves() {
+        let conn = seeded();
+        let missing = |kind, variant| ImageSource::Missing {
+            svg: placeholder_svg(kind, variant),
+        };
+        // The back of a card with one side.
+        assert_eq!(
+            image_source(&conn, &format!("/grid/{BOLT}/1")).unwrap(),
+            missing(Placeholder::CardBack, Variant::Grid)
+        );
+        // A printing with no art, on either face — the back of nothing is still a card back.
+        assert_eq!(
+            image_source(&conn, &format!("/grid/{NAMELESS}/0")).unwrap(),
+            missing(Placeholder::NoImage, Variant::Grid)
+        );
+        assert_eq!(
+            image_source(&conn, &format!("/art/{NAMELESS}/1")).unwrap(),
+            missing(Placeholder::CardBack, Variant::Art)
+        );
+        // A two-faced card asked for a variant its faces do not carry.
+        assert_eq!(
+            image_source(&conn, &format!("/display/{DELVER}/1")).unwrap(),
+            missing(Placeholder::CardBack, Variant::Display)
+        );
+        // `soon.jpg`: an address with no version, on a host that serves no card art. Never
+        // handed to a host as somewhere to fetch.
+        for variant in Variant::ALL {
+            assert_eq!(
+                image_source(&conn, &format!("/{}/{SOON}/0", variant.key())).unwrap(),
+                missing(Placeholder::NoImage, variant),
+                "{variant:?}"
+            );
+        }
+        // And the two placeholders are told apart, at the variant's own size.
+        let ImageSource::Missing { svg } =
+            image_source(&conn, &format!("/thumb/{BOLT}/1")).unwrap()
+        else {
+            panic!("a missing face is a placeholder");
+        };
+        assert!(svg.starts_with("<svg "), "{svg}");
+        assert!(svg.contains("Card back"), "{svg}");
+        assert!(svg.contains("viewBox=\"0 0 146 204\""), "{svg}");
+    }
+
+    /// **Everything else is unknown, in one answer and never an error**: a card no row holds,
+    /// a face no card can have, a variant this app does not store, and a path that is not a
+    /// picture's at all — including one that is trying to be a file's.
+    #[test]
+    fn a_path_that_names_no_picture_is_unknown() {
+        let conn = seeded();
+        for path in [
+            // No such card.
+            "/grid/ff000000-0000-0000-0000-0000000000ff/0".to_owned(),
+            // No such face: a card has two sides at most.
+            format!("/grid/{BOLT}/2"),
+            format!("/grid/{BOLT}/-1"),
+            format!("/grid/{BOLT}/front"),
+            format!("/grid/{BOLT}/"),
+            // No such variant: the JPG/PNG family is never served.
+            format!("/png/{BOLT}/0"),
+            format!("/normal/{BOLT}/0"),
+            format!("/GRID/{BOLT}/0"),
+            // Not a picture path.
+            String::new(),
+            "/".to_owned(),
+            "x".to_owned(),
+            format!("/grid/{BOLT}"),
+            format!("/grid/{BOLT}/0/extra"),
+            format!("/cover/{BOLT}/0"),
+            "/grid/../../user.db/0".to_owned(),
+            "/grid/not-a-card-id/0".to_owned(),
+            format!("https://mtgimg.localhost/grid/{BOLT}/0"),
+            format!("?/grid/{BOLT}/0"),
+        ] {
+            assert_eq!(
+                image_source(&conn, &path).unwrap(),
+                ImageSource::Unknown,
+                "{path:?}"
+            );
+        }
+    }
+
+    /// **The wire**: one object tagged by `kind`, in the three shapes the web host's service
+    /// worker reads — the keys and the tags are its contract.
+    #[test]
+    fn the_three_answers_serialize_as_the_page_reads_them() {
+        use serde_json::json;
+        assert_eq!(
+            json!(uri("https://cards.scryfall.io/grid/front/0/0/x.webp?17")),
+            json!({ "kind": "uri", "uri": "https://cards.scryfall.io/grid/front/0/0/x.webp?17" })
+        );
+        assert_eq!(
+            json!(ImageSource::Missing {
+                svg: "<svg/>".to_owned()
+            }),
+            json!({ "kind": "missing", "svg": "<svg/>" })
+        );
+        assert_eq!(json!(ImageSource::Unknown), json!({ "kind": "unknown" }));
     }
 
     #[test]

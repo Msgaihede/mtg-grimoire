@@ -10,9 +10,14 @@ step 5.1 (2026-10-04) the engine is a WASM module in a dedicated Worker, and it 
 database in a browser's OPFS and answers commands there, and **since step 5.2 (the same day) it
 builds its corpus there** — the launch's downloads streamed into their sinks, run once against
 the real hosts (§9.2) — and **since step 5.4 the clipboard, a link out and the desktop face's
-file dialogs are a browser's own there, and the manifest is finished** (§9.4). **It draws no
-card picture in a browser yet**; there is no service worker, nothing is hosted, and there is no
-sync on a light install.
+file dialogs are a browser's own there, and the manifest is finished** (§9.4), and **since step
+5.3 a service worker precaches the shell, answers card pictures on the app's own origin from
+Cache Storage, and holds a newer build until the reader takes it** (§9.3) — so a built web app
+draws its pictures and opens with the network gone — and **since the first half of step 5.5
+the hosting Worker's source, its policy and its runbook are in `app-worker/`** (§9.5).
+**Nothing is deployed.** What is left of the phase is that step's second half — the module's
+size with timings, CI's smoke run under the policy, and the built app driven end to end — and
+there is no sync on a light install, which is phase 6.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
@@ -257,13 +262,20 @@ purpose; the phase that owns the surface owns the fix.
 ### Phase 5 — the web host
 
 **Steps 5.1 and 5.2 (§9.1, §9.2) closed none of these four; step 5.4 (§9.4) closed the last
-three**, and the first is 5.3's in
-[the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md). What each step
-itself left open is at its own foot — §9.1's, §9.2's *Found and left*, §9.4's *Not measured*.
+three and step 5.3 (§9.3) the first.** What each step itself left open is at its own foot —
+§9.1's, §9.2's and §9.3's *Found and left*, §9.4's *Not measured*.
 
-- `FaceBoundary` catches a face that throws — a lazy chunk that never arrives included — and
+- ~~`FaceBoundary` catches a face that throws — a lazy chunk that never arrives included — and
   offers a reload. What it does not do is recover: a deploy that renamed the chunks needs the
-  service worker's update story, which is this phase's.
+  service worker's update story, which is this phase's.~~ **Closed 2026-10-04 (§9.3), by
+  taking the case away rather than by recovering from it**: a page's own build is precached
+  whole, in a cache named for that build, and served to the page for as long as it is open —
+  so a face's chunk is found by the name this page knows, however many deploys have installed
+  behind it and are waiting. `FaceBoundary` asks the host whether a newer build is waiting and
+  offers *that* when one is, the reload otherwise. **Still unrecoverable in place**: a browser
+  that evicts Cache Storage under a live page, with no update waiting and the old chunk gone
+  from the host, cannot draw a lazy face that page has not yet loaded. No real eviction has
+  been seen.
 - ~~A refused history **push** is swallowed like a refused replace, but costs more than a stale
   URL — the entry is never made. `back()`'s latch has one release, a `popstate`; a
   `history.back()` the browser drops leaves ✕ and Escape inert until the next one.~~ **Closed
@@ -1459,7 +1471,9 @@ there, so a host that never answers holds that feed's refresh claim for good.
 
 - **No browser arm has run**, and the image cache there is a fetcher: `files` refuses, so every
   picture is fetched, served and counted as a store failure. What a web host keeps pictures in
-  is phase 5's.
+  is phase 5's. (**Decided in step 5.3, 2026-10-04**: Cache Storage, kept by the service
+  worker, which asks the engine only where a picture is — §9.3. The cache here is not called
+  by that host at all.)
 - **The two findings above**, before a web host runs a feed.
 - **Card Kingdom's refresh emitted 4 426 progress events for one 67.8 MB download.** The host
   declares no length, so the throttle's `done >= total` is true for every chunk. The code is
@@ -3213,7 +3227,8 @@ no `wrangler`.
   between the two opens would pass; that a write survives is the dev pass's, below. Everything
   it starts is stopped whatever fails, and one timer bounds the whole run at three minutes.
   (**It asks nine things since step 5.2**, as an offline first run over fixtures, and its
-  reload check is now "it still holds the cards" — §9.2.)
+  reload check is now "it still holds the cards" — §9.2. **Step 5.3 added the service
+  worker's**: the shell, a picture, a reload with the server gone, and an update — §9.3.)
 - **CI's `web` job** builds the module and the page on `ubuntu-24.04`, reports every `.wasm`
   raw and `gzip -9`, runs the smoke script in the image's own Chrome and uploads `dist-web/`.
   The router gives it everything `core` runs for and everything the page is bundled from.
@@ -3309,10 +3324,12 @@ What follows for the engine in a browser:
   is over an empty one: no ingest, no search over cards, no memory high-water mark, no storage
   figure worth comparing with round one's. (**§9.2 has one run of each.**)
 - **Card images.** The page still asks the `mtgimg` origins, which a browser cannot reach
-  (step 5.3).
+  (step 5.3 — **built 2026-10-04, §9.3**: the web build asks its own origin under `/mtgimg`
+  and the service worker answers).
 - **Clipboard, links and files on the desktop face** in a browser (step 5.4 — **built and
-  driven 2026-10-04, §9.4**), **a service worker** (5.3) and **hosting** (5.5 — **the Worker,
-  its policy and its runbook built 2026-10-04, §9.5; not deployed**).
+  driven 2026-10-04, §9.4**), **a service worker** (5.3 — **built and driven 2026-10-04,
+  §9.3**) and **hosting** (5.5 — **the Worker, its policy and its runbook built 2026-10-04,
+  §9.5; not deployed**).
 - **CI's `web` job has not run.** Its first run is this step's pull request, and its sizes are
   that run's summary — a Linux Chrome's, not the one above.
   - **It has since, on this step's pull request** (#805, merged 2026-10-04): the job's first
@@ -3375,8 +3392,13 @@ and eight things that claimed more than they did — each closed in the same cha
   from this line as it stood: a storage clearing is a **notice** rather than an offered
   rebuild, because the rebuild is the launch's own download, and `persist()` is asked **again,
   at most weekly, while the answer is no** rather than once.
-- **5.3 — the service worker.** The shell precached, card images from Cache Storage on the
-  app's own origin, the update flow, and a face whose chunk a deploy renamed recovering.
+- ~~**5.3 — the service worker.** The shell precached, card images from Cache Storage on the
+  app's own origin, the update flow, and a face whose chunk a deploy renamed recovering.~~
+  **Built 2026-10-04 — §9.3**, with two things beyond this line as it stood: the Scryfall
+  address is asked of the engine *through the page*, because a service worker cannot reach
+  the database Worker, and the tagger feeds' and the combos' finishes take a turn between
+  their batches — §9.2's two longest tails. And the last clause was built as its opposite: a
+  deploy no longer renames a chunk under an open page, so there is nothing to recover from.
 - ~~**5.4 — the browser's seams and the manifest.**~~ **Built 2026-10-04 — §9.4**, with one
   thing built differently from the plan's line as it stood: the Android host opens a link
   through Tauri's opener, which its capability grants, rather than through the WebView.
@@ -3384,7 +3406,8 @@ and eight things that claimed more than they did — each closed in the same cha
   `mtg-grimoire.app`, its runbook~~ — **built 2026-10-04, §9.5, and not deployed**, with one
   thing this line did not say: the Worker has a script, because the single-page fallback alone
   answers a missing file with the document. **Still to come**: the module's size taken up with
-  timings, and the built app driven end to end against round one's figures.
+  timings, CI's smoke run served under the policy (§9.5's foot has what that takes), and the
+  built app driven end to end against round one's figures.
 
 ### 9.2 Step 5.2 — the first run (2026-10-04)
 
@@ -3625,7 +3648,9 @@ desktop Edge.
 - **A reload with the corpus present**: the database open at 1 843 ms, the shell at 2 161 ms,
   the first tiles at 3 107 ms. No cross-origin request went out but the card pictures', which
   fail — the page still asks `mtgimg.localhost`, and that is step 5.3's — so every tile shows
-  the card's name and "Retrying…".
+  the card's name and "Retrying…". (**True of this step's build only.** Since step 5.3 the
+  web build asks its own origin and the tiles draw their pictures; the same reload, with
+  pictures and with the server stopped, is timed in §9.3.)
 - **The suites, on the final tree**: `cargo test` green for the four packages, and clippy clean
   natively and for wasm32. The frontend suite green in four shards but for one test in a file
   this change does not touch (`src/components/table/VirtualTable.test.tsx`), which failed once
@@ -3656,6 +3681,15 @@ same change and each with a mutation run against its test:
   `ancestor_closures` is pure CPU with no batch boundary; each batch commit is a
   rollback-journal cycle in OPFS, which may be most of the time; and the card swap is one
   transaction by need, as Card Kingdom's store is by contract.
+  - **Built in step 5.3, the same day (§9.3)**, for the tag and combo tails: each takes a
+    turn between its batches, and on a host with no files the tag closure is written in key
+    order, 8 000 rows to a transaction. One run on that module: the oracle tags' finish
+    **1.74 s** against the 10.76 s and 11.34 s here, the art tags' **4.11 s** against 23.56 s
+    and 23.38 s, all launch feeds done at **50.84 s** against 76.07 s and 76.56 s, and a
+    longest single wait of **4.79 s** against 23.57 s and 26.1 s. **What is still one
+    synchronous stretch**: the card finish — which is now that longest wait — each tag
+    file's swap, the combos' swap and Card Kingdom's store. `ancestor_closures`, which has
+    no batch boundary, needed none: natively it is 4.3–6.5 ms.
 - **A chunk is inflated whole before it is framed.** A synthetic 1.9 MB chunk that inflates to
   185 MB took linear memory to 946 733 056 B; real data peaked at the 193.9 MiB above. Feeding
   the decoder in slices is about forty lines, and touches the native paths' batch boundaries.
@@ -3685,12 +3719,391 @@ same change and each with a mutation run against its test:
 - **A real eviction.**
 - **The pool's `delete_db` in a browser**: the native tests stand a closure in for it.
 
+### 9.3 Step 5.3 — the service worker (2026-10-04)
+
+A built web app draws its card pictures, opens with the network gone, and holds a newer build
+until the reader takes it — and the engine answers through two finishes it used to be silent
+for. Numbered for its step: §9.4's was merged first (#807), so that section's passes are over
+a tree with no service worker in it. The page's rules are
+[`mobile/CLAUDE.md`](../../mobile/CLAUDE.md)'s *The web host*; the engine's are
+[`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md)'s *A finish that
+writes staging…* and *The command table*; the picture cache's are
+[image-cache.md](image-cache.md#in-a-browser-cache-storage-and-a-service-worker).
+
+**What was built — the worker and the shell.**
+
+- **Hand-written, in `src/lib/core/web/sw/`, and its own `tsc` program.** `sw.ts` is the four
+  events only a real worker has, and has no branch of its own. What it decides is in the four
+  modules beside it, with no global in them, and the suite drives those over fakes: `shell.ts`
+  (which request is whose, and the cache's name), `pictures.ts` (a picture's path, the
+  budget), `bridge.ts` (asking the page where a picture is) and `serve.ts` (the install, the
+  activation and every answer, with its caches, its `fetch`, its pages and its clock handed
+  in). `tsconfig.web-sw.json` holds `sw.ts` under the `WebWorker` lib and the root program
+  excludes that one file, as it excludes the database Worker's; the four modules are followed
+  from both programs, so each is checked under both libs and may name no global only one has.
+- **Built by the `web` mode alone, and last.** `vite.sw.ts`'s plugin runs in `closeBundle` —
+  the first hook at which the build's hashed names and the public directory's copies are all
+  on disk — and makes one nested build: an IIFE at `dist-web/sw.js`, with a fixed name, no
+  chunk and no hash. Its address is the one thing in the build that must not move: a browser
+  finds a new build by asking for that file again. No other build has the plugin, so `dist/`,
+  `dist-mobile/` and `dist-share/` carry no worker. **Only after a build that wrote its
+  files** (`writeBundle`): Vite empties the output at `renderStart`, so a build that failed
+  before then leaves the last build's document on disk, and a worker built then would name
+  that build's files as this one's. A nested build that fails, fails `web:build`.
+- **Registered only by the built web app's page, and never by `web:dev`.** The web core's page
+  half registers `/sw.js` under `import.meta.env.PROD`, with `updateViaCache: "none"`. A dev
+  server behind a service worker goes on serving the last build it cached, so `npm run
+  web:dev` registers nothing — **and therefore draws no card picture**. `npm run web:preview`
+  is the command that runs the worker, and it serves `sw.js` `no-cache`, as a host must.
+- **One shell cache per build, `grimoire-shell-<build id>`.** The id is `shell.ts`'s
+  `shellBuildId` — `assets.ts`'s `buildIdOf`, the engine's own FNV hash — over every file the
+  build wrote but `sw.js`, **the ones that are not precached included**: a deploy that
+  changed only the host's `_headers` is a new id, a new worker and a new shell cache, which is
+  the one way a changed policy reaches a reader who already has the app. **Unchanged sources
+  give a byte-identical `sw.js`**, which is the property the update flow rests on: a browser
+  decides there is a new worker by comparing that file's bytes, and a timestamp in it would
+  put *a new version is ready* in front of a reader with nothing to gain.
+- **What is precached** (`shell.ts`'s `precacheList`): the document as `/` — never
+  `/index.html`, which a static host redirects, and a redirected response may not answer a
+  navigation — and every other file by its own path, sorted. Not `sw.js`, which the browser
+  keeps, and not a top-level entry whose name starts with `_` or `.`, which a host reads
+  rather than serves.
+- **The install is all or nothing.** Every file is fetched with `cache: "no-cache"`, so a
+  stale document in the HTTP cache is never paired with this build's files; each is **read to
+  its end as it arrives, four at a time** (`serve.ts`'s `PRECACHE_LANES`), and nothing is
+  written until the last has. One that does not answer 200 fails the install, and the build
+  the reader already has goes on working. **A path that is not a document and is answered as
+  `text/html` refuses the install too**: a host that hands its document to any path it does
+  not know answers a missing script with a 200 of HTML, and that is a broken deploy to refuse
+  rather than to cache. **A worker whose install fails says why to every open page** before
+  it is dropped (`grimoire:install-failed`), and the page says it once on its console — a
+  browser tells nobody.
+- **Routing is a closed list, and passing through is the default** (`shell.ts`'s `routeFor`).
+  A request that is not a `GET`, one to another origin, and a same-origin file the build does
+  not know get **no `respondWith` at all** — so the engine's own downloads, the 78 MB card
+  file among them, never go through this worker. A navigation to a place is answered with
+  the cached document. One of the build's own files (`/assets/`, `/wasm/`,
+  anything precached) is answered from **its own build's cache, then by the network's own
+  answer — never the document**: a page handed HTML for a script fails on a MIME error
+  rather than a missing file, and that is the failure an update must not meet. The picture
+  prefix is read before the mode, **and a navigation under it is a 404**: a picture's
+  address opened as a page is never the app and never the picture either — a picture is
+  drawn by an `<img>`, and a body this worker stored is never served as a document on the
+  app's own origin.
+- **A Cache Storage that throws is a miss, not an outage.** A shell lookup that throws goes
+  to the network, so with the host online the app loads as if there were no worker; a
+  picture is asked for, fetched and answered, and only not kept; and the activation's
+  housekeeping never rejects, so the claim follows whatever it did.
+- **Every Cache Storage lookup and delete passes `ignoreVary`, and it is part of the type**
+  (`pictures.ts`'s `CacheLike`). A static host answers `Vary: Origin`, a precached entry was
+  stored from a request with no `Origin`, and the page's module scripts carry one — so
+  without it every asset misses, and with the server up nothing shows it. Round one measured
+  the blank page on 2026-08-28.
+- **A first visit is claimed, not reloaded.** The worker calls `clients.claim()` on every
+  activation, so the page already open comes under it and the pictures it asks for from then
+  on are answered; the page's own guard keeps that first `controllerchange` from being read
+  as an update. **A hard reload starts a page no worker controls**, by the browser's own
+  rule, for the life of the document: the page posts `grimoire:claim` to the active worker,
+  which takes it.
+- **An activating worker deletes the other builds' shells, by prefix** — `grimoire-shell-`
+  and nothing else, because the picture cache is in the same Cache Storage and belongs to no
+  build.
+
+**What was built — card pictures.**
+
+- **A picture's address is the app's own origin**:
+  `<origin>/mtgimg/<variant>/<card id>/<face>`. `src/lib/images.ts`'s `imageOrigin` answers
+  it in the `web` build, by the build's mode, so **no call site changed** and no other
+  bundle carries the branch. A prefix and not the root, because the root's first segments
+  are the app's places.
+- **Kept in `grimoire-pictures-v1`, which is not per build**: a deploy that threw the
+  pictures away would undo the point of keeping them. The key is the address without its
+  query — `useImageRetry`'s `?retry=N` and `CardImage`'s `?stall=N` are new requests for the
+  same picture.
+- **A miss is asked of the engine through the page.** The engine is in a dedicated Worker
+  that only the page which made it can reach, so the service worker posts
+  `grimoire:picture-source` to **the page that asked**, over a `MessageChannel` made for that
+  one question; the page asks its `Core` for `card_image_source`; and the answer comes back
+  on the port. A request no page is known to have made asks each window in turn.
+- **The worker fetches from `https://cards.scryfall.io` and nowhere else** (`isFetchable`,
+  the desktop fetcher's own rule), with CORS and no credentials, and **stores a response
+  rebuilt from the bytes**, never the one `fetch` returned. That is what lets the page's
+  `img-src` be `'self'` alone: measured on the hosting step's branch in Chrome 154, a
+  cross-origin response passed through by a service worker is refused by `img-src 'self'`,
+  and only a rebuilt one loads. The rebuilt response carries the size the body was measured
+  at, when it was stored (`X-Grimoire-Stored`) and the address it came from
+  (`X-Grimoire-Source`, Scryfall's `?<epoch>` included).
+- **A 200 is not yet a picture.** What is kept is served again on the app's own origin for
+  as long as the address stands, so the worker stores only a body that declares a raster
+  image (`pictures.ts`'s `PICTURE_TYPES` — never SVG, never HTML) and has bytes in it; an
+  error page under a 200, or an empty body, is a failed fetch. Everything answered under the
+  prefix carries `X-Content-Type-Options: nosniff`.
+- **The answers are the desktop protocol's statuses**, so `useImageRetry` and `CardImage`'s
+  watchdog heal them as they heal the desktop's:
+
+  | What the worker found | Answer |
+  | --- | --- |
+  | The picture, in the cache | 200, and the engine is not asked |
+  | The engine says `uri`, and the fetch succeeds | 200, rebuilt and stored |
+  | The engine says `missing` | 200, the desktop's placeholder SVG, `no-store`, never stored |
+  | The engine says `unknown`; the path is under the prefix and is no picture's — a face that is not `0` or `1`, a variant nothing stores; or it was asked for as a page | 404 |
+  | No page to ask, a page or an engine that does not answer; Scryfall answers 429 | 503 with `Retry-After` |
+  | The fetch failed; Scryfall answered any other status, a 200 that is not a raster image, or an empty body | 502 |
+
+- **One ask per picture in flight**, as the desktop cache is single-flight per key: a wall
+  that mounts a card twice, a watchdog's second ask and a retry each join the ask already
+  out. **The bridge waits 20 s for a page** (`bridge.ts`'s `ASK_TIMEOUT_MS`) — long on
+  purpose, since a call made during a synchronous finish waits for it, and a frame that
+  gives up and asks again joins the same ask.
+- **The budget is 3 000 entries, swept once the cache is past 3 100, oldest first by Cache
+  Storage's own insertion order.** Entries and not bytes, and no ledger: Cache Storage keeps
+  no size and no access time, and a second record beside it can disagree with it — round
+  one's counted 9 of 78 pictures. Nothing is spared; a browser has no pre-warm to fetch a
+  spared picture back.
+- **A picture stored more than 7 days ago is served and then checked against the engine**:
+  the same address puts the same bytes back under a new stamp, which also moves the entry to
+  the young end of the cache's order; a changed address fetches the new picture; `missing`
+  deletes the entry, because the card is known and has no picture any more. **`unknown`
+  leaves it**: after a card-data clear, or a corpus the engine replaced, that is every card
+  until the sync has run again.
+- **Settings' *Clear cache* is answered on the page**, from Cache Storage, in the shape the
+  panel already reads — entry by entry, the bytes a sum of each entry's own `Content-Length`.
+  The engine is not called: on this host it holds no picture. No panel was forked.
+- **The engine says where a picture is and fetches nothing**: `card_image_source(path)`, over
+  `images::resolve` whole — `{"kind":"uri","uri":…}`, `{"kind":"missing","svg":…}` or
+  `{"kind":"unknown"}`, and never an address that is not Scryfall's. It is in the core's
+  table and on **`TABLE_ONLY`** in `src-tauri`'s parity fence — a fourth list, a reason per
+  entry — because the desktop has no wrapper for it and is not to grow one nobody calls.
+
+**What was built — the update flow.**
+
+- **A new build installs and waits.** Nothing in the worker skips the wait; while a page of
+  the old build is open the old worker goes on answering from its own cache, a reload
+  included — which is why a reload is not an update.
+- **The host says so, and only the press hands over.** Two host commands and an event
+  (`src/lib/core/hostUpdate.ts`), answered on the page by the web core and refused by every
+  other host: `host_update` → `{ title, action } | null`, `host_update_apply`, and
+  `host-update:changed`. **Not the desktop updater's `update_status` and `update_apply`.**
+  `mobile/UpdateNotice.tsx`, mounted by `LightApp` beside the faces, draws only what the
+  host answers, in the host's words, as `StorageNotice` does: not a modal, along the bottom
+  clear of the phone face's tab bar, its `role="status"` mounted before it has anything to
+  say. The press posts `grimoire:skip-waiting` to the waiting worker; the page reloads once,
+  on the new worker's `controllerchange`. A press with nothing waiting is **refused in a
+  sentence**, so the control that greyed itself comes back.
+- **The bar is on `LAYER.header`, and it can be put away.** The highest rung a page itself
+  draws on: over a wall and its sticky header, under everything a reader opened — a menu, a
+  picker, a dialog. It was on `popup` until the review, where, being later in the document
+  than either face, it painted over a menu opened near the foot of the window. *Not now*
+  hides it until the host next speaks of an update, or until the next load; the waiting
+  build is not touched, and `FaceBoundary` still offers it.
+- **A first install is not an update, and being claimed is not being taken over.** A worker
+  that reaches `installed` on a page nothing controls is not reported, and the first
+  `controllerchange` of a first visit is not a reload.
+- **Only the page that holds the database starts again.** A second tab never activates a
+  build and is not reloaded by the press: its database never opened, its only control is
+  already a link to a fresh document, and a reload would race the tab that pressed for the
+  database — as would a tab still opening.
+- **A page that comes back into view asks for a newer worker, at most hourly**: an installed
+  app left open navigates nowhere, and a browser looks only on a navigation and about once a
+  day.
+- **`FaceBoundary` offers the update when one waits, and the reload otherwise** — §5's
+  leftover, closed there.
+
+**What was built — the engine: two finishes that take turns.**
+
+- **`platform::timer::Turn`, `NoTurn` and `unbroken`.** A feed's finish is a run of short
+  transactions with the connection given back between two of them; natively that gap is for
+  another thread, and in a Worker it lets nobody in unless the loop returns to the event
+  loop there. So each finish is **one body**, an `async fn` that awaits a `Turn` in every
+  gap: `tags::StreamTags::finish_in_turns` and `combos::store_in_turns`. The streamed arm
+  hands it the `Breather` its download kept; the file-backed door hands it `NoTurn` and
+  runs it through `unbroken`, which is a function call — one poll, no runtime.
+- **Natively the statements and the transactions are the ones they were**, and that is
+  pinned by SQLite's own commit hook, as numbers read off the tree before the change: **13**
+  commits for the oracle fixture, **14** for the art one, **6** for the combos'.
+- **On a host with no files the tag closure is written in key order, 8 000 rows to a
+  transaction** (`tags::ClosurePlan::of_this_host`), where every other host writes it in the
+  file's order, 2 000 at a time, as it always has. The rows that land are identical — a test
+  compares every table of both taxonomies written both ways. The timings behind it are below.
+- **Two races, decided and tested.** A `combos_clear` taken between two batches is answered
+  truthfully, and the swap that follows installs the new file with its watermark — the only
+  press that reaches it is *clear, then a forced refresh*, and a file fetched a moment ago
+  is what that asks for. A second refresh of the same feed mid-finish is **refused**: the
+  claim is held until after the swap. A `cache_clear` mid-finish is refused by the claim
+  check it already had.
+- **What takes no turn**: the card finish (one transaction by need), each tag file's swap —
+  one transaction that also rebuilds two indexes over the whole closure — the combos' swap,
+  and Card Kingdom's store.
+
+**What was built — the smoke run.**
+
+- **Fourteen checks on the day, listed in the script's header.** What this step added: the
+  worker controls the page and its one shell cache holds the document, the database
+  Worker's chunk and both engine files; a tile's picture is decoded, and stored under the
+  app's own address with `X-Grimoire-Source` naming the fixture address it came from, and a
+  second ask does not reach the picture host; **offline — the server dropping every
+  connection unanswered — a reload draws the app, opens the database, answers a search and
+  draws the cached picture**; *Clear cache*, pressed in Settings, empties the pictures and
+  leaves the shell; a second `sw.js` installs and waits with the bar drawn and two shell
+  caches standing, no bar in the second tab, and a reload changing none of it; and the
+  press hands over with exactly one new document.
+- **Picture fixtures**: every address the six fixture cards name is answered with
+  `scripts/web-smoke/card.webp`, 736 B. **`mtgimg.localhost` is no longer excused** — a
+  request there fails the run, as a request to any host without a fixture does.
+- **A browser-level `Fetch.enable` pauses a service worker's fetches too** (confirmed,
+  Chrome 154), so §9.2's one enable still covers every request.
+- **`scripts/ci-route.mjs` routes `vite.sw.ts` to `frontend` and `web`**, named rather than
+  left to the fail-safe, which would run the Rust matrix for a service worker.
+
+**Measured, 2026-10-04, offline: the smoke run.** Windows 11, headless Chrome 154.0.8037.95.
+**Ten passes of ten on the final file, in 9.2–12.5 s**; 75 further direct runs before the
+last small edit passed. **One failure in about a hundred runs is unexplained**: *the first
+tab did not open its database*, 1.4 s in, under a mutation harness whose filter cut off the
+reason. Eight repeats passed, and the message now prints the page's console.
+
+**Measured, 2026-10-04, natively: the closure write behind `ClosurePlan`.** A release
+build on NTFS, Ryzen 9 5900X, over the real art graph rebuilt from the dev corpus — 11 603
+tags, 488 864 taggings, 53 237 illustrations, 979 249 closure rows. The closure's write
+alone, in seconds, two runs each:
+
+| Journal | File order, 2 000 rows | File order, 8 000 | Key order, 2 000 | Key order, 8 000 |
+| --- | --- | --- | --- | --- |
+| Rollback — what a browser's file gets | 16.6, 17.8 | 10.5, 10.5 | 6.1, 5.4 | 2.6, 2.8 |
+| WAL — every native host | 10.4, 11.6 | 9.8, 8.3 | 4.2, 5.2 | 2.1, 2.1 |
+
+- **The cost is order more than batch size.** The closure's key is `(subject, slug)`, the
+  file's order puts nearly every row on a page of its own, and a rollback journal writes
+  every touched page twice.
+- **`ancestor_closures` itself is 4.3–6.5 ms**, so the graph walk takes no turn and needs
+  none. **Each tag swap is 1.1–2.0 s natively.**
+- **The desktop was left alone**: its native statements were not to move in this step. It
+  would gain the same on its weekly art refresh — a decision not taken, not one taken
+  against it.
+
+**Measured, 2026-10-04: one first run against the real hosts, on this step's module.**
+Windows 11, Ryzen 9 5900X; headless Chrome 154.0.8037.95; the built app through
+`web:preview`; a fresh profile; the default headless window, inner 764 × 485, so the phone
+face. Started 07:49:50 UTC. **One run, and the machine was not quiet** — total CPU read
+17–38 % during it. The module is **8 684 745 B**, 3 030 884 B through `gzip -9` (step 5.2
+shipped 8 592 080 B and 3 001 242 B); `sw.js` is build `318e5370c53b423c`, with 42 files
+precached. Beside it, §9.2's two runs, which were not like for like with each other either:
+
+| | This run | §9.2's first run | §9.2's second run |
+| --- | --- | --- | --- |
+| Database open | 796 ms | 1 007 ms | 891 ms |
+| Card download | 16.47 s | 16.40 s | 15.30 s |
+| Card finish | 5.26 s | 4.70 s | 4.28 s |
+| Cards `done` | 24.48 s | 23.81 s | 21.87 s |
+| Oracle tags' finish | **1.74 s** | 11.34 s | 10.76 s |
+| Art tags' finish | **4.11 s** | 23.38 s | 23.56 s |
+| Combos' finish | 4.10 s | 3.67 s | 3.80 s |
+| All launch feeds done | **50.84 s** | 76.56 s | 76.07 s |
+| Longest single wait | **4.79 s** — the card finish | 26.1 s | 23.57 s |
+| Linear memory, peak | 205 979 648 B | 203 358 208 B | 203 227 136 B |
+| Renderer CPU time | 57.4 s | 79.6 s | 82.1 s |
+
+No error, and the same rows in every table as before.
+
+- **Inside each finish**, with a `sync_status` sent once a second through the page's core:
+
+  | Finish | Moments it answered | Longest stretch with no answer | Longest single wait |
+  | --- | --- | --- | --- |
+  | Oracle tags | 3 | 0.96 s, at the end | 53 ms |
+  | Art tags | 4 | 2.06 s, at the end | 1.10 s |
+  | Combos | 3 | 1.65 s, at the end | 0.81 s |
+  | Card finish | none | 5.3 s | 4.79 s |
+
+  In each feed the longest silent stretch is the last one before `done`, which is
+  consistent with the swap — **its position was timed, not its cause**. **The samples are
+  few**: 1, 5 and 4 of the once-a-second calls fell inside the three feed finishes. During
+  the card download all 16 calls answered, in 6–476 ms, median 246 ms.
+- **The first visit.** The precache ran from 109 ms to 942 ms after navigation and the
+  worker took the page at 980 ms — 22 s before the first picture was asked for. 1.29 MB
+  crossed the wire for the 12.2 MB shell, the page's own loads being revalidated rather
+  than fetched again. Nothing showed it competing with the engine's start.
+- **Pictures, uncached.** On the first wall, mount to decoded took 1.15–1.72 s, median
+  1.70 s, for the 20 tiles that stayed mounted — and that is the fetch itself: the worker's
+  requests to `cards.scryfall.io` took 0.56–2.04 s, median 1.67 s. With the engine idle:
+  0.98–1.74 s, median 1.73 s. **Inside the art tags' finish**: 24 pictures, 1.12–2.24 s,
+  median 1.88 s. **All 105 picture requests the page made were answered 200 by the worker —
+  none 503, and no `error` event.** While it waits a tile is an empty frame.
+- **What reached Scryfall**: 66 requests, all 200 over h2, 5 165 161 B. The worker's request
+  headers were the browser's own `User-Agent` and `Referer`; the response was `image/webp`
+  with `Access-Control-Allow-Origin: *`.
+- **Pictures, cached, after a reload**: 22–27 ms for 18 of 20.
+- **A back face was not reached in the real run** — the phone card sheet has no control
+  that turns a card over. Over the smoke's fixtures a transform card's `/1` came from its
+  `back` address.
+- **Reloads with the real corpus**, in milliseconds after navigation:
+
+  | | Online | Offline — the preview server stopped |
+  | --- | --- | --- |
+  | Database open | 2 031 | 1 923 |
+  | Past the gate | 2 349 | 2 235 |
+  | First tiles | 3 313 | 3 144 |
+  | First picture | 3 324 | 3 150 |
+
+  Offline, all 20 pictures came from the cache in 19–25 ms, and a search answered in 11 ms
+  and then 2 ms.
+- **Storage afterwards**: OPFS 64 files, 959 537 152 B; `grimoire-shell-318e5370c53b423c`
+  42 entries, 12 215 805 B; `grimoire-pictures-v1` 64 entries, 5 018 940 B by their
+  `Content-Length`. `estimate()` said `usage` 1 255 719 794 B — caches 17 329 152, the file
+  system 1 238 382 026, the registration 8 616 — and `persisted()` was `false`.
+
+**Reviewed before it shipped, and found by the run** — each closed in the same change:
+
+- **A stored picture trusted any 200 body, and Scryfall's `Content-Type`.** An empty 200 or
+  an HTML one would have been kept as that card's picture, and a navigation to a picture's
+  path could have rendered stored HTML on the app's own origin. Three locks now: only a
+  declared raster image with bytes in it is stored, a navigation under the prefix is a 404,
+  and every answer there says `nosniff`.
+- **The shell side had no answer for Cache Storage failing**, and a housekeeping pass that
+  failed skipped the claim. A throw there was every navigation answered with a network error
+  by a worker the reader cannot get rid of short of clearing the site's data — which takes
+  the collection in OPFS with it. It is a miss now, and the claim follows the housekeeping
+  whatever that did.
+- **The install hung for good on an HTTP/1.1 host that serves the shell `no-store`** —
+  measured in Chrome 154: 7 of the 42 requests reached the server. The precache read no body
+  until every fetch had answered, an unread body holds its connection, and such a host gives
+  a browser six. An HTTP cache hides it — a cacheable body is drained into the cache whether
+  or not it is read. Each file is now read as it arrives, four at a time.
+- **The update bar could not be put away**, and sat over the last row of a wall: *Not now*.
+- **The build id is pinned to include `_headers`**, a file the host reads and the worker
+  does not precache (`shellBuildId`, with its test).
+- Smaller: the worker's face grammar was looser than the engine's — any number of up to
+  three digits, where the engine serves `0` and `1` — and a stale picture was deleted when
+  the engine answered `unknown`.
+
+**Found and left**, each with what is known:
+
+- **Cache Storage throws `UnknownError` when Chrome's profile path is long, on Windows.** The
+  install fails and the page runs with no worker — no picture, no offline shell. It used to
+  say nothing at all; the page's console now says so once, with the worker's own reason
+  where the worker got one across. On the console and not on the page: the app works, and a
+  reload retries the install.
+- **The card finish is still one synchronous stretch, 4.3–5.3 s across the three runs
+  above, and each tag swap 1–2 s.** The figures are in the tables.
+- **A picture is stored twice**: in the HTTP cache and in Cache Storage.
+- **The 3 000-entry sweep and the weekly re-check were driven over a fake cache only.** The
+  real run stored 64 pictures, all the same day.
+- **A browser that evicts Cache Storage under a live page**, with no update waiting and the
+  old chunk gone from the host, cannot draw a lazy face that page has not loaded (§5).
+- **The one smoke failure above.**
+- **The desktop's closure is still written in the file's order.**
+
+**Not measured.**
+
+- **Any browser but Chromium on Windows.**
+- **An installed PWA.**
+- **A real eviction**, of the pictures, of the shell or of both.
+- **The bridge's 20 s bound in a real browser**: no picture waited that long.
+- **A second run of these figures, or a quiet machine.**
+
 ### 9.4 Step 5.4 — the browser's seams and the manifest (2026-10-04)
 
 What a face still asked a Tauri window for, answered below `@/lib/core`; the web manifest
 finished and moved to where only the light builds copy it; and phase 1's two history leftovers
-(§5). Numbered for its step: 5.3 was still in flight when this was written, so there is no
-§9.3 above it yet. The rules that came out of it are in [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
+(§5). The rules that came out of it are in [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
 
 **What was built — the clipboard and a link out.**
 
@@ -3966,7 +4379,9 @@ size taken up with timings, and the built app driven end to end against round on
 are still to come and are not in this section. **Nothing is deployed**: what was committed is
 source, configuration and a runbook, and [`app-worker/README.md`](../../app-worker/README.md)
 is that runbook — the probes, the steps in order, rollback and cost. Numbered for its step; 5.3
-was still in flight, so there is no §9.3 above it yet.
+was still in flight when this was written, on a tree with no service worker in it, and §9.3
+arrived above it when the two met (2026-10-04). **What that meeting changed is marked where it
+stands below**; every measurement here is still of the tree it names.
 
 **What was built.**
 
@@ -4001,7 +4416,9 @@ was still in flight, so there is no §9.3 above it yet.
 - **`app-worker/_headers`, emitted into `dist-web/` and nowhere else.** `vite.mobile.config.ts`
   gained a second `web`-mode plugin, `web:hosting`, which copies the file to the build's root —
   where `wrangler deploy` parses it — and fails the build, by line, on a file that does not
-  parse. **In neither public directory**: the root's is copied into `dist/` and `dist-share/`,
+  parse. (**Three, with step 5.3's**: `web:hosting` is listed first, so its headers are on a
+  preview response before any other plugin's middleware answers it — `sw.js` included — and
+  `web:service-worker` last, so the build id it hashes covers the emitted `_headers`.) **In neither public directory**: the root's is copied into `dist/` and `dist-share/`,
   and `mobile/public/` into the APK's `dist-mobile/`.
 
   | Build, listed 2026-10-04 | `_headers` | Manifest and icons | Engine and its Worker |
@@ -4110,8 +4527,8 @@ object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; fo
   at every route, the manifest, the favicon and the manifest's `icons/*.png`, whose names carry
   no hash. A year, `immutable`, for `/assets/*` and `/wasm/*`, which are content-addressed —
   **less `assets/worker-<hash>.js`, the engine's Worker, which is `no-cache`** (the third
-  finding). `/sw.js` restates `no-cache` by a rule of its own, written before the file exists,
-  so loosening `/*` cannot take it along. Each narrower rule detaches before it sets, or the
+  finding). `/sw.js` restates `no-cache` by a rule of its own, written before the file existed
+  (it does since step 5.3 — §9.3), so loosening `/*` cannot take it along. Each narrower rule detaches before it sets, or the
   two values would be joined.
 
 **Three findings, in headless Chrome 154.0.8037.95 on Windows 11, 2026-10-04.**
@@ -4153,7 +4570,8 @@ object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; fo
   **The service worker is a second cache with the same property** — it serves the shell out of
   Cache Storage with the headers it stored. Step 5.3 re-fetches the shell per build and hashes
   `_headers` into its build id; that is a property of that step, to be pinned by a test there,
-  and nothing here relies on it or checks it.
+  and nothing here relies on it or checks it. (**Pinned there**: `shell.test.ts`'s *moves when
+  only the host's `_headers` changed* — §9.3.)
 
 **What a browser said under the policy** — the same Chrome, over `npm run web:build` of `main`
 at `92cbc02b` with this step merged in. **The module was a copy from the phase's working tree
@@ -4172,7 +4590,10 @@ gzipped by Vite's report.
 - **One violation, seventeen times: `img-src` refusing `http://mtgimg.localhost/…`.** `main`'s
   page still names the desktop's image protocol; 5.3 moves pictures to `/mtgimg/…`. Until then a
   card picture in a browser is refused by the policy where before it was a connection nobody
-  accepted, and the tile draws its retry either way.
+  accepted, and the tile draws its retry either way. (**True of the tree this run was made
+  on.** With step 5.3 beside it the page asks `/mtgimg/…` of its own origin and the service
+  worker answers with a response rebuilt from the bytes. This run has not been made again, so
+  no card picture has been seen drawn under the policy.)
 - **The zero for the Worker is not a vacuous one.** With `data.scryfall.io` taken out of
   `connect-src`, the same run stopped at the card sync and named the Worker's three refused
   downloads.
@@ -4284,8 +4705,9 @@ from the wrong place and called every run red.
   shares. Nobody has counted a first visit.
 - **The desktop face over a corpus under the policy** — the smoke's fixtures drive the phone
   face, and at 1280 an empty database draws its *No card data yet* wall — **a card picture
-  drawn**, **a service worker**, **the real hosts** rather than fixtures, **any browser but one
-  Chrome**, and any phone.
+  drawn**, **a service worker** (built since, in step 5.3, and driven with no policy — §9.3;
+  the two have not been driven together in a browser), **the real hosts** rather than
+  fixtures, **any browser but one Chrome**, and any phone.
 - **`scripts/web-smoke.mjs` runs with no policy.** CI's `web` job therefore proves the build
   and not the build as served. What it would take: serve through `headersFor`, answer a miss
   and `/_headers` with a 404, and listen for violations in the Worker as well as on the page.

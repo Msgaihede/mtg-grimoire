@@ -1830,4 +1830,151 @@ mod tests {
         drop(state);
         let _ = std::fs::remove_dir_all(dir);
     }
+
+    /// **A command a page sends while a tag file's finish runs is answered — from the
+    /// previous tags — and the finish then lands the new ones.** The whole refresh as the web
+    /// host runs it: one thread, one connection, the body streamed, and the finish taking its
+    /// turns on the breather the download kept ([`crate::tags::StreamTags::finish_in_turns`]).
+    ///
+    /// The page is the second future of a `join!`: on one thread it runs only when the
+    /// refresh gives the event loop a turn, which is exactly a Worker's rule — and `biased`,
+    /// so each turn the refresh takes is followed by one pass of the page and never by two
+    /// or none. So an answer recorded while the phase is `ingesting` is a command taken in a
+    /// gap between two batches — and with the finish handed no turn there is none, which is
+    /// the 10.8 s and 23.6 s the first browser run measured.
+    ///
+    /// What each gap is asked, and what it must be told:
+    ///
+    /// * the status — the previous file's counts, and `refreshing`;
+    /// * the tags of a card — the previous taxonomy's, never a half-built one;
+    /// * **a second refresh** — refused, because the claim is held until the swap;
+    /// * **a cache clear** — refused for the same claim (`reset::cache_clear_refusal`).
+    ///
+    /// `platform::timer::turn_at_every_pass` makes every gap a turn, so the test does not turn
+    /// on whether this machine spends the breather's fifty milliseconds.
+    #[tokio::test]
+    async fn a_command_sent_during_a_streamed_finish_is_answered_from_the_previous_tags() {
+        let _serial = ORACLE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        use serde_json::{json, Value};
+        use std::sync::Arc;
+
+        let old = gz_bytes(&[&tag("a1", "ramp", &[], &["oid-1"])]);
+        // One tag over more cards than a page's closure batch holds, and `oid-1` among them:
+        // the closure is written in two transactions, the taggings and the tag in one each.
+        let cards: Vec<String> = (1..=crate::tags::CLOSURE_BATCH_WITHOUT_FILES + 100)
+            .map(|i| format!("oid-{i}"))
+            .collect();
+        let card_refs: Vec<&str> = cards.iter().map(String::as_str).collect();
+        let new = gz_bytes(&[&tag("b1", "removal", &[], &card_refs)]);
+
+        let server = MockServer::start_async().await;
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("tags-page-turns", &server.base_url());
+
+        let mut file = server.mock(|when, then| {
+            when.method(GET).path("/oracle-tags.jsonl.gz");
+            then.status(200).body(old.clone());
+        });
+        let mut listing =
+            page_descriptor(&server, "2026-08-14T21:00:00.000+00:00", old.len() as u64);
+        let before = refresh(&ORACLE, &state, false, &mut |_, _, _| {})
+            .await
+            .unwrap();
+        assert_eq!(before.tagging_count, Some(1));
+
+        file.delete();
+        listing.delete();
+        server.mock(|when, then| {
+            when.method(GET).path("/oracle-tags.jsonl.gz");
+            then.status(200).body(new.clone());
+        });
+        page_descriptor(&server, "2026-08-15T21:00:00.000+00:00", new.len() as u64);
+
+        let _every = crate::platform::timer::turn_at_every_pass();
+        let phases: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(Vec::new()));
+        let finished = AtomicBool::new(false);
+        let refreshing = async {
+            let said = phases.clone();
+            let answer = refresh(&ORACLE, &state, true, &mut |phase, _, _| {
+                said.lock().unwrap().push(phase.to_owned())
+            })
+            .await;
+            finished.store(true, Ordering::SeqCst);
+            answer
+        };
+        let ask = |name: &'static str, args: Value| {
+            let state = state.clone();
+            async move { crate::commands::dispatch(&state, name, args, None).await }
+        };
+        let page = async {
+            let mut gaps: Vec<[Result<Value, String>; 4]> = Vec::new();
+            while !finished.load(Ordering::SeqCst) {
+                let phase = phases.lock().unwrap().last().cloned();
+                if phase.as_deref() == Some("ingesting") {
+                    gaps.push([
+                        ask("oracle_tags_status", Value::Null).await,
+                        ask("oracle_tags_for_cards", json!({ "oracleIds": ["oid-1"] })).await,
+                        ask("oracle_tags_refresh", json!({ "force": true })).await,
+                        ask("cache_clear", Value::Null).await,
+                    ]);
+                }
+                tokio::task::yield_now().await;
+            }
+            gaps
+        };
+        let (after, gaps) = tokio::join!(biased; refreshing, page);
+        let after = after.unwrap();
+
+        assert_eq!(
+            gaps.len(),
+            4,
+            "a turn after the taggings, the tag and each of two closure batches"
+        );
+        for (n, [status, tags, second, clear]) in gaps.iter().enumerate() {
+            let status = status.as_ref().expect("the status answers");
+            assert_eq!(status["tagCount"], json!(1), "gap {n}: {status}");
+            assert_eq!(status["taggingCount"], json!(1), "gap {n}: {status}");
+            assert_eq!(
+                status["updatedAt"],
+                json!("2026-08-14T21:00:00.000+00:00"),
+                "gap {n}"
+            );
+            assert_eq!(status["refreshing"], json!(true), "gap {n}");
+            assert_eq!(
+                tags.as_ref().expect("the read answers"),
+                &json!([{ "oracleId": "oid-1", "slugs": ["ramp"] }]),
+                "gap {n}: the previous taxonomy, whole"
+            );
+            assert_eq!(
+                second.as_ref().unwrap_err(),
+                "Oracle tags are already being refreshed.",
+                "gap {n}"
+            );
+            let clear = clear.as_ref().unwrap_err();
+            assert!(clear.contains("download is running"), "gap {n}: {clear}");
+        }
+
+        // And the finish landed: the new taxonomy, its watermark, nothing left staged.
+        assert_eq!(after.tag_count, Some(1));
+        assert_eq!(after.tagging_count, Some(cards.len() as i64));
+        assert_eq!(
+            after.updated_at.as_deref(),
+            Some("2026-08-15T21:00:00.000+00:00")
+        );
+        assert!(
+            !crate::tags::status_of(&ORACLE, &state).refreshing,
+            "the claim is given back"
+        );
+        assert_eq!(slugs_for(&state.db, "oid-1"), vec!["removal".to_owned()]);
+        assert_eq!(oracle_staging_tables(&state), 0);
+        assert_eq!(
+            phases.lock().unwrap().last().map(String::as_str),
+            Some("done")
+        );
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

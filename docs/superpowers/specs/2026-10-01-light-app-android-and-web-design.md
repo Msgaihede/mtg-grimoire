@@ -655,6 +655,28 @@ in front of the Worker, in those commands' own result shapes, so the dialogs tha
 change — and a save answers that the file was handed to the browser, which is all a browser can
 know. [light-app.md](../../reference/light-app.md) §9.4 is the record.
 
+**Built 2026-10-04 (step 5.3) for the fourth row, and "the same path" gained a prefix.** On the
+web a picture is `<origin>/mtgimg/<variant>/<card_id>/<face>`: the root's first segments are the
+app's places, and a variant is a word a place could one day be. `imageOrigin` answers that origin
+in the `web` build, by the build's mode, so no call site that builds the URL changed and
+`CardArt`'s `remoteSrc` door is still the share viewer's alone — the paragraph above, as written.
+Three things it did not say:
+
+- **The service worker cannot ask the core.** The engine is in a dedicated Worker that only the
+  page which made it can reach, so the worker asks **the page that asked for the picture**, over
+  a `MessageChannel`, and the page asks the core's `card_image_source` — a command the table has
+  and the desktop does not (`TABLE_ONLY` in its parity fence), which says where a picture is and
+  fetches nothing.
+- **What is kept is a response rebuilt from the bytes**, not the one `fetch` returned: a page's
+  `img-src` is checked against the response's URL even when a service worker answered (measured
+  on the hosting step's branch, Chrome 154), and only a rebuilt one passes `img-src 'self'`.
+- **The refusals are the desktop protocol's** — 404, 502, 503 with `Retry-After` — so the
+  frame's retry and its stall watchdog are one mechanism on every host.
+
+The cache is `grimoire-pictures-v1`, bounded at 3 000 entries rather than at a byte budget, with
+no ledger beside it. [image-cache.md](../../reference/image-cache.md) has the rules and
+[light-app.md](../../reference/light-app.md) §9.3 the run.
+
 ---
 
 ## 4. Features
@@ -826,6 +848,56 @@ quiet**, on a module from before that step's review and before its yield):
 
 What is left of the list — the update flow and hosting — is in the three steps that remain.
 
+**Built 2026-10-04 (step 5.3): the service worker.** The fourth bullet of the list above, as
+written and with what it left out, and the first bullet's queue made short.
+
+- **The update flow is the bullet's, word for word, and the host is who says so.** A new build
+  installs as the waiting worker and nothing in it skips the wait; the web host answers
+  `host_update` — `{ title, action }`, or `null` — and emits `host-update:changed`, on the page
+  and without the engine; a non-modal bar in the light app draws only that answer; and only its
+  press (`host_update_apply`) posts the message that calls `skipWaiting`, after which the page
+  reloads once. These are deliberately not the desktop updater's `update_status` and
+  `update_apply`. **What the bullet did not say**: a first install is not reported as an
+  update; a first visit is *claimed* by the worker rather than reloaded; a page started by a
+  hard reload asks the active worker to take it; a second tab never activates a build and is
+  not reloaded by the press; and `sw.js` is byte-identical for unchanged sources — its build
+  id is a hash of the build's files — because a browser finds an update by comparing that
+  file's bytes.
+- **`ignoreVary` is in the type** of every Cache Storage lookup and delete the worker and the
+  page make, so the blank offline shell is a compile error rather than a rule to remember.
+- **One shell cache per build**, the document precached as `/`, the install all or nothing,
+  and the list of what the worker answers closed: a request that is not a `GET`, one to another
+  origin and an unknown same-origin file are never touched — the engine's downloads among them
+  — and a file is never answered with the document. §3.5 has the pictures.
+- **A face whose chunk a deploy renamed** (phase 1's leftover) is closed by taking the case
+  away: the page's own build is held whole for as long as the page is open.
+- **Searches still queue behind an ingest, and the queue is shorter.** The tagger feeds'
+  finish and the combos' store take a turn of the Worker's event loop between their batches,
+  one body each for every host — natively the same statements in the same transactions,
+  pinned by SQLite's commit hook — and on a host with no files the tag closure is written in
+  key order, 8 000 rows to a transaction. The card finish, each swap and the price list's
+  store are still one synchronous stretch each.
+
+**The table's third column, from one run** (headless Chrome 154.0.8037.95 on Windows 11, the
+built app through its preview server, the phone face, against the real hosts; **one run, on a
+machine that was not quiet**):
+
+| | Round one | Step 5.2, one run | Step 5.3, one run |
+| --- | --- | --- | --- |
+| WASM module | 2 642 182 B | 8 592 080 B as shipped | 8 684 745 B, 3 030 884 B through `gzip -9` |
+| First run | 117 606 rows, 15.6–16.3 s | `done` at 23 812 ms; the download 16.40 s | `done` at 24.48 s; the download 16.47 s |
+| Linear memory, peak | 148.6–171.6 MB | 203 358 208 B | 205 979 648 B |
+| Storage | about 526 MB with every feed | 960 569 344 B in OPFS | 959 537 152 B in OPFS, 12 215 805 B of shell and 5 018 940 B of pictures (64 of them) in Cache Storage |
+
+The feeds were all done at **50.84 s**, against 76.6 s: the oracle tags' finish took 1.74 s
+against 11.3 s, the art tags' 4.11 s against 23.4 s, and **the longest single wait was 4.79 s
+— the card finish — against 26.1 s**. With the preview server stopped, a reload opened the
+database at 1 923 ms and drew its first picture from the cache at 3 150 ms. The table's
+`search_cards` and `facet_cards` rows were not taken again. [light-app.md](../../reference/light-app.md)
+§9.3 is the record, with what was found and left.
+
+What is left of the list is hosting — step 5.5, whose first half is the note below.
+
 **Built 2026-10-04 (step 5.5, hosting): the Worker, and nothing deployed.** `app-worker/` is the
 list's last bullet as source — static assets over `dist-web/` at the root of
 `https://mtg-grimoire.app`, beside the relay and the share Worker and sharing nothing with
@@ -856,7 +928,8 @@ The headers are a `_headers` file the web build emits into `dist-web/` and no ot
 reader. **No agent deployed it**, as this section says; the runbook is
 [`app-worker/README.md`](../../../app-worker/README.md), every probe in it is marked not yet
 run, and [light-app.md](../../reference/light-app.md) §9.5 is the record. This is the step's
-first half: the module's size with timings and the phase's end-to-end run are still to come.
+first half: the module's size with timings, CI's smoke run under the policy and the phase's
+end-to-end run are still to come — and after them sync, which is phase 6.
 
 ---
 

@@ -208,6 +208,70 @@ pub const PHASES: [&str; 5] = ["checking", "downloading", "ingesting", "done", "
 /// wait for the write connection.
 const BATCH: usize = 2_000;
 
+/// **How a host with no files writes the closure**: [`CLOSURE_BATCH_WITHOUT_FILES`] rows to a
+/// transaction, and **in key order** — subjects sorted by id, each subject's rows by slug —
+/// where every other host writes [`BATCH`] rows in the file's order, as it always has.
+/// [`ClosurePlan::of_this_host`] picks, and the rows that end up in the table are the same
+/// rows either way (`a_page_writes_the_closure_a_desktop_writes`).
+///
+/// A host with no files is a browser, whose database is on a rollback journal
+/// ([`crate::db::Journal`]): every page a transaction touches is written twice, once to the
+/// journal and once to the file, and every commit is a journal made, synced and deleted. The
+/// closure's key is `(subject, slug)` and the file's order scatters subjects across it, so in
+/// file order nearly every row lands on a page of its own. In key order the table is filled
+/// from one end and a page is written when it is full.
+///
+/// **Chosen from a native measurement, and then run in a browser.** The real art file as a dev corpus held it (11 603 tags, 53 237 illustrations,
+/// 979 249 closure rows), a release build, NTFS, 2026-10-04, two runs each — the closure's
+/// write alone, in seconds:
+///
+/// | Journal | File order, 2 000 | File order, 8 000 | Key order, 2 000 | Key order, 8 000 |
+/// | --- | --- | --- | --- | --- |
+/// | DELETE (what a browser's file gets) | 16.6, 17.8 | 10.5, 10.5 | 6.1, 5.4 | 2.6, 2.8 |
+/// | WAL (every native host) | 10.4, 11.6 | 9.8, 8.3 | 4.2, 5.2 | 2.1, 2.1 |
+///
+/// (File order at 32 000 rows, from an earlier pass of the same probe: 7.4–7.6 s on DELETE,
+/// 6.1–6.9 s on WAL.) Sorting the subjects took 6–13 ms. In a browser the same loop, in file
+/// order at 2 000 rows, ran at about 49 ms a batch — most of a 23.6 s art finish (headless
+/// Chrome 154). **In key order at 8 000 rows the whole art finish was 4.11 s there, and the
+/// oracle tags' 1.74 s where it had been 10.76 s** (the same browser, the same day, one run,
+/// `docs/reference/light-app.md` §9.3) — the two changes were made together, so which of
+/// order and batch size bought how much in a browser is not on record.
+///
+/// **Eight thousand and not more**: a turn is taken only between two batches, so a batch is
+/// also the longest a command waits behind this loop. If a browser shows neither change is
+/// where its time goes, [`ClosurePlan::of_this_host`] is the one place to put back.
+///
+/// ⚠️ **The desktop would gain as much** — a weekly art refresh spends ten seconds on this
+/// loop and key order would make it four — and is deliberately left as it was: this change
+/// was made for the host that answers nothing while the loop runs, and the desktop's
+/// statements were not to move with it.
+const CLOSURE_BATCH_WITHOUT_FILES: usize = 8_000;
+
+/// How [`write_closure`] writes on this host: how many rows to a transaction, and in which
+/// order. See [`CLOSURE_BATCH_WITHOUT_FILES`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct ClosurePlan {
+    batch: usize,
+    in_key_order: bool,
+}
+
+impl ClosurePlan {
+    fn of_this_host() -> ClosurePlan {
+        if crate::platform::host::keeps_files() {
+            ClosurePlan {
+                batch: BATCH,
+                in_key_order: false,
+            }
+        } else {
+            ClosurePlan {
+                batch: CLOSURE_BATCH_WITHOUT_FILES,
+                in_key_order: true,
+            }
+        }
+    }
+}
+
 /// Bytes of download between progress events. Against reqwest's chunk callback, which fires
 /// far more often than a progress bar can use.
 const DOWNLOAD_EMIT_BYTES: u64 = 512 * 1024;
@@ -429,7 +493,10 @@ struct Graph {
 /// 43 % of them with more than one parent** (`art.rs`'s module table). Still fine — depth bounds
 /// the walk and every branch stops at the `seen` set — and it is no longer a guess: the whole art
 /// ingest, of which this is one step, measured **58.3 s** end to end for 952 729 closure rows in a
-/// debug build, and that time is dominated by the inserts rather than by this. The simple version
+/// debug build, and that time is dominated by the inserts rather than by this. **Timed on its
+/// own since** (2026-10-04, a release build, the art file as a dev corpus held it — 11 603 tags):
+/// **4.5 ms**, against some eleven seconds of closure inserts — which is why the finish takes
+/// its turns between batches and none in here. The simple version
 /// is the one whose termination argument fits in the paragraph above; if a third dataset ever
 /// arrives deeper or wider than the art one, this is the line to re-read.
 fn ancestor_closures(tags: &[Tag]) -> Vec<Vec<u32>> {
@@ -752,11 +819,52 @@ impl<'a> StreamTags<'a> {
     ///
     /// `progress` is called with the running row count every [`BATCH`] rows, and once more
     /// when the swap is done.
+    ///
+    /// **[`StreamTags::finish_in_turns`] with no turn to take, run where it stands**
+    /// (`platform::timer::unbroken`): one body for every host, and on this door — the
+    /// file-backed ingest's, on a host with threads — it is the synchronous function it always
+    /// was, statement for statement.
     pub fn finish(
-        mut self,
+        self,
         stamp: &FileStamp,
         ingested_at: i64,
         progress: &mut dyn FnMut(u64),
+    ) -> Result<TagStats, TagError> {
+        crate::platform::timer::unbroken(self.finish_in_turns(
+            stamp,
+            ingested_at,
+            progress,
+            &mut crate::platform::timer::NoTurn,
+        ))
+    }
+
+    /// [`StreamTags::finish`], **giving the host a turn in every gap between two batches**.
+    ///
+    /// The finish is four loops of short transactions — the last taggings, the tags, the
+    /// edges and the closure — and then the swap. Each batch takes the write connection,
+    /// commits and lets go, so between two of them the database is whole and nothing is held:
+    /// what has been written so far is in the `_staging` twins, which no reader can see, and
+    /// the live tables are the previous taxonomy until the swap's one transaction. That gap
+    /// is where `turn` is awaited. Handed a `platform::timer::Breather`, the engine goes back
+    /// to its event loop there on a budget of work, and a command a page sent is answered —
+    /// from the previous tags — before the next batch. On a host with one thread nothing else
+    /// could let it in: the first measured browser run answered nothing for 10.8 s of an
+    /// oracle finish and 23.6 s of an art one (`docs/reference/light-app.md` §9.2).
+    ///
+    /// **Nothing is held across a turn** — no guard, no transaction. Every batch is written
+    /// by a function that takes the connection and has let go before it returns, so the
+    /// `.await`s below sit between calls and never inside one;
+    /// `nothing_is_held_across_a_turn` is the compiler's word for it.
+    ///
+    /// **What still runs to its end without a turn**: the graph walk
+    /// ([`ancestor_closures`], pure CPU) and the swap, which is one transaction by need —
+    /// four renames, the two indexes a rename does not carry, and the watermark.
+    pub async fn finish_in_turns<P: FnMut(u64) + ?Sized>(
+        mut self,
+        stamp: &FileStamp,
+        ingested_at: i64,
+        progress: &mut P,
+        turn: &mut impl crate::platform::timer::Turn,
     ) -> Result<TagStats, TagError> {
         self.decoded.clear();
         self.decoder.finish(&mut self.decoded)?;
@@ -772,7 +880,8 @@ impl<'a> StreamTags<'a> {
                 .map_err(std::io::Error::from)?;
             self.lines.finish(|line| acc.take_line(ds, line));
         }
-        self.flush_full_batches(progress)?;
+        self.flush_full_batches(&mut |written| progress(written))?;
+        turn.take().await;
 
         // Destructured so the rest of this reads as the pull loop's tail did — the swap, the
         // refusals and the graph walk are unchanged from the day they were written.
@@ -796,6 +905,7 @@ impl<'a> StreamTags<'a> {
             stats.taggings += batch.len() as u64;
             write_taggings(ds, db, &g, &mut batch)?;
             written = stats.taggings;
+            turn.take().await;
         }
 
         // **Two ways a file that decoded perfectly is still not a taxonomy**, and the swap below
@@ -842,25 +952,10 @@ impl<'a> StreamTags<'a> {
             staging = staging(ds.tags_table)
         );
         for chunk in g.tags.chunks(BATCH) {
-            let mut conn = crate::db::lock_background(db);
-            let tx = conn.transaction()?;
-            {
-                let mut stmt = tx.prepare_cached(&tags_sql)?;
-                for tag in chunk {
-                    stmt.execute(params![
-                        tag.slug,
-                        tag.id,
-                        tag.label,
-                        tag.description,
-                        normalize(&tag.slug)
-                    ])?;
-                }
-            }
-            tx.commit()?;
-            drop(conn);
-            stand_aside();
+            flush_tags(db, &tags_sql, chunk)?;
             written += chunk.len() as u64;
             progress(written);
+            turn.take().await;
         }
 
         // The edges, once every id in the file is known. A parent the file never defined is
@@ -877,13 +972,14 @@ impl<'a> StreamTags<'a> {
                 }
             }
         }
-        write_edges(ds, db, &g, &mut written, progress)?;
+        write_edges(ds, db, &g, &mut written, progress, turn).await?;
 
         // The closure. Computed with no lock held — this is pure CPU over the tag list — and then
         // unioned per subject: a subject holding two tags that share an ancestor gets that
         // ancestor once, which is what the `(subject, slug)` primary key would insist on anyway.
         let closures = ancestor_closures(&g.tags);
-        stats.closure_rows = write_closure(ds, db, &g, &closures, &mut written, progress)?;
+        stats.closure_rows =
+            write_closure(ds, db, &g, &closures, &mut written, progress, turn).await?;
 
         {
             let mut conn = crate::db::lock_background(db);
@@ -997,13 +1093,37 @@ fn write_taggings(
     Ok(())
 }
 
-/// The parent edges, batched the same way.
-fn write_edges(
+/// One batch of tags, then let go of the connection. `sql` is the five-column insert
+/// [`StreamTags::finish_in_turns`] builds once for the dataset.
+fn flush_tags(db: &Mutex<Connection>, sql: &str, chunk: &[Tag]) -> Result<(), TagError> {
+    let mut conn = crate::db::lock_background(db);
+    let tx = conn.transaction()?;
+    {
+        let mut stmt = tx.prepare_cached(sql)?;
+        for tag in chunk {
+            stmt.execute(params![
+                tag.slug,
+                tag.id,
+                tag.label,
+                tag.description,
+                normalize(&tag.slug)
+            ])?;
+        }
+    }
+    tx.commit()?;
+    drop(conn);
+    stand_aside();
+    Ok(())
+}
+
+/// The parent edges, batched the same way — with a turn for the host after each batch.
+async fn write_edges<P: FnMut(u64) + ?Sized>(
     ds: &Dataset,
     db: &Mutex<Connection>,
     g: &Graph,
     written: &mut u64,
-    progress: &mut dyn FnMut(u64),
+    progress: &mut P,
+    turn: &mut impl crate::platform::timer::Turn,
 ) -> Result<(), TagError> {
     let mut pending: Vec<(&str, &str)> = Vec::with_capacity(BATCH);
     for tag in &g.tags {
@@ -1014,12 +1134,14 @@ fn write_edges(
             flush_edges(ds, db, &mut pending)?;
             *written += BATCH as u64;
             progress(*written);
+            turn.take().await;
         }
     }
     if !pending.is_empty() {
         let n = pending.len() as u64;
         flush_edges(ds, db, &mut pending)?;
         *written += n;
+        turn.take().await;
     }
     Ok(())
 }
@@ -1053,6 +1175,10 @@ fn flush_edges(
 /// Returns the number of rows written. The per-subject map is what makes two tags sharing an
 /// ancestor one row rather than a primary-key collision.
 ///
+/// **How many rows to a transaction, and in which order, is [`ClosurePlan`]'s**: the file's
+/// order and [`BATCH`] rows on a host with files, the key's order and larger batches on one
+/// without. The rows are the same.
+///
 /// # The weight
 ///
 /// Where [`Dataset::carries_weight`] is set, each row also carries **the strongest weight
@@ -1062,21 +1188,31 @@ fn flush_edges(
 /// whose `dog` tagging is weak but whose `hound` tagging is strong is not a weak `dog`, and
 /// `hound`'s ancestor *is* `dog`, so both land on the one row. Deciding this per row at read
 /// time would instead be work on every keystroke of a tag search.
-fn write_closure(
+async fn write_closure<P: FnMut(u64) + ?Sized>(
     ds: &Dataset,
     db: &Mutex<Connection>,
     g: &Graph,
     closures: &[Vec<u32>],
     written: &mut u64,
-    progress: &mut dyn FnMut(u64),
+    progress: &mut P,
+    turn: &mut impl crate::platform::timer::Turn,
 ) -> Result<u64, TagError> {
     let mut rows = 0u64;
-    let mut pending: Vec<(&str, &str, &str)> = Vec::with_capacity(BATCH);
+    let plan = ClosurePlan::of_this_host();
+    let batch = plan.batch;
+    // The subjects, in the order their rows are written: the file's, or the key's.
+    let mut order: Vec<u32> = (0..g.held.len() as u32).collect();
+    if plan.in_key_order {
+        order.sort_unstable_by(|a, b| g.subjects[*a as usize].cmp(&g.subjects[*b as usize]));
+    }
+    let mut pending: Vec<(&str, &str, &str)> = Vec::with_capacity(batch);
     // Tag index → the strongest weight of the taggings that reach it. A map rather than a set
     // for both datasets: the value is simply never written for one that carries no weight,
     // and one code path is one place for the union to be right.
     let mut inherited: HashMap<u32, &str> = HashMap::new();
-    for (subject, held) in g.held.iter().enumerate() {
+    for subject in order {
+        let subject = subject as usize;
+        let held = &g.held[subject];
         inherited.clear();
         for &(tag, weight_index) in held {
             let weight = g.weights[weight_index as usize].as_str();
@@ -1090,7 +1226,16 @@ fn write_closure(
         // Sorted for the same reason `ancestor_closures` sorts: a run's rows should not
         // depend on a hash seed.
         let mut slugs: Vec<u32> = inherited.keys().copied().collect();
-        slugs.sort_unstable();
+        if plan.in_key_order {
+            // By slug, and by index where two tags share one: the insert is `OR IGNORE`, so
+            // the first of such a pair is the row that stays, and on every host that is the
+            // lower index.
+            slugs.sort_unstable_by(|a, b| {
+                (g.tags[*a as usize].slug.as_str(), a).cmp(&(g.tags[*b as usize].slug.as_str(), b))
+            });
+        } else {
+            slugs.sort_unstable();
+        }
         for tag in slugs {
             pending.push((
                 g.subjects[subject].as_str(),
@@ -1102,17 +1247,21 @@ fn write_closure(
         // Flushed between subjects, never inside one: a batch boundary in the middle of a
         // subject's tags is exactly the half-written state the staging tables exist to hide,
         // and there is no reason to create one when the next subject is a natural seam.
-        if pending.len() >= BATCH {
+        if pending.len() >= batch {
             let n = pending.len() as u64;
             flush_closure(ds, db, &mut pending)?;
             *written += n;
             progress(*written);
+            // Between two subjects and between two transactions: the one place in this
+            // loop where nothing is half-written and nothing is held.
+            turn.take().await;
         }
     }
     if !pending.is_empty() {
         let n = pending.len() as u64;
         flush_closure(ds, db, &mut pending)?;
         *written += n;
+        turn.take().await;
     }
     Ok(rows)
 }
@@ -1668,8 +1817,10 @@ async fn refresh_once(
 ///
 /// The phases are the file-backed run's, each true as said: `downloading` counts bytes while
 /// the body arrives, and `ingesting` — once, with no count, as that run says it — is the
-/// graph walk, the closure and the swap that follow the last byte. On a host with one thread
-/// nothing else runs during that tail.
+/// graph walk, the closure and the swap that follow the last byte. **That tail takes a turn
+/// between its batches** ([`StreamTags::finish_in_turns`], on the breather the loop below
+/// keeps), so a command a page sends during it is answered from the previous tags; only the
+/// swap itself, one transaction, answers nothing until it has committed.
 async fn refresh_streamed(
     ds: &'static Dataset,
     state: &Arc<State>,
@@ -1740,7 +1891,12 @@ async fn refresh_streamed(
         etag: info.etag.clone(),
         updated_at,
     };
-    match sink.finish(&stamp, unix_now(), &mut |_| {}) {
+    // The same breather the chunk loop kept: the finish is longer than the download was,
+    // and it takes its turns on the budget the download did.
+    match sink
+        .finish_in_turns(&stamp, unix_now(), &mut |_| {}, &mut breather)
+        .await
+    {
         Ok(_) => {
             if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
                 let _ = crate::feed::backoff::clear(&conn, ds.bulk_name);
@@ -1833,6 +1989,20 @@ pub fn emit(ds: &Dataset, state: &State, phase: &str, done: u64, total: u64) {
             total,
         },
     );
+}
+
+/// **The fence, and it is the compiler's**: a finish that takes turns may hold no lock across
+/// one, and a future that keeps a `MutexGuard` across an `.await` is not `Send`.
+/// `sync_engine::client`'s has the argument, and why the bound is
+/// [`crate::platform::Sendable`] rather than `Send`. Never called.
+#[allow(dead_code)]
+fn nothing_is_held_across_a_turn(
+    sink: StreamTags<'_>,
+    stamp: &FileStamp,
+    breather: &mut crate::platform::timer::Breather,
+) {
+    fn sendable<T: crate::platform::Sendable>(_: T) {}
+    sendable(sink.finish_in_turns(stamp, 0, &mut |_| {}, breather));
 }
 
 /// What both bindings' test modules build their input out of.
@@ -2366,6 +2536,333 @@ mod tests {
              the priority rule allows {MOST_BATCHES_BEHIND}. Every ask as wait/transactions \
              behind ({overlap:?} overlap): {table}"
         );
+    }
+
+    // ---- a finish that takes turns ------------------------------------------------------
+
+    /// A file whose finish runs every loop more than once: `tags` tags under one root, each
+    /// tagging one subject of its own — so two batches of tags, two of edges and three of
+    /// closure rows at `tags = BATCH + 100`.
+    fn wide_file(ds: &Dataset, tags: usize, prefix: &str) -> Vec<String> {
+        (0..tags)
+            .map(|t| {
+                let parents = if t == 0 { "" } else { r#""t0""# };
+                format!(
+                    r#"{{"object":"tag","id":"t{t}","slug":"{prefix}-{t}","parent_ids":[{parents}],"taggings":[{{"{}":"s-{t}","weight":"median"}}]}}"#,
+                    ds.subject_column
+                )
+            })
+            .collect()
+    }
+
+    /// Every transaction `db` commits from here on, counted by SQLite itself.
+    fn count_commits(db: &Mutex<Connection>) -> std::sync::Arc<std::sync::atomic::AtomicUsize> {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let commits = std::sync::Arc::new(AtomicUsize::new(0));
+        let counted = commits.clone();
+        crate::db::lock_blocking(db)
+            .commit_hook(Some(move || {
+                counted.fetch_add(1, Ordering::SeqCst);
+                false
+            }))
+            .unwrap();
+        commits
+    }
+
+    /// **The file-backed ingest commits exactly what it did before its finish learned to take
+    /// turns** — the same batches, so the same number of transactions, counted by SQLite's
+    /// commit hook rather than by anything the ingest says about itself.
+    ///
+    /// Both figures were read off the code as it stood before the finish was restated
+    /// (2026-10-04, the same test over `HEAD`'s file) and are pinned as numbers on purpose.
+    /// For the oracle file: one taggings batch (the whole small file arrives in `finish`,
+    /// where `flate2` lets go of it), two of tags, two of edges, three of closure rows and
+    /// the swap — nine — and the four `CREATE`s that make the staging tables, each its own
+    /// transaction. The art file's lines are longer by its subject key, so the decoder hands
+    /// some over before `finish` and its taggings are two batches: fourteen.
+    #[test]
+    fn the_file_driver_commits_exactly_the_batches_it_always_did() {
+        use std::sync::atomic::Ordering;
+        for (ds, native_commits) in [
+            (&crate::tags::oracle::ORACLE, 13),
+            (&crate::tags::art::ART, 14),
+        ] {
+            let db = mem_db();
+            let lines = wide_file(ds, BATCH + 100, "tag");
+            let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+            let path = gz_fixture(&refs);
+            let commits = count_commits(&db);
+            let stats = ingest_gz(
+                ds,
+                &db,
+                &path,
+                &FileStamp::default(),
+                1_800_000_000,
+                &mut |_| {},
+            )
+            .unwrap();
+            assert_eq!(stats.tags as usize, BATCH + 100);
+            assert_eq!(stats.closure_rows as usize, 2 * (BATCH + 100) - 1);
+            assert_eq!(
+                commits.load(Ordering::SeqCst),
+                native_commits,
+                "{}: the file-backed ingest's transactions",
+                ds.bulk_name
+            );
+        }
+    }
+
+    /// Everything a taxonomy stores but its watermark, as text: tags, edges, taggings and
+    /// the closure with its weight where the dataset carries one — each in key order.
+    fn everything(ds: &Dataset, db: &Mutex<Connection>) -> Vec<String> {
+        let conn = crate::db::lock_blocking(db);
+        let subject = ds.subject_column;
+        let weight = if ds.carries_weight { "weight" } else { "''" };
+        let mut out = Vec::new();
+        for sql in [
+            format!(
+                "SELECT slug || '|' || id || '|' || label || '|' || slug_norm
+                   FROM {} ORDER BY slug",
+                ds.tags_table
+            ),
+            format!(
+                "SELECT child_slug || '>' || parent_slug FROM {} ORDER BY 1",
+                ds.parents_table
+            ),
+            format!(
+                "SELECT {subject} || '|' || slug || '|' || coalesce(weight, '-')
+                   FROM {} ORDER BY {subject}, slug",
+                ds.taggings_table
+            ),
+            format!(
+                "SELECT {subject} || '|' || slug || '|' || {weight}
+                   FROM {} ORDER BY {subject}, slug",
+                ds.closure_table
+            ),
+        ] {
+            let mut stmt = conn.prepare(&sql).unwrap();
+            let rows = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<Result<Vec<_>, _>>()
+                .unwrap();
+            out.push(format!("-- {} rows", rows.len()));
+            out.extend(rows);
+        }
+        out
+    }
+
+    /// **A page writes the closure a desktop writes.** The two hosts write it differently —
+    /// a page in key order and larger batches ([`ClosurePlan`]) — and what is in the table
+    /// afterwards must not differ by a row or by a weight, for either taxonomy.
+    ///
+    /// The file is made to be hard on that: subjects first met in descending order, so key
+    /// order and file order are opposites; a hierarchy three deep with a tag under two
+    /// parents; taggings whose weights disagree along one lineage, so the fold decides; and
+    /// **two tags that share a slug** with different weights on one subject — the insert is
+    /// `OR IGNORE`, so which of the pair is written first is which weight is stored.
+    #[test]
+    fn a_page_writes_the_closure_a_desktop_writes() {
+        for ds in [&crate::tags::oracle::ORACLE, &crate::tags::art::ART] {
+            let subject = ds.subject_column;
+            let tagging = |s: usize, weight: &str| {
+                format!(r#"{{"{subject}":"s-{s:05}","weight":"{weight}"}}"#)
+            };
+            let tag = |id: &str, slug: &str, parents: &[&str], taggings: Vec<String>| {
+                let parents = parents
+                    .iter()
+                    .map(|p| format!("\"{p}\""))
+                    .collect::<Vec<_>>()
+                    .join(",");
+                format!(
+                    r#"{{"object":"tag","id":"{id}","slug":"{slug}","parent_ids":[{parents}],"taggings":[{}]}}"#,
+                    taggings.join(",")
+                )
+            };
+            // Four closure rows a subject, so past two of a page's batches — met last-first.
+            let subjects = CLOSURE_BATCH_WITHOUT_FILES / 2 + 50;
+            let lines = [
+                tag("r", "animal", &[], vec![]),
+                tag("d", "dog", &["r"], vec![tagging(7, "weak")]),
+                tag("p", "pet", &[], vec![]),
+                // Under two parents, on every subject, last subject first.
+                tag(
+                    "h",
+                    "hound",
+                    &["d", "p"],
+                    (0..subjects).rev().map(|s| tagging(s, "strong")).collect(),
+                ),
+                // The same slug again under another id, tagging a subject `dog` already tags.
+                tag("d2", "dog", &[], vec![tagging(7, "very_strong")]),
+                tag(
+                    "z",
+                    "aardvark",
+                    &["r"],
+                    vec![tagging(3, "median"), tagging(9, "weak")],
+                ),
+            ];
+            let bytes = lines.join("\n").into_bytes();
+            let ingest = |db: &Mutex<Connection>| {
+                let mut sink = StreamTags::begin(ds, db).unwrap();
+                for chunk in bytes.chunks(64 * 1024) {
+                    sink.push(chunk, &mut |_| {}).unwrap();
+                }
+                sink.finish(&FileStamp::default(), 1_800_000_000, &mut |_| {})
+                    .unwrap()
+            };
+
+            let desktop = mem_db();
+            let on_a_desktop = ingest(&desktop);
+            let page = mem_db();
+            let on_a_page = {
+                let _page = crate::platform::host::emulate_page();
+                assert!(ClosurePlan::of_this_host().in_key_order);
+                ingest(&page)
+            };
+            assert!(!ClosurePlan::of_this_host().in_key_order);
+
+            assert_eq!(on_a_page, on_a_desktop, "{}: the counts", ds.bulk_name);
+            assert!(
+                on_a_page.closure_rows as usize > 2 * CLOSURE_BATCH_WITHOUT_FILES,
+                "more than two of a page's batches: {on_a_page:?}"
+            );
+            let (page, desktop) = (everything(ds, &page), everything(ds, &desktop));
+            assert_eq!(page.len(), desktop.len(), "{}", ds.bulk_name);
+            for (n, (a, b)) in page.iter().zip(&desktop).enumerate() {
+                assert_eq!(a, b, "{}: row {n}", ds.bulk_name);
+            }
+            // And the fold is what it should be, on both: `s-00007` is a strong `hound`, so
+            // it is a strong `dog` and a strong `animal`, whatever its own `dog` taggings say.
+            if ds.carries_weight {
+                for slug in ["animal", "dog", "hound", "pet"] {
+                    let row = format!("s-00007|{slug}|strong");
+                    assert!(page.contains(&row), "{row}");
+                }
+            }
+        }
+    }
+
+    /// A turn that is a page asking: in every gap it sends the engine a command through the
+    /// table and reads the live closure, and keeps what it was told.
+    ///
+    /// On an emulated page a connection asked for while it is held is a panic that names the
+    /// line (`platform::alone`), so every answer here is also proof that the finish held
+    /// nothing in that gap.
+    struct Asking<'a> {
+        ds: &'a Dataset,
+        state: &'a Arc<State>,
+        status: &'static str,
+        /// Per gap: the status command's answer, and how many rows the live closure held.
+        told: Vec<(serde_json::Value, i64)>,
+    }
+
+    impl crate::platform::timer::Turn for Asking<'_> {
+        async fn take(&mut self) {
+            let status =
+                crate::commands::dispatch(self.state, self.status, serde_json::Value::Null, None)
+                    .await
+                    .expect("a status asked in a gap is answered");
+            let rows = self
+                .state
+                .lock_db_read()
+                .query_row(
+                    &format!("SELECT count(*) FROM {}", self.ds.closure_table),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            self.told.push((status, rows));
+        }
+    }
+
+    /// **A command in a gap of the finish is answered, and sees the previous tags** — for
+    /// both taxonomies, on a host with one thread and one connection. Every loop of the
+    /// finish runs more than once over this file, so there is a gap after the last taggings,
+    /// after each batch of tags, of edges and of closure rows; in each the page is told the
+    /// previous file's counts and reads the previous closure, whole. After the finish it is
+    /// told the new ones.
+    ///
+    /// The engine's half of it. `tags::oracle`'s
+    /// `a_command_sent_during_a_streamed_finish_is_answered_from_the_previous_tags` is the
+    /// whole refresh, with the turns taken by the breather a streamed download keeps.
+    #[tokio::test]
+    async fn a_command_in_a_gap_of_the_finish_is_answered_and_sees_the_previous_tags() {
+        use serde_json::json;
+        /// Tags in the new file: its closure is two rows a tag, so this is past one of a
+        /// page's closure batches and the loop has a gap inside it.
+        const WIDE: usize = CLOSURE_BATCH_WITHOUT_FILES / 2 + 100;
+        for (ds, status, name) in [
+            (
+                &crate::tags::oracle::ORACLE,
+                "oracle_tags_status",
+                "tags-gaps-oracle",
+            ),
+            (&crate::tags::art::ART, "art_tags_status", "tags-gaps-art"),
+        ] {
+            let _page = crate::platform::host::emulate_page();
+            let (state, _heard, dir) = crate::state::fixtures::single(name, "http://127.0.0.1:1");
+
+            // The previous taxonomy: three tags, five closure rows.
+            let old = wide_file(ds, 3, "old").join("\n").into_bytes();
+            let mut sink = StreamTags::begin(ds, &state.db).unwrap();
+            sink.push(&old, &mut |_| {}).unwrap();
+            sink.finish(&FileStamp::default(), 1_700_000_000, &mut |_| {})
+                .unwrap();
+
+            let new = wide_file(ds, WIDE, "new").join("\n").into_bytes();
+            let mut sink = StreamTags::begin(ds, &state.db).unwrap();
+            for chunk in new.chunks(64 * 1024) {
+                sink.push(chunk, &mut |_| {}).unwrap();
+            }
+            let mut page = Asking {
+                ds,
+                state: &state,
+                status,
+                told: Vec::new(),
+            };
+            let stats = sink
+                .finish_in_turns(&FileStamp::default(), 1_800_000_000, &mut |_| {}, &mut page)
+                .await
+                .unwrap();
+            assert_eq!(stats.tags as usize, WIDE);
+
+            // The last taggings, three batches of tags, three of edges, and two of closure
+            // rows — a page's are `CLOSURE_BATCH_WITHOUT_FILES` each.
+            assert!(
+                page.told.len() >= 9,
+                "{}: a gap after every batch, and {} were taken",
+                ds.bulk_name,
+                page.told.len()
+            );
+            for (n, (status, rows)) in page.told.iter().enumerate() {
+                assert_eq!(status["tagCount"], json!(3), "{} gap {n}", ds.bulk_name);
+                assert_eq!(
+                    status["ingestedAt"],
+                    json!(1_700_000_000),
+                    "{} gap {n}",
+                    ds.bulk_name
+                );
+                assert_eq!(*rows, 5, "{} gap {n}: the previous closure", ds.bulk_name);
+            }
+
+            let after = crate::commands::dispatch(&state, status, serde_json::Value::Null, None)
+                .await
+                .unwrap();
+            assert_eq!(after["tagCount"], json!(WIDE));
+            assert_eq!(after["ingestedAt"], json!(1_800_000_000));
+            let rows: i64 = state
+                .lock_db_read()
+                .query_row(
+                    &format!("SELECT count(*) FROM {}", ds.closure_table),
+                    [],
+                    |r| r.get(0),
+                )
+                .unwrap();
+            assert_eq!(rows as usize, 2 * WIDE - 1);
+
+            drop(state);
+            let _ = std::fs::remove_dir_all(dir);
+        }
     }
 
     /// **What the page hears**: the event's name, and the keys it reads — camelCase, nothing

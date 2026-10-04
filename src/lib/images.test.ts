@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   cardImageUrl,
   imageOrigin,
@@ -6,6 +6,8 @@ import {
   IMAGE_RETRY_CEILING_MS,
   IMAGE_RETRY_FLOOR_MS,
   IMAGE_RETRY_SPREAD_MS,
+  WEB_IMAGE_PREFIX,
+  webImageOrigin,
 } from "@/lib/images";
 
 /**
@@ -30,6 +32,39 @@ describe("imageOrigin", () => {
   });
 
   it("uses the scheme form everywhere else", () => {
+    expect(imageOrigin("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe(
+      "mtgimg://localhost",
+    );
+  });
+});
+
+/**
+ * The web app has no custom protocol: the same path is asked of the app's own origin, under a
+ * prefix its service worker answers. Which build this is, is the build's mode — so every other
+ * build, this suite's included, still answers the three cases above.
+ */
+describe("imageOrigin in the web app's build", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("is the app's own origin and the picture prefix, whatever the browser says it is", () => {
+    vi.stubEnv("MODE", "web");
+    const own = `${window.location.origin}/mtgimg`;
+    expect(imageOrigin("Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/154.0")).toBe(own);
+    expect(imageOrigin("Mozilla/5.0 (Linux; Android 14; Pixel 8) Chrome/154.0 Mobile")).toBe(own);
+    expect(imageOrigin("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe(own);
+  });
+
+  it("keeps the path's shape, so no call site changes", () => {
+    vi.stubEnv("MODE", "web");
+    expect(cardImageUrl("0000419b-0bba-4488-8f7a-6194544ce91d", 1, "display")).toBe(
+      `${window.location.origin}/mtgimg/display/0000419b-0bba-4488-8f7a-6194544ce91d/1`,
+    );
+  });
+
+  it("puts the prefix where no place of the app is, and spells it once", () => {
+    expect(WEB_IMAGE_PREFIX).toBe("/mtgimg");
+    expect(webImageOrigin("https://mtg-grimoire.app")).toBe("https://mtg-grimoire.app/mtgimg");
+    // In every other mode — this one is `test` — the protocol's origins stand.
     expect(imageOrigin("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)")).toBe(
       "mtgimg://localhost",
     );

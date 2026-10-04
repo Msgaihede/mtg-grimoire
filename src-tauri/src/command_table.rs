@@ -10,10 +10,15 @@
 //!   [`DESKTOP_ONLY`] with the reason it never will be, or [`NOT_YET`]. A new desktop command
 //!   fails here until somebody decides which.
 //! - **Nothing on either list, or in the table, is a command this app does not register** — a
-//!   stale entry is a list that no longer describes the app.
+//!   stale entry is a list that no longer describes the app — **unless it is on
+//!   [`TABLE_ONLY`]**, with the reason this app has no use for it. That list is the other
+//!   direction's [`DESKTOP_ONLY`]: a command only a host of the table can need. It is a list
+//!   and not a wrapper nobody calls, because a registered command is one a page can invoke,
+//!   and a wrapper written to satisfy a test is one more of those for nothing.
 //! - **Every command in the table takes exactly the arguments its wrapper takes**, by name and in
 //!   order — the wrapper's parameters are the wire (`ipc.ts` sends them camelCase, Tauri renames
 //!   them so), so a table entry with another name would answer a host's call with a refusal.
+//!   A table-only command has no wrapper to agree with; its entry is the wire.
 //!
 //! Markus chose the reads first (2026-10-03), and the same day the table came to cover the light
 //! app (phase 4, step 4.2): every write, feed and sync command a light install can answer joined
@@ -61,6 +66,17 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
         "live sync's socket is this host's connection manager",
     ),
 ];
+
+/// Commands the table has that this app does not register and never will, each with the
+/// reason — [`DESKTOP_ONLY`], read from the other side. A host of the table needs them and
+/// this one does not, so there is no wrapper, and a page here that invoked one would be told
+/// the command does not exist.
+const TABLE_ONLY: &[(&str, &str)] = &[(
+    "card_image_source",
+    "where a card's picture is, for a host whose page fetches pictures itself — a web \
+     host's service worker. This app's `mtgimg://` handler asks the image cache, which \
+     resolves, fetches and stores in one call (`images::answer`)",
+)];
 
 /// Commands a light host could answer one day that the table does not have yet — and since the
 /// table came to cover the light app (phase 4, step 4.2, 2026-10-03), each group here says what
@@ -226,38 +242,134 @@ fn wrapper_args(sources: &[String], name: &str) -> Vec<(String, String)> {
     found.remove(0)
 }
 
-#[test]
-fn every_registered_command_is_in_the_table_or_on_one_list() {
+/// The four lists and what the app registers, as the placement rules read them.
+struct Lists<'a> {
+    table: &'a [&'a str],
+    desktop_only: &'a [&'a str],
+    not_yet: &'a [&'a str],
+    table_only: &'a [&'a str],
+    registered: &'a BTreeSet<String>,
+}
+
+/// Everything wrong with where the commands are, one sentence each; empty when every command
+/// is in exactly the place it belongs.
+fn misplaced(lists: &Lists) -> Vec<String> {
     let mut places: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
-    for entry in TABLE {
-        places.entry(entry.name).or_default().push("the table");
+    for name in lists.table {
+        places.entry(name).or_default().push("the table");
     }
-    for (name, _) in DESKTOP_ONLY {
+    for name in lists.desktop_only {
         places.entry(name).or_default().push("DESKTOP_ONLY");
     }
-    for name in NOT_YET {
+    for name in lists.not_yet {
         places.entry(name).or_default().push("NOT_YET");
     }
-    let registered = registered();
-    let unplaced: Vec<_> = registered
+    let mut wrong = Vec::new();
+    for name in lists.registered {
+        if !places.contains_key(name.as_str()) {
+            wrong.push(format!(
+                "{name}: registered by generate_handler! and in neither the core's table nor \
+                 a list here — decide which"
+            ));
+        }
+    }
+    for (name, at) in &places {
+        if at.len() > 1 {
+            wrong.push(format!("{name}: in more than one place: {at:?}"));
+        }
+        if !lists.registered.contains(*name) && !lists.table_only.contains(name) {
+            wrong.push(format!(
+                "{name}: named in {at:?} and not a command this app registers — a stale \
+                 entry, or a command for TABLE_ONLY with its reason"
+            ));
+        }
+    }
+    for name in lists.table_only {
+        if !lists.table.contains(name) {
+            wrong.push(format!("{name}: on TABLE_ONLY and not in the table"));
+        }
+        if lists.registered.contains(*name) {
+            wrong.push(format!(
+                "{name}: on TABLE_ONLY and registered by generate_handler! — it has a \
+                 wrapper, so it is an ordinary table command"
+            ));
+        }
+    }
+    wrong
+}
+
+#[test]
+fn every_registered_command_is_in_the_table_or_on_one_list() {
+    let table: Vec<&str> = TABLE.iter().map(|entry| entry.name).collect();
+    let desktop_only: Vec<&str> = DESKTOP_ONLY.iter().map(|(name, _)| *name).collect();
+    let table_only: Vec<&str> = TABLE_ONLY.iter().map(|(name, _)| *name).collect();
+    let wrong = misplaced(&Lists {
+        table: &table,
+        desktop_only: &desktop_only,
+        not_yet: NOT_YET,
+        table_only: &table_only,
+        registered: &registered(),
+    });
+    assert!(wrong.is_empty(), "{wrong:#?}");
+}
+
+/// **The rules above, each seen to refuse** — over lists made up for it, because the real ones
+/// are in order and so show only that nothing is wrong. Both directions of the table-only
+/// exception: a table command with no wrapper is refused until it is listed, and a listed one
+/// is refused once it has a wrapper or has left the table.
+#[test]
+fn a_command_in_the_wrong_place_is_named() {
+    let registered: BTreeSet<String> = ["both", "desktop", "later"]
         .iter()
-        .filter(|name| !places.contains_key(name.as_str()))
+        .map(|name| name.to_string())
         .collect();
-    assert!(
-        unplaced.is_empty(),
-        "registered by generate_handler! and in neither the core's table nor a list here — \
-         decide which: {unplaced:?}"
-    );
-    let twice: Vec<_> = places.iter().filter(|(_, at)| at.len() > 1).collect();
-    assert!(twice.is_empty(), "in more than one place: {twice:?}");
-    let stale: Vec<_> = places
-        .keys()
-        .filter(|name| !registered.contains(**name))
-        .collect();
-    assert!(
-        stale.is_empty(),
-        "named here or in the table, and not a command this app registers: {stale:?}"
-    );
+    let lists = |table: &'static [&'static str], table_only: &'static [&'static str]| {
+        misplaced(&Lists {
+            table,
+            desktop_only: &["desktop"],
+            not_yet: &["later"],
+            table_only,
+            registered: &registered,
+        })
+    };
+    assert_eq!(lists(&["both", "web"], &["web"]), Vec::<String>::new());
+
+    // In the table, registered by nobody, and on no list: stale until somebody says why.
+    let unlisted = lists(&["both", "web"], &[]);
+    assert_eq!(unlisted.len(), 1, "{unlisted:?}");
+    assert!(unlisted[0].starts_with("web: "), "{unlisted:?}");
+    assert!(unlisted[0].contains("TABLE_ONLY"), "{unlisted:?}");
+
+    // Listed as table-only, and gone from the table.
+    let gone = lists(&["both"], &["web"]);
+    assert_eq!(gone, ["web: on TABLE_ONLY and not in the table"]);
+
+    // Listed as table-only, and the app registers it after all.
+    let wrapped = lists(&["both"], &["both"]);
+    assert_eq!(wrapped.len(), 1, "{wrapped:?}");
+    assert!(wrapped[0].starts_with("both: on TABLE_ONLY and registered"));
+
+    // The three rules that were already here.
+    let unplaced = lists(&["web"], &["web"]);
+    assert_eq!(unplaced.len(), 1, "{unplaced:?}");
+    assert!(unplaced[0].starts_with("both: registered"), "{unplaced:?}");
+    let twice = lists(&["both", "desktop", "web"], &["web"]);
+    assert_eq!(twice.len(), 1, "{twice:?}");
+    assert!(twice[0].starts_with("desktop: in more than one place"));
+}
+
+/// A table-only command has no wrapper in this crate — registered or not. One written and
+/// left out of `generate_handler!` would be dead code that reads as a command.
+#[test]
+fn a_table_only_command_has_no_wrapper_here() {
+    let sources = sources();
+    for (name, _) in TABLE_ONLY {
+        let needle = format!("fn {name}(");
+        assert!(
+            !sources.iter().any(|text| text.contains(&needle)),
+            "{name} is on TABLE_ONLY and this crate defines a function of that name"
+        );
+    }
 }
 
 /// **By name, in order, and by type.** The names are the wire; the types are what the wire is
@@ -269,6 +381,8 @@ fn every_command_in_the_table_takes_its_wrappers_arguments() {
     let sources = sources();
     let mismatched: Vec<_> = TABLE
         .iter()
+        // A table-only command has no wrapper to compare with: its entry is the wire.
+        .filter(|entry| !TABLE_ONLY.iter().any(|(name, _)| *name == entry.name))
         .filter_map(|entry| {
             let wrapper = wrapper_args(&sources, entry.name);
             let table: Vec<_> = entry
@@ -304,4 +418,5 @@ fn a_type_is_compared_on_what_it_names_and_not_where_from() {
 #[test]
 fn every_desktop_only_command_says_why() {
     assert!(DESKTOP_ONLY.iter().all(|(_, why)| !why.trim().is_empty()));
+    assert!(TABLE_ONLY.iter().all(|(_, why)| !why.trim().is_empty()));
 }

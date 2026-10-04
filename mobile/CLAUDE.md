@@ -54,8 +54,11 @@ date, the build and the width of each figure.
   that covers a controlled input and the note editor alike.
 - **`FaceBoundary` stands between a face that threw and a blank page**, keyed by the face so a
   failure in one does not follow the reader into the other. A lazy chunk that never arrives —
-  offline, or a deploy that renamed it before a resize crossed the floor — is the ordinary way
-  to need it.
+  offline, on a host that keeps no copy of the build — is the ordinary way to need it. **A
+  deploy that renamed the chunks is no longer one on the web host** (step 5.3): the page's own
+  build is precached whole under its own name and served to it until the reader takes the
+  update. Its way out is the host's waiting build when the host says one is waiting
+  (`useHostUpdate`), and the reload otherwise.
 
 ## Nothing here asks where it is running
 
@@ -284,10 +287,10 @@ failure behind each at its own site:
 | `npm run mobile:build` | — | `tsc`, then the bundle into `dist-mobile/` |
 | `npm run mobile:android` | **The light app's Android host** (`src-tauri/` here) and its own data folder on the device | `tauri android dev` on a phone over `adb` — needs JDK 21, the Android SDK and NDK, which no machine of this repo's has yet; CI's `android` job builds the APK instead |
 | `npm run web:wasm` | — | The engine as a WASM module into `dist-wasm/` (`scripts/build-wasm.mjs`). Needs clang 18 or newer and the `wasm-bindgen` CLI at the version `Cargo.lock` resolves; minutes, cold. **Run it before any of the three below** |
-| `npm run web:dev` | **The web host**: the real engine in a Worker, its databases in this browser's OPFS | The web app in a browser on port 5176 — driven in Chrome only so far. No Rust process, **no lock**. A `web:wasm` beside a running server is picked up by a reload |
-| `npm run web:build` | — | `tsc`, the Worker's own `tsc` program, then the bundle into `dist-web/` with the engine under `wasm/<build id>/`. Fails, in a sentence, when `dist-wasm/` is not built |
-| `npm run web:preview` | The same engine, from `dist-web/` | The built app on port 4176, where a missing file is a 404 as on a real host |
-| `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP as an **offline first run**: every request the engine makes is answered from `scripts/web-smoke/`, and nine checks run over it — the card sync, the feeds, the picker and a second tab's refusal among them. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
+| `npm run web:dev` | **The web host**: the real engine in a Worker, its databases in this browser's OPFS | The web app in a browser on port 5176 — driven in Chrome only so far. No Rust process, **no lock**. A `web:wasm` beside a running server is picked up by a reload. **Registers no service worker, so it draws no card picture** — `web:preview` does |
+| `npm run web:build` | — | `tsc`, the Worker's and the service worker's own `tsc` programs, then the bundle into `dist-web/` with the engine under `wasm/<build id>/` — and last, `sw.js` at its root, built from the list of what was just written. Fails, in a sentence, when `dist-wasm/` is not built |
+| `npm run web:preview` | The same engine, from `dist-web/` | The built app on port 4176, where a missing file is a 404 as on a real host, every response carries what the hosting's `_headers` gives its address — the Content-Security-Policy on `sw.js` and the Worker's chunk among them — and `sw.js` is served `no-cache`. **The one command here that runs the service worker**: pictures, the offline shell, the update bar — and the one that enforces the policy |
+| `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP as an **offline first run**: every request the engine and the service worker make is answered from `scripts/web-smoke/`, and the checks in the script's header run over it — the card sync, the feeds, the picker, a card picture, a reload with the server gone, a waiting build and its press, and a second tab's refusal among them. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
 
 - **`mobile:tauri` is the desktop binary with a config overlay** (`src-tauri/tauri.light.conf.json`):
   it **takes the `app` lock** and reads `src-tauri/target/debug/data`. Read the `running-the-app`
@@ -303,8 +306,9 @@ failure behind each at its own site:
   the Android host's `tauri-build` reads `dist-mobile/`), and CI's `android` job bundles it into
   the APK. CI's `rust` job stubs `dist-mobile/index.html` instead, as it stubs `dist/`.
 - **`verify` does not build the web app.** Its `npm run build` type-checks the Worker's program
-  (`tsc -p tsconfig.web-worker.json`) and `cargo test --workspace` runs the web host's native
-  tests; the module, `dist-web/` and the smoke run are CI's `web` job, and yours by hand.
+  and the service worker's (`tsc -p tsconfig.web-worker.json`, `tsc -p tsconfig.web-sw.json`)
+  and `cargo test --workspace` runs the web host's native tests; the module, `dist-web/`, its
+  `sw.js` and the smoke run are CI's `web` job, and yours by hand.
 
 ## Tests
 
@@ -371,12 +375,13 @@ failure behind each at its own site:
   stats band's writes.
 - **The web host opens its database, answers commands and builds its corpus** (phase 5, steps
   5.1 and 5.2, 2026-10-04 — *The web host* below): the launch's downloads run in a browser, so
-  a web install has cards after its first run. **It draws no card picture yet** — every tile
-  shows the card's name and a retry — and **there is no service worker**: the manifest and its
-  icons are the whole of the PWA so far (`mobile/public/`, the light builds' own public directory
-  since step 5.4, so no other build carries them; `scripts/light-icons.mjs` renders the icons
-  from the mark, and **there is no install button**: a browser's own install UI is the install).
-  Nothing is hosted.
+  a web install has cards after its first run. **Its service worker is built** (step 5.3 —
+  *The web host* below): the shell precached, card pictures answered on the app's own origin
+  from Cache Storage, and a newer build held until the reader takes it. **The manifest and its
+  icons** are in `mobile/public/`, the light builds' own public directory since step 5.4, so no
+  other build carries them; `scripts/light-icons.mjs` renders the icons from the mark, and
+  **there is no install button**: a browser's own install UI is the install. **Nothing is deployed**: the
+  hosting Worker and its policy are source in `app-worker/` (step 5.5's first half).
 - **No device sync on a light install**: the phone face pairs with nothing. **It does hear the
   host's card sync and the feeds** — `phone/cardData.ts`'s `useCardDataWatch`, mounted once in
   `PhoneFace`, runs the desktop shell's own listeners (`useSyncInvalidation`, the feed hooks) and
@@ -524,8 +529,37 @@ built in the `web` mode.
   each feed in turn, on every launch, and one first run against the real hosts is measured in
   [light-app.md](../docs/reference/light-app.md) §9.2. **Not there yet**, each with the step
   that owns it in [the plan](../docs/superpowers/plans/2026-10-04-light-app-phase-5.md): no
-  card picture and no service worker (5.3); no deploy — the hosting Worker is built and nothing
-  is at the address (5.5, §9.5); no sync (phase 6).
+  deploy — the hosting Worker is built and nothing is at the address, and the step's second half
+  (the module's size with timings, CI's smoke run under the policy, the phase's end-to-end run)
+  is not done (5.5, §9.5); no sync (phase 6).
+- **The service worker is the web host's, and nothing here names it** (step 5.3;
+  `src/lib/core/web/sw/`, registered by the page's half of the web core in a built app and
+  never by the dev server). What a page sees of it is three things, each through the seam:
+  - **A card picture's address is the app's own origin** — `src/lib/images.ts`'s `imageOrigin`
+    answers `<origin>/mtgimg` in the `web` build, by the build's mode, so no call site
+    changed. The worker answers it from Cache Storage, asking the engine where the picture is
+    *through the page* (`card_image_source`; a service worker cannot reach the database
+    Worker). A refusal is the desktop protocol's — 502, 503, 404 — so `useImageRetry` and
+    `CardImage`'s watchdog heal it as they heal the desktop's. **Only a raster image is ever
+    kept or served there** — a 200 that declares anything else, or has no bytes, is a 502 —
+    and the address answers an `<img>` or a script, never a navigation.
+  - **A newer build waits, and the host says so.** `UpdateNotice.tsx`, which `LightApp` mounts
+    beside the faces, asks `host_update` and listens for `host-update:changed`
+    (`src/lib/core/hostUpdate.ts`), and draws only an answer, in the host's words —
+    `StorageNotice`'s arrangement. Only its press (`host_update_apply`) tells the waiting
+    build to take over; a reload does not, and a second tab does not. The Android host and
+    the desktop refuse the names, which is nothing to draw. **These are not the desktop's
+    `update_status` and `update_apply`**, which are its own updater's. The bar is drawn on
+    `LAYER.header` — under any menu, picker or dialog a reader opened — and its *Not now*
+    puts it away until the host next says a build is waiting, or the next load; the press is
+    refused in a sentence when nothing waits, and only the page that holds the database
+    starts again when the new build takes over.
+  - **Settings' *Clear cache* empties the pictures.** The web core answers `cache_clear` on
+    the page, from Cache Storage, in the shape the panel already reads; no panel was forked.
+  - **A first visit is claimed, not reloaded**: the worker takes the open page over when it
+    first activates, and a picture asked for before that is a 404 the frame's retry heals.
+    **A hard reload starts a page no worker controls**, by the browser's own rule; the page
+    asks the active worker to take it, and it does (driven in Chrome, 2026-10-04).
 - **The web build is served under `style-src 'self'`, as the desktop is** (step 5.5): the
   hosting's `_headers` sends the desktop's policy with what a browser adds, so the rule
   [`src/CLAUDE.md`](../src/CLAUDE.md) states for the shipped window — **no runtime `<style>`**,
