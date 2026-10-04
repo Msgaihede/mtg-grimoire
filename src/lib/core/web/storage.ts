@@ -282,6 +282,16 @@ export const CLEARED_TITLE = "Your browser cleared MTG Grimoire's saved data";
  * the card download by itself, so a silent app would look like a first run that is simply slow —
  * and a reader would go on waiting for a collection the download was never going to bring back.
  * It says so plainly, and names the one way back there is: a file they exported.
+ *
+ * **The fourth is about a place in a pairing group, and it is an *if*** (the light-app spec §7:
+ * "Clearing site data mints a new device and spends a slot"). A browser's device identity and
+ * its keys were rows of the database that went, so the app has opened on a new identity — and if
+ * the old one was paired, it is still on the roster of every other device in its group, counted
+ * against the group's five, until one of them removes it. **This page cannot know whether it
+ * was**: the only record that it was paired is the record that was cleared, and the mark that
+ * outlives the database (`HELD_KEY`) says a database was held and nothing about what was in it.
+ * So the sentence is conditional, and it names where the press is rather than promising there
+ * is something to press. Last, because it is the one of the four most readers have no use for.
  */
 export const CLEARED_LINES: readonly string[] = [
   "Browsers can remove what a site has stored — when the device runs low on space, or when the " +
@@ -290,7 +300,40 @@ export const CLEARED_LINES: readonly string[] = [
   "Anything you had added in this browser — your collection, wishlist and decks — was removed " +
     "with it, and this browser has nothing to restore it from. If you exported them, you can " +
     "import those files again.",
+  "If this browser was paired with your other devices, it is a new device now, and its old " +
+    "entry still counts toward the group's five. Remove the old entry in Settings, under Sync, " +
+    "on one of the others, then pair this browser again.",
 ];
+
+/**
+ * What a browser that is in a pairing group is told about its own storage, **before** anything
+ * clears it — the web host's answer to `storage_group_warning` (`../hostStorage.ts`), and the
+ * other half of {@link CLEARED_LINES}' last paragraph: that one speaks after the storage has
+ * gone and can only say *if*; this one stands in the Sync panel, under the roster, while there
+ * is still a group to leave.
+ *
+ * **The press it warns about is not in the app.** A device's identity and its keys are rows of
+ * `user.db`, and no command the app has deletes them — every clear on the Settings page was read
+ * for it on 2026-10-04 (`reset.rs` names the collection, the wishlist, the decks and the picture
+ * cache, and nothing of `sync_identity` or `sync_group`; *Leave group* is the one press that
+ * touches the group, and it is the cure). What deletes them is the browser's own *clear site
+ * data*. So there is no dialog for the sentence to live in, and it stands instead.
+ *
+ * **Here, with the host, because the words are a browser's**: "this browser", "site data".
+ * Another host whose storage can be cleared from outside the app — a phone's system settings —
+ * would answer the same name with its own, and the panel that draws this knows only that it was
+ * handed a sentence.
+ *
+ * **Two sentences, because it stands on a phone.** It opened with a third — where the identity
+ * is kept — and at a 360px window the three ran to seven lines of the panel for something most
+ * readers never do. What is left is the consequence and the two ways out, in the order they cost
+ * least: leaving first frees the place at once and needs nothing from another device; removing
+ * the old entry afterwards is what is left to a reader who has already cleared. Five lines there.
+ */
+export const SITE_DATA_WARNING =
+  "Clearing this browser's site data makes it a new device, and the old entry still counts " +
+  "toward the group's five until it is removed. Leave the group here first, or remove the old " +
+  "entry from another device afterwards.";
 
 /**
  * The console's line for the same thing, where a bug report can carry it. What the open then

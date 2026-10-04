@@ -7,7 +7,7 @@ import { FOCUS } from "@/lib/focus";
 import { labelFgCss } from "@/lib/hexColor";
 import { MARK_COLOR_DEFAULTS, useMarkColors, type MarkColorKey } from "@/lib/useMarkColors";
 import { cn } from "@/lib/utils";
-import { BUTTON } from "./controls";
+import { PANEL_BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /**
@@ -166,7 +166,7 @@ export function TheoryMarksPanel(): JSX.Element {
                       aria-disabled={untouched || undefined}
                       aria-label={`Reset the ${mark.noun} to its default color`}
                       className={cn(
-                        BUTTON,
+                        PANEL_BUTTON,
                         "border-border hover:bg-bg",
                         "aria-disabled:cursor-not-allowed aria-disabled:opacity-50",
                         "aria-disabled:hover:bg-transparent aria-disabled:active:scale-100",

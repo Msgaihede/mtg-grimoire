@@ -47,7 +47,10 @@ it says `tags: ["autodocs"]`.
   handler exists for a command Rust no longer registers. Commands deliberately left unimplemented must be
   declared with an explicit reason in the `ABSENT` map.
 - **The fake is shared with `npm run mobile:dev`** (`vite.mobile.config.ts`, port 5175): Both configs import
-  `fake/aliases.ts`, ensuring web and mobile mock behaviors stay identical.
+  `fake/aliases.ts`, ensuring web and mobile mock behaviors stay identical. **`?seed=` and `?fault=` in that
+  server's address are a story's `parameters.fake`** (`mobile/fakeBoot.ts`, read once before React), so a state
+  a story reaches by seed or fault — `/settings?seed=paired&fault=lentStorage` — can be stood behind the whole
+  light app at a phone's width; with no query it is the `starter` world.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because **`ownedQuantity`
   means three different things on three DTOs**: every copy of one printing and finish-blind on
   `CardSummary`; the copies filling one wish and finish-**aware** on `WishRow`; and on `DeckCard`

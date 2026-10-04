@@ -4,7 +4,7 @@ import type { JSX } from "react";
 import { ipc, ipcError, type ReviewRow, type ReviewTable } from "@/lib/ipc";
 import { RELAY_KEY, REVIEW_KEY } from "@/lib/query";
 import { cn } from "@/lib/utils";
-import { BUTTON } from "./controls";
+import { PANEL_BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /**
@@ -141,7 +141,7 @@ function Row({
           onClick={onClear}
           disabled={pending}
           aria-label={`Looks fine, ${row.title}`}
-          className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
+          className={cn(PANEL_BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
         >
           <Check aria-hidden="true" className="size-3.5" />
           Looks fine

@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type JSX, type ReactNode } from "re
 import { Dialog } from "@/components/Dialog";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { BUTTON } from "./controls";
+import { PANEL_BUTTON, TOUCH_FIELD, TOUCH_FLOOR } from "./controls";
 
 /**
  * The word a reader has to type out before an irreversible clear will run.
@@ -181,6 +181,10 @@ function Body({
             spellCheck={false}
             className={cn(
               "w-full rounded-md border border-border bg-bg px-2 py-1.5",
+              // This box takes the caret as the dialog opens, so on a phone a 14px one zooms
+              // the page on a press that only asked a question.
+              TOUCH_FIELD,
+              TOUCH_FLOOR,
               "disabled:cursor-not-allowed disabled:opacity-50",
               FOCUS,
             )}
@@ -189,7 +193,7 @@ function Body({
       )}
 
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onDismiss} disabled={pending} className={BUTTON}>
+        <button type="button" onClick={onDismiss} disabled={pending} className={PANEL_BUTTON}>
           Cancel
         </button>
         <button
@@ -201,7 +205,7 @@ function Body({
           // answer disagreeing with both the greying and the refusal.
           disabled={!armed || pending}
           className={cn(
-            BUTTON,
+            PANEL_BUTTON,
             "border-destructive text-destructive",
             "transition-colors duration-150 hover:bg-destructive hover:text-bg",
             "disabled:hover:bg-transparent disabled:hover:text-destructive",

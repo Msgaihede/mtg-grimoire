@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
@@ -65,10 +65,25 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 /** The clipboard is the operating system's, and jsdom has nothing behind Tauri's `invoke`. */
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn().mockResolvedValue(undefined) }));
 
+/**
+ * **The host, under `@/lib/core`** — the one thing the panel asks that is not a command of the
+ * engine's. `storage_group_warning` is answered, with a sentence, by a host whose storage can be
+ * cleared from outside the app and refused, by name, by every host that owns its folder; the
+ * panel draws the sentence it is handed and has none of its own. Every `ipc.*` call above is a
+ * stub, so this `invoke` is reached by that one question and nothing else.
+ */
+const hostInvoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tauri-apps/api/core")>()),
+  invoke: hostInvoke,
+}));
+
 // `supporterState` moved to `@/lib/query` when the collection cabinet's Share control became its
 // second reader — see that file's note above `SUPPORTER_KEY`. The cases below are unchanged;
 // only where the function is declared moved.
+import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
 import { supporterState } from "@/lib/query";
+import { TOUCH_CODE_ROOM, TOUCH_FIELD, TOUCH_FLOOR } from "./controls";
 import {
   LEAVE_WARNING,
   REMOVAL_WARNING,
@@ -290,6 +305,8 @@ beforeEach(() => {
   // `liveNote` says nothing about: a test that wants `"offline"` drives it with `onSyncLive`'s
   // captured callback instead of restating the seed.
   syncLiveState.mockReset().mockResolvedValue("off");
+  // A desktop, which is what every test above was written against: the host has no such command.
+  hostInvoke.mockReset().mockRejectedValue("Command storage_group_warning not found");
 });
 
 describe("SyncPanel", () => {
@@ -346,6 +363,12 @@ describe("SyncPanel", () => {
     const group = pill.parentElement as HTMLElement;
     expect(group.classList.contains("flex-1")).toBe(true);
     expect(group.classList.contains("min-w-0")).toBe(true);
+    // In a narrow roster the group starts from its name's own width, which is what lets a
+    // phone-width row wrap its presses under a long name instead of squeezing it to eleven
+    // characters. The roster is the container the question is asked of. jsdom lays nothing out;
+    // the wrap itself was measured in a browser at 360 and 412px.
+    expect(group.classList.contains("@max-sm:flex-auto")).toBe(true);
+    expect(group.closest("ul")?.classList.contains("@container")).toBe(true);
     expect(within(group).queryByRole("button")).toBeNull();
 
     const name = within(group).getByText("Desk");
@@ -786,6 +809,157 @@ describe("leaving the group", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/not in a pairing group/i);
     // Refused, so the reader is still where they were and can press again.
     expect(screen.getByRole("button", { name: "Leave group" })).toBeInTheDocument();
+  });
+});
+
+/**
+ * **The warning before anything that clears site data** — the light-app spec §7: *"Clearing site
+ * data mints a new device and spends a slot. The panel says so before a reader presses anything
+ * that would."*
+ *
+ * The press is the host's and not the app's, so there is no dialog to put the sentence in: it
+ * stands in the devices half for as long as both things are true — the host has something to say
+ * (`storage_group_warning`, a name only a host whose storage can be cleared from outside the app
+ * answers), and this device is in a group.
+ *
+ * **The words are the host's, and the panel has none of its own.** Every test below hands the
+ * panel a sentence no host ships, so a panel that drew a wording it kept for itself — or decided
+ * from the *kind* of answer what kind of host it was on, which is how this shipped for one
+ * commit — fails on the text.
+ */
+describe("what the host says to a paired device about its storage", () => {
+  /** Not the web host's sentence, on purpose: the comment over this describe says why. */
+  const SAID = "Clearing this app's storage in the system settings makes it a new device.";
+
+  /** A host that answers `storage_group_warning` with `answer`, and refuses every other name. */
+  const host = (answer: unknown) =>
+    hostInvoke.mockImplementation((command: string) =>
+      command === "storage_group_warning"
+        ? Promise.resolve(answer)
+        : Promise.reject(`Command ${command} not found`),
+    );
+  const asked = () => expect(hostInvoke).toHaveBeenCalledWith("storage_group_warning");
+  /**
+   * Long enough for an answer the host has already given to have reached the screen. An absence
+   * asserted the instant a promise settles is asserted before the query has told React — and
+   * would pass over a panel that draws the sentence a frame later.
+   */
+  const drawn = () => act(() => new Promise<void>((settled) => setTimeout(settled, 50)));
+
+  it("draws the host's own sentence for a device that is in a group", async () => {
+    host(SAID);
+    render(<SyncPanel />, { wrapper: paired });
+
+    const warning = await screen.findByText(SAID);
+    // A standing paragraph, not an alarm: nothing has gone wrong.
+    expect(warning).not.toHaveAttribute("role");
+    expect(warning.tagName).toBe("P");
+    // And nothing of a browser's wording beside it: the panel keeps no sentence of its own.
+    expect(screen.queryByText(/site data/i)).not.toBeInTheDocument();
+  });
+
+  /** The web host's answer, drawn word for word — the sentence a paired browser reads. */
+  it("draws the web host's sentence as that host words it", async () => {
+    host(SITE_DATA_WARNING);
+    render(<SyncPanel />, { wrapper: paired });
+    expect(await screen.findByText(SITE_DATA_WARNING)).toBeInTheDocument();
+  });
+
+  /**
+   * Under the roster it is about and above the row *Leave group* is in. Below the buttons it
+   * would be read after the press that is the way out had been passed.
+   */
+  it("stands between the roster and the Leave group press", async () => {
+    host(SAID);
+    render(<SyncPanel />, { wrapper: paired });
+
+    const warning = await screen.findByText(SAID);
+    const roster = screen.getByRole("list");
+    const leave = screen.getByRole("button", { name: "Leave group" });
+    expect(roster.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(warning.compareDocumentPosition(leave) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /** Asked once and kept: the answer is the host's and cannot change while the page lives. */
+  it("asks the host once, however often the panel draws", async () => {
+    host(SAID);
+    const { rerender } = render(<SyncPanel />, { wrapper: paired });
+    await screen.findByText(SAID);
+    rerender(<SyncPanel />);
+    await drawn();
+    expect(
+      hostInvoke.mock.calls.filter(([command]) => command === "storage_group_warning"),
+    ).toHaveLength(1);
+  });
+
+  /**
+   * A desktop and a phone keep their database in a folder that is theirs, and refuse the name.
+   * **Silently**: the refusal is nothing to draw — no sentence, and no alert about the asking.
+   */
+  it("says nothing, and reports nothing, on a host that refuses the name", async () => {
+    render(<SyncPanel />, { wrapper: paired });
+
+    await screen.findByText("Phone");
+    await waitFor(asked);
+    await expect(hostInvoke.mock.results[0].value).rejects.toMatch(/not found/);
+    // The refusal has been heard and drawn from by now; anything it caused would be on screen.
+    await drawn();
+    expect(screen.queryByText(/new device/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **An answer that is not a sentence is not one to draw.** The host's other storage name
+   * answers a record or `null`, and for one commit any answer at all was read as "this is a
+   * browser". A host that says `null` has nothing to say; one that answers something else is not
+   * one to put words in the mouth of.
+   */
+  it.each([
+    ["nothing", null],
+    ["an empty sentence", "   "],
+    ["a record instead of a sentence", { askedAt: null, granted: false }],
+    ["a yes", true],
+  ])("draws nothing for a host that answers %s", async (_what, answer) => {
+    host(answer);
+    render(<SyncPanel />, { wrapper: paired });
+
+    await screen.findByText("Phone");
+    await waitFor(asked);
+    await drawn();
+    const roster = screen.getByRole("list");
+    // Straight from the roster to the row of presses, with no paragraph between them.
+    expect(roster.nextElementSibling?.tagName).toBe("DIV");
+    expect(roster.nextElementSibling).toContainElement(
+      screen.getByRole("button", { name: "Leave group" }),
+    );
+  });
+
+  /** A device in no group has no place to lose, and a warning there teaches a reader who has
+   *  paired nothing that there is something to worry about. */
+  it("says nothing to a device that is in no group, whatever the host says", async () => {
+    host(SAID);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByRole("button", { name: /pair a device/i });
+    await waitFor(asked);
+    await expect(hostInvoke.mock.results[0].value).resolves.toBe(SAID);
+    await drawn();
+    expect(screen.queryByText(SAID)).not.toBeInTheDocument();
+  });
+
+  /** The way out, taken: the sentence goes with the group it was about. */
+  it("stops saying it once this device has left the group", async () => {
+    host(SAID);
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: paired });
+    await screen.findByText(SAID);
+
+    syncPairingStatus.mockResolvedValue({ ...UNPAIRED, deviceName: "Desk" });
+    await user.click(screen.getByRole("button", { name: "Leave group" }));
+    await user.click(screen.getByRole("button", { name: "Leave the group" }));
+
+    expect(await screen.findByText(/not paired yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(SAID)).not.toBeInTheDocument();
   });
 });
 
@@ -1537,5 +1711,109 @@ describe("a freshly paired device can reach the sync that entitles it", () => {
 
     await screen.findByText(/not paired yet/i);
     expect(screen.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
+  });
+});
+
+/**
+ * **The panel under a finger** — the light app's phone face draws this panel, and what makes it
+ * usable there is classes nothing else in this file would miss: take the floor off a button or
+ * the 16px type off a box and every test above stays green.
+ *
+ * Class pins on the elements as drawn, `FilterChips.test.tsx`'s way and for its reasons:
+ * `classList.contains`, never a substring, and on the rendered element rather than on a constant
+ * — a class `cn`'s merge dropped is missing here. jsdom applies no media query, so none of this
+ * is a pixel; `controls.test.ts` compiles each utility, and the sizes were measured in a browser
+ * under a touch pointer (`scripts/pairing-scan-smoke.mjs` takes two of them again).
+ */
+describe("the panel under a finger", () => {
+  const VIEWFINDER = "w-[min(16rem,50dvh)]";
+
+  it("puts the touch floor on every press of a paired panel", async () => {
+    // A group on the relay's side too, so *Sync now* is drawn beside the rest.
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    render(<SyncPanel />, { wrapper: paired });
+    await screen.findByText("Phone");
+    await screen.findByRole("button", { name: /connect patreon/i });
+    await screen.findByRole("button", { name: /sync now/i });
+
+    const presses = screen.getAllByRole("button");
+    // A sweep over nothing is a green test over an unswept panel: two Renames, one Remove, the
+    // four presses of the idle row, Connect Patreon, Connect and Sync now.
+    expect(presses).toHaveLength(10);
+    for (const press of presses) {
+      expect(press.classList.contains(TOUCH_FLOOR), press.textContent ?? "").toBe(true);
+    }
+  });
+
+  it("types a device's name at 16px in a box a finger can hit", async () => {
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: paired });
+
+    await user.click((await screen.findAllByRole("button", { name: "Rename" }))[0]);
+    const box = screen.getByLabelText(/name for desk/i);
+    expect(box.classList.contains(TOUCH_FIELD)).toBe(true);
+    expect(box.classList.contains(TOUCH_FLOOR)).toBe(true);
+  });
+
+  it("types a claim code at 16px in a box a finger can hit", async () => {
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    const box = await screen.findByLabelText(/claim code/i);
+    expect(box.classList.contains(TOUCH_FIELD)).toBe(true);
+    expect(box.classList.contains(TOUCH_FLOOR)).toBe(true);
+  });
+
+  it("gives a pasted pairing code 16px type and room for its lines", async () => {
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /enter a code/i }));
+    const box = await screen.findByLabelText(/code shown on the other device/i);
+    expect(box.classList.contains(TOUCH_FIELD)).toBe(true);
+    expect(box.classList.contains(TOUCH_CODE_ROOM)).toBe(true);
+    for (const name of ["Read the code", "Cancel"]) {
+      expect(screen.getByRole("button", { name }).classList.contains(TOUCH_FLOOR)).toBe(true);
+    }
+  });
+
+  /**
+   * The scanner, on the branch jsdom takes: no `mediaDevices`, so the camera fails and the box to
+   * type into is drawn under a viewfinder that is still there. Both are a phone's: the box for a
+   * finger, the viewfinder capped at half the window's height so a phone held sideways shows it
+   * with its sentence.
+   */
+  it("caps the viewfinder by the window's height, and gives the fallback box a finger's size", async () => {
+    const user = userEvent.setup();
+    const { container } = render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: "Scan a code" }));
+    const box = await screen.findByLabelText(/or type the code/i);
+    expect(box.classList.contains(TOUCH_FIELD)).toBe(true);
+    expect(box.classList.contains(TOUCH_CODE_ROOM)).toBe(true);
+
+    const finder = container.querySelector("video")?.parentElement;
+    expect(finder?.classList.contains(VIEWFINDER)).toBe(true);
+    expect(finder?.classList.contains("max-w-full")).toBe(true);
+    for (const name of ["Use this code", "Cancel"]) {
+      expect(screen.getByRole("button", { name }).classList.contains(TOUCH_FLOOR)).toBe(true);
+    }
+  });
+
+  /** The offer at a phone's width: a picture that gives way to its step, a code with a floor. */
+  it("draws an offer whose QR code fits its step and whose typed code can wrap under it", async () => {
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await user.click(await screen.findByRole("button", { name: /pair a device/i }));
+    const qr = await screen.findByTestId("pairing-qr");
+    expect(qr.classList.contains("max-w-full")).toBe(true);
+    expect(qr.classList.contains("aspect-square")).toBe(true);
+    expect(qr.classList.contains("w-72")).toBe(true);
+    // Never a fixed square again: that is what stood 20px through its frame at 360px.
+    expect(qr.classList.contains("size-72")).toBe(false);
+
+    const code = screen.getByText(OFFER.code);
+    expect(code.classList.contains("min-w-32")).toBe(true);
+    expect(code.classList.contains("flex-1")).toBe(true);
   });
 });

@@ -102,6 +102,7 @@
 import { CARDS, type FakeCard } from "./cards";
 import type { CommandHandler } from "./core";
 import { emitFake } from "./event";
+import { qrMatrix } from "./qr";
 import {
   CURRENT_VERSION,
   NEXT_VERSION,
@@ -1537,6 +1538,17 @@ export interface FakeUpdate {
  * the crate's own comment says the difference between withdrawn and darkened is in the rendered
  * HTML rather than in a code, so an app that claimed to know which had happened would be reading
  * prose.
+ *
+ * **`lentStorage`** is the one entry here that is about the *host* rather than about the
+ * backend, and the only one that adds a command instead of changing an answer. A browser lends
+ * a site its storage and can take it back, so the web app's host answers `storage_group_warning`
+ * (`src/lib/core/hostStorage.ts`) — one sentence, in its own words, for a device that is in a
+ * pairing group — where the desktop and the Android host refuse the name; and the Sync panel
+ * draws whatever sentence a host hands it and nothing on a host that refuses. A story is a
+ * desktop by default: the fake has no such handler, and must not grow one, because
+ * `parity.test.ts` holds this table to the commands `desktop.rs` registers. So the fault is read
+ * in `world.ts`, which puts the one handler over a world's table for the stories that ask to be
+ * a browser, answering the web host's own sentence from where that host keeps it.
  */
 export type Fault =
   | "busy"
@@ -1566,7 +1578,8 @@ export type Fault =
   | "wishGone"
   | "scannerMissing"
   | "scannerElsewhere"
-  | "shareLapsed";
+  | "shareLapsed"
+  | "lentStorage";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -23258,10 +23271,17 @@ export function writeHandlers(db: FakeDb) {
      * **The digits are the whole answer now.** A relay carries this device's own reply onward
      * (§1), so there is nothing left for a reader to copy back by hand — `PairingHandshake`
      * lost the field that used to hold it.
+     *
+     * **A scanned code is a URL, and only its fragment is the code** — `Invite::decode`'s first
+     * step, mirrored: everything up to the last `#` is address. Without it the filter below
+     * folds the relay's hostname into the payload and answers the length refusal about a code
+     * that is perfectly good, which is what this fake said to every scan and to a pasted link
+     * until 2026-10-04.
      */
     sync_pairing_accept: (args: { code: string }): PairingHandshake => {
       refuseIfBusy(db);
-      const cleaned = args.code.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
+      const typed = args.code.slice(args.code.lastIndexOf("#") + 1);
+      const cleaned = typed.replace(/[^0-9A-Za-z]/g, "").toUpperCase();
       if (cleaned.length !== 105) throw refuse(PAIRING_CODE_LENGTH);
       if (!/^[0-9ABCDEFGHJKMNPQRSTVWXYZILO]+$/.test(cleaned)) throw refuse(PAIRING_CODE_ALPHABET);
       const sas = fakeSas(cleaned);
@@ -24450,39 +24470,28 @@ function fakeSas(seedText: string): string {
 }
 
 /**
- * A 21×21 grid of booleans, with the three finder patterns drawn in the corners.
+ * `entitlement::RELAY_BASE`, verbatim — the address an invite's QR is drawn against. A hand copy
+ * of a Rust constant, so `qr.test.ts` reads `entitlement.rs` as text and holds the two equal:
+ * without that, the relay moving would leave every story's QR code pointing at the old address
+ * with nothing red.
+ */
+export const RELAY_BASE = "https://mtg-grimoire-relay.denmark-east.workers.dev";
+
+/**
+ * The invite as a QR code: **the real symbol of a fake invite** — `invite::qr_payload`'s URL
+ * (the relay's `/pair` page, the un-hyphenated code in the fragment), encoded as the crate
+ * encodes it: 162 bytes, version 9 at level M, 53×53.
  *
- * **It is a picture of a QR code and not a readable one**, and that is stated here rather than
- * left to be discovered: the workbench has no encoder, and what a story is checking is the
- * layout around the code — its size, its white ground, the row it shares with the typed form.
- * The finders are drawn because without them the panel's own drawing bug would be invisible: a
- * matrix that came back row-major and was drawn column-major is a symmetric mess either way
- * until something in it has a corner.
+ * **It was a 21×21 picture of a QR code until 2026-10-04**, drawn with three finder patterns and
+ * noise between them, because all a story checked was the layout around it. `qr.ts` has why that
+ * stopped being enough: at a phone's width the question is whether a camera reads what is drawn,
+ * and that has to be asked of the symbol the app ships. What it carries is still not an invite
+ * anybody can join — there is no key in {@link fakeInviteCode}'s characters — but
+ * {@link writeHandlers.sync_pairing_accept} takes it, as the crate's `Invite::decode` takes the
+ * real one, so a story's code can be scanned by a story's scanner.
  */
 function fakeQrMatrix(code: string): QrMatrix {
-  const width = 21;
-  const modules: boolean[] = [];
-  const finder = (x: number, y: number): boolean | null => {
-    for (const [ox, oy] of [
-      [0, 0],
-      [width - 7, 0],
-      [0, width - 7],
-    ]) {
-      const dx = x - ox;
-      const dy = y - oy;
-      if (dx < 0 || dy < 0 || dx > 6 || dy > 6) continue;
-      const ring = Math.max(Math.abs(dx - 3), Math.abs(dy - 3));
-      return ring !== 2;
-    }
-    return null;
-  };
-  for (let y = 0; y < width; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      const inFinder = finder(x, y);
-      modules.push(inFinder ?? fakeHash(`${code}:${x}:${y}`) % 2 === 0);
-    }
-  }
-  return { width, modules };
+  return qrMatrix(`${RELAY_BASE}/pair#${code.replace(/-/g, "")}`);
 }
 
 /* -------------------------------------------------------------------- the scanner ---- */

@@ -21,6 +21,7 @@ import type { SeedName } from "./seeds";
 import { CARDS } from "./cards";
 import { CLOCK_BASE } from "./db";
 import type { FakeDb, FakeDeck, FakeDeckCard, FakeEntry } from "./db";
+import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
 import { useAppStore } from "@/lib/store";
 import { SPECS } from "@/features/decks/validation/fixtures";
 import { validateDeck } from "@/features/decks/validation/engine";
@@ -118,6 +119,21 @@ describe("per-story isolation", () => {
     await expect(
       invoke<EntryChange>("collection_set_quantity", { id: 1, quantity: 1 }),
     ).resolves.toMatchObject({ quantity: 1 });
+  });
+
+  /**
+   * `lentStorage` is the one fault about the *host*: a browser answers `storage_group_warning`
+   * with a sentence of its own, and a desktop — which is what a story is unless it says
+   * otherwise — refuses the name. The handler is put over that one world's table and never into
+   * `allHandlers`, which `parity.test.ts` holds to the commands `desktop.rs` registers.
+   */
+  it("makes a world a browser's for `lentStorage`, and leaves the next one a desktop", async () => {
+    installWorld({ seed: "paired", fault: "lentStorage" });
+    // The web host's own words, from where that host keeps them — not a copy written here.
+    await expect(invoke("storage_group_warning")).resolves.toBe(SITE_DATA_WARNING);
+
+    installWorld({ seed: "paired" });
+    await expect(invoke("storage_group_warning")).rejects.toThrow(/No fake handler registered/);
   });
 
   it("defaults to starter with no fault when a story says nothing", () => {
