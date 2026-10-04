@@ -803,7 +803,8 @@ yet** — there is no corpus in a browser to take one over.
 **The origin is `https://mtg-grimoire.app`** (Markus, 2026-10-04): a domain he bought on
 Cloudflare for it, rather than a `workers.dev` name beside the relay's. Both OPFS databases and
 the install are bound to it, and it is the name the relay's CORS allow-list (§7) will carry.
-Nothing is deployed there. What is left of the list — the corpus that can vanish and
+Nothing is deployed there (it is since 2026-10-04 — the last note of this section). What is
+left of the list — the corpus that can vanish and
 `persist()`, the update flow, hosting — is in the four steps that remain;
 [the plan](../plans/2026-10-04-light-app-phase-5.md) has them and
 [light-app.md](../../reference/light-app.md) §9 is the record.
@@ -928,7 +929,8 @@ The headers are a `_headers` file the web build emits into `dist-web/` and no ot
 `npm run web:preview` sends them, so the policy is met on `localhost` before it is met by a
 reader. **No agent deployed it**, as this section says; the runbook is
 [`app-worker/README.md`](../../../app-worker/README.md), every probe in it is marked not yet
-run, and [light-app.md](../../reference/light-app.md) §9.5 is the record. This is the step's
+run (each run on 2026-10-04, with the deploy — the last note of this section), and
+[light-app.md](../../reference/light-app.md) §9.5 is the record. This is the step's
 first half; the module's size with timings, CI's smoke run under the policy and the phase's
 end-to-end run are the note below — and after them sync, which is phase 6.
 
@@ -969,6 +971,16 @@ desktop face's nine all worked, with a reload offline, a second tab, the update 
 cleared-storage notice. **One browser, one machine, and no phone**:
 [light-app.md](../../reference/light-app.md) §9.6 is the record, with the five things the run
 found and what only the owner can close.
+
+**Deployed 2026-10-04, 12:47 UTC: the web app is at `https://mtg-grimoire.app`.** From `main`
+at `d8c3779b`, by an agent because Markus asked for that deploy in chat — **"no agent
+provisions anything" stands**, and the ask was for one deploy. `wrangler dev --local` first, the
+zone read before it, and then every probe of the runbook at the real address: the policy byte
+for byte on every response that should carry it, the 304 included, and the served document
+equal to the built one. One headless Chrome then made a first run there — 118 470 cards
+searchable at 21.4 s, every feed in at 44.1 s, card pictures drawn, a launch with no network,
+and no policy violation. **Not seen**: a rollback, a second deploy under an open page, any
+other browser, a phone. [light-app.md](../../reference/light-app.md) §9.7 is the record.
 
 ---
 
