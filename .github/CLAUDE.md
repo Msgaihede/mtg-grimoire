@@ -12,6 +12,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - Acts as an aggregator requiring success or deliberate skip across all job dependencies:
     `changes`, `frontend`, `rust`, `core`, `powershell`, `storybook`, `android`, and `web`.
   - `enforce_admins` is `false`: a red PR cannot merge, but direct administrative pushes to `main` remain possible.
+- **CLAUDE.md line budget check**: The `changes` job runs `node scripts/check-claude-md.mjs` before classification, failing CI immediately if any `CLAUDE.md` in the repository grows beyond 200 lines.
 - **Path routing (`changes` job)**:
   - Uses `git diff --name-only --no-renames` (`fetch-depth: 0`) and pipes changed paths to `scripts/ci-route.mjs`.
   - Evaluated using strict `case` semantics: **first match wins**, and `*` crosses `/`.
