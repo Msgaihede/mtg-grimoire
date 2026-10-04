@@ -104,8 +104,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     that same config on every such change.
   - **Four single files and one folder sit above the tree that would otherwise take them**,
     each because that tree's arm does not set `web`: `scripts/build-wasm.mjs`,
-    `scripts/web-smoke.mjs`, `scripts/web-sync-smoke.mjs` (step 6.3, written in the smoke's own
-    harness) and — since step 5.2 — `scripts/web-smoke/*`, the fixtures the smoke
+    `scripts/web-smoke.mjs`, `scripts/web-sync-smoke.mjs` (step 6.3) and — since step 5.2 —
+    `scripts/web-smoke/*`, which holds `harness.mjs`, the module both runs are written in, and
+    the fixtures the smoke
     answers the engine with, above `scripts/*` (which would lint a broken build script and
     never run it; a fixture changed is a first run changed, and nothing but `web` runs it), and
     `.storybook/fake/aliases.ts` above `.storybook/*` — `vite.mobile.config.ts` imports

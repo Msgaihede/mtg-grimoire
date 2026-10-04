@@ -235,6 +235,8 @@ describe("the arms", () => {
     ["scripts/web-smoke.mjs", T, F, F, F, F, F, T],
     ["scripts/web-sync-smoke.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke/default-cards.jsonl", T, F, F, F, F, F, T],
+    // What both browser runs are written in, beside the fixtures it answers from.
+    ["scripts/web-smoke/harness.mjs", T, F, F, F, F, F, T],
     // The release's signing script, which `android` proves on a throwaway key; and the two
     // deploy scripts no job in this gate runs.
     ["scripts/android-sign.sh", T, T, F, F, F, T, F],

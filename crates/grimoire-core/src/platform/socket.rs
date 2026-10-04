@@ -594,6 +594,11 @@ mod imp {
             // whose event is queued behind the timer that brought this call — the Worker was
             // inside a long stretch, or the browser had it frozen — is delivered in a turn of
             // the event loop, and is not missing. No borrow is held across the turn.
+            //
+            // ⚠️ By reasoning, not by a rule: no specification orders a `MessageChannel` turn
+            // after the WebSocket task source, so a `pong` queued during a synchronous stretch
+            // of a whole ping period could still be behind this. The cost is one `Failed` and
+            // a reconnect, on a socket that was fine.
             if self.heard.borrow().unanswered() {
                 crate::platform::timer::yield_to_host().await;
             }

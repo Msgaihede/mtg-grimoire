@@ -5745,7 +5745,7 @@ too*, has the was-and-is table.
   Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`, `ws_origin`. The native arm, on the
   desktop and Android, is `tokio-tungstenite` 0.28 over rustls with the roots compiled in, so a
   phone is asked for no system store; the bearer rides `Authorization`. The browser arm compiles
-  and refuses every `connect`.
+  and refuses every `connect`. (**It opens a real socket since step 6.3 — §10.3.**)
 - **`timer::interval`**, for the 45 s ping and the 250 ms tick: a first tick at once, a late beat
   keeps the grid, a tick dropped mid-wait loses nothing. **Beats missed outright are dropped
   rather than owed**, which parts from tokio's default on purpose: tokio bursts, and after an
@@ -5782,7 +5782,7 @@ kill, neither a hook a request can be awaited in — so the loop's 3 s write deb
 an op that missed it goes with the next launch's first trip.
 
 **The web host does not run it.** It registers no wake and spawns no loop, and `sync_live_state`
-answers `off` there.
+answers `off` there. (**It runs one since step 6.3 — §10.3.**)
 
 **What was tested, natively**: the socket against a loopback listener — the bearer in
 `Authorization`, a text frame, a protocol ping, a 4001 close with its code, a dropped
@@ -5858,12 +5858,16 @@ and `hosting.test.ts` derives the second from `RELAY_BASE` by `ws_origin`'s rule
 rule out of `socket.rs`, and holds `connect-src` to it: every source `https://`, that one
 `wss://` and no other, in no other directive.
 
-**The walk** (`npm run web:sync-smoke`, `scripts/web-sync-smoke.mjs`, in `web-smoke.mjs`'s own
-harness — that file now exports it and runs only when it is the script Node started):
+**The walk** (`npm run web:sync-smoke`, `scripts/web-sync-smoke.mjs`, written in the first
+smoke's harness — the server, the browser and the two fences, which are a module of their own
+now, `scripts/web-smoke/harness.mjs`, so that neither run has to ask whether it is the script
+Node started; the first cut asked, by comparing two spellings of a path, and a run that
+answered *no* would have checked nothing and exited 0):
 
 - **The relay under real workerd**: `wrangler dev --local` (4.146.0) on `relay/wrangler.jsonc`,
-  `--local-protocol https`, with `--var RELAY_HMAC_KEY:<throwaway>` and `--var
-  APP_ORIGINS:<the run's page origin>` and no file. Its D1 is seeded with `schema.sql`, one
+  `--local-protocol https`, with `--var RELAY_HMAC_KEY:<32 random bytes, drawn per run>` and
+  `--var APP_ORIGINS:<the run's page origin>` and no file — the key has no value in the
+  repository, this script included. Its D1 is seeded with `schema.sql`, one
   `entitlements` row and one `claim_codes` row before it starts (`d1 execute --local`), so the
   claim is the real one: the page's claim-code field, the engine, `/claim`, `/token`, the gate.
 - **By the relay's real name**, so the shipped `RELAY_BASE` and the shipped `connect-src` are
@@ -5915,6 +5919,14 @@ upgrade — and makes no request to the relay, which has no fixture there.
   walked into it**: 620 errors on the first `npm run verify` after the walk, none in a file a
   person wrote. The lint ignores `**/.wrangler/` now, as git always did, and the walk removes
   what it made.
+- **A run that is interrupted stops what it started** (review, the same day): Ctrl-C, an
+  uncaught exception and an unhandled rejection each run the orderly stop and leave non-zero,
+  and the process's own `exit` stops every child synchronously — on POSIX the relay is a
+  process group of its own and the whole group is signalled. Seen on Windows, by pid: a run
+  ended mid-walk by a real Ctrl-C (exit 130) and one by a throw from a timer (exit 1) each had
+  36 processes — two workerd, two esbuild, 26 Chrome — and left none, and no state on disk.
+  A run that is itself killed outright (`taskkill /F`, `SIGKILL`) still leaves them: no handler
+  runs.
 - **The desktop face's *Add to wishlist* is greyed until the card's own read answers**, and a
   press on it then is no press. The walk's first measured run pressed it early and waited a
   minute on the other device for a write that was never made; it now presses an enabled

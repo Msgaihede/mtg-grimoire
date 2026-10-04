@@ -46,8 +46,8 @@
 //
 // **One honest difference from production**: the relay's `APP_ORIGINS` is this run's own page
 // origin (`http://localhost:<port>`) where the deployed one says `https://mtg-grimoire.app`.
-// Its signing key is a throwaway value handed over with `--var`, never a file: the repository
-// keeps no secret, a local one included.
+// Its signing key is thirty-two random bytes drawn by each run and handed over with `--var`:
+// `RELAY_HMAC_KEY` has no value in any file of this repository, this one included.
 //
 // **An entitlement without Patreon**: the local D1 is given the relay's schema and two rows — a
 // membership and a claim code for it — before the relay starts. Everything after that is the
@@ -60,13 +60,15 @@
 // and `dev --local`: nothing here reaches Cloudflare.
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   ALERT,
+  atExit,
   browse,
   buttonSaying,
   coreChunk,
@@ -77,7 +79,7 @@ import {
   runAs,
   serve,
   undo,
-} from "./web-smoke.mjs";
+} from "./web-smoke/harness.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 /** Also profile the engine's Worker for a minute, idle, unpaired and then paired. */
@@ -89,8 +91,6 @@ const IDLE_MS = 60_000;
 
 /** The claim code the local D1 is seeded with, as a reader would type it. */
 const CLAIM_CODE = "TEST-CARD-SYNC";
-/** Not a secret: the key of a relay that exists for the length of this run, on this machine. */
-const LOCAL_SIGNING_KEY = "web-sync-smoke-local-key-not-a-secret";
 
 /** The two fixture cards the walk wishes for, one in each direction. */
 const FIRST_WISH = "Rhystic Study";
@@ -138,14 +138,28 @@ function freePort() {
   });
 }
 
-/** Stop a process and everything it started. wrangler's child is workerd, and on Windows a
- *  plain kill of the parent leaves it running with the port and the database files held. */
+/**
+ * Stop a process and everything it started, **synchronously** — it is called from the process's
+ * own `exit` as well as from the orderly stop, and nothing can be awaited there.
+ *
+ * wrangler's child is workerd, which holds the port and the database files, and a plain kill of
+ * the parent leaves it running on either kind of host. On Windows `taskkill /T` walks the tree.
+ * On POSIX the relay is started as the leader of a process group of its own (`detached`), and
+ * the signal goes to the group — `kill(-pid)` — so workerd gets it whether or not wrangler passes
+ * it on. Safe to call twice: a tree that has gone is a `taskkill` that finds nothing, or an
+ * `ESRCH`.
+ */
 function stopTree(child) {
-  if (child.exitCode !== null || child.pid === undefined) return;
+  if (child.pid === undefined) return;
   if (process.platform === "win32") {
+    if (child.exitCode !== null) return;
     spawnSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], { stdio: "ignore" });
-  } else {
-    child.kill("SIGTERM");
+    return;
+  }
+  try {
+    process.kill(-child.pid, "SIGTERM");
+  } catch {
+    // No such group: it has already gone.
   }
 }
 
@@ -168,11 +182,21 @@ async function startRelay(pageOrigin) {
   // not, so whatever is there afterwards that was not there before is this run's, and goes.
   const scratch = join(ROOT, "relay/.wrangler/tmp");
   const before = new Set(existsSync(scratch) ? readdirSync(scratch) : []);
+  const mine = () => [
+    join(ROOT, persist),
+    ...(existsSync(scratch) ? readdirSync(scratch) : [])
+      .filter((entry) => !before.has(entry))
+      .map((entry) => join(scratch, entry)),
+  ];
   undo.push(async () => {
-    await rm(join(ROOT, persist), { recursive: true, force: true, maxRetries: 10 });
-    const left = existsSync(scratch) ? readdirSync(scratch) : [];
-    for (const name of left.filter((entry) => !before.has(entry))) {
-      await rm(join(scratch, name), { recursive: true, force: true, maxRetries: 10 });
+    for (const path of mine()) await rm(path, { recursive: true, force: true, maxRetries: 10 });
+  });
+  // And on the way out by any other road ({@link atExit}): the same, without waiting. Best
+  // effort — workerd may still be letting go of a file, and a directory left behind is ignored
+  // by git and by the lint, where a process left behind holds a port.
+  atExit.push(() => {
+    for (const path of mine()) {
+      rmSync(path, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 });
     }
   });
 
@@ -208,6 +232,12 @@ async function startRelay(pageOrigin) {
 
   const port = await freePort();
   const inspector = await freePort();
+  // **The relay's signing key, made here and kept nowhere.** `RELAY_HMAC_KEY` never has a value
+  // in a file of this repository — a throwaway one included, and this script is such a file —
+  // so each run draws its own, hands it to this one relay on its command line, and forgets it
+  // when the process ends. Nothing else needs to know it: the tokens it signs are minted and
+  // verified by that same relay.
+  const signingKey = randomBytes(32).toString("hex");
   const child = spawn(
     process.execPath,
     [
@@ -227,19 +257,27 @@ async function startRelay(pageOrigin) {
       "--persist-to",
       persist,
       "--var",
-      `RELAY_HMAC_KEY:${LOCAL_SIGNING_KEY}`,
+      `RELAY_HMAC_KEY:${signingKey}`,
       "--var",
       `APP_ORIGINS:${pageOrigin}`,
       "--show-interactive-dev-session=false",
     ],
-    { cwd: ROOT, env, stdio: ["ignore", "pipe", "pipe"] },
+    {
+      cwd: ROOT,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      // A process group of its own where there is such a thing, so the whole tree can be
+      // signalled at once (`stopTree`). Not on Windows, where it would open a console window.
+      detached: process.platform !== "win32",
+    },
   );
-  // Ahead of the state directory's removal on the undo list, so it is stopped first.
+  // Ahead of the state directory's removal on both lists, so it is stopped first.
   undo.push(async () => {
     stopTree(child);
     // workerd lets go of its files a moment after it is told to stop.
     await pause(800);
   });
+  atExit.push(() => stopTree(child));
 
   /** Every request the relay answered, in order: `{ method, path, status, at }`. */
   const log = [];

@@ -178,9 +178,16 @@ a host that moves, and a new address written as a literal, are each a red build.
 one of those hosts**: a page asks it as every other host does — the engine refuses nothing for
 being in a browser — so the policy's entry and the relay's allow-list are one fact in two
 deploys, and **the relay's deploy comes first**: a page that asks a relay with no CORS answers
-fails every request. The policy names `https://` only; the live socket's `wss://` is not in it
-until a browser has opened one. ⚠️ **No build that asks the relay from a page is deployed** — the
-tree is ahead of both hosts. **An address a server sends is not**
+fails every request. **The policy names the relay twice — `https://` for its requests and
+`wss://` for the live socket** — because `connect-src` matches a scheme: measured in headless
+Chrome 154 on 2026-10-04, in a page and in a dedicated Worker alike, a `wss://` socket to a host
+the policy names only as `https://` is refused before anything is sent (*Connecting to 'wss://…'
+violates the following Content Security Policy directive*), as an `error` with no `close`. The
+second source is derived from `RELAY_BASE` by the rule the engine dials by, and the same test
+holds it to that one. ⚠️ **No build that asks the relay from a page is deployed** — the
+tree is ahead of the web host: the relay's half went out on 2026-10-04 at 17:22 UTC
+(`docs/reference/light-app.md` §10.4), and the web app's deploy, which carries the engine that
+asks and the `wss://` source together, has not been made. **An address a server sends is not**
 — Scryfall's bulk-file host is in no line of ours, so if that moves every suite stays green and
 a browser's first run fails. **The last deploy was 2026-10-04 at 13:27 UTC, from `main` at
 `4929cc6e`** — the second that day, rolled back at 13:28 and forward again at 13:30 to see a
