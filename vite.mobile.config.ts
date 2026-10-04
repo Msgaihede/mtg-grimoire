@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { defineConfig, mergeConfig, type Plugin } from "vite";
 import base from "./vite.config.ts";
 import { FAKE_ALIASES } from "./.storybook/fake/aliases.ts";
+import { headersFor, parseHeaders } from "./app-worker/src/headers.ts";
 import {
   buildIdOf,
   GLUE_FILE,
@@ -187,6 +188,64 @@ function webEngine(
   };
 }
 
+/**
+ * The hosting's response headers — Cloudflare's `_headers` file, kept in `app-worker/` beside the
+ * `wrangler.jsonc` that deploys the build, and what it is copied to.
+ */
+const HEADERS_SOURCE = fileURLToPath(new URL("./app-worker/_headers", import.meta.url));
+const WEB_BUILD = fileURLToPath(new URL("./dist-web", import.meta.url));
+
+/**
+ * **The web build's hosting file, shipped and enforced** — the `web` mode's second plugin.
+ *
+ * - **In a build**, `app-worker/_headers` is emitted at the root of `dist-web/`, where
+ *   `wrangler deploy` reads it. Emitted here and **not kept in `public/`**, which every build
+ *   copies: the desktop's `dist/`, the APK's `dist-mobile/` and the share viewer's `dist-share/`
+ *   must not carry a policy that is none of theirs. A file that does not parse fails the build,
+ *   by line, rather than deploying as fewer rules than it looks.
+ * - **In the preview**, every response carries what the built file says that address is sent —
+ *   `app-worker/src/headers.ts` reads the format as Cloudflare does — so the
+ *   Content-Security-Policy meets the app on `localhost` and not first on the day of a deploy.
+ *   The *built* copy, because a preview serves the build. **A file that is not there gets none
+ *   of them**, as on the host: there the 404 is the Worker's own answer, which `_headers` does
+ *   not reach — and a year's `immutable` on a 404 is a chunk no rebuild could bring back.
+ *
+ * **Not in dev.** Vite's dev server injects `<style>` elements and an inline preamble and talks
+ * to the page over a WebSocket, each of which the shipped policy forbids on purpose.
+ *
+ * Listed **before** `web:engine`: that plugin rewrites a navigation to `/index.html`, and a
+ * rule is matched against the address the reader asked for.
+ */
+function webHosting(): Plugin {
+  return {
+    name: "web:hosting",
+    configurePreviewServer(server) {
+      if (!existsSync(`${WEB_BUILD}/_headers`)) {
+        throw new Error("dist-web/_headers is missing. Run `npm run web:build` first.");
+      }
+      const rules = parseHeaders(readFileSync(`${WEB_BUILD}/_headers`, "utf8"));
+      server.middlewares.use((request, response, next) => {
+        const req = request as unknown as Asked;
+        const path = pathOf(req);
+        const answered =
+          isNavigation(req.method, req.headers.accept, path) || existsSync(WEB_BUILD + path);
+        if (answered) {
+          const res = response as unknown as Answer;
+          for (const [name, value] of Object.entries(headersFor(rules, path))) {
+            res.setHeader(name, value);
+          }
+        }
+        next();
+      });
+    },
+    generateBundle() {
+      const source = readFileSync(HEADERS_SOURCE, "utf8");
+      parseHeaders(source);
+      this.emitFile({ type: "asset", fileName: "_headers", source });
+    },
+  };
+}
+
 export default defineConfig(({ mode, command, isPreview }) => {
   /**
    * **`web` is the web app's build**: the light entry over the engine in a Worker, into
@@ -202,7 +261,10 @@ export default defineConfig(({ mode, command, isPreview }) => {
   const engineBuild = building ? buildIdOf(engine) : "dev";
 
   return mergeConfig(base, {
-    plugins: [lightEntry(), ...(web ? [webEngine(engineBuild, engine, building)] : [])],
+    plugins: [
+      lightEntry(),
+      ...(web ? [webHosting(), webEngine(engineBuild, engine, building)] : []),
+    ],
     // The Storybook fake, under the real `ipc.ts` — **the four aliases `.storybook/main.ts`
     // declares, read from the one list both use**, for its reason: the fake sits *under* the
     // hand-written mirror, so the light app in a plain browser exercises the mirror too.
