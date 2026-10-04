@@ -9,7 +9,7 @@
 //! | | Native (the desktop, Android) | Browser |
 //! | --- | --- | --- |
 //! | [`connect`] | `tokio-tungstenite` over rustls, the bearer in the upgrade's `Authorization` header | **refused in a sentence** — the browser's socket is not written yet |
-//! | [`Socket::keepalive`] | a **protocol** ping, which fails when the one before it was never answered | — |
+//! | [`Socket::keepalive`] | a **protocol** ping, which fails when the one before it was never answered by a peer that has answered one | — |
 //! | [`Socket::next`] | the next text frame, or how the socket ended | — |
 //!
 //! **The two hosts cannot say who they are the same way, which is why the bearer is an
@@ -73,16 +73,31 @@ impl Socket {
     /// *message*: billed, and it wakes the object.
     ///
     /// **And it is how a dead socket is found: a keepalive whose predecessor was never
-    /// answered fails.** A connection that has gone without a word — a phone back from the
-    /// background on another network, a laptop out of range — is not closed by anything this
-    /// end can see until TCP gives up on it, which is about twenty seconds on Windows and on
-    /// the order of a quarter of an hour on Android's Linux defaults; until then the socket
-    /// reads as live and hears no doorbell. So each ping is owed a pong before the next one is
-    /// due: [`Socket::next`] notes it as it swallows it, and a keepalive that finds the last
-    /// one still unanswered looks once at what has already arrived (a caller busy with a round
-    /// trip has not been reading) and then answers `Err`, in a sentence. A dead socket is
-    /// noticed within two keepalive periods. The browser's arm owes the same property, from
-    /// the text `pong` its text `ping` is answered with.
+    /// answered fails — on a socket whose peer has answered one before.** A connection that
+    /// has gone without a word — a phone back from the background on another network, a laptop
+    /// out of range — is not closed by anything this end can see until TCP gives up on it,
+    /// which is about twenty seconds on Windows and on the order of a quarter of an hour on
+    /// Android's Linux defaults; until then the socket reads as live and hears no doorbell. So
+    /// each ping is owed a pong before the next one is due: [`Socket::next`] notes it as it
+    /// swallows it, and a keepalive that finds the last one still unanswered looks once at
+    /// what has already arrived (a caller busy with a round trip has not been reading) and
+    /// then answers `Err`, in a sentence. A dead socket is noticed within two keepalive
+    /// periods.
+    ///
+    /// ⚠️ **The deadline is enforced only once this socket has seen a pong, and that is what
+    /// makes it safe to ship.** It rests on the relay's edge answering a protocol ping with a
+    /// pong. Measured locally on 2026-10-04 — the relay under `wrangler dev --local` (workerd,
+    /// wrangler 4.146.0) answered a raw masked ping, opcode 9 and empty, with opcode 10 and
+    /// empty, on a hibernatable socket — and **not yet watched against the deployed edge**.
+    /// Were production to answer no pings at all, a deadline held from the first ping would
+    /// end every socket on every device at its second keepalive, for ever. So a peer that
+    /// never pongs is pinged and nothing is concluded from its silence, which is exactly what
+    /// this was before the deadline; a peer that has ponged once and then goes silent is
+    /// ended. What that gives up is a socket that goes half-open before its first pong — the
+    /// first ping period or two of a connection — which is left to TCP, as every socket was.
+    ///
+    /// The browser's arm owes the same property, from the text `pong` its text `ping` is
+    /// answered with.
     ///
     /// `Err` is that, or a socket that could not be written to; the caller treats either as
     /// the socket's end.
@@ -132,6 +147,9 @@ mod imp {
         stream: Stream,
         /// Whether a ping has gone out that no pong has come back for.
         unanswered: bool,
+        /// Whether this peer has **ever** answered a ping of this socket's with a pong. Until it
+        /// has, an unanswered ping proves nothing — [`Socket::keepalive`] has why.
+        answers: bool,
         /// What a keepalive read while it looked for its pong, kept for [`Socket::next`].
         held: VecDeque<Event>,
     }
@@ -168,6 +186,7 @@ mod imp {
             Ok((stream, _)) => Ok(Socket {
                 stream,
                 unanswered: false,
+                answers: false,
                 held: VecDeque::new(),
             }),
             Err(e) => Err(e.to_string()),
@@ -198,6 +217,11 @@ mod imp {
                 None => Some(Event::Closed(None)),
                 Some(Err(e)) => Some(Event::Failed(e.to_string())),
                 Some(Ok(Message::Pong(_))) => {
+                    // An answer only when there was a question: a pong nobody asked for says
+                    // nothing about whether this peer answers pings.
+                    if self.unanswered {
+                        self.answers = true;
+                    }
                     self.unanswered = false;
                     None
                 }
@@ -235,7 +259,9 @@ mod imp {
                 if self.catch_up() {
                     return Ok(());
                 }
-                if self.unanswered {
+                // **Only a peer that has answered before is held to answering.** One that has
+                // never sent a pong is pinged again and nothing is concluded from its silence.
+                if self.unanswered && self.answers {
                     return Err(UNANSWERED.to_owned());
                 }
             }
@@ -470,22 +496,53 @@ mod tests {
         answering.abort();
     }
 
-    /// **A ping nobody answers makes the next keepalive fail, in a sentence** — the half-open
-    /// socket: connected as far as this end's TCP knows, and nobody there. The peer never
-    /// reads again after the handshake, so no pong is ever sent, and the socket is still
-    /// open — which is the point: nothing else would end it.
+    /// **A peer that answered a ping and then went silent fails the keepalive after the next
+    /// unanswered one, in a sentence** — the half-open socket: connected as far as this end's
+    /// TCP knows, and nobody there. The peer answers the first ping and never reads again, so
+    /// no second pong is ever sent, and the socket is still open — which is the point: nothing
+    /// else would end it.
     #[tokio::test]
-    async fn a_ping_nobody_answered_fails_the_next_keepalive() {
-        let (mut socket, _peer, _asked) = pair().await;
+    async fn a_peer_that_answered_and_then_went_silent_fails_the_keepalive() {
+        let (mut socket, mut peer, _asked) = pair().await;
         socket.keepalive().await.expect("the first ping goes out");
+        // Read the ping, which queues its pong, and send it. Then nothing, ever again.
+        let heard = tokio::time::timeout(SOON, peer.next())
+            .await
+            .expect("the first ping never arrived");
+        assert!(matches!(heard, Some(Ok(Message::Ping(_)))), "{heard:?}");
+        peer.flush().await.unwrap();
+        until_answered(&mut socket).await;
 
+        socket
+            .keepalive()
+            .await
+            .expect("the first ping was answered, so a second goes out");
         let dead = socket
             .keepalive()
             .await
-            .expect_err("the first ping was never answered");
+            .expect_err("the second ping was never answered, by a peer that answers");
         assert!(dead.contains("did not answer the last keepalive"), "{dead}");
         // And it stays dead: asking again says the same, and sends nothing.
         assert_eq!(socket.keepalive().await, Err(dead));
+    }
+
+    /// **A peer that never answers any ping is never failed by the keepalive** — the control
+    /// for the deadline above, and the reason it waits for a first pong: if the relay's edge
+    /// turned out to answer no protocol pings at all, a deadline held from the first ping
+    /// would end every socket at its second keepalive, on every device, for ever. Here the
+    /// peer never reads after the handshake, so no pong is ever sent; every keepalive goes
+    /// out, and what ends such a socket is what always did.
+    #[tokio::test]
+    async fn a_peer_that_never_answers_a_ping_is_never_failed_by_the_keepalive() {
+        let (mut socket, _peer, _asked) = pair().await;
+        for nth in 1..=4 {
+            assert_eq!(
+                socket.keepalive().await,
+                Ok(()),
+                "keepalive {nth} was refused over a peer that has never ponged"
+            );
+            assert!(socket.0.unanswered(), "and its ping is still unanswered");
+        }
     }
 
     /// **A pong that arrived while nobody was reading is found by the keepalive itself, and a
@@ -496,12 +553,24 @@ mod tests {
     async fn a_keepalive_finds_a_pong_that_was_waiting_and_keeps_the_frame_ahead_of_it() {
         let (mut socket, mut peer, _asked) = pair().await;
         let head = r#"{"t":"head","cursor":9,"from":"d2"}"#;
-        // The frame first, then the read that answers the ping: on the wire, text then pong.
-        let answering = tokio::spawn(async move {
-            peer.send(Message::Text(head.into())).await.unwrap();
-            while peer.next().await.is_some() {}
-        });
+        // The peer answers the first ping, so it is one the deadline holds. Then, when told:
+        // the frame first, then the reads that answer the second ping — on the wire, text and
+        // then pong.
+        let go = std::sync::Arc::new(tokio::sync::Notify::new());
+        let answering = {
+            let go = go.clone();
+            tokio::spawn(async move {
+                let _ = peer.next().await;
+                peer.flush().await.unwrap();
+                go.notified().await;
+                peer.send(Message::Text(head.into())).await.unwrap();
+                while peer.next().await.is_some() {}
+            })
+        };
         socket.keepalive().await.unwrap();
+        until_answered(&mut socket).await;
+        go.notify_one();
+        socket.keepalive().await.expect("the second ping goes out");
 
         // Never `next`: only the keepalive, and the look it takes for itself. Asked again until
         // the pong has crossed loopback — a refusal sends nothing and changes nothing, so the

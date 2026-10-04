@@ -362,9 +362,10 @@ async fn connect_once(
 
             // The keepalive — a protocol ping wherever the host can send one, and
             // [`socket::Socket::keepalive`] has why. **It is also where a socket that died
-            // without a word is found**: it fails when the ping before it was never answered,
-            // and that is an ordinary failed socket — a backoff and a reconnect — a ping period
-            // or two after the network went, rather than whenever TCP gives up.
+            // without a word is found**: it fails when the ping before it was never answered
+            // by a peer that has answered one, and that is an ordinary failed socket — a
+            // backoff and a reconnect — a ping period or two after the network went, rather
+            // than whenever TCP gives up.
             Woke::Ping => {
                 if let Err(e) = socket.keepalive().await {
                     break (Disconnect::Failed, Some(e));

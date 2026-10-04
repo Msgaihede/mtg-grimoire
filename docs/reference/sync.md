@@ -3963,17 +3963,26 @@ desktop has a moment for: the bounded push on the way out (`anything_pending`, `
 **Two things the loop does differently on every host, the desktop included, and both on
 purpose:**
 
-- **A keepalive that was never answered ends the socket.** A connection that goes without a
-  word — a phone back from the background on another network, a laptop out of range — is closed
-  by nothing this end can see until TCP gives up: about twenty seconds on Windows, on the order
-  of a quarter of an hour on Android's Linux defaults. Until then the socket read `live` and
-  heard no doorbell. `Socket::keepalive` now tracks its ping: `next` notes the pong as it
-  swallows it, and a keepalive that finds the last ping still unanswered looks once at what has
-  already arrived (a loop inside a long trip has not been reading) and then fails — *the relay
-  did not answer the last keepalive* — which is `Disconnect::Failed`, the ordinary backoff and
-  reconnect. So a dead socket is noticed within two ping periods, ninety seconds. It rests on
-  the relay answering a protocol ping with a pong, which the 2026-10-01 pass above saw under
-  `wrangler dev`; against the deployed edge it has not been watched.
+- **A keepalive that was never answered ends the socket — once its peer has answered one.** A
+  connection that goes without a word — a phone back from the background on another network, a
+  laptop out of range — is closed by nothing this end can see until TCP gives up: about twenty
+  seconds on Windows, on the order of a quarter of an hour on Android's Linux defaults. Until
+  then the socket read `live` and heard no doorbell. `Socket::keepalive` now tracks its ping:
+  `next` notes the pong as it swallows it, and a keepalive that finds the last ping still
+  unanswered looks once at what has already arrived (a loop inside a long trip has not been
+  reading) and then fails — *the relay did not answer the last keepalive* — which is
+  `Disconnect::Failed`, the ordinary backoff and reconnect. So a dead socket is noticed within
+  two ping periods, ninety seconds.
+  ⚠️ **The deadline is held only on a socket that has already seen a pong, which is what makes
+  it safe by construction.** It rests on the relay's edge answering a protocol ping with a pong.
+  Measured locally on 2026-10-04 — the relay under `wrangler dev --local` (workerd, wrangler
+  4.146.0) answered a raw masked ping, opcode 9 and empty, with opcode 10 and empty, on a
+  hibernatable socket, as the 2026-10-01 pass above had seen — and **production is unseen**.
+  If the deployed edge answered no pings at all, a deadline held from the first ping would end
+  every socket on every device at its second keepalive, for ever; with this rule such a peer is
+  pinged and nothing is concluded, exactly as before the deadline existed. What it gives up is
+  a socket that goes half-open before its first pong — the first 45–90 s of a connection —
+  which is left to TCP, as every socket was.
 - **A beat that was missed is not owed.** `tokio::time::interval` bursts by default: a loop
   that was away takes every missed tick back to back. After an hour frozen — Android freezing a
   background process, a laptop's lid — that was 14 400 ticks and eighty pings, and
@@ -3998,7 +4007,9 @@ connection, on a thread standing in for a Worker (`platform::alone`), the loop t
 twice — once with no socket (the group read, a failed trip and its row, the token, the note) and
 once with one up and a `head` ahead of the cursor (the keepalive, the cursor read, the outbox
 gate). The socket's own: a relay that answers its pings stays up across keepalives, one that
-never does fails the second, and a pong that came in while nobody was reading is found. Each was
+answered and then went silent fails the keepalive after the next unanswered ping, one that never
+answers any is never failed by a keepalive, and a pong that came in while nobody was reading is
+found. Each was
 seen to fail against a mutation of what it guards. **Not driven**: the desktop app against a
 relay after the move, a phone at all, and an Android build on this machine (no target, no NDK —
 CI's `core (aarch64-linux-android)` job is what compiles it).

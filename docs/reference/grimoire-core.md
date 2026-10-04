@@ -62,7 +62,7 @@ All I/O operations go through abstractions defined in `src/platform/`:
   - Desktop: Standard worker threads and Tokio runtime.
   - Web: Single-threaded async cooperative tasks.
 - **The relay's live socket (`platform::socket`)**:
-  - Desktop / Android: `tokio-tungstenite` over rustls with compiled-in roots; the bearer rides the upgrade's `Authorization` header and the keepalive is a protocol ping, which fails when the one before it got no pong (a half-open socket is noticed within two ping periods).
+  - Desktop / Android: `tokio-tungstenite` over rustls with compiled-in roots; the bearer rides the upgrade's `Authorization` header and the keepalive is a protocol ping, which fails when the one before it got no pong from a peer that has ponged before (a half-open socket is noticed within two ping periods; a peer that never pongs is never failed this way).
   - Web: the arm compiles and refuses every `connect`; a browser's own `WebSocket` (bearer in the sub-protocol, a text keepalive) is not written yet.
   - Its one caller is `sync_engine::live::run`, the connection manager — a future each host spawns itself (the desktop and Android do; the web host does not yet). See [sync.md](sync.md), "The connection manager, too".
 
