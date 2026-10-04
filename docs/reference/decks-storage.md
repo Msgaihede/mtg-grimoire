@@ -1828,9 +1828,15 @@ Halfling`, the one non-legendary creature among its 56 creatures, was correctly 
   what its own first sentence always claimed — repairing an id whose category has actually left
   the deck (which now falls back to auto, not to somebody else's first column). An explicit pick
   **stays** picked, so ten cards into the Sideboard is one choice and ten presses. Each tile's
-  `+` names the pile it computed ("Add Sol Ring to Artifact"), which only works because
+  `+` names the pile it computed. **This sentence went on to say that this "only works because
   `autoCategoryFor` reads the type line and nothing else — a rule with more inputs could not
-  promise the answer before the press.
+  promise the answer before the press", and the warning in it came true**: the rule learnt to
+  read Oracle tags, the button went on handing it a type line, and with the taxonomy downloaded
+  it read `Add Rampant Growth to Sorcery` over a press that filed the card under Ramp (found
+  2026-10-04). The button now reads the wall's tags itself (`useWallOracleTags`), names the pile
+  through `autoCategoryIfKnown` — which answers `null`, and the button then names no pile, for a
+  card whose tags are not in hand — and sends the press the slugs it was named from, so
+  `useDeck.addCard` files by the same facts rather than reading them a second time.
 - **A write to what is _in_ a deck goes through a `useDeck` mutation, and `DeckEditor`'s
   `newestWrite([...])` takes every one of them but `rememberView`** — update (the rename, the
   cover, the format and the `Split X` chip, all of which are the same deck-row write

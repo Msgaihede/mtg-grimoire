@@ -5,6 +5,7 @@ import {
   AUTO_CATEGORY_DISPLAY_ORDER,
   autoCategoryDisplayOrder,
   autoCategoryFor,
+  autoCategoryIfKnown,
   AUTO_CATEGORY_NAMES,
   ORACLE_CATEGORIES,
   ORACLE_CATEGORY_NAMES,
@@ -295,6 +296,59 @@ describe("autoCategoryFor, by what the card does", () => {
     expect(autoCategoryFor(tagged("", ["ramp", "mana-producer"]))).toBe("Ramp");
     expect(autoCategoryFor(tagged(null, []))).toBe(UNCATEGORIZED);
     expect(autoCategoryFor(tagged("", []))).toBe(UNCATEGORIZED);
+  });
+});
+
+/**
+ * What a control may **say before the press** — the docked search's Add button names the pile a
+ * card will land in, and it used to name it from the type line alone while the add went on to
+ * read the card's tags: `Add Rampant Growth to Sorcery`, filed under Ramp (2026-10-04, the light
+ * app's desktop face over the real engine).
+ *
+ * So the question a label asks is not "what does the rule answer over what I happen to hold" but
+ * "what is the rule *certain* to answer" — and `undefined` slugs (a read still out, or refused)
+ * are a different fact from `[]` (read, and the card has none).
+ */
+describe("autoCategoryIfKnown, the pile a label may promise", () => {
+  it("names no pile for a card whose tags are not in hand", () => {
+    // The whole bug: with no tags this card's *type* bucket is Sorcery, and its tags say Ramp.
+    expect(autoCategoryIfKnown({ typeLine: "Sorcery", oracleTags: undefined })).toBeNull();
+    expect(autoCategoryIfKnown({ typeLine: "Artifact", oracleTags: undefined })).toBeNull();
+    expect(autoCategoryIfKnown({ typeLine: null, oracleTags: undefined })).toBeNull();
+  });
+
+  it("answers the rule's own pile once the tags are in hand", () => {
+    expect(autoCategoryIfKnown({ typeLine: "Sorcery", oracleTags: ["ramp"] })).toBe("Ramp");
+    expect(autoCategoryIfKnown({ typeLine: "Artifact", oracleTags: ["ramp", "mana-producer"] })).toBe(
+      "Ramp",
+    );
+  });
+
+  /** Read and found empty is an answer: the type line is then the whole of the rule. */
+  it("answers the type line's pile for a card known to carry no tags", () => {
+    expect(autoCategoryIfKnown({ typeLine: "Sorcery", oracleTags: [] })).toBe("Sorcery");
+    expect(autoCategoryIfKnown({ typeLine: null, oracleTags: [] })).toBe(UNCATEGORIZED);
+  });
+
+  /**
+   * The Land pin is decided before a tag is consulted, so no tag can move it — the one pile a
+   * label may promise with the read still out. The front face only, as the rule reads it.
+   */
+  it("promises Land with no tags in hand, because no tag can change it", () => {
+    expect(autoCategoryIfKnown({ typeLine: "Land", oracleTags: undefined })).toBe("Land");
+    expect(
+      autoCategoryIfKnown({ typeLine: "Land Creature — Forest Dryad", oracleTags: undefined }),
+    ).toBe("Land");
+    expect(autoCategoryIfKnown({ typeLine: "Sorcery // Land", oracleTags: undefined })).toBeNull();
+  });
+
+  /** It is the rule or it is silence — never a second opinion. */
+  it("never disagrees with autoCategoryFor when it answers", () => {
+    for (const c of CARDS) {
+      expect(autoCategoryIfKnown({ typeLine: c.typeLine, oracleTags: c.tags })).toBe(
+        autoCategoryFor(tagged(c.typeLine, c.tags)),
+      );
+    }
   });
 });
 

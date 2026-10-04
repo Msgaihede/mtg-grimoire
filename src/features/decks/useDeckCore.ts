@@ -174,7 +174,7 @@ export const NO_ANCHOR: DeckAnchor = {
  * Instant is a category the reader can drag; a refused add is a card they have to notice is
  * absent.
  */
-async function oracleTagsFor(cardId: string): Promise<readonly string[]> {
+export async function oracleTagsFor(cardId: string): Promise<readonly string[]> {
   try {
     const answers = await ipc.oracleTagsForPrintings([cardId]);
     return answers.find((entry) => entry.cardId === cardId)?.slugs ?? [];
@@ -592,6 +592,7 @@ export function useDeckCore(
       categoryId = null,
       deckDefault = false,
       typeLine,
+      oracleTags,
       finish = null,
       quantity,
     }: {
@@ -638,6 +639,23 @@ export function useDeckCore(
        *  is not the same thing and is the one arm that consults nothing — see
        *  {@link DEFAULT_CATEGORY_NAME}. */
       typeLine?: string | null;
+      /**
+       * What the card *does*, from a caller that has **already read it** — and absent from every
+       * caller that has not, which is most of them and costs them the one read below.
+       *
+       * The docked search is the caller that has: its Add button names the pile before the press,
+       * so it reads the wall's tags to name it (`useWallOracleTags`) and hands the same slugs
+       * here. **That is what makes the button's word and this hook's word one answer rather than
+       * two that usually agree** — the rule is still applied on this one definition, over the
+       * very facts the label was drawn from, so a taxonomy replaced between the paint and the
+       * press cannot file a card somewhere the button did not say. Until 2026-10-04 the button
+       * computed its word from the type line alone and this read the tags: `Add Rampant Growth to
+       * Sorcery`, filed under Ramp.
+       *
+       * Read only in the arm {@link typeLine} is read in. `[]` is an answer — a card known to
+       * carry no tag — and is not read again.
+       */
+      oracleTags?: readonly string[];
       quantity: number;
       /*
        * **An `owned` field stood here from 2026-08-23 to 2026-08-25**, set by the docked panel's
@@ -661,7 +679,7 @@ export function useDeckCore(
           ? null
           : typeLine === undefined
             ? DEFAULT_CATEGORY_NAME
-            : autoCategoryFor({ typeLine, oracleTags: await oracleTagsFor(cardId) });
+            : autoCategoryFor({ typeLine, oracleTags: oracleTags ?? (await oracleTagsFor(cardId)) });
       return ipc.deckAddCard(deckId, cardId, pileId, categoryName, variant, finish, quantity);
     },
     // **{@link invalidate} for every add, on success and on refusal alike.** This write touches

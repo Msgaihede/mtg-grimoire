@@ -26,6 +26,12 @@ const deckPlayedKeys = vi.hoisted(() => vi.fn());
 // two queries need answers or they sit rejected for the life of the file.
 const getMarketplace = vi.hoisted(() => vi.fn());
 const marketplaceFeedStatus = vi.hoisted(() => vi.fn());
+/**
+ * What each copy's card *does* — read for the wall under `Auto`, so the button can name the pile
+ * the app's one filing rule answers. `[]` by default: asked, and nothing here carries a tag,
+ * which is the type-line floor every case that is not about tags was written against.
+ */
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -35,6 +41,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckPlayedKeys,
     getMarketplace,
     marketplaceFeedStatus,
+    oracleTagsForPrintings,
   },
 }));
 
@@ -65,6 +72,15 @@ const MAIN = category();
 const SIDE = category({ id: 2, name: "Sideboard", kind: "side", sortOrder: 1 });
 /** The pile `autoCategoryFor` names for an Instant with no oracle tags — the type-line floor. */
 const INSTANTS = category({ id: 3, name: "Instant", kind: "main", sortOrder: 2 });
+/**
+ * **A `main`-kind pile the rule made earlier, which is not where an artifact that ramps goes.**
+ *
+ * The pile the old fallback reached for: with no pile called what the type line said, this tab
+ * took the deck's *first `main`-kind category*, on the assumption that a deck has one main pile.
+ * A deck filed by function has a dozen, so the button read `Add Sol Ring … to Lifegain` and the
+ * copy went there (a rehearsal over the real engine, 2026-10-04).
+ */
+const LIFEGAIN = category({ id: 6, name: "Lifegain", kind: "main", origin: "auto", sortOrder: 0 });
 
 const THIS_GROUP: CollectionFolder = {
   id: 10,
@@ -288,6 +304,7 @@ beforeEach(() => {
   deckPlayedKeys.mockReset().mockResolvedValue(PLAYS_BOLT);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
 });
 
 function tab({
@@ -911,9 +928,12 @@ describe("CollectionSearchTab", () => {
 
   /**
    * **Under `Auto` the pile is per card, and the button names it before the press** — the same
-   * promise `OpenPanel`'s Add button makes, kept by the same rule (`autoCategoryFor`) over the
-   * one fact a collection row carries: its type line. An Instant with no oracle tags files by
-   * type, which is the documented floor rather than an error.
+   * promise `OpenPanel`'s Add button makes, kept by the same rule (`autoCategoryFor`). An Instant
+   * with no oracle tags files by type, which is the documented floor rather than an error.
+   *
+   * **The pile is sent by name**, the arm `collection_to_deck` has had since 2026-08-23: the
+   * backend finds or makes it inside the move's own transaction, exactly as `deck_add_card` does
+   * for every other add in the app.
    */
   it("files an Auto add by what the card is, and names the pile", async () => {
     tab({ targetCategoryId: AUTO_CATEGORY });
@@ -922,24 +942,81 @@ describe("CollectionSearchTab", () => {
     await userEvent.click(button);
 
     await waitFor(() =>
-      expect(collectionToDeck).toHaveBeenCalledWith(LOOSE.id, DECK_ID, { id: INSTANTS.id }, 1),
+      expect(collectionToDeck).toHaveBeenCalledWith(LOOSE.id, DECK_ID, { name: "Instant" }, 1),
     );
   });
 
   /**
-   * **A pile the rule names that this deck has not got is a pile `collection_to_deck` cannot
-   * make**, because that command takes a category **id** where `deck_add_card` takes a name and
-   * finds-or-creates. So the fallback is the deck's own main pile, and — the half that matters —
-   * the button says which pile that is, so the reader is never told one thing and given another.
+   * **An Auto add is filed by what the card *does*, on this tab as on the other one.** The tab
+   * read the type line alone and, where the deck had no pile of that name, took its first
+   * `main`-kind category — so an artifact that ramps was offered, and filed, under whatever pile
+   * happened to come first. The button was true and the pile was wrong.
+   *
+   * The deck here has **no Ramp pile and no Artifact pile**, which is the state that reached the
+   * fallback: the rule's answer is sent by name and the backend makes the pile.
    */
-  it("falls back to the deck's main pile when the rule names one it has not got", async () => {
+  it("files an Auto add by what the card does, not into the first main pile", async () => {
+    collectionList.mockResolvedValue({ items: [UNPLAYED], total: 1 });
+    deckPlayedKeys.mockResolvedValue([UNPLAYED.oracleId]);
+    oracleTagsForPrintings.mockResolvedValue([
+      { cardId: UNPLAYED.cardId, slugs: ["ramp", "mana-producer"] },
+    ]);
+    tab({ categories: [LIFEGAIN, SIDE], targetCategoryId: AUTO_CATEGORY });
+
+    await userEvent.click(await screen.findByRole("button", { name: /^Add Sol Ring .* to Ramp$/ }));
+
+    expect(screen.queryByRole("button", { name: /to Lifegain/ })).toBeNull();
+    await waitFor(() =>
+      expect(collectionToDeck).toHaveBeenCalledWith(UNPLAYED.id, DECK_ID, { name: "Ramp" }, 1),
+    );
+  });
+
+  /**
+   * **A pile the rule names that this deck has not got is made, not swapped for another.** It
+   * used to fall back to the deck's main pile, forced by a command that took only a category id;
+   * the command has taken a name since 2026-08-23 and the fallback outlived its reason.
+   */
+  it("names the rule's pile even where the deck has not got it yet", async () => {
     tab({ categories: [MAIN, SIDE], targetCategoryId: AUTO_CATEGORY });
 
-    await userEvent.click(await screen.findByRole("button", { name: /to Main deck$/ }));
+    await userEvent.click(await screen.findByRole("button", { name: /to Instant$/ }));
+
+    expect(screen.queryByRole("button", { name: /to Main deck/ })).toBeNull();
+    await waitFor(() =>
+      expect(collectionToDeck).toHaveBeenCalledWith(LOOSE.id, DECK_ID, { name: "Instant" }, 1),
+    );
+  });
+
+  /**
+   * **A pile the button cannot promise is a pile it does not name** — and the press still files
+   * the copy, by the rule, read at the press. Nothing about categorising a card may fail an add.
+   */
+  it("names no pile while the tags are unread, and files by the rule at the press", async () => {
+    collectionList.mockResolvedValue({ items: [UNPLAYED], total: 1 });
+    deckPlayedKeys.mockResolvedValue([UNPLAYED.oracleId]);
+    // The wall's read is refused; the press's own read answers.
+    oracleTagsForPrintings
+      .mockRejectedValueOnce("The database is busy.")
+      .mockResolvedValue([{ cardId: UNPLAYED.cardId, slugs: ["ramp"] }]);
+    tab({ categories: [LIFEGAIN, SIDE], targetCategoryId: AUTO_CATEGORY });
+
+    const button = await screen.findByRole("button", {
+      name: "Add Sol Ring (C21 263, Nonfoil, Near mint)",
+    });
+    expect(screen.queryByRole("button", { name: /^Add Sol Ring .* to / })).toBeNull();
+    await userEvent.click(button);
 
     await waitFor(() =>
-      expect(collectionToDeck).toHaveBeenCalledWith(LOOSE.id, DECK_ID, { id: MAIN.id }, 1),
+      expect(collectionToDeck).toHaveBeenCalledWith(UNPLAYED.id, DECK_ID, { name: "Ramp" }, 1),
     );
+  });
+
+  /** A deck that names its pile has answered already: nothing about a card is looked up. */
+  it("reads no tags for a deck that names the pile its adds land in", async () => {
+    tab();
+    await screen.findByRole("button", { name: /to Main deck$/ });
+
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
   });
 
   /**
@@ -957,7 +1034,7 @@ describe("CollectionSearchTab", () => {
     await userEvent.click(await screen.findByRole("button", { name: /to Instant$/ }));
 
     await waitFor(() =>
-      expect(collectionToDeck).toHaveBeenCalledWith(LOOSE.id, DECK_ID, { id: INSTANTS.id }, 1),
+      expect(collectionToDeck).toHaveBeenCalledWith(LOOSE.id, DECK_ID, { name: "Instant" }, 1),
     );
   });
 

@@ -213,6 +213,23 @@ Full record, with every measurement and the provenance of each rung:
   local-SQLite round trip on a deliberate user act. **Match its answers by `cardId`, never by
   position**: blank and duplicate ids are dropped, so the array can be shorter than the request,
   and a deck holding one card in two categories sends that id twice.
+- **A control that names the pile before the press reads the tags too, and names nothing until
+  it has them** (2026-10-04). The docked search's Add button says `Add <card> to <pile>`, and
+  under `Auto` it computed that word from the type line alone while `addCard` read the tags — so
+  with the taxonomy downloaded it read `Add Rampant Growth to Sorcery` and the card landed in
+  Ramp. `autoCategoryFor` over a type line is a correct *filing* (the floor) and a false
+  *promise*. Three pieces keep the two one answer, and a new surface that names a pile in advance
+  owes all three: `useWallOracleTags` reads the wall's tags in bulk (only under `Auto`, keyed
+  under `ORACLE_TAGS_KEY` so a finished refresh re-reads them); `autoCategoryIfKnown` answers
+  `null` for a card whose tags are **not in hand** — `undefined`, which is not `[]` — and the
+  button then says `Add <card>` and no pile, except a land, which no tag can move; and the press
+  hands `addCard` the **slugs the button was named from** (`oracleTags`), so the rule runs once,
+  on its single definition, over the facts the reader was shown. The Collection tab is the same
+  shape over `collection_to_deck`'s **name** arm — it used to send an id and, for a pile the deck
+  had not got, fall back to the first `main`-kind category
+  ([collection-folders.md](../../../docs/reference/collection-folders.md)). **A test of such a
+  label needs a card whose type and function name different piles**: with an untagged Instant
+  both words are `Instant`, and a button built from the wrong one reads correctly.
 - **The Land pin exists because there is no `land` tag.** Lands are a card type, not a function, and
   **618 of 1 196 land cards (51.7%) carry a functional tag** — Prismatic Vista is `tutor`, Savai
   Triome `card-advantage` — so without the pin a deck's mana base scatters across a dozen piles.

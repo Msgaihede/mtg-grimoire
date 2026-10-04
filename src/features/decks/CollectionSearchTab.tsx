@@ -11,18 +11,19 @@ import { sortOptions } from "@/lib/options";
 import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
 import { plural } from "@/lib/counts";
 import { FINISH_LABEL, type Finish } from "@/lib/finish";
-import { ipcError, type CollectionRow, type DeckCategory } from "@/lib/ipc";
+import { ipcError, type CollectionRow, type DeckCategory, type DeckPile } from "@/lib/ipc";
 import { statusLine } from "@/lib/motion";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
 import { useAppStore } from "@/lib/store";
 import { tileKeyOf } from "@/lib/tileKey";
 import { cn } from "@/lib/utils";
 import { ADD_BUTTON } from "./addButton";
-import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
+import { AUTO_CATEGORY, autoCategoryIfKnown, UNNAMED_PILE_TIP } from "./autoCategory";
 import { foldCopies, type CopyTile } from "./collectionTiles";
 import type { DragPayload } from "./dnd";
 import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
 import { useCollectionSearch, type PlayState } from "./useCollectionSearch";
+import { useWallOracleTags } from "./useWallOracleTags";
 
 /**
  * How wide a tile is at 100 %, in px.
@@ -151,30 +152,46 @@ function copyLabel(name: string, row: PartialCopy): string {
 }
 
 /**
+ * Where one press files, and what the button may call it.
+ *
+ * Two fields because they are two questions that usually have one answer and sometimes have none:
+ * {@link name} is the word on the button and in the confirmation, {@link pile} is what the write
+ * is addressed with. Both are `null` together, for a card whose pile the rule cannot name yet —
+ * the press is still made, and `useCollectionSearch`'s `move` reads the rule's answer then.
+ */
+export interface Landing {
+  name: string | null;
+  pile: DeckPile | null;
+}
+
+/**
  * Which pile a press on this tile files into — **decided before the press and named on the
  * button**, which is the promise the card-search tab's Add button already makes.
  *
- * Three steps. A named `targetCategoryId` the deck actually carries is the deck setting and is used
- * as it stands. Otherwise it is `autoCategoryFor`'s answer over the one fact a collection row
- * carries — its type line, which is the documented floor for a card whose oracle tags have never
- * been downloaded — matched against the piles the deck **already has**. Then the deck's main pile.
+ * Two steps. A named `targetCategoryId` the deck actually carries is the deck setting and is used
+ * as it stands, by id. Otherwise it is the app's one filing rule — `autoCategoryFor`, over the
+ * card's Oracle tags and then its type line — and the pile goes by **name**, for
+ * `collection_to_deck` to find or make inside the move's own transaction.
  *
- * **The third step exists only here, and it is the backend's doing rather than a shortcut.**
- * `deck_add_card` takes a category *name* and finds-or-creates; the id arm of `collection_to_deck`
- * refuses one that is not there (`CATEGORY_GONE`), so there is no id to send for a pile that does
- * not exist yet. What makes the fallback honest rather than a surprise is that the button names
- * it: a reader adding an Instant to a deck with no Instant pile is told "to Main deck" before they
- * press.
+ * **There was a third step until 2026-10-04, and it was the bug.** The rule was asked with the
+ * type line alone, its answer was matched against the piles the deck *already had*, and a miss
+ * fell back to "the deck's main pile" — written as the first `main`-kind category, while
+ * `collection_to_deck` took only an id and there was none to send for a pile that did not exist.
+ * A deck filed by function has a dozen `main`-kind piles and no pile called `Artifact`, so the
+ * button read `Add Sol Ring … to Lifegain` and the copy went there: a true label over the wrong
+ * pile, on the tab the panel opens on, while the tab beside it named `Sorcery` and filed under
+ * Ramp. The command has taken a name since 2026-08-23; the fallback outlived its reason.
  *
- * `null` only for a deck with no categories at all, which `deck_create` makes impossible — it seeds
- * four piles in the same transaction as the deck — so it is the fence for a story or a test
- * mounting this tab bare rather than a state the editor can reach.
+ * **`oracleTags` is `undefined` for a card whose tags are not in hand** — the wall's read is
+ * still out, or was refused — and the answer then names nothing (`autoCategoryIfKnown`), except a
+ * land, which no tag can move.
  */
 export function landingCategory(
   categories: readonly DeckCategory[],
   targetCategoryId: number,
   row: Pick<CollectionRow, "typeLine">,
-): DeckCategory | null {
+  oracleTags: readonly string[] | undefined,
+): Landing {
   // **An id the deck's `categories` does not carry reads as `AUTO_CATEGORY`** — this folder's
   // `CLAUDE.md`, and it is a *read* rather than the repairing write an old clamp used to be:
   // `deck_category_delete` puts the deck row back to `0` itself, so what is left is the one commit
@@ -183,14 +200,9 @@ export function landingCategory(
     targetCategoryId === AUTO_CATEGORY
       ? undefined
       : categories.find((c) => c.id === targetCategoryId);
-  if (named) return named;
-  const wanted = autoCategoryFor({ typeLine: row.typeLine });
-  return (
-    categories.find((c) => c.name === wanted) ??
-    categories.find((c) => c.kind === "main") ??
-    categories[0] ??
-    null
-  );
+  if (named) return { name: named.name, pile: { id: named.id } };
+  const name = autoCategoryIfKnown({ typeLine: row.typeLine, oracleTags });
+  return { name, pile: name === null ? null : { name } };
 }
 
 /**
@@ -274,7 +286,7 @@ export function CollectionSearchTab({
    */
   deckId: number;
   /** The deck's `default_category_id` — {@link AUTO_CATEGORY} for "by what the card does". See
-   *  {@link landingCategory} for the one way this tab's resolution differs from an ordinary add. */
+   *  {@link landingCategory}, which resolves it the way every other add in the app does. */
   targetCategoryId: number;
   /** The format the wall opens on — the deck's, already fenced by `spec.hasLegalityData` in
    *  `DeckEditor`. A default and never a constraint. */
@@ -344,10 +356,23 @@ export function CollectionSearchTab({
   const tiles = useMemo(() => foldCopies(rows, sourceOf), [rows, sourceOf]);
   const empty = tiles.length === 0;
 
+  /**
+   * What every card on this wall *does*, so a button under `Auto` names the pile the filing rule
+   * will answer — `useWallOracleTags`, the read the tab beside this one makes for the same reason.
+   * Nothing is asked for a deck that names its pile. The ids are a tile's **card** id, which two
+   * tiles of one printing in two finishes share; the hook asks once.
+   */
+  const auto =
+    targetCategoryId === AUTO_CATEGORY || !categories.some((c) => c.id === targetCategoryId);
+  const wallIds = useMemo(() => tiles.map((tile) => tile.id), [tiles]);
+  const wallTags = useWallOracleTags(wallIds, auto);
+  const landingOf = (tile: CopyTile) =>
+    landingCategory(categories, targetCategoryId, tile, wallTags.get(tile.id));
+
   /** Send it. The confirm — where there is one — has already been answered by the time this runs. */
-  const commit = (tile: CopyTile, categoryId: number) => {
+  const commit = (tile: CopyTile, pile: DeckPile | null) => {
     setAsking(null);
-    if (tile.add) move.mutate({ row: tile.add, categoryId, quantity: 1 });
+    if (tile.add) move.mutate({ row: tile.add, pile, quantity: 1 });
   };
 
   /**
@@ -455,10 +480,10 @@ export function CollectionSearchTab({
           <motion.div {...statusLine} className="shrink-0 overflow-hidden">
             <Confirm
               tile={asking}
-              lands={landingCategory(categories, targetCategoryId, asking)}
+              lands={landingOf(asking)}
               pending={move.isPending}
               onCancel={() => setAsking(null)}
-              onConfirm={(categoryId) => commit(asking, categoryId)}
+              onConfirm={(pile) => commit(asking, pile)}
             />
           </motion.div>
         )}
@@ -547,7 +572,7 @@ export function CollectionSearchTab({
               // decided stays the hook's model: this file branches on the answer and never on the
               // census.
               play={playStateOf(tile)}
-              lands={landingCategory(categories, targetCategoryId, tile)}
+              lands={landingOf(tile)}
               tip={tip}
               onAsk={setAsking}
               onCommit={commit}
@@ -626,17 +651,19 @@ function AddButton({
   /** Whether this deck's live list plays this card at all — the assign-only fence (issue #358).
    *  See `PlayState`, which is where the four answers and the two axes are argued. */
   play: PlayState;
-  lands: DeckCategory | null;
+  /** Where the press files and what to call it — {@link landingCategory}. A `null` name is a
+   *  pile this button cannot promise yet, and it then names none. */
+  lands: Landing;
   tip: ReturnType<typeof useTooltip>;
   onAsk: (tile: CopyTile) => void;
-  onCommit: (tile: CopyTile, categoryId: number) => void;
+  onCommit: (tile: CopyTile, pile: DeckPile | null) => void;
 }) {
   const copy = tile.add ? copyLabel(tile.name, tile.add) : tile.name;
 
   /**
    * Why this tile cannot be pressed, or `null`.
    *
-   * **Four of them, and every one is said in the button's own accessible *name*** rather than only
+   * **Every one of them is said in the button's own accessible *name*** rather than only
    * in a tooltip: a greyed control whose name has not changed reads as a control that broke, and a
    * hover sentence is not something a keyboard reader can produce (`src/CLAUDE.md`'s greyed-row
    * rule).
@@ -666,9 +693,7 @@ function AddButton({
           ? `${tile.name} is not in this deck — add it from the Card search tab first`
           : tile.add === null
             ? `${tile.name} is already in this deck`
-            : lands === null
-              ? `${tile.name} — this deck has no category for it`
-              : null;
+            : null;
 
   /**
    * **Where the copy is coming from** — the fact the list this replaced drew on every row, and the
@@ -698,6 +723,9 @@ function AddButton({
 
   const where = place ? (place.taking ? `taking it from ${place.name}` : `in ${place.name}`) : null;
 
+  /** ` to Ramp`, or nothing for a pile the rule has not named yet — see {@link Landing}. */
+  const into = lands.name === null ? "" : ` to ${lands.name}`;
+
   return (
     <button
       type="button"
@@ -707,27 +735,31 @@ function AddButton({
       // `aria-disabled`, never `disabled`: a disabled button leaves the tab order, which would put
       // the reason on a hover a keyboard reader cannot perform.
       aria-disabled={refusal ? true : undefined}
-      aria-label={refusal ?? `Add ${copy} to ${lands?.name}${where ? ` — ${where}` : ""}`}
+      aria-label={refusal ?? `Add ${copy}${into}${where ? ` — ${where}` : ""}`}
       {...tip(
         refusal ??
           (place
             ? place.taking
-              ? `Take from ${place.name} → ${lands?.name}`
-              : `Add to ${lands?.name} — your copy in ${place.name}`
-            : `Add to ${lands?.name}`),
+              ? lands.name === null
+                ? `Take from ${place.name}`
+                : `Take from ${place.name} → ${lands.name}`
+              : `Add${into} — your copy in ${place.name}`
+            : lands.name === null
+              ? UNNAMED_PILE_TIP
+              : `Add${into}`),
         { describes: false },
       )}
       // **Never disabled while a write is in flight**, exactly as the card tab's Add button is
       // not: `collection_to_deck` folds into the deck row it finds, so pressing twice is two
       // copies — and "press it again for another one" is how a deck gets built.
       onClick={() => {
-        if (refusal || !lands || !tile.add) return;
+        if (refusal || !tile.add) return;
         // The one branch this whole tab is about: a copy another deck is holding is asked about
         // first, because confirming takes it out of that deck's *list* as well as its group — and
         // that deck is not on screen. `pickCopy` has already preferred a desk copy where the
         // reader has one, so this is reached only when every copy is spoken for.
         if (tile.from?.kind === "otherDeck") onAsk(tile);
-        else onCommit(tile, lands.id);
+        else onCommit(tile, lands.pile);
       }}
       className={cn(
         ADD_BUTTON,
@@ -765,10 +797,10 @@ function Confirm({
   onConfirm,
 }: {
   tile: CopyTile;
-  lands: DeckCategory | null;
+  lands: Landing;
   pending: boolean;
   onCancel: () => void;
-  onConfirm: (categoryId: number) => void;
+  onConfirm: (pile: DeckPile | null) => void;
 }) {
   const confirm = useConfirmFocus(`Move ${tile.name} into this deck`);
   const deckName = tile.from?.deckName ?? "another deck";
@@ -782,17 +814,21 @@ function Confirm({
         Your copy of “{tile.name}” is in “{deckName}”. Moving it here takes it off that deck’s list
         too.
       </p>
-      {lands && <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">It will go in {lands.name}.</p>}
+      {/* Said only where it can be promised: a pile the rule has not named yet is not guessed at
+          in the one sentence a reader is being asked to agree to. */}
+      {lands.name !== null && (
+        <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">It will go in {lands.name}.</p>
+      )}
 
       <div className="mt-2 flex flex-wrap gap-2">
         <button
           type="button"
           // `aria-disabled` rather than the attribute, so the button that is about to be pressed
           // again does not leave the tab order under the reader's caret mid-write.
-          aria-disabled={pending || !lands ? true : undefined}
+          aria-disabled={pending ? true : undefined}
           onClick={() => {
-            if (pending || !lands) return;
-            onConfirm(lands.id);
+            if (pending) return;
+            onConfirm(lands.pile);
           }}
           className={CONFIRM_DESTRUCTIVE}
         >

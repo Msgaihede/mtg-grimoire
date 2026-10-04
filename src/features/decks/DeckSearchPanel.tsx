@@ -1,5 +1,6 @@
 import {
   useCallback,
+  useMemo,
   type KeyboardEvent as ReactKeyboardEvent,
   type MouseEvent as ReactMouseEvent,
 } from "react";
@@ -16,12 +17,13 @@ import { ipcError, type CardSummary, type DeckCategory } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 import { ADD_BUTTON } from "./addButton";
-import { AUTO_CATEGORY, autoCategoryFor } from "./autoCategory";
+import { AUTO_CATEGORY, autoCategoryIfKnown, UNNAMED_PILE_TIP } from "./autoCategory";
 import { CollectionSearchTab } from "./CollectionSearchTab";
 import { isTokenPrinting } from "./deckTokens";
 import { TOKENS_HEADING } from "./DeckTokensPanel";
 import { cardDraggable } from "./dnd";
 import type { Deck } from "./useDeck";
+import { useWallOracleTags } from "./useWallOracleTags";
 
 /**
  * **Re-exported, not re-declared** — both moved to `features/search/CardSearchPanel.tsx` on
@@ -782,6 +784,16 @@ function OpenPanel({
     : (categories.find((c) => c.id === targetCategoryId)?.name ?? "this deck");
 
   /**
+   * What every card on this wall *does*, read so the Add button can name the pile an `Auto` add
+   * lands in — see {@link useWallOracleTags}. Nothing is asked for a deck that names its pile.
+   *
+   * A memo on `search.rows`, which the hook already holds still between pages: the id list is
+   * what the reads are chunked from, and a fresh array per keystroke would re-chunk them.
+   */
+  const wallIds = useMemo(() => search.rows.map((card) => card.id), [search.rows]);
+  const wallTags = useWallOracleTags(wallIds, auto);
+
+  /**
    * Every drawn tile, as a card that can be dragged into a category.
    *
    * The wall builds its own tiles, so this is the only way to hand a library an element: one
@@ -847,17 +859,27 @@ function OpenPanel({
       badge={(card) => <OwnedBadge owned={card.ownedQuantity} wishlisted={card.wishlisted} />}
       action={(card) => {
         // Where this card would land, named before the press rather than reported after it.
-        // Under `Auto` that is `autoCategoryFor`'s own answer for *this* card, which is the
-        // whole reason the rule reads the type line and nothing else: it is the only kind of
-        // answer a button can promise in advance and a reader can predict from the card in
-        // their hand. Found or created on the way in, so a deck with no Artifact pile grows
-        // one and the button said so. **A token lands in Tokens & Emblems whatever pile is
-        // picked** (user schema v52): `deck::add_card` reroutes it into a token entry, so a
-        // button naming a pile would promise a place the press never goes — the live pass's
-        // `Add Dinosaur // Treasure to Creature`. `isTokenPrinting` is Rust's router's twin.
+        // Under `Auto` that is the rule's own answer for *this* card — over its **Oracle tags
+        // and then its type line**, the two facts `useDeck.addCard` files by. Found or created
+        // on the way in, so a deck with no Ramp pile grows one and the button said so.
+        //
+        // **`null` is a pile this button cannot promise, and it then names none.** The comment
+        // that stood here said the rule "reads the type line and nothing else", which was the
+        // whole reason a button could promise its answer in advance — and it stopped being
+        // true when the rule learnt to read tags, while this went on handing it a type line.
+        // So the button read `Add Rampant Growth to Sorcery` and the card landed in Ramp
+        // (2026-10-04, over the real engine with the taxonomy downloaded). Until this card's
+        // tags are in hand the type line's pile is exactly the word that may be wrong;
+        // `autoCategoryIfKnown` answers only what no later read can change.
+        //
+        // **A token lands in Tokens & Emblems whatever pile is picked** (user schema v52):
+        // `deck::add_card` reroutes it into a token entry, so a button naming a pile would
+        // promise a place the press never goes — the live pass's `Add Dinosaur // Treasure to
+        // Creature`. `isTokenPrinting` is Rust's router's twin.
+        const tags = wallTags.get(card.id);
         const landsIn = isTokenPrinting(card.layout, card.typeLine)
           ? TOKENS_HEADING
-          : (targetName ?? autoCategoryFor(card));
+          : (targetName ?? autoCategoryIfKnown({ typeLine: card.typeLine, oracleTags: tags }));
         return (
           <button
             type="button"
@@ -867,17 +889,21 @@ function OpenPanel({
             // Named for the card *and* where it is going: two tiles' buttons both called
             // "Add" are two controls a screen reader cannot tell apart, and the category is
             // the one thing about this press that is not visible on the tile.
-            aria-label={`Add ${card.name} to ${landsIn}`}
-            {...tip(`Add to ${landsIn}`, { describes: false })}
+            aria-label={landsIn === null ? `Add ${card.name}` : `Add ${card.name} to ${landsIn}`}
+            {...tip(landsIn === null ? UNNAMED_PILE_TIP : `Add to ${landsIn}`, {
+              describes: false,
+            })}
             // Never disabled while a write is in flight, and that is the behaviour rather
             // than an omission: `deck_add_card` **folds into** the row it finds, so pressing
             // three times is three copies. Disabling would drop presses two and three, and
             // "press it again for another one" is how a deck gets built.
             //
-            // Under `Auto` this sends **no category and the card's type line**, which is what
-            // puts the rule on `useDeck`'s single definition rather than here: this component
-            // computes the *word on the button* and the hook computes the word it sends, from
-            // the same function over the same fact.
+            // Under `Auto` this sends **no category, the card's type line and the slugs the
+            // button was named from**, which is what puts the rule on `useDeck`'s single
+            // definition rather than here: this component computes the *word on the button*
+            // and the hook computes the word it sends, from the same function over the same
+            // facts. With no slugs in hand it sends none, and the hook reads them itself —
+            // which is the press a button that named no pile makes.
             // The per-call `onSuccess` carries the row the write landed in back to the
             // editor, which marks it for five seconds — the whole point being that the deck
             // is over *there* and the reader is looking *here*. It is per call rather than
@@ -887,7 +913,7 @@ function OpenPanel({
             onClick={() =>
               add.mutate(
                 auto
-                  ? { cardId: card.id, typeLine: card.typeLine, quantity: 1 }
+                  ? { cardId: card.id, typeLine: card.typeLine, oracleTags: tags, quantity: 1 }
                   : { cardId: card.id, categoryId: targetCategoryId, quantity: 1 },
                 { onSuccess: (change) => onAdded?.(change.id) },
               )
