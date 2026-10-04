@@ -276,8 +276,16 @@ export const ARMS = [
   // **Above `scripts/*`**, which would lint a broken build script and never run it.
   // `scripts/web-smoke/*` is what the smoke answers the engine with instead of the real hosts: a
   // fixture changed is a first run changed, and nothing but `web` runs it.
+  // **`scripts/web-sync-smoke.mjs`** (phase 6, step 6.3) is the third: it pairs two browsers
+  // through the relay's own code under workerd, and is written in `web-smoke.mjs`'s harness —
+  // which is why a change to either file is a change to both runs.
   {
-    match: ["scripts/build-wasm.mjs", "scripts/web-smoke.mjs", "scripts/web-smoke/*"],
+    match: [
+      "scripts/build-wasm.mjs",
+      "scripts/web-smoke.mjs",
+      "scripts/web-sync-smoke.mjs",
+      "scripts/web-smoke/*",
+    ],
     jobs: ["frontend", "web"],
   },
   // `scripts/` because `eslint .` lints it — its ignore list does not name it — and because
@@ -298,6 +306,21 @@ export const ARMS = [
   // The crossing runs the other way (`hosting.test.ts` reads `crates/grimoire-core`), and the
   // engine's arm already sets `frontend`. No job deploys it.
   { match: ["app-worker/*"], jobs: ["frontend", "web"] },
+
+  // **The sync relay** (phase 6, step 6.3): `relay/`, the Worker every device of a group asks.
+  // Until this arm it fell to the fail-safe, which ran `core` and `storybook` for it as well.
+  //   - `frontend` type-checks it (`tsc -p tsconfig.relay.json`), lints it and runs its tests;
+  //   - `rust`, because Rust tests read its sources as text and the census holds this arm to
+  //     them: the client's two request headers against `cors.ts`'s allow-list, the lapse's code
+  //     against `claim.ts`, and the browser's sub-protocols and keepalive against `ticket.ts`
+  //     (`platform::socket`). A word changed here alone is red there alone;
+  //   - **`web`**, which is the only job that *runs* this code: `scripts/web-sync-smoke.mjs`
+  //     starts it under workerd from `wrangler.jsonc`, seeds its D1 from `schema.sql`, and pairs
+  //     two browsers through it. A relay that no longer answers a page is red there and nowhere
+  //     else — every other test of it is a mock on one side or the other.
+  // **Not `core`**: the engine compiles nothing from this tree. **Not `storybook`**: nor does a
+  // story. Its README is prose, by the arm above every tree's. No job deploys it.
+  { match: ["relay/*"], jobs: ["frontend", "rust", "web"] },
 
   // **The light app's web host** (phase 5, step 5.1): `grimoire-web`, a workspace member, so
   // `rust` formats, lints and tests it natively, and `web` is the only job that compiles it for

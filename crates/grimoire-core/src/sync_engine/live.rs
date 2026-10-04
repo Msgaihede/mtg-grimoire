@@ -11,12 +11,13 @@
 //! there is exactly one code path that can change this database, and the socket only decides
 //! *when* it runs.
 //!
-//! **Every host's, and a host starts it**: [`run`] is the loop as a future, which the desktop
-//! and the Android host each spawn on their async runtime once their state is settled, with the
-//! [`WriteWake`] they registered on the write connection. It names no window — what it has to
-//! say goes through the state's event sink — and no socket crate: what a WebSocket *is* on a
-//! host is [`crate::platform::socket`]'s, and a browser's is not written yet, so no web host
-//! starts this. The desktop's push on the way out stays the desktop's, beside its exit.
+//! **Every host's, and a host starts it**: [`run`] is the loop as a future, which the desktop,
+//! the Android host and the web host each spawn once their state is settled — on their async
+//! runtime, or on a Worker's one thread — with the [`WriteWake`] they registered on the write
+//! connection. It names no window — what it has to say goes through the state's event sink —
+//! and no socket crate: what a WebSocket *is* on a host is [`crate::platform::socket`]'s, a
+//! browser's own included. The desktop's push on the way out stays the desktop's, beside its
+//! exit.
 
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::Arc;
@@ -98,8 +99,8 @@ static STATE: AtomicU8 = AtomicU8::new(LiveState::Off as u8);
 /// listener that mounts after the single `Off` learns nothing until something changes. A read is
 /// the other half of that pair: the page subscribes to the event *and* asks once at mount.
 ///
-/// **`Off` on a host that never starts [`run`]** — a web host, today — which is the truth
-/// there: no socket.
+/// **`Off` on a host that never starts [`run`]**, which is the truth there: no socket. Every
+/// host starts it today.
 ///
 /// Relaxed, because this is a display value and no other memory is ordered against it.
 pub fn current() -> LiveState {

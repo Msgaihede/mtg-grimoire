@@ -748,6 +748,37 @@ jobs:
         timeout-minutes: 10
         run: npm run web:smoke
 
+      # **Live sync, two browsers and the relay's own code** (phase 6, step 6.3):
+      # `scripts/web-sync-smoke.mjs` starts `relay/` under workerd (`wrangler dev --local`, a
+      # local D1, a throwaway signing key handed over with `--var`), opens the same bundle in two
+      # Chrome profiles that resolve the relay's real name to it, and walks a claim, a pairing and
+      # a write on each device arriving on the other with nothing pressed — under the shipped
+      # policy, so a `connect-src` that lost the relay's `wss://` source is red here.
+      #
+      # ⚠️ **It does not run yet, and that is this step saying so rather than a skip nobody
+      # sees.** The run needs wrangler, and wrangler is not one of the root package's
+      # dependencies. It is installed from `app-worker/`'s **own lockfile**, which the release
+      # rule's step (6.6) adds; until that file is on `main` both steps below are skipped by
+      # their `if`, and the summary says the sync smoke did not run. Never `npx wrangler@…`
+      # here: that is a version nobody pinned, fetched at run time. Nothing in either step
+      # reaches Cloudflare — no account, no token, `--local` throughout.
+      - name: Install wrangler from app-worker's lockfile
+        if: ${{ hashFiles('app-worker/package-lock.json') != '' }}
+        run: npm ci --prefix app-worker
+
+      - name: Pair two browsers through the local relay
+        if: ${{ hashFiles('app-worker/package-lock.json') != '' }}
+        timeout-minutes: 10
+        run: npm run web:sync-smoke
+
+      - name: Say that the sync smoke did not run
+        if: ${{ hashFiles('app-worker/package-lock.json') == '' }}
+        run: |
+          {
+            echo
+            echo "**The sync smoke did not run**: \`app-worker/package-lock.json\` is not in this tree, so there is no pinned wrangler to start the local relay with. It starts running when that lockfile lands (phase 6, step 6.6)."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # Whenever there is a bundle, a failed smoke included: a page that would not open on the
       # runner is exactly the one somebody needs to serve and look at. Kept 14 days, like the
       # APK.

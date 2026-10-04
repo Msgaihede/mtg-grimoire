@@ -88,6 +88,7 @@ Navigation grammar is standardized in `routes.ts`: views, decks, `?folder=<id>` 
 - Second-tab protection via Web Locks (`mtg-grimoire:database`).
 - Service Worker handles shell precaching and card picture caching in Cache Storage via the app origin (`/mtgimg`).
 - Shipped under strict Content Security Policy (`style-src 'self'`). No runtime `<style>` tags or unauthorized `motion` APIs allowed.
+- Live sync: the web host runs the core's connection manager too (`host::live_sync`, spawned beside the launch's downloads once `open` has answered), over the engine Worker's own `WebSocket` — the bearer in a sub-protocol, a text `ping`. `sync:live` and `sync:applied` reach the page through the Worker's event path, and both faces hear them. The policy's `connect-src` names the relay twice, `https://` and `wss://`: Chrome refuses the socket under the first alone.
 
 ---
 
@@ -104,6 +105,7 @@ Run tests only at the end of a feature (not after each change):
 | `npm run web:dev` | Vite (port 5176) | Run web light app over local OPFS |
 | `npm run web:preview` | Local preview (port 4176) | Test production web build and Service Worker under CSP |
 | `npm run web:smoke` | Headless Chromium | Offline first-run and data verification smoke tests |
+| `npm run web:sync-smoke` | Two headless Chromiums, the relay under workerd | A claim, a pairing and a write crossing each way without a press — the phone face and the desktop face (needs a wrangler; the script's header says where it looks) |
 
 Driving a shared panel at a phone's width (no lock needed, `mobile:dev` only):
 - `http://localhost:5175/settings?seed=paired&fault=lentStorage` — `?seed=` and `?fault=` are a story's `parameters.fake`, read once by `fakeBoot.ts`.

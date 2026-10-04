@@ -232,6 +232,7 @@ describe("the arms", () => {
     ["vite.sw.ts", T, F, F, F, F, F, T],
     ["scripts/build-wasm.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke.mjs", T, F, F, F, F, F, T],
+    ["scripts/web-sync-smoke.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke/default-cards.jsonl", T, F, F, F, F, F, T],
     // The web host: a workspace member `rust` tests, and the crate `web` compiles for a browser.
     // Not `core` — the engine does not depend on a host.
@@ -250,9 +251,15 @@ describe("the arms", () => {
     ["crates/card-scanner/Cargo.lock", T, T, T, F, F, F, T],
     ["crates/card-scanner/.cargo/config.toml", T, T, T, F, F, F, T],
     ["share-worker/wrangler.jsonc", T, T, T, F, T, F, T],
-    ["relay/src/index.ts", T, T, T, F, T, F, T],
+    // The sync relay: tested by `frontend`, read as text by Rust tests, and **run** by `web`,
+    // whose sync smoke starts it under workerd. Out of the fail-safe: not `core`, not `storybook`.
+    ["relay/src/index.ts", T, T, F, F, F, F, T],
+    ["relay/src/ticket.ts", T, T, F, F, F, F, T],
+    ["relay/wrangler.jsonc", T, T, F, F, F, F, T],
+    ["relay/schema.sql", T, T, F, F, F, F, T],
+    ["relay/README.md", F, F, F, F, F, F, F],
     // The web app's hosting: checked and tested by `frontend`, copied into `dist-web/` by `web`.
-    // Out of the fail-safe the other two Workers still fall to — no Rust source reads it.
+    // Out of the fail-safe the share Worker still falls to — no Rust source reads it.
     ["app-worker/wrangler.jsonc", T, F, F, F, F, F, T],
     ["app-worker/_headers", T, F, F, F, F, F, T],
     ["app-worker/src/headers.ts", T, F, F, F, F, F, T],
@@ -324,6 +331,7 @@ describe("the arms", () => {
   it.each([
     ["scripts/build-wasm.mjs", "scripts/*"],
     ["scripts/web-smoke.mjs", "scripts/*"],
+    ["scripts/web-sync-smoke.mjs", "scripts/*"],
     ["scripts/web-smoke/*", "scripts/*"],
     [".storybook/fake/aliases.ts", ".storybook/*"],
   ])("puts `%s` above `%s`", (file, tree) => {

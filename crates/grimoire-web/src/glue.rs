@@ -86,6 +86,10 @@ pub fn instantiated() {
 /// feeds, as one task on this Worker's own event loop. They say what they are doing through
 /// [`listen`]'s handler. **No upkeep loop** ([`host::start`] says why).
 ///
+/// **And it starts live sync** ([`host::live_sync`]), a second task beside the first and for
+/// the Worker's life: the relay's doorbell, which opens no socket until this device is in a
+/// sync group.
+///
 /// **A corpus that will not open is thrown away and built again**, through the pool's own
 /// delete ([`host::start_replacing`]); `user.db` is never touched, and the console is told.
 #[wasm_bindgen]

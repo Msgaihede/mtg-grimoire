@@ -34,6 +34,11 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   No lock; `web:dev` serves it on port 5176, and **`web:preview` serves the build under the
   hosting's own headers** — the local server to drive under the shipped policy; `web:smoke`
   serves under it too since 2026-10-04, and fails on a refusal.
+  **`npm run web:sync-smoke`** is live sync end to end: two headless Chromium profiles (the
+  desktop face and the phone face) claim, pair and sync through `relay/`'s own code under
+  workerd (`wrangler dev --local`, a local D1, nothing that reaches Cloudflare), by the relay's
+  real name and under the shipped policy; `-- --measure` adds a minute's profile of the idle
+  loop, twice. It needs a wrangler: `WRANGLER=<path to wrangler.js>`, or `app-worker`'s own.
   **`verify` runs none of them** — CI's `web` job
   does. See [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-web/CLAUDE.md).
 

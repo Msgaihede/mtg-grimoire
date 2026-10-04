@@ -63,8 +63,8 @@ All I/O operations go through abstractions defined in `src/platform/`:
   - Web: Single-threaded async cooperative tasks.
 - **The relay's live socket (`platform::socket`)**:
   - Desktop / Android: `tokio-tungstenite` over rustls with compiled-in roots; the bearer rides the upgrade's `Authorization` header and the keepalive is a protocol ping, which fails when the one before it got no pong from a peer that has ponged before (a half-open socket is noticed within two ping periods; a peer that never pongs is never failed this way).
-  - Web: the arm compiles and refuses every `connect`; a browser's own `WebSocket` (bearer in the sub-protocol, a text keepalive) is not written yet.
-  - Its one caller is `sync_engine::live::run`, the connection manager — a future each host spawns itself (the desktop and Android do; the web host does not yet). See [sync.md](sync.md), "The connection manager, too".
+  - Web: the engine Worker's own `WebSocket`, reached through `js_sys::Reflect`; the bearer rides a sub-protocol (`grimoire.live.v1` and `bearer.<token>`), its four events feed a queue `next()` drains, and the keepalive is the text frame `ping`, held to the same rule by the text `pong`, which no caller is handed. The arm's decisions are a module native tests reach (`heard`).
+  - Its one caller is `sync_engine::live::run`, the connection manager — a future each host spawns itself: the desktop, Android and, since step 6.3, the web host. See [sync.md](sync.md), "The connection manager, too".
 
 ---
 

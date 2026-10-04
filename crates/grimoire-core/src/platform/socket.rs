@@ -1149,7 +1149,10 @@ mod tests {
         assert_eq!(opened(&mut refused), None, "still dialling");
         refused.failed();
         refused.closed(Some(1006));
-        assert_eq!(opened(&mut refused), Some(Err(heard::NOT_OPENED.to_owned())));
+        assert_eq!(
+            opened(&mut refused),
+            Some(Err(heard::NOT_OPENED.to_owned()))
+        );
 
         let mut closed = Heard::default();
         closed.closed(Some(1006));

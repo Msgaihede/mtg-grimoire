@@ -50,6 +50,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
     - Reads the exact `wasm-bindgen` CLI version from `Cargo.lock` and compiles via `cargo install wasm-bindgen-cli --version "$bindgen" --locked`.
     - Builds the module (`npm run web:wasm`) and web assets (`npm run web:build`).
     - Executes headless Chrome smoke tests (`npm run web:smoke`) against fixture cards, enforcing offline operation and CORS safety.
+    - Runs the live-sync walk (`npm run web:sync-smoke`: two Chrome profiles, `relay/` under `wrangler dev --local`) **only when `app-worker/package-lock.json` exists**, installing wrangler from it; without that lockfile the step is skipped and the summary says so. Never `npx wrangler@…` in CI. `relay/**` routes to `frontend`, `rust` and `web`.
   - **`powershell`**: Runs `lock.test.ps1` for worktree locks on `windows-latest`. Windows is required because holder PID, process name, and `StartTime` are inspected.
 
 ## Toolchain & Action Security

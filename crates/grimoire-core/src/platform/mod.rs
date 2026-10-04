@@ -22,7 +22,7 @@
 //! | [`sync`] — a permit and a lock an `async fn` holds across an `.await`, first come first served; a bell that keeps a ring nobody was waiting for | `tokio::sync` | `tokio::sync`: it needs no runtime | the I/O step, for the image cache; a lock that guards a value with the sync step, for the pending pairing offer; the bell with live sync's connection manager, for its write wake |
 //! | [`Sendable`] — what a fence over a future's `Send`-ness bounds by, and what `spawn` asks of an operation it is handed | `Send` | anything | the sync step, for the fences over a trip |
 //! | [`spawn`] — work taken off the caller: minutes of SQLite under an `async fn`, a build nobody waits for, a sync operation | the async runtime's blocking pool, a thread | run where it stands: a Worker has no second thread | the I/O step, for the card sync's ingest and the facet index's build; an operation on a worker with live sync's connection manager, for its trips |
-//! | [`socket`] — the relay's doorbell: one WebSocket, a keepalive, the next frame | `tokio-tungstenite` over rustls, the bearer in `Authorization` | refused in a sentence until the browser's own `WebSocket` is written | live sync's connection manager (the light app's phase 6, step 6.2) |
+//! | [`socket`] — the relay's doorbell: one WebSocket, a keepalive, the next frame | `tokio-tungstenite` over rustls, the bearer in `Authorization`, a protocol ping | the Worker's own `WebSocket`, the bearer in a sub-protocol, a text `ping` | live sync's connection manager (the light app's phase 6, step 6.2); the browser's arm with the web host's loop (step 6.3) |
 //!
 //! [`alone`] is the odd one out: not an interface with two arms but a way for a native **test**
 //! to feel the browser's — one thread, work run where it stands, a lock taken twice a failure.
@@ -44,8 +44,11 @@
 //! kind driven through it — which reached [`clock`], [`pause`], [`spawn`]'s `blocking` and the
 //! refusing [`files`], and not [`http`], [`timer`] or `spawn`'s `background`. Those three are
 //! first called by the web host's launch downloads (phase 5, step 5.2), and what a browser
-//! made of them is `docs/reference/light-app.md`'s to record. **[`socket`]'s browser arm is the
-//! one that is not run**: it refuses, and no host starts live sync's loop there yet.
+//! made of them is `docs/reference/light-app.md`'s to record. **[`socket`]'s browser arm was the
+//! last to run**, on 2026-10-04 with [`spawn`]'s `on_a_worker` and [`timer`]'s `interval` under
+//! it: live sync's loop in headless Chrome 154, against the relay's own code under workerd
+//! (`scripts/web-sync-smoke.mjs`, and that file's §10.3). Chrome is the one browser any of
+//! these arms has run in.
 
 pub mod alone;
 pub mod clock;

@@ -25,7 +25,9 @@
 //! **What a `ready` open starts** (step 5.2): the launch's downloads — the card sync and then,
 //! one after another, the optional feeds — as one task on the Worker's own event loop, never
 //! awaited by `open` ([`host::launch_downloads`]). A corpus that will not open is thrown away
-//! through the pool's own delete and built again ([`host::start_replacing`]).
+//! through the pool's own delete and built again ([`host::start_replacing`]). **And live sync**
+//! (phase 6, step 6.3): the core's connection manager as a second task ([`host::live_sync`]),
+//! over the Worker's own `WebSocket`, silent until this device is in a sync group.
 //!
 //! **What it does not do yet**: keep a card image, or notice a corpus damaged inside a file
 //! whose first page is sound. Those are the web phase's later steps.

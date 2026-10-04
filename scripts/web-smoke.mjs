@@ -695,7 +695,7 @@ async function intercept(browser, origin, userAgent, problems, routes, through =
 async function watchPolicy(browser, problems, socket = () => false) {
   /** Session → what it is, for the sentence. */
   const targets = new Map();
-  /** Every socket any watched Worker made, allowed or not: `{ url, sessionId }`. */
+  /** Every socket any watched Worker made, allowed or not: `{ url, sessionId, requestId }`. */
   const sockets = [];
   const watch = async (sessionId, name, type) => {
     targets.set(sessionId, name);
@@ -703,8 +703,8 @@ async function watchPolicy(browser, problems, socket = () => false) {
     if (type === "worker") await browser.send("Network.enable", {}, sessionId);
   };
 
-  browser.on("Network.webSocketCreated", ({ url }, sessionId) => {
-    sockets.push({ url, sessionId });
+  browser.on("Network.webSocketCreated", ({ url, requestId }, sessionId) => {
+    sockets.push({ url, sessionId, requestId });
     if (!socket(url)) {
       problems.push(`${targets.get(sessionId) ?? "a target"} opened a socket to ${url}`);
     }
@@ -750,20 +750,22 @@ async function watchPolicy(browser, problems, socket = () => false) {
     watched: () => [...targets.values()],
     /** Every socket a watched Worker made. */
     sockets,
-    /** What a session is, for a sentence. */
-    named: (sessionId) => targets.get(sessionId),
+    /** The sessions of the dedicated Workers listened to, oldest first. */
+    workers: () => [...targets].filter(([, name]) => name.startsWith("worker ")).map(([id]) => id),
   };
 }
 
 /** A tab on `url`, with what it threw kept. `problems` is checked on every wait, and `policy`
- *  is told of the tab before it loads anything. */
-async function openPage(browser, url, problems, policy) {
+ *  is told of the tab before it loads anything. `prepare` is a run's own word to the tab before
+ *  it loads — the sync smoke's viewport, which decides the face the app mounts. */
+async function openPage(browser, url, problems, policy, prepare) {
   const { targetId } = await browser.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await browser.send("Target.attachToTarget", { targetId, flatten: true });
   await browser.send("Runtime.enable", {}, sessionId);
   await browser.send("Page.enable", {}, sessionId);
   // A tab that is not the browser's front one still takes typed text as a focused page does.
   await browser.send("Emulation.setFocusEmulationEnabled", { enabled: true }, sessionId);
+  await prepare?.(sessionId);
   await policy?.page(sessionId, `the page at ${url}`);
   await browser.send("Page.navigate", { url }, sessionId);
   const evaluate = async (expression) => {
@@ -983,8 +985,7 @@ async function browse(origin, routes, own = {}) {
 // What `scripts/web-sync-smoke.mjs` is written in: the same server, browser and ears, and the
 // same words for the page's own controls, so the two runs cannot come to mean different things
 // by "the app got past its startup gate".
-export { serve, browse, openPage, fixtures, coreChunk, buttonSaying, tileOf, tile };
-export { SHELL, ALERT, SEARCH_BOX, CARDS_FILE };
+export { serve, browse, openPage, fixtures, coreChunk, buttonSaying, ALERT };
 
 // ---------------------------------------------------------------------------------------------
 // A reload that lands inside a synchronous engine call
@@ -1560,8 +1561,8 @@ async function main() {
   // this device is in no sync group, so it must have dialled nobody. A request to the relay has
   // no fixture and would have failed the run by name above; a socket is no request, so it is
   // asked of the Worker's own `Network` domain (`watchPolicy`); and the loop's own word for
-  // where it stands is `off`. The run is minutes long, so its five-second read of `sync_group`
-  // has come round many times by now.
+  // where it stands is `off`. Four documents have each run the loop by here, the last for
+  // seconds, so its five-second read of `sync_group` has come round more than once.
   const live = await engine("sync_live_state");
   if (live !== "off" || policy.sockets.length > 0) {
     fail(
