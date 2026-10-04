@@ -33,8 +33,9 @@
 //! it is a guess.
 //!
 //! **The fence holds four more names to this directory since the I/O step**: `reqwest`,
-//! `tokio`, `std::fs` and `std::thread`, in shipped code. Each compiles for a desktop wherever
-//! it is written, which is exactly why a compiler cannot be what keeps them here.
+//! `tokio`, `std::fs` and `std::thread`, in shipped code — and, since [`socket`], its crate
+//! (`tokio_tungstenite`, `tungstenite`). Each compiles for a desktop wherever it is written,
+//! which is exactly why a compiler cannot be what keeps them here.
 //!
 //! **Every browser arm under this directory compiles, and the web host is what runs them**
 //! (`crates/grimoire-web`, the light app's phase 5). CI's `core` job builds them for

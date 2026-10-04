@@ -177,7 +177,8 @@ pub enum Disconnect {
     Removed,
     /// The relay closed the socket, or the stream simply ended.
     Closed,
-    /// The connection, the upgrade or a write failed.
+    /// The connection, the upgrade or a write failed — or a keepalive went unanswered, which is
+    /// a socket that died without saying so.
     Failed,
     /// The socket reached `live`'s age limit and was replaced on purpose.
     Aged,

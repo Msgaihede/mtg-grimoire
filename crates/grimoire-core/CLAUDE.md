@@ -26,7 +26,7 @@ Enforced by `platform::fence` across the codebase:
 | **No `tauri` dependency** (or wry, tao, tauri plugins) | `platform::fence` checks `Cargo.toml` |
 | **Platform cfg gates strictly localized** (`cfg(target_*)`, `cfg(windows)`, `cfg(unix)`) | Permitted only under `src/platform/` |
 | **No raw time primitives outside `src/platform/`** (`SystemTime`, `UNIX_EPOCH`, `Instant`) | Swept by `platform::fence`; use `platform::clock` or SQLite `unixepoch()` |
-| **No raw I/O or threading outside `src/platform/`** (`reqwest`, `tokio`, `std::fs`, `thread`, `net`, `process`, `env`, or path queries like `.exists()`) | Swept across all shipped code; tests placed at foot of files |
+| **No raw I/O or threading outside `src/platform/`** (`reqwest`, `tokio`, `tokio_tungstenite`/`tungstenite`, `std::fs`, `thread`, `net`, `process`, `env`, or path queries like `.exists()`) | Swept across all shipped code; tests placed at foot of files |
 | **Multi-target compilation** | CI verifies `x86_64-pc-windows-msvc`, `aarch64-linux-android`, and `wasm32-unknown-unknown` |
 
 ---
@@ -38,11 +38,11 @@ All OS- and environment-specific behaviors are isolated behind `platform/`:
 - **Clock (`platform::clock`)**:
   - `Tick`: Monotonic duration tracking via `Instant` (native) or `performance.now()` (browser microsecond precision).
   - `Wall`: Persistent wall-clock timestamps in milliseconds since epoch.
-- **Timer (`platform::timer`)**: `sleep`, `timeout`, `interval` (first tick at once, then one per period on a monotonic grid), and `yield_to_host` (posts message across `MessageChannel` in browser). Streaming loops use `Breather` with `feed::WORK_BUDGET` (50 ms) to avoid starving host IPC.
+- **Timer (`platform::timer`)**: `sleep`, `timeout`, `interval` (first tick at once, then one per period on a monotonic grid; beats missed outright are dropped, never taken back to back), and `yield_to_host` (posts message across `MessageChannel` in browser). Streaming loops use `Breather` with `feed::WORK_BUDGET` (50 ms) to avoid starving host IPC.
 - **Pause (`platform::pause`)**: `thread::sleep` on native; immediately returns `false` on single-threaded browser workers.
 - **HTTP (`platform::http`)**: Host-agnostic `Client`, `Request`, and `Response`. Native uses reqwest/rustls; browser uses `fetch`. No `reqwest` types leak outside `platform::http`.
 - **Files (`platform::files`)**: Native wraps `std::fs`/`tokio::fs`. Browser immediately returns `ErrorKind::Unsupported` (storage relies on SQLite OPFS VFS).
-- **Socket (`platform::socket`)**: The relay's doorbell WebSocket — `connect(url, bearer)`, `Socket::next() -> Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`, and `ws_origin`. Native (desktop and Android) uses `tokio-tungstenite` over rustls with compiled-in roots, the bearer in the upgrade's `Authorization` header and a protocol ping. The browser arm compiles and refuses every `connect`; no `tungstenite` type leaks outside the module.
+- **Socket (`platform::socket`)**: The relay's doorbell WebSocket — `connect(url, bearer)`, `Socket::next() -> Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`, and `ws_origin`. Native (desktop and Android) uses `tokio-tungstenite` over rustls with compiled-in roots, the bearer in the upgrade's `Authorization` header and a protocol ping — and `keepalive` fails when the previous ping got no pong, which is how a half-open socket is noticed. The browser arm compiles and refuses every `connect`; no `tungstenite` type leaks outside the module.
 - **Sync (`platform::sync`)**: `Semaphore`, `Lock`, and `Shared<T>` providing FIFO fairness across async tasks; `Bell`, a wake that keeps one ring when nobody is waiting (`notify_one`, never `notify_waiters`).
 - **Spawning (`platform::spawn`)**: `blocking`, `background`, and `on_a_worker` (an async operation whose stretches block — a sync trip — driven on a pool thread by a runtime of its own). Runs on thread pool natively; runs inline on single-threaded browser workers.
 - **Alone (`platform::alone`)**: Native test harness enabling single-threaded browser execution semantics to detect re-entrancy and deadlocks.

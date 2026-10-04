@@ -9,7 +9,7 @@
 //! | | Native (the desktop, Android) | Browser |
 //! | --- | --- | --- |
 //! | [`connect`] | `tokio-tungstenite` over rustls, the bearer in the upgrade's `Authorization` header | **refused in a sentence** — the browser's socket is not written yet |
-//! | [`Socket::keepalive`] | a **protocol** ping | — |
+//! | [`Socket::keepalive`] | a **protocol** ping, which fails when the one before it was never answered | — |
 //! | [`Socket::next`] | the next text frame, or how the socket ended | — |
 //!
 //! **The two hosts cannot say who they are the same way, which is why the bearer is an
@@ -59,8 +59,8 @@ pub async fn connect(url: &str, bearer: &str) -> Result<Socket, String> {
 impl Socket {
     /// Wait for the next thing the socket says — see [`Event`].
     ///
-    /// Safe to drop while it waits: nothing is read that is not handed back, so it can be one
-    /// arm of a select that another arm wins.
+    /// Safe to drop while it waits: nothing is read that is not handed back or noted, so it
+    /// can be one arm of a select that another arm wins.
     pub async fn next(&mut self) -> Event {
         self.0.next().await
     }
@@ -72,7 +72,20 @@ impl Socket {
     /// them — the only keepalive that keeps hibernation. A text frame would be an incoming
     /// *message*: billed, and it wakes the object.
     ///
-    /// `Err` is a socket that could not be written to, which the caller treats as its end.
+    /// **And it is how a dead socket is found: a keepalive whose predecessor was never
+    /// answered fails.** A connection that has gone without a word — a phone back from the
+    /// background on another network, a laptop out of range — is not closed by anything this
+    /// end can see until TCP gives up on it, which is about twenty seconds on Windows and on
+    /// the order of a quarter of an hour on Android's Linux defaults; until then the socket
+    /// reads as live and hears no doorbell. So each ping is owed a pong before the next one is
+    /// due: [`Socket::next`] notes it as it swallows it, and a keepalive that finds the last
+    /// one still unanswered looks once at what has already arrived (a caller busy with a round
+    /// trip has not been reading) and then answers `Err`, in a sentence. A dead socket is
+    /// noticed within two keepalive periods. The browser's arm owes the same property, from
+    /// the text `pong` its text `ping` is answered with.
+    ///
+    /// `Err` is that, or a socket that could not be written to; the caller treats either as
+    /// the socket's end.
     pub async fn keepalive(&mut self) -> Result<(), String> {
         self.0.keepalive().await
     }
@@ -103,15 +116,25 @@ pub fn ws_origin(base: &str) -> String {
 #[cfg(not(target_family = "wasm"))]
 mod imp {
     use super::Event;
-    use futures_util::{SinkExt, StreamExt};
-    use tokio_tungstenite::tungstenite::Message;
+    use futures_util::{FutureExt, SinkExt, StreamExt};
+    use std::collections::VecDeque;
+    use tokio_tungstenite::tungstenite::{Error, Message};
 
     /// The stream `connect_async` answers: TLS for `wss://`, plain for `ws://`.
     type Stream = tokio_tungstenite::WebSocketStream<
         tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>,
     >;
 
-    pub struct Socket(Stream);
+    /// What a keepalive that went unanswered says.
+    const UNANSWERED: &str = "the relay did not answer the last keepalive";
+
+    pub struct Socket {
+        stream: Stream,
+        /// Whether a ping has gone out that no pong has come back for.
+        unanswered: bool,
+        /// What a keepalive read while it looked for its pong, kept for [`Socket::next`].
+        held: VecDeque<Event>,
+    }
 
     /// The upgrade request for one socket, carrying the bearer.
     ///
@@ -142,33 +165,92 @@ mod imp {
     pub async fn connect(url: &str, bearer: &str) -> Result<Socket, String> {
         let request = upgrade_request(url, bearer)?;
         match tokio_tungstenite::connect_async(request).await {
-            Ok((socket, _)) => Ok(Socket(socket)),
+            Ok((stream, _)) => Ok(Socket {
+                stream,
+                unanswered: false,
+                held: VecDeque::new(),
+            }),
             Err(e) => Err(e.to_string()),
         }
     }
 
     impl Socket {
         pub async fn next(&mut self) -> Event {
+            if let Some(event) = self.held.pop_front() {
+                return event;
+            }
             loop {
-                match self.0.next().await {
-                    Some(Ok(Message::Text(text))) => return Event::Text(text.as_str().to_owned()),
-                    Some(Ok(Message::Close(frame))) => {
-                        return Event::Closed(frame.map(|f| u16::from(f.code)));
-                    }
-                    None => return Event::Closed(None),
-                    Some(Err(e)) => return Event::Failed(e.to_string()),
-                    // Pongs and everything else: the runtime handles control frames, and there
-                    // are no other application messages.
-                    Some(Ok(_)) => {}
+                let read = self.stream.next().await;
+                if let Some(event) = self.take(read) {
+                    return event;
                 }
             }
         }
 
+        /// One thing the stream answered, as the event it is — or `None` for what a caller is
+        /// never handed. A pong is the answer to the keepalive, and is noted here.
+        fn take(&mut self, read: Option<Result<Message, Error>>) -> Option<Event> {
+            match read {
+                Some(Ok(Message::Text(text))) => Some(Event::Text(text.as_str().to_owned())),
+                Some(Ok(Message::Close(frame))) => {
+                    Some(Event::Closed(frame.map(|f| u16::from(f.code))))
+                }
+                None => Some(Event::Closed(None)),
+                Some(Err(e)) => Some(Event::Failed(e.to_string())),
+                Some(Ok(Message::Pong(_))) => {
+                    self.unanswered = false;
+                    None
+                }
+                // Everything else: the runtime answers a ping the peer sent, and there are no
+                // other application messages.
+                Some(Ok(_)) => None,
+            }
+        }
+
+        /// Read whatever has **already arrived**, without waiting, until the keepalive's pong
+        /// is among it or there is no more — keeping what a caller is owed for
+        /// [`Socket::next`]. Answers whether the socket was found to have ended.
+        ///
+        /// For a caller that has not been reading: a round trip can outlast a ping period, and
+        /// the pong that came in during it is in the buffer, not missing.
+        fn catch_up(&mut self) -> bool {
+            while self.unanswered {
+                let Some(read) = self.stream.next().now_or_never() else {
+                    break;
+                };
+                if let Some(event) = self.take(read) {
+                    let ended = !matches!(event, Event::Text(_));
+                    self.held.push_back(event);
+                    if ended {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+
         pub async fn keepalive(&mut self) -> Result<(), String> {
-            self.0
+            if self.unanswered {
+                // A socket that has ended says so through `next`, in its own words.
+                if self.catch_up() {
+                    return Ok(());
+                }
+                if self.unanswered {
+                    return Err(UNANSWERED.to_owned());
+                }
+            }
+            self.stream
                 .send(Message::Ping(Vec::<u8>::new().into()))
                 .await
-                .map_err(|e| e.to_string())
+                .map_err(|e| e.to_string())?;
+            self.unanswered = true;
+            Ok(())
+        }
+
+        /// Whether a keepalive is still waiting for its pong.
+        #[cfg(test)]
+        pub(super) fn unanswered(&self) -> bool {
+            self.unanswered
         }
     }
 }
@@ -185,7 +267,8 @@ mod imp {
     /// holds the browser's own `WebSocket` here, opened with the sub-protocols `grimoire.live.v1` and
     /// `bearer.<token>` (a page cannot set `Authorization` on an upgrade), a queue its
     /// `onmessage`, `onclose` and `onerror` feed for [`Socket::next`] to drain, and a
-    /// `keepalive` that sends the text frame `ping` (a page cannot send a protocol ping).
+    /// `keepalive` that sends the text frame `ping` (a page cannot send a protocol ping) and
+    /// fails when the last one's text `pong` never came, as the native arm's does.
     /// Nothing about it need be `Send`: the loop that holds it is spawned on the Worker's own
     /// thread.
     pub struct Socket(std::convert::Infallible);
@@ -355,6 +438,84 @@ mod tests {
             matches!(&heard, Message::Ping(payload) if payload.is_empty()),
             "{heard:?}"
         );
+    }
+
+    /// Read — and swallow — until the keepalive's pong is in, bounded: a pong is only *known*
+    /// to have arrived once this end has read it, so "the server answered" is waited for
+    /// rather than guessed at from a clock.
+    async fn until_answered(socket: &mut Socket) {
+        let waiting = crate::platform::clock::Tick::now();
+        while socket.0.unanswered() {
+            assert!(waiting.elapsed() < SOON, "the pong never came");
+            let _ = tokio::time::timeout(Duration::from_millis(10), socket.next()).await;
+        }
+    }
+
+    /// **A relay that answers its pings stays up**, keepalive after keepalive: each pong is
+    /// noted as `next` swallows it, so the following ping finds nothing outstanding. The peer
+    /// here only reads, which is all tungstenite's accepting side needs to answer a ping.
+    #[tokio::test]
+    async fn a_socket_whose_pings_are_answered_stays_up_across_keepalives() {
+        let (mut socket, mut peer, _asked) = pair().await;
+        let answering = tokio::spawn(async move { while peer.next().await.is_some() {} });
+
+        for _ in 0..3 {
+            socket
+                .keepalive()
+                .await
+                .expect("the last ping was answered");
+            assert!(socket.0.unanswered(), "a ping is owed a pong from here");
+            until_answered(&mut socket).await;
+        }
+        answering.abort();
+    }
+
+    /// **A ping nobody answers makes the next keepalive fail, in a sentence** — the half-open
+    /// socket: connected as far as this end's TCP knows, and nobody there. The peer never
+    /// reads again after the handshake, so no pong is ever sent, and the socket is still
+    /// open — which is the point: nothing else would end it.
+    #[tokio::test]
+    async fn a_ping_nobody_answered_fails_the_next_keepalive() {
+        let (mut socket, _peer, _asked) = pair().await;
+        socket.keepalive().await.expect("the first ping goes out");
+
+        let dead = socket
+            .keepalive()
+            .await
+            .expect_err("the first ping was never answered");
+        assert!(dead.contains("did not answer the last keepalive"), "{dead}");
+        // And it stays dead: asking again says the same, and sends nothing.
+        assert_eq!(socket.keepalive().await, Err(dead));
+    }
+
+    /// **A pong that arrived while nobody was reading is found by the keepalive itself, and a
+    /// frame it read on the way is kept** — the loop inside a round trip longer than a ping
+    /// period: the answer is in the buffer, not missing, and the `head` behind it must not be
+    /// lost to the looking.
+    #[tokio::test]
+    async fn a_keepalive_finds_a_pong_that_was_waiting_and_keeps_the_frame_ahead_of_it() {
+        let (mut socket, mut peer, _asked) = pair().await;
+        let head = r#"{"t":"head","cursor":9,"from":"d2"}"#;
+        // The frame first, then the read that answers the ping: on the wire, text then pong.
+        let answering = tokio::spawn(async move {
+            peer.send(Message::Text(head.into())).await.unwrap();
+            while peer.next().await.is_some() {}
+        });
+        socket.keepalive().await.unwrap();
+
+        // Never `next`: only the keepalive, and the look it takes for itself. Asked again until
+        // the pong has crossed loopback — a refusal sends nothing and changes nothing, so the
+        // asking is only a wait; without the look it would be refused for ever.
+        let waiting = crate::platform::clock::Tick::now();
+        while let Err(not_yet) = socket.keepalive().await {
+            assert!(
+                waiting.elapsed() < SOON,
+                "the keepalive never found the pong: {not_yet}"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(next(&mut socket).await, Event::Text(head.to_owned()));
+        answering.abort();
     }
 
     /// The relay's "this group is gone" is a close with 4001, and the code is what the caller

@@ -3951,7 +3951,7 @@ desktop has a moment for: the bounded push on the way out (`anything_pending`, `
 | --- | --- | --- |
 | The socket | `tokio-tungstenite`, named in `live.rs` | `platform::socket`: `connect(url, bearer)`, `Socket::next() -> Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`. The native arm is the same crate, version, features and upgrade request; the browser arm compiles and refuses |
 | The five wakes | `tokio::select!` | `futures_util::select!` over fused futures — as fair: whichever is ready is taken in no fixed order. `tokio::select!` cannot be named outside `platform/`, and the core's tokio has no `macros` |
-| The 45 s ping and the 250 ms tick | `tokio::time::interval` | `platform::timer::interval`: the same shape (first tick at once, a missed beat owed, safe to drop mid-wait), on `platform::clock::Tick` and `timer::sleep`, so a browser has it |
+| The 45 s ping and the 250 ms tick | `tokio::time::interval` | `platform::timer::interval`, on `platform::clock::Tick` and `timer::sleep`, so a browser has it: first tick at once, a late beat keeps the grid, safe to drop mid-wait — and **beats missed outright are dropped, where tokio's default owes them back to back** (below) |
 | The socket's age limit and `lived_ms` | `tokio::time::Instant` | `Tick`, and one `timer::sleep(SOCKET_MAX_AGE)` for the socket's life |
 | The write wake | `Arc<tokio::sync::Notify>` | `Arc<platform::sync::Bell>` — the same `Notify` underneath, `ring()` is `notify_one`, so a commit that lands while the loop is in a trip, asleep on a backoff or dialling is still kept as one permit |
 | A trip, and the token for the upgrade | `sync::on_a_worker` | `platform::spawn::on_a_worker`: natively the same — a pool thread with a current-thread runtime of its own; where there is one thread, awaited where it stands |
@@ -3959,6 +3959,28 @@ desktop has a moment for: the bounded push on the way out (`anything_pending`, `
 | `sync:live`, and the loop's `sync:applied` | `AppHandle::emit` | the state's `EventSink`, which the desktop forwards to every window as before. The payloads are the same JSON; `sync:applied`'s keys now arrive in the order `serde_json::Value` keeps them, as every other core event's do |
 | `sync_live_state` | a desktop-only command | a `task` entry in the core's table; the desktop's wrapper stays registered and answers the same value |
 | Who starts it | `live::spawn(app, state, writes)` | the host: `tauri::async_runtime::spawn(live::run(state, writes))`, after its launch has settled |
+
+**Two things the loop does differently on every host, the desktop included, and both on
+purpose:**
+
+- **A keepalive that was never answered ends the socket.** A connection that goes without a
+  word — a phone back from the background on another network, a laptop out of range — is closed
+  by nothing this end can see until TCP gives up: about twenty seconds on Windows, on the order
+  of a quarter of an hour on Android's Linux defaults. Until then the socket read `live` and
+  heard no doorbell. `Socket::keepalive` now tracks its ping: `next` notes the pong as it
+  swallows it, and a keepalive that finds the last ping still unanswered looks once at what has
+  already arrived (a loop inside a long trip has not been reading) and then fails — *the relay
+  did not answer the last keepalive* — which is `Disconnect::Failed`, the ordinary backoff and
+  reconnect. So a dead socket is noticed within two ping periods, ninety seconds. It rests on
+  the relay answering a protocol ping with a pong, which the 2026-10-01 pass above saw under
+  `wrangler dev`; against the deployed edge it has not been watched.
+- **A beat that was missed is not owed.** `tokio::time::interval` bursts by default: a loop
+  that was away takes every missed tick back to back. After an hour frozen — Android freezing a
+  background process, a laptop's lid — that was 14 400 ticks and eighty pings, and
+  `platform::timer`'s interval, with no timer to pass through for a beat already due, would
+  have taken them without once yielding its thread or reading a frame. It takes one and is on
+  a grid from then. On the desktop that removes `take_due` calls that answer `false` and pings
+  into a socket that is probably dead.
 
 **Android runs it** (`mobile/src-tauri`): its `open` registers `live::WriteWake` as the state's
 one write observer and its `start` spawns the loop after `startup::settle`. **It has no push on
@@ -3972,8 +3994,11 @@ its keepalive will be a text frame; that arm of `platform::socket` is the next s
 twelve idle polls and dials nothing until it is put in a group; a device in a group dials a
 loopback stand-in with its bearer in `Authorization`, says `connecting`, `live`, sends a protocol
 ping first, and on a 4001 close says `offline` and writes the `live` row; and on a state with one
-connection, on a thread standing in for a Worker (`platform::alone`), one whole pass of the loop —
-the group read, a failed trip and its row, the token, the note — takes no lock twice. Each was
+connection, on a thread standing in for a Worker (`platform::alone`), the loop takes no lock
+twice — once with no socket (the group read, a failed trip and its row, the token, the note) and
+once with one up and a `head` ahead of the cursor (the keepalive, the cursor read, the outbox
+gate). The socket's own: a relay that answers its pings stays up across keepalives, one that
+never does fails the second, and a pong that came in while nobody was reading is found. Each was
 seen to fail against a mutation of what it guards. **Not driven**: the desktop app against a
 relay after the move, a phone at all, and an Android build on this machine (no target, no NDK —
 CI's `core (aarch64-linux-android)` job is what compiles it).

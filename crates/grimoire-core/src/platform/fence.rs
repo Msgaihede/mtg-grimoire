@@ -9,7 +9,9 @@
 //! **A fifth rule arrived with the I/O step, and it is the same kind**: `reqwest`, `tokio`,
 //! `std::fs` and `std::thread` all compile on a desktop wherever they are written, and each is
 //! something a browser has no equivalent of or a different one. They are named under this
-//! directory and nowhere else in what a build ships.
+//! directory and nowhere else in what a build ships. The relay socket's crate joined them with
+//! `platform::socket` — as `tokio_tungstenite` and as `tungstenite`, since a sweep for the word
+//! `tokio` reads straight past the first.
 //!
 //! **It reads code lines and skips comment lines**, where `mobile/phone/fence.test.ts` reads
 //! both: prose here has to be able to say why a rule exists, and the module docs name
@@ -108,8 +110,11 @@ mod tests {
     /// so its two code spellings are: the call, and the import an alias would need.
     const CLOCK_PATHS: [&str; 2] = ["Instant::now", "time::Instant"];
 
-    /// The two crates that are a host's network and its async runtime, as whole words.
-    const IO_CRATES: [&str; 2] = ["reqwest", "tokio"];
+    /// The crates that are a host's network, its async runtime and its WebSocket, as whole
+    /// words. **The socket's crate in both its spellings**: `tokio_tungstenite` is one word to
+    /// a sweep that reads identifiers, so neither `tokio` nor `tungstenite` finds it — and
+    /// `tungstenite` alone is how the crate it re-exports is named.
+    const IO_CRATES: [&str; 4] = ["reqwest", "tokio", "tokio_tungstenite", "tungstenite"];
 
     /// The modules of `std` that are a disk, another thread, a socket, a child process and the
     /// process's environment — the last because `std::env::temp_dir()` is a path on a disk a
@@ -227,7 +232,7 @@ mod tests {
     fn io_offence(line: &str) -> Option<&'static str> {
         if IO_CRATES.iter().any(|name| has_word(line, name)) {
             return Some(
-                "names the HTTP client or the async runtime; ask `platform::http`, `timer` or `files`",
+                "names the HTTP client, the async runtime or the socket's crate; ask `platform::http`, `timer`, `files` or `socket`",
             );
         }
         let import = bare(line);
@@ -543,6 +548,7 @@ mod tests {
         for (file, what) in [
             ("http.rs", "the HTTP client"),
             ("timer.rs", "the async runtime"),
+            ("socket.rs", "the socket's crate"),
             ("files.rs", "a disk"),
             ("pause.rs", "a thread"),
         ] {
@@ -561,6 +567,9 @@ mod tests {
             "tokio::time::sleep(wait).await;",
             "    slot: Arc<tokio::sync::Mutex<u64>>,",
             "use tokio::io::AsyncWriteExt;",
+            "let (socket, _) = tokio_tungstenite::connect_async(request).await?;",
+            "use tungstenite::Message;",
+            "    Frame(tokio_tungstenite::tungstenite::Message),",
             "let mut file = std::fs::File::open(path)?;",
             "use std::fs;",
             "use std::{fs, io};",

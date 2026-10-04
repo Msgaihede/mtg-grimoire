@@ -326,6 +326,13 @@ async fn connect_once(
     let mut ping = timer::interval(Duration::from_secs(PING_SECS));
     let mut tick = timer::interval(TICK);
     // One sleep for the socket's whole life, polled by every pass of the loop below.
+    //
+    // **It counts from its first poll, not from `up`**: `timer::sleep` is an `async fn`, so the
+    // timer under it is made when the select below first polls this, a few statements — or,
+    // when another arm is ready first, a first trip — after the upgrade. That is seconds of
+    // drift against twelve hours, on a limit whose only job is to stay well inside a
+    // twenty-four hour token; `lived_ms` is measured from `up` itself. Not worth a deadline
+    // type on `platform::timer` to remove, and not a bug to fix.
     let aged = timer::sleep(SOCKET_MAX_AGE).fuse();
     pin_mut!(aged);
 
@@ -354,7 +361,10 @@ async fn connect_once(
             Woke::Aged => break (Disconnect::Aged, None),
 
             // The keepalive — a protocol ping wherever the host can send one, and
-            // [`socket::Socket::keepalive`] has why.
+            // [`socket::Socket::keepalive`] has why. **It is also where a socket that died
+            // without a word is found**: it fails when the ping before it was never answered,
+            // and that is an ordinary failed socket — a backoff and a reconnect — a ping period
+            // or two after the network went, rather than whenever TCP gives up.
             Woke::Ping => {
                 if let Err(e) = socket.keepalive().await {
                     break (Disconnect::Failed, Some(e));
@@ -958,6 +968,165 @@ mod tests {
         authorization: Option<String>,
     }
 
+    /// The stand-in relay's end of one socket.
+    type Peer = tokio_tungstenite::WebSocketStream<tokio::net::TcpStream>;
+
+    /// Offer one connection an upgrade, keeping what its request said. `None` for a connection
+    /// that was not asking for one — a round trip's plain request, which the stand-in cannot
+    /// answer and lets fall away.
+    async fn upgraded(stream: tokio::net::TcpStream) -> Option<(Peer, Asked)> {
+        let mut asked = Asked::default();
+        // The refusal this callback could answer is a whole HTTP response — tungstenite's
+        // contract for it — and this one never refuses.
+        #[allow(clippy::result_large_err)]
+        let keep = |request: &Request, response: Response| -> Result<Response, ErrorResponse> {
+            asked.path = request.uri().to_string();
+            asked.authorization = request
+                .headers()
+                .get("authorization")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned);
+            Ok(response)
+        };
+        let peer = tokio_tungstenite::accept_hdr_async(stream, keep)
+            .await
+            .ok()?;
+        Some((peer, asked))
+    }
+
+    /// How many failures the background loop has noted, however they folded into rows.
+    fn noted(state: &State) -> i64 {
+        live_rows(state).iter().map(|(_, count)| count).sum()
+    }
+
+    /// **The connected loop on one connection and one thread.** The test above it never brings
+    /// a socket up, so three things the loop only does under one went unwalked there: the
+    /// keepalive, the cursor read a `head` frame asks for, and the outbox gate a commit rings.
+    /// Here the socket comes up, on a state whose write connection carries the wake, and the
+    /// stand-in sends a `head` ahead of this device's cursor — each step on the one connection,
+    /// on a thread where a lock taken twice is a panic ([`crate::platform::alone`]).
+    ///
+    /// What shows each was walked: the stand-in's first frame is the ping; a trip follows the
+    /// `head`, which only a cursor read behind it schedules; and the bell has no ring left in
+    /// it, though every failed trip's row was a commit that rang it.
+    #[tokio::test]
+    async fn the_connected_loop_takes_no_lock_twice_on_one_connection_and_one_thread() {
+        use futures_util::SinkExt;
+
+        let _turn = ONE_LOOP.lock().await;
+        let soon = Duration::from_secs(20);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+
+        // `state::fixtures::single`'s shape, with the wake registered as a host registers it.
+        let dir = crate::scratch::path("live-loop-alone-connected");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let opened = crate::db::open_single(&dir).unwrap();
+        crate::schema::build_pair(&opened.conn);
+        let heard = Arc::new(Recording::default());
+        let writes = Arc::new(Bell::new());
+        let state = Arc::new(State::new(
+            opened.conn,
+            None,
+            dir.clone(),
+            heard.clone(),
+            vec![Arc::new(WriteWake(writes.clone()))],
+            crate::scryfall::Client::new("http://127.0.0.1:1".into()),
+            crate::images::Cache::new(dir.join("images")),
+        ));
+        assert!(state.one_connection());
+        {
+            let conn = state.lock_db();
+            client::set_state(
+                &conn,
+                client::RELAY_URL,
+                &format!("http://127.0.0.1:{port}"),
+            )
+            .unwrap();
+            let me = identity::ensure(&conn).unwrap();
+            identity::create_group(&conn, &me).unwrap();
+            let tomorrow = crate::platform::clock::now_secs() + 24 * 60 * 60;
+            entitlement::store_grant(&conn, "tok", "refresh", tomorrow).unwrap();
+        }
+
+        // The relay's side: the socket is heard once, then holds until the test says to ring,
+        // sends a `head` ahead of any cursor this device has, and goes on reading — which is
+        // what answers the ping.
+        let (tell, mut told) = tokio::sync::mpsc::unbounded_channel();
+        let ring = Arc::new(tokio::sync::Notify::new());
+        let relay = {
+            let ring = ring.clone();
+            tokio::spawn(async move {
+                loop {
+                    let (stream, _) = listener.accept().await.unwrap();
+                    let (tell, ring) = (tell.clone(), ring.clone());
+                    tokio::spawn(async move {
+                        let Some((mut peer, _asked)) = upgraded(stream).await else {
+                            return;
+                        };
+                        let first = peer.next().await;
+                        let _ = tell.send(first);
+                        ring.notified().await;
+                        let head = r#"{"t":"head","cursor":5,"from":"d2"}"#;
+                        let _ = peer.send(Message::Text(head.into())).await;
+                        while peer.next().await.is_some() {}
+                    });
+                }
+            })
+        };
+
+        let _alone = crate::platform::alone::emulate();
+        let running = tokio::spawn(run(state.clone(), writes.clone()));
+        let waiting = Tick::now();
+        let still_running = |what: &str| {
+            assert!(
+                !running.is_finished(),
+                "the loop ended, which it never does: a lock taken twice is a panic here"
+            );
+            assert!(waiting.elapsed() < soon, "{what}");
+        };
+
+        let first = tokio::time::timeout(soon, told.recv())
+            .await
+            .expect("the loop never dialled")
+            .expect("the stand-in is still listening");
+        assert!(
+            matches!(&first, Some(Ok(Message::Ping(payload))) if payload.is_empty()),
+            "the keepalive is the socket's first word: {first:?}"
+        );
+
+        // The launch's trip and the reconnect's, neither of which the stand-in can answer.
+        while noted(&state) < 2 {
+            still_running("the trips around the socket were never noted");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        let before = noted(&state);
+
+        // The doorbell. A second and a tick later, the trip it asked for.
+        ring.notify_one();
+        while noted(&state) == before {
+            still_running("a `head` ahead of the cursor scheduled no trip");
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        still_running("the loop is still up");
+
+        // Every one of those rows was a commit, and each rang the bell while the loop was
+        // inside the trip that wrote it. None is left: the outbox gate took them.
+        assert!(
+            writes.rung().now_or_never().is_none(),
+            "a ring was left in the bell, so the commit arm never asked the outbox"
+        );
+        let events = heard.taken();
+        running.abort();
+        relay.abort();
+        assert_eq!(
+            events,
+            [said("connecting"), said("live")],
+            "the socket came up and stayed up"
+        );
+    }
+
     /// **The whole loop against a socket that really answers**: a device in a group, holding a
     /// token, dials the relay's address as a WebSocket with its bearer in `Authorization`, says
     /// `connecting` and then `live`, pings at once, and — told its group is gone — says
@@ -1002,23 +1171,9 @@ mod tests {
                 let (stream, _) = listener.accept().await.unwrap();
                 let tell = tell.clone();
                 tokio::spawn(async move {
-                    let mut asked = Asked::default();
-                    // The refusal this callback could answer is a whole HTTP response —
-                    // tungstenite's contract for it — and this one never refuses.
-                    #[allow(clippy::result_large_err)]
-                    let keep = |request: &Request,
-                                response: Response|
-                     -> Result<Response, ErrorResponse> {
-                        asked.path = request.uri().to_string();
-                        asked.authorization = request
-                            .headers()
-                            .get("authorization")
-                            .and_then(|value| value.to_str().ok())
-                            .map(str::to_owned);
-                        Ok(response)
+                    let Some((mut peer, asked)) = upgraded(stream).await else {
+                        return;
                     };
-                    let upgraded = tokio_tungstenite::accept_hdr_async(stream, keep).await;
-                    let Ok(mut peer) = upgraded else { return };
                     // The first thing a fresh socket sends is its keepalive.
                     let first = peer.next().await;
                     let _ = peer

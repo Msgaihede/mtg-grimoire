@@ -75,8 +75,11 @@ flate2 = "1"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 # A body's chunks (`platform::http::Body`), the browser arm's deadline (`platform::timer`) and
 # `scryfall`'s pacing gate — an async mutex that is not the runtime's, because the browser has
-# no runtime to borrow one from.
-futures-util = "0.3"
+# no runtime to borrow one from. Live sync's connection manager races its five wakes with its
+# `select!`. `sink` is `platform::socket`'s: sending the keepalive is `SinkExt::send`.
+# `tokio-tungstenite` turns the feature on already, and a feature this crate's own source names
+# must be one this crate asks for.
+futures-util = { version = "0.3", features = ["sink"] }
 # What a chunk of a response body is. `reqwest` hands these out; naming the crate is what lets
 # `platform::http::Body::chunk` say so in its signature.
 bytes = "1"
@@ -138,7 +141,8 @@ rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 # tokio** — Tauri's runtime is one — so the sleep is the runtime's and the file writes go through
 # its blocking pool. `rt` is not optional: `tokio::fs` runs every operation through
 # `spawn_blocking`, which needs a runtime handle. The features are the ones this crate's own
-# source names; `src-tauri` asks for more (`macros`) for code that is still its own.
+# source names — no `macros`, which nothing shipped here uses (the tests' `#[tokio::test]` asks
+# for it under `[dev-dependencies]`).
 # `sync` is `platform::sync`'s — the image cache's permits and its lock per key — and is the
 # one feature the web table asks for too. The rest are not on wasm: `tokio::fs` does not
 # compile there, and a Worker has no tokio runtime to drive a timer.
