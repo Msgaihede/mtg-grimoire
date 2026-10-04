@@ -1211,17 +1211,28 @@ confirmation and the result say the same thing. Note that this app's confirmatio
 
 **Which pile a press files into is decided before the press and named on the button**, which is
 the promise the card-search tab's Add already makes. A named default category is used as it
-stands; `AUTO_CATEGORY` goes through `autoCategoryFor` over the row's type line — the documented
-floor for a database whose oracle tags have never been downloaded. **Where that rule names a pile
-the deck has not got, it falls back to the deck's main pile rather than creating one**, and what
-keeps that honest is that the button names the pile before the press. It used to be forced as
-well: `collection_to_deck` took a category **id** and there was no id to send for a pile that did
-not exist yet. **That is no longer true** — the command takes a `collection_alloc::Pile`, an id
-**or** a name, since 2026-08-23, and the name arm resolves through `category_for_name` inside the
-move's own transaction exactly as `deck_add_card` does. The tab still sends an id, because a tab
-whose Add button names its destination has one in hand; the arm exists for the `All cards` tab's
-owned add, which files by what a card *does* and so can name a pile the deck has never had. A
+stands, by id; `AUTO_CATEGORY` is the app's one filing rule — `autoCategoryFor` over the card's
+Oracle tags and then its type line — and the pile goes by **name**: `collection_to_deck` takes a
+`collection_alloc::Pile`, an id **or** a name, since 2026-08-23, and the name arm resolves through
+`category_for_name` inside the move's own transaction exactly as `deck_add_card` does, so a pile
+the rule names that the deck has not got is made `origin: 'auto'` and goes with its last card. A
 call carrying both is refused in words (`BOTH_PILES`) rather than silently preferring one.
+
+**Until 2026-10-04 the tab did neither half of that, and the two halves failed differently.** It
+asked the rule with the **type line alone** — no list row carries a slug list — matched the answer
+against the piles the deck already had, and on a miss *fell back to the deck's main pile rather
+than creating one*. That fallback was forced while the command took only an id and was kept after
+it stopped being; and "the deck's main pile" was written as the first `main`-kind category, which
+is one pile only in a deck nobody has filed. A deck filed by function has a dozen `main`-kind
+piles and none called `Artifact`, so the button read `Add Sol Ring … to Lifegain` and the copy was
+filed there: **a true label over the wrong pile**, found in a rehearsal over the real engine. The
+`All cards` tab beside it had the opposite fault from the same cause — a label computed from the
+type line over a write that read the tags, `Add Rampant Growth to Sorcery` filed under Ramp. Both
+tabs now read the wall's tags (`useWallOracleTags`, one `oracle_tags_for_printings` per ~50
+printings, only under `Auto`) and each hands its press what its button was named from. **A card
+whose tags are not in hand yet names no pile at all** — the type line's pile is exactly the word
+that may turn out wrong — and its press reads the tags itself and files by the rule; a land is
+the exception, because the Land pin is decided before a tag is consulted.
 
 **A move is one deliberate press, so nothing here is optimistic.** `src/lib/query.ts` caches 30 s,
 which means a mounted query merely *marked* stale never refetches — the collection list, the

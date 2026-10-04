@@ -18,6 +18,9 @@ const deckPlayedKeys = vi.hoisted(() => vi.fn());
 // life of the file.
 const getMarketplace = vi.hoisted(() => vi.fn());
 const marketplaceFeedStatus = vi.hoisted(() => vi.fn());
+// What a card *does*, read by the move only when it is handed no pile — see the three cases
+// beside "moves copies out of a collection row".
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/ipc", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/ipc")>()),
   ipc: {
@@ -27,10 +30,12 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     deckPlayedKeys,
     getMarketplace,
     marketplaceFeedStatus,
+    oracleTagsForPrintings,
   },
 }));
 
 import { ANY_CARD } from "@/features/search/useCardSearch";
+import { autoCategoryFor } from "./autoCategory";
 import {
   copySource,
   DEFAULT_EXCLUDE_LOCKED,
@@ -160,6 +165,7 @@ beforeEach(() => {
   deckPlayedKeys.mockReset().mockResolvedValue([BOLT.oracleId]);
   getMarketplace.mockReset().mockResolvedValue("tcgplayer");
   marketplaceFeedStatus.mockReset().mockResolvedValue([]);
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
 });
 
 /** The hook, mounted the way the tab mounts it. */
@@ -499,10 +505,62 @@ describe("useCollectionSearch", () => {
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
 
     await act(async () => {
-      await result.current.move.mutateAsync({ row: BOLT, categoryId: 3, quantity: 1 });
+      await result.current.move.mutateAsync({ row: BOLT, pile: { id: 3 }, quantity: 1 });
     });
 
     expect(collectionToDeck).toHaveBeenCalledWith(BOLT.id, DECK_ID, { id: 3 }, 1);
+  });
+
+  /**
+   * **A pile the filing rule answered goes by name**, the command's other arm — the backend
+   * finds or makes it in the move's own transaction, so a pile the app invents is `auto`.
+   */
+  it("moves copies into a pile it is given by name", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.move.mutateAsync({ row: BOLT, pile: { name: "Removal" }, quantity: 1 });
+    });
+
+    expect(collectionToDeck).toHaveBeenCalledWith(BOLT.id, DECK_ID, { name: "Removal" }, 1);
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **`pile: null` is "by the rule, read now"** — what a button that could not name a pile sends.
+   * The write reads the card's tags itself and files by `autoCategoryFor`, which is
+   * `useDeck.addCard`'s own arm on the tab beside this one.
+   */
+  it("files a move that names no pile by what the card does", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: BOLT.cardId, slugs: ["removal"] }]);
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.move.mutateAsync({ row: BOLT, pile: null, quantity: 1 });
+    });
+
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith([BOLT.cardId]);
+    expect(collectionToDeck).toHaveBeenCalledWith(BOLT.id, DECK_ID, { name: "Removal" }, 1);
+  });
+
+  /** A tag read that fails is not a move that fails: the type line is the floor. */
+  it("files a move by the type line when the tags cannot be read", async () => {
+    oracleTagsForPrintings.mockRejectedValue("The database is busy.");
+    const { result } = mount();
+    await waitFor(() => expect(collectionList).toHaveBeenCalled());
+
+    await act(async () => {
+      await result.current.move.mutateAsync({ row: BOLT, pile: null, quantity: 1 });
+    });
+
+    expect(collectionToDeck).toHaveBeenCalledWith(
+      BOLT.id,
+      DECK_ID,
+      { name: autoCategoryFor({ typeLine: BOLT.typeLine }) },
+      1,
+    );
   });
 
   /**
@@ -517,7 +575,7 @@ describe("useCollectionSearch", () => {
     const asked = collectionList.mock.calls.length;
 
     await act(async () => {
-      await result.current.move.mutateAsync({ row: BOLT, categoryId: 3, quantity: 1 });
+      await result.current.move.mutateAsync({ row: BOLT, pile: { id: 3 }, quantity: 1 });
     });
 
     await waitFor(() => expect(collectionList.mock.calls.length).toBeGreaterThan(asked));
@@ -543,7 +601,7 @@ describe("useCollectionSearch", () => {
     await waitFor(() => expect(collectionList).toHaveBeenCalled());
 
     await act(async () => {
-      await result.current.move.mutateAsync({ row: BOLT, categoryId: 3, quantity: 1 });
+      await result.current.move.mutateAsync({ row: BOLT, pile: { id: 3 }, quantity: 1 });
     });
 
     const keys = invalidate.mock.calls.map((c) => JSON.stringify(c[0]?.queryKey));
@@ -612,7 +670,7 @@ describe("useCollectionSearch", () => {
 
     await act(async () => {
       await result.current.move
-        .mutateAsync({ row: BOLT, categoryId: 3, quantity: 1 })
+        .mutateAsync({ row: BOLT, pile: { id: 3 }, quantity: 1 })
         .catch(() => undefined);
     });
 

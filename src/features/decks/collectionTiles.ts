@@ -49,8 +49,9 @@ export interface CopyTile extends GridCard {
    *  folder — what `OwnedBadge` draws over the art. Rows already in this deck are counted: they
    *  are copies the reader owns, and {@link here} is the separate fact about where they are. */
   copies: number;
-  /** Carried for {@link landingCategory}, which files an add by what the card *does* and reads
-   *  the type line to do it — the documented floor for a database with no oracle tags. */
+  /** Carried for {@link landingCategory}, which files an add by what the card *does*: the type
+   *  line is the Land pin and the fallback under the card's Oracle tags, which the tab reads for
+   *  the wall (`useWallOracleTags`) — no list row carries a slug list. */
   typeLine: string | null;
   /** Which oracle card this is, for the context menu's "View all printings". `null` for an
    *  orphan — a printing that has left `cards` — exactly as the row carries it. */

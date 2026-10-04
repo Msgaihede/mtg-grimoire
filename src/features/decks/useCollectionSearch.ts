@@ -29,6 +29,7 @@ import {
   type CollectionQuery,
   type CollectionRow,
   type CollectionSortKey,
+  type DeckPile,
   type MoveOutcome,
 } from "@/lib/ipc";
 import type { Border } from "@/lib/border";
@@ -36,6 +37,8 @@ import { FINISHES, type Finish } from "@/lib/finish";
 import type { SortSpec } from "@/lib/sort";
 import { useMarketplace } from "@/lib/useMarketplace";
 import { refreshCardSearches } from "@/lib/searchMarks";
+import { autoCategoryFor } from "./autoCategory";
+import { oracleTagsFor } from "./useDeckCore";
 import { playKey, useDeckPlays } from "./useDeckPlays";
 
 /**
@@ -249,7 +252,16 @@ export function playStateFor(
 /** What a move is addressed by — the row it comes out of, the pile it lands in, and how many. */
 export interface MoveRequest {
   row: CollectionRow;
-  categoryId: number;
+  /**
+   * The pile the copy lands in — an id for a pile the deck names, a **name** for the one the
+   * filing rule answered — or `null` for *by the rule, read now*.
+   *
+   * `null` is what a button that could not name a pile sends: the card's tags were not in hand
+   * when it was drawn (`autoCategoryIfKnown`), so the write reads them itself and files by what
+   * it finds. That is `useDeck.addCard`'s own arm, one tab over, and for its reason — a tag read
+   * that is slow or refused costs the reader a word on a button and never the press.
+   */
+  pile: DeckPile | null;
   quantity: number;
 }
 
@@ -606,11 +618,25 @@ export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchO
    * before the press, for the 30 s `lib/query.ts` caches.
    */
   const move = useMutation<MoveOutcome, unknown, MoveRequest>({
-    mutationFn: ({ row, categoryId, quantity }) => {
-      if (deckId === null) return Promise.reject(new Error(NO_DECK));
-      // The id arm of {@link DeckPile}: this tab always has a pile in hand — the reader picked
-      // one — so there is no name for the backend to find-or-create.
-      return ipc.collectionToDeck(row.id, deckId, { id: categoryId }, quantity);
+    mutationFn: async ({ row, pile, quantity }) => {
+      if (deckId === null) throw new Error(NO_DECK);
+      // **Both arms of {@link DeckPile}.** A deck that names the pile its adds land in sends its
+      // id. Under `Auto` the pile is the filing rule's answer and goes by **name**, so the
+      // backend finds or makes it inside the move's own transaction — `deck_add_card`'s way, and
+      // what makes a pile the app invented `origin: "auto"`. This tab sent an id in both cases
+      // until 2026-10-04, and had none to send for a pile the deck had not got yet: it fell back
+      // to the deck's first `main`-kind category, which in a deck filed by function is whichever
+      // pile happens to come first (`Add Sol Ring … to Lifegain`).
+      //
+      // The `await` is the `null` arm alone — see {@link MoveRequest.pile}. `oracleTagsFor`
+      // catches and answers `[]`, so a refused read files by type line rather than refusing.
+      const into = pile ?? {
+        name: autoCategoryFor({
+          typeLine: row.typeLine,
+          oracleTags: await oracleTagsFor(row.cardId),
+        }),
+      };
+      return ipc.collectionToDeck(row.id, deckId, into, quantity);
     },
     onSettled: () => {
       void queryClient.invalidateQueries({ queryKey: ["collection"] });
