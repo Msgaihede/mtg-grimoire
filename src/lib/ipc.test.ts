@@ -86,7 +86,7 @@ import stickyNotesRsDesktop from "../../src-tauri/src/sticky_notes/mod.rs?raw";
 import syncClientRs from "../../crates/grimoire-core/src/sync_engine/client.rs?raw";
 import syncCommandsRsCore from "../../crates/grimoire-core/src/sync_engine/commands.rs?raw";
 import syncCommandsRsDesktop from "../../src-tauri/src/sync_engine/commands/mod.rs?raw";
-import syncLiveRs from "../../src-tauri/src/sync_engine/live.rs?raw";
+import syncLiveRs from "../../crates/grimoire-core/src/sync_engine/live.rs?raw";
 import upcomingSetsRsCore from "../../crates/grimoire-core/src/upcoming_sets.rs?raw";
 import upcomingSetsRsDesktop from "../../src-tauri/src/upcoming_sets/mod.rs?raw";
 import valueHistoryRsCore from "../../crates/grimoire-core/src/value_history.rs?raw";
@@ -4116,6 +4116,11 @@ it("subscribes to sync:live and hands the payload through unwrapped", async () =
  * both from the background loop, and `sync_engine/commands.rs` emits `sync:applied` again for
  * the manual **Sync now** press.
  *
+ * The loop is `grimoire-core`'s, so it speaks through the state's event sink
+ * (`events::emit(sink, "name", …)`) and every host forwards what it says; the press is the
+ * desktop wrapper's, which still names its window (`app.emit`). On a light host the press is the
+ * core's table entry, in `commands.rs` beside the loop's spelling.
+ *
  * The `raw.includes` shape is deliberately crude — this is a name check and not a parse. What
  * it can catch is the whole class that has bitten: a rename on either side, a hyphen for a
  * colon, an underscore for a hyphen.
@@ -4133,13 +4138,13 @@ describe("the sync event names agree with the crate that emits them", () => {
   });
 
   it("emits sync:applied on both sides of the boundary", () => {
-    expect(syncLiveRs).toContain('app.emit("sync:applied"');
+    expect(syncLiveRs).toContain('events::emit(&*state.events, "sync:applied"');
     expect(syncCommandsRs).toContain('app.emit("sync:applied"');
     expect(ipcSource).toContain('"sync:applied"');
   });
 
   it("emits sync:live on both sides of the boundary", () => {
-    expect(syncLiveRs).toContain('app.emit("sync:live"');
+    expect(syncLiveRs).toContain('events::emit(sink, "sync:live"');
     expect(ipcSource).toContain('"sync:live"');
   });
 });

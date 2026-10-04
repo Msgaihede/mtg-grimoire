@@ -142,7 +142,28 @@ rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 # `sync` is `platform::sync`'s — the image cache's permits and its lock per key — and is the
 # one feature the web table asks for too. The rest are not on wasm: `tokio::fs` does not
 # compile there, and a Worker has no tokio runtime to drive a timer.
-tokio = { version = "1", features = ["fs", "io-util", "rt", "sync", "time"] }
+# `net` is `platform::socket`'s: the TCP stream under the relay's WebSocket is named in that
+# socket's type. `tokio-tungstenite`'s `connect` turns it on already, and a feature this crate's
+# own source names must be one this crate asks for.
+tokio = { version = "1", features = ["fs", "io-util", "net", "rt", "sync", "time"] }
+# The relay doorbell — `platform::socket`'s native arm, on the desktop **and Android**, and the
+# only code that names the crate. It came here from `src-tauri/Cargo.toml` with the connection
+# manager (the light app's step 6.2), version and features unchanged. Not on wasm: a browser's
+# socket is its own `WebSocket`, and this crate does not compile there.
+#
+# **`rustls-tls-webpki-roots` and never the `native-tls` default**: `reqwest` above is
+# `rustls-tls`, and a second TLS stack would put schannel into a portable exe for no gain. It is
+# also what lets one line serve a phone: the roots are Mozilla's, compiled in, so nothing has to
+# find Android's system store — the choice `reqwest`'s `rustls-tls` makes for the same reason.
+#
+# **0.28 and not 0.24, because `tauri-plugin-mcp-bridge` already pulls 0.28 and cargo unifies
+# on it.** The version the plan named was a second copy of both this crate and `tungstenite`
+# in one exe, and it dragged `rand 0.8`/`rand_chacha`/`rand_core 0.6` in with it — and with
+# those, `getrandom 0.2`, a third major of that crate. Matching the plugin costs a little API
+# churn (`Utf8Bytes` and `Bytes` payloads) and adds exactly **one** crate to `Cargo.lock`:
+# `webpki-roots`. It is the same argument the paragraph above makes about not admitting a
+# second TLS stack, one crate over.
+tokio-tungstenite = { version = "0.28", default-features = false, features = ["connect", "rustls-tls-webpki-roots"] }
 
 # ── Web ──────────────────────────────────────────────────────────────────────────────────────
 # ⚠️ NEVER add `default-features = false` to this rusqlite line. `ffi-sqlite-wasm-rs` — the FFI
@@ -178,5 +199,6 @@ wasm-bindgen-futures = "0.4"
 tempfile = "3"
 # `scryfall`'s tests answer from a local mock server, and never from Scryfall.
 httpmock = "0.8"
-# `#[tokio::test]`, for the tests of what is async here.
-tokio = { version = "1", features = ["macros", "rt", "sync", "test-util"] }
+# `#[tokio::test]`, for the tests of what is async here. `net` is the listener
+# `platform::socket`'s and `sync_engine::live`'s tests stand in for the relay with.
+tokio = { version = "1", features = ["macros", "net", "rt", "sync", "test-util"] }

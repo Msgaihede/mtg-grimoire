@@ -17,6 +17,10 @@
 //! nothing, which was one stray timer for a relay request and would have been thousands for a
 //! body bounded a chunk at a time (`http::Body::chunk_within`).
 //!
+//! **And a beat**: [`interval`], a first tick at once and then one a period, on [`sleep`] and
+//! a monotonic tick rather than on either host's own interval — so live sync's connection
+//! manager keeps one grid on every host.
+//!
 //! **And a turn given back to the host**: [`yield_to_host`], and [`Breather`], which takes one
 //! on a budget of work. A loop of `chunk().await` and a synchronous push looks as though it
 //! lets go at every `.await`, and in a browser it does not — the first measured run found a
@@ -39,6 +43,52 @@ pub async fn sleep(duration: Duration) {
 /// unfinished — it is dropped, which for a request is the cancellation.
 pub async fn timeout<F: Future>(duration: Duration, future: F) -> Option<F::Output> {
     imp::timeout(duration, future).await
+}
+
+/// **A beat**: [`Interval::tick`] comes back at once the first time, and then once every
+/// `period`.
+///
+/// Live sync's connection manager keeps two — the quarter-second on which it asks its
+/// scheduler whether a trip is due, and the 45 s of its keepalive — and both were the async
+/// runtime's own interval while that loop was the desktop's. This is that interval's shape on
+/// [`sleep`], so a browser has it too:
+///
+/// * **the first tick is immediate**, so a socket that has just come up is pinged and asked
+///   about at once;
+/// * **each beat is due one `period` after the last was *due*, not after it was taken.** A
+///   caller that was away for two seconds — inside a round trip — finds the beats it missed
+///   owed, takes them back to back, and is on the original grid again. Counted on [`Tick`],
+///   which a wall clock's step cannot move;
+/// * **a tick dropped while it waits has lost nothing**: the next one waits out what is left.
+///   That is what lets it be one arm of a select.
+///
+/// [`Tick`]: super::clock::Tick
+#[derive(Debug)]
+pub struct Interval {
+    period: Duration,
+    due: super::clock::Tick,
+}
+
+/// An [`Interval`] of `period`, whose first tick is due now.
+pub fn interval(period: Duration) -> Interval {
+    Interval {
+        period,
+        due: super::clock::Tick::now(),
+    }
+}
+
+impl Interval {
+    /// Wait for the next beat.
+    pub async fn tick(&mut self) {
+        let wait = self
+            .due
+            .saturating_duration_since(super::clock::Tick::now());
+        if !wait.is_zero() {
+            sleep(wait).await;
+        }
+        // Only once the wait is over: a tick dropped above leaves `due` where it was.
+        self.due = self.due + self.period;
+    }
 }
 
 /// **Give the host's event loop a turn, and come back after it.**
@@ -381,6 +431,75 @@ mod tests {
             tick.elapsed() >= Duration::from_millis(30),
             "{:?}",
             tick.elapsed()
+        );
+    }
+
+    /// **A beat is immediate the first time and a period apart after**, and the grid is kept:
+    /// a caller that was away for three periods finds three beats owed and takes them without
+    /// waiting, then waits for the fourth.
+    #[tokio::test]
+    async fn an_interval_ticks_at_once_then_on_its_grid_and_owes_what_was_missed() {
+        let period = Duration::from_millis(150);
+        let start = Tick::now();
+        let mut beat = interval(period);
+
+        beat.tick().await;
+        assert!(
+            start.elapsed() < period,
+            "the first tick does not wait: {:?}",
+            start.elapsed()
+        );
+        beat.tick().await;
+        assert!(
+            start.elapsed() >= period,
+            "the second is a period after the first: {:?}",
+            start.elapsed()
+        );
+
+        // Away for three more periods: beats two, three and four fell due meanwhile.
+        sleep(period * 3 + Duration::from_millis(10)).await;
+        let back = Tick::now();
+        for _ in 0..3 {
+            beat.tick().await;
+        }
+        assert!(
+            back.elapsed() < period,
+            "the beats that were missed are owed, not waited for again: {:?}",
+            back.elapsed()
+        );
+        beat.tick().await;
+        assert!(
+            start.elapsed() >= period * 5,
+            "and the next one is on the original grid: {:?}",
+            start.elapsed()
+        );
+    }
+
+    /// **A tick dropped while it waits has lost nothing** — what lets it be an arm of a select
+    /// that another arm keeps winning: the beat still comes when it was due, not a full period
+    /// after the last time somebody asked.
+    #[tokio::test]
+    async fn an_interval_tick_dropped_mid_wait_still_comes_when_it_was_due() {
+        let period = Duration::from_millis(300);
+        let start = Tick::now();
+        let mut beat = interval(period);
+        beat.tick().await;
+
+        // Asked for and given up on, four times over most of one period.
+        for _ in 0..4 {
+            assert_eq!(timeout(Duration::from_millis(50), beat.tick()).await, None);
+        }
+        let abandoned = start.elapsed();
+        beat.tick().await;
+        let took = start.elapsed();
+        assert!(took >= period, "{took:?}");
+        // A wait that started the period again each time would end a whole period after the
+        // last abandoned one. Measured against what the abandoned waits really took, with a
+        // hundred milliseconds for a busy machine, so the bound is not a guess about a timer.
+        assert!(
+            took + Duration::from_millis(100) < abandoned + period,
+            "the abandoned waits must not each start the period again: {took:?} after \
+             {abandoned:?} of them"
         );
     }
 

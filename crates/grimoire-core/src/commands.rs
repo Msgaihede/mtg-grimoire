@@ -912,6 +912,10 @@ commands! {
         }
         Ok(outcome)
     };
+    // What the relay socket is doing, for a page that mounts after the last `sync:live` — the
+    // event is only sent on a change. A `task` because it asks nothing of the database: it reads
+    // the one value the connection manager keeps, and answers `off` on a host that runs none.
+    task sync_live_state in sync_engine::live() = |_state| async move { Ok(current()) };
     write sync_review_list in sync_engine::commands() = |conn| read_review(conn);
     // `blocking` because the table name is checked against the census before any connection is
     // taken, as the wrapper does — it arrives from the page and is spliced into the SQL.
@@ -2124,7 +2128,7 @@ mod tests {
             "sync_patreon_claim" => json!({ "code": "not-a-code" }),
             "sync_pairing_accept" => json!({ "code": "not-an-invite" }),
             "sync_device_revoke" => json!({ "deviceId": "nobody" }),
-            "sync_now" | "sync_group_leave" => Value::Null,
+            "sync_now" | "sync_group_leave" | "sync_live_state" => Value::Null,
             "sync_pairing_begin"
             | "sync_pairing_confirm"
             | "sync_pairing_poll"

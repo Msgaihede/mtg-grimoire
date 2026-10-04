@@ -14,14 +14,15 @@
 //! | --- | --- | --- | --- |
 //! | [`clock`] — the wall clock, a moment that can be stored, and a tick to measure a wait from | `SystemTime`, `Instant` | `Date.now()`; `performance.now()` for the tick | the leaves; the tick with the storage step; the stored moment with the image cache; the monotonic tick with the web host's first download |
 //! | [`pause`] — standing aside for another thread | `thread::sleep` | nothing: there is no other thread | the storage step, for `db::lock_for` |
-//! | [`timer`] — a sleep a future awaits, and a deadline on one | the async runtime's | `setTimeout` | the I/O step, for `scryfall`'s pacing and its image deadline |
+//! | [`timer`] — a sleep a future awaits, a deadline on one, and a beat | the async runtime's | `setTimeout` | the I/O step, for `scryfall`'s pacing and its image deadline; the beat with live sync's connection manager |
 //! | [`http`] — a request, a streamed body, a wait that gives up on a stall | `reqwest` over rustls | `reqwest` over `fetch`, with no `User-Agent` of its own | the I/O step, for `scryfall`; `POST`, a text body and a browser's deadline with the sync client; the stall bounds with the web host's first download |
 //! | [`host`] — whether a download has a file to land in, and whether a request is a page's | it has, and it is not | it has not, and it is | the web host's first download (phase 5, step 5.2) |
 //! | [`device`] — the machine's own name | the environment | none | the sync step, for the name a device mints |
 //! | [`files`] — a download on disk, the files the schema keeps, the image cache's pictures | `std::fs`, `tokio::fs` | refused | the I/O step, for `scryfall`, `ingest` and `schema`; a listing, a stamp and a rename for `images` |
-//! | [`sync`] — a permit and a lock an `async fn` holds across an `.await`, first come first served | `tokio::sync` | `tokio::sync`: it needs no runtime | the I/O step, for the image cache; a lock that guards a value with the sync step, for the pending pairing offer |
-//! | [`Sendable`] — what a fence over a future's `Send`-ness bounds by | `Send` | anything | the sync step, for the fences over a trip |
-//! | [`spawn`] — work taken off the caller: minutes of SQLite under an `async fn`, a build nobody waits for | the async runtime's blocking pool, a thread | run where it stands: a Worker has no second thread | the I/O step, for the card sync's ingest and the facet index's build |
+//! | [`sync`] — a permit and a lock an `async fn` holds across an `.await`, first come first served; a bell that keeps a ring nobody was waiting for | `tokio::sync` | `tokio::sync`: it needs no runtime | the I/O step, for the image cache; a lock that guards a value with the sync step, for the pending pairing offer; the bell with live sync's connection manager, for its write wake |
+//! | [`Sendable`] — what a fence over a future's `Send`-ness bounds by, and what `spawn` asks of an operation it is handed | `Send` | anything | the sync step, for the fences over a trip |
+//! | [`spawn`] — work taken off the caller: minutes of SQLite under an `async fn`, a build nobody waits for, a sync operation | the async runtime's blocking pool, a thread | run where it stands: a Worker has no second thread | the I/O step, for the card sync's ingest and the facet index's build; an operation on a worker with live sync's connection manager, for its trips |
+//! | [`socket`] — the relay's doorbell: one WebSocket, a keepalive, the next frame | `tokio-tungstenite` over rustls, the bearer in `Authorization` | refused in a sentence until the browser's own `WebSocket` is written | live sync's connection manager (the light app's phase 6, step 6.2) |
 //!
 //! [`alone`] is the odd one out: not an interface with two arms but a way for a native **test**
 //! to feel the browser's — one thread, work run where it stands, a lock taken twice a failure.
@@ -42,7 +43,8 @@
 //! kind driven through it — which reached [`clock`], [`pause`], [`spawn`]'s `blocking` and the
 //! refusing [`files`], and not [`http`], [`timer`] or `spawn`'s `background`. Those three are
 //! first called by the web host's launch downloads (phase 5, step 5.2), and what a browser
-//! made of them is `docs/reference/light-app.md`'s to record.
+//! made of them is `docs/reference/light-app.md`'s to record. **[`socket`]'s browser arm is the
+//! one that is not run**: it refuses, and no host starts live sync's loop there yet.
 
 pub mod alone;
 pub mod clock;
@@ -51,6 +53,7 @@ pub mod files;
 pub mod host;
 pub mod http;
 mod pause;
+pub mod socket;
 pub mod spawn;
 pub mod sync;
 pub mod timer;

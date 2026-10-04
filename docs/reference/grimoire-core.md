@@ -61,6 +61,10 @@ All I/O operations go through abstractions defined in `src/platform/`:
 - **Background Tasks & Threading (`platform::threads`)**:
   - Desktop: Standard worker threads and Tokio runtime.
   - Web: Single-threaded async cooperative tasks.
+- **The relay's live socket (`platform::socket`)**:
+  - Desktop / Android: `tokio-tungstenite` over rustls with compiled-in roots; the bearer rides the upgrade's `Authorization` header and the keepalive is a protocol ping.
+  - Web: the arm compiles and refuses every `connect`; a browser's own `WebSocket` (bearer in the sub-protocol, a text keepalive) is not written yet.
+  - Its one caller is `sync_engine::live::run`, the connection manager — a future each host spawns itself (the desktop and Android do; the web host does not yet). See [sync.md](sync.md), "The connection manager, too".
 
 ---
 
@@ -74,7 +78,7 @@ All I/O operations go through abstractions defined in `src/platform/`:
    - Hosts register lifecycle hooks (e.g. notifications when database writes finish or cache clears occur).
 
 3. **Event Forwarding (`state.events`)**:
-   - The core emits progress and lifecycle events (`sync:progress`, `collection:reconciled`) through `state.events`.
+   - The core emits progress and lifecycle events (`sync:progress`, `collection:reconciled`, live sync's `sync:live` and `sync:applied`) through `state.events`.
    - Host adapters (such as `desktop::WindowEvents`) forward these to active frontend windows.
 
 ---

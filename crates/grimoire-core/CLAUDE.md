@@ -38,12 +38,13 @@ All OS- and environment-specific behaviors are isolated behind `platform/`:
 - **Clock (`platform::clock`)**:
   - `Tick`: Monotonic duration tracking via `Instant` (native) or `performance.now()` (browser microsecond precision).
   - `Wall`: Persistent wall-clock timestamps in milliseconds since epoch.
-- **Timer (`platform::timer`)**: `sleep`, `timeout`, and `yield_to_host` (posts message across `MessageChannel` in browser). Streaming loops use `Breather` with `feed::WORK_BUDGET` (50 ms) to avoid starving host IPC.
+- **Timer (`platform::timer`)**: `sleep`, `timeout`, `interval` (first tick at once, then one per period on a monotonic grid), and `yield_to_host` (posts message across `MessageChannel` in browser). Streaming loops use `Breather` with `feed::WORK_BUDGET` (50 ms) to avoid starving host IPC.
 - **Pause (`platform::pause`)**: `thread::sleep` on native; immediately returns `false` on single-threaded browser workers.
 - **HTTP (`platform::http`)**: Host-agnostic `Client`, `Request`, and `Response`. Native uses reqwest/rustls; browser uses `fetch`. No `reqwest` types leak outside `platform::http`.
 - **Files (`platform::files`)**: Native wraps `std::fs`/`tokio::fs`. Browser immediately returns `ErrorKind::Unsupported` (storage relies on SQLite OPFS VFS).
-- **Sync (`platform::sync`)**: `Semaphore`, `Lock`, and `Shared<T>` providing FIFO fairness across async tasks.
-- **Spawning (`platform::spawn`)**: `blocking` and `background`. Runs on thread pool natively; runs inline on single-threaded browser workers.
+- **Socket (`platform::socket`)**: The relay's doorbell WebSocket — `connect(url, bearer)`, `Socket::next() -> Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`, and `ws_origin`. Native (desktop and Android) uses `tokio-tungstenite` over rustls with compiled-in roots, the bearer in the upgrade's `Authorization` header and a protocol ping. The browser arm compiles and refuses every `connect`; no `tungstenite` type leaks outside the module.
+- **Sync (`platform::sync`)**: `Semaphore`, `Lock`, and `Shared<T>` providing FIFO fairness across async tasks; `Bell`, a wake that keeps one ring when nobody is waiting (`notify_one`, never `notify_waiters`).
+- **Spawning (`platform::spawn`)**: `blocking`, `background`, and `on_a_worker` (an async operation whose stretches block — a sync trip — driven on a pool thread by a runtime of its own). Runs on thread pool natively; runs inline on single-threaded browser workers.
 - **Alone (`platform::alone`)**: Native test harness enabling single-threaded browser execution semantics to detect re-entrancy and deadlocks.
 
 ---
@@ -55,6 +56,7 @@ All OS- and environment-specific behaviors are isolated behind `platform/`:
   - Browser/WASM: `launch::open_single(databases, data_dir)` or `open_single_replacing` opens a single connection (`temp_store = FILE`) over OPFS.
 - **Single-connection safety**: On single-connection hosts, `read` is `None` and read requests take the write connection mutex. Any attempt to read while holding a write lock deadlocks/panics. Verified by `commands::tests::every_command_answers_on_one_connection_and_one_thread`.
 - **Hook installation**: Installed exclusively via `State::new` (`hooks::install`). Observers (`WriteObserver`) are notified in strict order inside SQLite commit/update hooks.
+- **Live sync (`sync_engine::live`)**: The connection manager is the core's: `live::run(state, writes)` is a future a **host spawns** after its launch settles, with the `Bell` it registered on the write connection as a `live::WriteWake` observer. The desktop and Android hosts run it; the web host does not yet. It speaks through `state.events` (`sync:live`, `sync:applied`), and `sync_live_state` is a table command.
 - **Corpus recovery**: Damaged or unmigratable corpus databases are dropped and recreated via `launch::open_single_replacing`; `user.db` is never touched.
 
 ---

@@ -69,7 +69,7 @@ The desktop manages two SQLite databases in the application data folder:
 
 ### Device Sync & Relay Networking
 - Manages encrypted device pairing (`sync_pair/`) and delta synchronization (`sync_engine/`).
-- `sync_engine::live` handles persistent WebSocket connections to the relay server.
+- The persistent WebSocket to the relay is `grimoire-core`'s: `sync_engine::live::run` (the connection manager) over `platform::socket`. `desktop.rs` spawns it after `startup::settle` with the write wake it registered as an observer; `src-tauri`'s `sync_engine::live` re-exports the core's module and keeps only the bounded push on exit (`anything_pending`, `push_now`).
 - Database changes are captured via SQLite triggers (`sync_ops`) and applied atomically during sync pulls.
 
 ### Multi-Window Coordination & In-App Updates
