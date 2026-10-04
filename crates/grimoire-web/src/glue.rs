@@ -86,6 +86,10 @@ pub fn instantiated() {
 /// feeds, as one task on this Worker's own event loop. They say what they are doing through
 /// [`listen`]'s handler. **No upkeep loop** ([`host::start`] says why).
 ///
+/// **And it starts live sync** ([`host::live_sync`]), a second task beside the first and for
+/// the Worker's life: the relay's doorbell, which opens no socket until this device is in a
+/// sync group.
+///
 /// **A corpus that will not open is thrown away and built again**, through the pool's own
 /// delete ([`host::start_replacing`]); `user.db` is never touched, and the console is told.
 #[wasm_bindgen]
@@ -130,7 +134,11 @@ async fn open_once(directory: String) -> String {
             STATE.with(|state| *state.borrow_mut() = Some(Arc::clone(&started.state)));
             // Spawned, never awaited: `open` answers now, and the downloads run between the
             // calls that follow it. Its first poll comes after this function has returned.
-            wasm_bindgen_futures::spawn_local(host::launch_downloads(started.state));
+            wasm_bindgen_futures::spawn_local(host::launch_downloads(Arc::clone(&started.state)));
+            // The relay's doorbell, behind the downloads and for the Worker's life. On an
+            // install in no sync group — every one that has paired nothing — its first poll
+            // is one read of `sync_group` and a five-second timer.
+            wasm_bindgen_futures::spawn_local(host::live_sync(started.state, started.writes));
             started.opened.to_json()
         }
         Err(message) => Opened::Failed { message }.to_json(),

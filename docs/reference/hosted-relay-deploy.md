@@ -793,11 +793,25 @@ the one that can take sync down.
 
 ### 13. The browser's half — a 101 no browser has read, and a keepalive nobody has seen billed
 
-Added 2026-10-04. **Not deployed, so none of these six has been driven.** Step 0's three pairs
+Added 2026-10-04, and deployed that day at 17:22 UTC. Step 0's three pairs
 settle the CORS headers and the origin check from outside; these are what only a real browser, or
 the account's own dashboard, can say. `relay/src/cors.test.ts` and `ticket.test.ts` run the
 router, and the real `Group` over stand-ins for three of workerd's globals — Node's `Response`
 refuses a status of 101 — so everything below is exactly what those suites could not reach.
+
+**What the local run settled, and what only production still can** (step 6.3, 2026-10-04:
+`npm run web:sync-smoke` — this relay's code under workerd, `wrangler dev --local` 4.146.0, and
+two profiles of headless Chrome 154 reaching it by its real name):
+
+| | Under workerd, in Chrome | On the deployed Worker |
+| --- | --- | --- |
+| The 101's `Sec-WebSocket-Protocol` reaches a browser | **yes** — both sockets read `grimoire.live.v1` and stayed open | not seen: it needs a real membership in a real browser, which is the owner's |
+| The text `ping` is answered `pong` | **yes** — every `ping` either device sent, the second 45 s after the first | not seen |
+| A page's requests pass CORS, refusals included | **yes** — a claim, a token, a pairing, pushes, pulls and acks, with no failed request | step 0's probes, from outside |
+| The page's policy lets the socket through | only with the relay's `wss://` source in `connect-src` — `https://` alone is refused by Chrome | the web app's next deploy carries it |
+| What a keepalive is billed | nothing a local run can say | the one-hour check below |
+| The token in Workers Logs | nothing a local run can say | **decided, not measured**: accepted by the owner on 2026-10-04, `invocation_logs` stays on |
+| Safari, Firefox, a phone's browser | not driven | not driven |
 
 - ⚠️ **The 101's `Sec-WebSocket-Protocol`, through the Worker, to a browser.** `Group.ws()` puts
   `grimoire.live.v1` on its 101 when the request offered it, and the Worker hands that response
@@ -841,6 +855,13 @@ refuses a status of 101 — so everything below is exactly what those suites cou
   socket from the web app and read that invocation's headers.** If it is there, the choices are to
   accept it — a day-long token in the account's own three-day log — or to set
   `observability.logs.invocation_logs` to `false`, which costs every route its invocation log.
+  **Chosen on 2026-10-04: accepted.** Nothing is changed, and the read above is now only a
+  confirmation of what is being accepted.
+- **A removed device's socket.** The local run found that a rotation closes no socket: the
+  removed device keeps its own, its panel reads the old group, and it learns at its next round
+  trip — its own write, a *Sync now*, or the next push by anybody left. If that is wanted
+  sooner it is a change to `group.ts`'s `roster` — close the departed devices' sockets — and a
+  deploy of its own.
 - **A pre-flight's cache, and a pull's lack of one.** A browser files a pre-flight under the whole
   URL, so `/pull?since=…` is asked about again whenever the cursor has moved. Count the `OPTIONS`
   in the page's network panel across a few edits: one in front of most pulls is the design, and

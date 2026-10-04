@@ -55,13 +55,14 @@ The Worker executes on a single thread with no parallel background threads:
 | `glue` | `wasm32-unknown-unknown` only | `#[wasm_bindgen]` bindings, OPFS pool setup, `thread_local` handles |
 
 - **Keep decisions out of `glue.rs`**: Only `glue.rs` is target-gated. All business decisions reside in `host.rs` or `wire.rs` and are tested natively via `cargo test -p grimoire-web`.
-- **Desktop tests vs browser runs**: Native tests mock browser features via scratch directories and mock servers (`httpmock`). Module execution in real browser environments is verified via `npm run web:smoke`.
+- **Desktop tests vs browser runs**: Native tests mock browser features via scratch directories and mock servers (`httpmock`). Module execution in real browser environments is verified via `npm run web:smoke`, and live sync between two of them via `npm run web:sync-smoke`.
 
 ---
 
 ## 5. Lifecycle and Storage Behaviors
 
 - **Launch download sequence**: `host::launch_downloads` runs as a single background task (`wasm_bindgen_futures::spawn_local`) in strict sequence: card sync, selected marketplace prices, oracle tags, art tags, and combos. Runs once per launch (no background upkeep loop).
+- **Live sync**: `host::start` registers `live::WriteWake` as the state's one write observer and hands back its `Bell` (`Started::writes`); `glue::open` spawns `host::live_sync` — the core's `sync_engine::live::run` — beside the downloads, after `open` has answered, for the Worker's life. The socket is the Worker's own `WebSocket` (`grimoire_core::platform::socket`). In no sync group it opens no socket and asks the relay nothing: one read of `sync_group` every 5 s. `sync:live` and `sync:applied` reach the page through `listen`. No push on exit — a closing tab gives a Worker no moment to await one.
 - **No image fetching or upkeep**: Pictures are fetched by the Service Worker and stored in Cache Storage. The engine only resolves image paths via `card_image_source`.
 - **Corpus recovery**: Unrecoverable or corrupted databases are deleted and rebuilt automatically (`host::delete_corpus`). `user.db` is never deleted or replaced.
 - **Facet index resiliency**: An error building the facet index produces a `console.warn` but never fails `open` (facet searches fail open by design).
@@ -90,6 +91,7 @@ Run verification only at the end of a feature (not after each change):
 | `npm run web:dev` | Start Vite dev server on port 5176 using current WASM build |
 | `npm run web:build` | Build production web bundle into `dist-web/` |
 | `npm run web:smoke` | Run headless Chromium offline smoke tests |
+| `npm run web:sync-smoke` | Pair two headless Chromium profiles through the relay under workerd and sync both ways (runs `app-worker`'s pinned wrangler — `npm ci --ignore-scripts --prefix app-worker` first — or `WRANGLER=<wrangler.js>`) |
 | `npm run web:preview` | Preview production build on port 4176 with Service Worker |
 
 Formatting and clippy:

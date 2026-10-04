@@ -60,3 +60,6 @@ Because WASM runs in a single-threaded Web Worker:
 - **No Locks Across `.await`**:
   - `Mutex` or `RefCell` borrows must **never** be held across an `.await` boundary in WASM.
   - Re-entering the event loop while holding a borrow results in a panic or deadlocks.
+- **Live sync shares that loop** (phase 6, step 6.3):
+  - `host::live_sync` — the core's `sync_engine::live::run` — is spawned beside the launch's downloads, over the Worker's own `WebSocket` (`platform::socket`'s browser arm). The socket's events are tasks on this event loop; the loop's reads and round trips run where they stand, on the one connection.
+  - Measured in headless Chrome 154: the Worker is busy about 5 ms a minute idle, in a group or not, and a `search_cards` beside a round trip waits at most one of the trip's stretches (7–11 ms). See [light-app.md](light-app.md) §10.3.

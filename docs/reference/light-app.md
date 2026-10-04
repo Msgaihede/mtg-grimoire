@@ -5707,18 +5707,24 @@ here.
 
 **Open after this step:**
 
-- **No browser has asked.** A mock is sent no pre-flight and asked for no
-  `Access-Control-Allow-Origin`; the first request from a page is the deploy's own probe.
-- **Whether workerd carries the 101's `Sec-WebSocket-Protocol` to a browser.** The types say the
+- ~~**No browser has asked.** A mock is sent no pre-flight and asked for no
+  `Access-Control-Allow-Origin`; the first request from a page is the deploy's own probe.~~
+  **answered — a browser has, of the relay's own code under workerd** (§10.3): headless Chrome
+  154 claimed, minted a token, paired, pushed, pulled and acked from a page, every pre-flight a
+  `204` and no request failed. The *deployed* relay has still been asked by no browser holding a
+  membership.
+- ~~**Whether workerd carries the 101's `Sec-WebSocket-Protocol` to a browser.** The types say the
   response may carry headers and no test can open a real socket; step 6.3's local relay settles
-  it before a deploy has to.
+  it before a deploy has to.~~ **answered — it does** (§10.3): both of Chrome's sockets read
+  `grimoire.live.v1` off the 101 and stayed open.
 - **What a browser's keepalive costs.** The auto-response is documented as costing no duration;
   the pricing page exempts only *protocol* pings from the 20:1 rule for incoming messages. Read
   as written, `ping` every 45 s is 96 Durable Object requests a day for a tab that never
   closes, against a desktop's none. The runbook's item 13 is the one-hour check after a deploy.
-- **A bearer in a sub-protocol is not redacted in Workers Logs**, where `authorization` is by
+- ~~**A bearer in a sub-protocol is not redacted in Workers Logs**, where `authorization` is by
   its name. It is a token that lives a day at most, in the account's own three-day log;
-  `invocation_logs: false` would take it out and is the owner's to choose.
+  `invocation_logs: false` would take it out and is the owner's to choose.~~ **answered — chosen
+  by the owner on 2026-10-04: accepted, and nothing is changed for it.**
 - **A pull's pre-flight is cached per address**, and `?since=` moves with the cursor, so most
   pulls from a browser cost one more Worker invocation — and no Durable Object request.
 
@@ -5739,7 +5745,7 @@ too*, has the was-and-is table.
   Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`, `ws_origin`. The native arm, on the
   desktop and Android, is `tokio-tungstenite` 0.28 over rustls with the roots compiled in, so a
   phone is asked for no system store; the bearer rides `Authorization`. The browser arm compiles
-  and refuses every `connect`.
+  and refuses every `connect`. (**It opens a real socket since step 6.3 — §10.3.**)
 - **`timer::interval`**, for the 45 s ping and the 250 ms tick: a first tick at once, a late beat
   keeps the grid, a tick dropped mid-wait loses nothing. **Beats missed outright are dropped
   rather than owed**, which parts from tokio's default on purpose: tokio bursts, and after an
@@ -5776,7 +5782,7 @@ kill, neither a hook a request can be awaited in — so the loop's 3 s write deb
 an op that missed it goes with the next launch's first trip.
 
 **The web host does not run it.** It registers no wake and spawns no loop, and `sync_live_state`
-answers `off` there.
+answers `off` there. (**It runs one since step 6.3 — §10.3.**)
 
 **What was tested, natively**: the socket against a loopback listener — the bearer in
 `Authorization`, a text frame, a protocol ping, a 4001 close with its code, a dropped
@@ -5800,9 +5806,154 @@ lints clean for `wasm32-unknown-unknown`.
   resolves the socket's crate with rustls on `ring` alone.
 - **Production's pong.** The runbook's item 13 has the three-minute check after the relay's next
   deploy.
-- **The browser's arm — step 6.3**: a page's own `WebSocket` in `platform::socket` (the bearer in
+- ~~**The browser's arm — step 6.3**: a page's own `WebSocket` in `platform::socket` (the bearer in
   the sub-protocol, the text `ping`, the same pong deadline from the text `pong`), the web host
-  registering the wake and spawning the loop, and `wss://` in the policy's `connect-src`.
+  registering the wake and spawning the loop, and `wss://` in the policy's `connect-src`.~~
+  **answered — built, and driven in a browser** (§10.3).
+
+### 10.3 Step 6.3 — the browser's socket (2026-10-04)
+
+The web app joins live sync over the same socket the desktop and Android use: no polling, and
+no second loop. **Three things moved together — the socket's browser arm, the web host starting
+the loop, and the policy's `wss://` source — and a fourth is how any of it is known**: a walk of
+two browsers through the relay's own code.
+
+**The socket** (`platform::socket`, browser arm). The engine Worker's own `WebSocket`, reached
+through `js_sys::Reflect` off the Worker's global as `timer` reaches `setTimeout` — no `web-sys`,
+for a constructor, four properties and two methods. It offers exactly two sub-protocols,
+`grimoire.live.v1` and `bearer.<access token>`. Its four events feed a queue that `next()`
+drains: a text frame is `Event::Text`, **except the keepalive's `pong`, which is swallowed where
+it arrives** and counts as the answer to the outstanding ping; a `close` is `Closed(code)`, 4001
+among them; an `error` is `Failed`. The first ending is the ending — a browser says `error` and
+then `close`, and a caller is owed one. `keepalive()` sends the text frame `ping` under the
+native arm's rule, word for word: a peer that has answered once and leaves a ping unanswered
+fails it, one that has never answered is left alone; before concluding it gives the event loop
+one turn, which is its look at what has already arrived. `Drop` clears the four handlers, closes
+the socket and only then lets the closures go. **What the arm decides is a module of its own
+(`heard`) that compiles for a test**, so a desktop's `cargo test` runs every rule above in eight
+tests, one of which holds the two sub-protocols and the `ping`/`pong` pair to `relay/src/ticket.ts`
+as text; the arm itself is the constructor, the handlers and a `send`.
+
+**A refused upgrade is one generic sentence**, because a browser is: a 401, a 403, a host that
+is not there and a policy that forbids the connection all reach a page as an `error` with
+nothing in it — *the live socket could not be opened (a browser does not say why)* — which is
+what `error_log` gets.
+
+**The web host runs the loop** (`crates/grimoire-web`): `host::start` registers `live::WriteWake`
+as the state's one write observer and hands back its bell; `glue::open` spawns
+`host::live_sync` beside the launch's downloads once `open` has answered, for the Worker's
+life. `sync:live` and `sync:applied` reach the page through `listen`, where both faces hear them
+— the desktop face through `AppShell`, the phone face since step 6.4. No push on the way out: a
+closing tab gives a Worker no moment to await one.
+
+**The policy.** Measured first, in headless Chrome 154.0.8037.95, in a page and in a dedicated
+Worker alike, under `connect-src 'self' https://mtg-grimoire-relay.denmark-east.workers.dev`:
+`new WebSocket("wss://…")` constructs, sends nothing, and fires `error` with no `close`; the
+`securitypolicyviolation` names `connect-src` and the `wss://` address, and the console says
+*Connecting to 'wss://mtg-grimoire-relay.denmark-east.workers.dev/g/abc/ws?device=d1' violates
+the following Content Security Policy directive: "connect-src 'self'
+https://mtg-grimoire-relay.denmark-east.workers.dev". The action has been blocked.* With
+`wss://<relay>` beside it the upgrade reached the relay. So `_headers` names the relay twice,
+and `hosting.test.ts` derives the second from `RELAY_BASE` by `ws_origin`'s rule, reads that
+rule out of `socket.rs`, and holds `connect-src` to it: every source `https://`, that one
+`wss://` and no other, in no other directive.
+
+**The walk** (`npm run web:sync-smoke`, `scripts/web-sync-smoke.mjs`, written in the first
+smoke's harness — the server, the browser and the two fences, which are a module of their own
+now, `scripts/web-smoke/harness.mjs`, so that neither run has to ask whether it is the script
+Node started; the first cut asked, by comparing two spellings of a path, and a run that
+answered *no* would have checked nothing and exited 0):
+
+- **The relay under real workerd**: `wrangler dev --local` (4.146.0) on `relay/wrangler.jsonc`,
+  `--local-protocol https`, with `--var RELAY_HMAC_KEY:<32 random bytes, drawn per run>` and
+  `--var APP_ORIGINS:<the run's page origin>` and no file — the key has no value in the
+  repository, this script included. Its D1 is seeded with `schema.sql`, one
+  `entitlements` row and one `claim_codes` row before it starts (`d1 execute --local`), so the
+  claim is the real one: the page's claim-code field, the engine, `/claim`, `/token`, the gate.
+- **By the relay's real name**, so the shipped `RELAY_BASE` and the shipped `connect-src` are
+  what runs: each browser is started with `--host-resolver-rules=MAP
+  mtg-grimoire-relay.denmark-east.workers.dev 127.0.0.1:<port>, MAP * ~NOTFOUND, EXCLUDE
+  localhost` and `--ignore-certificate-errors` (wrangler's certificate is self-signed).
+  `--host-rules` beside the smoke's catch-all resolver rule answered `ERR_NAME_NOT_RESOLVED`.
+- **Two profiles, two faces**: the desktop face at 1280 × 800 claims, offers and removes; the
+  phone face at 412 × 915 types the code. Every step is a press on the page's own controls.
+
+Eight runs, on the machine that wrote it (Windows 11, Chrome 154, everything on loopback),
+the last three back to back and alike:
+
+| | |
+| --- | --- |
+| The relay up, seeded | 3.9–4.5 s |
+| The claim's press → `connecting` | 4.0–4.4 s — the loop's five-second read of `sync_group` |
+| `connecting` → `live` | 90–155 ms on the claiming device (a round trip, then the upgrade), 49–63 ms on the joining one |
+| A write on one device → its tile on the other, nothing pressed | **4.2–4.5 s**, both ways — the 3 s write debounce, the 1 s frame debounce and a trip; `sync:applied` arrived 20–50 ms before the tile |
+| The relay's answers before the removal | 47–49 requests and **18 pre-flights**; 2 upgrades, both `101` selecting `grimoire.live.v1`; no refusal but the rendezvous poll's two not-yets |
+| The keepalive | a `ping` at once on each socket and one 45 s later, each answered `pong` |
+| The whole walk | 35 s; 155 s with the two idle minutes |
+
+**One thread, one connection** (`-- --measure`: V8's sampling profiler on the engine's Worker,
+a minute each). **Idle and in no group the Worker was busy 5.0–6.2 ms of the minute** — the
+loop's twelve reads of `sync_group` are inside that, most of the rest is the collector. **Idle,
+paired and live: 4.8–9.3 ms of the minute**, 240 ticks and two pings inside it. Not visible, and
+nothing was redesigned for it. A `search_cards` issued over and over while `sync_now` ran its
+round trip (37–73 ms) answered in a median 0.6 ms — what it answers alone — and at worst in
+6.3–10.9 ms: a page's command waits out one stretch of a trip, never the trip.
+
+**`web:smoke` still passes with the loop running**, and now says so: a device in no group opens
+no socket — asked of the Worker's own `Network` domain, since no request interception sees an
+upgrade — and makes no request to the relay, which has no fixture there.
+
+**Found on the way:**
+
+- **A removed device is told nothing.** The relay closes no socket on a rotation (4001 is for a
+  group that is gone), so the removed device goes on reading a group of two until its next
+  round trip — its own write, a *Sync now*, or the next push by a device still in the group.
+  The walk presses *Sync now* there, and says so.
+- **The loop asks whether the device is in a group only between sockets.** After that trip had
+  cleared `sync_group`, the removed device's loop still held its socket and `sync_live_state`
+  still answered `live` six seconds on. True of every host since the loop was written; not
+  changed here — the loop is not this step's to restructure.
+- **wrangler 4.146 on Windows turns an absolute `--persist-to` into `./C:\…`**, and its D1 then
+  answers *internal error*. The run keeps its state under `relay/.wrangler/`, named relatively.
+- **A `wrangler dev` stopped by force leaves its bundle in `.wrangler/tmp/`, and `eslint .`
+  walked into it**: 620 errors on the first `npm run verify` after the walk, none in a file a
+  person wrote. The lint ignores `**/.wrangler/` now, as git always did, and the walk removes
+  what it made.
+- **A run that is interrupted stops what it started** (review, the same day): Ctrl-C, an
+  uncaught exception and an unhandled rejection each run the orderly stop and leave non-zero,
+  and the process's own `exit` stops every child synchronously — on POSIX the relay is a
+  process group of its own and the whole group is signalled. Seen on Windows, by pid: a run
+  ended mid-walk by a real Ctrl-C (exit 130) and one by a throw from a timer (exit 1) each had
+  36 processes — two workerd, two esbuild, 26 Chrome — and left none, and no state on disk.
+  A run that is itself killed outright (`taskkill /F`, `SIGKILL`) still leaves them: no handler
+  runs.
+- **The desktop face's *Add to wishlist* is greyed until the card's own read answers**, and a
+  press on it then is no press. The walk's first measured run pressed it early and waited a
+  minute on the other device for a write that was never made; it now presses an enabled
+  control and checks the write landed where it was made.
+
+**CI**: `relay/**` and the new script route to `web`, and the job runs the walk after the first
+smoke. wrangler is not a root dependency: the step installs it from `app-worker/`'s own
+lockfile (step 6.6's, `npm ci --ignore-scripts --prefix app-worker`), which is also where the
+script looks first. **It has run on one Windows machine and on no runner**: its first run there
+is this step's own pull request.
+
+**Open after this step:**
+
+- **Production.** A real browser against the deployed relay needs a real membership — the
+  owner's — and the web app's deploy, which carries the `wss://` source and the new engine
+  together. Until then the live site's engine opens no socket.
+- **Safari and Firefox.** Each opens a socket with sub-protocols and applies `connect-src` to
+  it; neither has been driven, and neither has run any browser arm of the engine.
+- **What a keepalive is billed.** The local relay answers `ping` with `pong`; whether the
+  dashboard counts each as a request is the runbook's one-hour check, still not run.
+- **A phone's browser freezing the Worker.** `timer::interval` drops the beats a frozen Worker
+  missed and the pong rule ends a socket that died meanwhile, by reasoning; no backgrounded tab
+  has been watched coming back.
+- **The removed device's stale socket**, above: a relay that closed a departed device's socket,
+  or a loop that asked about its group while connected, would each end it. Neither is built.
+- **The sync smoke on a runner**: Linux, wrangler installed without its lifecycle scripts, a
+  runner's clock under every wait. The pull request's own `web` job is the first.
 
 ### 10.4 Step 6.4 — pairing on the phone face (2026-10-04)
 

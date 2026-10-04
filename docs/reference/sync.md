@@ -3619,7 +3619,8 @@ frame is a hint and is never itself the cursor advancing.
    the light app's phase 6 — and one module touches the crate: `grimoire-core`'s
    `platform::socket`, whose native arm it is (it was `sync_engine::live`, in `src-tauri`, until
    the connection manager moved; see "The connection manager, too" below). It is still true of a
-   browser, which is why that module has a second arm and the web host does not run the loop yet.
+   browser, which is why that module has a second arm: there the socket is the engine Worker's
+   own `WebSocket`, and the web host runs the same loop over it since step 6.3.
 2. **"A WebSocket from the page would need the CSP widened."** It would not, and this is the half
    the record had backwards: `connect-src 'self' ipc: http://ipc.localhost` governs the
    **webview's** connections, and the socket that shipped is opened by `tokio-tungstenite` inside
@@ -3954,7 +3955,7 @@ desktop has a moment for: the bounded push on the way out (`anything_pending`, `
 
 | What | Was (`src-tauri`) | Is (`grimoire-core`) |
 | --- | --- | --- |
-| The socket | `tokio-tungstenite`, named in `live.rs` | `platform::socket`: `connect(url, bearer)`, `Socket::next() -> Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`. The native arm is the same crate, version, features and upgrade request; the browser arm compiles and refuses |
+| The socket | `tokio-tungstenite`, named in `live.rs` | `platform::socket`: `connect(url, bearer)`, `Socket::next() -> Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`. The native arm is the same crate, version, features and upgrade request; the browser arm is a page's own `WebSocket` (step 6.3, below) |
 | The five wakes | `tokio::select!` | `futures_util::select!` over fused futures — as fair: whichever is ready is taken in no fixed order. `tokio::select!` cannot be named outside `platform/`, and the core's tokio has no `macros` |
 | The 45 s ping and the 250 ms tick | `tokio::time::interval` | `platform::timer::interval`, on `platform::clock::Tick` and `timer::sleep`, so a browser has it: first tick at once, a late beat keeps the grid, safe to drop mid-wait — and **beats missed outright are dropped, where tokio's default owes them back to back** (below) |
 | The socket's age limit and `lived_ms` | `tokio::time::Instant` | `Tick`, and one `timer::sleep(SOCKET_MAX_AGE)` for the socket's life |
@@ -4000,9 +4001,58 @@ purpose:**
 one write observer and its `start` spawns the loop after `startup::settle`. **It has no push on
 the way out** — the process ends by `_exit` or by the system's kill, neither a hook a request
 can be awaited in — so the loop's 3 s write debounce is what pushes, and an op that missed it is
-still `pushed_at IS NULL` for the next launch's first trip. **The web host does not run it yet**:
-a browser's `WebSocket` cannot set `Authorization`, so its bearer will ride the sub-protocol, and
-its keepalive will be a text frame; that arm of `platform::socket` is the next step's.
+still `pushed_at IS NULL` for the next launch's first trip.
+
+**And the web host runs it, since step 6.3** (`crates/grimoire-web`): `host::start` registers the
+same wake on the host's one connection, and `glue::open` spawns `host::live_sync` beside the
+launch's downloads once `open` has answered. The loop is not changed for it; what a browser
+needs is all `platform::socket`'s second arm:
+
+- **The socket is the engine Worker's own `WebSocket`**, constructed off the Worker's global
+  through `js_sys::Reflect` (no `web-sys`), with **exactly two sub-protocols** — `grimoire.live.v1`,
+  which the relay selects, and `bearer.<access token>`, because a page can set no header on an
+  upgrade.
+- **Its four events feed a queue, and `next()` drains it.** A browser's socket is not read; it
+  tells, whenever the event loop gets to it — also while the loop is inside a trip. A text frame
+  is queued; a `close` is `Closed(code)`, 4001 among them; an `error` is `Failed`, with a
+  sentence that says nothing, because a browser tells a page nothing about a refused upgrade
+  (a 401, a 403, a host that is not there and a policy that forbids it are all `error` and, at
+  most, a close with 1006). The first ending is the ending.
+- **The keepalive is the text frame `ping`**, and the relay's `pong` is swallowed where the
+  event arrives — it is the answer to the outstanding ping and is handed to no caller. The rule
+  is the native arm's: a ping that finds its predecessor unanswered fails the keepalive, once
+  this peer has answered one. Before concluding, the arm gives the event loop one turn
+  (`timer::yield_to_host`), which is its look at what has already arrived.
+- **Letting go is ordered**: the four handler properties are cleared, then the socket is closed,
+  then the closures are dropped — a closure the browser calls after it was dropped throws inside
+  the event loop.
+- **One thread, one connection.** `spawn::blocking` and `on_a_worker` run where they stand, so
+  the loop's reads, its outbox gate and its trips all run between two turns of the Worker's
+  event loop, on the connection a page's commands use. Measured in headless Chrome 154
+  (`npm run web:sync-smoke -- --measure`, V8's sampling profiler on the Worker): **idle and in
+  no group the Worker was busy about 5 ms of a minute** — the five-second read of `sync_group`
+  is inside that — and **idle, paired and live about 5–9 ms of a minute**, the quarter-second
+  tick and the keepalive inside it. A `search_cards` issued over and over beside a round trip
+  answered in a median 0.6 ms, as it does alone, and at worst in 7–11 ms: the longest stretch a
+  small trip keeps the connection.
+- **The hosting policy names the socket.** `connect-src` matches a scheme, and Chrome refuses
+  `wss://<relay>` under `https://<relay>` alone, so `app-worker/_headers` carries both.
+
+**What a browser's device does not get**: a push on the way out (a closing tab gives a Worker
+no moment to await one — the 3 s write debounce pushes, as on Android), and a socket that
+survives the tab being frozen. `timer::interval` drops the beats a frozen Worker missed, so it
+comes back to one tick and one ping, and a socket that died meanwhile is found by that ping's
+missing `pong` within two periods.
+
+⚠️ **Seen in that run, and true of every host: the loop asks whether the device is in a group
+only between sockets.** A device removed from the roster — or one that leaves — while its socket
+is up keeps the socket: the relay closes nothing on a rotation (4001 is for a group that is
+gone), the device learns it was removed at its next round trip — its own write, a *Sync now*, or
+the next push by a device still in the group, which still rings it — and after that trip has
+cleared `sync_group` the loop still holds the socket, still pings, and still reads `live` until
+the socket ends by itself or reaches its twelve hours. Nothing is synced over it: a ring there
+schedules a trip that finds no group and asks nobody. So the cost is a wrong state behind the
+panel and a keepalive nobody needs.
 
 **What was run**: the loop's own tests, natively — a device in no group says `off` once over
 twelve idle polls and dials nothing until it is put in a group; a device in a group dials a

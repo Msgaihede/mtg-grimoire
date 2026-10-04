@@ -815,6 +815,32 @@ jobs:
         timeout-minutes: 10
         run: npm run web:smoke
 
+      # **Live sync, two browsers and the relay's own code** (phase 6, step 6.3):
+      # `scripts/web-sync-smoke.mjs` starts `relay/` under workerd (`wrangler dev --local`, a
+      # local D1, a throwaway signing key handed over with `--var`), opens the same bundle in two
+      # Chrome profiles that resolve the relay's real name to it, and walks a claim, a pairing and
+      # a write on each device arriving on the other with nothing pressed — under the shipped
+      # policy, so a `connect-src` that lost the relay's `wss://` source is red here.
+      #
+      # **The run needs wrangler, and wrangler is not one of the root package's dependencies.**
+      # It is installed from `app-worker/`'s own lockfile — the one tool that directory pins, at
+      # one exact version with every integrity hash, since the release rule's step (6.6) — and
+      # with `--ignore-scripts`, as the deploy installs it: no dependency's lifecycle script runs
+      # on the runner. Never `npx wrangler@…` here: that is a version nobody pinned, fetched at
+      # run time. Nothing in either step reaches Cloudflare — no account, no token, no secret in
+      # the job, `--local` throughout; the script looks for wrangler under `app-worker/` and
+      # stops in a sentence when it is not there.
+      #
+      # ⚠️ **Written on Windows and first run on a runner by the pull request that added it**:
+      # whether wrangler's self-signed TLS, workerd and two Chromes fit a runner is that run's to
+      # say. **Bounded**, for the first smoke's reason.
+      - name: Install wrangler from app-worker's lockfile
+        run: npm ci --ignore-scripts --prefix app-worker
+
+      - name: Pair two browsers through the local relay
+        timeout-minutes: 10
+        run: npm run web:sync-smoke
+
       # Whenever there is a bundle, a failed smoke included: a page that would not open on the
       # runner is exactly the one somebody needs to serve and look at. Kept 14 days, like the
       # APK.

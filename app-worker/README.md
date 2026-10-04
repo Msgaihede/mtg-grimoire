@@ -164,10 +164,17 @@ a request it matches is a 429 once the free plan's day is spent.
   are one fact written in two deploys**, and neither is any use without the other: a policy
   that names a relay that does not answer lets every request leave and fail, and a relay that
   answers an origin whose policy does not name it is never asked. *The steps, in order* has
-  the order. ⚠️ **`https:` only — the live socket is not named.** A `wss://` address is
-  another scheme to `connect-src`, and no `wss://` source is written until a browser has
-  opened the socket and shown what the policy needs; `hosting.test.ts` holds every source to
-  `https://` until then. ⚠️ **It names the hosted relay and no other**: the engine's override
+  the order. **It is named twice — `https://` for its requests and `wss://` for the live
+  socket — because to `connect-src` those are two sources.** Measured in headless Chrome 154
+  on 2026-10-04, in a page and in a dedicated Worker alike: under `connect-src 'self'
+  https://<relay>` a `new WebSocket("wss://<relay>/g/…/ws?device=…")` is refused before
+  anything is sent — the console says *Connecting to 'wss://…' violates the following Content
+  Security Policy directive: "connect-src 'self' https://…". The action has been blocked.* —
+  and the socket fires `error` and no `close`. With `wss://<relay>` beside it the upgrade
+  reaches the relay. So that one source is written, derived from `RELAY_BASE` by the rule the
+  engine dials by (`platform::socket`'s `ws_origin`), and `hosting.test.ts` holds it: every
+  other source is `https://`, this is the only `wss://`, and a relay that moves is red until
+  both follow. ⚠️ **It names the hosted relay and no other**: the engine's override
   for a relay of a reader's own (`client::RELAY_URL`, which has no UI) points a request at a
   host this policy refuses, so the hosted page syncs through the hosted relay or not at all.
 - ⚠️ **What the fence cannot hold: `data.scryfall.io`, which is Scryfall's choice and no line
@@ -522,7 +529,13 @@ from yet is a header on no request. So:
   everybody who has been before, and the engine's Worker chunk is revalidated into the new
   policy (*The policy*, above). What that update costs a reader was measured for a
   `_headers`-only deploy — *What a deploy changes for a reader*: 43 small requests, the engine
-  not downloaded again.
+  not downloaded again. **Step 6.3's is one of these twice over**: it adds the relay's `wss://`
+  source to `_headers` *and* ships a new engine (the browser's socket, and the loop that opens
+  it), so its deploy is a new worker build, a new module to download, and an update bar for
+  every reader who has been before. Until it is deployed the live site's engine opens no
+  socket, so the old policy refuses nothing; a deploy of the page without the header — or the
+  header's revalidation failing — would be a paired tab reading *Not connected to the relay*
+  with the violation in its console, and push, pull and ack, which are requests, still working.
 
 1. **`npm ci`**, on Node from `.nvmrc`.
 2. **`npm run web:wasm`** — the engine, into `dist-wasm/`. It needs the `wasm32-unknown-unknown`
@@ -536,7 +549,14 @@ from yet is a header on no request. So:
    tree, and check `dist-web/_headers` is there — a `dist-web/` built before step 5.5 has none,
    and deploys as an app with no policy and no caching rules.
 4. **`npm run web:smoke`**, then **`npm run web:preview`** and a look in a real browser. The
-   preview applies the policy by this repository's own reading of `_headers`.
+   preview applies the policy by this repository's own reading of `_headers`. **And
+   `npm run web:sync-smoke`** when the engine's sync, the relay or `connect-src` changed: two
+   headless Chrome profiles — the desktop face and the phone face — claim, pair and sync
+   through `relay/`'s own code under workerd, by the relay's real name and under this policy,
+   so a `connect-src` that lost either of the relay's sources fails there before a reader meets
+   it. It runs this directory's own pinned wrangler (the install under *Step 0*; or
+   `WRANGLER=<path to a wrangler.js>`), and of wrangler only `d1 execute --local` and
+   `dev --local`: it reaches no Cloudflare.
 5. **`cd app-worker && npx --no-install wrangler dev`, and the probes against it — before anything is
    public.** `wrangler dev` runs Cloudflare's own asset worker and router worker locally, the
    code `workers-sdk` publishes and the edge runs, over this `wrangler.jsonc` and this

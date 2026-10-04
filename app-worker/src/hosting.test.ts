@@ -9,6 +9,7 @@ import feedRs from "../../crates/grimoire-core/src/marketplace_feed.rs?raw";
 import scryfallRs from "../../crates/grimoire-core/src/scryfall.rs?raw";
 import oracleTagsRs from "../../crates/grimoire-core/src/tags/oracle.rs?raw";
 import entitlementRs from "../../crates/grimoire-core/src/sync_engine/entitlement.rs?raw";
+import socketRs from "../../crates/grimoire-core/src/platform/socket.rs?raw";
 import webCoreTs from "../../src/lib/core/web/index.ts?raw";
 import { headersFor, parseHeaders } from "./headers";
 
@@ -126,6 +127,22 @@ const RELAY_BASE = constant(
 );
 const CARD_KINGDOM = feedUrl("CardKingdom");
 const MANA_POOL = feedUrl("ManaPool");
+
+/**
+ * Where the engine opens its live socket: `RELAY_BASE` under the rule `platform::socket`'s
+ * `ws_origin` applies to it — `https://` becomes `wss://`, and nothing else moves. **Derived
+ * here, never written**: no shipped line spells this address, so a relay that moves is one new
+ * `RELAY_BASE`, and both of its sources in `_headers` are red until they follow.
+ *
+ * It is a source of its own because `connect-src` matches a scheme exactly where a host is
+ * written with one. Measured in headless Chrome 154 on 2026-10-04, in a page and in a dedicated
+ * Worker alike, under `connect-src 'self' https://<relay>`: the socket was refused before
+ * anything was sent — *Connecting to 'wss://<relay>/g/…/ws?device=…' violates the following
+ * Content Security Policy directive: "connect-src 'self' https://<relay>". The action has been
+ * blocked.* — as an `error` event and no `close`; with `wss://<relay>` beside it the upgrade
+ * reached the relay.
+ */
+const RELAY_SOCKET = RELAY_BASE.replace(/^https:\/\//, "wss://");
 
 /**
  * Where the bulk files are. **Not a constant of the engine's, and not in its shipped code at
@@ -272,6 +289,8 @@ describe("connect-src, against the hosts the engine asks", () => {
     // (`relay/src/cors.ts`) and this entry are one fact in two deploys, the relay's first. A
     // relay that moves is a new `RELAY_BASE`, and red here until `_headers` follows it.
     ["the sync relay", RELAY_BASE],
+    // The same relay, for the one thing it is asked that is not a request: live sync's socket.
+    ["the sync relay's live socket", RELAY_SOCKET],
     ...BULK_FILES.map((url): [string, string] => ["a bulk file", url]),
   ])("allows %s — %s", (_what, url) => {
     expect(csp["connect-src"]).toContain(origin(url));
@@ -282,10 +301,29 @@ describe("connect-src, against the hosts the engine asks", () => {
     // nothing behind it is red: an entry nobody asks is one nobody will remember to take out.
     // **This is the half that sees a host leave or move, not one arrive** — a new feed is the
     // census's to catch, and its host then has to be named here too before this passes.
-    const asked = [SCRYFALL_API, IMAGE_HOST, COMBO_FEED, CARD_KINGDOM, RELAY_BASE, ...BULK_FILES].map(
-      origin,
-    );
+    const asked = [
+      SCRYFALL_API,
+      IMAGE_HOST,
+      COMBO_FEED,
+      CARD_KINGDOM,
+      RELAY_BASE,
+      RELAY_SOCKET,
+      ...BULK_FILES,
+    ].map(origin);
     expect([...csp["connect-src"]].sort()).toEqual(["'self'", ...new Set(asked)].sort());
+  });
+
+  it("derives the socket's source as the engine derives the socket's address", () => {
+    // `ws_origin` is the rule: an `https://` base is the same address under `wss://`. Read from
+    // the Rust, so a rule that changed there — a path added, a port — is red here rather than a
+    // policy that allows an address the engine no longer dials.
+    expect(socketRs).toMatch(
+      /base\.strip_prefix\("https:\/\/"\)\s*\{\s*format!\("wss:\/\/\{rest\}"\)/,
+    );
+    expect(RELAY_SOCKET).toMatch(/^wss:\/\//);
+    expect(new URL(RELAY_SOCKET).host).toBe(new URL(RELAY_BASE).host);
+    // A URL's origin keeps a socket's scheme, which is what the rows above compare.
+    expect(origin(`${RELAY_SOCKET}/g/abc/ws?device=d1`)).toBe(RELAY_SOCKET);
   });
 
   it("does not allow Mana Pool, which a page cannot read whatever the policy says", () => {
@@ -294,16 +332,19 @@ describe("connect-src, against the hosts the engine asks", () => {
     expect(csp["connect-src"]).not.toContain(origin(MANA_POOL));
   });
 
-  it("names each host by scheme and name, and never by a wildcard", () => {
-    // `https:` and nothing else — so the relay is here for its requests and **not for its
-    // socket**: `wss://` is another scheme to this directive, and by the matching rule in the
-    // CSP specification an `https://` source does not cover it (read there, measured nowhere).
-    // No `wss://` source is written, on purpose, until a browser has opened the live socket and
-    // shown what its policy has to say — the step that builds the browser's socket loosens this
-    // rule by what it measured, and not before.
-    for (const source of csp["connect-src"].filter((s) => s !== "'self'")) {
-      expect(source).toMatch(/^https:\/\/[a-z0-9.-]+$/);
-    }
+  it("names each host by scheme and name, never by a wildcard — and one socket", () => {
+    // `https:` for every host, and **exactly one `wss://` source: the relay's**. To this
+    // directive a socket is another scheme, and an `https://` source does not cover it — read in
+    // the CSP specification at step 6.1, and measured at step 6.3 (`RELAY_SOCKET` has the
+    // browser's own sentence). So the relay is named twice, and nothing else may be a socket: a
+    // second `wss://` source, or a bare `wss:`, is a door nothing in the engine walks through.
+    const sources = csp["connect-src"].filter((s) => s !== "'self'");
+    const sockets = sources.filter((s) => !/^https:\/\/[a-z0-9.-]+$/.test(s));
+    expect(sockets).toEqual([RELAY_SOCKET]);
+    expect(RELAY_SOCKET).toMatch(/^wss:\/\/[a-z0-9.-]+$/);
+    // And never without its other half: the socket only rings, and the trip it asks for is a
+    // request to the same host.
+    expect(sources).toContain(RELAY_BASE);
   });
 });
 
@@ -334,9 +375,16 @@ describe("the policy", () => {
     expect(loose.sort()).toEqual(["script-src 'wasm-unsafe-eval'", "style-src-attr 'unsafe-inline'"]);
   });
 
-  it("has no wildcard and no plain-http source anywhere", () => {
+  it("has no wildcard and no plain-http or plain-ws source anywhere", () => {
     const sources = Object.values(csp).flat();
-    expect(sources.filter((s) => s.includes("*") || s.startsWith("http:"))).toEqual([]);
+    expect(
+      sources.filter((s) => s.includes("*") || s.startsWith("http:") || s.startsWith("ws:")),
+    ).toEqual([]);
+    // And a socket source in the one directive that governs a socket, nowhere else.
+    const socketed = Object.entries(csp)
+      .filter(([, list]) => list.some((s) => s.startsWith("wss:")))
+      .map(([name]) => name);
+    expect(socketed).toEqual(["connect-src"]);
   });
 
   it("is never looser than the desktop's, directive for directive", () => {

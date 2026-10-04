@@ -40,9 +40,15 @@
 #                                               allow-list (`relay/src/cors.ts`, `APP_ORIGINS`) and
 #                                               this entry are one fact written in two deploys, and
 #                                               THE RELAY'S GOES FIRST (README, "The steps, in
-#                                               order"). `https:` only: the live socket is `wss:`, a
-#                                               different source to this directive, and is not
-#                                               named until a browser has opened one (step 6.3).
+#                                               order"). NAMED TWICE, `https://` for its requests and
+#                                               `wss://` for the live socket, because to this
+#                                               directive they are two sources: with the first
+#                                               alone, Chrome 154 refused the socket ("Connecting
+#                                               to 'wss://…' violates … connect-src" — measured
+#                                               2026-10-04, README "The policy"). The second is
+#                                               the first under `platform/socket.rs`'s `ws_origin`,
+#                                               and `hosting.test.ts` derives it so: the one
+#                                               `wss://` source, and no other.
 #                NOT manapool.com: it sends no Access-Control-Allow-Origin, so a page cannot read
 #                it whatever this says.
 #   img-src      This origin and `data:`, and NOT cards.scryfall.io although every card picture
@@ -69,7 +75,7 @@
 # preload list. No `Cross-Origin-Opener-Policy` or `-Embedder-Policy`: the OPFS pool needs neither
 # (the August spike ran it both ways), and `require-corp` would refuse every card picture.
 /*
-  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com https://mtg-grimoire-relay.denmark-east.workers.dev; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com https://mtg-grimoire-relay.denmark-east.workers.dev wss://mtg-grimoire-relay.denmark-east.workers.dev; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
   X-Content-Type-Options: nosniff
   Referrer-Policy: strict-origin-when-cross-origin
   Cache-Control: no-cache

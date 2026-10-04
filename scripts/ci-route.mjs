@@ -274,9 +274,18 @@ export const ARMS = [
   // `frontend` lints them like the rest of `scripts/`; `web` is the job that runs them.
   // **Above `scripts/*`**, which would lint a broken build script and never run it.
   // `scripts/web-smoke/*` is what the smoke answers the engine with instead of the real hosts: a
-  // fixture changed is a first run changed, and nothing but `web` runs it.
+  // fixture changed is a first run changed, and nothing but `web` runs it. **And, since step
+  // 6.3, `harness.mjs` beside them**: the server, the browser and the two fences, a module both
+  // browser runs are written in — a change to it is a change to both.
+  // **`scripts/web-sync-smoke.mjs`** (phase 6, step 6.3) is the third script: it pairs two
+  // browsers through the relay's own code under workerd.
   {
-    match: ["scripts/build-wasm.mjs", "scripts/web-smoke.mjs", "scripts/web-smoke/*"],
+    match: [
+      "scripts/build-wasm.mjs",
+      "scripts/web-smoke.mjs",
+      "scripts/web-sync-smoke.mjs",
+      "scripts/web-smoke/*",
+    ],
     jobs: ["frontend", "web"],
   },
   // The script that signs a release's APK (step 6.6). `release.yml`'s `android-sign` job runs it
@@ -311,6 +320,23 @@ export const ARMS = [
   // manifest that is not a workspace — and `frontend` runs the test that holds them
   // (`scripts/release-rule.test.mjs`).
   { match: ["app-worker/*"], jobs: ["frontend", "web"] },
+
+  // **The sync relay** (phase 6, step 6.3): `relay/`, the Worker every device of a group asks.
+  // Until this arm it fell to the fail-safe, which ran `core` and `storybook` for it as well.
+  //   - `frontend` type-checks it (`tsc -p tsconfig.relay.json`), lints it and runs its tests;
+  //   - `rust`, because Rust tests read five of its sources as text and the census holds this
+  //     arm to them: the client's two request headers against `cors.ts`'s allow-list, the
+  //     lapse's code against `claim.ts`, the browser's sub-protocols and keepalive against
+  //     `ticket.ts` (`platform::socket`), a removal's epoch step against `groupauth.ts`
+  //     (`sync_pair::identity`), and the sealed cap and the clock's bound against `log.ts`
+  //     (`sync_engine::wire`, `hlc`). A word changed here alone is red there alone;
+  //   - **`web`**, which is the only job that *runs* this code: `scripts/web-sync-smoke.mjs`
+  //     starts it under workerd from `wrangler.jsonc`, seeds its D1 from `schema.sql`, and pairs
+  //     two browsers through it. A relay that no longer answers a page is red there and nowhere
+  //     else — every other test of it is a mock on one side or the other.
+  // **Not `core`**: the engine compiles nothing from this tree. **Not `storybook`**: nor does a
+  // story. Its README is prose, by the arm above every tree's. No job deploys it.
+  { match: ["relay/*"], jobs: ["frontend", "rust", "web"] },
 
   // **The light app's web host** (phase 5, step 5.1): `grimoire-web`, a workspace member, so
   // `rust` formats, lints and tests it natively, and `web` is the only job that compiles it for

@@ -639,13 +639,31 @@ it runs on (`platform::socket`):
 | --- | --- | --- | --- |
 | Desktop | opened from the app's Rust process, `tokio-tungstenite` over rustls | `Authorization: Bearer`, no sub-protocol offered | a protocol ping every 45 s |
 | Android (since the light app's step 6.2) | the same code, in the Android host's Rust process | the same | the same |
-| Web | **not built until step 6.3.** `platform::socket`'s browser arm compiles and refuses every connect, and the web host does not start the loop — so no page opens this socket yet | will be `bearer.<access>` beside `grimoire.live.v1` | will be the text `ping` |
+| Web (since the light app's step 6.3) | the engine's dedicated Worker's own `WebSocket` — the same loop, compiled to WASM (`platform::socket`'s browser arm) | `bearer.<access>` beside `grimoire.live.v1`, the two sub-protocols and no other | the text frame `ping` every 45 s, answered `pong` |
 
-So everything this section says about a browser's socket is the relay's half, written ahead of
-its client. The native client also holds the relay to an answer: once a socket has seen one pong,
-a ping that gets none ends it, and the client reconnects — which rests on the runtime answering a
-protocol ping with a pong, seen under `wrangler dev --local` on 2026-10-04 and not yet watched
-on the deployed Worker.
+Every client holds the relay to an answer: once a socket has seen one pong, a ping that gets none
+ends it, and the client reconnects. Natively that rests on the runtime answering a protocol ping
+with a pong; in a browser, on the auto-response answering the text one. **Both were seen under
+`wrangler dev --local` on 2026-10-04** — the browser's by headless Chrome 154 driving this code
+through `scripts/web-sync-smoke.mjs`, which also read the 101's `Sec-WebSocket-Protocol:
+grimoire.live.v1` off both of its sockets — **and neither has been watched on the deployed
+Worker.**
+
+**`npm run web:sync-smoke` is this Worker's only end-to-end run**: the code in this directory
+under workerd, a local D1 seeded from `schema.sql` with one membership and one claim code, a
+signing key handed over with `--var` and never a file, and two browser profiles that claim, pair
+and sync through it by the relay's real name. `APP_ORIGINS` there is the run's own page origin.
+It runs the wrangler `app-worker/`'s lockfile pins (`npm ci --ignore-scripts --prefix
+app-worker`) — the one tool that deploys anything here — and of it only `d1 execute --local`
+and `dev --local`.
+
+⚠️ **A removed device is told nothing, and the smoke run is where that was seen.** A rotation's
+roster marks the device departed in the group's object and closes no socket — 4001 is for a
+group that is gone — so the device goes on holding its socket and learns it was removed at its
+next round trip, when `/keys` answers a manifest without it: after a write of its own, a press
+of *Sync now*, or the next push by a device still in the group, which still rings it
+(`notifyTargets` is every open socket but the pusher's). Until then its panel reads a group it
+is no longer in. True of every host; a page is only where it was watched.
 
 ⚠️ **Three things about it that are stated rather than discovered:**
 
@@ -659,10 +677,12 @@ on the deployed Worker.
   `secret`, `token` or `jwt` — and `sec-websocket-protocol` is none of those. With
   `observability` on, a browser's access token sits in this account's logs for their retention. It
   is good for at most a day and readable only by whoever can already read the signing key.
-- **The 101's `Sec-WebSocket-Protocol` has never met a browser.** `ticket.test.ts` runs the real
-  `Group.ws()` over stand-ins for `WebSocketPair` and a `Response` that accepts a 101, which Node's
-  does not; whether workerd passes the header through to the client is settled by the first socket
-  the web app opens.
+  **Accepted by the owner on 2026-10-04, and nothing is changed for it**: `invocation_logs` stays
+  on.
+- ~~**The 101's `Sec-WebSocket-Protocol` has never met a browser.**~~ **It has, under workerd**
+  (2026-10-04): Node's `WebSocket` and then headless Chrome 154 each opened the socket, read
+  `grimoire.live.v1` back and kept it. What is left is the deployed edge, which a real browser
+  with a real membership settles.
 
 ## Where the logic is
 

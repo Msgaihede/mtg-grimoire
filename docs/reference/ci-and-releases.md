@@ -102,9 +102,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `android` runs for a page-side input**: `mobile/**`, `src/**` and `vite.config.ts` feed the
     APK's bundle too and still do not set it, because `web` now builds that same page through
     that same config on every such change.
-  - **Three single files and one folder sit above the tree that would otherwise take them**,
+  - **Four single files and one folder sit above the tree that would otherwise take them**,
     each because that tree's arm does not set `web`: `scripts/build-wasm.mjs`,
-    `scripts/web-smoke.mjs` and — since step 5.2 — `scripts/web-smoke/*`, the fixtures the smoke
+    `scripts/web-smoke.mjs`, `scripts/web-sync-smoke.mjs` (step 6.3) and — since step 5.2 —
+    `scripts/web-smoke/*`, which holds `harness.mjs`, the module both runs are written in, and
+    the fixtures the smoke
     answers the engine with, above `scripts/*` (which would lint a broken build script and
     never run it; a fixture changed is a first run changed, and nothing but `web` runs it), and
     `.storybook/fake/aliases.ts` above `.storybook/*` — `vite.mobile.config.ts` imports
@@ -433,6 +435,19 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     Its version goes in the summary, because a figure taken in a browser is a figure about that
     browser. The smoke step has `timeout-minutes: 10`: the failure it guards is a page that
     waits for ever, and a job otherwise has six hours to do that in.
+  - **`npm run web:sync-smoke`** (phase 6, step 6.3): live sync end to end — the relay's own
+    code under workerd (`wrangler dev --local`, a local D1, a throwaway signing key by
+    `--var`), two Chrome profiles that resolve the relay's real name to it, a claim, a
+    pairing, and a write on each device arriving on the other with nothing pressed, under the
+    shipped policy. wrangler is installed by `npm ci --ignore-scripts --prefix app-worker`,
+    from that directory's own lockfile (step 6.6's) and from nowhere else — never
+    `npx wrangler@…`, a version nobody pinned — and the job holds no secret. ⚠️ **It was
+    written and run on one Windows machine, and its first run on a runner is the pull request
+    that added it**: whether wrangler's self-signed TLS, workerd and two Chromes fit a runner's
+    ten minutes is that run's to say.
+  - **`relay/**` routes to `frontend`, `rust` and `web`** since the same step — out of the
+    fail-safe, which ran `core` and `storybook` for it: `frontend` tests it, Rust tests read
+    three of its files as text, and `web` is the one job that runs it.
   - `dist-web/` uploaded as `mtg-grimoire-web` (`actions/upload-artifact`, 14 days,
     `if-no-files-found: error`) **whenever the bundle was built, a failed smoke included** — a
     page that would not open on the runner is the one somebody needs to serve and look at.

@@ -27,6 +27,7 @@
     "web:build": "tsc && tsc -p tsconfig.web-worker.json && tsc -p tsconfig.web-sw.json && vite build --config vite.mobile.config.ts --mode web",
     "web:preview": "vite preview --config vite.mobile.config.ts --mode web",
     "web:smoke": "node scripts/web-smoke.mjs",
+    "web:sync-smoke": "node scripts/web-sync-smoke.mjs",
     "web:deploy-guard": "node scripts/web-deploy-guard.mjs",
     "lint:claude": "node scripts/check-claude-md.mjs",
     "lint": "eslint . --max-warnings 0 && npm run lint:claude",

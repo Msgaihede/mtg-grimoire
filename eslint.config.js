@@ -53,6 +53,14 @@ export default tseslint.config(
       "ds-bundle/",
       ".ds-sync/",
       ".design-sync/",
+      // wrangler's local state, beside whichever Worker `wrangler dev` was run in — ignored by
+      // git everywhere, and on disk on any machine that has run one. Its `tmp/` holds the
+      // Worker's bundle with wrangler's own middleware around it, which fails `no-undef` by the
+      // hundred: found 2026-10-04, when `npm run web:sync-smoke` (which starts the relay under
+      // `wrangler dev --local`) was followed by `npm run verify` and 620 errors named no file a
+      // person wrote. The smoke removes what it made; a `wrangler dev` stopped any other way
+      // does not.
+      "**/.wrangler/",
     ],
   },
   js.configs.recommended,
