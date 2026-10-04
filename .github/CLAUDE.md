@@ -62,6 +62,20 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
     fail-safe sets `web` where it does not set `android`**, and the difference is whether an
     unplaced path can be an input: never to the APK, and to a build of the page and the engine
     both, easily — a new root config, a new directory the entry imports.
+  - **`app-worker/**` → `frontend` and `web`** (phase 5, step 5.5, 2026-10-04): the web app's
+    hosting — a third Cloudflare Worker's `wrangler.jsonc`, the `_headers` file a deploy reads,
+    and a script of a few lines. `frontend` type-checks it (`tsc -p tsconfig.app-worker.json`,
+    in `npm run build`), lints it and runs its tests, among them the fence that reads
+    `_headers` and the engine's Rust as text and fails when the Content-Security-Policy and the
+    hosts the engine asks part. ⚠️ **That fence reads three crates by a glob**, which
+    `ci-route.test.mjs`'s census of `?raw` imports does not see: it is safe only because
+    `crates/grimoire-core/**`, `crates/grimoire-web/**` and `crates/*` each already set
+    `frontend`. An arm that took `frontend` off any of them would skip the one test that
+    notices a new host in the engine. `web` because `vite.mobile.config.ts` imports
+    `app-worker/src/headers.ts` at load and copies `_headers` into `dist-web/`. **Not `rust`**:
+    no Rust source reads a file there — unlike `share-worker/`, which for that reason still has
+    no arm and falls to the fail-safe. Its `README.md` is prose and routes nowhere.
+    **No job deploys it, and none may**: `wrangler deploy` is the owner's.
   - **The two halves read each other's files, and `scripts/ci-route.test.mjs` is the fence.**
     Until 2026-09-26 the router said they shared no inputs, so a Rust-only PR that drifted from
     `ipc.ts` merged green and the red landed on the next unrelated PR. The test derives the

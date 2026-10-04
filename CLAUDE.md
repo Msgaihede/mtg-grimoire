@@ -142,6 +142,21 @@ same value on both Workers; ask the host before you believe any of this or its o
 [collection-sharing.md](docs/reference/collection-sharing.md) is the record, and lists what only a
 real publish can settle.
 
+**A _third_ Worker is the light app's web host, and it is not deployed.** `app-worker/` serves
+the web build, `dist-web/`, at **`https://mtg-grimoire.app`** — static assets, one `_headers` file
+that carries the Content-Security-Policy and the caching, and a script of a few lines whose whole
+job is that a missing file is a 404 and never the document. Beside the other two for the share
+Worker's reason, blast radius, and unlike them it holds **no secret and no binding but its
+assets**: no D1, no R2, no `vars`. **The origin is the app's identity, not an address that can
+move** — a browser keys both OPFS databases, the service worker and the install to it, and phase
+6 names it in the relay's CORS allow-list. Its policy's `connect-src` is exactly the hosts the
+engine asks, and a test reads the engine's shipped Rust to hold it there: a host that moves, and
+a new address written as a literal, are each a red build. **An address a server sends is not**
+— Scryfall's bulk-file host is in no line of ours, so if that moves every suite stays green and
+a browser's first run fails. No job deploys it and no agent may;
+[`app-worker/README.md`](app-worker/README.md) is the runbook, and every probe in it is marked
+*not yet run* — ask the host before you believe this or its opposite.
+
 **Commander Spellbook's combo database is the third optional feed, and the first that is neither
 Scryfall nor a price list.** `variants.json.gz` is where a Commander deck's bracket estimate gets
 its fourth signal: a two-card infinite combo is a fact about an _interaction_, so no amount of
@@ -185,7 +200,9 @@ no combo" and "we have never downloaded the list" have to be two different sente
 - `npm run web:wasm` / `web:build` / `web:smoke` — the light app's web host: the engine as a
   WASM module into `dist-wasm/` (needs clang and the `wasm-bindgen` CLI at `Cargo.lock`'s
   version), the page around it into `dist-web/`, and that bundle opened in headless Chromium.
-  No lock; `web:dev` serves it on port 5176. **`verify` runs none of them** — CI's `web` job
+  No lock; `web:dev` serves it on port 5176, and **`web:preview` serves the build under the
+  hosting's own headers** — the one local server that enforces the shipped policy.
+  **`verify` runs none of them** — CI's `web` job
   does. See [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md).
 
 ## Architecture
@@ -231,6 +248,7 @@ on — do not work from this page alone.
 | [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export — parsing, planning, the two dialogs |
 | [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
+| [`app-worker/README.md`](app-worker/README.md) | The web app's hosting — a README rather than a `CLAUDE.md`, so it does not load by itself: `wrangler.jsonc`, the `_headers` policy and why each line is there, what the script answers, and the deploy runbook that opens with asking the host |
 | [`mobile/CLAUDE.md`](mobile/CLAUDE.md) | The light app — the Android and web face: the two faces and the width that picks one, the URL as navigation, what the phone face may import, and the rule that nothing there asks where it is running |
 
 **Two rules load by file *extension* rather than by directory, and sit in `.claude/rules/`.**

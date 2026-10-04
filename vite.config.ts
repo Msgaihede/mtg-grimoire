@@ -101,6 +101,12 @@ export default defineConfig({
       ".storybook/**/*.test.ts",
       "relay/src/**/*.test.ts",
       "share-worker/src/**/*.test.ts",
+      // The third Worker — `app-worker/`, the web app's hosting — on the two above's terms: a
+      // plain handler over a fake of its one binding. Its other two files are not about a
+      // handler at all: `headers.test.ts` holds the reader of Cloudflare's `_headers` format,
+      // and `hosting.test.ts` reads that file, `wrangler.jsonc` and the engine's Rust as text
+      // and fails when the Content-Security-Policy and the hosts the engine asks part.
+      "app-worker/src/**/*.test.ts",
       // The fifth glob is the **public web viewer** — `share/`, built by
       // `vite.share.config.ts` into `dist-share/` and served by the share Worker's `assets`
       // binding. It is a React page like `src/`, so unlike the two Worker globs above it needs

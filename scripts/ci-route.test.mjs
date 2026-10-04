@@ -17,6 +17,7 @@ const TS_TESTS = import.meta.glob(
     "/.storybook/**/*.test.ts",
     "/relay/src/**/*.test.ts",
     "/share-worker/src/**/*.test.ts",
+    "/app-worker/src/**/*.test.ts",
     "/share/**/*.test.{ts,tsx}",
     "/mobile/**/*.test.{ts,tsx}",
     "/scripts/**/*.test.mjs",
@@ -249,6 +250,15 @@ describe("the arms", () => {
     ["crates/card-scanner/.cargo/config.toml", T, T, T, F, F, F, T],
     ["share-worker/wrangler.jsonc", T, T, T, F, T, F, T],
     ["relay/src/index.ts", T, T, T, F, T, F, T],
+    // The web app's hosting: checked and tested by `frontend`, copied into `dist-web/` by `web`.
+    // Out of the fail-safe the other two Workers still fall to — no Rust source reads it.
+    ["app-worker/wrangler.jsonc", T, F, F, F, F, F, T],
+    ["app-worker/_headers", T, F, F, F, F, F, T],
+    ["app-worker/src/headers.ts", T, F, F, F, F, F, T],
+    ["app-worker/src/index.ts", T, F, F, F, F, F, T],
+    // Its runbook is prose, by the arm above every tree's; its `tsc` program is the glob's.
+    ["app-worker/README.md", F, F, F, F, F, F, F],
+    ["tsconfig.app-worker.json", T, F, F, F, T, F, T],
     ["some/new/thing.txt", T, T, T, F, T, F, T],
     // The light app: its host, built into an APK, and its pages, which no Rust job reads — and
     // which are the web build's own page, where the phone's host is nothing to a browser.

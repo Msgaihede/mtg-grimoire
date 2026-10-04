@@ -524,7 +524,17 @@ built in the `web` mode.
   each feed in turn, on every launch, and one first run against the real hosts is measured in
   [light-app.md](../docs/reference/light-app.md) §9.2. **Not there yet**, each with the step
   that owns it in [the plan](../docs/superpowers/plans/2026-10-04-light-app-phase-5.md): no
-  card picture and no service worker (5.3); no hosting (5.5); no sync (phase 6).
+  card picture and no service worker (5.3); no deploy — the hosting Worker is built and nothing
+  is at the address (5.5, §9.5); no sync (phase 6).
+- **The web build is served under `style-src 'self'`, as the desktop is** (step 5.5): the
+  hosting's `_headers` sends the desktop's policy with what a browser adds, so the rule
+  [`src/CLAUDE.md`](../src/CLAUDE.md) states for the shipped window — **no runtime `<style>`**,
+  so no portal or popper library and neither forbidden `motion` API — binds the phone face in a
+  browser too, and fails there as silently. **`web:preview` is where that policy is enforced,
+  not `web:dev`**: Vite's dev server sends no policy and injects `<style>` itself, so a page
+  that works in dev has proved nothing about it. A card picture is drawn from this origin alone
+  (`img-src 'self' data:`), and the engine may ask only the hosts `connect-src` names —
+  [`app-worker/README.md`](../app-worker/README.md) has both lists and why.
 - **The desktop face's file dialogs are answered on the page** (step 5.4): `export_save_file` is
   a download and `import_pick_file` a hidden `<input type="file">`, in front of the Worker
   (`src/lib/core/web/files.ts`), in the desktop commands' own result shapes — so

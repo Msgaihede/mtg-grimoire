@@ -826,6 +826,38 @@ quiet**, on a module from before that step's review and before its yield):
 
 What is left of the list — the update flow and hosting — is in the three steps that remain.
 
+**Built 2026-10-04 (step 5.5, hosting): the Worker, and nothing deployed.** `app-worker/` is the
+list's last bullet as source — static assets over `dist-web/` at the root of
+`https://mtg-grimoire.app`, beside the relay and the share Worker and sharing nothing with
+either. Three things the bullet does not say, each built:
+
+- **It is not assets alone.** The single-page fallback answers every address that matches no
+  file with the document and a 200, which is what `/decks/12` needs and what a chunk a deploy
+  renamed must never get — the failure the update flow above is built to recover from would
+  arrive as HTML instead. So the Worker has a script of a few lines: with one present,
+  Cloudflare answers a browser's navigation at the edge and sends every other miss to the
+  script, where it is a 404. A file that exists never reaches it.
+- **The origin root is also a policy's root.** One Content-Security-Policy, sent with every
+  response, because a dedicated Worker and a service worker each take the policy on *their own
+  script's* response (measured, Chrome 154): `'wasm-unsafe-eval'` for the engine and never
+  `'unsafe-eval'`, the desktop's `style-src 'self'`, and a `connect-src` that is exactly the
+  hosts the engine asks — held there by a test that reads the engine's shipped Rust, for a host
+  that moves and for a new one written as a literal; not for an address a server sends, which
+  is what Scryfall's bulk-file host is. The engine's Worker is the one hashed file that is not
+  kept for a year, because a change to the policy has to reach its script. Mana Pool is not on it,
+  which is §4's rule from the other side; the relay is not on it until phase 6.
+- **A card picture is drawn from this origin alone.** `img-src` does not name Scryfall's image
+  host: Chrome checks the address of the response a service worker returns, so the worker must
+  rebuild what it hands back from the bytes. A response passed along as it came — or out of
+  Cache Storage — is refused, and only the rebuilt one is drawn.
+
+The headers are a `_headers` file the web build emits into `dist-web/` and no other bundle, and
+`npm run web:preview` sends them, so the policy is met on `localhost` before it is met by a
+reader. **No agent deployed it**, as this section says; the runbook is
+[`app-worker/README.md`](../../../app-worker/README.md), every probe in it is marked not yet
+run, and [light-app.md](../../reference/light-app.md) §9.5 is the record. This is the step's
+first half: the module's size with timings and the phase's end-to-end run are still to come.
+
 ---
 
 ## 7. Sync on a light install
