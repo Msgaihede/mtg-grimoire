@@ -1,401 +1,111 @@
 # MTG Grimoire
 
 Portable Windows desktop app for tracking a Magic: The Gathering collection.
-Tauri 2.11 (Rust core) + React 19 + TypeScript 6. Single local user, SQLite storage.
+Built with Tauri 2.11 (Rust core) + React 19 + TypeScript 6. Single local user, SQLite storage.
+Also supports a light app (Android APK via Tauri and Web via WebAssembly in a Cloudflare Worker).
 
-**Scryfall is the card data and the only dependency the app needs to work.** Two price feeds
-join it — Card Kingdom's and Mana Pool's public bulk pricelists — and both are optional by
-construction: nothing downloads until a reader selects that marketplace, and a feed that never
-answers costs em dashes rather than a broken app. Card trader is deliberately absent; its API
-needs a per-user JWT and publishes no bulk download.
+## Index
 
-**Scryfall's two Tagger datasets are further bulk downloads from the same source, and optional
-in a weaker sense than the price feeds are**: a launch fetches them uninvited, and what makes
-them optional is that every reader of them answers without them. **Oracle Tags** say what a card
-_does_ (`removal`, `ramp`, `recursion`), which is what a deck add is filed by; a database that has
-never fetched them files by card type instead, and that fallback is the floor rather than an
-error. **Art Tags** say what an illustration
-_shows_ (`forest`, `dragon`, `dog`), which is what the Tags page browses by; a database that
-has never fetched them has a Tags page that says so and still answers from the oracle side.
-~5.85 MB and ~12.5 MB — [the oracle research](docs/superpowers/research/2026-08-14-scryfall-oracle-tags.md)
-and [the art one](docs/superpowers/research/2026-08-20-scryfall-art-tags.md).
-**A _tag_ in this app is one of those two and nothing else.** The deckbuilder's own coloured
-per-card mark is a **label** — `deck_labels`, `deck_cards.label_id`, the `Labels` dialog — and the
-collection's free-text `tags` column is a third thing again. **A _keyword_ is a fourth, and it is
-the one most likely to be miscalled a tag**: `cards.keywords` at corpus schema 5 holds the card's
-own **keyword abilities** — `flying`, `vigilance` — which is what the search box's `kw:` asks
-about, and it is a fact Scryfall ships on the card rather than a taxonomy anyone tagged it with.
-The measurement that separates it from the rules text it is written in is in
-[search-syntax.md](docs/reference/search-syntax.md): `kw:flying` answers 3,318 cards and
-`o:flying` 4,617, while `kw:flying -o:flying` is 0. Never let the words trade places.
+### Agent Instructions (`docs/agent/`)
 
-**_Note_ is the same trap one word over, and it is worse because all four spellings are the
-reader's own prose rather than three of one thing and one of another.** A **deck note** is what
-they wrote about one deck and is the only one that attaches cards — `deck_notes` and
-`deck_note_cards`, the band `NoteEditor` opens in the deck editor, many to a deck since user
-schema v43 replaced the single `decks.notes` column. A **card note** is not a table at all: it is
-those same rows read from the card's side, across every deck at once, which is what the
-`card_notes` command and the `CardNote` shape answer — and why the two questions, _what has this
-deck written_ against _what has anyone written about this card_, must stay two commands and
-never collapse into one. An **entry note** is neither: a free-text column on one row of the
-binder or the wishlist (`collection_entries.notes`, `wishlist_entries.notes`), which travels
-with that row through a fold, a move and an export field of its own. And a **sticky note** is
-the reader's prose about nothing in particular, on the home page — `sticky_notes` at user schema
-v46, filed against no deck, no card and no row, which is the whole of what separates it from the
-first three. A **deck to-do list** is a fifth thing and is **not a note at all** —
-`deck_todo_lists`, many titled lists to a deck at user schema v59, each body a document of
-headings, text and to-dos, whose to-dos are still lines with no row of their own. **It is now
-shaped exactly like a deck note** — a title, a body, a card in a band beside the Notes band, the
-notes' editor and their inline dialect — which is what makes it easy to miscall, and why the
-difference has to be said: no card attachments, no row in `deck_notes`, no Save and no history.
-v58 had one checklist to a deck in `decks.todos`, every line a to-do; v59 converted it and dropped
-the column.
-**The overlap is not cosmetic**: `deck_notes` and `sticky_notes` share a title-and-body shape, a
-CommonMark dialect and a renderer, so a sentence that says "notes" and means one of them reads
-perfectly as the other. Say which.
+- [`docs/agent/CODE_STYLE.md`](docs/agent/CODE_STYLE.md) — Formatting rules (Prettier), linters (ESLint, Clippy), naming conventions, UI patterns, and commit guidelines.
+- [`docs/agent/ARCHITECTURE.md`](docs/agent/ARCHITECTURE.md) — Core architectural boundaries, crate structure, IPC data flow, and golden corpus tests.
+- [`docs/agent/DOMAIN_VOCABULARY.md`](docs/agent/DOMAIN_VOCABULARY.md) — Critical domain taxonomy: tags vs labels vs keywords vs notes, and how to avoid confusing them.
+- [`docs/agent/EXTERNAL_SERVICES.md`](docs/agent/EXTERNAL_SERVICES.md) — Scryfall, price feeds, Spellbook combos, sync relay, Workers, secrets policy, and deploy rules.
+- [`docs/agent/RUNNING_AND_VERIFYING.md`](docs/agent/RUNNING_AND_VERIFYING.md) — Full command catalog, database paths, single-instance traps, and CDP UI verification.
+- [`docs/agent/WORKFLOW.md`](docs/agent/WORKFLOW.md) — Subagent fan-out, git worktrees, project skills, language server caveats, and documentation maintenance.
 
-**Both files regenerate _daily_; _weekly_ is this app's refresh interval, and the two must not be
-blurred.** Scryfall's `docs/api/tags` says the bulk files are updated daily, and both `updated_at`
-stamps were the previous day when checked on 2026-08-20. The week is
-`tags::{oracle,art}::REFRESH_INTERVAL_SECS`, a choice this app made about how often to ask — so a
-taxonomy up to seven days behind Scryfall is the design working, not a stale download.
+### Sections in this Document
 
-**Sync is the fourth network dependency and the only one that is not a download.** Nothing about a
-*membership* is fetched or sent until a reader connects one — **that is the boundary for
-entitlement**, because claiming makes a group of one when the device is in none, so a single
-connected device pushes and pulls with nothing ever paired to it. **Pairing crosses a boundary of
-its own since 2026-08-31, and it used to need none at all**: two devices still meet with an X25519
-handshake and six digits compared on both screens, but a short-lived, unauthenticated
-**rendezvous** on the same relay now carries everything but the invite, so pairing itself needs the
-relay reachable before either device holds a membership — two devices can no longer pair with no
-signal and connect Patreon afterwards. An installation that has connected nothing has sync off,
-which is the state every existing installation is in. **The relay is one Cloudflare
-Worker Markus runs**, not one each reader deploys — that was the original premise and nobody
-would ever have done it. **Its address is compiled into the binary as `RELAY_BASE`, is in this
-repository, and is public**, in exactly the way every application's API base URL is public: the
-relay can decrypt nothing it stores, and **every route that reaches a Durable Object refuses a
-request without a token the relay minted** — push, pull and ack. The four entitlement routes are
-not behind that gate and cannot be, because three of them exist precisely so a caller with no
-token can get one, so each is guarded by something else instead (an authorization code Patreon
-carries, a single-use ten-minute claim code, the refresh secret or the group auth being presented,
-the webhook's HMAC). **Two `/g/…` routes stand outside it too** — `/rotate` and `/keys`, which
-carry the group's own key material and refuse out of D1 alone (an accepted rotation then posts its
-roster to the group's object, once): a device that has just been rotated away from cannot mint a
-token, so a `/keys` behind the gate would refuse exactly the caller it exists to serve. Either way
-nothing follows from knowing where the relay lives. **The hosted Worker is deployed at that
-address**, which reverses what this file said until 2026-08-30. Probed that day, after the
-group-key deploy: `/claim` and `/token` answer **405** to a GET (the route is there and
-wants POST), `/oauth/patreon/callback` **400**, `/g/{group}/pull` **401** from the bearer gate,
-`/g/{group}/rotate` **401** to a POST, `/g/{group}/keys` **401** to a GET with a well-formed
-bearer, and `/g/{group}/bogus` **404** — so the gate, the callback, the membership flow and the
-key distribution are all live. This sentence briefly said `/rotate` and `/keys` were the two
-routes still missing; that was true for part of one day. **The device roll and the pairing
-rendezvous are deployed too**, which this file denied until 2026-09-28 on a probe that could not
-fail — [the runbook](docs/reference/hosted-relay-deploy.md)'s step 0 has one that can. **The last
-deploy was 2026-10-01 at 22:09 UTC**, and carried rate limits on the five routes a caller reaches
-with no token — in the Worker, because `workers.dev` has no zone for a rule, so they spare the D1
-read and not the request, and they bound a flood rather than metering a trickle. The deploy before
-it, the same day from `main` at `2b845048`, carried issue #548's `dev` claim on the tokens the
-relay mints. ⚠️ **This sentence named `1512ea68` and #541 until that day, and was two
-deploys behind**: issue #546's half went out on 2026-09-28 at 19:57 UTC, nobody wrote it down, and
-step 0's sixth probe found it live three days later. The next deploy is an **update** with a D1 that holds real entitlements, not a
-first landing. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
-real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
+- [Primary Commands](#primary-commands) — Key commands needed across everyday tasks.
+- [Architecture & Responsibilities](#architecture--responsibilities) — The fundamental Rust vs TypeScript separation.
+- [Area-Specific Guides](#area-specific-guides) — Directory-level `CLAUDE.md` files governing specific parts of the codebase.
+- [Project Skills & Workflows](#project-skills--workflows) — Worktree workflows, app locks, and branch shipping.
+- [Global Rules](#global-rules) — Invariants binding every agent and every commit.
+- [Working Style](#working-style) — Subagents, testing, and user interaction standards.
 
-**An entitlement is a property of the GROUP, not of the device that pressed Connect** — so a
-reader may pair first and connect second, and every device in the group reads *Supporting since
-…*. Any paired device derives its own relay credential from the group key and mints its own token,
-which is why **pairing does not carry the refresh secret**: the relay retires that secret with
-the one device `/claim` recorded as holding it, so a copy on any other device would outlive that
-device's removal and go on minting tokens for the group that removed it. **A removal reaches every
-device**: it rotates the group key, rewraps it per remaining device, publishes the set, and
-commits only when the relay accepts it — and the published manifest's key set *is* the roster, so
-a device it omits leaves the group on its next sync. **A device can also leave of its own accord,
-and that press is always possible** — everything after the in-a-group check is best effort,
-*planning included*, and the local clear runs whatever the relay answered; what a failure costs is
-the courtesy of telling the others, never the departure. Leaving takes the membership with it,
-which is why **`/claim` moves a binding rather than refusing one**: without that, the paying
-device that left could never connect anywhere again. **Five devices to a membership**, which is
-the same count as five to a group because a subject holds exactly one — the relay is the fence,
-the app is the message, and the cap's refusal is a **403 carrying `code: "device_limit"`**,
-matched on the code and never on the sentence.
-**What must never be committed are the three secrets the Worker holds** —
-`PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY`, in
-[the hosted-relay design](docs/superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
-§9. They are set with `wrangler secret put` and belong in no `.dev.vars` either. A reader who
-wants their own relay still can: `relay/` is the whole source and a fork changes that one
-constant. [sync.md](docs/reference/sync.md) has the whole record.
+### Reference Docs
 
-**A read-only shared collection is the fifth, it is a _second_ Worker beside the relay, and it
-has been deployed since 2026-10-01 without a single share published through it.** A share is a snapshot the owner
-publishes rather than a window onto their database, so a viewer needs no account and no app and
-the link is the whole of the capability — while *publishing* is Patreon-gated by the same bearer
-token sync mints. It is the one place the relay's "it can decrypt nothing it stores" stops
-holding: **a snapshot is stored in the clear**, which is what buys the OpenGraph card in Discord,
-and is why six collection columns are _absent_ from the format rather than switched off in it.
-**`share::publish::SHARE_BASE` is that Worker's address**,
-`https://mtg-grimoire-share.denmark-east.workers.dev`, compiled in and public on `RELAY_BASE`'s
-terms, and equal byte for byte to the `SHARE_BASE` var in `share-worker/wrangler.jsonc`. It was a
-placeholder until the deploy, so **every release before the one that carries it still refuses a
-press in words rather than publishing**. Its one secret is the relay's own `RELAY_HMAC_KEY`, the
-same value on both Workers; ask the host before you believe any of this or its opposite.
-[collection-sharing.md](docs/reference/collection-sharing.md) is the record, and lists what only a
-real publish can settle.
+- [`docs/reference/README.md`](docs/reference/README.md) — Index of all 31 reference deep-dives, live measurements, and design rationale documents.
 
-**A _third_ Worker is the light app's web host, and it has been deployed since 2026-10-04.** `app-worker/` serves
-the web build, `dist-web/`, at **`https://mtg-grimoire.app`** — static assets, one `_headers` file
-that carries the Content-Security-Policy and the caching, and a script of a few lines whose whole
-job is that a missing file is a 404 and never the document. Beside the other two for the share
-Worker's reason, blast radius, and unlike them it holds **no secret and no binding but its
-assets**: no D1, no R2, no `vars`. **The origin is the app's identity, not an address that can
-move** — a browser keys both OPFS databases, the service worker and the install to it, and phase
-6 names it in the relay's CORS allow-list. Its policy's `connect-src` is exactly the hosts the
-engine asks, and a test reads the engine's shipped Rust to hold it there: a host that moves, and
-a new address written as a literal, are each a red build. **An address a server sends is not**
-— Scryfall's bulk-file host is in no line of ours, so if that moves every suite stays green and
-a browser's first run fails. **The last deploy was 2026-10-04 at 13:43 UTC, from `main` at
-`e1e76f78`** — the third that day and the first to rename chunks, so **production is `main`'s
-code as of that commit**; the one before it was rolled back and forward to see a rollback
-work. This paragraph said *not deployed* until that day. No job deploys it and no agent may:
-each of those was run by an agent because Markus asked for it, and **the ask is per deploy**.
-[`app-worker/README.md`](app-worker/README.md) is the runbook, with every probe in it answered
-at the real address that day. **Who has run it**: headless Chrome 154, driven and measured; the
-owner's Firefox and the owner's phone, a sentence each. What nobody has seen — Safari, an
-installed app, a phone's figures, the app's own update check in a browser that was measured —
-and the one policy violation known on the live site, the deck note editor's — **fixed in the
-source that day, and raised by the deployed build until the next deploy** — are in
-[light-app.md](docs/reference/light-app.md) §9.7. Ask the host before you believe this or its
-opposite.
+---
 
-**Commander Spellbook's combo database is the third optional feed, and the first that is neither
-Scryfall nor a price list.** `variants.json.gz` is where a Commander deck's bracket estimate gets
-its fourth signal: a two-card infinite combo is a fact about an _interaction_, so no amount of
-reading either card's own text finds one. **It is optional in the tagger files' sense and not the
-price feeds'**, and it moved across that line: a launch fetches it uninvited now, because a
-bracket readout drawn from three signals looks exactly like one drawn from four — no error, no
-empty state, just a number a little too low — and there was no way for a reader to know a Refresh
-button was what they were missing. What optional still means is that a failure keeps the combos
-already stored, and an estimate with none reads three signals rather than refusing to answer.
-27.5 MB gzipped over 639 MB of JSON, so the ingest streams throughout;
-`combos::REFRESH_INTERVAL_SECS` is **the same week**, against a file Spellbook rebuilds through
-the day, and the reason is the tagger week's: a bracket readout that changed between two sessions
-on one afternoon, for a reason the reader cannot see, is the failure worth avoiding.
-**Since 2026-09-08 it has a second reader that is not a deck at all**: the card modal's `Combos`
-row, which asks _which combos name this card_ where the estimate asks _which combos does this
-pile hold_. Two questions, never one statement — and the card side is why `combos` grew four
-prose columns (**corpus schema 2**, the corpus ladder's first rung ever) and why "this card is in
-no combo" and "we have never downloaded the list" have to be two different sentences.
-[commander-brackets.md](docs/reference/commander-brackets.md) has every measurement.
+## Primary Commands
 
-## Commands
+- `npm run verify` — Build + lint + `cargo fmt --check` + Clippy + Vitest + cargo test. **Run at the end of a feature before committing (not after every change).**
+- `npm run tauri dev` — Run the desktop app (Vite HMR + Rust rebuild). Takes the `app` lock (see `running-the-app` skill).
+- `npm run test` / `test:run` — Run frontend tests via Vitest.
+- `cargo test --workspace` — Run Rust tests across all crates (`src-tauri`, `crates/grimoire-core`, `mobile/src-tauri`, `crates/grimoire-web`).
+- `npm run storybook` / `build-storybook` — Component development workbench (`.storybook/`).
+- `npm run mobile:dev` / `mobile:tauri` — Run the light app in a browser fake or in a phone-sized Tauri window.
+- `npm run web:wasm` / `web:build` / `web:preview` — Build and preview the WASM web target.
 
-- `npm run tauri dev` — run the app (Vite HMR + Rust rebuild). Takes the `app` lock: only
-  one app runs across every worktree. See the `running-the-app` skill.
-- `npm run verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test. **Run
-  before every commit.** Rust is pinned by `rust-toolchain.toml` and Node by `.nvmrc`.
-- `npm run test` / `test:run` — frontend tests; `cargo test --workspace` — Rust tests, for every
-  member of the cargo workspace at the root (`src-tauri`, `crates/grimoire-core`, since
-  2026-10-03 the light app's Android host `mobile/src-tauri`, and since 2026-10-04 its web
-  host `crates/grimoire-web`, natively). **Its
-  build tree is still `src-tauri/target`**: `.cargo/config.toml` pins it, so nothing that names
-  that folder moved when the workspace arrived on 2026-10-02.
-- `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not
-  `cargo llvm-cov`'s**: that counts the inline `#[cfg(test)]` modules, where every line is
-  covered by definition, and reads ~14 points high. See
-  [test-coverage.md](docs/reference/test-coverage.md) before quoting either figure.
-- `npm run storybook` / `build-storybook` — the component workbench
-- `npm run mobile:dev` / `mobile:tauri` — the light app, over the Storybook fake in a browser
-  (port 5175, no lock) or over the real core in a phone-sized window (**takes the `app` lock**).
-  See [`mobile/CLAUDE.md`](mobile/CLAUDE.md).
-- `npm run web:wasm` / `web:build` / `web:smoke` — the light app's web host: the engine as a
-  WASM module into `dist-wasm/` (needs clang and the `wasm-bindgen` CLI at `Cargo.lock`'s
-  version), the page around it into `dist-web/`, and that bundle opened in headless Chromium.
-  No lock; `web:dev` serves it on port 5176, and **`web:preview` serves the build under the
-  hosting's own headers** — the local server to drive under the shipped policy; `web:smoke`
-  serves under it too since 2026-10-04, and fails on a refusal.
-  **`verify` runs none of them** — CI's `web` job
-  does. See [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md).
+_For complete command options, coverage caveats, and environment flags, see [`docs/agent/RUNNING_AND_VERIFYING.md`](docs/agent/RUNNING_AND_VERIFYING.md)._
 
-## Architecture
+---
 
-- **Rust owns data plumbing** (SQLite/FTS5, Scryfall sync, image cache). **TS owns domain
-  logic** (deck validation, import/export parsing). Rust supplies _facts_; TS draws
-  _conclusions_. Keep that boundary.
-- **The Rust is two crates, and the line between them is "does it know about a window".**
-  `crates/grimoire-core` is the engine — the schema, the decks, the collection, the wishlist, the
-  search — and has no `tauri`; `src-tauri` is the desktop: the window, the mirror, the updater,
-  what still reaches a network, and **every `#[tauri::command]`**. A command's function is
-  written in the core over `&Connection`; its wrapper is written in
-  `src-tauri/src/<module>/mod.rs`, which re-exports the core's module of that name with a glob.
-  So `crate::deck::…` in `src-tauri` is the core's `deck` unless that file defines the item.
-- **Export _writing_ is the one thing that lives on both sides, by design, and the golden fence
-  is what makes it legal.** The plain-text mirror is maintained by a Rust thread and cannot ask
-  the page to render a file, so `src-tauri/src/transfer/` is a second implementation of
-  `src/features/transfer/export/`. The alternative — move the writer to Rust and have the export
-  dialog fetch its text over IPC — turns the dialog's live field preview into a round trip per
-  checkbox and strands the writer-to-parser round-trip test vitest owns. So both stay, and
-  **`src/features/transfer/__golden__/` is the fence that turns drift into a red build** rather
-  than into a file that quietly disagrees with the dialog: one committed corpus, one committed
-  golden set, both suites asserting byte equality against it. **Parsing did not follow** — there
-  is no Rust parser, because the mirror never reads a file back. Full record:
-  [text-mirror.md](docs/reference/text-mirror.md).
-- Spec: `docs/superpowers/specs/2026-08-04-mtg-collection-tracker-design.md`
-- Research (live-verified facts, incl. Scryfall breaking changes): `docs/superpowers/research/`
-- Plans: `docs/superpowers/plans/` — execute in order, check off steps as you go.
+## Architecture & Responsibilities
 
-## Where the rules live
+- **Rust supplies facts, TypeScript draws conclusions**:
+  - Rust owns data plumbing (SQLite/FTS5, Scryfall bulk ingestion, image caching).
+  - TypeScript owns domain logic (deck validation, import/export parsing).
+  - Keep this boundary clean: do not leak UI assumptions into Rust or storage plumbing into TypeScript.
+- **Crate Boundary (window awareness)**:
+  - `crates/grimoire-core` is the engine with no window dependency. It contains schemas, database migrations, decks, collection, wishlist, search, and Scryfall clients. Compiles to native and WASM.
+  - `src-tauri` is the desktop application: windows, menus, native updater, IPC commands (`#[tauri::command]`), and filesystem mirror.
+- **IPC Type Mirroring**:
+  - `src/lib/ipc.ts` is the hand-written TypeScript mirror of Rust structs.
+  - `src/lib/ipc.test.ts` asserts byte/field parity against the Rust source text to prevent schema drift.
 
-This file is deliberately short. **The binding rules for an area sit in that area's own
-`CLAUDE.md`**, which loads when you touch a file there. Read the one for what you are working
-on — do not work from this page alone.
+_For full architecture details and golden export fences, see [`docs/agent/ARCHITECTURE.md`](docs/agent/ARCHITECTURE.md)._
 
-| File | Read it when you are working on |
-| --- | --- |
-| [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md) | Anything Rust: schema and migrations, sync, Scryfall, images, deck storage, capabilities. **Its rules bind a module wherever its file is** — and since 2026-10-02 the file for the decks, the collection, the wishlist and the search is in the crate below |
-| [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md) | The engine with no window, which three hosts link, **and where most of the Rust now is**: the schema, the decks, the collection, the wishlist, the search, the Scryfall client and the ingest. Its five rules and the fence behind them, `platform/` — where a request, a timer, a file and the clock each have a native arm and a browser arm — why no `#[tauri::command]` is in it (each is in `src-tauri/src/<module>/mod.rs`, under a glob re-export), how a module moves there, and how to compile it for WASM on this machine |
-| [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md) | The light app's web host — the engine as a WASM module in a Worker: its three exports and the hand-written mirror of them, why nothing in it may trap or reject, what is gated to the browser and what is tested natively, and how to build it and run it for real |
-| [`src/CLAUDE.md`](src/CLAUDE.md) | Any UI. Carries the Storybook-MCP rule, the `frontend-design` skill, layers, card images |
-| [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, the editor's views and drags |
-| [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export — parsing, planning, the two dialogs |
-| [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md) | Stories, the fake, seeds and faults |
-| [`.github/CLAUDE.md`](.github/CLAUDE.md) | Workflows, the `changes` router, release-please |
-| [`app-worker/README.md`](app-worker/README.md) | The web app's hosting — a README rather than a `CLAUDE.md`, so it does not load by itself: `wrangler.jsonc`, the `_headers` policy and why each line is there, what the script answers, and the deploy runbook that opens with asking the host |
-| [`mobile/CLAUDE.md`](mobile/CLAUDE.md) | The light app — the Android and web face: the two faces and the width that picks one, the URL as navigation, what the phone face may import, and the rule that nothing there asks where it is running |
+---
 
-**Two rules load by file *extension* rather than by directory, and sit in `.claude/rules/`.**
-They cover the language servers, which are active for every `.rs` and `.ts`/`.tsx` file with no
-setup — [`rust-lsp.md`](.claude/rules/rust-lsp.md) and
-[`typescript-lsp.md`](.claude/rules/typescript-lsp.md). Read them for when to prefer the `LSP`
-tool over grep, and for the traps each server has: **TypeScript's `findReferences` silently
-under-reports until a file is loaded** — one measured call said a live symbol had a single
-reference — and rust-analyzer's cold start reports "not on a symbol" when it means "not indexed
-yet". Both are answers that look right and are not.
+## Area-Specific Guides
 
-## Project skills (`.claude/skills/`)
+This file contains only global instructions. **The binding rules for any specific area live in that area's own `CLAUDE.md`**, which should be read before modifying code there:
 
-These skills carry the worktree and shipping workflow and are the authority on it — this
-file does not repeat them:
+| Area / File                                                          | Governs                                                                                                     |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md)                         | Desktop Rust host, window management, updater, desktop migrations, and `#[tauri::command]` IPC handlers     |
+| [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md)   | Shared headless engine (schema, decks, collection, wishlist, search, Scryfall client, platform abstraction) |
+| [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md)     | Web host — engine compiled to WASM module for browser execution                                             |
+| [`mobile/CLAUDE.md`](mobile/CLAUDE.md)                               | Light app — Android and web UI faces and responsive boundary                                                |
+| [`src/CLAUDE.md`](src/CLAUDE.md)                                     | React frontend, design tokens, `CardImage` rules, Storybook MCP usage                                       |
+| [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md)       | Deck validation, categories, deck editor views, and drag-and-drop interactions                              |
+| [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export parsing, planning, and dialogs                                                   |
+| [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md)                       | Storybook workbench, mock database (`fake/db.ts`), seed fixtures, and fault simulation                      |
+| [`.github/CLAUDE.md`](.github/CLAUDE.md)                             | CI workflows, path routers, and release-please configuration                                                |
+| [`app-worker/README.md`](app-worker/README.md)                       | Web app Cloudflare Worker hosting, headers, and deploy runbook                                              |
 
-- **`worktree-setup`** — the working rules for a second checkout: the base-branch check,
-  what is not shared with the main checkout, and the shared stash stack. `npm install` is
-  no longer a step here — `.claude/hooks/worktree-deps.sh` runs it at SessionStart, along
-  with reporting the branch.
-- **`running-the-app`** — **only one app and one Storybook can run across every worktree**,
-  and both collisions are silent. Two locks in `locks/` under the git **common** dir
-  (`D:/Code/mtg-grimoire/.git/locks` — a worktree's own `.git` is a file, not a
-  directory), claimed and released through
-  `.claude/skills/running-the-app/lock.ps1`. Ports stay 1420/6006/9222; they are hardcoded
-  in tracked files and must not be remapped.
-- **`shipping-a-branch`** — `npm run verify` → PR → merge `main` in (never rebase) →
-  wait for `ci-ok`. The agent does not press Merge.
-- **`auto-pr`** — the same trip when eight to ten agents are shipping at once and every
-  merge into main knocks the other PRs to `BEHIND`. Arms auto-merge, then watches for the
-  only two states GitHub abandons: a real conflict and a red `ci-ok`. Carries
-  `pr-auto.ps1`.
+---
 
-## Reference docs
+## Project Skills & Workflows
 
-The long-form record — every measurement, with the date and the build it was taken on. Linked
-from the `CLAUDE.md` that governs each area; read one when you need the _why_ behind a rule or a
-number to compare against.
+Worktree and deployment workflows are managed by skills in `.claude/skills/`:
 
-| Doc | Holds |
-| --- | --- |
-| [data-and-sync.md](docs/reference/data-and-sync.md) | Data dir, sync timings, the schema ladder, every search-performance measurement |
-| [scryfall.md](docs/reference/scryfall.md) | Rate limits, the penalty, bulk data, `error_log`, pre-warm keys |
-| [the price-feed research](docs/superpowers/research/2026-08-12-card-kingdom-mana-pool-price-feeds.md) | Both feeds measured live — sizes, key collisions, the NM-vs-cheapest trap |
-| [image-cache.md](docs/reference/image-cache.md) | Cache layout, concurrency, placeholders, the `/cover/` route, and the budget — what eviction spares, why the used-stamp is a file's modified time, and the idle horizon that ages the old `grid` files out |
-| [search-faceting.md](docs/reference/search-faceting.md) | The in-memory index, and why faceting fails open |
-| [search-syntax.md](docs/reference/search-syntax.md) | Scryfall query syntax in every card search box — the fourteen keywords and why `:` does not mean one thing, the day `a:` and `o:` stopped being tags, FTS against LIKE measured at 82× and 277×, `kw:` and the corpus rung behind it, why tag resolution is exact, and the one arm that fails closed among all the ones that fail open |
-| [in-app-updates.md](docs/reference/in-app-updates.md) | Why the portable swap is hand-written, what the release digest does and does not prove, and the update signing that was built and removed — and why the v0.34.0 draft must never be published |
-| [decks-storage.md](docs/reference/decks-storage.md) | Deck tables, the card commands, how owned/missing is answered, the audit log, the decklist import, the token resolver and its union keep rule |
-| [commander-brackets.md](docs/reference/commander-brackets.md) | The bracket table as it stands, why the estimate is a floor and never 5, what the four signals can and cannot see, Commander Spellbook's combo feed measured, corpus schema 2 and its two traps, and the card side's three statements, its four empty states and the `CROSS JOIN` worth 65 ms |
-| [external-links.md](docs/reference/external-links.md) | The `Open on …` ladder — the TCGplayer product ids Scryfall has always stored measured across the corpus, the two-word printing vocabulary verified in a browser, the decision table's six rows and why a link always names a printing, the finish floor that reads the printing's own column rather than defaulting flat, and why tcgcsv.com was measured and refused |
-| [import-export.md](docs/reference/import-export.md) | The seven formats, the field registry, the fold rule, the four import destinations |
-| [text-mirror.md](docs/reference/text-mirror.md) | The plain-text mirror — the layout, the dirty map, why the pruner reads a manifest instead of guessing, the measured cost of a pass, and the bugs still open |
-| [wishlist-folders.md](docs/reference/wishlist-folders.md) | The two folder tables, the four-term grain, the merge rule, the root-add duplicate and the `elsewhere` mark |
-| [collection-folders.md](docs/reference/collection-folders.md) | The collection's cabinet — the eleventh grain term, the deck groups and `Recently removed` that made it the ledger of where every card sits, the v25 conversion, and what a zero quantity now costs |
-| [home-page.md](docs/reference/home-page.md) | The landing view — the layout document (version 2, the cell grid) and the three files that keep its round-trip promise, why an empty widget list is a layout, the widget kinds and the registry their settings are built from — and why the default layout holds fewer of them than the catalogue offers — the grid measured in JavaScript and why it is still not a container query, the `activity` table with its three rules and the write-site census, the commands, the chord renumbering, the grid redesign's own record — recently viewed, set completion's slot rule and the thinned `price_snapshots` table — the sticky notes of v46, including the reorder that was built before anything pressed it — and the collection value graph of v50, whose history is `price_snapshots` with a `copies` column, read back with the table's own weekly thinning and ended by a live point that equals the Collection value widget's figure |
-| [decks-live-findings.md](docs/reference/decks-live-findings.md) | What driving the shipped window found — **including the bugs still open** |
-| [tags-live-findings.md](docs/reference/tags-live-findings.md) | The Tags page in the shipped window — the art ingest timed, both performance gates settled, and the bugs still open |
-| [card-scanner.md](docs/reference/card-scanner.md) | The crate, the pipeline and every measurement behind it, the three evidence tiers and their weights, both tracker verdicts and the failures that shaped them, the debug server and how to drive it without a camera, and the app's Scanner view — plus the bundle a release build embeds and the weekly workflow that publishes it, the set and date filters, Fast and Exact with the six tiers and the eval that tightened two of them, Fast's early decision and two-frame lock with the `eval --trace` distributions they were set from, why an early decision has to be borne out by a read and the three-frame gap between adds (and the at-rest rule that was measured and refused), one decision per card and the failures behind each of its rules, a card laid on the last one and the appearance watch that sees it (with its threshold measured against four other descriptors), the `app_meta` review tray, and **a synthetic evaluation that is a regression fence and never an accuracy claim** |
-| [frontend-design.md](docs/reference/frontend-design.md) | The ribbon, card images, foil, layers, tables, the Settings rail and its two lopsided flex numbers |
-| [keyboard-shortcuts.md](docs/reference/keyboard-shortcuts.md) | The chord catalogue — the fence and the four rows outside it, exact modifier matching and the two chords it narrowed away, where the text-field yield lives, and the live pass that proved the panel needs no `LAYER` rung |
-| [multi-window.md](docs/reference/multi-window.md) | More than one window on one collection — why a second *process* stays refused and a second window costs nothing, the cascade and its two traps, the commit-driven change mask with both of the update hook's blind spots, the table map and the fence that keeps a view preference per window, the scanner's lease and what renews it, and a live pass that measured every one of them |
-| [motion.md](docs/reference/motion.md) | `motion@13.1.0` — the timing scale, reduced motion, and **two forbidden APIs** |
-| [storybook.md](docs/reference/storybook.md) | The workbench and its fake, in full |
-| [live-ui-verification.md](docs/reference/live-ui-verification.md) | The CDP harness contract — `scripts/cdp.mjs` and its traps |
-| [tauri-mcp-bridge.md](docs/reference/tauri-mcp-bridge.md) | The other way to drive the window — its five pieces, the environment variable that opens it, three permissions, and the one tool that cannot reach an app command |
-| [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
-| [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
-| [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what the 2026-10-01 deploy has not proved** |
-| [light-app.md](docs/reference/light-app.md) | The Android and web face — one entry and two faces, what a browser over the fake was driven to show at 360 and 1280 and across the crossing between them, the phone-sized Tauri window over the real core and the desktop app launched after it, the build's chunks, the two ways the dev server died, and what is open by the phase that owns it — and, in §6, the shared core as each extraction step lands it: the cargo workspace and why `target/` did not move, which modules have moved (all seven steps: the leaves, storage, state, the forty-nine domain modules one script moved, the I/O — Scryfall, the card sync, the facet index, the three feeds and the image cache — sync: the client, the entitlement and pairing, restated to hold nothing across a request and then moved — and the scanner's session glue, which made `card-scanner` a dependency of the core — and then the command table, `grimoire_core::dispatch`, with its reads in it and every other command on an explicit list), what stayed behind and why, the WASM compile, and what the desktop was checked for afterwards — an upgrade run side by side with `main` on a copy of real data each time — and, in §8, the Android host step by step, its emulator run in CI and its first run on a real phone. — and, in §9, the web host a step at a time: since step 5.1 a WASM host that opens its database in a browser, since step 5.2 one that builds its corpus there — one first run against the real hosts, timed, with what it found and left — since step 5.4 one whose clipboard, links and file dialogs are a browser's own, and since step 5.3 one with a service worker: the shell precached and opened offline, card pictures answered on the app's own origin from Cache Storage, a newer build held until the reader takes it, and the tag and combo finishes taking turns, with one more first run timed beside the earlier ones — and since the first half of step 5.5 the hosting Worker's source, its policy and its runbook (§9.5), and since its second half the phase's own run (§9.6): four `opt-level` builds timed and 3 kept, the built app driven on both faces against the real hosts under the policy, and what that found — a reload stranded on the second-tab screen, which a Web Lock now tells from a real second tab, among it — and, in §9.7, the deploy of 2026-10-04: the zone as it was read, the probes answered at the real address, the reader's tasks driven in a browser there, a second deploy with a rollback and the update flow across them, a third that renamed chunks under two open browsers, the note editor's policy violation it found, and what is still not proved. **There is an Android host and a web host; the web host is deployed at `https://mtg-grimoire.app` since 2026-10-04, one headless Chrome has driven it and the owner has used it in Firefox and on a phone, and there is no sync on a light install — a browser install refuses a relay call in a sentence until phase 6** |
-| [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eighteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
-| [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
+- **`worktree-setup`** — Rules for secondary checkouts, base branches, and shared stashes.
+- **`running-the-app`** — Lock management (`.git/locks/app` and `storybook`). Only one app and one Storybook instance may run across all worktrees.
 
-## Running and verifying
+---
 
-- **Verify UI in the real app, not just in tests.** Every UI task in Plans 2–3 found something
-  the suite could not. Drive the real window over CDP —
-  [live-ui-verification.md](docs/reference/live-ui-verification.md) is the contract, and it
-  documents traps that have each cost a session.
-- **Under `tauri dev` the databases are `src-tauri/target/debug/data/user.db` and
-  `corpus.db`** — not `src-tauri/data/`, and not one file: schema 27 split the reader's
-  own tables out of the rebuildable ones. A folder still holding `mtg.db` is converted at
-  the next launch. Delete that `data/` folder to force a clean first-run sync; deleting
-  `corpus.db` alone costs a resync and nothing else, which is what the split is for.
-- **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
-  `tauri build` binary.** Vite writes a new bundle, cargo then sees no Rust source change and
-  leaves the old bundle inside the old exe — exiting 0. `touch src-tauri/src/main.rs` first, and
-  stop the app before rebuilding or the link fails with `Access is denied. (os error 5)`.
-  `npm run tauri dev` does not have this problem, which is why it is the command above.
-- **A second launch does not start a second app — it opens another window in the one already
-  running.** `tauri-plugin-single-instance` still gives the new process exit code 0, no window and
-  no stderr, and a dev build still counts; what changed on 2026-09-20 is what the *first* process
-  does about it. **So a dev build launched from another worktree opens a window in the running
-  app, showing the RUNNING worktree's frontend** — a window that looks like yours and renders
-  somebody else's branch. The `app` lock still prevents it; see the `running-the-app` skill and
-  [multi-window.md](docs/reference/multi-window.md).
-- **Every measured claim in this repo was measured on Windows. Nobody has run a Linux build.**
-  Name the build (debug or release) in any figure you add; the same measurement can differ by ~8×.
+## Global Rules
 
-## Global rules
+- **Pre-commit verification**: Run `npm run verify` only at the end of a feature before committing, not after each individual change. Avoid running test suites on intermediate edits to minimize churn and repetitive re-fixing.
+- **Commit style (one commit per feature)**: Commits must match the full size of a feature (code, tests, and docs together). Do not split a single feature across multiple commits; multi-commit features fragment and mess up the release-please changelog. Use Conventional Commits (`feat:`, `fix:`, `chore:`, `test:`, `docs:`).
+- **No `@types/node` in webview code**: The frontend is a webview environment; `@types/node` is forbidden to prevent leaking Node types into browser code.
+- **Narrowest permissions**: When declaring Tauri plugin permissions, always request the narrowest required capability, never `:default`.
+- **`data/` is strictly local**: Never commit SQLite databases or test artifacts in `data/`. When seeding fixtures in tests, seed only user tables, never `cards` or `sync_meta`.
+- **Worker secrets are never committed**: Secrets (`PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`, `RELAY_HMAC_KEY`) belong solely in Cloudflare Secret storage, never in repository files or `.dev.vars`.
+- **Deployments require explicit instruction**: No agent or CI job may deploy Workers without explicit instruction from the user.
+- **Domain vocabulary precision**: Strictly distinguish between Scryfall tags, user deck labels, card keyword abilities, and note types. Refer to [`docs/agent/DOMAIN_VOCABULARY.md`](docs/agent/DOMAIN_VOCABULARY.md).
+- **Live UI verification**: Drive real WebView2 windows over CDP (`scripts/cdp.mjs`) when verifying UI changes; tests alone cannot detect webview-specific rendering glitches.
 
-- Work on `main`, commit small after each task/step with `feat:`/`fix:`/`chore:`/`test:`.
-- Tests: cover logic that can break (parsers, validation, sync). No ceremony tests.
-- **Never install `@types/node`** — it leaks Node types into the app program and retypes
-  `setTimeout`. Its absence is the only fence; see [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md).
-- npm `xlsx` is banned (CVEs). TypeScript stays on 6.0.x until TS 7.1.
-- **Adding a dependency with permissions means adding its narrowest permission, never its
-  `:default`.**
-- **`data/` is the user's and is never committed.** When seeding fixtures, seed **user tables
-  only** — `cards` and `sync_meta` belong to the sync, and a hand-written row in either makes
-  every later measurement a fiction. Delete every seeded row afterwards.
-- **A prose-only edit routes to neither CI job, so nothing goes red when a document rots.** Counts
-  and lists in these files (fault lists, test-case counts) have each drifted at least once —
-  re-count in the same commit that changes one. **Better still, do not write down a number a build
-  already answers**: the Storybook story and plays totals were deleted on 2026-08-14 after
-  conflicting on five consecutive merges of `main`, because a count is a fact about a *tree* and
-  every open branch has a different one.
+---
 
-## Working style (user preferences)
+## Working Style
 
-- Ultracode/dynamic workflows for large parallelizable work; subagents use Opus 5.
-- Superpowers flow: brainstorm → spec → plan → subagent-driven implementation.
-- **Fan a feature out to parallel subagents rather than working it one step at a time.** Split it
-  at the seams this repo already has — Rust command, TS domain logic, UI, stories, docs — and
-  dispatch the independent pieces in a single message so they run at once. Serialize only what
-  genuinely needs an earlier task's result. See `superpowers:dispatching-parallel-agents` and
-  `superpowers:subagent-driven-development`.
-- **Two subagents editing the same files in the same tree clobber each other.** Give each one
-  files no sibling touches, or its own worktree (`superpowers:using-git-worktrees`) — and note
-  that a worktree needs its own `npm install` before its suites pass.
-- **Tests run once, at the end, after fan-in — not inside each subagent.** A subagent's slice
-  compiles against a tree its siblings are still changing, so a suite run mid-fan-out fails for
-  reasons that are not its own, and `npm run verify` is too slow to pay for N times. Have each
-  one report what it changed, then run `npm run verify` yourself before the commit.
-- **Ask through the `AskUserQuestion` tool, not in prose.** When you need more information or a
-  decision between approaches, put it in the tool — the option cards are how he wants to answer.
-  Keep the evidence with it: lead the question or an option's description with what was measured,
-  and put your recommendation first, labelled. He can still write his own answer through "Other",
-  and an answer that is not on the list is the point rather than scope creep.
+- **Fan out parallel subagents**: Split large features along architectural seams (Rust commands, TS domain logic, UI, stories, docs) and dispatch independent pieces in parallel.
+- **Prevent file collisions**: Give each subagent distinct files, or assign separate git worktrees (`.claude/skills/worktree-setup`).
+- **Test only at the end of a feature (fan-in)**: Do NOT run tests after each intermediate change or edit. Subagents report what they changed; run `npm run verify` once centrally at the end of the entire feature to verify it works as a whole, minimizing unnecessary re-fixing.
+- **User questions**: Use the `AskUserQuestion` tool for clarification or design choices, presenting structured options with evidence and recommended defaults.
