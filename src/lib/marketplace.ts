@@ -128,3 +128,29 @@ export function isMarketplaceId(value: string): value is MarketplaceId {
 export function resolveMarketplace(id: string | null | undefined): Marketplace {
   return MARKETPLACES[id && isMarketplaceId(id) ? id : DEFAULT_MARKETPLACE];
 }
+
+/**
+ * What a window quotes when the marketplace its database names is one **this host cannot ask**
+ * — Mana Pool in a browser, whose price list a page may not read (the light-app spec §4: "a
+ * database synced from a desktop that chose Mana Pool falls back rather than drawing blanks").
+ *
+ * **The marketplace in the same currency whose prices arrive with the card data**: TCGplayer
+ * for a dollar marketplace, Cardmarket for a euro one. Two reasons, and both are about what the
+ * reader sees rather than about which shop is nearest in spirit:
+ *
+ * - **It needs no download of its own.** A fallback onto another feed would trade one thing this
+ *   host might not have for another, and could itself be the one out of reach.
+ * - **The currency does not move.** Every figure in the window keeps the sign the reader chose,
+ *   so what changes under them is the shop and never the money.
+ *
+ * The default is the floor for a currency no such marketplace quotes in, which is none today.
+ *
+ * **Whether a marketplace is out of reach is not decided here** — it is the host's answer
+ * (`MarketplaceFeedStatus.reachable`), and `useMarketplace` is the one caller.
+ */
+export function fallbackMarketplace(unreachable: Marketplace): Marketplace {
+  return (
+    MARKETPLACE_LIST.find((m) => m.priced && !m.feed && m.currency === unreachable.currency) ??
+    MARKETPLACES[DEFAULT_MARKETPLACE]
+  );
+}

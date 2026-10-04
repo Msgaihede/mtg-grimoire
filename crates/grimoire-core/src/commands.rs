@@ -1939,8 +1939,11 @@ mod tests {
     /// runs. **No request leaves the machine**: Scryfall's client and the relay's override both
     /// point at a local server that answers 404, the combo feed is stamped as just checked, and
     /// the price feed is asked for a marketplace it has no feed for. So the far side of a
-    /// download — an ingest, a swap — is not run here; in a browser that side is refused at the
-    /// first file (`platform::files`), and is the web host's next step.
+    /// download — an ingest, a swap — is not run *here*. It is run the same way — one
+    /// connection, one thread, no files (`platform::host::emulate_page`, which this test
+    /// stands under too) — by each download's own tests against a mock that serves a file:
+    /// `sync::run_tests`' streamed runs, `tags::oracle`'s and `art`'s, `combos`' and
+    /// `marketplace_feed`'s. Those are where a lock held across a chunk would fail by name.
     #[test]
     fn every_command_answers_on_one_connection_and_one_thread() {
         let nowhere = httpmock::MockServer::start();
@@ -1980,7 +1983,12 @@ mod tests {
             .expect("the combo feed's stamp");
         }
 
-        let _alone = crate::platform::alone::emulate();
+        // The whole page, not only its one thread: no files and requests that must pass CORS,
+        // so the five download commands take the arm a Worker takes — the streamed one — as
+        // far as the mock's 404 lets them, and anything that asks for a file is refused as a
+        // browser refuses it.
+        let _page = crate::platform::host::emulate_page();
+        assert!(crate::platform::alone::emulated());
         // Warm, so an `owned` write has an index to refresh — through the one connection.
         crate::index::lifecycle::build_now(&state).expect("an index over one connection");
         let mut runtime = one_thread_runtime();

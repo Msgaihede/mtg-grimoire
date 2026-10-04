@@ -35,6 +35,10 @@
 //!
 //!   [`ingest_gz`] goes through [`read_stream`], which is push-shaped. [`read_file`] and the
 //!   [`DeserializeSeed`] over the array below are the file-shaped entry point the tests use.
+//!   **On a host that keeps no files the temp file is the step that goes** (a browser;
+//!   `platform::host`): the response's chunks are pushed into [`StreamRead`] as they arrive
+//!   and [`store`] follows — `refresh_streamed`, which also says what stands in for the
+//!   ETag there.
 //! * **A size guard, against the declared length *and* the streamed total.** [`MAX_FEED_BYTES`]
 //!   is a bound on what a host that is not the one we think it is can make this process spend,
 //!   not a budget. A chunked response declares nothing, which is why the running total is
@@ -538,6 +542,13 @@ impl StreamRead {
         self.elements.peak_buffer()
     }
 
+    /// Whether the bytes pushed so far arrived gzipped — `None` until two of them have.
+    /// A caller counting what it receives against a size bound has to know which size it is
+    /// counting: a browser hands over a `Content-Encoding: gzip` body already decompressed.
+    pub fn is_gzip(&self) -> Option<bool> {
+        self.decoder.is_gzip()
+    }
+
     pub fn push(&mut self, chunk: &[u8]) -> Result<(), ComboError> {
         self.decoded.clear();
         self.decoder.push(chunk, &mut self.decoded)?;
@@ -562,9 +573,29 @@ impl StreamRead {
                 .push(&self.decoded, |el| take_element(file, el))
                 .map_err(std::io::Error::from)?;
         }
+        // **A body that ended inside `variants` is not the file**, however many whole
+        // variants came before the cut — and every one the framer handed over was whole, so
+        // nothing above has noticed. A real `.gz` cut short has already failed at the
+        // decoder's trailer; a body the host decompressed for us (a browser, over
+        // `Content-Encoding: gzip`) has no trailer left to fail at, and without this the
+        // prefix would be promoted over the whole catalogue and stamped as today's file.
+        if self.elements.cut_short() {
+            return Err(cut_short(self.file.seen).into());
+        }
         self.file.stamp = stamp_from_head(&self.head);
         Ok(self.file)
     }
+}
+
+/// What a [`StreamRead`] says of a body that ended before its `variants` array did.
+fn cut_short(seen: u64) -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::UnexpectedEof,
+        format!(
+            "the combo file ended before its list of variants did, after {seen} of them; \
+             keeping the previous ones"
+        ),
+    )
 }
 
 impl Default for StreamRead {
@@ -2130,6 +2161,17 @@ pub async fn refresh(
     force: bool,
     progress: &mut (dyn FnMut(&str, u64, u64) + Send),
 ) -> Result<ComboStatus, String> {
+    refresh_from(state, FEED_URL, force, progress).await
+}
+
+/// [`refresh`] with the feed's address handed in, which is the seam its tests drive:
+/// [`FEED_URL`] is the live host. `marketplace_feed::refresh_from`'s shape.
+async fn refresh_from(
+    state: &Arc<State>,
+    url: &str,
+    force: bool,
+    progress: &mut (dyn FnMut(&str, u64, u64) + Send),
+) -> Result<ComboStatus, String> {
     let Some(_guard) = RefreshGuard::claim() else {
         // Refused rather than queued, exactly as a second concurrent sync is: the run already
         // in flight is the one driving the progress event, and a second would download the same
@@ -2153,8 +2195,23 @@ pub async fn refresh(
     progress("checking", 0, 0);
     let conditional = conditional_etag(etag.as_deref(), populated);
 
+    // A host that keeps no files has no `tmp/` to download into: the body is reduced as it
+    // arrives. Decided here, before anything is asked for — this used to send its request
+    // and find out at the folder, which on such a host spent 27.5 MB on every launch.
+    if !crate::platform::host::keeps_files() {
+        return refresh_streamed(
+            state,
+            url,
+            conditional,
+            MAX_FEED_BYTES,
+            crate::scryfall::STALL,
+            progress,
+        )
+        .await;
+    }
+
     let gz = temp_path(state);
-    let fetched = download(FEED_URL, &gz, conditional, &mut |done, total| {
+    let fetched = download(url, &gz, conditional, &mut |done, total| {
         progress("downloading", done, total)
     })
     .await;
@@ -2217,6 +2274,184 @@ pub async fn refresh(
             progress("error", 0, 0);
             Err(format!("the combo file could not be processed: {e}"))
         }
+    }
+}
+
+/// How much of a body a host that keeps no files will take when it arrives **already
+/// decompressed**.
+///
+/// Spellbook sends its file with `Content-Encoding: gzip`, and a browser's `fetch` decodes
+/// that whether asked to or not — so there the chunks are the 639 MB of JSON, not the
+/// 27.5 MB the wire carried, and [`MAX_FEED_BYTES`] would refuse the real file a fifth of the
+/// way in. A little over three times the document as measured, for that constant's reason: a
+/// bound on what a wrong host can make this process read, not a budget. Nothing is *held* at
+/// this size — the reader keeps one variant at a time — and a stream that has stopped framing
+/// is refused long before, at `feed::frame::MAX_ELEMENT_BYTES`.
+const MAX_DECODED_FEED_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+
+/// [`refresh`]'s download and ingest as one pass, **on a host that keeps no files**: one
+/// streamed `GET`, each chunk pushed into [`StreamRead`] as it arrives, then [`store`].
+///
+/// **No conditional header, because a page may not send one** (`platform::host`), and no
+/// `ETag` to keep, because a page cannot read one. What stands in for both is the one
+/// validator a cross-origin `fetch` *can* read: `Last-Modified`. It is stored where a host
+/// with files stores the ETag (`combo_meta.etag`, which is "whatever says which file this is"
+/// on either), and a run whose answer carries the value the database already holds stops
+/// there — **the response is dropped with its body unread**, which aborts the request, the
+/// stamp moves, and nothing is ingested. `held` is that stored value, and is `None` for a
+/// database with no rows ([`conditional_etag`]), which must download whatever it is told.
+///
+/// **No lock crosses an `.await`, and none is taken while the body arrives**: [`StreamRead`]
+/// never touches the database. The write is [`store`], after the last chunk, in its own
+/// batches — synchronous from there to the swap, so on a host with one thread nothing else
+/// runs until it returns.
+///
+/// **Two bounds on the body.** Every wait — for the answer, and for each chunk — gives up
+/// after `stall`. And the bytes received are counted against `max_bytes` when they arrive
+/// still gzipped, or against [`MAX_DECODED_FEED_BYTES`] when the host has already
+/// decompressed them, which the first two bytes say.
+///
+/// The phases are the file-backed run's. `downloading` counts bytes received, on the byte
+/// step and never per chunk, **against the declared length only for a body that arrived
+/// still gzipped**; a body the host decompressed is 639 MB against a declared 28.8 MB, so it
+/// is reported with a total of `0`, which the page draws as a bar with no fraction
+/// (`feed::StreamedProgress`). `ingesting` is said once, for the write.
+async fn refresh_streamed(
+    state: &Arc<State>,
+    url: &str,
+    held: Option<&str>,
+    max_bytes: u64,
+    stall: Duration,
+    progress: &mut (dyn FnMut(&str, u64, u64) + Send),
+) -> Result<ComboStatus, String> {
+    let read = read_streamed(url, held, max_bytes, stall, &mut |done, total| {
+        progress("downloading", done, total)
+    })
+    .await;
+    let (file, validator) = match read {
+        Ok(Streamed::Unchanged) => {
+            mark_checked(state);
+            progress("done", 0, 0);
+            return Ok(status_of(state));
+        }
+        Ok(Streamed::Read { file, validator }) => (file, validator),
+        Err(e) => {
+            note_failure(&state.db, &e);
+            // As for a file-backed run: a refusal on size, or a body that is not the
+            // document, is Spellbook's answer and will be the same at the next launch; a
+            // connection that failed, stalled or answered a status is this machine's network.
+            if matches!(e, ComboError::TooLarge | ComboError::Io(_)) {
+                note_unusable(state);
+            }
+            progress("error", 0, 0);
+            return Err(e.to_string());
+        }
+    };
+
+    progress("ingesting", 0, 0);
+    match store(
+        &state.db,
+        &file,
+        validator.as_deref(),
+        unix_now(),
+        &mut |_, _| {},
+    ) {
+        Ok(_) => {
+            if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+                let _ = crate::feed::backoff::clear(&conn, BACKOFF_FEED);
+            }
+            progress("done", 0, 0);
+            Ok(status_of(state))
+        }
+        Err(e) => {
+            note_failure(&state.db, &e);
+            note_unusable(state);
+            progress("error", 0, 0);
+            Err(e.to_string())
+        }
+    }
+}
+
+/// What [`read_streamed`] made of the one request a page may send.
+enum Streamed {
+    /// The answer carried the validator the database already holds: nothing was read.
+    Unchanged,
+    /// The document, reduced, and the validator it came with.
+    Read {
+        file: ComboFile,
+        validator: Option<String>,
+    },
+}
+
+/// The request and the read of [`refresh_streamed`], with no database in it.
+async fn read_streamed(
+    url: &str,
+    held: Option<&str>,
+    max_bytes: u64,
+    stall: Duration,
+    progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<Streamed, ComboError> {
+    let resp = client()
+        .get(url)
+        .send_within(stall)
+        .await
+        .map_err(ComboError::Http)?;
+    let status = resp.status();
+    if !(200..300).contains(&status) {
+        return Err(ComboError::Status { status });
+    }
+    let validator = resp.header("last-modified").map(str::to_owned);
+    if held.is_some() && held == validator.as_deref() {
+        // Dropped unread, which is what cancels it.
+        return Ok(Streamed::Unchanged);
+    }
+    // The declared length is the *wire's*, so it is only held against the wire's bound — and
+    // is only a progress bar's denominator for a body that arrives still gzipped
+    // (`feed::StreamedProgress`).
+    let declared = resp.content_length().unwrap_or(0);
+    if declared > max_bytes {
+        return Err(ComboError::TooLarge);
+    }
+
+    let mut sink = StreamRead::new();
+    let mut done = 0u64;
+    let mut said = crate::feed::StreamedProgress::new(declared, PROGRESS_EMIT_BYTES);
+    let mut breather = crate::platform::timer::Breather::new(crate::feed::WORK_BUDGET);
+    let mut body = resp.into_body();
+    // No total yet: whether the length declared is this body's is not known until its first
+    // bytes are.
+    progress(0, 0);
+    while let Some(chunk) = body.chunk_within(stall).await {
+        let chunk = chunk.map_err(ComboError::Http)?;
+        done += chunk.len() as u64;
+        sink.push(&chunk)?;
+        // After the push, which is what decides whether these bytes are still compressed.
+        if done > streamed_bound(sink.is_gzip(), max_bytes) {
+            return Err(ComboError::TooLarge);
+        }
+        if let Some((done, total)) = said.after(done, sink.is_gzip()) {
+            progress(done, total);
+        }
+        // The turn a queued command is answered in: a chunk the network had already buffered
+        // resumes this loop without one (`platform::timer::yield_to_host`).
+        breather.breathe().await;
+    }
+    if let Some((done, total)) = said.at_end(done, sink.is_gzip()) {
+        progress(done, total);
+    }
+    Ok(Streamed::Read {
+        file: sink.finish()?,
+        validator,
+    })
+}
+
+/// How many received bytes a streamed body may run to, once its first two have said whether
+/// it is still gzipped: the wire's bound for one that is, and [`MAX_DECODED_FEED_BYTES`] for
+/// one the host has already decompressed. Undecided — fewer than two bytes in — is the wire's.
+fn streamed_bound(is_gzip: Option<bool>, max_bytes: u64) -> u64 {
+    match is_gzip {
+        Some(false) => MAX_DECODED_FEED_BYTES.max(max_bytes),
+        _ => max_bytes,
     }
 }
 
@@ -4915,6 +5150,500 @@ mod tests {
                 ),
             ]
         );
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- the refresh on a host that keeps no files -------------------------------------
+    //
+    // `platform::host::emulate_page` makes the test's thread a browser's Worker: one thread,
+    // no files, and the response headers a cross-origin `fetch` hides hidden. The state is
+    // the browser's too — one connection.
+
+    /// Held by every test here that runs a refresh: the claim is process-wide.
+    static PAGE_REFRESHES: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn gzipped(body: &str) -> Vec<u8> {
+        use flate2::{write::GzEncoder, Compression};
+        let mut enc = GzEncoder::new(Vec::new(), Compression::fast());
+        enc.write_all(body.as_bytes()).unwrap();
+        enc.finish().unwrap()
+    }
+
+    /// [`refresh_from`], asked again when the one other test in this binary that claims the
+    /// refresh in passing happens to hold it.
+    async fn refresh_on_a_page(
+        state: &Arc<State>,
+        url: &str,
+        force: bool,
+    ) -> (Result<ComboStatus, String>, Vec<(String, u64, u64)>) {
+        loop {
+            let mut said: Vec<(String, u64, u64)> = Vec::new();
+            let answer = refresh_from(state, url, force, &mut |phase, done, total| {
+                said.push((phase.to_owned(), done, total))
+            })
+            .await;
+            match answer {
+                Err(e) if e.contains("already being refreshed") => {
+                    tokio::time::sleep(Duration::from_millis(20)).await;
+                }
+                answer => return (answer, said),
+            }
+        }
+    }
+
+    fn phases_of(said: &[(String, u64, u64)]) -> Vec<&str> {
+        let mut phases: Vec<&str> = said.iter().map(|(p, _, _)| p.as_str()).collect();
+        phases.dedup();
+        phases
+    }
+
+    /// **A combo refresh with nowhere to put a file**: one request with no conditional
+    /// header, the body reduced as it arrives, and the write after it. Then the run after
+    /// that, which a desktop would be told `304` for — and which here stops at the answer's
+    /// `Last-Modified`, the one validator a page can read. Then a file that did change.
+    #[tokio::test]
+    async fn a_refresh_with_no_files_streams_the_document_and_stops_at_an_unchanged_one() {
+        let _serial = PAGE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        let first = gzipped(&document(&[
+            ok_variant(
+                "a",
+                "R",
+                &[("Thassa's Oracle", "o1"), ("Consultation", "o2")],
+            ),
+            ok_variant(
+                "b",
+                "S",
+                &[("Kiki-Jiki", "o3"), ("Zealous Conscripts", "o4")],
+            ),
+        ]));
+        let server = MockServer::start_async().await;
+        // What a page may not send: the real host answers the pre-flight it costs with 403.
+        let conditional = server.mock(|when, then| {
+            when.method(GET)
+                .path("/variants.json.gz")
+                .header_exists("if-none-match");
+            then.status(500);
+        });
+        let mut file = server.mock(|when, then| {
+            when.method(GET).path("/variants.json.gz");
+            then.status(200)
+                .header("etag", "\"a-desktop-would-keep-this\"")
+                .header("last-modified", "Sun, 04 Oct 2026 08:00:00 GMT")
+                .body(first.clone());
+        });
+        let url = server.url("/variants.json.gz");
+
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("combos-page", "http://127.0.0.1:1");
+
+        let (status, said) = refresh_on_a_page(&state, &url, false).await;
+        let status = status.unwrap();
+        assert_eq!(
+            phases_of(&said),
+            ["checking", "downloading", "ingesting", "done"]
+        );
+        let size = first.len() as u64;
+        assert!(
+            said.contains(&("downloading".to_owned(), size, size)),
+            "a body that arrives still gzipped is counted against the length it declared: \
+             {said:?}"
+        );
+        assert_eq!(status.combos, 2);
+        assert_eq!(status.stamp.as_deref(), Some("2026-08-27T03:12:44Z"));
+        let fetched_at = status.fetched_at.expect("an ingest stamps when");
+        let held: Option<String> = state
+            .lock_db()
+            .query_row("SELECT etag FROM combo_meta", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            held.as_deref(),
+            Some("Sun, 04 Oct 2026 08:00:00 GMT"),
+            "the validator a page can read is what is kept, never the ETag it cannot"
+        );
+        assert!(!dir.join("tmp").exists(), "nothing was written to a file");
+        file.assert_calls(1);
+
+        // Forced past the week: the same `Last-Modified`, so nothing is read and nothing moves
+        // but the stamp that says Spellbook was asked.
+        state
+            .lock_db()
+            .execute("UPDATE combo_meta SET checked_at = 1, fetched_at = 1", [])
+            .unwrap();
+        let (again, said) = refresh_on_a_page(&state, &url, true).await;
+        let again = again.unwrap();
+        assert_eq!(phases_of(&said), ["checking", "done"]);
+        assert_eq!(again.combos, 2);
+        assert_eq!(again.fetched_at, Some(1), "nothing was ingested");
+        assert!(
+            again.checked_at.is_some_and(|at| at >= fetched_at),
+            "and the check is stamped: {:?}",
+            again.checked_at
+        );
+        file.assert_calls(2);
+
+        // The file moves on: a new `Last-Modified`, and the document is taken whole.
+        file.delete();
+        let second = gzipped(&document(&[ok_variant(
+            "c",
+            "P",
+            &[("Dramatic Reversal", "o5"), ("Isochron Scepter", "o6")],
+        )]));
+        server.mock(|when, then| {
+            when.method(GET).path("/variants.json.gz");
+            then.status(200)
+                .header("last-modified", "Mon, 05 Oct 2026 08:00:00 GMT")
+                .body(second.clone());
+        });
+        let (moved, said) = refresh_on_a_page(&state, &url, true).await;
+        assert_eq!(moved.unwrap().combos, 1);
+        assert_eq!(
+            phases_of(&said),
+            ["checking", "downloading", "ingesting", "done"]
+        );
+        conditional.assert_calls(0);
+        assert!(!any_refresh_running(), "the claim is given back");
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **An empty database downloads whatever `Last-Modified` says** — the stored validator
+    /// describes a file, not the state of the tables, and a watermark that outlived its rows
+    /// must not be what keeps them empty ([`conditional_etag`]'s rule, on a page).
+    #[tokio::test]
+    async fn an_empty_database_with_no_files_downloads_whatever_the_validator_says() {
+        let _serial = PAGE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        let body = gzipped(&document(&[ok_variant(
+            "a",
+            "R",
+            &[("Thassa's Oracle", "o1"), ("Consultation", "o2")],
+        )]));
+        let server = MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(GET).path("/variants.json.gz");
+            then.status(200)
+                .header("last-modified", "Sun, 04 Oct 2026 08:00:00 GMT")
+                .body(body.clone());
+        });
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("combos-page-empty", "http://127.0.0.1:1");
+        // A watermark naming this very file, over tables with nothing in them.
+        state
+            .lock_db()
+            .execute(
+                "INSERT INTO combo_meta (id, etag, checked_at)
+                 VALUES (1, 'Sun, 04 Oct 2026 08:00:00 GMT', 1)",
+                [],
+            )
+            .unwrap();
+
+        let (status, said) =
+            refresh_on_a_page(&state, &server.url("/variants.json.gz"), true).await;
+        assert_eq!(status.unwrap().combos, 1);
+        assert!(phases_of(&said).contains(&"ingesting"), "{said:?}");
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **What a failed streamed refresh leaves**: the combos already stored and a row in
+    /// `error_log` — for a refused status, for a body past the bound, and for a body that
+    /// stops arriving, which only the stall bound ends. And the claim is given back.
+    #[tokio::test]
+    async fn a_streamed_refresh_that_fails_keeps_the_combos_and_says_why() {
+        let _serial = PAGE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        let body = gzipped(&document(&[ok_variant(
+            "a",
+            "R",
+            &[("Thassa's Oracle", "o1"), ("Consultation", "o2")],
+        )]));
+        let quiet = crate::feed::quiet_host::start(body[..body.len() / 2].to_vec(), body.len());
+        let server = MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(GET).path("/gone.json.gz");
+            then.status(503);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/variants.json.gz");
+            then.status(200).body(body.clone());
+        });
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("combos-page-fails", "http://127.0.0.1:1");
+        seed_one(&state.db, "kept", "o-kept");
+        let stall = Duration::from_millis(300);
+        let logged = |state: &State| -> Vec<String> {
+            let conn = state.lock_db();
+            let mut stmt = conn
+                .prepare("SELECT kind FROM error_log WHERE operation = 'combos' ORDER BY rowid")
+                .unwrap();
+            let kinds = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            kinds
+        };
+        let combos = |state: &State| -> i64 {
+            state
+                .lock_db()
+                .query_row("SELECT count(*) FROM combos", [], |r| r.get(0))
+                .unwrap()
+        };
+
+        // A status that is not a body.
+        let err = refresh_streamed(
+            &state,
+            &server.url("/gone.json.gz"),
+            None,
+            MAX_FEED_BYTES,
+            stall,
+            &mut |_, _, _| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("503"), "{err}");
+
+        // A body past the bound, still gzipped — so it is the wire's bound that holds.
+        let err = refresh_streamed(
+            &state,
+            &server.url("/variants.json.gz"),
+            None,
+            16,
+            stall,
+            &mut |_, _, _| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("larger than"), "{err}");
+
+        // A body that stops arriving.
+        let began = crate::platform::clock::Tick::now();
+        let err = refresh_streamed(
+            &state,
+            &format!("{quiet}/variants.json.gz"),
+            None,
+            MAX_FEED_BYTES,
+            stall,
+            &mut |_, _, _| {},
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("stalled"), "{err}");
+        assert!(
+            began.elapsed() < Duration::from_secs(20),
+            "the stall bound is what ended it: {:?}",
+            began.elapsed()
+        );
+
+        // And through the door a command comes in by: the claim is given back on a failure.
+        let (refused, _) = refresh_on_a_page(&state, &server.url("/gone.json.gz"), true).await;
+        assert!(refused.unwrap_err().contains("503"));
+        assert!(
+            !any_refresh_running(),
+            "a failed refresh gives the claim back"
+        );
+
+        assert_eq!(
+            combos(&state),
+            1,
+            "the combos already stored are still there"
+        );
+        assert_eq!(logged(&state), ["http", "http", "timeout"]);
+        assert!(!dir.join("tmp").exists());
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A body the host has already decompressed is held to the decoded bound, not the
+    /// wire's.** A browser's `fetch` decodes Spellbook's `Content-Encoding: gzip` whether asked
+    /// or not, so there the chunks are the 639 MB document — which the wire's 128 MiB bound
+    /// would refuse a fifth of the way in. And such a body reduces to what the gzipped one does.
+    #[tokio::test]
+    async fn a_body_that_arrives_decompressed_is_held_to_the_decoded_bound_and_reads_the_same() {
+        assert_eq!(streamed_bound(Some(true), MAX_FEED_BYTES), MAX_FEED_BYTES);
+        assert_eq!(
+            streamed_bound(None, MAX_FEED_BYTES),
+            MAX_FEED_BYTES,
+            "undecided is the wire's bound"
+        );
+        assert_eq!(
+            streamed_bound(Some(false), MAX_FEED_BYTES),
+            MAX_DECODED_FEED_BYTES
+        );
+        // The document as measured (639 585 506 bytes) is inside the decoded bound and outside
+        // the wire's, which is why there are two.
+        let measured = std::hint::black_box(639_585_506u64);
+        assert!(MAX_DECODED_FEED_BYTES > measured && MAX_FEED_BYTES < measured);
+
+        use httpmock::prelude::*;
+        let plain = document(&[ok_variant(
+            "a",
+            "R",
+            &[("Thassa's Oracle", "o1"), ("Consultation", "o2")],
+        )]);
+        let server = MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(GET).path("/plain");
+            then.status(200).body(plain.clone());
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/gzipped");
+            then.status(200).body(gzipped(&plain));
+        });
+        let mut reads = Vec::new();
+        for path in ["/plain", "/gzipped"] {
+            let read = read_streamed(
+                &server.url(path),
+                None,
+                MAX_FEED_BYTES,
+                Duration::from_secs(5),
+                &mut |_, _| {},
+            )
+            .await
+            .unwrap();
+            let Streamed::Read { file, .. } = read else {
+                panic!("nothing is held, so nothing can be unchanged");
+            };
+            reads.push((file.seen, file.skipped, file.stamp, file.combos.len()));
+        }
+        assert_eq!(reads[0], reads[1]);
+        assert_eq!(reads[0].3, 1);
+    }
+
+    /// **A document that ends before its `variants` array does is refused, however many whole
+    /// variants came first.** Every element the framer hands over is whole, so a body cut off
+    /// after its second variant reduces to two good combos and no error. A real `.gz` cut
+    /// short fails at the decoder's trailer; a body the host has already decompressed — a
+    /// browser, over `Content-Encoding: gzip` — has no trailer left to fail at, and stored,
+    /// the prefix would replace the catalogue and be stamped as today's file.
+    #[test]
+    fn a_document_that_ends_before_its_variants_do_is_refused_by_the_push_reader() {
+        let whole = document(&[
+            ok_variant(
+                "a",
+                "R",
+                &[("Thassa's Oracle", "o1"), ("Consultation", "o2")],
+            ),
+            ok_variant(
+                "b",
+                "S",
+                &[("Kiki-Jiki", "o3"), ("Zealous Conscripts", "o4")],
+            ),
+            ok_variant(
+                "c",
+                "P",
+                &[("Dramatic Reversal", "o5"), ("Isochron Scepter", "o6")],
+            ),
+        ]);
+        let pushed = |body: &str, chunk: usize| {
+            read_stream(body.as_bytes().chunks(chunk).map(|c| Ok(c.to_vec())))
+        };
+        assert_eq!(pushed(&whole, 64).unwrap().combos.len(), 3);
+
+        let third = whole.find(r#"{"id":"c""#).expect("the third variant");
+        let between_two = &whole[..third];
+        let inside_one = &whole[..third + 40];
+        for cut in [between_two, inside_one] {
+            for chunk in [1, 64, 1 << 20] {
+                let refused = pushed(cut, chunk)
+                    .expect_err("two whole variants of a cut body are not the file");
+                assert!(
+                    matches!(&refused, ComboError::Io(e)
+                        if e.kind() == std::io::ErrorKind::UnexpectedEof),
+                    "{refused:?}"
+                );
+                assert_eq!(
+                    refused.to_string(),
+                    "could not read the downloaded combo file: the combo file ended before \
+                     its list of variants did, after 2 of them; keeping the previous ones"
+                );
+            }
+        }
+    }
+
+    /// **And through the whole refresh, on a host that keeps no files**: a body cut short
+    /// leaves the combos already stored, keeps the validator it had, and says why — so the
+    /// next refresh is not told "unchanged" about a file it never finished.
+    #[tokio::test]
+    async fn a_refresh_whose_body_is_cut_short_with_no_files_keeps_the_previous_combos() {
+        let _serial = PAGE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        let whole = document(&[
+            ok_variant(
+                "a",
+                "R",
+                &[("Thassa's Oracle", "o1"), ("Consultation", "o2")],
+            ),
+            ok_variant(
+                "b",
+                "S",
+                &[("Kiki-Jiki", "o3"), ("Zealous Conscripts", "o4")],
+            ),
+            ok_variant(
+                "c",
+                "P",
+                &[("Dramatic Reversal", "o5"), ("Isochron Scepter", "o6")],
+            ),
+        ]);
+        // As a browser is handed it: already decompressed, so no gzip trailer guards the end.
+        let cut = whole[..whole.find(r#"{"id":"c""#).unwrap()].to_owned();
+        let server = MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(GET).path("/variants.json.gz");
+            then.status(200)
+                .header("last-modified", "Mon, 05 Oct 2026 08:00:00 GMT")
+                .body(cut.clone());
+        });
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("combos-page-cut", "http://127.0.0.1:1");
+        seed_one(&state.db, "kept", "o-kept");
+        state
+            .lock_db()
+            .execute(
+                "INSERT INTO combo_meta (id, etag, fetched_at, checked_at, combo_count, skipped)
+                 VALUES (1, 'Sun, 04 Oct 2026 08:00:00 GMT', 1, 1, 1, 0)",
+                [],
+            )
+            .unwrap();
+
+        let (refused, said) =
+            refresh_on_a_page(&state, &server.url("/variants.json.gz"), true).await;
+        let err = refused.unwrap_err();
+        assert!(
+            err.contains("ended before its list of variants did"),
+            "{err}"
+        );
+        assert_eq!(phases_of(&said).last(), Some(&"error"));
+        assert!(!phases_of(&said).contains(&"ingesting"), "{said:?}");
+        let (combos, held, fetched_at): (i64, Option<String>, Option<i64>) = {
+            let conn = state.lock_db();
+            (
+                conn.query_row("SELECT count(*) FROM combos", [], |r| r.get(0))
+                    .unwrap(),
+                conn.query_row("SELECT etag FROM combo_meta", [], |r| r.get(0))
+                    .unwrap(),
+                conn.query_row("SELECT fetched_at FROM combo_meta", [], |r| r.get(0))
+                    .unwrap(),
+            )
+        };
+        assert_eq!(combos, 1, "the combos already stored are still there");
+        assert_eq!(
+            held.as_deref(),
+            Some("Sun, 04 Oct 2026 08:00:00 GMT"),
+            "and the validator is yesterday's, so the next refresh downloads again"
+        );
+        assert_eq!(fetched_at, Some(1));
+        assert!(!any_refresh_running());
+
         drop(state);
         let _ = std::fs::remove_dir_all(dir);
     }

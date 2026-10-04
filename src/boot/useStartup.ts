@@ -35,7 +35,19 @@ const LOADING: StartupStatus = { state: "loading" };
  * this screen reports is one Rust wrote a sentence for. The next tick asks again.
  *
  * The state only ever leaves `loading` once, so the first answer that is not `loading` wins —
- * whichever half delivered it — and both halves are stopped there.
+ * whichever half delivered it — and the poll is stopped there.
+ *
+ * **The listener is kept after `ready`, for the one move a host may still make: `ready` to
+ * `failed`.** The web host makes it when its engine's Worker dies (`core/web/index.ts`'s
+ * `crashed`): from then until a reload there is no app behind the page, which is a fact about the
+ * whole window and belongs to the gate, not to each query that would otherwise find it out alone.
+ * **Never the other way** — nothing comes back from `failed`, and a second `ready` is no news — so
+ * the answer still cannot flap, and a `failed` ends the subscription for good. **The desktop and
+ * the Android host never say anything after `ready`**: their engine cannot stop while the window
+ * lives, so for them this is one registration that stays quiet, and the poll has stopped either
+ * way. A failure after `ready` has no polled half — nothing asks again once the app is up — which
+ * is honest only because the host that sends it delivers events in the page's own thread, with
+ * nothing to drop them.
  *
  * **`enabled: false` answers `ready` at once and asks nothing** — for a host with no startup to
  * wait for. The light app's fake mode is the one caller: the Storybook fake answers no
@@ -47,23 +59,27 @@ export function useStartup(enabled: boolean = true): StartupStatus {
 
   useEffect(() => {
     if (!enabled) return;
-    // `live` is the unmount; `settled` is the answer. Separate because StrictMode runs this
+    // `live` is the unmount; `at` is the answer so far. Separate because StrictMode runs this
     // effect twice, and the first run's in-flight ask must neither set state nor re-arm a timer.
     let live = true;
-    let settled = false;
+    let at: StartupStatus["state"] = "loading";
     let timer: ReturnType<typeof setTimeout> | undefined;
     let unlisten: Unlisten | undefined;
 
-    const stop = () => {
-      clearTimeout(timer);
+    const unsubscribe = () => {
       unlisten?.();
       unlisten = undefined;
     };
 
     const settle = (next: StartupStatus) => {
-      if (!live || settled || next.state === "loading") return;
-      settled = true;
-      stop();
+      if (!live || next.state === "loading") return;
+      // The two moves there are: out of `loading`, and from `ready` to `failed`. Anything else —
+      // a second `ready`, or any word after `failed` — is not news.
+      if (at === "failed" || next.state === at) return;
+      at = next.state;
+      // Nothing is asked again once there is an answer; the listener outlives a `ready` alone.
+      clearTimeout(timer);
+      if (at === "failed") unsubscribe();
       setStatus(next);
     };
 
@@ -74,14 +90,15 @@ export function useStartup(enabled: boolean = true): StartupStatus {
         .startupStatus()
         .then(settle, () => undefined)
         .finally(() => {
-          if (live && !settled) timer = setTimeout(ask, STARTUP_POLL_MS);
+          if (live && at === "loading") timer = setTimeout(ask, STARTUP_POLL_MS);
         });
     };
     ask();
 
     return () => {
       live = false;
-      stop();
+      clearTimeout(timer);
+      unsubscribe();
     };
   }, [enabled]);
 

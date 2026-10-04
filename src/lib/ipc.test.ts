@@ -59,6 +59,8 @@ import facetsRsCore from "../../crates/grimoire-core/src/index/facets.rs?raw";
 import facetsRsDesktop from "../../src-tauri/src/index/facets/mod.rs?raw";
 import markcolorsRsCore from "../../crates/grimoire-core/src/markcolors.rs?raw";
 import markcolorsRsDesktop from "../../src-tauri/src/markcolors/mod.rs?raw";
+import marketplaceFeedRsCore from "../../crates/grimoire-core/src/marketplace_feed.rs?raw";
+import marketplaceFeedRsDesktop from "../../src-tauri/src/marketplace_feed/mod.rs?raw";
 import newPrintingsRsCore from "../../crates/grimoire-core/src/new_printings.rs?raw";
 import newPrintingsRsDesktop from "../../src-tauri/src/new_printings/mod.rs?raw";
 import priceHistoryRsCore from "../../crates/grimoire-core/src/price_history.rs?raw";
@@ -163,6 +165,7 @@ const deckTokensRs = deckTokensRsCore + "\n" + deckTokensRsDesktop;
 const facetsRs = facetsRsCore + "\n" + facetsRsDesktop;
 const homeRs = homeRsCore + "\n" + homeRsDesktop;
 const markcolorsRs = markcolorsRsCore + "\n" + markcolorsRsDesktop;
+const marketplaceFeedRs = marketplaceFeedRsCore + "\n" + marketplaceFeedRsDesktop;
 const newPrintingsRs = newPrintingsRsCore + "\n" + newPrintingsRsDesktop;
 const priceHistoryRs = priceHistoryRsCore + "\n" + priceHistoryRsDesktop;
 const recentCardsRs = recentCardsRsCore + "\n" + recentCardsRsDesktop;
@@ -5632,6 +5635,14 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["BulkUndoOutcome", bulkUndoRs, "BulkUndoOutcome"],
     ["ImportFile", importRs, "ImportFile"],
     ["ImportResolveLine", importRs, "ResolveLine"],
+    // **A price feed's status, on the table since it grew `reachable`** (the light app's phase 5,
+    // step 5.2). The field is the host saying it cannot ask a feed — Mana Pool in a browser —
+    // and two things turn on it with nothing else to catch a drift: the picker greys the row,
+    // and `useMarketplace` quotes another marketplace in place of a stored choice. Renamed on
+    // either side it arrives `undefined`, which this side reads as *reachable* on purpose (a
+    // status that does not say must not grey a working row) — so a browser would offer Mana
+    // Pool again and draw a window of em dashes, with nothing red anywhere but here.
+    ["MarketplaceFeedStatus", marketplaceFeedRs, "FeedStatus"],
   ];
 
   it.each(plainMirrors)(

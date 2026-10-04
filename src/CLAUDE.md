@@ -1154,7 +1154,9 @@ Every one of these has its measurement and its story in
   headers. **It has three implementations, and `src/lib/core/index.ts` is the one place a build
   chooses between them**: Tauri's `invoke` on the desktop, one `core_call` naming the command on
   the light app's Android host, and — in the `web` build alone, reached by a dynamic import so
-  no other bundle carries it — a message to the database Worker (`lib/core/web/`). **A refusal
+  no other bundle carries it — a message to the database Worker (`lib/core/web/`), except
+  `startup_status` and the three `storage_*` commands (`lib/core/hostStorage.ts`), which the web
+  core answers itself, on the page. **A refusal
   is a bare string on all three**, which is what `ipcError` and every page above it reads.
 - **A JSON header value must be written with `asciiJson`, never with bare `JSON.stringify`.** A
   header value is bytes, and three layers disagree about which bytes are allowed: `JSON.stringify`

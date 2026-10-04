@@ -390,3 +390,344 @@ async fn a_sync_whose_download_is_refused_says_so_and_swaps_nothing() {
         ("scryfall_api".into(), "bulk_download".into(), "http".into())
     );
 }
+
+// ---------------------------------------------------------------------------------------
+// The same run on a host that keeps no files — a browser's Worker, stood in for
+// ---------------------------------------------------------------------------------------
+//
+// `platform::host::emulate_page` makes the test's own thread a page: one thread, a file
+// interface that refuses, and the response headers a cross-origin `fetch` hides hidden. The
+// state is the browser's shape too — one connection, no read connection — so a lock held
+// across the work that takes it is a panic naming the line, not a wait.
+
+/// A page's state, with a stall bound short enough to wait out in a test.
+fn page(
+    name: &str,
+    base_url: String,
+) -> (
+    Arc<State>,
+    Arc<crate::events::fixtures::Recording>,
+    std::path::PathBuf,
+) {
+    crate::state::fixtures::single_with(
+        &format!("sync-page-{name}"),
+        scryfall::Client::new(base_url).with_stall(std::time::Duration::from_millis(400)),
+    )
+}
+
+/// The two headers the streamed run never sends, each for its own reason, with a mock that
+/// fails the run if one goes out. Mounted first, so either wins over the mocks that serve.
+///
+/// * **`If-None-Match` a page may not send**: it is outside the CORS safelist, so it costs a
+///   pre-flight, and Scryfall's bulk hosts refuse one — the request itself would fail.
+/// * **`Range` a page *may* send** — a simple `Range: bytes=N-` is safelisted and needs no
+///   pre-flight (measured, `docs/reference/light-app.md` §9.1). What a page cannot do is
+///   read the `Content-Range` that says where the answer starts, so it could not verify a
+///   resume; the streamed run therefore asks for the whole file, every time.
+fn refuse_what_a_page_may_not_send<'a>(
+    server: &'a MockServer,
+    path: &'static str,
+) -> [httpmock::Mock<'a>; 2] {
+    [
+        server.mock(|when, then| {
+            when.method(GET).path(path).header_exists("if-none-match");
+            then.status(500)
+                .body("a pre-flight this host does not grant");
+        }),
+        server.mock(|when, then| {
+            when.method(GET).path(path).header_exists("range");
+            then.status(500)
+                .body("a resume this run could not have verified");
+        }),
+    ]
+}
+
+fn staging_tables(state: &State) -> i64 {
+    count(
+        state,
+        "SELECT count(*) FROM corpus.sqlite_master WHERE name = 'cards_staging'",
+    )
+}
+
+/// **A first sync with nowhere to put a file**: the body goes from the request into the
+/// ingest a chunk at a time, the page hears the phases it draws in the order it draws them,
+/// and nothing is written but the database. Then the run after it, which a desktop would be
+/// told `304` for — and which here is decided from the descriptor's own `updated_at`, because
+/// a page may send no `If-None-Match` and can read no `ETag`.
+#[tokio::test]
+async fn a_first_sync_with_no_files_streams_into_the_ingest_and_the_next_finds_the_same_file() {
+    let server = MockServer::start();
+    // Mounted before `publish`'s own conditional mock, so these answer first.
+    let conditional = refuse_what_a_page_may_not_send(&server, "/bulk-data/default_cards");
+    let ranged = refuse_what_a_page_may_not_send(&server, "/default-cards.jsonl.gz");
+    let size = publish(&server, 5);
+    let _page = crate::platform::host::emulate_page();
+    let (state, heard, dir) = page("first", server.base_url());
+
+    let outcome = run_sync(state.clone(), false).await.unwrap();
+    assert!(outcome.updated);
+    assert_eq!(outcome.card_count, 5);
+    assert_eq!(outcome.updated_at.as_deref(), Some(UPDATED_AT));
+
+    let events = heard.taken();
+    let seen = phases(&events);
+    let fixed: Vec<&str> = seen
+        .iter()
+        .map(String::as_str)
+        .filter(|p| !matches!(*p, "reclaiming" | "compacting"))
+        .collect();
+    assert_eq!(
+        fixed,
+        ["checking", "downloading", "ingesting", "sets", "done"],
+        "the phases a file-backed run says, in its order: {seen:?}"
+    );
+    // Bytes while the body arrives, against the listing's size…
+    let downloads: Vec<&serde_json::Value> = events
+        .iter()
+        .map(|(_, p)| p)
+        .filter(|p| p["phase"] == "downloading")
+        .collect();
+    assert_eq!(
+        *downloads[0],
+        serde_json::json!({"phase": "downloading", "done": 0, "total": size, "message": null})
+    );
+    assert_eq!(
+        **downloads.last().unwrap(),
+        serde_json::json!({"phase": "downloading", "done": size, "total": size, "message": null})
+    );
+    // …and cards once it is in: what was staged before the swap, then the count that landed.
+    let ingests: Vec<&serde_json::Value> = events
+        .iter()
+        .map(|(_, p)| p)
+        .filter(|p| p["phase"] == "ingesting")
+        .collect();
+    assert_eq!(
+        **ingests.last().unwrap(),
+        serde_json::json!({"phase": "ingesting", "done": 5, "total": 117_000, "message": null})
+    );
+    assert!(
+        ingests.iter().all(|p| p["total"] == 117_000),
+        "every `ingesting` counts cards against the estimate: {ingests:?}"
+    );
+    assert_eq!(
+        events.last().unwrap().1,
+        serde_json::json!({"phase": "done", "done": 5, "total": 5, "message": "5 cards"})
+    );
+
+    assert_eq!(count(&state, "SELECT count(*) FROM cards"), 5);
+    assert_eq!(count(&state, "SELECT count(*) FROM cards_fts"), 5);
+    assert_eq!(count(&state, "SELECT count(*) FROM sets"), 1);
+    assert_eq!(staging_tables(&state), 0, "the swap took staging with it");
+    {
+        let conn = state.lock_db();
+        assert_eq!(
+            get_meta(&conn, K_BULK_ETAG),
+            None,
+            "a page cannot read an ETag, so none is stored — the mock sent one"
+        );
+        assert_eq!(
+            get_meta(&conn, K_BULK_UPDATED_AT).as_deref(),
+            Some(UPDATED_AT)
+        );
+        assert_eq!(get_meta(&conn, K_CARD_COUNT).as_deref(), Some("5"));
+        assert!(get_meta(&conn, K_LAST_CHECK_AT).is_some());
+        assert!(get_meta(&conn, K_LAST_ERROR).is_none());
+    }
+    assert!(
+        !dir.join("tmp").exists(),
+        "no folder was made, because no file was written"
+    );
+    assert!(!state.syncing.load(Ordering::SeqCst));
+    assert!(
+        crate::index::lifecycle::current(&state).is_some(),
+        "the index is built by the time the run returns: a Worker builds it where it stands"
+    );
+    for mock in conditional.iter().chain(&ranged) {
+        assert_eq!(
+            mock.calls(),
+            0,
+            "a header the streamed run never sends went out"
+        );
+    }
+
+    // The run after it. An ETag left in the database — by nothing a page can do, but it must
+    // not be replayed if one is ever there — and the same file on offer.
+    set_meta(&state.lock_db(), K_BULK_ETAG, ETAG).unwrap();
+    let again = run_sync(state.clone(), true).await.unwrap();
+    assert!(!again.updated, "the descriptor names the file already held");
+    assert_eq!(again.card_count, 5);
+    assert_eq!(phases(&heard.taken()), ["checking", "done"]);
+    for mock in conditional.iter().chain(&ranged) {
+        assert_eq!(
+            mock.calls(),
+            0,
+            "the stored ETag was replayed, or a resume was asked for"
+        );
+    }
+    assert_eq!(count(&state, "SELECT count(*) FROM cards"), 5);
+    assert!(!dir.join("tmp").exists());
+}
+
+/// **A body shorter than the listing promised is refused before the swap**, and leaves nothing
+/// staged. A truncated bulk file is still valid gzip up to where it stops, so the byte count
+/// is the only thing standing between a dropped connection and a partial card database.
+#[tokio::test]
+async fn a_short_body_with_no_files_is_refused_before_the_swap_and_leaves_no_staging() {
+    let server = MockServer::start();
+    let lines: Vec<String> = (0..5).map(card_line).collect();
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let bytes = std::fs::read(gz_fixture(&refs)).unwrap();
+    server.mock(|when, then| {
+        when.method(GET).path("/bulk-data/default_cards");
+        then.status(200).json_body(serde_json::json!({
+            "jsonl_download_uri": format!("{}/default-cards.jsonl.gz", server.base_url()),
+            "updated_at": UPDATED_AT,
+            // One byte more than the host will send.
+            "compressed_size": bytes.len() + 1,
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path("/default-cards.jsonl.gz");
+        then.status(200).body(bytes.clone());
+    });
+    let _page = crate::platform::host::emulate_page();
+    let (state, heard, dir) = page("short", server.base_url());
+    // A corpus already here, which a refused download must leave exactly as it was.
+    state
+        .lock_db()
+        .execute(
+            "INSERT INTO cards (id, name, set_code, collector_number, lang, layout, raw)
+             VALUES ('kept', 'Kept', 'x', '1', 'en', 'normal', '{}')",
+            [],
+        )
+        .unwrap();
+
+    let err = run_sync(state.clone(), true).await.unwrap_err();
+    assert_eq!(
+        err,
+        format!(
+            "downloaded {} bytes, expected {}",
+            bytes.len(),
+            bytes.len() + 1
+        )
+    );
+    let events = heard.taken();
+    assert_eq!(phases(&events), ["checking", "downloading", "error"]);
+    assert_eq!(
+        count(&state, "SELECT count(*) FROM cards WHERE id = 'kept'"),
+        1,
+        "nothing was swapped"
+    );
+    assert_eq!(count(&state, "SELECT count(*) FROM cards"), 1);
+    assert_eq!(staging_tables(&state), 0, "and what was staged is gone");
+    assert!(!state.syncing.load(Ordering::SeqCst));
+    assert!(!dir.join("tmp").exists());
+    let conn = state.lock_db();
+    assert_eq!(get_meta(&conn, K_LAST_ERROR).as_deref(), Some(err.as_str()));
+    assert!(get_meta(&conn, K_LAST_CHECK_AT).is_none());
+    assert!(get_meta(&conn, K_BULK_UPDATED_AT).is_none());
+    let logged: (String, String, String) = conn
+        .query_row("SELECT source, operation, kind FROM error_log", [], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+        })
+        .unwrap();
+    assert_eq!(
+        logged,
+        (
+            "scryfall_api".into(),
+            "bulk_download".into(),
+            "parse".into()
+        )
+    );
+}
+
+/// **A body that stops arriving ends the run in a sentence, after the stall bound** — which
+/// in a browser is the only thing that ever would. The host answers, sends the first half of
+/// a real file and then says nothing more with the connection open; the run gives up, says
+/// so three ways, gives the flag back and leaves nothing staged.
+#[tokio::test]
+async fn a_body_that_stops_arriving_with_no_files_fails_the_run_after_the_stall_bound() {
+    let lines: Vec<String> = (0..5).map(card_line).collect();
+    let refs: Vec<&str> = lines.iter().map(String::as_str).collect();
+    let bytes = std::fs::read(gz_fixture(&refs)).unwrap();
+    let quiet = crate::feed::quiet_host::start(bytes[..bytes.len() / 2].to_vec(), bytes.len());
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/bulk-data/default_cards");
+        then.status(200).json_body(serde_json::json!({
+            "jsonl_download_uri": format!("{quiet}/default-cards.jsonl.gz"),
+            "updated_at": UPDATED_AT,
+            "compressed_size": bytes.len(),
+        }));
+    });
+    let _page = crate::platform::host::emulate_page();
+    let (state, heard, _dir) = page("stalled", server.base_url());
+
+    let began = crate::platform::clock::Tick::now();
+    let err = run_sync(state.clone(), false).await.unwrap_err();
+    let took = began.elapsed();
+    assert!(err.contains("stalled"), "{err}");
+    assert!(
+        took >= std::time::Duration::from_millis(400),
+        "it gave up before the bound: {took:?}"
+    );
+    assert!(
+        took < std::time::Duration::from_secs(20),
+        "the stall bound is what ended it, not the host: {took:?}"
+    );
+
+    assert_eq!(phases(&heard.taken()), ["checking", "downloading", "error"]);
+    assert!(
+        !state.syncing.load(Ordering::SeqCst),
+        "a stalled run gives the flag back, so Retry is not refused"
+    );
+    assert_eq!(staging_tables(&state), 0);
+    assert_eq!(count(&state, "SELECT count(*) FROM cards"), 0);
+    let conn = state.lock_db();
+    assert_eq!(get_meta(&conn, K_LAST_ERROR).as_deref(), Some(err.as_str()));
+    let kind: String = conn
+        .query_row(
+            "SELECT kind FROM error_log WHERE operation = 'bulk_download'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "timeout");
+}
+
+/// **And a host that never begins to answer**: the wait for the response is bounded too.
+#[tokio::test]
+async fn a_download_that_never_answers_with_no_files_gives_up_after_the_stall_bound() {
+    let server = MockServer::start();
+    server.mock(|when, then| {
+        when.method(GET).path("/bulk-data/default_cards");
+        then.status(200).json_body(serde_json::json!({
+            "jsonl_download_uri": format!("{}/silent.jsonl.gz", server.base_url()),
+            "updated_at": UPDATED_AT,
+            "compressed_size": 100,
+        }));
+    });
+    server.mock(|when, then| {
+        when.method(GET).path("/silent.jsonl.gz");
+        then.status(200)
+            .delay(std::time::Duration::from_secs(10))
+            .body("late");
+    });
+    let _page = crate::platform::host::emulate_page();
+    let (state, heard, _dir) = page("silent", server.base_url());
+
+    let began = crate::platform::clock::Tick::now();
+    let err = run_sync(state.clone(), false).await.unwrap_err();
+    assert!(err.contains("stalled"), "{err}");
+    assert!(
+        began.elapsed() < std::time::Duration::from_secs(8),
+        "{:?}",
+        began.elapsed()
+    );
+    assert_eq!(phases(&heard.taken()), ["checking", "downloading", "error"]);
+    assert_eq!(
+        staging_tables(&state),
+        0,
+        "nothing was staged for a body that never came"
+    );
+}

@@ -12864,6 +12864,11 @@ export function readHandlers(db: FakeDb) {
           // The fake's refreshes are synchronous, so nothing is ever in flight *between* two
           // commands here. A story that wants the state emits `marketplace:progress`.
           refreshing: false,
+          // **Always `true`: the fake stands in for a host that can ask every feed**, which is
+          // every host but a browser. The one that cannot is drawn by `MarketplacePanel`'s own
+          // story from an argument — a world where a feed is out of reach is a different *host*,
+          // not a different database, so it is neither a seed nor a fault.
+          reachable: true,
         };
       }),
 
@@ -22699,6 +22704,8 @@ export function writeHandlers(db: FakeDb) {
         // it *left* the feed in, which is the same shape `marketplace_feed_status` reads back.
         stale: isFeedStale(meta.fetchedAt, CLOCK_BASE),
         refreshing: false,
+        // It was just fetched, so it was reachable — `marketplace_feed_status`'s answer.
+        reachable: true,
       };
     },
 

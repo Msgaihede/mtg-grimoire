@@ -26,7 +26,8 @@
 //! connection (the light-app spec §6). It is steps 2 and 4, on [`crate::db::open_single`]:
 //! no folder is made, no file is asked after, and there is no step 3 — [`Opened::read`] is
 //! `None`, and the [`State`] built over it reads through the connection it writes with. What
-//! stands in for step 1 there is not built: see [`unreadable_corpus_seam`].
+//! stands in for step 1 there is [`open_single_replacing`]: the same open, for a host that can
+//! delete its corpus by name and try again.
 //!
 //! **What neither does** is build the [`State`]: the event sink and the write observers are
 //! the host's, and so is the moment the hook goes on. Nor does either start anything — the facet
@@ -62,6 +63,10 @@ pub struct Opened {
     pub corpus_journal: Journal,
     pub client: scryfall::Client,
     pub images: images::Cache,
+    /// Whether this open threw the corpus away and built an empty one in its place — only
+    /// ever `true` from [`open_single_replacing`]. The reader's rows are untouched; the cards
+    /// come back with the next sync, and a host that can say so should.
+    pub corpus_replaced: bool,
 }
 
 /// Open `data_dir` as a host with no pre-27 data and no mirror opens it — see the module doc.
@@ -123,47 +128,105 @@ pub fn open(data_dir: &Path) -> Result<Opened, String> {
 /// a file beside it ([`crate::schema::back_up_user_file`]), which a host with no folder is
 /// refused — logged and skipped, as on any host whose backup cannot be written.
 pub fn open_single(databases: &Path, data_dir: &Path) -> Result<Opened, String> {
-    unreadable_corpus_seam();
+    attempt_single(databases, data_dir).map_err(|refused| refused.sentence)
+}
 
-    let pair = db::open_single(databases).map_err(|e| folder_error(data_dir, e))?;
-    schema::prepare_database(&pair.conn).map_err(|e| {
-        format!(
-            "MTG Grimoire could not prepare its databases in {}: {e}\n\
-             If this says the collection is from a newer version, run that version of the app. \
-             Otherwise the storage may be full. Do not clear the app's stored data: it holds \
-             your collection, decks and wishlist and cannot be rebuilt.",
-            data_dir.display(),
-        )
+/// [`open_single`] for a host that **can delete its corpus by name** — a browser, whose
+/// storage is a pool with a delete of its own (`OpfsSAHPoolUtil::delete_db`): a corpus that
+/// will not open, or will not migrate, is thrown away and the pair is opened again over an
+/// empty one. `user.db` is never touched, and the next card sync builds the corpus back.
+///
+/// It is what [`open`] does with files, for a host that has none. There the dance is
+/// [`crate::schema::replace_unreadable_corpus`] before the open and
+/// `schema::replace_attached_corpus` inside it, and both are refused on a host with no folder
+/// ([`crate::platform::files`]) — so until this existed a corpus that would not migrate was
+/// attached again and stopped every launch for good.
+///
+/// **What decides it is here; only the delete is the host's.** `delete_corpus` is called at
+/// most once, with every connection closed — the first attempt's is dropped before it — and
+/// only for a failure that is *about the corpus file*:
+///
+/// * the corpus would not attach or take its pragmas ([`db::Unopened::Corpus`]), or would
+///   not climb to head ([`schema::Stopped::Corpus`]);
+/// * and the failure says something about the file. A full or read-only store, a busy or
+///   locked database and an I/O error (`schema::says_nothing_about_the_file`) stop the launch
+///   as they always did: deleting a corpus over one costs a whole resync and cures nothing.
+///
+/// A failure in `user.db`, in the capture triggers, or anywhere else is refused in its own
+/// sentence with nothing deleted. A delete that fails is refused in the first failure's
+/// sentence with the delete's reason after it. And a second failure after a delete that
+/// worked is the launch's answer: nothing is deleted twice.
+///
+/// **[`Opened::corpus_replaced`] says it happened**, so a host can say so: the page then
+/// finds no cards, which reads as a first run, and the launch's card sync is what rebuilds.
+///
+/// ⚠️ **What it does not cover**: a corpus damaged *inside* a file whose first page is sound.
+/// [`open`]'s host looks for that after launch on a connection of its own
+/// ([`crate::schema::check_corpus`]) and leaves a mark file for the next one; a host with one
+/// connection and no files has neither, and nothing looks. And a corpus that is simply gone —
+/// evicted by the browser while `user.db` survived — is not noticed as such: `ATTACH` makes
+/// an empty one, and the app is on a first run.
+pub fn open_single_replacing(
+    databases: &Path,
+    data_dir: &Path,
+    delete_corpus: &mut dyn FnMut() -> Result<(), String>,
+) -> Result<Opened, String> {
+    let refused = match attempt_single(databases, data_dir) {
+        Ok(opened) => return Ok(opened),
+        Err(refused) => refused,
+    };
+    if !refused.corpus {
+        return Err(refused.sentence);
+    }
+    // No connection is open here: `attempt_single` dropped its own on the way out.
+    if let Err(why) = delete_corpus() {
+        return Err(format!(
+            "{}\nThe card database could not be removed to be rebuilt: {why}",
+            refused.sentence
+        ));
+    }
+    let mut opened = attempt_single(databases, data_dir).map_err(|again| again.sentence)?;
+    opened.corpus_replaced = true;
+    Ok(opened)
+}
+
+/// Why a one-connection launch stopped, and whether throwing the corpus away could cure it.
+struct Refused {
+    sentence: String,
+    /// The failure was about `corpus.db` itself — see [`open_single_replacing`].
+    corpus: bool,
+}
+
+/// One try at the one-connection launch. The connection it opened is closed by the time it
+/// answers a refusal, which is what lets a host delete a file behind it.
+fn attempt_single(databases: &Path, data_dir: &Path) -> Result<Opened, Refused> {
+    let pair = db::open_single_or_say(databases).map_err(|unopened| {
+        let corpus = matches!(
+            &unopened,
+            db::Unopened::Corpus(e) if !schema::says_nothing_about_the_file(e)
+        );
+        Refused {
+            sentence: folder_error(data_dir, unopened.into_error()),
+            corpus,
+        }
     })?;
+    if let Err(stopped) = schema::prepare_database_or_say(&pair.conn) {
+        let corpus = matches!(stopped, schema::Stopped::Corpus(_));
+        let e = stopped.into_error();
+        return Err(Refused {
+            sentence: format!(
+                "MTG Grimoire could not prepare its databases in {}: {e}\n\
+                 If this says the collection is from a newer version, run that version of the \
+                 app. Otherwise the storage may be full. Do not clear the app's stored data: \
+                 it holds your collection, decks and wishlist and cannot be rebuilt.",
+                data_dir.display(),
+            ),
+            corpus,
+        });
+    }
 
     Ok(finish(pair, None, data_dir))
 }
-
-/// **Step 5.2's seam, and deliberately nothing else**: where [`open`] replaces a corpus that
-/// will not open, [`open_single`] does nothing — and this is the line it does it on.
-///
-/// [`crate::schema::replace_unreadable_corpus`] is a dance with files: is the mark there, does
-/// the corpus open on a connection of its own, delete it and its journals. A host with no
-/// folder can do none of the three ([`crate::platform::files`] refuses, and a second connection
-/// is what its storage does not permit). What that leaves a browser with today, case by case:
-///
-/// * **A corpus that is not there** — never built, or evicted by the browser while the shell
-///   and `user.db` survived — is not noticed as such. `ATTACH` creates an empty file,
-///   `migrate_corpus` builds the shape, and the app is on a first run: `sync::has_cards` is
-///   false. The reader's rows are untouched, and nothing says a corpus *used* to be there.
-/// * **A corpus that is there and will not migrate** reaches
-///   `schema::replace_attached_corpus`, which detaches it and cannot delete it; it is attached
-///   again and the launch is refused with the corpus's own sentence. Every later launch
-///   repeats it — the desktop's "throw it away and resync" has no arm here.
-/// * **A corpus damaged inside a sound first page** is never looked for: `schema::check_corpus`
-///   opens a connection of its own, and the mark it leaves is a file.
-///
-/// What closes it is the host's to hand over, because the delete is the pool's
-/// (`OpfsSAHPoolUtil::delete_db`), not SQLite's: a way to remove one named database before this
-/// opens it, and a way for a launch to say *the corpus was expected and is gone* so a page can
-/// offer the rebuild (the light-app spec §6, "the corpus can vanish while the shell
-/// survives"). Neither is decided here.
-fn unreadable_corpus_seam() {}
 
 /// What both entries end on: the image cache, and the Scryfall client with any stored 429
 /// lockout re-entered before a single request can go out.
@@ -183,6 +246,7 @@ fn finish(pair: db::Pair, read: Option<Connection>, data_dir: &Path) -> Opened {
         corpus_journal: pair.corpus_journal,
         client,
         images,
+        corpus_replaced: false,
     }
 }
 
@@ -444,5 +508,228 @@ mod tests {
         let opened = open_single(&dir, shown).unwrap();
         assert_eq!(opened.images.dir(), shown.join("images"));
         assert!(dir.join(db::USER_DB).is_file());
+    }
+
+    // ---- a corpus that will not open, on a host whose storage can delete one --------------
+    //
+    // On a thread standing in for a page (`platform::host::emulate_page`) the file interface
+    // refuses, exactly as a browser's does — so `schema::replace_attached_corpus` cannot
+    // delete the corpus itself, which is the state a pool leaves a launch in. The closure
+    // stands in for the pool's delete.
+
+    /// A pair with a row of the reader's in it, and a corpus that will not migrate: version 0,
+    /// holding a table the climb builds.
+    fn pool_with_a_corpus_that_will_not_migrate(name: &str) -> std::path::PathBuf {
+        let dir = pool(name);
+        {
+            let opened = open_single(&dir, &dir).unwrap();
+            app_meta::set_app_meta(&opened.write, "reader_wrote", "this").unwrap();
+            db::checkpoint_truncate(&opened.write).unwrap();
+        }
+        delete_corpus_files(&dir);
+        let conn = rusqlite::Connection::open(dir.join(db::CORPUS_DB)).unwrap();
+        conn.execute_batch("CREATE TABLE cards (id TEXT)").unwrap();
+        dir
+    }
+
+    /// What a pool's delete does: the corpus and whatever SQLite kept beside it.
+    fn delete_corpus_files(dir: &Path) {
+        for suffix in ["", "-wal", "-shm", "-journal"] {
+            let _ = std::fs::remove_file(dir.join(format!("{}{suffix}", db::CORPUS_DB)));
+        }
+    }
+
+    fn readers_row(opened: &Opened) -> Option<String> {
+        app_meta::get_app_meta(&opened.write, "reader_wrote")
+    }
+
+    /// **A corpus that will not migrate is thrown away by the host's delete and the launch
+    /// goes on** — once, with the reader's file untouched, and saying that it happened.
+    /// Without a delete the same folder refuses every launch, which is what a browser had
+    /// until this existed.
+    #[test]
+    fn a_corpus_that_will_not_migrate_is_replaced_through_the_hosts_delete() {
+        let dir = pool_with_a_corpus_that_will_not_migrate("launch-single-replace");
+        let _page = crate::platform::host::emulate_page();
+
+        let stopped = open_single(&dir, &dir)
+            .err()
+            .expect("with nothing to delete it with, the launch stops");
+        assert!(
+            stopped.contains("could not prepare its databases")
+                && stopped.contains("table cards already exists"),
+            "{stopped}"
+        );
+        assert!(
+            dir.join(db::CORPUS_DB).is_file(),
+            "and the corpus is still there"
+        );
+
+        let mut deletes = 0;
+        let opened = open_single_replacing(&dir, &dir, &mut || {
+            deletes += 1;
+            delete_corpus_files(&dir);
+            Ok(())
+        })
+        .expect("a host that can delete its corpus opens over an empty one");
+        assert_eq!(deletes, 1);
+        assert!(opened.corpus_replaced);
+        assert_eq!(
+            readers_row(&opened).as_deref(),
+            Some("this"),
+            "user.db is not touched"
+        );
+        assert!(
+            !sync::has_cards(&opened.write),
+            "the corpus is empty, at head"
+        );
+        let sets: i64 = opened
+            .write
+            .query_row("SELECT count(*) FROM corpus.sets", [], |r| r.get(0))
+            .expect("the corpus has its shape back");
+        assert_eq!(sets, 0);
+    }
+
+    /// The other way a corpus will not open: bytes that are not a database at all.
+    #[test]
+    fn a_corpus_that_is_not_a_database_is_replaced_through_the_hosts_delete() {
+        let dir = pool("launch-single-garbage");
+        {
+            let opened = open_single(&dir, &dir).unwrap();
+            app_meta::set_app_meta(&opened.write, "reader_wrote", "this").unwrap();
+            db::checkpoint_truncate(&opened.write).unwrap();
+        }
+        delete_corpus_files(&dir);
+        std::fs::write(
+            dir.join(db::CORPUS_DB),
+            b"not a database at all, at some length",
+        )
+        .unwrap();
+        let _page = crate::platform::host::emulate_page();
+
+        assert!(open_single(&dir, &dir).is_err());
+        let mut deletes = 0;
+        let opened = open_single_replacing(&dir, &dir, &mut || {
+            deletes += 1;
+            delete_corpus_files(&dir);
+            Ok(())
+        })
+        .expect("garbage in the corpus's place is replaced");
+        assert_eq!(deletes, 1);
+        assert!(opened.corpus_replaced);
+        assert_eq!(readers_row(&opened).as_deref(), Some("this"));
+    }
+
+    /// **Nothing is deleted for a failure that is not the corpus's**, and nothing for a launch
+    /// that needs no help: a reader's file from a newer version stops the launch in its own
+    /// sentence with the corpus where it was.
+    #[test]
+    fn the_hosts_delete_is_never_called_for_a_failure_that_is_not_the_corpus() {
+        let dir = pool("launch-single-not-the-corpus");
+        let mut deletes = 0;
+        {
+            let opened = open_single_replacing(&dir, &dir, &mut || {
+                deletes += 1;
+                Ok(())
+            })
+            .expect("a first launch opens");
+            assert!(!opened.corpus_replaced);
+            opened
+                .write
+                .execute_batch("PRAGMA main.user_version = 9999")
+                .unwrap();
+        }
+        assert_eq!(deletes, 0, "a launch that opens deletes nothing");
+
+        let _page = crate::platform::host::emulate_page();
+        let refused = open_single_replacing(&dir, &dir, &mut || {
+            deletes += 1;
+            Ok(())
+        })
+        .err()
+        .expect("a collection from a newer version is not opened");
+        assert!(refused.contains("user.db"), "{refused}");
+        assert_eq!(deletes, 0, "and its corpus is not thrown away over it");
+        assert!(dir.join(db::CORPUS_DB).is_file());
+    }
+
+    /// **A delete that fails, and a delete that changes nothing**: the first is said after the
+    /// failure that asked for it, and the second leaves the launch's own answer — the delete
+    /// is tried once and never again.
+    #[test]
+    fn a_delete_that_does_not_help_is_said_and_is_not_tried_twice() {
+        let dir = pool_with_a_corpus_that_will_not_migrate("launch-single-delete-fails");
+        let _page = crate::platform::host::emulate_page();
+
+        let refused = open_single_replacing(&dir, &dir, &mut || {
+            Err("the pool would not let go of it".to_owned())
+        })
+        .err()
+        .unwrap();
+        assert!(
+            refused.contains("already exists")
+                && refused.contains(
+                    "The card database could not be removed to be rebuilt: the pool would not \
+                     let go of it"
+                ),
+            "{refused}"
+        );
+
+        let mut deletes = 0;
+        let refused = open_single_replacing(&dir, &dir, &mut || {
+            deletes += 1;
+            Ok(())
+        })
+        .err()
+        .expect("a corpus that is still there still will not migrate");
+        assert!(refused.contains("already exists"), "{refused}");
+        assert_eq!(deletes, 1);
+    }
+
+    /// **A corpus that cannot be opened for a reason that says nothing about the file is not
+    /// deleted.** "Unable to open" is what a full store, a held handle or a refused permission
+    /// look like, and none of them is cured by throwing a card database away — it costs the
+    /// reader a whole resync and the next launch fails the same way. A folder standing where
+    /// the corpus should be is a can't-open that needs no fault injected: the attach is
+    /// refused, the launch stops in its own sentence, and the host's delete is never called.
+    #[test]
+    fn a_corpus_that_cannot_be_opened_for_a_reason_that_is_not_about_it_is_never_deleted() {
+        let dir = pool("launch-single-cannot-open");
+        {
+            let opened = open_single(&dir, &dir).unwrap();
+            app_meta::set_app_meta(&opened.write, "reader_wrote", "this").unwrap();
+            db::checkpoint_truncate(&opened.write).unwrap();
+        }
+        delete_corpus_files(&dir);
+        std::fs::create_dir(dir.join(db::CORPUS_DB)).unwrap();
+
+        // The premise, asked of the opener itself: this is the corpus's failure, and it is
+        // one of the kind that says nothing about the file.
+        match db::open_single_or_say(&dir) {
+            Err(db::Unopened::Corpus(e)) => assert!(
+                schema::says_nothing_about_the_file(&e),
+                "a folder in the corpus's place should be a can't-open, and was: {e}"
+            ),
+            Err(db::Unopened::User(e)) => panic!("the reader's file opened before: {e}"),
+            Ok(_) => panic!("a folder is not a database"),
+        }
+
+        let _page = crate::platform::host::emulate_page();
+        let mut deletes = 0;
+        let refused = open_single_replacing(&dir, &dir, &mut || {
+            deletes += 1;
+            Ok(())
+        })
+        .err()
+        .expect("a corpus that cannot be opened stops the launch");
+        assert_eq!(
+            deletes, 0,
+            "a failure that says nothing about the corpus must not cost the reader a resync"
+        );
+        assert!(
+            refused.contains("could not open its databases"),
+            "{refused}"
+        );
+        assert!(dir.join(db::CORPUS_DB).is_dir(), "and nothing was removed");
     }
 }

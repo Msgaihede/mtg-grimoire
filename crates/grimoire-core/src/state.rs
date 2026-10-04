@@ -869,6 +869,16 @@ pub mod fixtures {
     /// Built at head like [`on_files`]: no capture triggers, no launch passes. A test that
     /// wants the launch itself opens through [`crate::launch::open_single`].
     pub fn single(name: &str, scryfall: &str) -> (Arc<State>, Arc<Recording>, PathBuf) {
+        single_with(name, crate::scryfall::Client::new(scryfall.to_owned()))
+    }
+
+    /// [`single`] with the Scryfall client handed in — for a test that wants one with a short
+    /// stall bound (`scryfall::Client::with_stall`), so "the download stalled" is a test of
+    /// milliseconds.
+    pub fn single_with(
+        name: &str,
+        client: crate::scryfall::Client,
+    ) -> (Arc<State>, Arc<Recording>, PathBuf) {
         let dir = crate::scratch::path(name);
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
@@ -881,7 +891,7 @@ pub mod fixtures {
             dir.clone(),
             heard.clone(),
             Vec::new(),
-            crate::scryfall::Client::new(scryfall.to_owned()),
+            client,
             crate::images::Cache::new(dir.join("images")),
         );
         (Arc::new(state), heard, dir)

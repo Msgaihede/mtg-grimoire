@@ -26,7 +26,11 @@ function answer(status: DownloadsStatus | Error) {
   });
 }
 
-beforeEach(() => invoke.mockReset());
+// Braces: a `beforeEach` that returns a function hands Vitest a teardown, and `mockReset()`
+// returns the mock — the bare arrow ended every test here by calling `invoke()` with nothing.
+beforeEach(() => {
+  invoke.mockReset();
+});
 
 describe("the mobile-data prompt", () => {
   it("lists what the launch is holding, each with its measured size, and the total", async () => {

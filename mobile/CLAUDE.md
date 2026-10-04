@@ -271,7 +271,7 @@ failure behind each at its own site:
 | `npm run web:dev` | **The web host**: the real engine in a Worker, its databases in this browser's OPFS | The web app in a browser on port 5176 — driven in Chrome only so far. No Rust process, **no lock**. A `web:wasm` beside a running server is picked up by a reload |
 | `npm run web:build` | — | `tsc`, the Worker's own `tsc` program, then the bundle into `dist-web/` with the engine under `wasm/<build id>/`. Fails, in a sentence, when `dist-wasm/` is not built |
 | `npm run web:preview` | The same engine, from `dist-web/` | The built app on port 4176, where a missing file is a 404 as on a real host |
-| `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP: five checks, a second tab's refusal among them. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
+| `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP as an **offline first run**: every request the engine makes is answered from `scripts/web-smoke/`, and nine checks run over it — the card sync, the feeds, the picker and a second tab's refusal among them. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
 
 - **`mobile:tauri` is the desktop binary with a config overlay** (`src-tauri/tauri.light.conf.json`):
   it **takes the `app` lock** and reads `src-tauri/target/debug/data`. Read the `running-the-app`
@@ -353,19 +353,20 @@ failure behind each at its own site:
   ticket back, and an add's `Undo` is the stepper one copy back. Settings' panels make the desktop's
   own writes. **Not yet**: folder management, a copy's purchase price, the deck tokens band's and
   stats band's writes.
-- **The web host opens its database and answers commands, and that is all it does yet** (phase
-  5, step 5.1, 2026-10-04 — *The web host* below). **It downloads nothing in a browser**, so a
-  web install has no cards; it draws no card picture; **there is no service worker** — the
-  manifest and its icons are the whole of the PWA so far (`mobile/public/`, the light builds' own
-  public directory since step 5.4, so no other build carries them; `scripts/light-icons.mjs`
-  renders the icons from the mark, and **there is no install button**: a browser's own install UI
-  is the install) — and nothing is hosted.
+- **The web host opens its database, answers commands and builds its corpus** (phase 5, steps
+  5.1 and 5.2, 2026-10-04 — *The web host* below): the launch's downloads run in a browser, so
+  a web install has cards after its first run. **It draws no card picture yet** — every tile
+  shows the card's name and a retry — and **there is no service worker**: the manifest and its
+  icons are the whole of the PWA so far (`mobile/public/`, the light builds' own public directory
+  since step 5.4, so no other build carries them; `scripts/light-icons.mjs` renders the icons
+  from the mark, and **there is no install button**: a browser's own install UI is the install).
+  Nothing is hosted.
 - **No device sync on a light install**: the phone face pairs with nothing. **It does hear the
   host's card sync and the feeds** — `phone/cardData.ts`'s `useCardDataWatch`, mounted once in
   `PhoneFace`, runs the desktop shell's own listeners (`useSyncInvalidation`, the feed hooks) and
   draws the loudest running job on the mana line; an empty card search says *No cards match.*
-  only over a database that has cards (`phone/search/NoCards.tsx`). Over the fake, and in a
-  browser until the web host downloads anything, no sync event comes, so the line rests.
+  only over a database that has cards (`phone/search/NoCards.tsx`). Over the fake no sync event
+  comes, so the line rests; the web host has sent them since step 5.2, when it began to download.
   `mobile:tauri` is the desktop binary, not a light host.
 
 ## The Android host — `src-tauri/` here
@@ -441,6 +442,16 @@ built in the `web` mode.
 - **The startup gate is one gate on every host.** `LightApp` reads `@/boot/useStartup` as it
   does on Android; in the web build the status is answered on the page, from what the Worker
   reported. A call made before the database is open waits rather than being refused.
+- **The gate can close again, once, and only this host closes it.** A Worker that dies after
+  the database opened moves the startup status from `ready` to `failed` with `reload: true`
+  and says so on `startup:changed`; `useStartup` keeps its listener after `ready` for exactly
+  that, and `LightApp` then draws `BootScreen` — the sentence and the Reload link — *in place
+  of* the faces, the face's boundary and everything mounted beside them. From a trap until a
+  reload there is no app behind the page, and that is one fact for the whole window: left to
+  each hook, it was a first-run bar that never moved again and walls that stopped answering.
+  Never back to `ready`, never twice, and never from a gate that had already failed for a
+  reason of its own. The desktop and Android say nothing after `ready`, so nothing changes
+  for them.
 - **A second tab is told so by the startup status the host answers** —
   `{ state: "failed", message, reload: true }` — and by nothing a page detects. `reload` is a
   host saying that a fresh document may find things different: a second tab (the first holds
@@ -454,16 +465,57 @@ built in the `web` mode.
 - **A command the table lacks is refused in the table's words, as on Android**, and a refusal
   is a bare string on every host. `DownloadsPrompt` draws nothing here for that reason: this
   host has no `light_downloads`.
+- **What a browser did with its storage is asked of the host, and only this host answers**
+  (step 5.2; `src/lib/core/hostStorage.ts` has the three commands and their shapes). A browser
+  lends its storage and can take it back while the page still opens, so the web host answers
+  `storage_cleared`, `storage_cleared_dismiss` and `storage_persistence` **on the page, without
+  the engine**, as it answers `startup_status`. `StorageNotice.tsx`, which `LightApp` mounts
+  after both faces, asks the first once and draws only an answer — `DownloadsPrompt`'s
+  arrangement — and **the sentences are the host's own**, as a startup failure's are, so
+  nothing under `mobile/` says what kind of host it is drawn on. The Android host and the
+  desktop refuse the name, which is nothing to draw.
+  - **Found by the folder, not by a count of cards.** The Worker asks whether OPFS already
+    held the database's folder *before* the engine opens it (opening creates one), and the
+    page compares that with a mark it keeps in `localStorage`: a mark and no folder is storage
+    cleared under the app. An empty card table has other causes — a download still running, a
+    corpus the engine replaced, a reader who cleared the card data — and none of them took a
+    collection with it.
+  - **Not a modal, and drawn on the first-run screen's rung** (`LAYER.gate`), last in the
+    document: at 1024px and wider an empty card database is the desktop face's full-window
+    first-run screen, and equal rungs paint in document order. A `Dialog` is a rung below
+    that screen and would be hidden for the whole download it explains.
+  - **A clearing is recorded by the open that saw it, even one that then failed.** The pool's
+    install makes the folder before anything can fail, so the launch after a failed one looks
+    ordinary; the occurrence waits in `localStorage` for a launch that can draw it.
+  - **`persist()` is asked when the database has opened, and again no more than once a week
+    while the answer is no** — a yes is final. That departs from the spec's "asked once" on
+    purpose: Chromium decides at the call, so a first visit's `false`, recorded for good,
+    stopped the app asking after an install. Each launch reads `persisted()` first, which asks
+    nobody. What was said is in `localStorage` with the day it was last asked — on the console
+    beside the open's line, and read back by `storage_persistence`. Nothing reads it to decide
+    anything, and nothing reads `estimate()` at all. No Settings row draws it yet.
+- **The marketplace picker is drawn from the host's answer too**: `MarketplaceFeedStatus.reachable`
+  is `false` for a feed the host cannot ask (Mana Pool in a browser), the row is greyed and says
+  why, and `useMarketplace` quotes the fallback for a stored choice it cannot ask without
+  writing the choice away. Both faces' Settings draw that one panel.
 - **To run it**: `npm run web:wasm` once (and again after any Rust change), then `web:dev` for
   the dev server, or `web:build` and then `web:smoke` or `web:preview` for the built app. None
   takes a lock. The *Running it* table has each.
-- **Not there yet**, each with the step that owns it in
-  [the plan](../docs/superpowers/plans/2026-10-04-light-app-phase-5.md): no download, so no
-  corpus, and the marketplace picker still offers Mana Pool, which a page cannot reach (5.2);
-  no card picture and no service worker (5.3); no hosting (5.5). And a second
-  tab is the only thing the page says about its storage: nothing asks `persist()` yet.
+- **A web install builds its corpus** (step 5.2): a `ready` open starts the card sync and then
+  each feed in turn, on every launch, and one first run against the real hosts is measured in
+  [light-app.md](../docs/reference/light-app.md) §9.2. **Not there yet**, each with the step
+  that owns it in [the plan](../docs/superpowers/plans/2026-10-04-light-app-phase-5.md): no
+  card picture and no service worker (5.3); no hosting (5.5); no sync (phase 6).
 - **The desktop face's file dialogs are answered on the page** (step 5.4): `export_save_file` is
   a download and `import_pick_file` a hidden `<input type="file">`, in front of the Worker
   (`src/lib/core/web/files.ts`), in the desktop commands' own result shapes — so
   `src/features/transfer/files.ts` and both dialogs are unchanged. A save answers `true` for
   *handed to the browser*, which is honest only because `ExportDialog` draws no sentence from it.
+  The clipboard and a link out are a browser's own there (*Nothing here asks where it is
+  running*, above), and light-app.md §9.4 has what was driven.
+- **What the storage notice was shown to do, and what it was not.** Driven in Chromium on
+  2026-10-04, in a dev build, by removing the database's OPFS folder by hand between two
+  loads: the notice was drawn, survived a reload and went on its button. **No browser has
+  been seen to evict**, which cannot be produced on demand — so that a real eviction leaves
+  `localStorage` standing, as the hand-made one did, is an assumption. Where a browser clears
+  the mark *with* OPFS the app is a first run again and says nothing.

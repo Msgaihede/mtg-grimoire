@@ -170,19 +170,52 @@ pub fn open_write_pair(data_dir: &Path) -> rusqlite::Result<Pair> {
 /// folder gets exactly the statements, in exactly the order, it got before there was a second
 /// caller.
 fn open_pair(dir: &Path, temp_store: Option<&str>) -> rusqlite::Result<Pair> {
-    let conn = Connection::open(dir.join(USER_DB))?;
-    let journal = apply_pragmas(&conn, None)?;
-    conn.pragma_update(None, "foreign_keys", "ON")?;
-    conn.busy_timeout(BUSY_TIMEOUT)?;
-    if let Some(store) = temp_store {
-        conn.pragma_update(None, "temp_store", store)?;
-    }
-    let corpus_journal = attach_corpus(&conn, dir)?;
+    open_pair_or_say(dir, temp_store).map_err(Unopened::into_error)
+}
+
+/// [`open_pair`], saying which of the two files would not open.
+fn open_pair_or_say(dir: &Path, temp_store: Option<&str>) -> Result<Pair, Unopened> {
+    let user = || -> rusqlite::Result<(Connection, Journal)> {
+        let conn = Connection::open(dir.join(USER_DB))?;
+        let journal = apply_pragmas(&conn, None)?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        if let Some(store) = temp_store {
+            conn.pragma_update(None, "temp_store", store)?;
+        }
+        Ok((conn, journal))
+    };
+    let (conn, journal) = user().map_err(Unopened::User)?;
+    let corpus_journal = attach_corpus(&conn, dir).map_err(Unopened::Corpus)?;
     Ok(Pair {
         conn,
         journal,
         corpus_journal,
     })
+}
+
+/// Which file of the pair would not open — for a host that can throw one of them away.
+///
+/// A host with a folder never needs it: there a corpus that will not open has been found and
+/// deleted before the pair is opened (`schema::replace_unreadable_corpus`), on a connection
+/// of its own. A host with one connection and no files cannot ask that way, so it opens the
+/// pair, and if it was the corpus that refused, deletes it through its own storage and opens
+/// again ([`crate::launch::open_single_replacing`]).
+#[derive(Debug)]
+pub enum Unopened {
+    /// `user.db` — the reader's own file. Never a reason to delete anything.
+    User(rusqlite::Error),
+    /// `corpus.db`, attached and given its pragmas.
+    Corpus(rusqlite::Error),
+}
+
+impl Unopened {
+    /// The error [`open_write`] and [`open_single`] have always answered.
+    pub fn into_error(self) -> rusqlite::Error {
+        match self {
+            Unopened::User(e) | Unopened::Corpus(e) => e,
+        }
+    }
 }
 
 /// The pair on a connection that may write it, and the journal each file actually got.
@@ -248,6 +281,11 @@ const SINGLE_TEMP_STORE: &str = "FILE";
 /// with one connection there is no "beside".
 pub fn open_single(databases: &Path) -> rusqlite::Result<Pair> {
     open_pair(databases, Some(SINGLE_TEMP_STORE))
+}
+
+/// [`open_single`], saying which of the two files would not open ([`Unopened`]).
+pub fn open_single_or_say(databases: &Path) -> Result<Pair, Unopened> {
+    open_pair_or_say(databases, Some(SINGLE_TEMP_STORE))
 }
 
 /// A second, **read-only** connection to the same database file.

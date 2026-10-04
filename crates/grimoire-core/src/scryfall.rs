@@ -29,7 +29,7 @@
 //! under `*.scryfall.io` are explicitly unlimited.
 
 use crate::platform::clock::{self, Tick};
-use crate::platform::{files, http, timer};
+use crate::platform::{files, host, http, timer};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -61,6 +61,36 @@ const ACCEPT: &str = "application/json;q=0.9,*/*;q=0.8";
 /// requirement, and the bulk origin does occasionally pause mid-stream. Sixty seconds of
 /// complete silence, though, is a connection that is not coming back.
 const READ_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+/// How long a host with no read timeout of its own waits for an answer to begin, or for the
+/// next chunk of a body, before it calls the download stalled.
+///
+/// **A browser's `fetch` has no socket to bound** (`platform::http`), so there a request that
+/// stops delivering would otherwise never end — the sync flag latched, or a feed's refresh
+/// claim held, for the life of the Worker. This is that bound, applied to every wait rather
+/// than to the whole request, because a deadline long enough for a 78 MB file is no deadline.
+///
+/// **Sixty seconds, because that is [`READ_TIMEOUT`]** — one constant, so a page gives up on a
+/// silent host exactly when a desktop does, and for the reason written there: the bulk origin
+/// does pause mid-stream, and a minute of nothing is a connection that is not coming back.
+///
+/// **What the bound counts, said exactly.** The timer starts when the next chunk is asked
+/// for, so this download's *own* work between two waits — a chunk pushed into its sink — is
+/// not in it. But a Worker is one thread, and a timer there runs on through anything else
+/// that thread does while this download is waiting: a command a page sent, another
+/// download's swap. A stretch of that longer than the bound leaves the timer due when the
+/// event loop resumes, beside the chunk that arrived meanwhile. Two things keep that from
+/// reading as a stall: a deadline that fires is given a second look before it is believed
+/// (`platform::http::SECOND_LOOK`), which is where a chunk already delivered is seen; and
+/// the web host runs the launch's downloads one after another, so no download waits on a
+/// chunk through another's long synchronous tail.
+///
+/// ⚠️ **No browser has seen it fire**: the measured first runs never stalled. A tab the
+/// browser froze and thawed could find the timer due
+/// before the network has resumed, and fail a download that was only paused — the second
+/// look is one second, not a reconnect; the run after retries from the start. `feed`'s
+/// streamed downloads borrow the same figure.
+pub const STALL: std::time::Duration = READ_TIMEOUT;
 
 /// The whole of how long one card image may take.
 ///
@@ -295,6 +325,9 @@ pub struct Client {
     /// is "the deadline is what ends the call", and a test that had to sit out the
     /// production number to prove it would be a ten-second test.
     image_timeout: std::time::Duration,
+    /// [`STALL`], as a field for `image_timeout`'s reason: "the stall bound is what ends the
+    /// download" is the behaviour worth a test, and not one worth sixty seconds of it.
+    stall: std::time::Duration,
     /// The pacing gate: when the last `api.scryfall.com` request claimed its slot, and the gap
     /// its endpoint asks for before the next may go out. Shared through an `Arc` so a cloned
     /// `Client` paces against the same budget — two clones with two gates would be two
@@ -328,8 +361,9 @@ impl Client {
             // both the header's Refresh and the first-run Retry disabled behind it — an
             // unrecoverable UI that only a restart clears.
             //
-            // A browser has neither bound to set (`platform::http`): there a download that
-            // stops delivering is the web host's to bound, when there is one.
+            // A browser has neither bound to set (`platform::http`): there every wait is
+            // bounded by `STALL` instead — `api_send`'s for an answer, `Client::stream`'s for
+            // each chunk.
             read_timeout: Some(READ_TIMEOUT),
         });
         Client {
@@ -337,6 +371,7 @@ impl Client {
             base_url: base_url.trim_end_matches('/').to_owned(),
             http,
             image_timeout: IMAGE_TIMEOUT,
+            stall: STALL,
             // No gap owed, so the first request of a session goes out immediately: the
             // gate spaces requests apart, it does not charge an entry fee.
             next_api_slot: Arc::new(futures_util::lock::Mutex::new((
@@ -394,6 +429,14 @@ impl Client {
         self
     }
 
+    /// The same client with a different stall bound. See the field. Test scaffolding, and
+    /// reachable from another crate's tests for the hosts that drive a download.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn with_stall(mut self, stall: std::time::Duration) -> Client {
+        self.stall = stall;
+        self
+    }
+
     /// The only way this module issues an API request.
     ///
     /// One choke point, doing four things no call site may be trusted to remember:
@@ -433,8 +476,16 @@ impl Client {
                 req = req.header(name, value);
             }
 
+            // A page's `fetch` has no connect or read bound, so there the wait for an answer
+            // is bounded here; natively the client's own two bounds are what end it, as they
+            // always have.
+            let sent = if host::asks_as_a_page() {
+                req.send_within(self.stall).await
+            } else {
+                req.send().await
+            };
             // Whatever this attempt earned, if it is worth another go.
-            let pending = match req.send().await {
+            let pending = match sent {
                 Ok(resp) if resp.status() == 429 => {
                     let asked = retry_after_secs(&resp);
                     return Err(ScryfallError::RateLimited {
@@ -445,6 +496,8 @@ impl Client {
                     ScryfallError::Unexpected(format!("status {}", resp.status()))
                 }
                 Ok(resp) => return Ok(resp),
+                // A page's bound is the stall bound, and that is the figure it reports.
+                Err(e) if e.is_stall() => ScryfallError::Timeout(self.stall),
                 Err(e) if e.is_timeout() => ScryfallError::Timeout(READ_TIMEOUT),
                 Err(e) if e.is_connect() || e.is_request() => ScryfallError::Http(e),
                 Err(e) => return Err(ScryfallError::Http(e)),
@@ -467,8 +520,8 @@ impl Client {
     /// for this app is one.
     ///
     /// What is waited is what is left of the last request's gap, measured with a
-    /// [`Tick`] — monotonic natively. A browser's tick is the wall clock, which can step
-    /// forwards and open the gate early; see `platform::clock`.
+    /// [`Tick`] — monotonic on every host, a browser's `performance.now()` included since the
+    /// web host first paced a request; see `platform::clock`.
     async fn await_slot(&self, url: &str) {
         let interval = min_interval(url);
         let mut slot = self.next_api_slot.lock().await;
@@ -516,12 +569,21 @@ impl Client {
     /// so a further dataset shares the one pacing gate and the one 429 lockout: three
     /// datasets are still one application as far as Scryfall is concerned, and a second
     /// client would be two.
+    ///
+    /// **A page sends no `If-None-Match`, whatever it is handed, and reads no `ETag`**
+    /// (`platform::host`): the header costs a pre-flight this endpoint does not grant, and the
+    /// response's `ETag` is not exposed to a cross-origin `fetch`. So there the answer is
+    /// always `Available`, with `etag: None`, and "unchanged" is the caller's to decide from
+    /// the descriptor's own `updated_at` — which every caller already does for a 200, because
+    /// a desktop behind a proxy that strips ETags is in the same position. Decided here, at
+    /// the one place the header is built, so no caller can send it by forgetting.
     pub async fn check_bulk_dataset(
         &self,
         dataset: &str,
         etag: Option<&str>,
     ) -> Result<BulkCheck, ScryfallError> {
         let url = format!("{}/bulk-data/{dataset}", self.base_url);
+        let etag = etag.filter(|_| !host::asks_as_a_page());
         let headers: Vec<(&str, &str)> =
             etag.map(|e| vec![("If-None-Match", e)]).unwrap_or_default();
         let resp = self.api_send(&url, &headers).await?;
@@ -529,7 +591,7 @@ impl Client {
             304 => Ok(BulkCheck::NotModified),
             200 => {
                 let etag = resp.header("etag").map(str::to_owned);
-                let v = json_body(resp).await?;
+                let v = self.json(resp).await?;
                 Ok(BulkCheck::Available(BulkInfo {
                     // The one field with no sane default: without a download URI there
                     // is nothing to sync, so a missing one is an error rather than "".
@@ -667,6 +729,56 @@ impl Client {
         Ok(())
     }
 
+    /// One streamed `GET` of a bulk file, **for a host that keeps no files**: the body is
+    /// handed back a chunk at a time, for the caller to push straight into its sink
+    /// (`ingest::StreamIngest`, `tags::StreamTags`), and nothing is written anywhere.
+    ///
+    /// [`download`](Client::download)'s other shape, and what it gives up is the resume: one
+    /// request, from byte zero, with no `Range` — a page cannot read the `Content-Range` that
+    /// would say where a resumed body starts, so it could not verify what it had been given.
+    /// A run that fails partway starts again from the beginning next time.
+    ///
+    /// **What it keeps is the size check, and it is still the load-bearing part.** The stream
+    /// is told `expected_size` — the descriptor's `compressed_size` — and [`Stream::chunk`]
+    /// answers the end of the body only when exactly that many bytes arrived: a body that ends
+    /// short, or runs past it, is [`ScryfallError::SizeMismatch`] *instead of* the end. A
+    /// caller therefore cannot reach its sink's `finish` — the swap — over a truncated file by
+    /// forgetting to ask.
+    ///
+    /// **Every wait is bounded by the client's stall bound** ([`STALL`]): for the answer to
+    /// begin, and for each chunk after it. A file origin, so no pacing and no `Accept`, as for
+    /// `download`.
+    pub async fn stream(&self, uri: &str, expected_size: u64) -> Result<Stream, ScryfallError> {
+        let resp = self.http.get(uri).send_within(self.stall).await?;
+        match resp.status() {
+            200 => Ok(Stream {
+                body: resp.into_body(),
+                stall: self.stall,
+                expected: expected_size,
+                received: 0,
+            }),
+            429 => Err(ScryfallError::RateLimited {
+                retry_after_secs: retry_after_secs(&resp),
+            }),
+            s => Err(ScryfallError::Unexpected(format!("status {s}"))),
+        }
+    }
+
+    /// A response body as JSON — on a page, read against the stall bound a chunk at a time,
+    /// because nothing else there ends a body that stops arriving; natively in one read, as
+    /// it always was, under the client's read timeout.
+    async fn json(&self, resp: http::Response) -> Result<serde_json::Value, ScryfallError> {
+        if !host::asks_as_a_page() {
+            return json_body(resp).await;
+        }
+        let mut body = resp.into_body();
+        let mut bytes: Vec<u8> = Vec::new();
+        while let Some(chunk) = body.chunk_within(self.stall).await {
+            bytes.extend_from_slice(&chunk?);
+        }
+        parse_json(&bytes)
+    }
+
     /// All sets, following `has_more`/`next_page` to the end — or to
     /// [`MAX_SET_PAGES`], whichever comes first.
     pub async fn fetch_sets(&self) -> Result<Vec<SetRow>, ScryfallError> {
@@ -681,7 +793,7 @@ impl Client {
                 200 => {}
                 s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
             }
-            let v = json_body(resp).await?;
+            let v = self.json(resp).await?;
             for s in v["data"].as_array().into_iter().flatten() {
                 out.push(SetRow {
                     code: s["code"].as_str().unwrap_or_default().to_owned(),
@@ -733,7 +845,7 @@ impl Client {
                 200 => {}
                 s => return Err(ScryfallError::Unexpected(format!("status {s}"))),
             }
-            let v = json_body(resp).await?;
+            let v = self.json(resp).await?;
             for m in v["data"].as_array().into_iter().flatten() {
                 // A row with no id or no old id describes nothing this app can act on —
                 // and the id is the primary key of the bookkeeping that makes a re-poll a
@@ -960,8 +1072,54 @@ fn retry_after_secs(resp: &http::Response) -> u64 {
 /// which this crate already depends on), so bodies are decoded here.
 async fn json_body(resp: http::Response) -> Result<serde_json::Value, ScryfallError> {
     let bytes = resp.bytes().await?;
-    serde_json::from_slice(&bytes)
+    parse_json(&bytes)
+}
+
+fn parse_json(bytes: &[u8]) -> Result<serde_json::Value, ScryfallError> {
+    serde_json::from_slice(bytes)
         .map_err(|e| ScryfallError::Unexpected(format!("response was not JSON: {e}")))
+}
+
+/// A bulk file's body, a chunk at a time — what [`Client::stream`] answers.
+pub struct Stream {
+    body: http::Body,
+    stall: Duration,
+    expected: u64,
+    received: u64,
+}
+
+impl Stream {
+    /// The next chunk, or `None` when the body has ended **and was the size it was promised
+    /// to be**. A body that stops arriving is an error after the stall bound; one that ends
+    /// short or runs long is [`ScryfallError::SizeMismatch`].
+    pub async fn chunk(&mut self) -> Result<Option<bytes::Bytes>, ScryfallError> {
+        match self.body.chunk_within(self.stall).await {
+            Some(Ok(chunk)) => {
+                self.received += chunk.len() as u64;
+                // Refused the moment it runs over, before the bytes are handed on: a host
+                // sending more than it promised is not sending the file that was listed.
+                if self.received > self.expected {
+                    return Err(self.mismatch());
+                }
+                Ok(Some(chunk))
+            }
+            Some(Err(e)) => Err(ScryfallError::Http(e)),
+            None if self.received != self.expected => Err(self.mismatch()),
+            None => Ok(None),
+        }
+    }
+
+    /// Bytes handed out so far.
+    pub fn received(&self) -> u64 {
+        self.received
+    }
+
+    fn mismatch(&self) -> ScryfallError {
+        ScryfallError::SizeMismatch {
+            expected: self.expected,
+            actual: self.received,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -1825,5 +1983,134 @@ mod tests {
         let sets = Client::new(server.base_url()).fetch_sets().await.unwrap();
         let sizes: Vec<Option<i64>> = sets.iter().map(|s| s.printed_size).collect();
         assert_eq!(sizes, [Some(269), None, None]);
+    }
+
+    // ---- a host that asks as a page, and keeps no files --------------------------------
+
+    /// **A page sends no `If-None-Match`, whatever it is handed, and reads no `ETag`.** The
+    /// header costs a pre-flight this endpoint does not grant, and the response's `ETag` is
+    /// not exposed to a cross-origin `fetch`. Natively both are exactly as they were.
+    #[tokio::test]
+    async fn a_page_checks_a_bulk_file_with_no_conditional_header_and_reads_no_etag() {
+        let server = MockServer::start();
+        let conditional = server.mock(|when, then| {
+            when.method(GET)
+                .path("/bulk-data/default_cards")
+                .header_exists("if-none-match");
+            then.status(304);
+        });
+        let plain = server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/default_cards");
+            then.status(200)
+                .header("etag", "W/\"xyz\"")
+                .json_body(serde_json::json!({
+                    "updated_at":"2026-08-03T21:16:27.869+00:00",
+                    "jsonl_download_uri":"https://data.scryfall.io/default-cards/x.jsonl.gz",
+                    "compressed_size":77332681u64 }));
+        });
+        let c = Client::new(server.base_url());
+
+        assert!(matches!(
+            c.check_bulk_update(Some("W/\"abc\"")).await.unwrap(),
+            BulkCheck::NotModified
+        ));
+        conditional.assert_calls(1);
+
+        let _page = host::emulate_page();
+        let BulkCheck::Available(info) = c.check_bulk_update(Some("W/\"abc\"")).await.unwrap()
+        else {
+            panic!("a page is never told 304: it cannot ask the question")
+        };
+        conditional.assert_calls(1);
+        plain.assert_calls(1);
+        assert_eq!(
+            info.etag, None,
+            "the mock sent one, and a page cannot read it"
+        );
+        assert_eq!(info.updated_at, "2026-08-03T21:16:27.869+00:00");
+        assert_eq!(info.compressed_size, 77332681);
+    }
+
+    /// **A stream ends only at the size it was promised.** The end of the body is answered
+    /// when exactly the listed bytes arrived; a body that ends short, or runs over, is a size
+    /// mismatch *instead of* the end — so a caller cannot reach its swap over either. And no
+    /// request it makes carries a `Range`.
+    #[tokio::test]
+    async fn a_stream_ends_only_at_the_size_it_was_promised() {
+        let server = MockServer::start();
+        let ranged = server.mock(|when, then| {
+            when.method(GET).path("/bulk.gz").header_exists("range");
+            then.status(500);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/bulk.gz");
+            then.status(200).body(vec![7u8; 100]);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/limited.gz");
+            then.status(429);
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/gone.gz");
+            then.status(404);
+        });
+        let c = Client::new(server.base_url());
+        let uri = format!("{}/bulk.gz", server.base_url());
+
+        async fn drain(mut stream: Stream) -> (u64, Result<(), ScryfallError>) {
+            loop {
+                match stream.chunk().await {
+                    Ok(Some(_)) => {}
+                    Ok(None) => return (stream.received(), Ok(())),
+                    Err(e) => return (stream.received(), Err(e)),
+                }
+            }
+        }
+
+        let (received, whole) = drain(c.stream(&uri, 100).await.unwrap()).await;
+        assert_eq!(received, 100);
+        assert!(whole.is_ok());
+
+        let (_, short) = drain(c.stream(&uri, 101).await.unwrap()).await;
+        assert!(
+            matches!(
+                short,
+                Err(ScryfallError::SizeMismatch {
+                    expected: 101,
+                    actual: 100
+                })
+            ),
+            "{short:?}"
+        );
+
+        let (_, long) = drain(c.stream(&uri, 99).await.unwrap()).await;
+        assert!(
+            matches!(long, Err(ScryfallError::SizeMismatch { expected: 99, .. })),
+            "{long:?}"
+        );
+
+        assert!(matches!(
+            c.stream(&format!("{}/limited.gz", server.base_url()), 1)
+                .await,
+            Err(ScryfallError::RateLimited { .. })
+        ));
+        let gone = c
+            .stream(&format!("{}/gone.gz", server.base_url()), 1)
+            .await
+            .err()
+            .expect("a status is not a body");
+        assert_eq!(
+            gone.to_string(),
+            "unexpected response from Scryfall: status 404"
+        );
+        ranged.assert_calls(0);
+    }
+
+    /// The stall bound is the read timeout's own figure: a page gives up on a silent host
+    /// when a desktop does.
+    #[test]
+    fn the_stall_bound_is_the_read_timeout() {
+        assert_eq!(STALL, READ_TIMEOUT);
+        assert_eq!(STALL, std::time::Duration::from_secs(60));
     }
 }

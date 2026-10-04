@@ -32,12 +32,13 @@ pub fn now_secs() -> i64 {
 /// is not comparable across a restart. `db::lock_for` is why it exists — a bounded wait has to
 /// know when its bound has passed.
 ///
-/// A browser's arm is the wall clock, which a reader or an NTP step can move, and which counts
-/// whole milliseconds. A step backwards reads as no time having passed, so a wait there runs
-/// long; **a step forwards reads as time having passed, so a wait there can end early**, and
-/// the rounding alone can overstate a wait by a millisecond. `db::lock_for` gives up a little
-/// soon; `scryfall`'s pacing gate, the second caller, would send a little soon — which is why
-/// the web host should give this arm `performance.now()` before it paces anything.
+/// **Monotonic on every host**: `Instant` natively and `performance.now()` in a browser, read
+/// off the global scope because the host there is a Worker. It was the wall clock in a
+/// browser until the web host first paced a request (phase 5, step 5.2) — a clock a reader or
+/// an NTP step can move forwards, which read as time having passed and would have let
+/// `scryfall`'s pacing gate send early. A browser coarsens the reading (100 µs, or 5 µs on a
+/// cross-origin-isolated page), which is nothing against the 100 ms the gate counts. A host
+/// with no `performance` object falls back to the wall clock rather than trapping.
 ///
 /// **Two ticks can be compared and a tick can be moved forward**, which is what the scanner's
 /// one-window lease needs: it keeps the tick its holder last settled at and asks how long ago
@@ -169,9 +170,20 @@ mod imp {
 #[cfg(target_family = "wasm")]
 mod imp {
     use std::time::Duration;
+    use wasm_bindgen::prelude::*;
 
-    /// Milliseconds since the epoch, as [`now_ms`] answered them.
+    /// **Microseconds on the host's monotonic clock** — `performance.now()`, counted from the
+    /// Worker's own time origin, so it says nothing about the date and cannot be stored.
     pub type Tick = i64;
+
+    #[wasm_bindgen]
+    extern "C" {
+        /// `performance.now()`, off the global scope — a Worker has no `window`, and
+        /// `performance` is on `WorkerGlobalScope` as it is on a page. `catch`, because a host
+        /// with no such object would otherwise *throw*, and a throw here is a trap.
+        #[wasm_bindgen(js_namespace = performance, js_name = now, catch)]
+        fn performance_now() -> Result<f64, JsValue>;
+    }
 
     /// `Date.now()` is a whole number of milliseconds in a double, and a negative one for a
     /// clock set before 1970 — which reads as `0`, the native arm's answer.
@@ -184,20 +196,33 @@ mod imp {
         }
     }
 
+    /// The monotonic clock, in whole microseconds. **Never the wall clock while there is a
+    /// monotonic one**: a reader or an NTP step can move `Date.now()` either way, and a step
+    /// forwards would open Scryfall's pacing gate early. A browser coarsens the reading (to
+    /// 100 µs, or 5 µs on a cross-origin-isolated page), which is far inside the 100 ms the
+    /// gate counts. A host with no `performance` at all falls back to the wall clock, which is
+    /// what this arm was before the web host paced anything.
     pub fn tick() -> Tick {
-        now_ms()
+        match performance_now() {
+            Ok(ms) if ms.is_finite() && ms >= 0.0 => (ms * 1000.0) as i64,
+            _ => now_ms().saturating_mul(1000),
+        }
+    }
+
+    fn micros(span: i64) -> Duration {
+        Duration::from_micros(u64::try_from(span).unwrap_or(0))
     }
 
     pub fn elapsed(tick: &Tick) -> Duration {
-        Duration::from_millis(u64::try_from(now_ms().saturating_sub(*tick)).unwrap_or(0))
+        micros(self::tick().saturating_sub(*tick))
     }
 
     pub fn since(later: &Tick, earlier: &Tick) -> Duration {
-        Duration::from_millis(u64::try_from(later.saturating_sub(*earlier)).unwrap_or(0))
+        micros(later.saturating_sub(*earlier))
     }
 
     pub fn later(tick: Tick, by: Duration) -> Tick {
-        tick.saturating_add(super::whole_ms(by))
+        tick.saturating_add(i64::try_from(by.as_micros()).unwrap_or(i64::MAX))
     }
 }
 
