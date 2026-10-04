@@ -1151,7 +1151,11 @@ Every one of these has its measurement and its story in
 - **`Core.call` takes `(command, args?: CallArgs, options?: CallOptions)`**, where `CallArgs` is
   `Record<string, unknown> | Uint8Array`. It widened for one *shape* of call, which two wrappers
   make — `ipc.scannerFrame` and `ipc.scannerCapture`, the only two that pass raw bytes and
-  headers.
+  headers. **It has three implementations, and `src/lib/core/index.ts` is the one place a build
+  chooses between them**: Tauri's `invoke` on the desktop, one `core_call` naming the command on
+  the light app's Android host, and — in the `web` build alone, reached by a dynamic import so
+  no other bundle carries it — a message to the database Worker (`lib/core/web/`). **A refusal
+  is a bare string on all three**, which is what `ipcError` and every page above it reads.
 - **A JSON header value must be written with `asciiJson`, never with bare `JSON.stringify`.** A
   header value is bytes, and three layers disagree about which bytes are allowed: `JSON.stringify`
   leaves non-ASCII as itself, a browser sends 0x80–0xFF as Latin-1 and throws outright above

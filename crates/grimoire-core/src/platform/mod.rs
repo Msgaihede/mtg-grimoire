@@ -22,6 +22,9 @@
 //! | [`Sendable`] — what a fence over a future's `Send`-ness bounds by | `Send` | anything | the sync step, for the fences over a trip |
 //! | [`spawn`] — work taken off the caller: minutes of SQLite under an `async fn`, a build nobody waits for | the async runtime's blocking pool, a thread | run where it stands: a Worker has no second thread | the I/O step, for the card sync's ingest and the facet index's build |
 //!
+//! [`alone`] is the odd one out: not an interface with two arms but a way for a native **test**
+//! to feel the browser's — one thread, work run where it stands, a lock taken twice a failure.
+//!
 //! **Each is here because something calls it**: an interface written before the code that calls
 //! it is a guess.
 //!
@@ -29,9 +32,14 @@
 //! `tokio`, `std::fs` and `std::thread`, in shipped code. Each compiles for a desktop wherever
 //! it is written, which is exactly why a compiler cannot be what keeps them here.
 //!
-//! **Every browser arm under this directory compiles and none has run.** CI's `core` job builds
-//! them for `wasm32-unknown-unknown`; the first host to call one is the web build.
+//! **Every browser arm under this directory compiles, and the web host is what runs them**
+//! (`crates/grimoire-web`, the light app's phase 5). CI's `core` job builds them for
+//! `wasm32-unknown-unknown`. The first run of any of them was 2026-10-04, under Node's V8 rather
+//! than a browser: the module instantiated over SQLite's in-memory VFS and commands of every
+//! kind driven through it — which reached [`clock`], [`pause`], [`spawn`]'s `blocking` and the
+//! refusing [`files`], and not [`http`], [`timer`] or `spawn`'s `background`.
 
+pub mod alone;
 pub mod clock;
 pub mod device;
 pub mod files;

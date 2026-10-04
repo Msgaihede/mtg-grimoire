@@ -156,81 +156,109 @@ describe("the census", () => {
 describe("the arms", () => {
   const T = true;
   const F = false;
-  // [path, frontend, rust, core, powershell, storybook, android]
+  // [path, frontend, rust, core, powershell, storybook, android, web]
   it.each([
-    [".github/workflows/ci.yml", T, T, T, T, T, T],
-    ["scripts/ci-route.mjs", T, T, T, T, T, T],
-    ["rust-toolchain.toml", T, T, T, F, F, T],
-    [".github/actions/rust-toolchain/action.yml", T, T, T, F, F, T],
-    ["Cargo.toml", T, T, T, F, F, T],
-    ["Cargo.lock", T, T, T, F, F, T],
-    [".cargo/config.toml", T, T, T, F, F, T],
-    [".github/workflows/release.yml", T, F, F, F, F, F],
-    [".github/workflows/scanner-bundle.yml", T, F, F, F, F, F],
+    [".github/workflows/ci.yml", T, T, T, T, T, T, T],
+    ["scripts/ci-route.mjs", T, T, T, T, T, T, T],
+    ["rust-toolchain.toml", T, T, T, F, F, T, T],
+    [".github/actions/rust-toolchain/action.yml", T, T, T, F, F, T, T],
+    ["Cargo.toml", T, T, T, F, F, T, T],
+    ["Cargo.lock", T, T, T, F, F, T, T],
+    [".cargo/config.toml", T, T, T, F, F, T, T],
+    [".github/workflows/release.yml", T, F, F, F, F, F, F],
+    [".github/workflows/scanner-bundle.yml", T, F, F, F, F, F, F],
     // A measurement on an emulator, outside the gate (step 4.5): its pins and its toolchain are
     // `frontend`'s to check, and its script sits in `scripts/` like the router itself.
-    [".github/workflows/android-emulator.yml", T, F, F, F, F, F],
-    ["scripts/android-first-run.sh", T, F, F, F, F, F],
-    [".github/dependabot.yml", T, F, F, F, F, F],
-    [".nvmrc", T, F, F, F, T, F],
-    ["src/lib/core/index.ts", T, F, F, F, T, F],
-    ["docs/reference/ci-and-releases.md", F, F, F, F, F, F],
-    ["README.md", F, F, F, F, F, F],
-    ["src/features/decks/CLAUDE.md", F, F, F, F, F, F],
-    [".storybook/CLAUDE.md", F, F, F, F, F, F],
-    [".vscode/settings.json", F, F, F, F, F, F],
-    [".gitignore", F, F, F, F, F, F],
-    [".release-please-manifest.json", F, F, F, F, F, F],
+    [".github/workflows/android-emulator.yml", T, F, F, F, F, F, F],
+    ["scripts/android-first-run.sh", T, F, F, F, F, F, F],
+    [".github/dependabot.yml", T, F, F, F, F, F, F],
+    [".nvmrc", T, F, F, F, T, F, T],
+    ["src/lib/core/index.ts", T, F, F, F, T, F, T],
+    ["docs/reference/ci-and-releases.md", F, F, F, F, F, F, F],
+    ["README.md", F, F, F, F, F, F, F],
+    ["src/features/decks/CLAUDE.md", F, F, F, F, F, F, F],
+    [".storybook/CLAUDE.md", F, F, F, F, F, F, F],
+    // Prose wins over the web host's arm too: it sits above it, and `*` crosses `/`.
+    ["crates/grimoire-web/CLAUDE.md", F, F, F, F, F, F, F],
+    [".vscode/settings.json", F, F, F, F, F, F, F],
+    [".gitignore", F, F, F, F, F, F, F],
+    [".release-please-manifest.json", F, F, F, F, F, F, F],
     // Read by a Rust test since the engine's manifest began carrying the app's version.
-    ["release-please-config.json", T, T, F, F, F, F],
-    ["scripts/x.ps1", F, F, F, T, F, F],
-    [".claude/skills/running-the-app/lock.ps1", F, F, F, T, F, F],
-    ["src-tauri/x.psm1", F, F, F, T, F, F],
-    ["tools/x.psd1", F, F, F, T, F, F],
+    ["release-please-config.json", T, T, F, F, F, F, F],
+    ["scripts/x.ps1", F, F, F, T, F, F, F],
+    [".claude/skills/running-the-app/lock.ps1", F, F, F, T, F, F, F],
+    ["src-tauri/x.psm1", F, F, F, T, F, F, F],
+    ["tools/x.psd1", F, F, F, T, F, F, F],
     // A module the core extraction split: the desktop keeps its command wrappers at the old
     // module path, and the engine's half — a `core` row — is below.
-    ["src-tauri/src/deck/mod.rs", T, T, F, F, F, F],
-    ["src-tauri/src/desktop.rs", T, T, F, F, F, F],
-    ["src-tauri/src/schema/mod.rs", T, T, F, F, F, F],
-    ["src-tauri/Cargo.toml", T, T, F, F, F, F],
-    ["src-tauri/src/share/__golden__/snapshot.json", T, T, F, F, F, F],
-    ["src/features/transfer/__golden__/deck.arena.all.txt", T, T, F, F, T, F],
-    ["src/features/transfer/__golden__/corpus.json", T, T, F, F, T, F],
-    ["src/lib/userTables.json", T, T, F, F, T, F],
-    ["src/lib/syncedTables.json", T, T, F, F, T, F],
-    ["src/features/decks/DeckEditor.tsx", T, F, F, F, T, F],
-    ["public/favicon.svg", T, F, F, F, T, F],
-    ["index.html", T, F, F, F, T, F],
-    [".storybook/fake/db.ts", T, F, F, F, T, F],
-    [".storybook/DesignSystem.mdx", T, F, F, F, T, F],
-    ["package.json", T, F, F, F, T, F],
-    ["package-lock.json", T, F, F, F, T, F],
-    ["vite.config.ts", T, F, F, F, T, F],
-    ["eslint.config.js", T, F, F, F, T, F],
-    ["scripts/golden.mjs", T, F, F, F, F, F],
-    ["crates/grimoire-core/src/lib.rs", T, T, T, F, F, F],
+    ["src-tauri/src/deck/mod.rs", T, T, F, F, F, F, F],
+    ["src-tauri/src/desktop.rs", T, T, F, F, F, F, F],
+    ["src-tauri/src/schema/mod.rs", T, T, F, F, F, F, F],
+    ["src-tauri/Cargo.toml", T, T, F, F, F, F, F],
+    ["src-tauri/src/share/__golden__/snapshot.json", T, T, F, F, F, F, F],
+    ["src/features/transfer/__golden__/deck.arena.all.txt", T, T, F, F, T, F, T],
+    ["src/features/transfer/__golden__/corpus.json", T, T, F, F, T, F, T],
+    ["src/lib/userTables.json", T, T, F, F, T, F, T],
+    ["src/lib/syncedTables.json", T, T, F, F, T, F, T],
+    ["src/features/decks/DeckEditor.tsx", T, F, F, F, T, F, T],
+    ["public/favicon.svg", T, F, F, F, T, F, T],
+    // The desktop's document. The web build's is `mobile/index.html`, a `mobile/*` row below.
+    ["index.html", T, F, F, F, T, F, F],
+    [".storybook/fake/db.ts", T, F, F, F, T, F, F],
+    // The one file there the light config imports, in every mode.
+    [".storybook/fake/aliases.ts", T, F, F, F, T, F, T],
+    [".storybook/DesignSystem.mdx", T, F, F, F, T, F, F],
+    ["package.json", T, F, F, F, T, F, T],
+    ["package-lock.json", T, F, F, F, T, F, T],
+    ["components.json", T, F, F, F, T, F, F],
+    ["vite.config.ts", T, F, F, F, T, F, T],
+    ["vite.watch.ts", T, F, F, F, T, F, T],
+    ["tsconfig.json", T, F, F, F, T, F, T],
+    ["tsconfig.node.json", T, F, F, F, T, F, T],
+    // The web Worker's own `tsc` program, by the glob — so by any name it lands under.
+    ["tsconfig.web-worker.json", T, F, F, F, T, F, T],
+    // Out of the fail-safe with it: no Rust job reads a `tsc` program.
+    ["tsconfig.relay.json", T, F, F, F, T, F, T],
+    ["tsconfig.share-worker.json", T, F, F, F, T, F, T],
+    // Anchored: a `tsconfig.json` further down is some other arm's, or nobody's.
+    [".design-sync/tsconfig.json", T, T, T, F, T, F, T],
+    // The light app's Vite config: linted, built into the APK's bundle, built into `dist-web/`.
+    // `rust` rides with `android`.
+    ["vite.mobile.config.ts", T, T, F, F, F, T, T],
+    ["eslint.config.js", T, F, F, F, T, F, F],
+    ["scripts/golden.mjs", T, F, F, F, F, F, F],
+    // The web build's two scripts, which `scripts/*` would lint and never run.
+    ["scripts/build-wasm.mjs", T, F, F, F, F, F, T],
+    ["scripts/web-smoke.mjs", T, F, F, F, F, F, T],
+    // The web host: a workspace member `rust` tests, and the crate `web` compiles for a browser.
+    // Not `core` — the engine does not depend on a host.
+    ["crates/grimoire-web/src/lib.rs", T, T, F, F, F, F, T],
+    ["crates/grimoire-web/Cargo.toml", T, T, F, F, F, F, T],
+    ["crates/grimoire-core/src/lib.rs", T, T, T, F, F, F, T],
     // The schema since 2026-10-02. `src-tauri/src/schema/mod.rs` above is what the desktop host
     // kept of it — the conversion from a single file — so both rows are true, and this is the
     // one a new rung changes. The deck's row is the same pair, one step later.
-    ["crates/grimoire-core/src/deck.rs", T, T, T, F, F, F],
-    ["crates/grimoire-core/src/schema.rs", T, T, T, F, F, F],
-    ["crates/grimoire-core/Cargo.toml", T, T, T, F, F, F],
+    ["crates/grimoire-core/src/deck.rs", T, T, T, F, F, F, T],
+    ["crates/grimoire-core/src/schema.rs", T, T, T, F, F, F, T],
+    ["crates/grimoire-core/Cargo.toml", T, T, T, F, F, F, T],
     // `core` since the extraction's seventh step, when the engine took the crate for the
-    // scanner's session glue.
-    ["crates/card-scanner/src/session.rs", T, T, T, F, F, F],
-    ["crates/card-scanner/Cargo.lock", T, T, T, F, F, F],
-    ["crates/card-scanner/.cargo/config.toml", T, T, T, F, F, F],
-    ["share-worker/wrangler.jsonc", T, T, T, F, T, F],
-    ["relay/src/index.ts", T, T, T, F, T, F],
-    ["some/new/thing.txt", T, T, T, F, T, F],
-    // The light app: its host, built into an APK, and its pages, which no Rust job reads.
-    ["mobile/src-tauri/src/lib.rs", T, T, F, F, F, T],
-    ["mobile/src-tauri/Cargo.toml", T, T, F, F, F, T],
-    ["mobile/src-tauri/gen/android/app/src/main/AndroidManifest.xml", T, T, F, F, F, T],
-    ["mobile/phone/CardSheet.tsx", T, F, F, F, T, F],
-    ["mobile/host.test.ts", T, F, F, F, T, F],
-  ])("%s", (path, frontend, rust, core, powershell, storybook, android) => {
-    expect(route([path])).toEqual({ frontend, rust, core, powershell, storybook, android });
+    // scanner's session glue — and `web` with it, which links the same dependency.
+    ["crates/card-scanner/src/session.rs", T, T, T, F, F, F, T],
+    ["crates/card-scanner/Cargo.lock", T, T, T, F, F, F, T],
+    ["crates/card-scanner/.cargo/config.toml", T, T, T, F, F, F, T],
+    ["share-worker/wrangler.jsonc", T, T, T, F, T, F, T],
+    ["relay/src/index.ts", T, T, T, F, T, F, T],
+    ["some/new/thing.txt", T, T, T, F, T, F, T],
+    // The light app: its host, built into an APK, and its pages, which no Rust job reads — and
+    // which are the web build's own page, where the phone's host is nothing to a browser.
+    ["mobile/src-tauri/src/lib.rs", T, T, F, F, F, T, F],
+    ["mobile/src-tauri/Cargo.toml", T, T, F, F, F, T, F],
+    ["mobile/src-tauri/gen/android/app/src/main/AndroidManifest.xml", T, T, F, F, F, T, F],
+    ["mobile/index.html", T, F, F, F, T, F, T],
+    ["mobile/phone/CardSheet.tsx", T, F, F, F, T, F, T],
+    ["mobile/host.test.ts", T, F, F, F, T, F, T],
+  ])("%s", (path, frontend, rust, core, powershell, storybook, android, web) => {
+    expect(route([path])).toEqual({ frontend, rust, core, powershell, storybook, android, web });
   });
 
   it("routes an empty diff nowhere, skipping blank lines as the `case` loop did", () => {
@@ -246,14 +274,50 @@ describe("the arms", () => {
       powershell: true,
       storybook: true,
       android: false,
+      web: true,
     });
   });
 
-  it("ends on the fail-safe, which sets every build job and not `powershell`", () => {
+  // `web` is a build job the fail-safe sets and `android` is one it does not, and the difference
+  // is whether a path nobody placed can be an input: it cannot be one to the APK, and it can be
+  // one to a build of the page and the engine both.
+  it("ends on the fail-safe, which sets every build job and not `powershell` or `android`", () => {
     const last = ARMS.at(-1);
     expect(last.match).toEqual(["*"]);
     expect(armFor("anything/at/all")).toBe(armFor("zzz"));
-    expect([...last.jobs].sort()).toEqual(["core", "frontend", "rust", "storybook"]);
+    expect([...last.jobs].sort()).toEqual(["core", "frontend", "rust", "storybook", "web"]);
+  });
+
+  // `core`'s wasm leg proves the engine compiles for a browser; `web` links that compile into
+  // the module a browser loads, and opens it. An arm that set `core` alone would be a change to
+  // what the module is made of that no job had loaded.
+  it("never routes to `core` without `web`", () => {
+    const coreArms = ARMS.filter((arm) => arm.jobs.includes("core"));
+    expect(coreArms.length).toBeGreaterThan(0);
+    expect(coreArms.filter((arm) => !arm.jobs.includes("web"))).toEqual([]);
+  });
+
+  // The web host is a host: the engine does not depend on it, so `core` has nothing to prove
+  // about a change there — and both arms below it would run `core` for one.
+  it("puts the web host's arm above the engine's and `crates/*`", () => {
+    const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));
+    expect(at("crates/grimoire-web/*")).toBeGreaterThan(-1);
+    expect(at("crates/grimoire-web/*")).toBeLessThan(at("crates/grimoire-core/*"));
+    expect(at("crates/grimoire-web/*")).toBeLessThan(at("crates/*"));
+    expect(ARMS[at("crates/grimoire-web/*")].jobs).not.toContain("core");
+  });
+
+  // Each of these is one file inside a tree a wider arm takes, and that arm does not set `web`:
+  // below it, the file would be linted or type-checked and the build it feeds never run.
+  it.each([
+    ["scripts/build-wasm.mjs", "scripts/*"],
+    ["scripts/web-smoke.mjs", "scripts/*"],
+    [".storybook/fake/aliases.ts", ".storybook/*"],
+  ])("puts `%s` above `%s`", (file, tree) => {
+    const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));
+    expect(at(file)).toBeGreaterThan(-1);
+    expect(at(file)).toBeLessThan(at(tree));
+    expect(ARMS[at(tree)].jobs).not.toContain("web");
   });
 
   // `core` compiles the engine for two foreign targets and runs nothing. Its native compile and

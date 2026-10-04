@@ -288,7 +288,8 @@ fn open(app: &tauri::AppHandle) -> Result<State, String> {
     let opened = grimoire_core::launch::open(&data_dir)?;
     Ok(State::new(
         opened.write,
-        Some(opened.read),
+        // `Some`, from `launch::open`: a host with a folder reads on a second connection.
+        opened.read,
         data_dir,
         Arc::new(PageEvents(app.clone())),
         Vec::new(),

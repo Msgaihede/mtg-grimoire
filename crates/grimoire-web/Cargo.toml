@@ -1,0 +1,70 @@
+[package]
+name = "grimoire-web"
+# **The app's version**, as the core's and the Android host's are: the three ship from one tag,
+# and one core means one schema version (the light-app spec §7's release rule). It is equal to
+# `grimoire-core`'s — release-please bumps it with the others (`release-please-config.json`),
+# and `host::tests::the_host_wears_the_cores_version` goes red when the two part.
+version = "0.40.0"
+description = "MTG Grimoire, light: the browser host over grimoire-core"
+authors = ["Markus Seerup"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+publish = false
+
+# **The light app's web host** (the light-app spec §6, phase 5): `grimoire-core` compiled to
+# WASM and loaded by one dedicated Worker. Three exports — `open`, `call`, `listen` — and the
+# OPFS pool the databases live in. Everything else is the core's.
+#
+# **It builds natively as nearly nothing, on purpose.** Only the `#[wasm_bindgen]` shell and the
+# OPFS install (`src/glue.rs`) are gated to the target; the wire types and everything with a
+# decision in it compile, and are tested, on every target — so `cargo clippy --workspace`,
+# `cargo test --workspace` and `cargo fmt -p grimoire-web --check` reach this crate on a desktop.
+# A module gated to wasm is invisible to `cargo test`, and a typo in a wire string is a silent
+# `undefined` in a page.
+
+[lib]
+name = "grimoire_web"
+# `cdylib` is the `.wasm` `wasm-bindgen` reads; `rlib` is what this crate's own tests and
+# `cargo clippy --all-targets` link on a desktop.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# **Never with its `testing` feature** — `platform::fence` reads this file for it. Two things
+# behind that feature are not scaffolding (the core's manifest says which), and on in a shipped
+# module they would be an image fetcher that accepts loopback and an undo that finds nothing.
+grimoire-core = { path = "../grimoire-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# `Shared`, for the one `open` every caller of it awaits (`host::Once`). The core's version.
+futures-util = "0.3"
+
+# ── The browser ───────────────────────────────────────────────────────────────────────────────
+[target.'cfg(target_family = "wasm")'.dependencies]
+# ⚠️ **`scripts/build-wasm.mjs` refuses to build when the `wasm-bindgen` CLI is not exactly the
+# version `Cargo.lock` resolves here.** Two different things can go wrong with a mismatched pair,
+# and the script's own header has both: a CLI on a different bindgen **schema** refuses the
+# module itself, in words; a CLI on the same schema and another version is let through by that
+# check (0.2.127's schema is `0.2.122`), and what it generates is untested — the case the first
+# web host recorded as failing at run time inside the glue. Moving this version is moving the
+# CLI with it — on every machine that builds, CI's included.
+wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
+js-sys = "0.3"
+# The OPFS VFS: a pool of `FileSystemSyncAccessHandle`s, which is why the engine lives in a
+# dedicated Worker and why a second tab is refused. Same author as the FFI crate rusqlite links
+# on this target (`sqlite-wasm-rs`), and both sit on `rsqlite-vfs 0.1`. Its README marks its
+# VFSes "No COOP/COEP requirements", and the first web host tested that rather than quoting it.
+sqlite-wasm-vfs = "0.2"
+# For one name: `rusqlite::ffi::WasmOsCallback`, the clock and the randomness the pool's VFS is
+# installed with. The core's own line for this target — ⚠️ never `default-features = false`,
+# which switches off the backend that makes SQLite build for a browser at all.
+rusqlite = { version = "0.40", features = ["hooks"] }
+# A panic in a Worker is a trap, and a trap arrives with nothing a page can show. This writes
+# the sentence and the line to the Worker's console first.
+console_error_panic_hook = "0.1"
+
+[dev-dependencies]
+# The core's test scaffolding — a scratch directory, a recording sink — for this crate's tests
+# only, never on the `[dependencies]` line above.
+grimoire-core = { path = "../grimoire-core", features = ["testing"] }
+tokio = { version = "1", features = ["macros", "rt", "time"] }

@@ -21,6 +21,11 @@
 // and nothing under `src-tauri/`, which the engine does not depend on. Its native compile and
 // its tests are `rust`'s, so everything that routes to `core` routes to `rust` as well.
 //
+// **`web` is the wide one** (phase 5, step 5.1). It builds the engine into a WASM module, the
+// light page around it, and opens the result in a browser — so it reads both halves: everything
+// `core` reads (the module is the engine, linked), the web host in `crates/grimoire-web`, and
+// what the light page is bundled from. Everything that routes to `core` routes to `web`.
+//
 // Semantics are `case`'s, kept exactly: **first match wins** — the order of `ARMS` is the rule
 // every arm below is placed by — and `*` matches any run of characters **including `/`**, so
 // `src/*` is the whole tree and `*.md` is a Markdown file at any depth. Nothing else is special.
@@ -28,7 +33,7 @@ import { readFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
 /** Every job a `changes` output gates, in the order the outputs are printed. */
-export const JOBS = ["frontend", "rust", "core", "powershell", "storybook", "android"];
+export const JOBS = ["frontend", "rust", "core", "powershell", "storybook", "android", "web"];
 
 /**
  * The two jobs a Rust source can break: `rust`, which compiles it, and `frontend`, whose tests
@@ -39,11 +44,24 @@ export const JOBS = ["frontend", "rust", "core", "powershell", "storybook", "and
 const RUST_SIDE = ["frontend", "rust"];
 
 /**
- * Those two and `core`, for what the engine's other two targets are built from: the
+ * Those two, `core` and `web`, for what the engine's other two targets are built from: the
  * `grimoire-core` crate itself, `card-scanner` beside it, and the files every cargo build in the
  * workspace shares.
+ *
+ * **`web` is in the constant rather than beside it** (phase 5): `core`'s wasm leg proves the
+ * engine compiles for a browser, and `web` is the job that links that compile into the module a
+ * browser loads and opens it. Whatever can change the first can change the second, so no arm may
+ * set one without the other — and one list is how that stays true without anybody remembering.
  */
-const CORE_SIDE = [...RUST_SIDE, "core"];
+const CORE_SIDE = [...RUST_SIDE, "core", "web"];
+
+/**
+ * The three jobs that bundle the page: `frontend` (`tsc`, `eslint`, `vitest` and the desktop's
+ * `vite build`), `storybook`, and `web`, which is the only job that builds the light entry into
+ * `dist-web/` and loads it. The light page is the app's own components under a second entry, so
+ * what feeds one bundle feeds the other.
+ */
+const PAGE_SIDE = ["frontend", "storybook", "web"];
 
 /**
  * Every job that builds something **for every change it cannot place**. The fail-safe sets these
@@ -53,6 +71,13 @@ const CORE_SIDE = [...RUST_SIDE, "core"];
  * none of them. It is also the slowest job here — a release build of the whole engine for
  * `aarch64-linux-android`, then Gradle — so a fail-safe that set it would make every new root
  * config a twenty-minute wait for a proof about nothing it touched.
+ *
+ * **`web` is in it, through `CORE_SIDE`, and `android`'s argument is why.** That one stays out
+ * because an unrecognised path cannot be an input to the APK. It *can* be one to the web build,
+ * which is the page and the engine both: a new root config that Vite or `tsc` loads, a new
+ * directory the light entry imports from, a new crate the engine takes — each lands here first,
+ * and `web` is the only job that would notice any of them in `dist-web/`. Only a wrong skip is
+ * dangerous, and this job is minutes rather than twenty.
  */
 const BUILD = [...CORE_SIDE, "storybook"];
 
@@ -66,7 +91,8 @@ export const ARMS = [
   // `storybook`'s sake**, which installs no Rust.
   //
   // **And `android`**, which installs the same toolchain with the Android target added: a pin
-  // the APK build cannot use is red there and nowhere else.
+  // the APK build cannot use is red there and nowhere else. `web` installs it with the wasm
+  // target, and is in `CORE_SIDE`.
   {
     match: ["rust-toolchain.toml", ".github/actions/rust-toolchain/*"],
     jobs: [...CORE_SIDE, "android"],
@@ -83,6 +109,9 @@ export const ARMS = [
   // `crates/card-scanner/.cargo/config.toml` match their own trees' arms below.
   // **And `android`**: the lockfile is what the APK links, and the root manifest names the light
   // host as a member — a dependency bumped for the desktop is a dependency the phone ships.
+  // **And `web`, through `CORE_SIDE`, for two reasons of its own**: the lockfile is what the
+  // module links, and it is where the job reads which `wasm-bindgen` CLI to install — a bump of
+  // that crate is a different CLI on the next run, or glue that does not fit its module.
   { match: ["Cargo.toml", "Cargo.lock", ".cargo/*"], jobs: [...CORE_SIDE, "android"] },
 
   // The workflows outside this gate, and Dependabot's config. No job in `ci.yml` runs any of
@@ -104,9 +133,11 @@ export const ARMS = [
     jobs: ["frontend"],
   },
 
-  // The Node version every job that installs Node reads through `node-version-file`. `rust` and
-  // `powershell` install none.
-  { match: [".nvmrc"], jobs: ["frontend", "storybook"] },
+  // The Node version the jobs that bundle the page read through `node-version-file` — `web` among
+  // them since phase 5. `rust`, `core` and `powershell` install none. (`android` installs it too
+  // and is left to these three: every arm that sets it sets `rust`, and a Node the light bundle
+  // will not build under is red in `web`, which builds that bundle through the same config.)
+  { match: [".nvmrc"], jobs: PAGE_SIDE },
 
   // release-please's config, which says which files a release bumps. `desktop.rs`'s
   // `the_core_wears_the_apps_version` reads it: the engine's manifest carries the app's version
@@ -154,19 +185,24 @@ export const ARMS = [
   // prevent. The `dist/index.html` that `tauri-build` demands is stubbed by the jobs themselves.
   // **Not `core`**: the engine does not depend on the desktop host, so nothing here can change
   // what its other targets compile. What the two share is the lockfile, which has its own arm.
+  // **Not `web`**, for the same reason one host over: the browser's host is
+  // `crates/grimoire-web`, and nothing it links or bundles is in this tree.
   { match: ["src-tauri/*"], jobs: RUST_SIDE },
 
   // The TypeScript side's files that Rust tests read. `transfer::write` asserts the Rust export
   // writer reproduces every golden file byte for byte (with `card.rs` and `fields.rs` reading
   // `corpus.json` and `fields.json`), and `changes` asserts `userTables.json` is the user side
-  // of its table registry and `syncedTables.json` is `schema::SYNCED_TABLES`. **Above `src/*`.**
+  // of its table registry and `syncedTables.json` is `schema::SYNCED_TABLES`. **Above `src/*`**,
+  // so it owes whatever that arm sets — `web` since phase 5: `syncedTables.json` is a module the
+  // page imports (`crossWindow.ts`), and the other two ride along rather than earning an arm
+  // each.
   {
     match: [
       "src/features/transfer/__golden__/*",
       "src/lib/userTables.json",
       "src/lib/syncedTables.json",
     ],
-    jobs: ["frontend", "rust", "storybook"],
+    jobs: ["rust", ...PAGE_SIDE],
   },
 
   // **The light app's Android host** (phase 4, 2026-10-03): a workspace member, so `rust`
@@ -174,32 +210,79 @@ export const ARMS = [
   // only job that links it for a phone and packs `gen/android`; and `frontend` because
   // `mobile/host.test.ts` reads its manifest, its Gradle file and its config as text — the
   // hand edits a re-init would revert. **Above `mobile/*`**, and the order is the rule.
+  // **Not `web`**: this is the phone's host, and the browser links none of it.
   { match: ["mobile/src-tauri/*"], jobs: ["frontend", "rust", "android"] },
   // The light app's pages and entry: a React tree like `src/`, which `tsc`, `eslint`, `vitest`
   // and Storybook's story glob all read. Until this arm it fell to the fail-safe and ran the
-  // whole Rust matrix and `core` for a change to a phone sheet.
-  { match: ["mobile/*"], jobs: ["frontend", "storybook"] },
+  // whole Rust matrix and `core` for a change to a phone sheet. **And `web`** (phase 5), whose
+  // page this is: `mobile/index.html` is the document `dist-web/` is built from.
+  { match: ["mobile/*"], jobs: PAGE_SIDE },
   // Frontend. What `npm run build` (`tsc && vite build`), `eslint .` and `vitest run` read — and
   // `storybook`, which builds every `*.stories.tsx` under `src/` and serves `public/` as its
-  // static directory.
-  { match: ["src/*", "public/*", "index.html"], jobs: ["frontend", "storybook"] },
+  // static directory. **And `web`**: the light entry imports its components, its transports and
+  // its Worker from `src/`, and every Vite build here copies `public/` into its output.
+  { match: ["src/*", "public/*"], jobs: PAGE_SIDE },
+  // The desktop's document, at the root. **Not `web`**, whose document is `mobile/index.html`:
+  // the light config names that one as its only input, so this file reaches no `dist-web/`.
+  { match: ["index.html"], jobs: ["frontend", "storybook"] },
+  // The one file under `.storybook/` the light config imports, and it imports it **in every
+  // mode** — `vite.mobile.config.ts` reads `FAKE_ALIASES` at load, before it knows which mode it
+  // is in — so a version of this file that will not load is a `web:build` that never starts.
+  // **Above `.storybook/*`**, which would otherwise take it.
+  { match: [".storybook/fake/aliases.ts"], jobs: PAGE_SIDE },
   // The workbench and its fake. `frontend` because vitest collects `.storybook/**/*.test.ts`,
   // `tsc -p .storybook` is in `npm run build` and `eslint .` lints it. Until this arm it fell to
   // the fail-safe and ran the whole Rust matrix too; no Rust source reads a file here, which the
-  // census below would say if one ever did.
+  // census below would say if one ever did. **Not `web`**: the fake is aliased in under `fake`
+  // mode alone, and the web build's backend is the engine itself.
   { match: [".storybook/*"], jobs: ["frontend", "storybook"] },
-  {
-    match: ["package.json", "package-lock.json", "components.json", ".prettierrc"],
-    jobs: ["frontend", "storybook"],
-  },
-  // Storybook's Vite builder loads `vite.config.ts` as well.
-  {
-    match: ["tsconfig.json", "tsconfig.node.json", "vite.config.ts", "eslint.config.js"],
-    jobs: ["frontend", "storybook"],
-  },
+  // What `npm ci` installs and what `npm run` means, for every job that runs either.
+  { match: ["package.json", "package-lock.json"], jobs: PAGE_SIDE },
+  { match: ["components.json", ".prettierrc"], jobs: ["frontend", "storybook"] },
+  // Every `tsc` program at the root, and the two files every Vite build here starts from.
+  // Storybook's Vite builder loads `vite.config.ts` as well, and `.storybook/main.ts` imports
+  // `vite.watch.ts`; `web:build` runs `tsc` over the root program and the Worker's own, then Vite
+  // through `vite.config.ts`, which the light config merges over.
+  //
+  // **A glob for the programs, and it is a narrowing as well as a widening**: `tsconfig*.json`
+  // is anchored, so it is the root's files only (`.storybook/tsconfig.json` matches its own arm,
+  // `.design-sync/tsconfig.json` still falls through). It names the web Worker's program
+  // whatever that file is called, and it takes `tsconfig.relay.json` and
+  // `tsconfig.share-worker.json` out of the fail-safe, where they ran the whole Rust matrix and
+  // `core` for a file only `npm run build`'s `tsc -p` reads. `storybook` and `web` are the cheap
+  // direction for those two. **`vite.watch.ts` fell to the fail-safe as well** until this arm.
+  { match: ["tsconfig*.json", "vite.config.ts", "vite.watch.ts"], jobs: PAGE_SIDE },
+  { match: ["eslint.config.js"], jobs: ["frontend", "storybook"] },
+  // **The light app's own Vite config**: the entry plugin, the `fake` mode's aliases and, since
+  // phase 5, the `web` mode. Until this arm it fell to the fail-safe. Three jobs run something
+  // through it: `frontend` lints it (`eslint .`); `web` builds `dist-web/` with it and opens the
+  // result; and `android`, whose `beforeBuildCommand` is `npm run mobile:build` — **the only CI
+  // build of this config's default mode**, into the `dist-mobile/` the APK packs, so an edit
+  // that adds a mode for the browser and breaks the phone's is red there and nowhere else.
+  // **`rust` is here for `android`'s rule and not because it reads the file**: every arm that
+  // sets `android` sets `rust`, and the fail-safe was already running it for this path.
+  // Not `storybook`, which loads `vite.config.ts` and never this file.
+  { match: ["vite.mobile.config.ts"], jobs: ["frontend", "rust", "android", "web"] },
+  // The web build's two scripts: `web:wasm`, which compiles the module and runs `wasm-bindgen`
+  // over it, and `web:smoke`, which serves `dist-web/` and opens it in a headless browser.
+  // `frontend` lints them like the rest of `scripts/`; `web` is the job that runs them.
+  // **Above `scripts/*`**, which would lint a broken build script and never run it.
+  { match: ["scripts/build-wasm.mjs", "scripts/web-smoke.mjs"], jobs: ["frontend", "web"] },
   // `scripts/` because `eslint .` lints it — its ignore list does not name it — and because
   // `vitest` collects `scripts/**/*.test.mjs`.
   { match: ["scripts/*"], jobs: ["frontend"] },
+
+  // **The light app's web host** (phase 5, step 5.1): `grimoire-web`, a workspace member, so
+  // `rust` formats, lints and tests it natively, and `web` is the only job that compiles it for
+  // `wasm32-unknown-unknown`, runs `wasm-bindgen` over it and loads what comes out. `frontend`
+  // for `src-tauri/*`'s reason: a `.rs` file a test reads as text is red there alone, and
+  // narrowing to the files read today is the silent skip the day one is added.
+  // **Not `core`**, by that job's own definition: `core` compiles what the *engine* is built
+  // from, and the engine does not depend on a host — this one no more than the desktop's or the
+  // phone's. **Above `crates/grimoire-core/*` and `crates/*`**, and the order is the rule: the
+  // second would take this tree and cross-compile the engine twice for a change that cannot
+  // have moved it.
+  { match: ["crates/grimoire-web/*"], jobs: ["frontend", "rust", "web"] },
 
   // The engine: `grimoire-core`, a workspace member three hosts link. `rust` compiles it for
   // the desktop and runs its tests, `core` compiles it for the two targets `rust` never builds,
@@ -207,7 +290,8 @@ export const ARMS = [
   // `ipc.test.ts`'s mirror rows follow the file (`filters.rs`, since 2026-10-02), as does
   // `useTray.test.ts`'s pin on `db.rs`, and the census holds this arm to them.
   // **Above `crates/*`**, and the order is the rule: first match wins, so that arm would take
-  // this tree and skip `core`, the one job that exists for it.
+  // this tree and skip `core`, the one job that exists for it. **And `web`** (in `CORE_SIDE`):
+  // the module a browser loads is this crate, linked.
   { match: ["crates/grimoire-core/*"], jobs: CORE_SIDE },
 
   // The `card-scanner` crate: a separate cargo package, excluded from the workspace on purpose,
@@ -216,15 +300,16 @@ export const ARMS = [
   // rows) and lints `crates/*/scripts/**/*.mjs`. **And `core`, since the extraction's seventh
   // step**: the engine depends on it for the scanner's session glue, so a change here is a
   // change to what the engine compiles for a browser and a phone — which this arm said it would
-  // gain on that day, and does.
+  // gain on that day, and does. **`web` with it**, for the same dependency: the crate is linked
+  // into the module.
   { match: ["crates/*"], jobs: CORE_SIDE },
 
-  // Anything unrecognised runs every build job, `core` among them. This is the fail-safe that
-  // makes the lists above safe to be wrong in the cheap direction: a new root config, a new
-  // top-level directory, a path nobody thought about — all of it gets full CI until someone
-  // deliberately narrows it. **It is load-bearing for `share-worker/`**: a Rust test reads
-  // `share-worker/wrangler.jsonc` (`share::publish`'s `SHARE_BASE` check), so an arm narrowing
-  // that tree must keep `rust`.
+  // Anything unrecognised runs every build job, `core` and `web` among them — `BUILD` says why
+  // `web` is one and `android` is not. This is the fail-safe that makes the lists above safe to
+  // be wrong in the cheap direction: a new root config, a new top-level directory, a path nobody
+  // thought about — all of it gets full CI until someone deliberately narrows it. **It is
+  // load-bearing for `share-worker/`**: a Rust test reads `share-worker/wrangler.jsonc`
+  // (`share::publish`'s `SHARE_BASE` check), so an arm narrowing that tree must keep `rust`.
   { match: ["*"], jobs: BUILD },
 ];
 

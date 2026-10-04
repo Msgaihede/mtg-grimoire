@@ -1,7 +1,8 @@
 # grimoire-core — the engine with no window
 
 What every host links: the desktop app in `src-tauri`, the light app's Android host in
-`mobile/src-tauri` (phase 4, 2026-10-03), and a WASM build in a Worker later. The design is
+`mobile/src-tauri` (phase 4, 2026-10-03), and the web host in `crates/grimoire-web` — this
+crate as a WASM module in a Worker (phase 5, step 5.1, 2026-10-04). The design is
 [the light-app spec](../../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md)
 §2; what each extraction step built and measured is in
 [light-app.md](../../docs/reference/light-app.md).
@@ -104,11 +105,18 @@ over there is this crate's item unless that file defines one.
 | `platform::sync::Semaphore`, `Lock` — a permit and a lock an `async fn` holds across an `.await`, **first come, first served**; `Shared<T>` — a value one holder at a time changes, the same lock with something behind it | `tokio::sync` | `tokio::sync`: it needs no runtime |
 | `platform::Sendable` — what a fence over a future's `Send`-ness bounds by | `Send` | anything: no request is `Send` there, and there is no other thread |
 | `platform::spawn::blocking(f).await` — synchronous work under an `async fn`; `spawn::background(f)` — work nobody waits for | the async runtime's blocking pool, **started by the call**; a thread | **run where it stands**: a Worker has no second thread, so `blocking` runs at its first poll and `background` before it returns |
+| `platform::alone` — **not an interface with two arms: a way for a native test to feel the browser's.** `alone::emulate()` makes the calling thread a host with one: `spawn` runs on the caller, `pause` answers `false`, and a connection or the facet index asked for while held is a panic naming the line | a `thread_local` flag, `cfg(test)` and `testing` only; `emulated()` is a constant `false` in a build that ships | nothing: it is what the browser arms already are |
 
 `db::lock_for` and `db::lock_background` are why `Tick` and `pause` exist. **A wait that polls is
 a wait that cannot succeed in a browser**, so `lock_for` gives up on its first contended attempt
-there and its caller answers `db::BUSY`. **No browser arm has ever run** — the crate compiles for
-`wasm32` and nothing instantiates it.
+there and its caller answers `db::BUSY`. **The browser arms first ran on 2026-10-04, under
+Node before a browser**: step 5.1 instantiated the module under Node's V8 over SQLite's
+in-memory VFS and drove commands of every kind through it (launch to head in 76 ms, no trap) —
+the clock, `pause`, `spawn`'s `blocking` and the refusing `files`. **The same day the web host
+opened its database in headless Chrome**, over the OPFS pool, and answered commands there
+([light-app.md](../../docs/reference/light-app.md) §9.1). `http` has made no request from a
+browser — the web host starts no download — and whether `timer` or `spawn`'s `background` ran
+there is not on record.
 
 - **`http` is the wire and nothing above it.** Pacing, retry, the 429 lockout and the size checks
   are rules about Scryfall or about a feed, and live with the client that owns them
@@ -144,11 +152,16 @@ there and its caller answers `db::BUSY`. **No browser arm has ever run** — the
   *finished* when it returns where a native one has only started; rely on neither. **A panic in
   the work is `Err(Lost)` natively and a panic in a browser**, where there is no pool or thread
   to catch it.
-- ⚠️ **The facet index's build opens a connection of its own** — `index::lifecycle::build_now`
-  calls `db::open_read` on the state's data directory, so a full pass over `cards` never holds
-  the read connection every search waits on. A browser's storage permits one connection (spec
-  §6), so that open is the first thing the web host has to answer differently, and nothing in
-  this crate does yet.
+- **The facet index's build opens a connection of its own, where the host can have one** —
+  `index::lifecycle::build_now` and `invalidate_owned` call `db::open_read` on the state's data
+  directory, so a full pass over `cards` never holds the read connection every search waits on.
+  **On a host built with one connection (`State::one_connection`) they read through the
+  state's** — `lifecycle::over_the_corpus` is the one place that is decided (step 5.1). ⚠️ What
+  runs inside that pass holds the connection every write goes through, so it may not ask for
+  it: `amend_owned` hands a failure back and `invalidate_owned` writes it to `error_log` once
+  the pass has let go. Noted from inside, the row was asked for by the thread holding the lock
+  and was never written — found by reading, and held by
+  `a_failed_owned_refresh_on_one_connection_is_still_written_down`.
 - **`files::listing` is whole or it is an error.** A directory that is not there answers
   `None`, which is an ordinary state; a directory or an entry that cannot be read is the error,
   so a partial listing is never mistaken for a whole one — the image cache's eviction reaps the
@@ -183,6 +196,19 @@ read connection after it, the image cache and the Scryfall client with any store
 re-entered — `desktop::init_state`'s steps less the pre-27 conversion and the mirror's name, with
 its sentences. It answers the pieces and builds no `State`: the sink and the observers are the
 host's. The Android host (`mobile/src-tauri`) is its first caller; the desktop does not call it.
+
+**A host with no folder and one connection opens with `launch::open_single(databases,
+data_dir)`** (phase 5, step 5.1, 2026-10-04) — a browser. No folder is made and no file is asked
+after; the pair is opened on **one** connection by `db::open_single`, which is `open_write`
+statement for statement plus `temp_store = FILE`, and **answers the journal each file actually
+got** (`db::Journal`: `wal` on a folder, `delete` on a browser's OPFS pool, never assumed).
+`Opened.read` is `None`, and it is handed to `State::new` as it is. `databases` is empty where the
+VFS is the filesystem (a pool's names are bare); `data_dir` is what the host shows and what the
+image cache is told, and need not be a path (`OPFS:/<directory>`). ⚠️ **What stands in for
+"replace a corpus that will not open" is not built**: `launch::unreadable_corpus_seam` is the
+line, and its doc says what a browser gets today in each of the three cases — a corpus that is
+gone reads as a first run, one that will not migrate refuses every launch. It is the web
+phase's next step (5.2).
 
 **A host builds one `state::State` and everything else is handed it.**
 `State::new(write, read, data_dir, events, observers, client, images)` takes connections the
@@ -219,10 +245,40 @@ where the pictures are kept are the host's to know. ⚠️ **Seven arguments is 
   listens for the commit.
 - **`read` is `None` on a host that can have only one connection** — a browser's storage
   permits exactly one (spec §6). `State::reader()` is then the write connection's own mutex, and
-  `lock_db_read` takes it. ⚠️ **Nothing has run that way**: a read asked for while the same
-  thread holds the write connection is a lock taken twice, which the desktop's two connections
-  never notice. `reader()` is also what a caller passes on where it used to pass
-  `&state.db_read`; the field is private.
+  `lock_db_read` takes it. ⚠️ **A read asked for while the same thread holds the write
+  connection is then a lock taken twice**, which the desktop's two connections never notice:
+  a wait that never ends natively, and in a Worker a trap (std's `Mutex` panics on a recursive
+  lock where there are no threads). **`commands`' test
+  `every_command_answers_on_one_connection_and_one_thread` runs every entry of `TABLE` that
+  way** — the real one-connection launch, a thread standing in for a Worker
+  (`platform::alone`) — and fails with the command's name on a panic, on a `BUSY` answered
+  against itself, and on a call that never answers.
+  `a_lock_taken_twice_fails_by_name_instead_of_hanging` is the mutation that shows each is
+  caught. **A new `blocking` or `task` command
+  owes that test a row of arguments** (`chosen_args`): those are the kinds handed the state,
+  and it refuses a table that grew one without. `reader()` is also what a caller passes on
+  where it used to pass `&state.db_read`; the field is private.
+  - ⚠️ **"By name instead of hanging" is true of four locks and no others**: a connection and
+    the facet index (routed through `platform::alone`, which panics), and the sync lane and the
+    pairing offer (awaited, so the test's deadline ends them). `db::lock_plain` and every bare
+    `.lock()` — the image cache's maps, Scryfall's pacing gate, the event sinks, the scanner,
+    the undo tickets — are taken as they are natively, and a recursive one **blocks the test's
+    thread for good**: no deadline fires on a current-thread runtime whose thread is blocked.
+    They are deliberately not routed: some are process-wide (`db`'s `WAITING`), and a test
+    binary's other threads hold them honestly. In a Worker each would still be a trap.
+  - **A bounded ask is watched too, and more strictly than a browser treats it.** There
+    `db::lock_for` answers `None` at its first contended attempt, and ~20 callers — every
+    `note_*`, `mark_checked`, `persist_penalty`, the backoff stamps — drop their work on `None`.
+    So a self-contended one is a write that silently never happens: no trap, no `BUSY`. On an
+    emulated thread `lock_for` panics instead (`alone::refuse_held`), which is how the
+    `amend_owned` bug above fails by name at `sync.rs`'s ask rather than as a missing row.
+    ⚠️ The table test reaches none of those helpers on a failing download — no request leaves
+    the machine — so for the feeds' and the card sync's failure paths the claim rests on
+    reading: each is called with no guard in scope (2026-10-04).
+  - **Asked is not run.** A made-up argument that does not parse is refused before the body;
+    the test counts those and pins them by name (`STOPPED_AT_THE_DOOR`, empty since the four
+    it found were given rows), so a new command it never reaches is a red test, not a
+    silence.
 - **`events::EventSink` is how an event leaves the crate.** A host gives the state one sink;
   code with something to say calls `events::emit` with `&*state.events` — `sync:progress`, and
   `collection:reconciled` when the migration log moved something; `combos:progress`,
@@ -322,9 +378,9 @@ its second: `sync_engine::{client, entitlement}` and `sync_pair::pairing`, with 
 ## The command table: `commands!` and `dispatch`
 
 **`src/commands.rs` is how a host with no window calls the engine** — `grimoire_core::dispatch(&state,
-name, args, body)`, a command by its desktop name with the JSON a page sent. The WASM host will
-export `call(name, json)` over it and the Android host one `core_call`; **the desktop does not use
-it** and keeps its typed wrappers, so there are two lists and `src-tauri`'s `command_table` test is
+name, args, body)`, a command by its desktop name with the JSON a page sent. The WASM host
+exports `call(name, args, body?)` over it (`crates/grimoire-web`) and the Android host one
+`core_call`; **the desktop does not use it** and keeps its typed wrappers, so there are two lists and `src-tauri`'s `command_table` test is
 the fence between them (light-app spec §2.4; [light-app.md](../../docs/reference/light-app.md)
 §6.11). Markus chose (2026-10-03) the machinery and the reads first, and a `macro_rules!` table.
 
@@ -534,6 +590,13 @@ is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain c
   `std::thread::scope` and `Instant` panic, so nothing may call the session there before the light
   app's phase 7 seams them; the Android compile is CI's. **A change under `crates/card-scanner`
   runs the `core` job** — `scripts/ci-route.mjs`'s `crates/*` arm took `core` the same day.
+  ⚠️ **It costs the web module 1.84 MB that nothing calls** (measured 2026-10-04, step 5.1):
+  the scanner's `ocrs` is taken with its default features, one of which is `export-wasm` —
+  `#[wasm_bindgen]` classes of its own (`OcrEngine` and nine more) that become exports of
+  `grimoire_web.js` and root the whole OCR runtime past LTO. With that feature off in a scratch
+  copy the module was 6 703 909 B against 8 547 708 B. The cure is `default-features = false`
+  on `ocrs` in `crates/card-scanner/Cargo.toml`, keeping its `rten`; it was found by the web
+  host's step and left for whoever owns that manifest.
 - A target-specific dependency goes in a `[target.'cfg(…)'.dependencies]` table. That is the one
   place outside `src/platform/` a target is named, and the fence does not read it for that.
 - **The `testing` feature is test scaffolding and nothing a build ships**: `schema::memory_pair`,
@@ -578,6 +641,8 @@ The crate is a member of the workspace at the repository root, so it shares `Car
 | `cargo test -p grimoire-core deck::` | A domain module's — the same, for any of the forty-nine; `-p mtg-grimoire deck::` runs none: only wrappers stayed |
 | `npm run verify` | Both members: `fmt --check`, `clippy -D warnings`, `cargo test --workspace` |
 | `cargo build --lib -p grimoire-core --target wasm32-unknown-unknown` | The WASM compile. Needs clang 18 or newer for SQLite's C |
+| `node scripts/build-wasm.mjs` | The web host's module, `crates/grimoire-web`, into `dist-wasm/` — finds clang itself on this machine, refuses a `wasm-bindgen` CLI that is not the lockfile's version, and prints the module's size |
+| `cargo test -p grimoire-web` | The web host's decisions, natively — only its `#[wasm_bindgen]` shell is gated to the browser |
 
 **On this machine clang is not on `PATH`** and `cc-rs` does not look for it:
 
@@ -589,5 +654,7 @@ The Android compile runs only in CI: there is no NDK here.
 
 - **Never `cargo fmt --all`.** It follows path dependencies into `crates/card-scanner`, which is
   hand-formatted. `cargo fmt -p grimoire-core`.
-- **A green suite here proves the desktop.** The `core` job proves the other two targets
-  *compile*; nothing yet runs this crate in a browser or on a phone.
+- **A green suite here proves the desktop**, and — since step 5.1's table test — that no
+  command takes its connection twice on a host with one. The `core` job proves the other two
+  targets *compile*. What runs the module is the web host, in a browser; the suite here never
+  does.

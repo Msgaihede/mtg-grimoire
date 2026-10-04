@@ -213,6 +213,7 @@ pub fn owned_rowids(_conn: &Connection) -> String {
 /// Lives here rather than in [`crate::collection`] because its callers are a collection write,
 /// [`crate::reset::collection_clear`] and anything else that can move what the reader owns, and
 /// the thing they have in common is this module rather than that one.
+#[track_caller]
 pub fn with_write_owned<T>(
     state: &crate::state::State,
     f: impl FnOnce(&rusqlite::Connection) -> Result<T, String>,

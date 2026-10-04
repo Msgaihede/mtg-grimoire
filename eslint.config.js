@@ -32,10 +32,14 @@ export default tseslint.config(
   {
     ignores: [
       "dist/",
-      // Output of the web build, removed on 2026-09-27, which a checkout that ran it still holds
-      // on disk (gitignored): the wasm-bindgen glue is machine-written and fails `no-undef`.
+      // Output of round one's web build, removed on 2026-09-27, which a checkout that ran it
+      // still holds on disk (gitignored): the wasm-bindgen glue is machine-written and fails
+      // `no-undef`.
       "web/public/",
+      // The web app's bundle (`npm run web:build`), and the engine `npm run web:wasm` writes for
+      // it — wasm-bindgen's glue again, which is the file that fails `no-undef`.
       "dist-web/",
+      "dist-wasm/",
       // The public share viewer's bundle. Generated output like `dist/` above, and on disk on
       // any machine that has run `npm run share:build` — which `share-worker`'s deploy requires,
       // because `wrangler.jsonc` declares an `assets` binding over it.

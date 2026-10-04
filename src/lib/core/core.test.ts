@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const invoke = vi.hoisted(() => vi.fn());
 const listen = vi.hoisted(() => vi.fn());
@@ -123,5 +123,58 @@ describe("pickCore", () => {
     expect(pickCore({ __GRIMOIRE_CORE__: "table" })).toBe(tableCore);
     expect(pickCore({})).toBe(tauriCore);
     expect(pickCore({ __GRIMOIRE_CORE__: "something else" })).toBe(tauriCore);
+  });
+});
+
+describe("the core a build chooses", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+    vi.resetModules();
+  });
+
+  it("is Tauri's in every build but the web app's, this suite's included", async () => {
+    // `MODE` is `test` here, `production` in the desktop's and the Android app's bundles, and
+    // `fake` under the Storybook fake: none of them is `web`, so none of them reaches a Worker.
+    expect(import.meta.env.MODE).not.toBe("web");
+    const { core } = await import("@/lib/core");
+    expect(core).toBe(tauriCore);
+  });
+
+  it("is the database Worker's in a web build, made once and asked to open the database", async () => {
+    const made: { url: string; options: unknown; posted: unknown[] }[] = [];
+    // jsdom has no `Worker`. Stood in for by a class, since the page constructs one.
+    vi.stubGlobal(
+      "Worker",
+      class {
+        private readonly posted: unknown[] = [];
+        constructor(url: URL | string, options?: unknown) {
+          made.push({ url: String(url), options, posted: this.posted });
+        }
+        postMessage(message: unknown): void {
+          this.posted.push(message);
+        }
+        addEventListener(): void {}
+      },
+    );
+    vi.stubEnv("MODE", "web");
+    vi.resetModules();
+    const { core } = await import("@/lib/core");
+    const { tauriCore: freshTauri } = await import("@/lib/core/tauri");
+    expect(core).not.toBe(freshTauri);
+
+    // The gate, mounted twice the way StrictMode mounts it.
+    core.listen("startup:changed", () => {})();
+    core.listen("startup:changed", () => {});
+    await expect(core.call("startup_status")).resolves.toEqual({ state: "loading" });
+    await expect(core.call("startup_status")).resolves.toEqual({ state: "loading" });
+
+    expect(made).toHaveLength(1);
+    expect(made[0].url).toContain("worker");
+    expect(made[0].options).toEqual({ type: "module" });
+    expect(made[0].posted).toEqual([{ kind: "open", directory: "mtg-grimoire" }]);
+    // And nothing went to Tauri: the gate was answered below the seam, by the host.
+    expect(invoke).not.toHaveBeenCalled();
+    expect(listen).not.toHaveBeenCalled();
   });
 });

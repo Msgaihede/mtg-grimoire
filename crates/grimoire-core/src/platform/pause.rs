@@ -25,6 +25,10 @@ use std::time::Duration;
 /// `true` when the pause happened. **`false` when this host has no other thread to wait for**:
 /// nothing was waited, and waiting again will not help.
 pub fn pause(duration: Duration) -> bool {
+    // A test standing in for a one-thread host on this thread: see [`super::alone`].
+    if super::alone::emulated() {
+        return false;
+    }
     imp::pause(duration)
 }
 

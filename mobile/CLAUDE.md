@@ -73,8 +73,12 @@ test, no `isTauri`, no `isAndroid`, no `display-mode` query deciding what a page
   `@tauri-apps/plugin-os`.
   **It reads comments too**, so a source file may not name one even in prose; this file may,
   because the sweep does not read Markdown.
-- **`import.meta.env.MODE === "fake"` is not a probe.** It is which *build* this is, replaced at
-  compile time, and it is how `main.tsx` keeps the Storybook fake out of a production bundle.
+- **`import.meta.env.MODE === "fake"` is not a probe, and neither is `=== "web"`.** Each is
+  which *build* this is, replaced at compile time and asked of no window. `fake` is how
+  `main.tsx` keeps the Storybook fake out of a production bundle; `web` is how the web app's
+  build — and no other — reaches the database Worker, **and that choice is made in
+  `src/lib/core/index.ts`, below the seam, never here**: nothing under `mobile/` compares the
+  mode to `web`.
 - **What differs between two installs lives below `@/lib/core`** (spec §3.5): how a command is
   called, how a file is picked, where a card image is served from. The one user-agent read the
   phone face's graph reaches today is that seam's own — `src/lib/images.ts`'s `imageOrigin`,
@@ -236,18 +240,28 @@ failure behind each at its own site:
 | `npm run mobile:tauri` | The real Rust core and the dev database | The same UI against a real corpus, in a 412 × 915 window |
 | `npm run mobile:build` | — | `tsc`, then the bundle into `dist-mobile/` |
 | `npm run mobile:android` | **The light app's Android host** (`src-tauri/` here) and its own data folder on the device | `tauri android dev` on a phone over `adb` — needs JDK 21, the Android SDK and NDK, which no machine of this repo's has yet; CI's `android` job builds the APK instead |
+| `npm run web:wasm` | — | The engine as a WASM module into `dist-wasm/` (`scripts/build-wasm.mjs`). Needs clang 18 or newer and the `wasm-bindgen` CLI at the version `Cargo.lock` resolves; minutes, cold. **Run it before any of the three below** |
+| `npm run web:dev` | **The web host**: the real engine in a Worker, its databases in this browser's OPFS | The web app in a browser on port 5176 — driven in Chrome only so far. No Rust process, **no lock**. A `web:wasm` beside a running server is picked up by a reload |
+| `npm run web:build` | — | `tsc`, the Worker's own `tsc` program, then the bundle into `dist-web/` with the engine under `wasm/<build id>/`. Fails, in a sentence, when `dist-wasm/` is not built |
+| `npm run web:preview` | The same engine, from `dist-web/` | The built app on port 4176, where a missing file is a 404 as on a real host |
+| `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP: five checks, a second tab's refusal among them. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
 
 - **`mobile:tauri` is the desktop binary with a config overlay** (`src-tauri/tauri.light.conf.json`):
   it **takes the `app` lock** and reads `src-tauri/target/debug/data`. Read the `running-the-app`
   skill first. Widen the window past 1024 and the face changes.
-- **Both dev servers use port 5175**, so they cannot run at once — `mobile:tauri` starts its own
-  with `mobile:serve`, which is `mobile:dev` without the fake.
+- **`mobile:dev` and `mobile:serve` both use port 5175**, so those two cannot run at once —
+  `mobile:tauri` starts its own with `mobile:serve`, which is `mobile:dev` without the fake.
+  **`web:dev` is on 5176**, so the web app can be up beside either. (This said *both dev servers
+  use port 5175* while there were two.)
 - **Fake mode has no startup gate**: the fake answers no `startup_status`, and the gate reads a
   rejected ask as *still loading*, so gating there would wait for ever. It also installs one
   world, `starter`, once, before React.
 - **`verify` bundles the light app** (`vite build --config vite.mobile.config.ts`, since phase 4:
   the Android host's `tauri-build` reads `dist-mobile/`), and CI's `android` job bundles it into
   the APK. CI's `rust` job stubs `dist-mobile/index.html` instead, as it stubs `dist/`.
+- **`verify` does not build the web app.** Its `npm run build` type-checks the Worker's program
+  (`tsc -p tsconfig.web-worker.json`) and `cargo test --workspace` runs the web host's native
+  tests; the module, `dist-web/` and the smoke run are CI's `web` job, and yours by hand.
 
 ## Tests
 
@@ -312,14 +326,17 @@ failure behind each at its own site:
   ticket back, and an add's `Undo` is the stepper one copy back. Settings' panels make the desktop's
   own writes. **Not yet**: folder management, a copy's purchase price, the deck tokens band's and
   stats band's writes.
-- **No WASM host, no service worker** — `public/light.webmanifest` is the whole of the PWA so
-  far — **and no device sync on a light install**: the phone face pairs with nothing. **It does
-  hear the host's card sync and the feeds** — `phone/cardData.ts`'s `useCardDataWatch`, mounted
-  once in `PhoneFace`, runs the desktop shell's own listeners (`useSyncInvalidation`, the feed
-  hooks) and draws the loudest running job on the mana line; an empty card search says *No cards
-  match.* only over a database that has cards (`phone/search/NoCards.tsx`). Over the fake and in a
-  browser no sync event comes, so the line rests. `mobile:tauri` is the desktop binary, not a
-  light host.
+- **The web host opens its database and answers commands, and that is all it does yet** (phase
+  5, step 5.1, 2026-10-04 — *The web host* below). **It downloads nothing in a browser**, so a
+  web install has no cards; it draws no card picture; **there is no service worker** —
+  `public/light.webmanifest` is the whole of the PWA so far — and nothing is hosted.
+- **No device sync on a light install**: the phone face pairs with nothing. **It does hear the
+  host's card sync and the feeds** — `phone/cardData.ts`'s `useCardDataWatch`, mounted once in
+  `PhoneFace`, runs the desktop shell's own listeners (`useSyncInvalidation`, the feed hooks) and
+  draws the loudest running job on the mana line; an empty card search says *No cards match.*
+  only over a database that has cards (`phone/search/NoCards.tsx`). Over the fake, and in a
+  browser until the web host downloads anything, no sync event comes, so the line rests.
+  `mobile:tauri` is the desktop binary, not a light host.
 
 ## The Android host — `src-tauri/` here
 
@@ -342,12 +359,17 @@ and the `mtgimg` protocol over the core's `images::answer`.
   holds each one** — run it after any `tauri android init`, and put the edits back rather than
   deleting the assertion. Regenerate from `mobile/`, never the repository root: the CLI picks the
   project by the directory it starts in, and from the root it finds the desktop's.
-- **Three plugins, granted to the page not at all** (step 4.3): `dialog` and `fs` answer the
-  desktop's `export_save_file` and `import_pick_file` inside `core_call` (`src-tauri/src/files.rs`
-  here) — the system's save dialog and picker, a `content://` document opened by the fs plugin,
-  and no URI ever crossing to the page — and `opener` takes every `http(s)` link that is not one of
-  the app's pages to the system browser (`navigation.rs`'s guard), so a deck note's link never
-  replaces the app. `capabilities/light.json` stays `core:default` alone.
+- **Three plugins, and the page is granted one of them, narrowly** (step 4.3): `dialog` and `fs`
+  answer the desktop's `export_save_file` and `import_pick_file` inside `core_call`
+  (`src-tauri/src/files.rs` here) — the system's save dialog and picker, a `content://` document
+  opened by the fs plugin, and no URI ever crossing to the page — and `opener` takes every
+  `http(s)` link that is not one of the app's pages to the system browser (`navigation.rs`'s
+  guard), so a deck note's link never replaces the app. **`capabilities/light.json` holds three
+  permissions**: `core:default`, and `opener:allow-open-url` with `opener:allow-default-urls` —
+  the desktop's exact pair, never `opener:default` — because the desktop face, drawn on a tablet
+  past 1024px, opens its links through `@tauri-apps/plugin-opener` from the page. No `dialog:`
+  or `fs:` permission: both are used from Rust only. `host.test.ts` holds the list. (This said
+  the file *stays `core:default` alone*, which the file and that test had both left behind.)
 - **The launch's downloads wait on a metered link** (step 4.4): the host asks Android over JNI
   whether the network is metered and, unless the reader said *always*, holds every launch
   download. `DownloadsPrompt.tsx`, which `LightApp` mounts above both faces, asks the host's
@@ -367,3 +389,47 @@ and the `mtgimg` protocol over the core's `images::answer`.
   `npm run mobile:build`, over a `light-data` folder beside the binary — never the desktop app's,
   which shares its identifier. It does not take the `app` lock and does not need it, because it
   opens a different folder; it still shares nothing with a running desktop app.
+
+## The web host — none of it is here
+
+`grimoire-core` as a WASM module in a dedicated Worker (phase 5;
+[light-app.md](../docs/reference/light-app.md) §9). The crate is `crates/grimoire-web`, with
+[a `CLAUDE.md` of its own](../crates/grimoire-web/CLAUDE.md), and the page's half is
+`src/lib/core/web/` — **below `@/lib/core`, which is the only reason a file under `mobile/` can
+stay ignorant of it.** The page is the Android app's program; `dist-web/` is the light entry
+built in the `web` mode.
+
+- **The Worker owns the one connection.** OPFS's synchronous access handles exist only off the
+  main thread and the pool SQLite sits on permits one connection, so every read and every write
+  of the web app queues through that Worker. Nothing on the page opens a database, and nothing
+  here constructs a Worker.
+- **The page loads the engine once**, whatever mounts above it: `webCore` is a module singleton
+  that makes one Worker on the first call or subscription — StrictMode's second mount and a
+  face crossing find it made — and the Worker memoises the module's load and its `open`. Two
+  instances of the module in one Worker corrupt each other's heap; round one lost two first
+  runs in three to it.
+- **The startup gate is one gate on every host.** `LightApp` reads `@/boot/useStartup` as it
+  does on Android; in the web build the status is answered on the page, from what the Worker
+  reported. A call made before the database is open waits rather than being refused.
+- **A second tab is told so by the startup status the host answers** —
+  `{ state: "failed", message, reload: true }` — and by nothing a page detects. `reload` is a
+  host saying that a fresh document may find things different: a second tab (the first holds
+  the database, and may since have closed), an engine that never loaded, one that stopped. A
+  database that would not open carries none, and neither native host ever sends it.
+- **`BootScreen` may draw `ReloadLink` for it, because that is drawn from what the host
+  answered** — the rule above (*Nothing here asks where it is running*), kept rather than bent.
+  Never offer the reload from a test of the page's surroundings. `ReloadLink` is a link to
+  where the reader already is, not a button calling `location.reload()`, and `FaceBoundary`
+  draws the same one.
+- **A command the table lacks is refused in the table's words, as on Android**, and a refusal
+  is a bare string on every host. `DownloadsPrompt` draws nothing here for that reason: this
+  host has no `light_downloads`.
+- **To run it**: `npm run web:wasm` once (and again after any Rust change), then `web:dev` for
+  the dev server, or `web:build` and then `web:smoke` or `web:preview` for the built app. None
+  takes a lock. The *Running it* table has each.
+- **Not there yet**, each with the step that owns it in
+  [the plan](../docs/superpowers/plans/2026-10-04-light-app-phase-5.md): no download, so no
+  corpus, and the marketplace picker still offers Mana Pool, which a page cannot reach (5.2);
+  no card picture and no service worker (5.3); no clipboard, open-a-link or file seam for the
+  desktop face in a browser, and the manifest unfinished (5.4); no hosting (5.5). And a second
+  tab is the only thing the page says about its storage: nothing asks `persist()` yet.

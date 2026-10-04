@@ -27,6 +27,9 @@
  * opens with a globstar so that it also holds in the main checkout, where `.claude/worktrees/`
  * puts whole second checkouts — every one with all of these — under the root. (Spelled
  * out, because the glob prefix itself would close this comment.)
+ *
+ * `dist-wasm/` is the one a dev server is most likely to be up beside while it is written:
+ * `npm run web:wasm` rebuilds the engine the web app's server (`npm run web:dev`) is serving.
  */
 export const WATCH_IGNORED = [
   "**/src-tauri/**",
@@ -34,5 +37,7 @@ export const WATCH_IGNORED = [
   "**/dist/**",
   "**/dist-mobile/**",
   "**/dist-share/**",
+  "**/dist-web/**",
+  "**/dist-wasm/**",
   "**/storybook-static/**",
 ];

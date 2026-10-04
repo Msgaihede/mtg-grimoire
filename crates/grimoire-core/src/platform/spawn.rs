@@ -31,7 +31,11 @@
 //! thread each catch it, which is what [`Lost`] carries; work run where it stands unwinds
 //! through its caller, so there `Err(Lost)` is never made.
 //!
-//! **Neither browser arm has run.**
+//! **A native test can run its work the way the browser arms do**: on a thread that
+//! [`super::alone`] has said is the only one, both native arms run the work on the caller,
+//! `blocking` at its first poll and `background` before it returns. Never in a build that
+//! ships. (The browser's own `blocking` first ran on 2026-10-04, under Node; `background`'s
+//! had not when this was written.)
 
 use std::fmt;
 use std::future::Future;
@@ -84,7 +88,20 @@ mod imp {
     use super::Lost;
     use std::future::Future;
 
-    pub type Handle = std::thread::JoinHandle<()>;
+    /// A thread, or — on a thread a test has said is the only one ([`crate::platform::alone`])
+    /// — work that had already run by the time there was a handle to it, as in a browser.
+    pub enum Handle {
+        Thread(std::thread::JoinHandle<()>),
+        Ran,
+    }
+
+    /// Where [`blocking`]'s work is by the time its future exists.
+    enum Started<T, F> {
+        /// On the pool, already running.
+        Pool(tokio::task::JoinHandle<T>),
+        /// Still in hand, to run at the first poll — the browser arm's shape, for a test.
+        Here(F),
+    }
 
     /// Not an `async fn`: the work is handed to the pool here, before anything is awaited.
     pub fn blocking<T, F>(work: F) -> impl Future<Output = Result<T, Lost>>
@@ -92,18 +109,34 @@ mod imp {
         F: FnOnce() -> T + Send + 'static,
         T: Send + 'static,
     {
-        let handle = tokio::task::spawn_blocking(work);
-        async move { handle.await.map_err(|e| Lost(e.to_string())) }
+        let started = if crate::platform::alone::emulated() {
+            Started::Here(work)
+        } else {
+            Started::Pool(tokio::task::spawn_blocking(work))
+        };
+        async move {
+            match started {
+                Started::Pool(handle) => handle.await.map_err(|e| Lost(e.to_string())),
+                Started::Here(work) => Ok(work()),
+            }
+        }
     }
 
     pub fn background<F>(work: F) -> Handle
     where
         F: FnOnce() + Send + 'static,
     {
-        std::thread::spawn(work)
+        if crate::platform::alone::emulated() {
+            work();
+            return Handle::Ran;
+        }
+        Handle::Thread(std::thread::spawn(work))
     }
 
     pub fn join(handle: Handle) -> Result<(), Lost> {
+        let Handle::Thread(handle) = handle else {
+            return Ok(());
+        };
         handle.join().map_err(|panic| {
             // A panic's payload is a `&str` or a `String` when it came from `panic!`.
             let said = panic
@@ -192,6 +225,37 @@ mod tests {
             .await
             .unwrap_err();
         assert!(lost.to_string().contains("panicked"), "{lost}");
+    }
+
+    /// **On a thread standing in for a Worker, nothing is taken off the caller** — the browser
+    /// arms' shape, which is what lets a native test find a lock held across work that takes
+    /// it. `blocking` runs at its first poll and not before; `background` has run by the time it
+    /// returns.
+    #[tokio::test]
+    async fn work_runs_on_the_caller_while_it_stands_in_for_a_host_with_one_thread() {
+        let here = std::thread::current().id();
+        let _alone = crate::platform::alone::emulate();
+
+        let ran = Arc::new(AtomicBool::new(false));
+        let flag = ran.clone();
+        let pending = blocking(move || {
+            flag.store(true, Ordering::SeqCst);
+            std::thread::current().id()
+        });
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "the work waits for its first poll, as the browser's does"
+        );
+        assert_eq!(pending.await.unwrap(), here);
+
+        let (said, heard) = std::sync::mpsc::channel();
+        let handle = background(move || said.send(std::thread::current().id()).unwrap());
+        assert_eq!(
+            heard.try_recv(),
+            Ok(here),
+            "it had run before the call returned"
+        );
+        handle.join().unwrap();
     }
 
     #[test]
