@@ -17,7 +17,9 @@ import {
   type Browser,
   type WorkerPort,
   NOTHING_WAITING,
+  STILL_HELD,
 } from "./index";
+import { DATABASE_LOCK, RETRY_BOUND_MS, type LockManagerLike } from "./holder";
 import type { FromWorker, Opening, ToWorker } from "./protocol";
 import {
   CLEARED_KEY,
@@ -53,6 +55,11 @@ class FakeWorker implements WorkerPort {
   ): void {
     if (type === "message") this.onMessage = listener as (event: { data: FromWorker }) => void;
     else this.onError = listener as (event: { message?: string }) => void;
+  }
+
+  terminated = false;
+  terminate(): void {
+    this.terminated = true;
   }
 
   /** The Worker says something. */
@@ -96,12 +103,49 @@ function harness(browser: Partial<Browser> = {}) {
   const worker = new FakeWorker();
   const spawn = vi.fn(() => worker);
   const { store, kept } = fakeStore();
-  const core = createWebCore(spawn, OPFS_DIRECTORY, { store, now: () => NOW, ...browser });
+  const core = createWebCore(spawn, OPFS_DIRECTORY, {
+    store,
+    now: () => NOW,
+    // No timer of the suite's is left running by a test that says `already-open` in passing.
+    after: () => undefined,
+    ...browser,
+  });
   return { core, worker, spawn, kept };
 }
 
 const status = (core: ReturnType<typeof createWebCore>) =>
   core.call<StartupStatus>("startup_status");
+
+/** `navigator.locks`, with the database's lock free or held by another document. */
+function fakeLocks(heldElsewhere = false) {
+  const state = { asked: [] as string[], held: heldElsewhere, released: false };
+  const locks: LockManagerLike = {
+    request(name, _options, callback) {
+      state.asked.push(name);
+      if (state.held) return Promise.resolve(callback(null));
+      state.held = true;
+      return Promise.resolve(callback({})).then(() => {
+        state.held = false;
+        state.released = true;
+      });
+    },
+  };
+  return { locks, state };
+}
+
+/** Let the lock's answer land. */
+const asked = () => new Promise<void>((done) => setTimeout(done, 0));
+
+/**
+ * A second tab, as a page finds one: another living document holds the database's lock. No
+ * Worker is started there, so the harness's `worker` hears nothing and is asked nothing.
+ */
+async function secondTab(browser: Partial<Browser> = {}) {
+  const tab = harness({ locks: fakeLocks(true).locks, ...browser });
+  void status(tab.core);
+  await asked();
+  return tab;
+}
 
 /** What the core said on the console. Caught, so an opened database does not print in the run. */
 let said: ReturnType<typeof vi.spyOn>;
@@ -116,10 +160,11 @@ afterEach(() => {
 });
 
 describe("the web core's Worker", () => {
-  it("says which journal each file got when the database opens, and nothing when it does not", () => {
-    const refused = harness();
-    void status(refused.core);
-    refused.worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+  it("says which journal each file got when the database opens, and nothing when it does not", async () => {
+    await secondTab();
+    const broken = harness();
+    void status(broken.core);
+    broken.worker.say({ kind: "opened", opened: { kind: "failed", message: "no" }, existed: true });
     expect(said).not.toHaveBeenCalled();
 
     const { core, worker } = harness();
@@ -205,11 +250,12 @@ describe("the startup gate, answered from the open", () => {
   });
 
   it("tells a second tab so in a sentence, and that a reload can cure it", async () => {
-    const { core, worker } = harness();
+    // A second tab is one whose neighbour holds the database's lock — `holder.ts` — and it is
+    // told from that alone.
+    const { core } = harness({ locks: fakeLocks(true).locks });
     const heard: StartupStatus[] = [];
     core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
-
-    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    await asked();
 
     const told = { state: "failed", message: ALREADY_OPEN, reload: true };
     expect(await status(core)).toEqual(told);
@@ -254,13 +300,16 @@ describe("the startup gate, answered from the open", () => {
     opened.worker.say({ kind: "opened", opened: READY, existed: true });
     opened.worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
     expect(await status(opened.core)).toEqual({ state: "ready" });
+    // Nor is an open database's Worker ended for it: asking again is for a gate still loading.
+    expect(opened.worker.terminated).toBe(false);
 
     // And never back: a database that did not open is not opened by a later `ready`.
     const refused = harness();
     void status(refused.core);
-    refused.worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    const failed: Opening = { kind: "failed", message: "The pool would not open." };
+    refused.worker.say({ kind: "opened", opened: failed, existed: true });
     refused.worker.say({ kind: "opened", opened: READY, existed: true });
-    expect(await status(refused.core)).toMatchObject({ state: "failed", message: ALREADY_OPEN });
+    expect(await status(refused.core)).toMatchObject({ state: "failed", message: failed.message });
   });
 });
 
@@ -324,14 +373,21 @@ describe("a call through the web core", () => {
   });
 
   it("rejects what was waiting on a database that did not open, and whatever is asked after", async () => {
-    const { core, worker } = harness();
+    const { core, worker, spawn } = harness({ locks: fakeLocks(true).locks });
     const waiting = core.call("list_sets");
-    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
 
     await expect(waiting).rejects.toBe(ALREADY_OPEN);
     await expect(core.call("deck_list")).rejects.toBe(ALREADY_OPEN);
-    // Nothing was sent to a Worker with no database behind it.
-    expect(worker.messages).toHaveLength(1);
+    // Nothing was sent to a Worker, and none was made: there is no database behind this page.
+    expect(spawn).not.toHaveBeenCalled();
+    expect(worker.messages).toHaveLength(0);
+
+    // The same for a Worker that did open nothing: its one message is the open it was asked for.
+    const broken = harness();
+    const held = broken.core.call("list_sets");
+    broken.worker.say({ kind: "opened", opened: { kind: "failed", message: "no" }, existed: true });
+    await expect(held).rejects.toBe("no");
+    expect(broken.worker.messages).toHaveLength(1);
   });
 
   it("hands a byte payload over rather than copying it, with its headers as the arguments", () => {
@@ -592,9 +648,7 @@ describe("asking the browser to keep its storage", () => {
   it("asks nothing for a database that did not open", async () => {
     const persist = vi.fn(() => Promise.resolve(true));
     const persisted = vi.fn(() => Promise.resolve(true));
-    const { core, worker } = harness({ storage: { persist, persisted } });
-    void status(core);
-    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    const { core } = await secondTab({ storage: { persist, persisted } });
 
     // A second tab keeps nothing of its own; the first tab is the one that looked.
     expect(await persistence(core)).toBeNull();
@@ -751,9 +805,11 @@ describe("storage cleared under the app", () => {
     expect(answer).toMatchObject({ at: NOW, title: CLEARED_TITLE });
   });
 
+  // A second tab is not on this list any more: it is told by the lock and starts no Worker, so
+  // it never looks at the folder — and the tab that holds the database is the one that did.
   it.each<[string, Opening]>([
-    ["a second tab", { kind: "already-open" }],
     ["an engine that never loaded", { kind: "unloaded", message: "TypeError: Failed to fetch" }],
+    ["a database that would not open", { kind: "failed", message: "The pool would not open." }],
   ])("records it for %s too, and leaves the mark alone", async (_name, opened) => {
     const { store, kept } = fakeStore(HELD);
     const { core, worker } = harness({ store });
@@ -908,15 +964,17 @@ describe("a Worker that died", () => {
   });
 
   it("leaves a gate that had already failed with its own sentence", async () => {
-    // A second tab: that is why there is no app here, and a Worker that then also errors has
-    // nothing to add — least of all "reload", into the same refusal.
+    // An engine that never loaded: that is why there is no app here, and a Worker that then
+    // also errors has nothing to add to it.
     const { core, worker } = harness();
     const heard: StartupStatus[] = [];
     core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
-    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    worker.say({ kind: "opened", opened: { kind: "unloaded", message: "TypeError" }, existed: null });
+    const told = await status(core);
     worker.crash("late");
 
-    expect(await status(core)).toEqual({ state: "failed", message: ALREADY_OPEN, reload: true });
+    expect(told).toMatchObject({ state: "failed", reload: true });
+    expect(await status(core)).toEqual(told);
     expect(heard).toHaveLength(1);
 
     // And one that would not open keeps offering no reload at all.
@@ -942,6 +1000,254 @@ describe("a Worker that died", () => {
       state: "failed",
       reload: true,
       message: expect.stringMatching(/Worker is not defined/),
+    });
+  });
+});
+
+/**
+ * A reload while the engine was busy left the new document on the second-tab screen with no
+ * other tab open (reproduced 3 of 3 on 2026-10-04): the old document's Worker was still inside
+ * the engine, still holding the pool, when the new one asked. `holder.ts` has the measurement.
+ */
+describe("a database another document may still hold", () => {
+  const ELSEWHERE: Opening = { kind: "already-open" };
+
+  /** A core that makes a new Worker per ask, over a clock and a timer the test owns. */
+  function retrying(browser: Partial<Browser> = {}) {
+    const workers: FakeWorker[] = [];
+    const waits: { ms: number; run: () => void }[] = [];
+    let now = NOW;
+    const { store } = fakeStore();
+    const core = createWebCore(
+      () => {
+        const made = new FakeWorker();
+        workers.push(made);
+        return made;
+      },
+      OPFS_DIRECTORY,
+      { store, now: () => now, after: (ms, run) => void waits.push({ ms, run }), ...browser },
+    );
+    return {
+      core,
+      workers,
+      waits,
+      /** Let the wait before the next ask pass. */
+      pass() {
+        const wait = waits.shift();
+        if (!wait) throw new Error("nothing is waiting");
+        now += wait.ms;
+        wait.run();
+        return wait.ms;
+      },
+    };
+  }
+
+  it("tells a second tab at once, by the lock, and starts no engine there", async () => {
+    const { locks, state } = fakeLocks(true);
+    const { core, workers } = retrying({ locks });
+    const heard: StartupStatus[] = [];
+    core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
+    await asked();
+
+    const told = { state: "failed", message: ALREADY_OPEN, reload: true };
+    expect(await status(core)).toEqual(told);
+    expect(heard).toEqual([told]);
+    expect(state.asked).toEqual([DATABASE_LOCK]);
+    // No Worker: there is nothing one could add, and nothing for it to hold while it tried.
+    expect(workers).toEqual([]);
+    await expect(core.call("deck_list")).rejects.toBe(ALREADY_OPEN);
+  });
+
+  it("takes the lock before it starts the engine, and keeps it while the database is open", async () => {
+    const { locks, state } = fakeLocks();
+    const { core, workers } = retrying({ locks });
+    void status(core);
+    // Asked first: two tabs opened together must not each win one of the two.
+    expect(workers).toEqual([]);
+    await asked();
+    expect(workers).toHaveLength(1);
+    expect(workers[0].messages).toEqual([{ kind: "open", directory: OPFS_DIRECTORY }]);
+
+    workers[0].say({ kind: "opened", opened: READY, existed: true });
+    expect(await status(core)).toEqual({ state: "ready" });
+    await asked();
+    expect(state.held).toBe(true);
+    expect(state.released).toBe(false);
+  });
+
+  it("asks again, with a fresh Worker, when the lock is its own and the pool is still held", async () => {
+    const { locks } = fakeLocks();
+    const { core, workers, waits, pass } = retrying({ locks });
+    const heard: StartupStatus[] = [];
+    core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
+    const decks = core.call("deck_list");
+    await asked();
+
+    workers[0].say({ kind: "opened", opened: ELSEWHERE, existed: true });
+    // To the gate it has not happened: still loading, nothing said, nothing refused.
+    expect(await status(core)).toEqual({ state: "loading" });
+    expect(heard).toEqual([]);
+    // The refused Worker is ended — a Worker memoises its open — and the next is not made yet.
+    expect(workers[0].terminated).toBe(true);
+    expect(workers).toHaveLength(1);
+    expect(waits.map(({ ms }) => ms)).toEqual([200]);
+
+    pass();
+    expect(workers).toHaveLength(2);
+    expect(workers[1].messages).toEqual([{ kind: "open", directory: OPFS_DIRECTORY }]);
+    workers[1].say({ kind: "opened", opened: READY, existed: true });
+
+    expect(await status(core)).toEqual({ state: "ready" });
+    expect(heard).toEqual([{ state: "ready" }]);
+    // The call made before any of it is the second Worker's to answer.
+    const sent = workers[1].messages.find((m) => m.kind === "call") as { id: number };
+    expect(sent).toMatchObject({ command: "deck_list" });
+    expect(workers[0].messages.some((m) => m.kind === "call")).toBe(false);
+    workers[1].say({ kind: "ok", id: sent.id, result: [] });
+    await expect(decks).resolves.toEqual([]);
+    // Said once, beside the open's own line, where a bug report can carry it.
+    expect(said).toHaveBeenCalledWith(
+      "MTG Grimoire: the database was still held by a page that had gone — opened on attempt 2, " +
+        "200 ms after the first",
+    );
+  });
+
+  it("waits a little longer each time, and never past its bound", async () => {
+    const { locks } = fakeLocks();
+    const { core, workers, pass, waits } = retrying({ locks });
+    void status(core);
+    await asked();
+
+    const waited: number[] = [];
+    while (workers[workers.length - 1]) {
+      workers[workers.length - 1]?.say({ kind: "opened", opened: ELSEWHERE, existed: true });
+      if (waits.length === 0) break;
+      waited.push(pass());
+    }
+    expect(waited.slice(0, 4)).toEqual([200, 400, 800, 800]);
+    expect(waited.reduce((sum, ms) => sum + ms, 0)).toBe(RETRY_BOUND_MS);
+    expect((await status(core)).state).toBe("failed");
+    // Every refused Worker was ended — the last one too, at the bound: it may have taken some of
+    // the pool's handles before it met one it could not, and would keep them while the page stood.
+    expect(workers.every((made) => made.terminated)).toBe(true);
+  });
+
+  it("says, when the bound is spent, that the database could not be opened — not that a tab is open", async () => {
+    const { locks, state } = fakeLocks();
+    const { core, workers, pass, waits } = retrying({ locks });
+    const decks = core.call("deck_list");
+    await asked();
+    for (;;) {
+      workers[workers.length - 1]?.say({ kind: "opened", opened: ELSEWHERE, existed: true });
+      if (waits.length === 0) break;
+      pass();
+    }
+
+    expect(await status(core)).toEqual({ state: "failed", message: STILL_HELD, reload: true });
+    // This document holds the lock: there is no other tab for the sentence to name.
+    expect(STILL_HELD).not.toMatch(/another tab/);
+    expect(STILL_HELD).toMatch(/Reload to try again/);
+    await expect(decks).rejects.toBe(STILL_HELD);
+    // And it lets the lock go: a document with no database must not make the next one a "second".
+    await asked();
+    expect(state.released).toBe(true);
+  });
+
+  it("does not hear a Worker it has replaced", async () => {
+    const { locks } = fakeLocks();
+    const { core, workers, pass } = retrying({ locks });
+    void status(core);
+    await asked();
+    workers[0].say({ kind: "opened", opened: ELSEWHERE, existed: true });
+    pass();
+
+    // The ended Worker's last words, and an `error` on its way down, are nobody's.
+    workers[0].say({ kind: "opened", opened: READY, existed: true });
+    workers[0].crash("terminated");
+    expect(await status(core)).toEqual({ state: "loading" });
+
+    workers[1].say({ kind: "opened", opened: READY, existed: true });
+    expect(await status(core)).toEqual({ state: "ready" });
+  });
+
+  it("notes what the open found about storage once, from the answer that stood", async () => {
+    const { locks } = fakeLocks();
+    const { core, workers, pass } = retrying({ locks });
+    void status(core);
+    await asked();
+    workers[0].say({ kind: "opened", opened: ELSEWHERE, existed: true });
+    pass();
+    workers[1].say({ kind: "opened", opened: READY, existed: true });
+    // The first word about the open is noted once a page, and it is the open's, not the
+    // refusal's: noted for the refusal, the database that then opened would never have been
+    // asked about — its mark not written, its persistence never looked at.
+    await expect(core.call("storage_persistence")).resolves.toBeNull();
+    expect(said).toHaveBeenCalledWith(
+      "MTG Grimoire: persistent storage not asked — this browser has no way to ask",
+    );
+    expect(warned).not.toHaveBeenCalled();
+  });
+
+  it("lets the lock go when the database will not open, so the next tab is told the real reason", async () => {
+    const { locks, state } = fakeLocks();
+    const { core, workers } = retrying({ locks });
+    void status(core);
+    await asked();
+    workers[0].say({
+      kind: "opened",
+      opened: { kind: "failed", message: "user.db would not migrate." },
+      existed: true,
+    });
+    expect(await status(core)).toEqual({ state: "failed", message: "user.db would not migrate." });
+    await asked();
+    expect(state.released).toBe(true);
+    // **And its Worker is ended**, which is the half that makes the sentence above true: the
+    // engine installs the pool before it opens a database, so a living Worker whose open failed
+    // still holds every handle — and the next tab, finding the lock free and the pool taken,
+    // would wait out its bound and be told the browser had not let go.
+    expect(workers[0].terminated).toBe(true);
+  });
+
+  describe("in a browser with no Web Locks", () => {
+    it("starts the engine in the same turn, as it always did", () => {
+      const { core, workers } = retrying();
+      void status(core);
+      expect(workers).toHaveLength(1);
+    });
+
+    it("asks again all the same, and opens when the pool is let go", async () => {
+      const { core, workers, pass } = retrying();
+      void status(core);
+      workers[0].say({ kind: "opened", opened: ELSEWHERE, existed: true });
+      expect(await status(core)).toEqual({ state: "loading" });
+      pass();
+      workers[1].say({ kind: "opened", opened: READY, existed: true });
+      expect(await status(core)).toEqual({ state: "ready" });
+    });
+
+    it("says the second-tab sentence when the bound is spent: it cannot tell, and that is the likelier", async () => {
+      const { core, workers, pass, waits } = retrying();
+      void status(core);
+      for (;;) {
+        workers[workers.length - 1]?.say({ kind: "opened", opened: ELSEWHERE, existed: true });
+        if (waits.length === 0) break;
+        pass();
+      }
+      expect(await status(core)).toEqual({ state: "failed", message: ALREADY_OPEN, reload: true });
+    });
+
+    it("is what a browser that refuses the lock gets, too", async () => {
+      const refusing: LockManagerLike = {
+        request: () => Promise.reject(new DOMException("denied", "SecurityError")),
+      };
+      const { core, workers, pass } = retrying({ locks: refusing });
+      void status(core);
+      await asked();
+      expect(workers).toHaveLength(1);
+      workers[0].say({ kind: "opened", opened: ELSEWHERE, existed: true });
+      pass();
+      workers[1].say({ kind: "opened", opened: READY, existed: true });
+      expect(await status(core)).toEqual({ state: "ready" });
     });
   });
 });
@@ -1064,9 +1370,9 @@ describe("the service worker's page half", () => {
   });
 
   it("refuses the ask at once in a second tab, so the worker does not wait on it", async () => {
-    const { core, worker, workers } = served();
+    const { core, workers } = served(new FakeWorkers(), { locks: fakeLocks(true).locks });
     void status(core);
-    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    await asked();
     const replies = workers.ask({ kind: "grimoire:picture-source", path: "/display/abc/0" });
     await vi.waitFor(() => expect(replies).toEqual([{ kind: "refused", message: ALREADY_OPEN }]));
   });
@@ -1113,10 +1419,10 @@ describe("the service worker's page half", () => {
   it("does not reload a second tab when the first one's press takes the page over", async () => {
     // The tab that pressed reloads and opens the database again; this one is a boot screen with
     // a Reload link, and a reload of its own would race the other for the database.
-    const { core, worker, workers, reload } = served();
+    const { core, workers, reload } = served(new FakeWorkers(), { locks: fakeLocks(true).locks });
     void status(core);
-    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
-    await status(core);
+    await asked();
+    expect(await status(core)).toMatchObject({ state: "failed", message: ALREADY_OPEN });
     workers.takeOver();
     expect(reload).not.toHaveBeenCalled();
   });

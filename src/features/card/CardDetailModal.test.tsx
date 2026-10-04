@@ -975,8 +975,8 @@ it("re-reads the figures after a write it has no callback to hang off", async ()
   // under each of `["collection"]`, `["wishlist"]` and `["decks"]`, so every writer in the app
   // refreshed it through the invalidation vocabulary it already used. One query can be under only
   // one of those roots — and `Add to wishlist` here goes through `CardMenuDeps`, whose `mutate`
-  // returns `void`, so there is nothing to chain an invalidation onto either. The falling edge of
-  // `useIsMutating` is what catches it; without that the figure goes on saying what it said
+  // returns `void`, so there is nothing to chain an invalidation onto either. `useHoldingsFreshness`,
+  // hearing the write settle, is what catches it; without that the figure goes on saying what it said
   // before the press, which is the failure `query.ts`'s 30 s `staleTime` makes look deliberate.
   renderModal("c1");
   await screen.findByRole("dialog");

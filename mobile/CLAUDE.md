@@ -289,8 +289,8 @@ failure behind each at its own site:
 | `npm run web:wasm` | — | The engine as a WASM module into `dist-wasm/` (`scripts/build-wasm.mjs`). Needs clang 18 or newer and the `wasm-bindgen` CLI at the version `Cargo.lock` resolves; minutes, cold. **Run it before any of the three below** |
 | `npm run web:dev` | **The web host**: the real engine in a Worker, its databases in this browser's OPFS | The web app in a browser on port 5176 — driven in Chrome only so far. No Rust process, **no lock**. A `web:wasm` beside a running server is picked up by a reload. **Registers no service worker, so it draws no card picture** — `web:preview` does |
 | `npm run web:build` | — | `tsc`, the Worker's and the service worker's own `tsc` programs, then the bundle into `dist-web/` with the engine under `wasm/<build id>/` — and last, `sw.js` at its root, built from the list of what was just written. Fails, in a sentence, when `dist-wasm/` is not built |
-| `npm run web:preview` | The same engine, from `dist-web/` | The built app on port 4176, where a missing file is a 404 as on a real host, every response carries what the hosting's `_headers` gives its address — the Content-Security-Policy on `sw.js` and the Worker's chunk among them — and `sw.js` is served `no-cache`. **The one command here that runs the service worker**: pictures, the offline shell, the update bar — and the one that enforces the policy |
-| `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP as an **offline first run**: every request the engine and the service worker make is answered from `scripts/web-smoke/`, and the checks in the script's header run over it — the card sync, the feeds, the picker, a card picture, a reload with the server gone, a waiting build and its press, and a second tab's refusal among them. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
+| `npm run web:preview` | The same engine, from `dist-web/` | The built app on port 4176, where a missing file is a 404 as on a real host, every response carries what the hosting's `_headers` gives its address — the Content-Security-Policy on `sw.js` and the Worker's chunk among them — and `sw.js` is served `no-cache`. **The one command here that runs the service worker for you to drive**: pictures, the offline shell, the update bar — under the policy, enforced |
+| `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP as an **offline first run**: every request the engine and the service worker make is answered from `scripts/web-smoke/`, and the checks in the script's header run over it — the card sync, the feeds, the picker, a card picture, a reload with the server gone, a waiting build and its press, and a second tab's refusal among them. **Served as the host serves it since step 5.5b** — `_headers` on every response, the host's 404 for a miss — and a policy refusal anywhere fails the run. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
 
 - **`mobile:tauri` is the desktop binary with a config overlay** (`src-tauri/tauri.light.conf.json`):
   it **takes the `app` lock** and reads `src-tauri/target/debug/data`. Read the `running-the-app`
@@ -371,7 +371,9 @@ failure behind each at its own site:
   `useCardAdds`); a tile's `⋯` opens a sheet, **a tile of several rows asks which copy and every
   write addresses one row**, a managed wish has no `⋯`, a removal offers the desktop's `bulk_undo`
   ticket back, and an add's `Undo` is the stepper one copy back. Settings' panels make the desktop's
-  own writes. **Not yet**: folder management, a copy's purchase price, the deck tokens band's and
+  own writes. **The card sheet's *In your grimoire* figures are settled by `useHoldingsFreshness`,
+  mounted in the sheet's shell** (2026-10-04): no writer on this face names that read's key, so
+  without it the figures stood still after the sheet's own add. **Not yet**: folder management, a copy's purchase price, the deck tokens band's and
   stats band's writes.
 - **The web host opens its database, answers commands and builds its corpus** (phase 5, steps
   5.1 and 5.2, 2026-10-04 — *The web host* below): the launch's downloads run in a browser, so
@@ -381,8 +383,12 @@ failure behind each at its own site:
   icons** are in `mobile/public/`, the light builds' own public directory since step 5.4, so no
   other build carries them; `scripts/light-icons.mjs` renders the icons from the mark, and
   **there is no install button**: a browser's own install UI is the install. **Nothing is deployed**: the
-  hosting Worker and its policy are source in `app-worker/` (step 5.5's first half).
-- **No device sync on a light install**: the phone face pairs with nothing. **It does hear the
+  hosting Worker and its policy are source in `app-worker/` (step 5.5's first half), and the
+  built app was driven end to end under that policy in one headless Chrome (its second half,
+  light-app.md §9.6).
+- **No device sync on a light install**: the phone face pairs with nothing. **In a browser the
+  engine refuses every relay command in a sentence** (`NOT_FROM_A_BROWSER_YET`, until phase 6)
+  — draw the refusal, never work around it from a face. **It does hear the
   host's card sync and the feeds** — `phone/cardData.ts`'s `useCardDataWatch`, mounted once in
   `PhoneFace`, runs the desktop shell's own listeners (`useSyncInvalidation`, the feed hooks) and
   draws the loudest running job on the mana line; an empty card search says *No cards match.*
@@ -481,6 +487,19 @@ built in the `web` mode.
   host saying that a fresh document may find things different: a second tab (the first holds
   the database, and may since have closed), an engine that never loaded, one that stopped. A
   database that would not open carries none, and neither native host ever sends it.
+  - **The host finds a second tab by a Web Lock, not by the pool's refusal**
+    (`src/lib/core/web/holder.ts`, 2026-10-04). The document that holds the database holds
+    `mtg-grimoire:database` for its lifetime; a new document that finds it held is told at
+    once and starts no engine. One that finds it free and is still refused by the pool is
+    looking at a Worker of a page that has **gone** — a reload or a closed tab while the
+    engine was inside a long call, which keeps its handles for one to three seconds — and
+    asks again with a fresh Worker, on a short backoff, for up to ten seconds, the gate
+    reading *Opening your collection…* throughout. Until this, that reload left the reader on
+    the second-tab sentence with no other tab open, for as long as the page stood. Only a
+    bound spent says anything, and not that a tab is open (`STILL_HELD`) — except in a
+    browser with no Web Locks, which retries the same and then says the second-tab sentence.
+    **Chrome 154 is all that has run it**; light-app.md §9.6 has the scenarios and what is
+    unproven.
 - **`BootScreen` may draw `ReloadLink` for it, because that is drawn from what the host
   answered** — the rule above (*Nothing here asks where it is running*), kept rather than bent.
   Never offer the reload from a test of the page's surroundings. `ReloadLink` is a link to
@@ -529,9 +548,8 @@ built in the `web` mode.
   each feed in turn, on every launch, and one first run against the real hosts is measured in
   [light-app.md](../docs/reference/light-app.md) §9.2. **Not there yet**, each with the step
   that owns it in [the plan](../docs/superpowers/plans/2026-10-04-light-app-phase-5.md): no
-  deploy — the hosting Worker is built and nothing is at the address, and the step's second half
-  (the module's size with timings, CI's smoke run under the policy, the phase's end-to-end run)
-  is not done (5.5, §9.5); no sync (phase 6).
+  deploy — the hosting Worker is built and nothing is at the address; that is the owner's
+  (§9.5, and §9.6 for the phase's own run and what it left) — and no sync (phase 6).
 - **The service worker is the web host's, and nothing here names it** (step 5.3;
   `src/lib/core/web/sw/`, registered by the page's half of the web core in a built app and
   never by the dev server). What a page sees of it is three things, each through the seam:
@@ -566,7 +584,8 @@ built in the `web` mode.
   so no portal or popper library and neither forbidden `motion` API — binds the phone face in a
   browser too, and fails there as silently. **`web:preview` is where that policy is enforced,
   not `web:dev`**: Vite's dev server sends no policy and injects `<style>` itself, so a page
-  that works in dev has proved nothing about it. A card picture is drawn from this origin alone
+  that works in dev has proved nothing about it. **`web:smoke` serves under it too, and a
+  refusal fails the run** — in the page, the engine's Worker or the service worker. A card picture is drawn from this origin alone
   (`img-src 'self' data:`), and the engine may ask only the hosts `connect-src` names —
   [`app-worker/README.md`](../app-worker/README.md) has both lists and why.
 - **The desktop face's file dialogs are answered on the page** (step 5.4): `export_save_file` is

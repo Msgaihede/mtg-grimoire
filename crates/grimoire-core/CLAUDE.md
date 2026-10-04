@@ -103,7 +103,7 @@ over there is this crate's item unless that file defines one.
 | `platform::timer::Turn`, `NoTurn` and `unbroken` — where a batch loop written once for every host lets the host have a turn; the turn that is none; and a future that never waits, run where it stands | a loop handed `NoTurn` and run through `unbroken` is a function call: one poll, no runtime | the same code handed a `Breather`: one `yield_to_host` each time its budget is spent |
 | `platform::http` — `Client` (`get`, `post`, `deadline`), `Request` (`header`, `body`, `send`, `send_within`), `Response` (`bytes`, `text`), `Body` (`chunk`, `chunk_within`), `Error` | `reqwest` over rustls, with a connect bound and a per-read bound; `deadline` is **not applied** | `reqwest` over `fetch`: **no connect or read bound to set**, so a request is bounded by `deadline` — the whole of it — or, for a body too long for one, by `send_within` and `chunk_within`, which give up on a wait rather than on the request; **no `User-Agent` is set** (a page may not choose one); `is_connect()` is always `false` |
 | `platform::host` — `keeps_files()`, `asks_as_a_page()`: the two facts a download picks its shape by | `true`, `false` | `false`, `true`: a download is streamed into its sink, no request carries a conditional header, and a feed whose server permits no page is not asked |
-| `platform::device::name()` — what this machine is called, for a device's default name | `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere | `None`: a page has no such thing to ask, and `identity::mint_name` falls back to a word |
+| `platform::device::name()` — what this machine is called, for a device's default name; `device::kind()` — the word for a machine that is called nothing, which is what `identity::mint_name` falls back to | `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere; `Desktop`, or `Android` on Android | `None`: a page has no such thing to ask; **`Browser`** — it was `Desktop` on every host until a browser install drew "Desktop — not paired yet." |
 | `platform::files` — `open`, `read`, `write`, `remove`, `remove_dir`, `create_dir_all`, `entries`, `listing`, `set_modified`, `is_file`, `exists`; and `files::aio` for an `async fn`, with `read` and `rename` | `std::fs`; `tokio::fs` | **refused**, `ErrorKind::Unsupported`; the two questions answer `false` |
 | `platform::sync::Semaphore`, `Lock` — a permit and a lock an `async fn` holds across an `.await`, **first come, first served**; `Shared<T>` — a value one holder at a time changes, the same lock with something behind it | `tokio::sync` | `tokio::sync`: it needs no runtime |
 | `platform::Sendable` — what a fence over a future's `Send`-ness bounds by | `Send` | anything: no request is `Send` there, and there is no other thread |
@@ -500,7 +500,24 @@ its second: `sync_engine::{client, entitlement}` and `sync_pair::pairing`, with 
   natively by its connect and read bounds, and in a browser by `Client::deadline`, the whole
   request: **120 s** for the sync client — pairing's rendezvous included, which goes through it
   — whose unpaged pull can be large, and **30 s** for the entitlement. ⚠️ **No browser has run
-  either number**; the web phase measures them.
+  either number, and the web phase did not**: a page asks the relay nothing (the next rule),
+  so they are phase 6's to measure.
+- ⚠️ **A web page does not ask the relay, and phase 6 deletes the function that says so.**
+  `sync_engine::entitlement::not_from_a_page_yet()` answers the sentence
+  `NOT_FROM_A_BROWSER_YET` on a host whose requests are a page's (`platform::host`), because
+  the relay sends no CORS answer today (`relay/src` has none) and every request to it costs a
+  pre-flight. It is asked at the only two ways to a relay client — `client::relay()` and
+  `entitlement::relay()`, so **no request can be built without passing it**, and the refusal
+  is returned before the `say` that logs a failed request — and at the four doors that would
+  otherwise make something locally for a flow that cannot finish: `pairing::begin` and
+  `accept`, `commands::begin_authorize` and `ensure_group`. Local reads, a rename, a cancel
+  and **leaving a group** are untouched: a departure's courtesy call is refused like any
+  request and the local clear runs anyway. Held by
+  `commands::tests::on_a_page_no_command_asks_the_relay_and_each_that_would_says_so`, against
+  a mock relay that counts. **Three things move together when phase 6 gives the relay CORS**:
+  this function goes (the compiler then names each caller), the relay gains its `OPTIONS` and
+  `Access-Control-*` code, and `app-worker/src/hosting.test.ts`'s test that the relay is
+  *absent* from the hosting policy's `connect-src` is turned round.
 - **What a press runs on is the host's.** The desktop's wrappers are
   `sync::on_a_worker(|| async { … state.lane_for_press().await? … })` in `src-tauri`, and a
   departure is `sync_pair::pairing::leave(&State)` here, which takes `State::lane()` — so a
@@ -741,13 +758,19 @@ is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain c
   `std::thread::scope` and `Instant` panic, so nothing may call the session there before the light
   app's phase 7 seams them; the Android compile is CI's. **A change under `crates/card-scanner`
   runs the `core` job** — `scripts/ci-route.mjs`'s `crates/*` arm took `core` the same day.
-  ⚠️ **It costs the web module 1.84 MB that nothing calls** (measured 2026-10-04, step 5.1):
-  the scanner's `ocrs` is taken with its default features, one of which is `export-wasm` —
-  `#[wasm_bindgen]` classes of its own (`OcrEngine` and nine more) that become exports of
-  `grimoire_web.js` and root the whole OCR runtime past LTO. With that feature off in a scratch
-  copy the module was 6 703 909 B against 8 547 708 B. The cure is `default-features = false`
-  on `ocrs` in `crates/card-scanner/Cargo.toml`, keeping its `rten`; it was found by the web
-  host's step and left for whoever owns that manifest.
+  **It costs the web module 35 583 B of code, and LTO is the whole reason it is that little**
+  (read off the name section, 2026-10-04, step 5.5, at `opt-level` 3): no command in the table
+  reaches the session, so detection, the hashes, `ocrs`, every `rten*` crate and the image
+  codecs are dropped at link time, and what stays is `stored_prefs`, `stored_tray` and their
+  writes — which a browser does call. So there is nothing here to fence out of the web build,
+  and no `cfg` to want. ⚠️ **An export is a root, and one cost 1 882 984 B until that step**:
+  `ocrs`'s default `export-wasm` feature is a `#[wasm_bindgen]` API of its own — seven classes,
+  `OcrEngine` among them — which became exports of `grimoire_web.js` and kept the whole OCR
+  runtime past LTO. `crates/card-scanner/Cargo.toml` now takes `ocrs` with
+  `default-features = false, features = ["rten"]`; natively that compiles what it always did,
+  because the gate reads `target_arch = "wasm32"` as well as the feature. **A dependency of the
+  scanner's that carries `#[wasm_bindgen]` items does this again, silently** — the symptom is a
+  class in `dist-wasm/grimoire_web.js` that is not `reqwest`'s `IntoUnderlying*` three.
 - A target-specific dependency goes in a `[target.'cfg(…)'.dependencies]` table. That is the one
   place outside `src/platform/` a target is named, and the fence does not read it for that.
 - **The `testing` feature is test scaffolding and nothing a build ships**: `schema::memory_pair`,

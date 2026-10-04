@@ -87,7 +87,7 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   Chromium decides at the call and a first visit's no would otherwise stand after an install —
   and recorded. The marketplace picker offers what the host can reach.
   ([light-app.md](../../reference/light-app.md) §9.2 is the record.)
-- [ ] **5.3 — the service worker.** The shell precached, one cache per build; card images
+- [x] **5.3 — the service worker** (#809, merged 2026-10-04). The shell precached, one cache per build; card images
   answered from Cache Storage on the app's own origin (`/mtgimg/…`), the Scryfall address asked
   of the core **through the page that asked**, because a service worker cannot reach the
   database Worker, and the stored response rebuilt from its bytes; Settings' *Clear cache*
@@ -108,7 +108,7 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   place**: the Android host opens a link through Tauri's opener, which its capability grants,
   and only its clipboard is the browser's.
   ([light-app.md](../../reference/light-app.md) §9.4 is the record.)
-- [ ] **5.5 — hosting, and the phase's own run.** A Cloudflare Worker with static assets at an
+- [x] **5.5 — hosting, and the phase's own run** (#808 for the hosting, merged 2026-10-04; the run in a step of its own, 5.5b, the same day). A Cloudflare Worker with static assets at an
   origin root, beside the relay and never the same one: the single-page fallback, the headers a
   service worker and a WASM module need, its `wrangler.jsonc` with `mtg-grimoire.app` as its
   custom domain, and a runbook that opens with asking the host. Then the built app driven end to end against round one's
@@ -117,8 +117,13 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   [light-app.md](../../reference/light-app.md) §9.5 is the record), **differently in one
   place**: the Worker is not assets alone — the fallback by itself answers a missing file with
   the document, so a script of a few lines makes that a 404. The headers are a `_headers` file
-  only the web build carries. **The box stays open for the second half**: the module's size
-  with timings, and the phase's own run.
+  only the web build carries. ~~**The box stays open for the second half**: the module's size
+  with timings, and the phase's own run.~~
+  **The second half landed**: the module's size settled by timings (`opt-level` stays 3), the
+  smoke served under the hosting policy, and the built app driven on both faces against the
+  real hosts. ([light-app.md](../../reference/light-app.md) §9.6 is the record, with what the
+  run found, fixed and left.)
 
-What only Markus can close stays open on the issue: the deploy itself, and a run on a real phone's
-browser over `adb reverse`.
+What only Markus can close stays open on the issue: the deploy itself — `wrangler dev` first,
+then the zone checks `app-worker/README.md` lists — a run in a real phone's browser over
+`adb reverse`, Firefox and Safari, and Android's clipboard on a device.

@@ -4,6 +4,7 @@ import {
   RANK,
   comboActivity,
   createActivityStore,
+  marketplaceFeedActivity,
   megabytes,
   oracleTagActivity,
   syncActivity,
@@ -11,7 +12,12 @@ import {
   updateActivity,
   type Activity,
 } from "@/lib/activity";
-import type { ComboProgress, OracleTagProgressEvent, SyncProgressEvent } from "@/lib/ipc";
+import type {
+  ComboProgress,
+  FeedProgressEvent,
+  OracleTagProgressEvent,
+  SyncProgressEvent,
+} from "@/lib/ipc";
 
 const job = (over: Partial<Activity> = {}): Activity => ({
   key: "sync",
@@ -328,14 +334,20 @@ describe("comboActivity", () => {
     expect(activity?.value).toBeCloseTo(0.509, 2);
   });
 
-  /** `download` reads `content_length().unwrap_or(0)`, so a host that declares none leaves the
-   *  phase with a sentence and no denominator rather than an error. */
-  it("has no figure and no bar for a download with no declared length", () => {
-    const activity = comboActivity(true, combos({ done: 14_000_000, total: 0 }));
+  /**
+   * A download with no denominator: a host that declares no length, or — in the web app — a
+   * body the browser decompressed, whose declared length is the wire's and not its own, so the
+   * engine sends `total: 0`. The bytes so far are still real, and are the only sign the job is
+   * moving; a fraction and a bar would need a total nobody has.
+   */
+  it("counts the bytes so far, with no fraction and no bar, when there is no total", () => {
+    const activity = comboActivity(true, combos({ done: 312_400_000, total: 0 }));
 
     expect(activity?.label).toBe("Downloading combos");
-    expect(activity?.detail).toBeNull();
+    expect(activity?.detail).toBe("312 MB");
     expect(activity?.value).toBeNull();
+    // Before the first byte there is nothing to count: `0 MB` would be a figure about nothing.
+    expect(comboActivity(true, combos({ done: 0, total: 0 }))?.detail).toBeNull();
   });
 
   /**
@@ -386,6 +398,30 @@ describe("comboActivity", () => {
     expect(topActivity([combo, update])).toBe(update);
     expect(topActivity([combo, oracleTags])).toBe(oracleTags);
     expect(RANK.combos).toBeGreaterThan(RANK.marketplaceFeed);
+  });
+});
+
+describe("marketplaceFeedActivity", () => {
+  const feed = (over: Partial<FeedProgressEvent> = {}): FeedProgressEvent => ({
+    marketplace: "cardkingdom",
+    phase: "downloading",
+    done: 0,
+    total: 0,
+    ...over,
+  });
+
+  /** Card Kingdom declares no length at all, and in the web app its body arrives decompressed:
+   *  the row says how much has come and draws no bar — `comboActivity`'s rule, one feed over. */
+  it("counts a download against its total where there is one, and alone where there is not", () => {
+    const sized = marketplaceFeedActivity("Card Kingdom", feed({ done: 12e6, total: 64e6 }));
+    expect(sized?.detail).toBe("12 / 64 MB");
+    expect(sized?.value).toBeCloseTo(0.1875, 4);
+
+    const unsized = marketplaceFeedActivity("Card Kingdom", feed({ done: 41_600_000 }));
+    expect(unsized?.label).toBe("Downloading Card Kingdom prices");
+    expect(unsized?.detail).toBe("42 MB");
+    expect(unsized?.value).toBeNull();
+    expect(marketplaceFeedActivity("Card Kingdom", feed())?.detail).toBeNull();
   });
 });
 

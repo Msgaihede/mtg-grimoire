@@ -58,7 +58,6 @@ import {
 } from "react";
 import {
   skipToken,
-  useIsMutating,
   useMutation,
   useQuery,
   useQueryClient,
@@ -101,7 +100,8 @@ import { copyFinish, copyOption, finishRefusal } from "./copyEdit";
 import { ownsArrowKeys } from "./arrowKeys";
 import { useOptionalAddCardToDeck } from "./cardMenu";
 import { cardDetailKey } from "./cardDetailKey";
-import { cardHoldingsKey, cardPrintingsKey, HOLDINGS_KEY } from "./cardKeys";
+import { cardHoldingsKey, cardPrintingsKey } from "./cardKeys";
+import { useHoldingsFreshness } from "./useHoldingsFreshness";
 import { CardModalArt } from "./CardModalArt";
 import { CardModalControls } from "./CardModalControls";
 import { CardModalPrintings } from "./CardModalPrintings";
@@ -339,43 +339,6 @@ export function artistOf(
  *  reader knows. Pointed at the constant because two literals holding one decision drift the
  *  first time either moves — which is `useDeck`'s rule at the app's other one-press add. */
 const MODAL_CONDITION = MENU_CONDITION;
-
-/**
- * Refetch the grimoire figures whenever **any** write in the app has finished.
- *
- * **This is the price of one read replacing three, and it is a mechanism rather than a
- * belt-and-braces.** Every writer that can move these three numbers settles its own roots and
- * only its own: `useCardMenuDeps`' collection add fires all four of `query.ts`'s
- * `OWNED_WRITE_KEYS`, its wishlist add fires `["wishlist"]` and `["cards", "search"]`,
- * `AllPrintingsDialog`'s wish fires the same pair, and an ordinary deck write fires `["decks"]`
- * alone. {@link HOLDINGS_KEY} can sit under exactly one of those, so a key chosen for any one
- * writer is a figure that silently stops moving for the others — and `query.ts`'s 30 s
- * `staleTime` is what turns that into *a wrong number on screen* rather than a slow one.
- *
- * **The falling edge of `useIsMutating` is the one signal that catches all of them**, including
- * the three presses this file makes through callbacks it cannot chain: the action row's two adds
- * go through `CardMenuDeps`, whose `mutate` returns `void`, and `Add to deck` reaches the app's
- * single `useCardToDeck` through a context that returns `void` too. A mutation's own `onSuccess`
- * has already run by the time its status leaves `pending`, so by the falling edge every root the
- * writer meant to settle is settled and the backend row is committed — this read is the last one
- * to be asked and gets the written answer.
- *
- * What it costs is **one extra read per press, and only while a card is open** — the modal is the
- * only thing that mounts this. A write that cannot have moved a holding (a label, a deck cover)
- * pays it too; that is the same trade `settle` below already makes by firing four roots for a
- * write that moves one of them.
- */
-function useHoldingsFreshness(): void {
-  const queryClient = useQueryClient();
-  const writing = useIsMutating();
-  // A ref rather than state: this is an edge detector and a re-render of its own would be one.
-  const wasWriting = useRef(writing);
-  useEffect(() => {
-    const settled = wasWriting.current > 0 && writing === 0;
-    wasWriting.current = writing;
-    if (settled) void queryClient.invalidateQueries({ queryKey: HOLDINGS_KEY });
-  }, [writing, queryClient]);
-}
 
 /**
  * Remember each card the modal opens, for the home page's **Recently viewed** strip.
@@ -1148,7 +1111,7 @@ function Body({
    * deck (a claim is clamped to what the entry still holds), and the search results, which draw
    * `ownedQuantity` on every row.
    *
-   * **{@link HOLDINGS_KEY} is deliberately not among them.** It is not under any of these roots
+   * **`HOLDINGS_KEY` (`cardKeys.ts`) is deliberately not among them.** It is not under any of these roots
    * and could not be under all three, so it is settled by {@link useHoldingsFreshness} instead —
    * which catches this write and every write made through a callback this file cannot chain. A
    * key added here would refresh the figures after a stepper press and leave them stale after the

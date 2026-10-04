@@ -617,6 +617,15 @@ fn http() -> http::Client {
     build_http()
 }
 
+/// **The only way this module reaches its client**: [`http`], behind
+/// [`entitlement::not_from_a_page_yet`], which has the reason. Every request below is built
+/// from this, so none can be sent from a host the relay cannot answer; the refusal is the
+/// bare sentence, returned before the `say` that logs a failed request — a refusal is not one.
+fn relay() -> Result<http::Client, String> {
+    entitlement::not_from_a_page_yet()?;
+    Ok(http())
+}
+
 /// The one place the client's shape is written down, so the two arms above cannot drift on a
 /// timeout the way two copies of a builder would.
 fn build_http() -> http::Client {
@@ -840,7 +849,7 @@ async fn fetch_key_page_at(
 ) -> Result<Option<KeyPage>, String> {
     let auth = crypto::relay_auth(&group.group_key, &group.group_id, group.epoch);
     let url = keys_url(base, device, group, at);
-    let response = match http()
+    let response = match relay()?
         .get(&url)
         .header("authorization", &format!("Bearer {auth}"))
         .send()
@@ -1204,7 +1213,7 @@ pub async fn post_rotation(db: &impl Store, rotation: &identity::Rotation) -> Re
         "keys": keys,
     })
     .to_string();
-    let response = match http()
+    let response = match relay()?
         .post(&url)
         .header("content-type", "application/json")
         .header("authorization", &format!("Bearer {auth}"))
@@ -1263,7 +1272,7 @@ pub async fn post_rendezvous(
     let base = db.with(|conn| Ok(entitlement::base(conn)))?;
     let url = format!("{base}/p/{rv}/{slot}");
     let body = serde_json::json!({ "blob": blob }).to_string();
-    let response = match http()
+    let response = match relay()?
         .post(&url)
         .header("content-type", "application/json")
         .body(body)
@@ -1301,7 +1310,7 @@ pub async fn get_rendezvous(
 ) -> Result<Option<String>, String> {
     let base = db.with(|conn| Ok(entitlement::base(conn)))?;
     let url = format!("{base}/p/{rv}/{slot}");
-    let response = match http().get(&url).send().await {
+    let response = match relay()?.get(&url).send().await {
         Ok(r) => r,
         Err(e) => {
             say(db, "rendezvous", kind_of(&e), &e.to_string(), Some(&url));
@@ -1498,7 +1507,8 @@ async fn post_ops(
         }
     };
     let body = serde_json::to_string(&envelope).map_err(|e| Refusal::Failed(e.to_string()))?;
-    let response = http()
+    let response = relay()
+        .map_err(Refusal::Failed)?
         .post(&url)
         .header("content-type", "application/json")
         .header("authorization", &format!("Bearer {token}"))
@@ -2074,7 +2084,7 @@ pub async fn pull(
         "{base}/g/{}/pull?since={cursor}&device={device}",
         group.group_id
     );
-    let response = match http()
+    let response = match relay()?
         .get(&url)
         .header("authorization", &format!("Bearer {token}"))
         .send()
@@ -2470,7 +2480,7 @@ pub async fn ack(db: &impl Store, base: &str, token: &str) -> Result<(), String>
     // enable: `serde_json` is already here, and a feature that changes what every other request
     // in the tree is built from is a wide edit for two call sites.
     let body = serde_json::json!({ "device": device, "cursor": cursor }).to_string();
-    let response = match http()
+    let response = match relay()?
         .post(&url)
         .header("content-type", "application/json")
         .header("authorization", &format!("Bearer {token}"))

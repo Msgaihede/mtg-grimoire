@@ -17,8 +17,12 @@ use serde_json::Value;
 /// What opening the databases answered.
 ///
 /// Its own type rather than a call's answer because it happens once, before any command, and
-/// its [`Opened::AlreadyOpen`] arm is not an error a page retries — it is a different page: a
-/// sentence and a Reload.
+/// its [`Opened::AlreadyOpen`] arm is not a call's error: it says who holds the pool, and the
+/// page decides what that means. **Since the light app's step 5.5 a page retries it**, with a
+/// fresh Worker each time, when the database's Web Lock is its own — the holder is then a
+/// Worker of a document that has gone, not a second tab, which the lock tells before any
+/// Worker starts — and draws a sentence and a Reload only once its retries are spent
+/// (`src/lib/core/web/holder.ts`). This Worker never retries: it opens once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Opened {
@@ -39,8 +43,9 @@ pub enum Opened {
         corpus_journal: String,
         schema_version: i64,
     },
-    /// `{"kind":"already-open"}` — another document of this origin holds the pool's access
-    /// handles. First tab wins; the second says so.
+    /// `{"kind":"already-open"}` — another Worker of this origin holds the pool's access
+    /// handles: a second tab's, or one whose document has gone and which has not ended yet.
+    /// First tab wins; which of the two it is, is the page's to tell.
     AlreadyOpen,
     /// `{"kind":"failed","message":"…"}` — everything else, in a sentence a page can show.
     Failed { message: String },

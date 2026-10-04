@@ -160,6 +160,24 @@ export function megabytes(done: number, total: number): string {
 }
 
 /**
+ * `312 MB` — a download's bytes so far, where nobody knows how many there will be.
+ *
+ * A body a browser decompressed in transit declares the *wire's* length, which is not this
+ * body's, so the engine sends `total: 0` for it (the combos and Card Kingdom's price list in the
+ * web app): no fraction and no bar, but the count is real and is the only sign the job is moving.
+ */
+function megabytesSoFar(done: number): string {
+  return `${(done / 1_000_000).toFixed(0)} MB`;
+}
+
+/** A download's figure: against its total where there is one, alone where there is not, and
+ *  nothing before the first byte. */
+function downloaded(done: number, total: number): string | null {
+  if (total > 0) return megabytes(done, total);
+  return done > 0 ? megabytesSoFar(done) : null;
+}
+
+/**
  * Fold a sync into the job the ribbon describes.
  *
  * `busy` decides whether anything is running, never the event: a run inside the 24 h check
@@ -233,14 +251,12 @@ export function marketplaceFeedActivity(
   };
 }
 
-/** Bytes while downloading, rows while ingesting, and nothing at all without a total — the
- *  ingest's own count is real (it is rows written), so unlike the card sync's estimate it can
- *  be printed as a figure. */
+/** Bytes while downloading — against the total where the host declared one, alone where it did
+ *  not — and rows while ingesting: the ingest's own count is real (it is rows written), so
+ *  unlike the card sync's estimate it can be printed as a figure. */
 function feedDetail(progress: FeedProgressEvent | null): string | null {
   if (!progress) return null;
-  if (progress.phase === "downloading" && progress.total > 0) {
-    return megabytes(progress.done, progress.total);
-  }
+  if (progress.phase === "downloading") return downloaded(progress.done, progress.total);
   if (progress.phase === "ingesting") return `${count(progress.done)} prices`;
   return null;
 }
@@ -321,8 +337,7 @@ export function comboActivity(
     // two terminal phases whose event can outlive the run. None of the three is a phase, and
     // none may read as finished.
     label: phase ? COMBO_PHASE_LABEL[phase.phase] : "Updating combos",
-    detail:
-      phase?.phase === "downloading" && phase.total > 0 ? megabytes(phase.done, phase.total) : null,
+    detail: phase?.phase === "downloading" ? downloaded(phase.done, phase.total) : null,
     value:
       phase?.phase === "downloading" && phase.total > 0
         ? Math.min(1, phase.done / phase.total)

@@ -75,7 +75,20 @@ rusqlite = { version = "0.40", features = ["bundled"], optional = true }
 ureq = { version = "3", optional = true }
 rayon = { version = "1", optional = true }
 
-ocrs = { version = "0.13", optional = true }
+# **`default-features = false` is a subtraction of one thing, for the web module's sake.**
+# `ocrs`'s defaults are `export-wasm` and `rten`. `export-wasm` gates one module, `wasm_api`,
+# and only under `target_arch = "wasm32"`: a `#[wasm_bindgen]` JavaScript API of ocrs's own
+# (`OcrEngine`, `OcrEngineInit`, `Image`, `DetectedLine`, `TextLine`, `TextWord`, `RotatedRect`),
+# for somebody shipping ocrs itself as an npm package. A `#[wasm_bindgen]` item is an export of
+# whatever module links the crate, so with the default on those seven classes were exports of the
+# light app's `grimoire_web.js` and roots that kept the whole OCR runtime past LTO in a build that
+# calls none of it. `rten` is the other default and is named back: it is `rten/rten_format`, the
+# reader for the `.rten` models the app ships. **Natively this line compiles what it always did**
+# — the gate reads the target as well as the feature, so no desktop or Android source file is
+# in or out because of it, and `cargo tree -e features` for the desktop, the Android host and
+# the web host each lost `ocrs feature "default"` and `ocrs feature "export-wasm"` and nothing
+# else. The root `Cargo.toml`'s `wasm` profile has the bytes: 1 882 984 of them.
+ocrs = { version = "0.13", default-features = false, features = ["rten"], optional = true }
 rten = { version = "0.26", optional = true }
 # For `RotatedRect`, which `ocrs::OcrEngine::recognize_text` takes and `ocrs` does not
 # re-export. Held to `ocrs`'s own `0.26` so the type is the one it expects — a second

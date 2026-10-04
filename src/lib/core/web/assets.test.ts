@@ -1,5 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { buildIdOf, isNavigation, wasmContentType, wasmFileOf, wasmPath, wasmUrls } from "./assets";
+import { WEB_IMAGE_PREFIX } from "../../images";
+import {
+  buildIdOf,
+  isNavigation,
+  NOT_A_PLACE,
+  wasmContentType,
+  wasmFileOf,
+  wasmPath,
+  wasmUrls,
+} from "./assets";
 
 const bytes = (...values: number[]): Uint8Array => new Uint8Array(values);
 
@@ -106,5 +115,35 @@ describe("a page navigation", () => {
     expect(isNavigation("GET", "*/*", "/decks/12")).toBe(false);
     expect(isNavigation("GET", undefined, "/decks/12")).toBe(false);
     expect(isNavigation("POST", HTML, "/decks/12")).toBe(false);
+  });
+
+  /**
+   * **Nothing under a reserved tree is a place, whatever it is asked with or called.** A chunk a
+   * deploy renamed and a picture asked for before the service worker controls the page are both
+   * paths whose last segment can lack an extension — and the document there is a 200 of HTML to
+   * a caller that asked for a file. The dev server, the preview, the smoke run and the hosting
+   * Worker all answer by this one function.
+   */
+  it("is nothing under the trees that hold files, pictures or the host's own configuration", () => {
+    for (const path of [
+      "/assets/chunk",
+      "/assets/",
+      "/wasm/0123456789abcdef/grimoire_web",
+      "/mtgimg/display/abc/0",
+      "/mtgimg/",
+      "/_headers",
+    ]) {
+      expect(isNavigation("GET", HTML, path), path).toBe(false);
+    }
+    // A route that merely starts with the same letters is still a place.
+    expect(isNavigation("GET", HTML, "/assetsmith")).toBe(true);
+    expect(isNavigation("GET", HTML, "/decks/assets/1")).toBe(true);
+  });
+
+  /** The picture tree is spelled here, in a module a Vite config and a bare Node script can
+   *  import without the app behind it — and held to the constant every picture address is built
+   *  from, so the two cannot come to name different trees. */
+  it("reserves the tree card pictures are asked under", () => {
+    expect(NOT_A_PLACE).toContain(WEB_IMAGE_PREFIX + "/");
   });
 });

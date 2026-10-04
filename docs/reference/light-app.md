@@ -14,10 +14,12 @@ file dialogs are a browser's own there, and the manifest is finished** (§9.4), 
 5.3 a service worker precaches the shell, answers card pictures on the app's own origin from
 Cache Storage, and holds a newer build until the reader takes it** (§9.3) — so a built web app
 draws its pictures and opens with the network gone — and **since the first half of step 5.5
-the hosting Worker's source, its policy and its runbook are in `app-worker/`** (§9.5).
-**Nothing is deployed.** What is left of the phase is that step's second half — the module's
-size with timings, CI's smoke run under the policy, and the built app driven end to end — and
-there is no sync on a light install, which is phase 6.
+the hosting Worker's source, its policy and its runbook are in `app-worker/`** (§9.5), and
+**since its second half the module's `opt-level` is settled by timings, CI's smoke run is
+served under that policy, and the built app has been driven end to end on both faces against
+the real hosts** (§9.6). **Nothing is deployed**, and the deploy is the owner's; nothing but
+one headless Chrome on Windows has run the web host. There is no sync on a light install,
+which is phase 6 — a browser install says so in a sentence rather than asking the relay.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
@@ -3094,7 +3096,9 @@ no `wrangler`.
 - **`open` runs once whoever asks.** `host::Once` keeps the first call's *future* and every
   later caller awaits a clone of it — a second pool is never installed and the state is never
   replaced under a call in flight (`the_first_open_is_the_only_one_and_everyone_gets_its_answer`).
-  A page that wants another attempt reloads, which is a new Worker.
+  A page that wants another attempt reloads, which is a new Worker. (**Since §9.6 the page
+  makes that new Worker itself in one case**: an `already-open` met while this document holds
+  the database's Web Lock. The Worker's own rule is unchanged — it opens once.)
 - **The host starts nothing.** No card sync, no feed, no image upkeep: a download in a browser
   has no temp file to land in (step 5.2), and the upkeep loop evicts files this host does not
   have. No write observers either — the desktop's three are its mirror, its other windows and
@@ -3187,7 +3191,11 @@ no `wrangler`.
   so a second document of the origin is refused at the *install*, before it names a database.
   `wire::Opened::from_install_error` tells that from a real failure by the `DOMException`'s
   **name** (`NoModificationAllowedError`), anywhere in the text. The page turns it into
-  `{ state: "failed", message, reload: true }`. **`StartupStatus` grew `reload?: true`** — a
+  `{ state: "failed", message, reload: true }`. (**True of this step. Since §9.6 the pool's
+  refusal is not what tells a second tab**: a Web Lock is, asked before any engine starts, and
+  an `already-open` met by the document that holds the lock is retried with a fresh Worker
+  rather than told — it is a page that has gone, not a tab that is open.)
+  **`StartupStatus` grew `reload?: true`** — a
   host saying that starting again can cure the failure — and the web host sends it for a second
   tab, for an engine that never loaded and for one that stopped; never for a database that
   would not open, which will not open the second time either. **`mobile/BootScreen.tsx` draws
@@ -3251,6 +3259,10 @@ no `wrangler`.
   smaller than the one that ships.)
   **Neither was adopted in this step**: no size-optimised build has been timed in a browser,
   and the `ocrs` line is `crates/card-scanner`'s. Both are step 5.5's, with timings.
+  (**Settled there, §9.6**: the `ocrs` feature is off, worth 1 882 984 B rather than the
+  scratch copy's 1.84 MB; `"s"`, `"z"` and a build with only the Rust at `"s"` were each timed
+  on a first run and each was slower, so `opt-level` stays 3. The module that ships is
+  6 767 338 B, 2 372 783 B through `gzip -9`.)
 - **Under Node 24's V8, before any browser** (the module through a temporary export, since
   removed; which profile that module was built under is not on this record): the whole engine
   as WASM over SQLite's in-memory VFS — launch to schema 59 in 76 ms, `journal: "delete"` on
@@ -3985,7 +3997,8 @@ Windows 11, Ryzen 9 5900X; headless Chrome 154.0.8037.95; the built app through
 `web:preview`; a fresh profile; the default headless window, inner 764 × 485, so the phone
 face. Started 07:49:50 UTC. **One run, and the machine was not quiet** — total CPU read
 17–38 % during it. The module is **8 684 745 B**, 3 030 884 B through `gzip -9` (step 5.2
-shipped 8 592 080 B and 3 001 242 B); `sw.js` is build `318e5370c53b423c`, with 42 files
+shipped 8 592 080 B and 3 001 242 B; **the last module of this size** — §9.6 took the OCR
+runtime out, and ships 6 767 338 B); `sw.js` is build `318e5370c53b423c`, with 42 files
 precached. Beside it, §9.2's two runs, which were not like for like with each other either:
 
 | | This run | §9.2's first run | §9.2's second run |
@@ -4376,7 +4389,7 @@ each tab's `visibilityState` as the witness for a tab switch.
 Where the web build is served from, and under what policy: a third Cloudflare Worker,
 `app-worker/`, for `https://mtg-grimoire.app`. **This is the step's first half.** The module's
 size taken up with timings, and the built app driven end to end against round one's figures,
-are still to come and are not in this section. **Nothing is deployed**: what was committed is
+are not in this section — they are the second half, §9.6. **Nothing is deployed**: what was committed is
 source, configuration and a runbook, and [`app-worker/README.md`](../../app-worker/README.md)
 is that runbook — the probes, the steps in order, rollback and cost. Numbered for its step; 5.3
 was still in flight when this was written, on a tree with no service worker in it, and §9.3
@@ -4411,6 +4424,8 @@ stands below**; every measurement here is still of the tree it names.
   asks the network, and the document in answer would be a broken picture with a 200 a cache has
   no reason to refuse. An `<img>`'s request is `no-cors`, never a navigation, so the edge sends
   it to the script; the tree is named so the script cannot hand it the document either.
+  (**The list is `NOT_A_PLACE` in `src/lib/core/web/assets.ts` since §9.6**, read by
+  `isNavigation` itself, because the three local servers were found without it.)
   `/_headers` is refused the same way: the host parses that file and does not serve it, so its
   address is a miss with no extension.
 - **`app-worker/_headers`, emitted into `dist-web/` and nowhere else.** `vite.mobile.config.ts`
@@ -4505,7 +4520,10 @@ object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; fo
 
   **Not Mana Pool**, which sends no `Access-Control-Allow-Origin` (§9.1's table). **Not the
   relay**: sync in a browser is phase 6, which adds the host in the change that adds this origin
-  to the relay's CORS allow-list; until then the request fails either way.
+  to the relay's CORS allow-list; until then the request fails either way. (**Since §9.6 no
+  such request is made**: the engine refuses a relay call on a page in a sentence,
+  `NOT_FROM_A_BROWSER_YET`, before anything is sent — so the policy's refusal is no longer
+  what a reader meets first.)
 - ⚠️ **`data.scryfall.io` is pinned by this policy and by nothing in the engine.** No shipped
   line names the host; the desktop follows the descriptor anywhere. If Scryfall moves its bulk
   files, **every suite stays green** and a browser's first run fails — the page says `http
@@ -4579,7 +4597,7 @@ that day, not this tree's own build**: `grimoire_web_bg.wasm` at 8 623 589 B, 3 
 gzipped by Vite's report.
 
 - **`npm run web:smoke` passed as it stands** (4.5 s), all nine checks. It serves the build
-  with no policy.
+  with no policy. (It serves under the policy since the step's second half — §9.6.)
 - **The same first run, under the policy**: a scratch copy of that script whose server sends
   what `headersFor` answers and which listens for violations on the page and, by auto-attach,
   in the Worker. All nine checks passed again — the engine compiled, the card sync asked
@@ -4708,7 +4726,270 @@ from the wrong place and called every run red.
   drawn**, **a service worker** (built since, in step 5.3, and driven with no policy — §9.3;
   the two have not been driven together in a browser), **the real hosts** rather than
   fixtures, **any browser but one Chrome**, and any phone.
-- **`scripts/web-smoke.mjs` runs with no policy.** CI's `web` job therefore proves the build
+- ~~**`scripts/web-smoke.mjs` runs with no policy.** CI's `web` job therefore proves the build
   and not the build as served. What it would take: serve through `headersFor`, answer a miss
-  and `/_headers` with a 404, and listen for violations in the Worker as well as on the page.
-- **The step's second half**: the module's size with timings, and the phase's own run.
+  and `/_headers` with a 404, and listen for violations in the Worker as well as on the page.~~
+  **Closed in the step's second half (§9.6)**: the smoke's server answers as the host is read
+  to, and a refusal by the policy in the page, the engine's Worker or the service worker fails
+  the run.
+- ~~**The step's second half**: the module's size with timings, and the phase's own run.~~
+  **Done the same day — §9.6**, which also drove what the bullet above this pair lists as not
+  seen together: the desktop face over a real corpus, card pictures drawn, the service worker
+  and the real hosts, all under the policy. Still one Chrome, and still no phone.
+
+### 9.6 Step 5.5, second half — the phase's own run (2026-10-04)
+
+The module's size taken up with timings, and the built app driven as a reader would use it —
+both faces, under the hosting policy, against the real hosts. **Nothing is deployed, and no
+figure below was taken at `https://mtg-grimoire.app`**: each is the built app on `localhost`,
+answered as §9.5 reads the host to answer, in headless Chrome 154.0.8037.95 on Windows 11
+(Ryzen 9 5900X) — one browser, one machine, one day. What the run found is listed with what
+became of each, and what only the owner can close is at the foot.
+
+**The module: one line cut, four builds timed, and `opt-level` left at 3.**
+
+- **`ocrs` is taken without its default `export-wasm` feature** (`crates/card-scanner/Cargo.toml`)
+  — the dead OCR API §9.1 found and left. The module at `opt-level` 3 went from **8 684 745 B to
+  6 801 761 B**, 3 030 884 B to 2 388 746 B through `gzip -9`: 1 882 984 B that nothing called.
+  Natively the line compiles what it always did; the root `Cargo.toml`'s `wasm` profile and the
+  core's `CLAUDE.md` have the mechanism, and the symptom to look for if it happens again.
+- **Four builds of that tree, differing in the `wasm` profile's `opt-level` alone, each given
+  four first runs.** The built app under the hosting's headers; a fresh profile per run; the
+  runs interleaved A, B, C, D four times over between 09:26 and 09:42 UTC, total CPU reading
+  12–23 % before each. **The network was loopback, on purpose**: the real hosts' own files,
+  downloaded once that day, answered locally under the real hosts' headers with every other
+  name unresolvable — so the four builds were handed the same bytes at the same speed, and
+  what differs between rows is the engine. Medians, with the range:
+
+  | Build | Module | `gzip -9` | Cards: download and ingest | Cards `done` | Every launch feed done |
+  | --- | --- | --- | --- | --- | --- |
+  | **A — `opt-level = 3`** | 6 801 761 B | 2 388 746 B | **14.03 s** (13.77–14.12) | 19.71 s (19.62–20.20) | 40.90 s (40.26–41.23) |
+  | B — `"s"` | 5 535 141 B | 1 865 782 B | 16.38 s (16.15–17.60) | 22.37 s (21.85–23.62) | 44.43 s (42.75–45.27) |
+  | C — `"z"` | 4 771 206 B | 1 617 653 B | 21.03 s (20.97–21.13) | 26.86 s (26.78–26.97) | 49.41 s (48.84–49.60) |
+  | D — the Rust at `"s"`, SQLite's C at 3 | 6 090 581 B | 2 055 851 B | 16.38 s (16.08–16.70) | 22.20 s (21.81–22.81) | 43.45 s (42.51–44.84) |
+
+  Every one of the sixteen runs ended on the same counts — 118 470 cards, and 4 561, 11 612
+  and 111 486 in the oracle-tag, art-tag and combo statuses — with no error.
+- **Each smaller build was slower where a first run spends its time.** B gives back 522 964 B
+  of the compressed download and costs **+2.35 s** on the card phase; C gives back 771 093 B
+  and costs +7.01 s. **D was no faster than B there** — 16.38 s both — so what `"s"` costs on
+  that phase is in the Rust, not in SQLite's C, and keeping SQLite at 3 buys back nothing for
+  its 190 069 B.
+- **Nothing else separated the four.** The card sync's finish was 3.90 s, 4.09 s, 3.92 s and
+  3.90 s; `search_cards` for `dragon` settled at 48–50 ms and the no-text wall at
+  34–37 ms on each; a reload opened the database in 1.61–1.67 s; linear memory after the feeds
+  was 190 251 008–204 406 784 B across all sixteen, with no build apart from the others.
+- **So A ships: `opt-level = 3`.** A module is downloaded once per build and then kept by the
+  service worker; the ingest is paid on every first run and again whenever the card file is
+  taken anew. **A measurement of one machine**: what a phone's CPU makes of the same trade
+  was not taken, and a slow link — where the smaller download would count for more — was not
+  emulated.
+- **The module that ships is 6 767 338 B, 2 372 783 B through `gzip -9`** — A's profile, with
+  the engine changes of finding 2 below in it; built in 181.7 s, name section stripped, no
+  `wasm-opt`. Why it is 34 423 B smaller was not looked into. **It was not timed again**:
+  every figure in this section is the 6 801 761 B build's. Round one's module was
+  2 642 182 B.
+
+**The run, on A, against the real hosts.** The built app on `localhost:4176` under the
+hosting policy; a fresh profile; started 10:39:35 UTC; the phone face at the headless
+default, 764 × 485, and the desktop face at 1280 × 800. **One run**, and the machine's load
+during it was not recorded.
+
+- **The first run**, in time after navigation, beside §9.3's — one run each, hours apart,
+  over a network nobody controlled, so the two columns are not like for like:
+
+  | | This run | §9.3's run |
+  | --- | --- | --- |
+  | Module | 6 801 761 B | 8 684 745 B |
+  | Database open | 892 ms | 796 ms |
+  | Card download, 78 693 900 B | 14.48 s | 16.47 s |
+  | Cards `done` — **118 470 cards searchable** | **20.88 s** | 24.48 s |
+  | Oracle tags' finish | 1.43 s | 1.74 s |
+  | Art tags' finish | 3.15 s | 4.11 s |
+  | Combos' finish | 3.36 s | 4.10 s |
+  | Every launch feed done | **43.81 s** | 50.84 s |
+  | Linear memory, peak | 198 377 472 B | 205 979 648 B |
+
+  The engine's Worker asked `api.scryfall.com` four times, `data.scryfall.io` three and
+  `json.commanderspellbook.com` once; the service worker asked `cards.scryfall.io` twenty
+  times. Every one was a 200 and none was blocked.
+- **Zero Content-Security-Policy violations across the run's tasks** — the page, the engine's
+  Worker and the service worker each listened to. The one place the policy did refuse
+  something is the second finding below, which no task in the run pressed.
+- **Search and facets**, nine calls each once the feeds were in, all `playableOnly`:
+
+  | Call | Hits | First | Median of the next eight | Round one |
+  | --- | --- | --- | --- | --- |
+  | `search_cards`, `bolt` | 142 | 11.3 ms | 2.1 ms | — |
+  | `search_cards`, `dragon` | 2 363 | 52.3 ms | 48.95 ms | median 53 ms, cold 134 ms |
+  | `search_cards`, no text | 5 000 | 33.8 ms | 32.65 ms | — |
+  | `facet_cards`, no text | 100 275 | 7.7 ms | 4.3 ms | 5 ms |
+  | `facet_cards`, `bolt` | 142 | 2.2 ms | 1.05 ms | — |
+
+- **Pictures.** The first wall's twenty were each asked of the app's own origin, answered 200
+  by the service worker in 248–420 ms, median 402.5 ms — its own requests to Scryfall a median
+  of 377 ms — and stored as `image/webp`, 1 455 750 B for the twenty. After a reload the
+  database was open at 1 598 ms, the shell drawn at 1 919 ms and the tiles at 2 125 ms; each
+  of the twenty pictures came from the cache in 6 ms, and Scryfall was not asked again.
+- **The phone face, twelve reader tasks of twelve**: a typed search narrowed in the filters
+  sheet; the card sheet with its price, 140 printings, legality, oracle tags, 118 combos and
+  three *Open on …* links; an add to the collection and to the wishlist — both landed, and
+  the sheet's own figures did not move, which is finding 3; a deck created;
+  cards added from *Add cards*; a quantity changed and the commander set; a card added from
+  the card sheet; the deck's check and bracket; the deck exported — copied, and saved as a
+  file; a decklist imported from a file, its one unmatched line named; Settings' prices —
+  Mana Pool greyed with its sentence, Card Kingdom's list of 151 684 rows down in 5.75 s; and
+  *Clear cache*, which freed the 43 pictures and left the shell's cache alone.
+- **The desktop face, nine of nine**: the rail with no caption — no drag region, no window
+  buttons, no keyboard map, no *New window*; the Search wall with 25 pictures decoded; the
+  card modal, its 68 printings and a step to another; *Open on Scryfall* opening a tab; a
+  context menu's *Copy card name* pasted back into the search box; the deck editor's stacks,
+  docked search and stats band — the add landed, under a control that named another category,
+  which is finding 4; *Export deck* saving a 127-byte file; *Import* through *Choose file*;
+  the collection and wishlist pages.
+- **Offline, the server stopped**: the phone face reloaded with the database open at 1 541 ms
+  and all twenty pictures drawn; a search, a card sheet with every section, and the deck with
+  its check and bracket all answered; the desktop face opened at 1 544 ms with 25 of 25 and
+  12 of 12 pictures in the wall and the editor. **With the network cut at the browser as
+  well**, a picture never cached was the service worker's 502 in 6–7 ms and the frame's
+  *Retrying…*, and the card behind it still had its printings and combos. ⚠️ The cut reached
+  the page and the service worker only — Chrome answered *Not supported* for the dedicated
+  Worker — so the engine was never asked to fetch with no network.
+- **A second tab** was told at once, and the first went on answering. **The update flow, once**:
+  a second build's worker waited, the bar read *A new version of MTG Grimoire is ready.*, a
+  reload changed nothing, the press left one shell cache — the new build's — and 118 470
+  cards, and the second tab was neither told nor reloaded. **The cleared-storage notice**: drawn
+  after the browser's storage was emptied, still there after a reload, gone on *Got it* and
+  gone for good; the card data came back by itself, and the decks and the collection did not.
+  **The first attempt at these three stopped on the second-tab screen with no second tab
+  open** — finding 1, met by the run itself — and each passed when asked again.
+- **Storage.** After the phone face: OPFS 64 files, **959 348 736 B**; at the end, after the
+  clearing and the rebuild, 947 716 096 B, with 10 317 486 B of shell (42 entries) and
+  5 147 434 B of pictures (67) in Cache Storage. `estimate()` said `usage` 1 028 072 185 B and
+  `persisted()` was `false`. The largest renderer process peaked at 634.3 MB of working set.
+
+**What the run found, and what became of each.**
+
+1. **A reload that landed inside a synchronous engine call stranded the reader on the
+   second-tab screen** — three times in three, with no other tab open, and still there 40 s
+   later. **Fixed.** The cause, measured: a dedicated Worker is ended with its document, but
+   one inside a long synchronous call — the ingest's finish — keeps the pool's access handles
+   until it has ended. From the reload being asked to every file being free again:
+
+   | The old document's Worker was | All of the pool's files free |
+   | --- | --- |
+   | idle, or awaiting a `fetch` | by the first look, 37–42 ms |
+   | inside the engine's finish | 984 ms, 2 897 ms |
+   | the same, with `worker.terminate()` on `pagehide` | 1 589 ms, 1 045 ms |
+
+   The new document asks about 140 ms after the reload, so it always lost; and `terminate()`
+   on the way out asks for the ending the browser was already giving. **The fix is a Web
+   Lock, `mtg-grimoire:database`, taken before any engine starts** (`src/lib/core/web/holder.ts`):
+   a document's locks go with the document, which a dying Worker's handles do not. Held by
+   another document, this one is a second tab and is told at once, with no Worker started.
+   Free, any `already-open` it then meets is a pool still being let go: the refused Worker is
+   ended and a fresh one asked after 200, 400 and then 800 ms, for at most 10 s, the gate
+   reading *Opening your collection…* throughout. When the bound is spent the reader is told
+   the browser has not let go of the collection yet — `STILL_HELD`, which does not say a tab
+   is open. **A browser with no Web Locks retries the same and then says `ALREADY_OPEN`.**
+   **A document whose database did not open ends its Worker as well as letting the lock go**
+   — the review's finding, read from source and not driven: the engine installs the pool
+   before it opens a database, so a living Worker whose open failed, or was refused part-way
+   through the pool's handles, still holds them, and the next tab would have found the lock
+   free, the pool taken, and waited out its bound on a page that could never open.
+   The same reload then opened on the fifth ask, 3.0–3.3 s after the first refusal, six runs
+   in six. Nine scenarios driven with the fix in:
+
+   | Scenario | Until the app was drawn — or a second tab told |
+   | --- | --- |
+   | A reload inside the card sync's finish | 3 735 ms, 3 589 ms, 3 552 ms |
+   | A reload with the card file's handle held | 1 137 ms |
+   | A reload with a feed's file held | 941 ms |
+   | A reload with the engine idle | 940 ms |
+   | The tab closed inside the finish, and a new one opened | 2 037 ms, on the third ask |
+   | A real second tab, the first idle | told at 108 ms |
+   | A real second tab, the first busy | told at 125 ms |
+   | The second tab's *Reload*, after the first had closed | 967 ms, 1 421 ms |
+   | A navigation to `/decks`, then Back | 944 ms, 1 193 ms |
+
+   **Not proved**: any browser but this Chrome; that 10 s is enough — it is three times the
+   longest hold seen on one machine, not a ceiling; **a tab still running a build from before
+   the lock**, which holds the pool and no lock, so a new tab would retry for 10 s and then
+   say `STILL_HELD` — reasoned, not driven; "during a feed" was driven only with the
+   feed's file held, never with a reload timed into a feed's own finish; and **a lock held
+   elsewhere is believed on one ask** — a browser that lets a departing document's lock go
+   later than the next document asks for it would tell a reload it is a second tab, which is
+   this finding by another route. Not seen in Chrome; nothing rules it out elsewhere.
+2. **Settings → Sync asked the relay, which the policy refuses and the relay could not have
+   answered.** One press of *Pair a device* was thirteen violations in fifteen seconds
+   (`entitlement.rs` has the count), each a request the browser refuses and the engine can
+   only call "error sending request". **Fixed in the engine**: on a host whose requests are
+   a page's, every command that would ask the relay answers one sentence before anything is
+   sent — *"Syncing from a browser is not available yet. The desktop and Android apps can
+   pair and sync; this browser keeps its collection here."*
+   (`sync_engine::entitlement::NOT_FROM_A_BROWSER_YET`). Local reads, a rename, a cancel and
+   leaving a group are untouched. And **a device with no machine name is called what it is**:
+   `platform::device::kind()` answers `Browser`, `Android` or `Desktop`, where every host said
+   `Desktop` and a browser's own Devices panel read "Desktop — not paired yet." Phase 6
+   deletes the refusal in the change that gives the relay its CORS answers.
+3. **The phone card sheet's *In your grimoire* figures did not move after an add** — `Owned 0`
+   beside the receipt, and again when the sheet was closed and opened. Nothing on the phone
+   face settled that read; and the desktop's hook, which did, watched `useIsMutating` fall to
+   zero — **which does nothing for a write answered inside one task**, the count going
+   0 → 1 → 0 between two renders. **Fixed**: `useHoldingsFreshness`
+   (`src/features/card/useHoldingsFreshness.ts`) hears the mutation cache itself, and the
+   phone face mounts it in the sheet's shell, where it is heard with no card open.
+   ⚠️ **Left**: the desktop modal mounts it with the open card, so a write made while the
+   modal is closed leaves the cached figure for up to 30 s on the next open.
+4. **The deck editor's docked search names the wrong category on its add control** — it read
+   *Add Rampant Growth to Sorcery* and the card landed in Ramp. **Found, not fixed here**:
+   handed off as its own task.
+5. ***Copy card image* on the web copies the picture's address as text** — the clipboard
+   held `text/plain`, a `cards.scryfall.io` URL, and no image. That is what the row's code
+   does on every host (`cardMenu.tsx`'s `copyCardImage` copies the address it is answered);
+   a browser is where it was read back. **Noted only.**
+
+**Beside the five.**
+
+- **The three local servers handed the document to `/mtgimg/x`** asked for as a page — the
+  dev server, the preview and the smoke's own — where the host answers a 404. `NOT_A_PLACE`
+  moved out of the hosting Worker's script into `src/lib/core/web/assets.ts`, and
+  `isNavigation` reads it: **the hosting Worker, `web:dev`, `web:preview` and the smoke now
+  answer by one list.** The dev server needed one thing more, which the review read out of
+  Vite's source: with the rewrite gone, Vite's own single-page fallback answered those
+  paths with `/index.html` — at this root, the *desktop's* document — so `light:entry`
+  writes the 404 itself there.
+- **`web:smoke` runs under the hosting policy.** Its server sends what `dist-web/_headers`
+  gives each address — parsed by `app-worker/src/headers.ts`, the reader `web:preview` serves
+  by — and answers a miss with the host's 404; a `ContentSecurityPolicyIssue` in a page, in the engine's
+  Worker or in the service worker fails the run, and so does a run that listened to no Worker
+  or no service worker. The HTTP cache is emptied before the offline reload, because the
+  policy now lets it keep `assets/` and `wasm/` for a year. **Added in this step**: a check
+  that reloads while the engine is inside a synchronous call and requires the next document
+  to open — finding 1, asked on every run of the smoke from now on.
+- **An activity row for a download with no readable total shows the bytes so far.** A body the
+  browser decompressed in transit declares the wire's length, so the engine sends `total: 0`
+  for the combos and Card Kingdom's list, and the row said nothing while 677 301 270 B went
+  by. No fraction and no bar still; the count is the one sign the job is moving.
+
+**Not measured.**
+
+- **The module that ships.** The timings and the run are the 6 801 761 B build's.
+- **A second real run, or a quiet machine.** The four-build comparison had four runs each;
+  the run against the real hosts was one.
+- **A slow link, or a slow CPU** — the two things the `opt-level` trade turns on.
+- **The engine with no network.** The cut never reached its Worker.
+- **An installed PWA, a headed window, a real eviction.** As §9.3 left them.
+- **The lock anywhere but Chrome 154**, and each of finding 1's *Not proved*.
+
+**What only the owner can close.**
+
+- **The deploy itself.** `npx wrangler dev` first — Cloudflare's own asset worker and router
+  over this configuration, before anything is public — and then the checks
+  [`app-worker/README.md`](../../app-worker/README.md) lists for the zone: each feature that
+  rewrites HTML off, and the served document equal to the built one. Every probe in that
+  runbook is still marked not yet run.
+- **A run in a real phone's browser.** Every figure here is a desktop CPU's.
+- **Firefox and Safari.** One Chrome, headless, on Windows is the whole of what has run the
+  web host — the lock, the pool, the service worker and the policy included.
+- **Android's clipboard on a device** — never run (§9.4).

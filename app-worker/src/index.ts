@@ -26,7 +26,7 @@ import { isNavigation } from "../../src/lib/core/web/assets";
  * whose last segment has no extension is a place in the app, and every place is the one
  * document. Imported rather than restated, so the three servers cannot come to disagree.
  *
- * **And three trees hold no place at all**, whatever the caller accepts ({@link NOT_A_PLACE}):
+ * **And three trees hold no place at all**, whatever the caller accepts (`NOT_A_PLACE`, in `assets.ts`):
  * the two a build writes its files into, and `/mtgimg/`, where step 5.3's service worker answers
  * card pictures. A page that worker does not control yet asks `/mtgimg/display/…` over the
  * network, and the answer has to be a 404 nothing keeps — the document there would be drawn as
@@ -55,23 +55,16 @@ const REFUSAL = {
   "cache-control": "no-store",
 };
 
-/**
- * Where nothing is a page: the bundle's hashed files, the engine's, and the card pictures the
- * service worker answers (step 5.3). A miss under any of them is a 404 to every caller.
- *
- * **And `/_headers`**, which is not a tree but is never a place either: Cloudflare parses that
- * file and does not serve it, so its address is a miss, has no extension, and would otherwise be
- * answered with the document to a caller that accepts one. The preview answers it with a 404;
- * so does this.
- */
-const NOT_A_PLACE = ["/assets/", "/wasm/", "/mtgimg/", "/_headers"];
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
     const accept = request.headers.get("accept") ?? undefined;
-    const place = !NOT_A_PLACE.some((tree) => url.pathname.startsWith(tree));
-    if (place && isNavigation(request.method, accept, url.pathname)) {
+    // `isNavigation` holds the whole rule since the phase's last step, the reserved trees
+    // included (`NOT_A_PLACE`, in `assets.ts`): the bundle's hashed files, the engine's, the
+    // card pictures the service worker answers, and `/_headers`, which Cloudflare parses and
+    // does not serve. A miss under any of them is a 404 to every caller — here, in the dev
+    // server, in the preview and in the smoke's own server, by one list.
+    if (isNavigation(request.method, accept, url.pathname)) {
       // **Asked for `/` by name, not handed the request.** The binding applies
       // `not_found_handling` to what it is given, so the request as it came would get the
       // document too — until the day somebody changes that setting, when it would get a 404 this
