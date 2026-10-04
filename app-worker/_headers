@@ -10,6 +10,9 @@
 #
 # These reach static-asset responses only. What the Worker's script answers itself — a 404 — carries
 # its own headers, set in `src/index.ts`.
+#
+# Live since 2026-10-04. A change to this file alone — a comment included — is a new build to the
+# service worker, which hashes this file into its build id: every reader is offered the update.
 
 # --- Everything ---------------------------------------------------------------------------------
 #
