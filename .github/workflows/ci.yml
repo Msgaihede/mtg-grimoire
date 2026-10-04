@@ -783,14 +783,6 @@ jobs:
         shell: pwsh
         run: pwsh -NoProfile -File .claude/skills/running-the-app/lock.test.ps1
 
-      # The auto-PR guard: which pull requests a fan-out `-All` may touch. It needs no gh
-      # and no network — the guards are pure functions of a PR object and the test builds
-      # its own. Worth a gate because the failure it prevents is arming auto-merge on
-      # release-please's PR, which would cut a release nobody asked for.
-      - name: Run the auto-PR guard tests
-        shell: pwsh
-        run: pwsh -NoProfile -File .claude/skills/auto-pr/pr-auto.test.ps1
-
   ci-ok:
     name: ci-ok
     if: always()

@@ -1,9 +1,9 @@
 # Workflow: subagents, worktrees, skills and docs
 
 How work is organised in this repo: the user's preferences for agent workflows, the project
-skills that own the worktree and shipping flow, the language-server rules, and how to keep the
-docs honest. Moved out of the root [`CLAUDE.md`](../../CLAUDE.md) without changing the wording.
-The root file keeps the one-line versions.
+skills that own the worktree and concurrency flow, and how to keep the docs honest. Moved
+out of the root [`CLAUDE.md`](../../CLAUDE.md) without changing the wording. The root file keeps
+the one-line versions.
 
 ## Working style (user preferences)
 
@@ -35,7 +35,7 @@ The root file keeps the one-line versions.
 
 ## Project skills (`.claude/skills/`)
 
-These skills carry the worktree and shipping workflow and are the authority on it — this
+These skills carry the worktree and concurrency workflow and are the authority on it — this
 file does not repeat them:
 
 - **`worktree-setup`** — the working rules for a second checkout: the base-branch check,
@@ -48,23 +48,6 @@ file does not repeat them:
   directory), claimed and released through
   `.claude/skills/running-the-app/lock.ps1`. Ports stay 1420/6006/9222; they are hardcoded
   in tracked files and must not be remapped.
-- **`shipping-a-branch`** — `npm run verify` → PR → merge `main` in (never rebase) →
-  wait for `ci-ok`. The agent does not press Merge.
-- **`auto-pr`** — the same trip when eight to ten agents are shipping at once and every
-  merge into main knocks the other PRs to `BEHIND`. Arms auto-merge, then watches for the
-  only two states GitHub abandons: a real conflict and a red `ci-ok`. Carries
-  `pr-auto.ps1`.
-
-## Language-server rules (`.claude/rules/`)
-
-**Two rules load by file *extension* rather than by directory, and sit in `.claude/rules/`.**
-They cover the language servers, which are active for every `.rs` and `.ts`/`.tsx` file with no
-setup — [`rust-lsp.md`](../../.claude/rules/rust-lsp.md) and
-[`typescript-lsp.md`](../../.claude/rules/typescript-lsp.md). Read them for when to prefer the `LSP`
-tool over grep, and for the traps each server has: **TypeScript's `findReferences` silently
-under-reports until a file is loaded** — one measured call said a live symbol had a single
-reference — and rust-analyzer's cold start reports "not on a symbol" when it means "not indexed
-yet". Both are answers that look right and are not.
 
 ## Keeping the docs honest
 

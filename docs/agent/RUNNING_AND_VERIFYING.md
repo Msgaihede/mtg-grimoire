@@ -4,9 +4,8 @@ The full command list and the traps you hit when you run the app, build it and v
 out of the root [`CLAUDE.md`](../../CLAUDE.md) without changing the wording. The root file keeps
 a short command table and the one-line versions of these rules.
 
-Related: the `running-the-app` skill (locks and ports), the `shipping-a-branch` skill (verify →
-PR), [live-ui-verification.md](../reference/live-ui-verification.md) (the CDP harness) and
-[tauri-mcp-bridge.md](../reference/tauri-mcp-bridge.md) (the other way to drive the window).
+Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md](../reference/live-ui-verification.md)
+(the CDP harness) and [tauri-mcp-bridge.md](../reference/tauri-mcp-bridge.md) (the other way to drive the window).
 
 ## Commands
 

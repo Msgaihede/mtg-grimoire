@@ -72,4 +72,4 @@ Then, in order:
 - **Running against real data** rather than an empty wall → `live-data.md`, beside this
   file. Copying `src-tauri/target/debug/data` beats a 93-second sync, but only the whole
   folder works and only with the app stopped.
-- **Work finished** → the `shipping-a-branch` skill.
+- **Work finished** → verify, commit the feature, push branch, and open PR.
