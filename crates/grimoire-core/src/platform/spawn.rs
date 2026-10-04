@@ -1,18 +1,22 @@
 //! Work taken off the caller: minutes of SQLite that an `async fn` must not sit in, and a
 //! build nobody waits for.
 //!
-//! Two shapes, because there are two kinds of caller:
+//! Three shapes, because there are three kinds of caller:
 //!
 //! * [`blocking`] is for an `async fn` with synchronous work to do — the ingest, the migration
 //!   log applied, the page reclaim, the one-time compaction. The future resolves with the
 //!   work's answer, and the task's thread is free meanwhile.
 //! * [`background`] is for work the caller does not wait for at all — the facet index's build.
 //!   It answers a handle a test can join.
+//! * [`on_a_worker`] is for an `async fn` whose work is itself async **and blocks between its
+//!   awaits** — a sync operation, whose stretches are SQLite and a wait for the connection.
+//!   Live sync's connection manager runs its round trips through it.
 //!
 //! | | Native | Browser |
 //! | --- | --- | --- |
 //! | [`blocking`] | the async runtime's blocking pool, **started by the call** | **run where it stands**, at the first poll |
 //! | [`background`] | a thread | **run where it stands**, before the call returns |
+//! | [`on_a_worker`] | a thread of the blocking pool, **with a runtime of its own to drive the future** | **awaited where it stands** |
 //!
 //! **A Worker is one thread, so in a browser nothing is taken off anything**: the work runs on
 //! the caller, to completion, and the page stays live only because the Worker is not the page.
@@ -62,6 +66,36 @@ where
     T: Send + 'static,
 {
     imp::blocking(work)
+}
+
+/// Run an **async** operation that blocks between its awaits off the task that asks for it,
+/// and resolve with what it answers.
+///
+/// **What it is for is a sync operation.** Nothing in one holds the connection across a
+/// request, but each *stretch* between two requests is SQLite work, and a wait for the
+/// connection when a reader's write has it: blocking, both, and so kept off the async runtime's
+/// own threads. Natively `make` is called on a thread of the blocking pool and the future it
+/// answers is driven there by a current-thread runtime built for it — what the desktop's
+/// `sync::on_a_worker` has always done, and still does for a press.
+///
+/// **In a browser there is no thread to take it to**, so the future is awaited where it
+/// stands, as [`blocking`]'s work is run where it stands; and on a thread a native test has
+/// said is the only one ([`super::alone`]) the same.
+///
+/// `make` and not a future: natively the future is *made* on the worker, so it need not be
+/// `Send` there — only the closure that makes it crosses. It is bounded by
+/// [`super::Sendable`] all the same, for the one native case that awaits it in place (a test's
+/// lone thread), which keeps the future this answers `Send` on every native build; in a
+/// browser that bound asks nothing.
+///
+/// `Err` is the worker itself failing: its runtime would not build, or the operation panicked.
+pub fn on_a_worker<T, F, Fut>(make: F) -> impl Future<Output = Result<T, Lost>>
+where
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: Future<Output = T> + super::Sendable,
+    T: Send + 'static,
+{
+    imp::on_a_worker(make)
 }
 
 /// Work nobody is waiting for. Joining it is for a test, and for a caller that must know it
@@ -122,6 +156,43 @@ mod imp {
         }
     }
 
+    /// Where [`on_a_worker`]'s operation is by the time its future exists.
+    enum Worker<T, F> {
+        /// On a thread of the pool, already being driven.
+        Pool(tokio::task::JoinHandle<Result<T, Lost>>),
+        /// Still in hand, to be made and awaited at the first poll — the browser arm's shape,
+        /// for a test.
+        Here(F),
+    }
+
+    /// Not an `async fn`, for [`blocking`]'s reason: the operation is handed to the pool here.
+    pub fn on_a_worker<T, F, Fut>(make: F) -> impl Future<Output = Result<T, Lost>>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: Future<Output = T> + crate::platform::Sendable,
+        T: Send + 'static,
+    {
+        let started = if crate::platform::alone::emulated() {
+            Worker::Here(make)
+        } else {
+            Worker::Pool(tokio::task::spawn_blocking(move || {
+                // A runtime of its own, and a current-thread one: the operation's awaits are
+                // requests and a lock, and this thread is the only one that has to drive them.
+                let runtime = tokio::runtime::Builder::new_current_thread()
+                    .enable_all()
+                    .build()
+                    .map_err(|e| Lost(e.to_string()))?;
+                Ok(runtime.block_on(make()))
+            }))
+        };
+        async move {
+            match started {
+                Worker::Pool(handle) => handle.await.map_err(|e| Lost(e.to_string()))?,
+                Worker::Here(make) => Ok(make().await),
+            }
+        }
+    }
+
     pub fn background<F>(work: F) -> Handle
     where
         F: FnOnce() + Send + 'static,
@@ -162,6 +233,17 @@ mod imp {
         T: Send + 'static,
     {
         Ok(work())
+    }
+
+    /// Awaited where it stands: there is one thread, and the operation's stretches run on it
+    /// between its requests as every command's do.
+    pub async fn on_a_worker<T, F, Fut>(make: F) -> Result<T, Lost>
+    where
+        F: FnOnce() -> Fut + Send + 'static,
+        Fut: std::future::Future<Output = T> + crate::platform::Sendable,
+        T: Send + 'static,
+    {
+        Ok(make().await)
     }
 
     pub fn background<F>(work: F) -> Handle
@@ -256,6 +338,59 @@ mod tests {
             "it had run before the call returned"
         );
         handle.join().unwrap();
+    }
+
+    /// **An operation on a worker is driven off the task that asked**, awaits and all — its
+    /// own runtime drives the sleep inside it — and answers what it computed.
+    #[tokio::test]
+    async fn an_operation_on_a_worker_is_driven_on_another_thread_with_its_own_runtime() {
+        let here = std::thread::current().id();
+        let (before, after, answer) = on_a_worker(|| async {
+            let before = std::thread::current().id();
+            // A timer the *worker's* runtime has to fire: nothing else is driving this thread.
+            crate::platform::timer::sleep(std::time::Duration::from_millis(5)).await;
+            (before, std::thread::current().id(), 6 * 7)
+        })
+        .await
+        .unwrap();
+        assert_eq!(answer, 42);
+        assert_ne!(
+            before, here,
+            "the operation must not run on the task's own thread"
+        );
+        assert_eq!(before, after, "and one thread drives it from end to end");
+    }
+
+    /// A panic in the operation is an answer, as [`blocking`]'s is.
+    #[tokio::test]
+    async fn an_operation_that_panics_on_its_worker_is_lost_and_says_so() {
+        async fn falls_over() -> u8 {
+            panic!("the trip fell over")
+        }
+        let lost = on_a_worker(falls_over).await.unwrap_err();
+        assert!(lost.to_string().contains("panicked"), "{lost}");
+    }
+
+    /// **On a thread standing in for a Worker the operation is awaited where it stands**, and
+    /// not before its first poll — the browser arm's shape.
+    #[tokio::test]
+    async fn an_operation_is_awaited_on_the_caller_while_it_stands_in_for_one_thread() {
+        let here = std::thread::current().id();
+        let _alone = crate::platform::alone::emulate();
+        let made = Arc::new(AtomicBool::new(false));
+        let flag = made.clone();
+        let pending = on_a_worker(move || {
+            flag.store(true, Ordering::SeqCst);
+            async {
+                tokio::task::yield_now().await;
+                std::thread::current().id()
+            }
+        });
+        assert!(
+            !made.load(Ordering::SeqCst),
+            "nothing is made until the first poll, as in a browser"
+        );
+        assert_eq!(pending.await.unwrap(), here);
     }
 
     #[test]

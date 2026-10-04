@@ -1628,7 +1628,8 @@ file is touched.
 - **No browser has run a relay request.** The two deadlines are reasoned, not measured; the web
   host's phase measures what a pull costs a Worker and starts from them.
 - **A web host needs its own socket.** `live.rs` is `tokio` tasks and `tokio-tungstenite`; the
-  browser's half — a `WebSocket`, or the polling spec §7 names — is phase 6's.
+  browser's half — a `WebSocket`, or the polling spec §7 names — is phase 6's. (**The loop moved
+  to the core in step 6.2 and the browser's arm is step 6.3 — §10.2.**)
 - **The same-second baseline skip in `apply`** (§6.8) was fixed on its own: #780, merged
   2026-10-03 and in v0.40.0 — [sync.md](sync.md), *A claim names its emission*. The two
   whole-trip tests in `sync_engine/client/tests.rs` that backdated their fixtures ten seconds to
@@ -2530,7 +2531,8 @@ to tell the page what it is.
   `State::new` with an event sink that forwards to the page and **no write observers**, then the
   facet index, the image upkeep thread, `settle(Ready)`, the corpus check, and the card sync with
   the optional feeds behind it on a first run (issue #551's rule). No mirror, no updater, no second
-  window, no live socket (phase 6).
+  window, no live socket (phase 6). (**It runs one since step 6.2, with live sync's wake as its
+  one write observer — §10.2.**)
 - **The image answer is the core's now**: `grimoire_core::images::{Reply, answer}` — the status,
   the three headers that carry meaning and the body, with no HTTP crate in it. The desktop's
   `respond`/`fail`/`not_ready` became one `to_response` over it, and its seven tests of that answer
@@ -5717,3 +5719,85 @@ here.
   `invocation_logs: false` would take it out and is the owner's to choose.
 - **A pull's pre-flight is cached per address**, and `?since=` moves with the cursor, so most
   pulls from a browser cost one more Worker invocation — and no Durable Object request.
+
+### 10.2 Step 6.2 — the live socket is the core's, and Android runs it (2026-10-04)
+
+**The connection manager moved, whole.** `sync_engine::live` — the relay doorbell's loop: one
+socket per device, five wakes, the scheduler it asks, `sync:live`, the loop's `sync:applied`,
+the `error_log` note and the write wake — is `grimoire-core`'s. `live::run(state, writes)` is the
+loop as a future **a host spawns** once its launch has settled; the desktop spawns it where
+`live::spawn` was, and keeps one thing beside a re-export of the core's module: the bounded push
+on the way out (`anything_pending`, `push_now`). Nothing the relay sees changed: the same upgrade
+request, the same protocol ping, the same trips. [sync.md](sync.md), *The connection manager,
+too*, has the was-and-is table.
+
+**What it stands on**, all under `platform/`:
+
+- **`socket`** — the one place a WebSocket is named: `connect(url, bearer)`, `Socket::next() ->
+  Event::{Text, Closed(code), Failed}`, `Socket::keepalive()`, `ws_origin`. The native arm, on the
+  desktop and Android, is `tokio-tungstenite` 0.28 over rustls with the roots compiled in, so a
+  phone is asked for no system store; the bearer rides `Authorization`. The browser arm compiles
+  and refuses every `connect`.
+- **`timer::interval`**, for the 45 s ping and the 250 ms tick: a first tick at once, a late beat
+  keeps the grid, a tick dropped mid-wait loses nothing. **Beats missed outright are dropped
+  rather than owed**, which parts from tokio's default on purpose: tokio bursts, and after an
+  hour frozen — Android does that to a background process — that is 14 400 ticks and eighty
+  pings taken back to back, by an interval that passes through no timer for a beat already due
+  and so never yields its thread or reads a frame until the burst is over.
+- **`sync::Bell`**, the write wake: `notify_one`, so a commit that lands while the loop is in a
+  trip, on a backoff or dialling is kept as one permit.
+- **`spawn::on_a_worker`**, for a trip: a pool thread with a runtime of its own, as the desktop
+  always ran one, and awaited where it stands on a host with one thread.
+- The five wakes race in `futures_util::select!` over fused futures — as fair as the
+  `tokio::select!` the fence keeps out of the core.
+
+**A dead socket is noticed.** A socket that has answered a ping once and then leaves one
+unanswered is ended within two ping periods — an ordinary failed socket, a backoff and a
+reconnect — where it used to read `live` until TCP gave up, which on Android's Linux defaults is
+on the order of a quarter of an hour. **A peer that never answers any ping is left to TCP, as
+before**: the deadline arms only on a first pong, because of what it rests on — **measured
+2026-10-04 against the step-6.1 relay under `wrangler dev --local` (wrangler 4.146.0): a raw
+protocol ping (opcode 9, empty) on a hibernatable socket was answered opcode 10, empty;
+production's edge has not been watched doing it.** Held from the first ping, an edge that
+answered none would end every socket at its second keepalive, on every device.
+
+**The fence names the socket's crate.** `platform::fence` swept for the word `tokio`, which reads
+straight past `tokio_tungstenite`; it refuses that and `tungstenite` outside `platform/` now, and
+was seen to fail on a `use` planted in `sync_engine/live.rs`. **`sync_live_state` is in the
+command table**, off the desktop-only list, so a light host answers the read a page makes when it
+mounts after the last `sync:live`.
+
+**Android** (`mobile/src-tauri`): `open` registers `live::WriteWake` as the state's one write
+observer, and `start` spawns the loop after `startup::settle`. `PageEvents` forwards `sync:live`
+and `sync:applied`. **No push on the way out** — the process ends by `_exit` or the system's
+kill, neither a hook a request can be awaited in — so the loop's 3 s write debounce pushes, and
+an op that missed it goes with the next launch's first trip.
+
+**The web host does not run it.** It registers no wake and spawns no loop, and `sync_live_state`
+answers `off` there.
+
+**What was tested, natively**: the socket against a loopback listener — the bearer in
+`Authorization`, a text frame, a protocol ping, a 4001 close with its code, a dropped
+connection, a peer that answers its pings, one that answered and went silent, one that never
+answers — and the loop itself: in no group, `off` once over twelve idle polls and nothing
+dialled; in a group, `connecting`, `live`, a ping first, then 4001 → `offline` and a `live` row;
+and on one connection and one thread (`platform::alone`), twice — with no socket and with one up
+and a `head` ahead of the cursor — no lock taken twice. Twenty-seven tests are new and five moved
+with the code; each new behaviour was seen to fail against a mutation. On the tree merged with
+step 6.1: `grimoire-core` 3 229 passed, the desktop 427, Vitest 13 933, and the core builds and
+lints clean for `wasm32-unknown-unknown`.
+
+**Open after this step:**
+
+- **The desktop app has not been driven against a relay since the move.** Its loop is the same
+  code path by path, and the tests above are a stand-in that upgrades and cannot answer a trip.
+- **No phone has run it.** Whether Android lets a backgrounded process keep the socket, and what
+  the loop looks like after a freeze, are a device's to say.
+- **Android was not compiled on the machine that wrote it** — no target, no NDK. CI's
+  `core (aarch64-linux-android)` job is the first build; the dependency tree for that target
+  resolves the socket's crate with rustls on `ring` alone.
+- **Production's pong.** The runbook's item 13 has the three-minute check after the relay's next
+  deploy.
+- **The browser's arm — step 6.3**: a page's own `WebSocket` in `platform::socket` (the bearer in
+  the sub-protocol, the text `ping`, the same pong deadline from the text `pong`), the web host
+  registering the wake and spawning the loop, and `wss://` in the policy's `connect-src`.

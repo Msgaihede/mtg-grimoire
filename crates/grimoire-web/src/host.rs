@@ -74,8 +74,10 @@ pub struct Started {
 /// network. And no image upkeep: that loop evicts files this host does not have
 /// (`grimoire_core::images::upkeep_tick`).
 ///
-/// No write observers: the desktop's three are its mirror, its other windows and its live
-/// socket, and this host has none of them.
+/// No write observers: the desktop's three are its mirror, its other windows and live sync's
+/// wake. This host has neither of the first two, and it does not start the core's live-sync
+/// loop — a browser's socket is not written yet (`grimoire_core::platform::socket`) — so it
+/// registers no wake for one either, and `sync_live_state` answers `off`.
 ///
 /// **A corpus that will not open stops this**, because nothing here can delete one:
 /// [`start_replacing`] is the same start for a caller that can.

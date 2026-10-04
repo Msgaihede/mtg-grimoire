@@ -2,8 +2,8 @@
 //!
 //! **Everything here is a pure function of an explicit `now_ms`**, so the debounces, the
 //! single-flight rule and the backoff are testable without a socket, a relay or a timer. The
-//! part that does I/O is `src-tauri`'s `sync_engine::live` — the connection manager, which is the desktop's because it
-//! is `tokio` tasks and a socket — and it is deliberately thin: this is where a bug would live.
+//! part that does I/O is [`super::live`] — the connection manager, a loop a host spawns over
+//! `platform`'s socket and timer — and it is deliberately thin: this is where a bug would live.
 
 /// How long a `head` frame waits before its round trip, so a burst becomes one trip.
 ///
@@ -85,10 +85,10 @@ impl Scheduler {
             }
             Wake::LocalWrite => now_ms.saturating_add(WRITE_DEBOUNCE_MS),
             // **There is no `Exit` here, and there was one until this review.** The shutdown
-            // push does not go through a scheduler at all: `desktop.rs`'s `ExitRequested` arm
-            // asks `live::anything_pending` and calls `live::push_now` directly, inside its own
-            // hard budget, because by then this loop may already be gone. A variant nothing
-            // constructs is a mechanism a reader believes in.
+            // push does not go through a scheduler at all: the desktop's `ExitRequested` arm
+            // asks its own `anything_pending` and calls its own `push_now` directly (`src-tauri`'s
+            // `sync_engine::live`), inside its own hard budget, because by then this loop may
+            // already be gone. A variant nothing constructs is a mechanism a reader believes in.
             Wake::Launch | Wake::Reconnect => now_ms,
         };
         // **Three cases, and only one of them moves a deadline later.**
@@ -177,7 +177,8 @@ pub enum Disconnect {
     Removed,
     /// The relay closed the socket, or the stream simply ended.
     Closed,
-    /// The connection, the upgrade or a write failed.
+    /// The connection, the upgrade or a write failed — or a keepalive went unanswered, which is
+    /// a socket that died without saying so.
     Failed,
     /// The socket reached `live`'s age limit and was replaced on purpose.
     Aged,

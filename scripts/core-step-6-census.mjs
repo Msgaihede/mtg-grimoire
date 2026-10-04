@@ -11,12 +11,14 @@ import { split, inner, code as blank } from "./lib/rs-items.mjs";
 
 /**
  * The files the sync client, the entitlement and pairing are, from the repository's root: in the
- * core since the sync step's second part, but for the connection manager and the two modules'
- * command wrappers, which are the desktop's.
+ * core since the sync step's second part — the connection manager since the light app's phase 6
+ * — but for the desktop's push on the way out and the two modules' command wrappers, which are
+ * the desktop's.
  */
 export const FILES = [
   "crates/grimoire-core/src/sync_engine/client.rs",
   "crates/grimoire-core/src/sync_engine/entitlement.rs",
+  "crates/grimoire-core/src/sync_engine/live.rs",
   "src-tauri/src/sync_engine/live.rs",
   "crates/grimoire-core/src/sync_engine/schedule.rs",
   "crates/grimoire-core/src/sync_engine/commands.rs",

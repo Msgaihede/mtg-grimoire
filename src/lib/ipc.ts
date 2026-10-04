@@ -5572,7 +5572,8 @@ export interface SyncProgressEvent {
 }
 
 /**
- * What the relay socket is doing. Mirrors `LiveState` in `src-tauri/src/sync_engine/live.rs`.
+ * What the relay socket is doing. Mirrors `LiveState` in
+ * `crates/grimoire-core/src/sync_engine/live.rs`.
  *
  * `"off"` is not a failure — it is every installation that has connected no membership and
  * paired no device, which is all of them until somebody does.

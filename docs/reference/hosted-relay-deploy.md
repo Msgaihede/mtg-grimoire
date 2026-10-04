@@ -793,7 +793,7 @@ the one that can take sync down.
 
 ### 13. The browser's half — a 101 no browser has read, and a keepalive nobody has seen billed
 
-Added 2026-10-04. **Not deployed, so none of these five has been driven.** Step 0's three pairs
+Added 2026-10-04. **Not deployed, so none of these six has been driven.** Step 0's three pairs
 settle the CORS headers and the origin check from outside; these are what only a real browser, or
 the account's own dashboard, can say. `relay/src/cors.test.ts` and `ticket.test.ts` run the
 router, and the real `Group` over stand-ins for three of workerd's globals — Node's `Response`
@@ -810,7 +810,21 @@ refuses a status of 101 — so everything below is exactly what those suites cou
 - **The desktop's socket, straight after the deploy.** It offers no sub-protocol and sends no
   `Origin`, and `ticket.test.ts` holds its 101 to no header at all — but it is the client every
   reader has, and a `Sec-WebSocket-Protocol` it did not ask for is a failed handshake. **Edit a
-  card on one desktop and watch a second pick it up without a press.**
+  card on one desktop and watch a second pick it up without a press.** The Android app's socket
+  is the same code since the light app's step 6.2 (`grimoire-core`'s `platform::socket`), so one
+  desktop answers for both.
+- ⚠️ **That the deployed edge answers a protocol ping with a pong — which the native client now
+  leans on, and nobody has watched in production.** Since step 6.2 the client ends a socket whose
+  ping went unanswered, once that socket has seen one pong (`platform::socket`'s `keepalive`), so
+  a half-open connection is noticed in two ping periods rather than when TCP gives up. workerd
+  pongs: the relay under `wrangler dev --local` answered a raw masked ping, opcode 9 and empty,
+  with opcode 10 and empty, on a hibernatable socket (2026-10-04). **Leave a paired desktop on
+  that build connected for three minutes and read the Sync panel**: `Live` throughout is the
+  pass. A socket that drops to `Offline` every ninety seconds means the edge answered one ping
+  and then stopped — the one shape the client's rule does not forgive. It leaves no `error_log`
+  row to find: a socket that lived past a minute is forgiven its end (`schedule::next_attempt`),
+  so the panel's state is the only tell. An edge that answers none at all shows nothing here: the
+  deadline never arms, and the client is where it was before the rule.
 - ⚠️ **What a tab's keepalive costs.** The pricing page bills incoming WebSocket messages at
   twenty to one and exempts protocol pings by name; of `setWebSocketAutoResponse` it says only
   that the answer costs no *duration*. Read as written, a browser's `ping` every 45 s is 1 920

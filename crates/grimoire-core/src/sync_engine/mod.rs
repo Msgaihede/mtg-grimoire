@@ -13,15 +13,19 @@
 //! * [`client`] — push, pull, the key check and the rendezvous, over `platform::http`.
 //! * [`entitlement`] — the grant: the tokens that let this device talk to the relay at all,
 //!   and the supporter status the relay last reported.
-//! * [`schedule`] — when a trip runs, as a pure function of a clock. The connection manager
-//!   that asks it is the desktop's, beside its socket.
+//! * [`schedule`] — when a trip runs, as a pure function of a clock.
+//! * [`live`] — the connection manager that asks it: one doorbell socket per device and the
+//!   loop that runs a trip when it rings. A host spawns it; the socket itself is
+//!   [`crate::platform::socket`]'s.
 //! * [`commands`] — what the sync panel reads and the functions its commands call. The
 //!   `#[tauri::command]` wrappers are the desktop's.
 //!
 //! **A sync operation reaches the database a stretch at a time, on the lane**
 //! ([`crate::state::Store`], [`crate::state::Lane`]) — see [`client`]'s module doc. The client,
 //! the entitlement, the commands' functions and pairing arrived here in the sync step's second
-//! part, after its first had restated them so that none holds a connection across a request.
+//! part, after its first had restated them so that none holds a connection across a request;
+//! the connection manager followed in the light app's phase 6, when the Android host came to
+//! run it.
 
 pub mod apply;
 pub mod baseline;
@@ -31,6 +35,7 @@ pub mod commands;
 pub mod emission;
 pub mod entitlement;
 pub mod hlc;
+pub mod live;
 pub mod merge;
 pub mod schedule;
 pub mod wire;
