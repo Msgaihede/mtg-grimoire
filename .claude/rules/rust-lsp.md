@@ -39,10 +39,13 @@ cite a `documentSymbol` line number as a declaration site**; confirm with `works
 read.
 
 **The loaded workspace is the cargo workspace at the repository root** — `src-tauri` and
-`crates/grimoire-core` — since 2026-10-02; until then `src-tauri` was a standalone package and
-the only thing loaded. **No measurement on this page was repeated after that change**, so a first
-query inside `crates/grimoire-core` that comes back empty is a cold server or an unmeasured case
-before it is a broken one. The one crate with `.rs` outside the workspace is
+`crates/grimoire-core` since 2026-10-02, the light app's Android host `mobile/src-tauri` since
+2026-10-03 and its web host `crates/grimoire-web` since 2026-10-04; until 2026-10-02 `src-tauri`
+was a standalone package and the only thing loaded. **No measurement on this page was repeated
+after any of those changes**, so a first query inside a member other than `src-tauri` that comes
+back empty is a cold server or an unmeasured case before it is a broken one — and
+`crates/grimoire-web/src/glue.rs` is compiled for `wasm32` only, which is one more thing nobody
+has asked the server about. The one crate with `.rs` outside the workspace is
 `crates/card-scanner`, which is deliberately not a member (the root `Cargo.toml` excludes it and
 its own says why) but is a path dependency of `src-tauri`, so rust-analyzer reaches it through
 that dependency rather than as a workspace of its own. How the server answers inside it has not

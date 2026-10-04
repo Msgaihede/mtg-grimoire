@@ -54,6 +54,27 @@ describe("every workflow", () => {
     const pinned = src.match(/node-version-file: \.nvmrc/g)?.length ?? 0;
     expect(pinned).toBe(setups);
   });
+
+  // **A third pin, and the one with no file of its own**: the `wasm-bindgen` CLI has to be the
+  // very version of the `wasm-bindgen` crate the module was compiled against — the CLI refuses a
+  // module whose schema it does not know — and that version is whatever `Cargo.lock` resolves. So
+  // a workflow reads it from the lock, in a shell variable; a number typed beside `--version` is
+  // right until the day the crate moves, and then the job is red for a reason its diff does not
+  // show. `--locked` because every cargo call here carries it.
+  const installs = (src) =>
+    src.split("\n").filter((line) => !/^\s*#/.test(line) && /\bwasm-bindgen-cli\b/.test(line));
+
+  it.each(entries)("%s installs wasm-bindgen-cli only at the lockfile's version", (_path, src) => {
+    for (const line of installs(src)) {
+      expect(line).toMatch(/\bcargo install wasm-bindgen-cli --version "\$[a-z_]+" --locked\b/);
+    }
+  });
+
+  // Guards the filter above: a job that stopped installing the CLI, or spelled it another way,
+  // would pass a loop over nothing.
+  it("finds the web job's install", () => {
+    expect(installs(WORKFLOWS["/.github/workflows/ci.yml"])).toHaveLength(1);
+  });
 });
 
 describe(".nvmrc", () => {

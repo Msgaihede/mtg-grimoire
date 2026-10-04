@@ -1,11 +1,17 @@
 node_modules/
 dist/
 
-# Output of the web build, removed on 2026-09-27. A checkout that ever ran it still holds the
-# generated wasm and its glue on disk, and nothing deletes an ignored file when its ignore goes —
-# so these stay until no checkout has them. `eslint.config.js` ignores the same two.
-dist-web/
+# `web/public/` is output of round one's web build, removed on 2026-09-27. A checkout that ever
+# ran it still holds the generated wasm and its glue on disk, and nothing deletes an ignored file
+# when its ignore goes — so it stays until no checkout has it.
 web/public/
+
+# The web app (the light app's `web` mode): `npm run web:wasm` writes the engine — wasm-bindgen's
+# glue and the module — to `dist-wasm/`, and `npm run web:build` bundles the page into
+# `dist-web/` with a copy of it. `eslint.config.js` ignores both and `vite.watch.ts` keeps
+# every dev server's watcher out of them.
+dist-web/
+dist-wasm/
 
 # The shared-collection viewer's bundle. `share-worker/wrangler.jsonc` declares an `assets`
 # binding over it, so a deploy needs it on disk and nothing needs it in the history.

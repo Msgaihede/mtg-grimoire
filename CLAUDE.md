@@ -169,8 +169,9 @@ no combo" and "we have never downloaded the list" have to be two different sente
 - `npm run verify` — build + lint + `cargo fmt --check` + clippy + Vitest + cargo test. **Run
   before every commit.** Rust is pinned by `rust-toolchain.toml` and Node by `.nvmrc`.
 - `npm run test` / `test:run` — frontend tests; `cargo test --workspace` — Rust tests, for every
-  member of the cargo workspace at the root (`src-tauri`, `crates/grimoire-core` and, since
-  2026-10-03, the light app's Android host `mobile/src-tauri`). **Its
+  member of the cargo workspace at the root (`src-tauri`, `crates/grimoire-core`, since
+  2026-10-03 the light app's Android host `mobile/src-tauri`, and since 2026-10-04 its web
+  host `crates/grimoire-web`, natively). **Its
   build tree is still `src-tauri/target`**: `.cargo/config.toml` pins it, so nothing that names
   that folder moved when the workspace arrived on 2026-10-02.
 - `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not
@@ -181,6 +182,11 @@ no combo" and "we have never downloaded the list" have to be two different sente
 - `npm run mobile:dev` / `mobile:tauri` — the light app, over the Storybook fake in a browser
   (port 5175, no lock) or over the real core in a phone-sized window (**takes the `app` lock**).
   See [`mobile/CLAUDE.md`](mobile/CLAUDE.md).
+- `npm run web:wasm` / `web:build` / `web:smoke` — the light app's web host: the engine as a
+  WASM module into `dist-wasm/` (needs clang and the `wasm-bindgen` CLI at `Cargo.lock`'s
+  version), the page around it into `dist-web/`, and that bundle opened in headless Chromium.
+  No lock; `web:dev` serves it on port 5176. **`verify` runs none of them** — CI's `web` job
+  does. See [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md).
 
 ## Architecture
 
@@ -218,7 +224,8 @@ on — do not work from this page alone.
 | File | Read it when you are working on |
 | --- | --- |
 | [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md) | Anything Rust: schema and migrations, sync, Scryfall, images, deck storage, capabilities. **Its rules bind a module wherever its file is** — and since 2026-10-02 the file for the decks, the collection, the wishlist and the search is in the crate below |
-| [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md) | The engine with no window, which three hosts will link, **and where most of the Rust now is**: the schema, the decks, the collection, the wishlist, the search, the Scryfall client and the ingest. Its five rules and the fence behind them, `platform/` — where a request, a timer, a file and the clock each have a native arm and a browser arm — why no `#[tauri::command]` is in it (each is in `src-tauri/src/<module>/mod.rs`, under a glob re-export), how a module moves there, and how to compile it for WASM on this machine |
+| [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md) | The engine with no window, which three hosts link, **and where most of the Rust now is**: the schema, the decks, the collection, the wishlist, the search, the Scryfall client and the ingest. Its five rules and the fence behind them, `platform/` — where a request, a timer, a file and the clock each have a native arm and a browser arm — why no `#[tauri::command]` is in it (each is in `src-tauri/src/<module>/mod.rs`, under a glob re-export), how a module moves there, and how to compile it for WASM on this machine |
+| [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md) | The light app's web host — the engine as a WASM module in a Worker: its three exports and the hand-written mirror of them, why nothing in it may trap or reject, what is gated to the browser and what is tested natively, and how to build it and run it for real |
 | [`src/CLAUDE.md`](src/CLAUDE.md) | Any UI. Carries the Storybook-MCP rule, the `frontend-design` skill, layers, card images |
 | [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md) | Deck validation, categories, the editor's views and drags |
 | [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export — parsing, planning, the two dialogs |
@@ -293,7 +300,7 @@ number to compare against.
 | [ci-and-releases.md](docs/reference/ci-and-releases.md) | Both workflows, in full |
 | [hosted-relay-deploy.md](docs/reference/hosted-relay-deploy.md) | The deploy runbook — what exists and what does not, how to ask the host rather than a document, the order, and the things only a live deploy can settle |
 | [collection-sharing.md](docs/reference/collection-sharing.md) | The read-only shared binder — the snapshot format and its six absences, the size measured, the two `collection.rs` traps the publisher has its own read to avoid, the second Worker and the `live`/`lapsed`/`revoked` pass, both viewers, and **what the 2026-10-01 deploy has not proved** |
-| [light-app.md](docs/reference/light-app.md) | The Android and web face — one entry and two faces, what a browser over the fake was driven to show at 360 and 1280 and across the crossing between them, the phone-sized Tauri window over the real core and the desktop app launched after it, the build's chunks, the two ways the dev server died, and what is open by the phase that owns it — and, in §6, the shared core as each extraction step lands it: the cargo workspace and why `target/` did not move, which modules have moved (all seven steps: the leaves, storage, state, the forty-nine domain modules one script moved, the I/O — Scryfall, the card sync, the facet index, the three feeds and the image cache — sync: the client, the entitlement and pairing, restated to hold nothing across a request and then moved — and the scanner's session glue, which made `card-scanner` a dependency of the core — and then the command table, `grimoire_core::dispatch`, with its reads in it and every other command on an explicit list), what stayed behind and why, the WASM compile, and what the desktop was checked for afterwards — an upgrade run side by side with `main` on a copy of real data each time. **No Android host, no WASM host, no sync** |
+| [light-app.md](docs/reference/light-app.md) | The Android and web face — one entry and two faces, what a browser over the fake was driven to show at 360 and 1280 and across the crossing between them, the phone-sized Tauri window over the real core and the desktop app launched after it, the build's chunks, the two ways the dev server died, and what is open by the phase that owns it — and, in §6, the shared core as each extraction step lands it: the cargo workspace and why `target/` did not move, which modules have moved (all seven steps: the leaves, storage, state, the forty-nine domain modules one script moved, the I/O — Scryfall, the card sync, the facet index, the three feeds and the image cache — sync: the client, the entitlement and pairing, restated to hold nothing across a request and then moved — and the scanner's session glue, which made `card-scanner` a dependency of the core — and then the command table, `grimoire_core::dispatch`, with its reads in it and every other command on an explicit list), what stayed behind and why, the WASM compile, and what the desktop was checked for afterwards — an upgrade run side by side with `main` on a copy of real data each time. **An Android host since phase 4 (§8), which no phone has run, and since step 5.1 a WASM host that opens its database in a browser (§9) — with no download there yet, no service worker, and no sync on a light install** |
 | [sync.md](docs/reference/sync.md) | Pairing **and** the relay — the protocol step by step, the six digits, the eighteen synced tables, how a row is named across devices, §7.3's five rules against the test that proves each, the envelope measured, the auth gate and the two routes that stand outside it, the group door, the rewrap hop that carries a removal to every device, and what is not built |
 | [test-coverage.md](docs/reference/test-coverage.md) | What both suites reach, and why the Rust figure needs a correction |
 

@@ -38,11 +38,29 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   because `scripts/toolchain.test.mjs` and `scripts/actions-pinned.test.mjs` read them;
   `*.ps1`/`*.psm1`/`*.psd1` → `powershell`; `ci.yml` and the router
   itself → every job, `powershell` included; prose and editor bookkeeping → neither; and **anything
-  unrecognised → every build job**, `storybook` and `core` included. That last arm is the
+  unrecognised → every build job**, `storybook`, `core` and `web` included. That last arm is the
   fail-safe that makes the lists safe to be wrong in the cheap direction — and it is
   load-bearing for `share-worker/`, whose `wrangler.jsonc` a Rust test reads. **Only the
   "neither" arm can wrongly skip work, so it stays small.** And **nothing routes to `core`
   without `rust`**: `core` compiles and runs nothing, so the engine's tests are `rust`'s.
+  - **`web` reads both halves, and the router gives it both** (phase 5, 2026-10-04). It builds
+    the engine into a module and the light page around it, so it runs for **everything `core`
+    runs for** — `CORE_SIDE` carries it, and the test holds that no arm sets `core` without
+    `web` — for the web host, **`crates/grimoire-web/**` → `frontend`, `rust` and `web`** on an
+    arm above the engine's (not `core`: the engine does not depend on a host), and for what the
+    page is bundled from: `mobile/**`, `src/**`, `public/**`, `package.json` and its lockfile,
+    `.nvmrc`, every root `tsconfig*.json`, `vite.config.ts` and `vite.watch.ts`, each beside
+    `frontend` and `storybook`. **Three single files sit above the tree that would take them**,
+    because that tree's arm does not set `web`: `scripts/build-wasm.mjs` and
+    `scripts/web-smoke.mjs` above `scripts/*`, and `.storybook/fake/aliases.ts` above
+    `.storybook/*` — the light config imports it in every mode. **`vite.mobile.config.ts` →
+    `frontend`, `rust`, `android` and `web`**: `android` because its `beforeBuildCommand` is the
+    only CI build of that config's default mode, and `rust` only because every arm that sets
+    `android` sets it. Not `web`: `src-tauri/**`, `mobile/src-tauri/**` (the other two hosts),
+    the root `index.html` (the desktop's document) and the rest of `.storybook/**`. **The
+    fail-safe sets `web` where it does not set `android`**, and the difference is whether an
+    unplaced path can be an input: never to the APK, and to a build of the page and the engine
+    both, easily — a new root config, a new directory the entry imports.
   - **The two halves read each other's files, and `scripts/ci-route.test.mjs` is the fence.**
     Until 2026-09-26 the router said they shared no inputs, so a Rust-only PR that drifted from
     `ipc.ts` merged green and the red landed on the next unrelated PR. The test derives the
@@ -101,7 +119,7 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `needs` **and** its success-or-skipped loop — with the `env:` line that hands the loop its
   result, and the `echo` above it. In `needs` alone, its failure is a result the gate never
   reads. `core` went into all of them on 2026-10-02, and into `ci-route.test.mjs`'s table,
-  where a job is a column every row has to answer for.
+  where a job is a column every row has to answer for; `web` followed on 2026-10-04.
 - **Three traps in that routing, all measured against a fixture repo:**
   1. A workflow-level `paths:` filter is the obvious implementation and is **wrong** — it skips
      the whole workflow, `ci-ok` included, and a required check that never reports leaves every
@@ -118,13 +136,17 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   frontend it needs is one file it writes itself.
 - **The cargo workspace is rooted at the repository, and its build tree is still
   `src-tauri/target`** (2026-10-02). The root `Cargo.toml` makes members of the app in
-  `src-tauri` and the engine in `crates/grimoire-core`, with one `Cargo.lock` beside it, and
-  `.cargo/config.toml` pins `target-dir` back to where every script, skill and dev database
-  already is. So the `rust` job's three commands run from the root, with no
-  `working-directory`: `cargo fmt -p mtg-grimoire -p grimoire-core --check`,
-  `cargo clippy --workspace --all-targets` and `cargo test --workspace`. **Never
-  `cargo fmt --all`** — it follows path dependencies into `card-scanner`, which is not
-  rustfmt-clean; `--workspace` on the other two sees the members and nothing else.
+  `src-tauri`, the engine in `crates/grimoire-core` and the light app's two hosts —
+  `mobile/src-tauri` and, since phase 5, `crates/grimoire-web` — with one `Cargo.lock` beside
+  it, and `.cargo/config.toml` pins `target-dir` back to where every script, skill and dev
+  database already is. So the `rust` job's three commands run from the root, with no
+  `working-directory`: `cargo fmt … --check` with **a `-p` for every member** (`-p mtg-grimoire
+  -p grimoire-core -p grimoire-light -p grimoire-web`), `cargo clippy --workspace --all-targets`
+  and `cargo test --workspace`. **Never `cargo fmt --all`** — it follows path dependencies into
+  `card-scanner`, which is not rustfmt-clean; `--workspace` on the other two sees the members
+  and nothing else. **So a new member is a `-p` to add in two places**, that line and
+  `lint:rust` in `package.json`, and nothing goes red while it is missing: the crate is simply
+  never formatted.
   `Swatinem/rust-cache` is told both halves — `workspaces: ". -> src-tauri/target"` — in
   `ci.yml` and `release.yml` alike. **This is the only job that tests the engine, and the only
   one that compiles it for Windows.** The layout was read off `cargo metadata` on the day
@@ -142,13 +164,47 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `beforeBuildCommand`. It writes the APK's size and the `.so`'s to the step summary and uploads
   the APK (`actions/upload-artifact`, 14 days). **A release build signed with the runner's debug
   key** — installable, but one run's APK does not upgrade over another's. Its routing is the
-  host's tree (`mobile/src-tauri/*`), the workspace's root files and the toolchain pin — **not
+  host's tree (`mobile/src-tauri/*`), the workspace's root files, the toolchain pin and — since
+  phase 5 — `vite.mobile.config.ts`, whose default mode no other CI job builds — **not
   the fail-safe and not `crates/grimoire-core/*`**: an unrecognised path cannot be an input to
   the APK, the engine's Android compile is `core`'s, and its API against the host is compiled by
   `rust`, where `mobile/src-tauri` is a workspace member. Every arm that sets `android` sets
   `rust`. **Nothing in it runs the APK** — `android-emulator.yml` does, below. Its first run is
   the PR that adds it, and its numbers are that run's summary —
   [light-app.md](../docs/reference/light-app.md) §8.1.
+- **The `web` job builds the light app's web host and opens it in a browser** (phase 5, step
+  5.1, 2026-10-04), on `ubuntu-24.04` for `core`'s clang reason — the module is the engine
+  linked, so it compiles the same `sqlite-wasm-rs` shim, and the step and its ≥ 18 guard are
+  that job's. `npm ci`, the toolchain action with `targets: wasm32-unknown-unknown`,
+  `rust-cache` keyed `web-wasm32`, then: `npm run web:wasm` (`cargo build -p grimoire-web
+  --lib` for the target under the `wasm` profile, `wasm-bindgen --target web` into
+  `dist-wasm/`), `npm run web:build`
+  (`tsc` for the page and for the Worker's own program, then the light entry in `web` mode
+  into `dist-web/`, the engine under `wasm/<build id>/`), a size report — every `.wasm`
+  in the bundle, raw and `gzip -9`, and `dist-web/` whole — `npm run web:smoke`, and
+  `dist-web/` uploaded (14 days, whenever the bundle was built, a failed smoke included).
+  - **The `wasm-bindgen` CLI's version is read from `Cargo.lock` in the step, never typed into
+    the workflow.** The CLI rewrites what the crate emitted and refuses a module whose schema is
+    not its own, so the two are one version or the build stops — and the crate's version is
+    whatever the lockfile resolves. A number in `ci.yml` would be right until a bump moved the
+    crate, and then the job is red for a reason its diff does not show. The step requires
+    **exactly one** `wasm-bindgen` entry in the lock, installs with `cargo install
+    wasm-bindgen-cli --version "$bindgen" --locked` — compiled from crates.io and checksummed
+    like every other dependency, not a downloaded binary; `rust-cache` keeps `~/.cargo/bin`, so
+    the compile is a cold cache's alone — and checks what `wasm-bindgen --version` then says.
+    It takes no `--target-dir`: `cargo install` from a registry starts its configuration at
+    `$CARGO_HOME` and never reads this repository's `.cargo/config.toml`. `scripts/build-wasm.mjs` reads the lock for itself and refuses a CLI
+    that differs; **`scripts/toolchain.test.mjs` fails any workflow whose install line carries
+    anything but a shell variable after `--version`**.
+  - **The smoke test's browser is the image's own Google Chrome, by path, in `CHROME`**:
+    `google-chrome` on `PATH`, else `CHROME_BIN`, else the step fails saying so. Nothing is
+    downloaded. Its version goes in the summary. The smoke step is bounded at ten minutes,
+    because the failure it guards is a page that waits for ever.
+  - **What it proves is `scripts/web-smoke.mjs`'s to say** — the module instantiates and the
+    engine opens its database, in one Chrome on Linux. It runs no suite in the browser and
+    downloads no corpus; the engine's tests are `rust`'s. **Nothing in this bullet was measured
+    on the job when it was written** — its first run is the pull request that adds it, and its
+    sizes are that run's summary.
 - **The `core` job is a compile gate for `grimoire-core` on the two targets a desktop build
   never touches** (2026-10-02): a matrix over `wasm32-unknown-unknown` and
   `aarch64-linux-android` on `ubuntu-24.04`, each leg `cargo build --lib -p grimoire-core
@@ -195,13 +251,18 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   `src-tauri` asks for `grimoire-core`'s `testing` feature under `[dev-dependencies]` — so in
   both, the core's test scaffolding is on for the app's ordinary library as well, and a
   non-test use of it would pass them and first fail in `tauri build` on a release tag.
-  `cargo check -p mtg-grimoire --locked` is the build with no dev-dependencies in it, and
-  `npm run verify` runs the same line at the end of `lint:rust`. The step after it fails when
-  `cargo tree -p mtg-grimoire -e features,normal,build -i grimoire-core` prints
-  `feature "testing"`: one thing behind that feature is not scaffolding — the image fetcher
-  accepts a loopback host under it — and the resolver sees every spelling a text sweep of the
-  manifests cannot. **`release.yml` has neither step**; it builds what `main` holds, and
-  `ci-ok` gates `main`.
+  `cargo check -p mtg-grimoire -p grimoire-light --locked` is the build with no
+  dev-dependencies in it, for the two hosts Tauri builds, and `npm run verify` runs the same
+  line at the end of `lint:rust`. **The web host is not on it**: it ships as a WASM module, and
+  the `web` job's `cargo build --lib` for `wasm32-unknown-unknown` is that build. The step
+  after it fails when `cargo tree -p <host> -e features,normal,build -i grimoire-core` prints
+  `feature "testing"` for **any host — `mtg-grimoire`, `grimoire-light` or `grimoire-web`**:
+  one thing behind that feature is not scaffolding — the image fetcher accepts a loopback host
+  under it — and the resolver sees every spelling a text sweep of the manifests cannot. It is
+  asked for the runner's own target, which answers for the web host only while its dependency
+  on the core is not under a `[target.…]` table; **a tree that does not name the core fails
+  the step** rather than passing it, because that is the question not having been asked.
+  **`release.yml` has neither step**; it builds what `main` holds, and `ci-ok` gates `main`.
 
 ## `release.yml`
 
@@ -214,9 +275,19 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
   binaries still carry the check. [in-app-updates.md](../docs/reference/in-app-updates.md) has
   the record. If signing returns, the secret goes in a job of its own and never a build leg.
 - **Versions are never typed by hand.** release-please reads the `feat:`/`fix:`/`!` prefixes and
-  keeps a release PR open that bumps all five version files. `bump-minor-pre-major` is on, so
-  while on `0.x` a `feat!:` bumps the **minor**; reaching 1.0 is a deliberate `Release-As: 1.0.0`
-  footer.
+  keeps a release PR open that bumps every version file: `package.json` and its lockfile, which
+  the `node` release type owns, and each entry of `release-please-config.json`'s `extra-files`
+  — a manifest and a `Cargo.lock` selector for every workspace member, and each Tauri host's
+  `tauri.conf.json`. **That list is the count; this page does not keep one** (it said *five*
+  long after the config had outgrown it). **A new workspace member owes two entries there** —
+  `grimoire-web` got its pair on 2026-10-04 — or its first release ships that crate a version
+  behind the app, and `--locked` does not notice: it sees a manifest that moved without its
+  lockfile entry, never one that did not move at all. **What goes red is a test per host that
+  has one**: `src-tauri`'s `the_core_wears_the_apps_version` holds the core to the app, and
+  `grimoire-web`'s `the_host_wears_the_cores_version` holds the web host to the core. The
+  Android host's manifest has no such test. `bump-minor-pre-major` is on,
+  so while on `0.x` a `feat!:` bumps the **minor**; reaching 1.0 is a deliberate
+  `Release-As: 1.0.0` footer.
 - **The `Cargo.lock` selector must read `@.name.value`, never `@.name`** — release-please parses
   TOML into tagged nodes, so the obvious form matches nothing, and a non-match is a _warning_,
   not an error. `--locked` is what converts that silence into a failed check. **The file is

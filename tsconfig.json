@@ -68,7 +68,13 @@
   // `mobile/` is the light app — a third React entry over the same `src/` components, built by
   // `vite.mobile.config.ts`. In this program for `share/`'s reason: a webview program with no
   // Node in it, resolving `@/*` through the same paths.
+  //
+  // **One file under `src/` is not in this program**: the web host's database Worker, which runs
+  // in a dedicated Worker and is checked by `tsconfig.web-worker.json` under the `WebWorker` lib.
+  // That lib and this program's `DOM` declare the same globals differently, so the file is left
+  // out here rather than given both. Nothing imports it — the page names it by URL — so the
+  // exclusion holds; a module that did import it would pull it straight back in.
   "include": ["src", "share", "mobile"],
-  "exclude": [".claude"],
+  "exclude": [".claude", "src/lib/core/web/worker.ts"],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

@@ -36,7 +36,52 @@ pub const LEGACY_DB: &str = "mtg.db";
 /// half-qualified against a name somebody typed differently.
 pub const CORPUS: &str = "corpus";
 
-/// Apply the four file-level pragmas to one schema.
+/// Which journal a schema actually ended up on.
+///
+/// **A value rather than an assumption**, because the answer is not the same on every host and
+/// the difference is about durability rather than speed. `PRAGMA journal_mode = WAL` answers
+/// `delete` on a browser's `opfs-sahpool` VFS — measured on both files of the pair by the first
+/// web host (2026-08-28, Chrome and Edge 151) — and a desktop whose data folder sits on a
+/// filesystem with no shared memory can answer `delete` too. [`apply_pragmas`] asks for WAL
+/// everywhere and answers what it was given; [`open_single`] hands both answers to its host.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Journal {
+    /// Write-ahead logging — what the desktop and Android get, and what [`checkpoint_truncate`]
+    /// is for.
+    Wal,
+    /// A rollback journal. A browser's, and the only durability story available there.
+    Delete,
+    /// An in-memory database, which has no journal file to speak of.
+    Memory,
+    /// Something SQLite offers that this app never asks for. Never a panic and never a guess: a
+    /// mode this build has not heard of must not be mistaken for one it has.
+    Other,
+}
+
+impl Journal {
+    /// Read SQLite's own answer. Case-insensitive: the pragma answers lowercase, but the value
+    /// can also arrive from a stored string.
+    pub fn parse(answer: &str) -> Journal {
+        match answer.to_ascii_lowercase().as_str() {
+            "wal" => Journal::Wal,
+            "delete" => Journal::Delete,
+            "memory" => Journal::Memory,
+            _ => Journal::Other,
+        }
+    }
+
+    /// The word a host reports it by — SQLite's own, lowercase.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Journal::Wal => "wal",
+            Journal::Delete => "delete",
+            Journal::Memory => "memory",
+            Journal::Other => "other",
+        }
+    }
+}
+
+/// Apply the four file-level pragmas to one schema, and answer the journal SQLite settled on.
 ///
 /// **`auto_vacuum` first, before any statement writes a page**, and that ordering is
 /// load-bearing on both schemas for the same reason: once `journal_mode=WAL` has
@@ -49,16 +94,20 @@ pub const CORPUS: &str = "corpus";
 /// `schema` is `None` for `main` and `Some(CORPUS)` for the attached half. `foreign_keys`
 /// and `busy_timeout` are **not** here: both are per-connection and take no schema.
 ///
-/// `journal_mode` is issued with `query_row`, because setting it answers a row.
-pub fn apply_pragmas(conn: &Connection, schema: Option<&str>) -> rusqlite::Result<()> {
+/// `journal_mode` is issued with `query_row`, because setting it answers a row — **and the row
+/// is the answer**, returned rather than thrown away since the web host: a browser's storage
+/// refuses WAL, so a host there has to be able to *say* what it got ([`Journal`]). The same
+/// statements, in the same order, as before it was read.
+pub fn apply_pragmas(conn: &Connection, schema: Option<&str>) -> rusqlite::Result<Journal> {
     conn.pragma_update(schema, "auto_vacuum", "INCREMENTAL")?;
     let qualified = match schema {
         Some(name) => format!("PRAGMA {name}.journal_mode = WAL"),
         None => "PRAGMA journal_mode = WAL".to_owned(),
     };
-    let _journal: String = conn.query_row(&qualified, [], |r| r.get(0))?;
+    let journal: String = conn.query_row(&qualified, [], |r| r.get(0))?;
     conn.pragma_update(schema, "synchronous", "NORMAL")?;
-    conn.pragma_update(schema, "journal_size_limit", JOURNAL_SIZE_LIMIT)
+    conn.pragma_update(schema, "journal_size_limit", JOURNAL_SIZE_LIMIT)?;
+    Ok(Journal::parse(&journal))
 }
 
 /// Open (or create) the SQLite database at `path` with the app's standard PRAGMAs:
@@ -86,7 +135,10 @@ pub fn open(path: &Path) -> rusqlite::Result<Connection> {
 /// The path is bound as a parameter; the schema name cannot be, which is why [`CORPUS`] is
 /// interpolated. Creating the file if it is absent is deliberate and is the corpus's whole
 /// character: a missing corpus is a rebuild, not an error.
-pub fn attach_corpus(conn: &Connection, data_dir: &Path) -> rusqlite::Result<()> {
+///
+/// Answers the journal the corpus got, which is not promised to be `main`'s: a journal is a
+/// property of a file.
+pub fn attach_corpus(conn: &Connection, data_dir: &Path) -> rusqlite::Result<Journal> {
     let path = data_dir.join(CORPUS_DB);
     conn.execute(
         &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
@@ -103,12 +155,99 @@ pub fn attach_corpus(conn: &Connection, data_dir: &Path) -> rusqlite::Result<()>
 /// `Connection::open` names is the one whose absence is a failure the app has a message for,
 /// and `PRAGMA user_version` unqualified means `main`.
 pub fn open_write(data_dir: &Path) -> rusqlite::Result<Connection> {
-    let conn = Connection::open(data_dir.join(USER_DB))?;
-    apply_pragmas(&conn, None)?;
+    open_pair(data_dir, None).map(|pair| pair.conn)
+}
+
+/// [`open_write`] for a caller that wants to know which journal each file got — the same
+/// statements, with the two answers kept. [`crate::launch::open`] is the caller.
+pub fn open_write_pair(data_dir: &Path) -> rusqlite::Result<Pair> {
+    open_pair(data_dir, None)
+}
+
+/// [`open_write`]'s and [`open_single`]'s one body, so the pair cannot be opened two ways.
+///
+/// `temp_store` is the one statement between them, and `None` issues nothing: a host with a
+/// folder gets exactly the statements, in exactly the order, it got before there was a second
+/// caller.
+fn open_pair(dir: &Path, temp_store: Option<&str>) -> rusqlite::Result<Pair> {
+    let conn = Connection::open(dir.join(USER_DB))?;
+    let journal = apply_pragmas(&conn, None)?;
     conn.pragma_update(None, "foreign_keys", "ON")?;
     conn.busy_timeout(BUSY_TIMEOUT)?;
-    attach_corpus(&conn, data_dir)?;
-    Ok(conn)
+    if let Some(store) = temp_store {
+        conn.pragma_update(None, "temp_store", store)?;
+    }
+    let corpus_journal = attach_corpus(&conn, dir)?;
+    Ok(Pair {
+        conn,
+        journal,
+        corpus_journal,
+    })
+}
+
+/// The pair on a connection that may write it, and the journal each file actually got.
+pub struct Pair {
+    /// `user.db` as `main`, `corpus.db` attached as [`CORPUS`] — [`open_write`]'s pair.
+    pub conn: Connection,
+    /// `main`'s journal — the reader's own file.
+    pub journal: Journal,
+    /// The corpus's. Reported apart because a journal is a property of a *file*: the corpus is
+    /// the half that writes an ingest's worth of journal, and one field would hide the day the
+    /// two stop agreeing.
+    pub corpus_journal: Journal,
+}
+
+/// Where a one-connection host's SQLite builds its temporary b-trees — the sort behind every
+/// `CREATE INDEX` of a staging swap, an FTS rebuild, a materialised subquery.
+///
+/// **`FILE`, and it is a decision about a browser's memory rather than a measured necessity.**
+/// The SQLite a browser build compiles (`sqlite-wasm-rs`, `SQLITE_TEMP_STORE=2`) keeps them in
+/// memory unless told otherwise, and there memory is the module's linear memory, which grows
+/// and is never given back: a first ingest's index replay over ~117 000 rows would be the
+/// session's high-water mark for good. In the VFS they are files that are deleted when the
+/// statement ends. The first web host ran this way end to end — 148.6–171.6 MB peak linear
+/// memory over a whole first run — and that is the only figure there is: the setting was first
+/// added against a failure later traced to something else (a module instantiated twice), and
+/// **memory has never been measured in its place**. Nothing spills for small work either way:
+/// SQLite gives each temporary b-tree a page cache of its own and opens the file only when
+/// that overflows, so the managed wishlists' `temp` tables on every write never reach one.
+///
+/// **What it costs is file slots**: on a pooled VFS each such file takes one of the pool's
+/// preallocated files while it lives, which is why the web host's pool is sized well past the
+/// two databases and their two journals.
+///
+/// On a host with a folder this is SQLite's own default (`SQLITE_TEMP_STORE=1`), which is why
+/// [`open_single`] can set it on every host and a native test can read it back.
+const SINGLE_TEMP_STORE: &str = "FILE";
+
+/// **The pair on one connection, for a host that can have only one** — a browser, whose
+/// storage is SQLite's own OPFS VFS and permits exactly one connection.
+///
+/// [`open_write`], statement for statement — `user.db` as `main`, `corpus.db` attached, the
+/// same four file pragmas on each and the same two on the connection — with two differences:
+///
+/// * **the journal each file got is answered** rather than assumed ([`Journal`]). The pragmas
+///   still *ask* for WAL: a host whose storage has it gets it, and one whose storage refuses
+///   answers `delete` and says so;
+/// * **`temp_store`** is set ([`SINGLE_TEMP_STORE`] has the reason).
+///
+/// **There is no [`open_read`] to follow it.** The connection is the host's only one: its
+/// [`crate::state::State`] is built with `read: None`, every read goes through the mutex that
+/// writes do, and a read asked for while the same thread holds the connection is a lock taken
+/// twice — `commands`' table test runs every command that way.
+///
+/// `databases` is what the two file names are joined to, and **it is empty where the VFS is
+/// the filesystem**: a pool's names are bare (`user.db`, `corpus.db`), so a web host passes
+/// `Path::new("")`. A test passes a scratch directory, which is the whole of what makes this
+/// reachable from a native suite. Nothing here creates a folder or asks whether a file exists
+/// — a browser has neither question to ask ([`crate::platform::files`]).
+///
+/// **What a rollback journal changes, for whoever reads on**: there is no `-wal` to
+/// checkpoint, so [`checkpoint_truncate`] has nothing to fold and a host that got
+/// [`Journal::Delete`] has no exit handler to run; and a reader cannot run beside a writer —
+/// with one connection there is no "beside".
+pub fn open_single(databases: &Path) -> rusqlite::Result<Pair> {
+    open_pair(databases, Some(SINGLE_TEMP_STORE))
 }
 
 /// A second, **read-only** connection to the same database file.
@@ -286,8 +425,16 @@ pub fn lock_plain<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
 }
 
 /// [`lock_plain`] over the one type most of this crate locks.
+///
+/// **On a host with one connection this is where a lock taken twice ends** — a read asked for
+/// by a thread that already holds the write connection is the same mutex again. A desktop
+/// with one connection would wait here for ever; a browser's Worker traps, because std's
+/// `Mutex` panics on a recursive lock where there are no threads. A test that stands in for
+/// such a host ([`crate::platform::alone`]) gets that as a panic naming the line that asked,
+/// which is what `#[track_caller]` is here for; everywhere else this is `Mutex::lock`.
+#[track_caller]
 pub fn lock_blocking(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
-    lock_plain(mutex)
+    crate::platform::alone::lock(mutex)
 }
 
 /// Take `mutex`, **waiting as long as it takes — and counted as an ask while it waits**, so a
@@ -300,8 +447,12 @@ pub fn lock_blocking(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
 /// [`crate::state::with_write_waiting`] makes now and which used to come through [`lock_for`]
 /// as a whole operation.
 ///
-/// **On a host with no second thread it blocks**, as [`lock_blocking`] does: a Worker cannot
-/// pause, and nothing but its own caller can be holding the lock there.
+/// **On a host with no second thread it does not wait at all**: a Worker cannot pause, and
+/// nothing but its own caller can be holding the lock there — so a contended ask goes straight
+/// to [`lock_blocking`], which is a trap in a browser and a named panic in a test standing in
+/// for one. A stretch asked for by a caller that holds the connection is a bug on every host
+/// ([`crate::state::with_write_waiting`]); this is where it stops being a silent one.
+#[track_caller]
 pub fn lock_waiting(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     // Held until this returns, and withdrawn by its `Drop`.
     let mut waiting: Option<Waiting> = None;
@@ -326,13 +477,20 @@ pub fn lock_waiting(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
 /// poisoned index as **cold**, which is at least safe, but `write().ok()` would silently drop
 /// the publish and leave it cold *forever* — one panic anywhere and the app never faceted
 /// again until it was restarted.
+///
+/// A lock of a state's own, like the connection's, so it is taken through
+/// [`crate::platform::alone`] for [`lock_blocking`]'s reason: on a host with one thread, a
+/// read asked for while that thread is replacing the value is a trap, and a test standing in
+/// for one hears about it.
+#[track_caller]
 pub fn lock_read<T>(lock: &RwLock<T>) -> RwLockReadGuard<'_, T> {
-    lock.read().unwrap_or_else(|e| e.into_inner())
+    crate::platform::alone::read(lock)
 }
 
 /// [`lock_read`]'s other half.
+#[track_caller]
 pub fn lock_write<T>(lock: &RwLock<T>) -> RwLockWriteGuard<'_, T> {
-    lock.write().unwrap_or_else(|e| e.into_inner())
+    crate::platform::alone::write(lock)
 }
 
 /// How long [`lock_for`] sleeps between attempts. Short enough that the wait is invisible,
@@ -366,6 +524,14 @@ const LOCK_POLL_INTERVAL: Duration = Duration::from_millis(20);
 /// already parked when the other lets go, and a `try_lock` poll never finds it free (issue
 /// #551, and `a_bounded_asker_gets_its_turn_between_two_batch_loops`). A zero timeout never
 /// registers, because it never waits.
+///
+/// **On a host with one thread a contended ask is `None` at once** — nobody but the caller can
+/// be holding the lock, and it will not let go while this polls. ⚠️ Most callers drop their
+/// work on `None` (an `error_log` row, a stamp, a flush), so there a self-contended ask is a
+/// write that silently never happens. A test standing in for such a host
+/// ([`crate::platform::alone`]) is told instead: the contended arm panics with the line that
+/// asked, which is what `#[track_caller]` is here for.
+#[track_caller]
 pub fn lock_for(
     mutex: &Mutex<Connection>,
     timeout: Duration,
@@ -378,6 +544,8 @@ pub fn lock_for(
             Ok(guard) => return Some(guard),
             Err(TryLockError::Poisoned(e)) => return Some(e.into_inner()),
             Err(TryLockError::WouldBlock) => {
+                // A test standing in for a host with one thread: the holder is the caller.
+                crate::platform::alone::refuse_held("a connection, with a bound");
                 if started.elapsed() >= timeout {
                     return None;
                 }
@@ -463,6 +631,7 @@ fn someone_is_waiting(key: usize) -> bool {
 /// Background work waiting on background work is unchanged: this blocks like
 /// [`lock_blocking`] once no ask is waiting, and two ingests share the connection exactly as
 /// they did. The deference is capped at [`BACKGROUND_DEFERENCE_CAP`].
+#[track_caller]
 pub fn lock_background(mutex: &Mutex<Connection>) -> MutexGuard<'_, Connection> {
     let key = key_of(mutex);
     let started = Tick::now();
@@ -843,6 +1012,113 @@ mod tests {
             "auto_vacuum must be set before WAL materialises the file"
         );
         assert_eq!(fk, 1, "foreign_keys is per-connection, not per-schema");
+    }
+
+    /// SQLite's answer to `journal_mode = WAL` is read, not assumed: a file gets WAL, and an
+    /// in-memory database — which cannot — says `memory`. A browser's pool says `delete` for
+    /// the same kind of reason, and its host reports the word.
+    #[test]
+    fn the_journal_a_schema_got_is_what_sqlite_answered() {
+        let dir = scratch("journal");
+        let conn = Connection::open(dir.join("t.db")).unwrap();
+        assert_eq!(apply_pragmas(&conn, None).unwrap(), Journal::Wal);
+        assert_eq!(attach_corpus(&conn, &dir).unwrap(), Journal::Wal);
+        drop(conn);
+        let _ = std::fs::remove_dir_all(&dir);
+
+        let memory = Connection::open_in_memory().unwrap();
+        assert_eq!(apply_pragmas(&memory, None).unwrap(), Journal::Memory);
+
+        assert_eq!(Journal::parse("DELETE"), Journal::Delete);
+        assert_eq!(Journal::parse("truncate"), Journal::Other);
+        for journal in [Journal::Wal, Journal::Delete, Journal::Memory] {
+            assert_eq!(Journal::parse(journal.as_str()), journal);
+        }
+        assert_eq!(Journal::Other.as_str(), "other");
+    }
+
+    /// Every pragma a connection and its two files carry, in one row — what "the same pragmas"
+    /// means when two openers are compared.
+    fn pragmas(conn: &Connection) -> Vec<(String, String)> {
+        [
+            "main.journal_mode",
+            "corpus.journal_mode",
+            "main.auto_vacuum",
+            "corpus.auto_vacuum",
+            "main.synchronous",
+            "corpus.synchronous",
+            "main.journal_size_limit",
+            "corpus.journal_size_limit",
+            "foreign_keys",
+            "busy_timeout",
+        ]
+        .into_iter()
+        .map(|name| {
+            let value = conn
+                .query_row(&format!("PRAGMA {name}"), [], |r| {
+                    r.get::<_, rusqlite::types::Value>(0)
+                })
+                .unwrap();
+            (name.to_owned(), format!("{value:?}"))
+        })
+        .collect()
+    }
+
+    /// **The one-connection opener is `open_write` plus what it reports and one pragma.** The
+    /// pair, the file pragmas on both halves and the two on the connection are the same row for
+    /// row; what differs is `temp_store`, and that the journals come back.
+    #[test]
+    fn the_single_opener_sets_what_the_write_opener_sets_and_says_what_it_got() {
+        let folder = scratch("single-folder");
+        let pool = scratch("single-pool");
+
+        let write = open_write(&folder).unwrap();
+        let single = open_single(&pool).unwrap();
+        assert_eq!(pragmas(&single.conn), pragmas(&write));
+        // A file on this machine can have WAL, so that is what was asked for and what came back.
+        assert_eq!(single.journal, Journal::Wal);
+        assert_eq!(single.corpus_journal, Journal::Wal);
+
+        let temp_store = |conn: &Connection| -> i64 {
+            conn.query_row("PRAGMA temp_store", [], |r| r.get(0))
+                .unwrap()
+        };
+        assert_eq!(temp_store(&single.conn), 1, "temp_store must be FILE (1)");
+        assert_eq!(
+            temp_store(&write),
+            0,
+            "a host with a folder is left on SQLite's default, as it always was"
+        );
+
+        // One connection over both files: an unqualified name reaches the attached one.
+        single
+            .conn
+            .execute_batch(
+                "CREATE TABLE t (v TEXT); INSERT INTO t VALUES ('user');
+                 CREATE TABLE corpus.u (v TEXT); INSERT INTO u VALUES ('corpus');",
+            )
+            .unwrap();
+        let both: (String, String) = single
+            .conn
+            .query_row("SELECT t.v, u.v FROM t, u", [], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .unwrap();
+        assert_eq!(both, ("user".to_owned(), "corpus".to_owned()));
+
+        drop(write);
+        drop(single);
+        assert!(pool.join(USER_DB).is_file() && pool.join(CORPUS_DB).is_file());
+        let _ = std::fs::remove_dir_all(&folder);
+        let _ = std::fs::remove_dir_all(&pool);
+    }
+
+    /// **A pool's names are bare**, so the host passes an empty path — and joined to nothing,
+    /// the two names are the two names.
+    #[test]
+    fn an_empty_place_names_the_two_files_bare() {
+        assert_eq!(Path::new("").join(USER_DB), Path::new("user.db"));
+        assert_eq!(Path::new("").join(CORPUS_DB).to_string_lossy(), "corpus.db");
     }
 
     /// Both files exist afterwards, and they are two files. `ATTACH` on a path that does not

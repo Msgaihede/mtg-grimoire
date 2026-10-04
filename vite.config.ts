@@ -147,6 +147,10 @@ export default defineConfig({
         // only ever runs in a browser.
         "src/vite-env.d.ts",
         "src/main.tsx",
+        // The database Worker's entry: it runs only in a Worker, over a WASM module no test
+        // loads. Everything it decides is in `engine.ts` beside it, which is covered.
+        "src/lib/core/web/worker.ts",
+        "src/lib/core/web/grimoire_web.d.ts",
         ".claude/**/*",
       ],
     },

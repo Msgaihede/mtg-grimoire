@@ -1,0 +1,39 @@
+{
+  /* The web host's database Worker — its own type-check program, for the reason
+     `tsconfig.relay.json` gives for the relay's: one program per runtime.
+
+     `src/lib/core/web/worker.ts` runs in a dedicated Worker. It needs the `WebWorker` lib —
+     `DedicatedWorkerGlobalScope`, a `postMessage` with no target origin — and the app under
+     `src/` has the `DOM` lib, which declares `self`, `postMessage` and `MessageEvent` over again
+     and differently. In one program the two fight; `skipLibCheck` hides the fight inside the
+     library files and leaves `self` typed as a `Window` in the one file where it is not one.
+
+     So the root `tsconfig.json` **excludes** that file and this program holds it. The modules it
+     imports — `engine.ts`, `protocol.ts`, `assets.ts` and the hand-written `grimoire_web.d.ts` —
+     are followed from it and so are checked twice, once under each lib, which is the point: they
+     are the half both sides read, and may name no global only one of them has.
+
+     `vite/client` is listed for `import.meta.env`, which is how the Worker is told its engine's
+     build id; this program does not contain `src/vite-env.d.ts`, whose triple-slash reference
+     gives the app the same thing.
+
+     `npm run build` and `npm run web:build` both run it. */
+  "compilerOptions": {
+    "target": "ES2020",
+    /* No `DOM`: this is not a page. `ES2022.Error` for the root program's reason. */
+    "lib": ["ES2020", "ES2022.Error", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "types": ["vite/client"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src/lib/core/web/worker.ts"]
+}

@@ -213,9 +213,21 @@ impl State {
     ///
     /// ⚠️ **On a host with one connection this is the write connection's own mutex.** A read
     /// asked for while the same thread holds the write connection is then a lock taken twice,
-    /// which a host with two never notices. Nothing has run that way yet.
+    /// which a host with two never notices: a wait that never ends on a desktop, and a trap in
+    /// a browser's Worker. `commands`' table test runs every command on such a state, on a
+    /// thread standing in for a Worker ([`crate::platform::alone`]), and fails by name on one.
     pub fn reader(&self) -> &Mutex<Connection> {
         self.db_read.as_ref().unwrap_or(&self.db)
+    }
+
+    /// Whether this host has **one connection for everything** — it was built with `read:
+    /// None`, as a browser's is.
+    ///
+    /// For the two places that used to open a connection of their own for a long read (the
+    /// facet index's build and its `owned` refresh): where the storage permits one connection,
+    /// a second open is a refusal, so they read through the state's instead.
+    pub fn one_connection(&self) -> bool {
+        self.db_read.is_none()
     }
 
     /// Lock the write connection, waiting as long as it takes and recovering from a poisoned
@@ -223,6 +235,7 @@ impl State {
     ///
     /// For work that owns its own wait: a sync's bookkeeping, a launch pass. A user-facing
     /// write does not come through here — it asks with a bound and answers [`db::BUSY`].
+    #[track_caller]
     pub fn lock_db(&self) -> MutexGuard<'_, Connection> {
         db::lock_blocking(&self.db)
     }
@@ -233,6 +246,7 @@ impl State {
     /// Only ever held for a short run of queries and never across an `.await`, so on a host
     /// with a read connection of its own, waiting for it is bounded whatever the writer is
     /// doing.
+    #[track_caller]
     pub fn lock_db_read(&self) -> MutexGuard<'_, Connection> {
         db::lock_blocking(self.reader())
     }
@@ -267,6 +281,7 @@ impl State {
 /// take a lock its own thread already holds, then answers [`crate::db::BUSY`] against itself.
 /// `do_sync`'s orphan-sweep arm is the site that has to remember: it passes its already-open
 /// connection down instead.
+#[track_caller]
 pub fn with_write<T>(
     state: &State,
     f: impl FnOnce(&Connection) -> Result<T, String>,
@@ -844,6 +859,32 @@ pub mod fixtures {
         let heard = Arc::new(Recording::default());
         let (state, dir) = build(name, "http://127.0.0.1:1", heard.clone());
         (state, heard, dir)
+    }
+
+    /// **A browser's shape, on files**: the pair at head on **one connection**
+    /// ([`crate::db::open_single`]) and a [`State`] with no read connection, so every read goes
+    /// through the mutex every write does. A recording sink, so a test can ask what a page
+    /// would have heard, and a Scryfall client pointed at `scryfall`.
+    ///
+    /// Built at head like [`on_files`]: no capture triggers, no launch passes. A test that
+    /// wants the launch itself opens through [`crate::launch::open_single`].
+    pub fn single(name: &str, scryfall: &str) -> (Arc<State>, Arc<Recording>, PathBuf) {
+        let dir = crate::scratch::path(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let opened = crate::db::open_single(&dir).unwrap();
+        crate::schema::build_pair(&opened.conn);
+        let heard = Arc::new(Recording::default());
+        let state = State::new(
+            opened.conn,
+            None,
+            dir.clone(),
+            heard.clone(),
+            Vec::new(),
+            crate::scryfall::Client::new(scryfall.to_owned()),
+            crate::images::Cache::new(dir.join("images")),
+        );
+        (Arc::new(state), heard, dir)
     }
 
     fn build(name: &str, scryfall: &str, events: Arc<dyn EventSink>) -> (Arc<State>, PathBuf) {

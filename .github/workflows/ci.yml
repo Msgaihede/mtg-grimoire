@@ -45,6 +45,7 @@ jobs:
       powershell: ${{ steps.classify.outputs.powershell }}
       storybook: ${{ steps.classify.outputs.storybook }}
       android: ${{ steps.classify.outputs.android }}
+      web: ${{ steps.classify.outputs.web }}
     steps:
       # The classification is a diff against the base, so this needs history, not a
       # depth-1 checkout. 188 commits of text — the full fetch costs a second or two.
@@ -95,7 +96,7 @@ jobs:
           # missing one reads as `''`, every job gated on it skips, and `ci-ok` counts a skip
           # as a pass — so a router that printed nothing would take the gate green having run
           # nothing. Fail here instead.
-          for job in frontend rust core powershell storybook android; do
+          for job in frontend rust core powershell storybook android web; do
             grep -Eqx "$job=(true|false)" <<< "$flags" \
               || { echo "ci-route.mjs printed no '$job=true|false' line:" >&2; echo "$flags" >&2; exit 1; }
           done
@@ -253,17 +254,19 @@ jobs:
       # Formatting has no platform split, so it runs once. Lints do: the source has
       # cfg-gated Windows paths that a Linux-only clippy pass never compiles.
       #
-      # **All three run from the repository root, over both workspace members** (2026-10-02):
-      # the app in `src-tauri` and the engine in `crates/grimoire-core`. This is the only job
-      # that runs the core's tests, and the only one that compiles it for Windows — `core` below
-      # builds it for the other two targets and runs nothing.
+      # **All three run from the repository root, over every workspace member** (2026-10-02):
+      # the app in `src-tauri`, the engine in `crates/grimoire-core`, the light app's Android
+      # host in `mobile/src-tauri` and its web host in `crates/grimoire-web`. This is the only
+      # job that runs the core's tests, and the only one that compiles it for Windows — `core`
+      # below builds it for the other two targets and runs nothing.
       #
-      # **`fmt` names the two packages and never `--all`**, which follows path dependencies
-      # into `crates/card-scanner` — not a member, and not rustfmt-clean (below). `--workspace`
-      # has no such reach: clippy and the tests see the members and nothing else.
+      # **`fmt` names the members one by one and never `--all`**, which follows path
+      # dependencies into `crates/card-scanner` — not a member, and not rustfmt-clean (below).
+      # `--workspace` has no such reach: clippy and the tests see the members and nothing else.
+      # **So a new member is a new `-p` here**, and in `npm run lint:rust`, or nothing formats it.
       - name: cargo fmt
         if: matrix.os == 'ubuntu-22.04'
-        run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light --check
+        run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web --check
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -275,6 +278,11 @@ jobs:
       # non-test use of `schema::memory_pair` or `scratch::path` would pass them and first
       # fail in `tauri build`, on a release tag. This is the build with no dev-dependencies
       # in it.
+      #
+      # **The two hosts Tauri builds, and not the web host**: `grimoire-web` ships as a WASM
+      # module, and the `web` job below is that build — `cargo build --lib` for
+      # `wasm32-unknown-unknown`, with no dev-dependency in it. A native check of that crate
+      # would compile the half of it nobody ships.
       - name: cargo check (the shipped feature set)
         run: cargo check -p mtg-grimoire -p grimoire-light --locked
 
@@ -284,14 +292,28 @@ jobs:
       # the workspace's manifests for the feature as text and several spellings pass a text
       # sweep — a `[workspace.dependencies]` entry, a renamed dependency, a default feature
       # that implies it. `cargo tree` sees them all.
+      #
+      # **Asked for the runner's own target, which answers for the web host only because its
+      # dependency on the core is the same on every target.** `cargo tree` prints the graph for
+      # the host platform unless told otherwise, and `grimoire-web` ships for
+      # `wasm32-unknown-unknown`. A core dependency moved under a `[target.…]` table would leave
+      # this tree without the core in it, which cargo words as a warning ("nothing to print")
+      # rather than an error — so an answer that does not name the core is a failure here and
+      # not a pass: the question was not asked, and the line needs a `--target`. (That reading
+      # of cargo has not been driven on a run; if it errors instead, the step is red that way.)
       - name: The shipped build links the core without its test scaffolding
         shell: bash
         run: |
           set -euo pipefail
-          # Every host by its package name — the desktop, and the light app's Android host.
-          for host in mtg-grimoire grimoire-light; do
+          # Every host by its package name — the desktop, and the light app's Android and web
+          # hosts.
+          for host in mtg-grimoire grimoire-light grimoire-web; do
             tree=$(cargo tree -p "$host" -e features,normal,build -i grimoire-core --locked)
             echo "$tree"
+            if ! echo "$tree" | grep -q 'grimoire-core'; then
+              echo "cargo tree found no grimoire-core in $host's build for this target, so nothing was checked" >&2
+              exit 1
+            fi
             if echo "$tree" | grep -q 'feature "testing"'; then
               echo "grimoire-core's 'testing' feature is on in $host's build, which is not a test" >&2
               exit 1
@@ -533,6 +555,207 @@ jobs:
           retention-days: 14
           if-no-files-found: error
 
+  # **The light app's web host, built and opened in a browser** (phase 5, step 5.1). The `core`
+  # job proves the engine *compiles* for `wasm32-unknown-unknown`; this one links the web host
+  # (`crates/grimoire-web`) for it, runs `wasm-bindgen` over the result, bundles the light page
+  # around the module into `dist-web/`, serves that on `localhost` and has a headless Chrome
+  # load it — the first job here in which the engine runs anywhere but the runner's own triple.
+  #
+  # **What it proves is the smoke script's to say** (`scripts/web-smoke.mjs`): the module
+  # instantiates in a Worker and the engine opens its database there. It runs no test suite in
+  # the browser, downloads no corpus, and is one Chrome on Linux — the engine's tests are still
+  # `rust`'s, natively, and a phone's browser is still a phone's. **No measured figure in this
+  # repository comes off a Linux build**, and the sizes this job writes down are a runner's.
+  #
+  # **24.04 for the clang version**, as in `core`'s wasm leg, whose step this copies: the
+  # module is the engine linked, so it compiles the same `sqlite-wasm-rs` shim and needs the same
+  # clang 18.
+  #
+  # No `dist/` stub, unlike `rust`: `cargo build -p grimoire-web` compiles that package and what
+  # it depends on, and neither Tauri host is among them, so nothing asks for `frontendDist`.
+  web:
+    name: web
+    needs: changes
+    if: needs.changes.outputs.web == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # `core`'s step, guard and all — see there for what the failure looks like without it.
+      # `scripts/build-wasm.mjs` finds the compiler as `clang` on `PATH`, which is where this
+      # puts it.
+      - name: Install clang
+        run: |
+          sudo apt-get update && sudo apt-get install -y clang
+          clang --version
+          major=$(clang --version | sed -n 's/.*clang version \([0-9]*\).*/\1/p' | head -1)
+          if ! [ "${major:-0}" -ge 18 ]; then
+            echo "clang '${major}' is too old or unreadable: sqlite-wasm-rs's shim needs C23 attributes (clang 18+)" >&2
+            exit 1
+          fi
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+
+      - run: npm ci
+
+      # `rust-toolchain.toml`'s pin, never `stable` — and the one target this job builds for.
+      - uses: ./.github/actions/rust-toolchain
+        with:
+          targets: wasm32-unknown-unknown
+
+      # A key of its own, as every job here that compiles for a target has: this tree holds the
+      # web host and the module's profile, which `core`'s wasm leg never builds. **Ahead of the
+      # install below on purpose** — this is what restores `~/.cargo/bin`, so a run whose
+      # lockfile has not moved finds the CLI already there and `cargo install` has nothing to do.
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          workspaces: ". -> src-tauri/target"
+          key: web-wasm32
+
+      # **The CLI's version is read from `Cargo.lock`, never typed here.** `wasm-bindgen` the
+      # CLI rewrites what `wasm-bindgen` the crate emitted, and it refuses a module whose schema
+      # is not its own — so the two are one version or the build stops. The crate's version is
+      # whatever the lockfile resolves; a number in this file would be right until the day a
+      # dependency bump moved the crate, and then every run is red for a reason the diff that
+      # caused it does not show. Read here, the bump moves both.
+      #
+      # **Exactly one entry, or the step stops**: a lockfile resolving the crate twice has no
+      # single CLI that fits, and guessing which one the web host links is the mismatch again.
+      # `scripts/build-wasm.mjs` reads the same lockfile for itself and refuses a CLI that
+      # differs, so this parse and that one disagreeing is a red step and not a quiet skew.
+      #
+      # **Compiled from crates.io, not downloaded**: `cargo install --locked` builds the CLI
+      # from the crate's own published lockfile, checksummed by the registry like every other
+      # dependency here — where a prebuilt binary would be a release asset to verify by hand,
+      # and a new trust decision in a workflow whose every action is pinned by SHA. The compile
+      # is paid on a cold cache alone. No `--target-dir`: `cargo install` from a registry starts
+      # its configuration at `$CARGO_HOME` and never reads this repository's
+      # `.cargo/config.toml`, so the CLI builds in a temporary folder of cargo's own and not in
+      # `src-tauri/target`.
+      - name: Install the wasm-bindgen CLI the lockfile resolves
+        shell: bash
+        run: |
+          set -euo pipefail
+          versions=$(awk '$0 == "name = \"wasm-bindgen\"" { getline; print }' Cargo.lock \
+            | sed -n 's/^version = "\([^"]*\)"$/\1/p')
+          count=$(grep -c . <<< "$versions" || true)
+          if [ "$count" != 1 ]; then
+            echo "Cargo.lock resolves the wasm-bindgen crate $count times; the CLI can match exactly one:" >&2
+            echo "$versions" >&2
+            exit 1
+          fi
+          bindgen=$versions
+          echo "Cargo.lock resolves wasm-bindgen $bindgen"
+          cargo install wasm-bindgen-cli --version "$bindgen" --locked
+          installed=$(wasm-bindgen --version)
+          echo "$installed"
+          case "$installed" in
+            "wasm-bindgen $bindgen" | "wasm-bindgen $bindgen "*) ;;
+            *)
+              echo "the wasm-bindgen on PATH is '$installed', not $bindgen" >&2
+              exit 1
+              ;;
+          esac
+
+      # The one place the host's `#[wasm_bindgen]` shell is linted. `glue.rs` is gated to this
+      # target, so the `rust` job's `clippy --workspace` — a native build — never compiles it,
+      # and `core`'s wasm leg lints the engine alone.
+      - name: Clippy, the web host for wasm32
+        run: cargo clippy --lib -p grimoire-web --locked --target wasm32-unknown-unknown -- -D warnings
+
+      # `cargo build -p grimoire-web --lib --target wasm32-unknown-unknown --profile wasm
+      # --locked`, then `wasm-bindgen --target web` into `dist-wasm/`.
+      - name: Build the module
+        run: npm run web:wasm
+
+      # `tsc` over the page's program and the Worker's own, then the light entry in `web` mode
+      # into `dist-web/`, with the engine from `dist-wasm/` emitted under `dist-web/wasm/` in a
+      # directory named for its build — which is why the module is built first: the config fails
+      # a build whose engine is not there.
+      - name: Build the page
+        id: build
+        run: npm run web:build
+
+      # Every `.wasm` the bundle holds, raw and as a server would send it, and the bundle
+      # whole. **Found rather than named**: the module sits under a directory named for the
+      # engine's build, which this step has no business computing — and a bundle with no module
+      # in it is a failure, not an empty table.
+      - name: Report the bundle
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t modules < <(find dist-web -type f -name '*.wasm' | sort)
+          if [ "${#modules[@]}" -eq 0 ]; then
+            echo "dist-web/ holds no .wasm, so the page has no engine to load" >&2
+            exit 1
+          fi
+          mib() { awk "BEGIN {printf \"%.2f\", $1 / 1048576}"; }
+          total=$(du -sb dist-web | cut -f1)
+          files=$(find dist-web -type f | wc -l)
+          {
+            echo "### Light app, web build (\`dist-web/\`)"
+            echo
+            echo "| | bytes | MiB |"
+            echo "| --- | ---: | ---: |"
+            for module in "${modules[@]}"; do
+              bytes=$(stat -c %s "$module")
+              gz=$(gzip -9 -c "$module" | wc -c)
+              echo "| \`${module#dist-web/}\` | $bytes | $(mib "$bytes") |"
+              echo "| \`${module#dist-web/}\`, gzip -9 | $gz | $(mib "$gz") |"
+            done
+            echo "| \`dist-web/\`, $files files | $total | $(mib "$total") |"
+          } | tee -a "$GITHUB_STEP_SUMMARY"
+
+      # **The image's own Google Chrome, by path**, handed to the smoke script as `CHROME`.
+      # `google-chrome` on `PATH` first, then the `CHROME_BIN` the image sets; neither is a
+      # contract, so a runner with no browser stops here with that sentence rather than inside
+      # the script with a spawn error. Nothing is downloaded: a Chrome fetched at run time is a
+      # binary nobody pinned. The version goes in the summary, because a figure taken in a
+      # browser is a figure about that browser.
+      - name: Find Chrome
+        shell: bash
+        run: |
+          set -euo pipefail
+          chrome=$(command -v google-chrome || command -v google-chrome-stable || true)
+          if [ -z "$chrome" ] && [ -n "${CHROME_BIN:-}" ] && [ -x "$CHROME_BIN" ]; then
+            chrome=$CHROME_BIN
+          fi
+          if [ -z "$chrome" ]; then
+            echo "this runner has no google-chrome on PATH and no usable CHROME_BIN" >&2
+            exit 1
+          fi
+          version=$("$chrome" --version)
+          echo "$chrome: $version"
+          echo "CHROME=$chrome" >> "$GITHUB_ENV"
+          {
+            echo
+            echo "The smoke test's browser: **$version** (\`$chrome\`, headless) on \`$RUNNER_OS\` \`${ImageOS:-?}\`."
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Serves `dist-web/` on `localhost` — a secure context, which OPFS and a module Worker
+      # both ask for — opens it over CDP in the Chrome found above (`CHROME`, from the step's
+      # `GITHUB_ENV` line) and checks the engine opened its database. **Bounded**, because the
+      # failure this guards is a page that waits for ever, and a job has six hours to do it in.
+      - name: Open the built app in headless Chrome
+        timeout-minutes: 10
+        run: npm run web:smoke
+
+      # Whenever there is a bundle, a failed smoke included: a page that would not open on the
+      # runner is exactly the one somebody needs to serve and look at. Kept 14 days, like the
+      # APK.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        with:
+          name: mtg-grimoire-web
+          path: dist-web/
+          retention-days: 14
+          if-no-files-found: error
+
   # Branch protection pins required checks by name string, and a matrix job's name embeds
   # its matrix values — so protecting `rust (windows-latest)` would silently stop applying
   # the day the matrix changes. This fixed name is the protected check; the matrix
@@ -571,7 +794,7 @@ jobs:
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [changes, frontend, rust, core, powershell, storybook, android]
+    needs: [changes, frontend, rust, core, powershell, storybook, android, web]
     runs-on: ubuntu-22.04
     steps:
       - name: Fail unless every dependency succeeded or was deliberately skipped
@@ -583,8 +806,9 @@ jobs:
           POWERSHELL: ${{ needs.powershell.result }}
           STORYBOOK: ${{ needs.storybook.result }}
           ANDROID: ${{ needs.android.result }}
+          WEB: ${{ needs.web.result }}
         run: |
-          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST core=$CORE powershell=$POWERSHELL storybook=$STORYBOOK android=$ANDROID"
+          echo "changes=$CHANGES frontend=$FRONTEND rust=$RUST core=$CORE powershell=$POWERSHELL storybook=$STORYBOOK android=$ANDROID web=$WEB"
 
           # `changes` is the one dependency that may never be skipped or fail. It decides
           # what the other two do, so if it dies they skip — and a rule that reads a skip
@@ -594,7 +818,7 @@ jobs:
           # A skip here is a deliberate answer from `changes`: that part of the repo did
           # not change, so it has nothing to prove. Every job gated on a `changes` output
           # belongs in this loop — one left out is a job whose failure the gate ignores.
-          for result in "$FRONTEND" "$RUST" "$CORE" "$POWERSHELL" "$STORYBOOK" "$ANDROID"; do
+          for result in "$FRONTEND" "$RUST" "$CORE" "$POWERSHELL" "$STORYBOOK" "$ANDROID" "$WEB"; do
             case "$result" in
               success|skipped) ;;
               *) exit 1 ;;

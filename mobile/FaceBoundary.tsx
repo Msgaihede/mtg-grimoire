@@ -1,7 +1,6 @@
 import { Component, type ErrorInfo, type ReactNode } from "react";
 import { GrimoireMark } from "@/components/GrimoireMark";
-import { FOCUS } from "@/lib/focus";
-import { cn } from "@/lib/utils";
+import { ReloadLink } from "./ReloadLink";
 
 /**
  * What stands between a face that threw and a blank page.
@@ -16,9 +15,8 @@ import { cn } from "@/lib/utils";
  * **`LightApp` keys it by the face**, so a failure in one face does not follow the reader across
  * the floor into the other.
  *
- * **The way out is a link to where the reader already is**, not a button that calls
- * `location.reload()`: a fresh document from the same URL is exactly a reload, and a link is the
- * one control that works even if whatever broke took the scripts with it.
+ * **The way out is a link to where the reader already is** — `ReloadLink`, which says why it
+ * is not a button.
  */
 export class FaceBoundary extends Component<{ children: ReactNode }, { failed: boolean }> {
   state = { failed: false };
@@ -39,15 +37,7 @@ export class FaceBoundary extends Component<{ children: ReactNode }, { failed: b
         <p role="alert" className="max-w-prose text-center text-sm text-destructive">
           This page could not be drawn.
         </p>
-        <a
-          href={window.location.pathname + window.location.search}
-          className={cn(
-            "flex h-11 items-center rounded-md border border-border px-4 text-sm text-text",
-            FOCUS,
-          )}
-        >
-          Reload
-        </a>
+        <ReloadLink />
       </div>
     );
   }

@@ -5528,11 +5528,18 @@ export interface SyncStatus {
  * It only ever moves `loading → ready` or `loading → failed`, never back. `message` is a
  * human-written, multi-line sentence naming the folder that would not open, meant to be shown
  * as it is.
+ *
+ * **`reload` is a host saying that starting again can cure the failure** — and only a host that
+ * can mean it sends it. The web host does, for a second tab (the first tab holds the database, and
+ * may since have closed) and for an engine that never loaded; neither native host does, because a
+ * data folder that would not open will not open the second time either. The light app's boot
+ * screen offers the way out it names (`mobile/BootScreen.tsx`); the desktop's draws the message
+ * and nothing else, as it always has.
  */
 export type StartupStatus =
   | { state: "loading" }
   | { state: "ready" }
-  | { state: "failed"; message: string };
+  | { state: "failed"; message: string; reload?: true };
 
 /** The phases `sync.rs` emits, and the only values `SyncProgressEvent.phase` takes. */
 export type SyncPhase =

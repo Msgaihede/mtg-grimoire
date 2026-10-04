@@ -261,6 +261,19 @@ stands there, to completion. A Worker has one thread; deferring the work to a mi
 only move the block, and would let a caller believe something had been taken off it.
 [The step's plan](../plans/2026-10-02-light-app-core-step-5-io.md) has each reason.
 
+**Built 2026-10-04, `platform::alone` — and the browser arms have now run.** `alone` is not a
+fifth interface with two arms: it is how a *native test* is made to feel the browser's. A Worker
+is one thread, so `spawn` runs its work where it stands, `pause` answers that nothing was waited
+for, and a lock asked for twice by that thread is a trap — none of which a desktop test can see,
+where the pool is another thread and a lock taken twice is a test that never ends.
+`alone::emulate()` makes the calling thread such a host until its guard drops, per thread and
+under `cfg(test)` and the `testing` feature only; the core's table test runs every command that
+way. **The arms themselves first ran the same day**: under Node's V8 over SQLite's in-memory VFS
+— the clock, `pause`, `spawn`'s `blocking` and the refusing `files` — and then in headless
+Chrome, where the web host opened its database in OPFS. `http` has made no request from a
+browser, because the host starts no download yet. [light-app.md](../../reference/light-app.md)
+§9.1 is the record.
+
 ### 2.6 State, events and the one update hook
 
 - **`AppState` splits.** `core::State` holds what every host needs. The desktop wraps it with its
@@ -589,6 +602,21 @@ and `CardArt`'s `remoteSrc` door stays the share viewer's alone.
 alias and answers every registered command. The light app in a plain browser over the fake is a
 config file (§10).
 
+**Built 2026-10-04 for the first row's last column, and the build's mode is what chooses.**
+`src/lib/core/index.ts` has a third `Core` beside Tauri's and the Android host's: in the `web`
+build — `import.meta.env.MODE === "web"`, replaced at compile time, never a probe of the window
+— it reaches `src/lib/core/web/` by a dynamic import and sends every command to the database
+Worker. The import is dynamic and the comparison is written out at it so that no other build
+carries the Worker's chunk; a `Core` that waits for that chunk stands in until it arrives, and
+one that tells the startup gate so replaces it if it never does. The Android host is still
+chosen by the mark it sets, at run time, below the seam. **The rows below it are not this
+step's**: the phone face already picks a file with an `<input type="file">` and saves with a
+download (phase 4, step 4.3), while files, the clipboard and links on the *desktop face* in a
+browser are step 5.4's and card images step 5.3's. **§6's "a sentence with a Reload button" is a link**: the startup status a
+host answers grew `reload`, the web host sends it for a second tab, and the light app's boot
+screen draws a link to where the reader already is — the one control that works even if
+whatever broke took the scripts with it — which is also what `FaceBoundary` draws.
+
 ---
 
 ## 4. Features
@@ -683,6 +711,37 @@ What it has to carry:
 
 **No agent provisions anything.** The source and its `wrangler.jsonc` are committed; Markus runs
 `wrangler deploy`.
+
+**Built 2026-10-04, the first of five steps: the engine in a browser.** `crates/grimoire-web`
+is the host — three exports, `open`, `call` and `listen`, over `grimoire_core::dispatch` — in a
+dedicated Worker, with the page's half below `@/lib/core` and a build of its own, `dist-web/`.
+Of the list above it carries the first two bullets and the fifth:
+
+- **One connection and no WAL**, with the journal *reported* rather than assumed: the page's
+  console said `journal delete, corpus journal delete` in Chrome. What assumed a second
+  connection — the launch, and the facet index's two long reads — has a one-connection arm in
+  the core, and every command in the table is run that way natively, on a thread standing in
+  for a Worker, so a lock taken twice fails a test instead of trapping one. **Nothing queues
+  behind an ingest yet, because nothing ingests**: the host starts no download.
+- **One tab**: the second is refused at the pool's install and told so, with a Reload.
+- **The load is memoised**, on the page and in the Worker, and so is the `open`; the build
+  script refuses a `wasm-bindgen` CLI that is not the lockfile's version.
+
+**The module is 8 548 543 B against the table's 2 642 182 B** — profile `wasm` (release with
+fat LTO, one codegen unit and `panic = "abort"`), no `wasm-opt`, name section stripped;
+2 982 372 B through `gzip -9`. Two causes were read off the build: the core is far larger than
+round one's subset, and the scanner's `ocrs` roots about 1.84 MB of OCR runtime nothing calls.
+Neither was cut in this step, because no size-optimised build has been timed in a browser; both
+are the last step's, with timings. **No other row of the table has a figure from this host
+yet** — there is no corpus in a browser to take one over.
+
+**The origin is `https://mtg-grimoire.app`** (Markus, 2026-10-04): a domain he bought on
+Cloudflare for it, rather than a `workers.dev` name beside the relay's. Both OPFS databases and
+the install are bound to it, and it is the name the relay's CORS allow-list (§7) will carry.
+Nothing is deployed there. What is left of the list — the corpus that can vanish and
+`persist()`, the update flow, hosting — is in the four steps that remain;
+[the plan](../plans/2026-10-04-light-app-phase-5.md) has them and
+[light-app.md](../../reference/light-app.md) §9 is the record.
 
 ---
 
@@ -892,7 +951,7 @@ columns, with the build named.
 | How the desktop face behaves below its 700px height floor in a browser | Phase 3, measured |
 | What the deck editor is on a 360px screen | Phase 3, as built options put to Markus |
 | Android signing and distribution | Phase 4, with Markus |
-| The web app's origin, and therefore the relay's CORS allow-list | Phase 5, with Markus |
+| The web app's origin, and therefore the relay's CORS allow-list | Settled 2026-10-04 — `https://mtg-grimoire.app` (§6). Open: the allow-list itself, which is phase 6's |
 | Whether a browser needs the live socket | Phase 6, after polling has been lived with |
 | Whether OCR is usable in a browser on a phone | Phase 7, measured on a device |
 | Whether the desktop moves onto the command table | After phases 4 and 5 have both run on it |

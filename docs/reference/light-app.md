@@ -4,13 +4,17 @@ The Android and web face of MTG Grimoire — card search, decks, collection, wis
 as one second entry over the desktop's own components. **What is built is phase 1, the skeleton,
 and phase 3, the pages:** it runs in a browser over the Storybook fake (§2.1, §7) and in a
 phone-sized window over the real Rust core (§2.2). Underneath it, phase 2 moved the engine into a
-crate those hosts can link (§6), and **phase 4 is building the Android host on it** (§8) — an APK
-CI builds, which no phone has run yet. There is no WASM host, no service worker and no sync on a
-light install yet.
+crate those hosts can link (§6), **phase 4 is building the Android host on it** (§8) — an APK
+CI builds, which no phone has run yet — and **phase 5 is building the web host** (§9): since
+step 5.1 (2026-10-04) the engine is a WASM module in a dedicated Worker, and it opens its
+database in a browser's OPFS and answers commands there. **It downloads nothing in a browser
+yet**, so a web install has no cards; there is no service worker, nothing is hosted, and there
+is no sync on a light install.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
-  pages: [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md).
+  pages: [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md); the web host:
+  [the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md).
 - What is left, phase by phase: [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761).
 - The binding rules for anyone changing it: [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
 
@@ -249,6 +253,10 @@ purpose; the phase that owns the surface owns the fix.
 
 ### Phase 5 — the web host
 
+**Step 5.1 (§9.1) closed none of these four**, and each has a step that owns it in
+[the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md): the first is 5.3's,
+the other three 5.4's. What 5.1 itself left open is at the foot of §9.1.
+
 - `FaceBoundary` catches a face that throws — a lazy chunk that never arrives included — and
   offers a reload. What it does not do is recover: a deploy that renamed the chunks needs the
   service worker's update story, which is this phase's.
@@ -291,8 +299,10 @@ the weld or the probe in it:
 The engine is moving out of `src-tauri` into `crates/grimoire-core`, a crate with no `tauri`
 dependency that the desktop, the Android host and the WASM host will all link (spec §2). The
 rules for working in it are [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md);
-this section is what each step built and measured. **Nothing here runs on a phone or in a
-browser yet**: what exists is a crate the desktop links, compiled for two more targets. All
+this section is what each step built and measured. **Nothing in this section ran on a phone or
+in a browser**: what phase 2 left is a crate the desktop links, compiled for two more targets.
+(The hosts that run it there came after — phase 4's for Android, §8, and since 2026-10-04 the
+web host, which runs it in a browser, §9.1.) All
 seven steps have landed — the leaves, the storage layer, the state a host holds over it, and
 the domain: the decks, the collection, the wishlist and the search — and the whole of the
 fifth, in three parts: a request, a timer, a file, a lock and background work under
@@ -1102,16 +1112,20 @@ compared equal — and four things that were wrong anyway.
 **Open after this part:**
 
 - **No browser arm has run.** `http`, `timer` and `files` compile for `wasm32` and are linted
-  there; the first thing to call one is phase 5's Worker.
+  there; the first thing to call one is phase 5's Worker. (**Some have since**: §9.1, 2026-10-04.
+  `http` is not among them — the web host starts no download, and no request from a browser is
+  on record.)
 - **CORS is unmeasured, and it decides whether the browser arm of the client works at all.** A
   request from a Worker is cross-origin: `If-None-Match` and `Range` cost a pre-flight, and
   `ETag`, `Retry-After` and `Content-Range` read as absent unless the host exposes them — in
   which case a bulk check stores no ETag, every 429 falls to thirty seconds and a resume is
   refused. Which of those `api.scryfall.com`, `data.scryfall.io` and `cards.scryfall.io` expose
-  is the first thing phase 5 measures, against the real hosts.
+  is the first thing phase 5 measures, against the real hosts. (**Measured 2026-10-04, with
+  `curl` — §9.1's CORS table.** None of the three exposes any of them.)
 - **A browser's `Tick` is the wall clock**, in whole milliseconds, so a clock stepped forwards
   opens the pacing gate early there. `performance.now()` is monotonic and a Worker has it; the
-  web host should give `platform::clock` that arm before it paces a request.
+  web host should give `platform::clock` that arm before it paces a request. (**Still open
+  after step 5.1**, which paces no request; it is step 5.2's.)
 - **`futures_util`'s mutex is not FIFO-fair** where tokio's was. The gate promises spacing, not
   order, and one request is in flight at a time in this app — but a caller that needed the order
   would not get it.
@@ -2302,7 +2316,9 @@ reason. `SettingsPage` is the edition's second reader, as spec §3.1 grants; `na
   Patreon*). It is now `SyncPanelBody`, which takes `openLink`, and a one-line `SyncPanel` that
   hands it `openExternal`; the phone face hands it a `window.open` until the host seam for opening
   a link exists (phases 4 and 5).
-- **Driven in Chromium over the fake** (`mobile:dev` on port 5176): every group opened at 360 wide
+- **Driven in Chromium over the fake** (`mobile:dev`, which this record puts on port 5176 — the
+  config's port for that script was 5175 then and is now, so the pass named another by hand or
+  the figure is a slip; **since 2026-10-04 port 5176 is `web:dev`'s**): every group opened at 360 wide
   with no sideways scroll (`scrollWidth` 360 for each), the Clear collection dialog over the
   window rather than the list, the sync group at 800 in a `max-w-2xl` column, and the desktop
   face at 1280×800 with six rail entries and `dropbox` matching nothing.
@@ -2656,7 +2672,9 @@ the app does not ship. So `MainActivity` pads `android.R.id.content` by `systemB
   Framework on Android) and `tauri-plugin-fs` (`Fs::open`, which on Android asks the Kotlin side for
   a descriptor for the `content://` URI). So the desktop face, drawn on a tablet past 1024px, saves
   and picks as it does on Windows. No URI crosses to the page in either direction, the desktop's
-  rule (issue #545); the capability grants no `dialog:`, `fs:` or `opener:` permission.
+  rule (issue #545); the capability grants no `dialog:` or `fs:` permission. (This said *or
+  `opener:`* too until 2026-10-04, against the paragraph below and against
+  `capabilities/light.json`, which holds the opener pair for the desktop face.)
   `read_bounded` and `suggested_name` moved into the core's `import` so both hosts share the
   megabyte cap and the name rule.
 
@@ -2789,3 +2807,361 @@ mobile data — is still a device's to show. The emulator draws through SwiftSha
 (the action's default `-gpu swiftshader_indirect`).
 And the APK is x86_64, a different compile of the same source. **Every figure from this workflow
 is an emulator figure and is to be named as one**; the issue's box stays open for a phone.
+
+## 9. The web host — phase 5, a step at a time
+
+`grimoire-core` compiled to WASM, loaded by one dedicated Worker, with the page talking to it
+through the `Core` seam (spec §6, and §3.5 for the seams).
+[The plan](../superpowers/plans/2026-10-04-light-app-phase-5.md) has the five steps, one pull
+request each; the rules for the host crate are
+[`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-web/CLAUDE.md).
+
+**Decided before anything was built** (the plan's table), the last of them by Markus on
+2026-10-04:
+
+- **The host is `crates/grimoire-web`, a fourth workspace member** — a `cdylib` whose
+  `#[wasm_bindgen]` shell is the only thing gated to the target, so every `--workspace` command
+  still reaches it natively.
+- **The page is a build of its own, `dist-web/`** — the light entry in a `web` mode. The page's
+  code is the Android app's; what differs is below `@/lib/core`, as the fake's build already
+  differs. The desktop's `dist/` and the APK's `dist-mobile/` are to carry neither the module
+  nor the Worker nor the service worker.
+- **The service worker is hand-written**, as round one's was: no `workbox`, no
+  `vite-plugin-pwa`.
+- **`platform::files` keeps refusing in a browser.** The databases are SQLite's own OPFS VFS, a
+  download is streamed into its sink, and card images are the service worker's, in Cache
+  Storage.
+- **Nobody here deploys.** The hosting Worker's source and its `wrangler.jsonc` are committed;
+  Markus runs `wrangler deploy`.
+- **The web app's origin is `https://mtg-grimoire.app`** (Markus, 2026-10-04) — a domain he
+  bought on Cloudflare for it, rather than a `workers.dev` name beside the relay's. An origin is
+  a PWA's identity: both OPFS databases and the install are bound to it, and the relay's CORS
+  allow-list (phase 6) names it. **Nothing is deployed there**; hosting is step 5.5.
+
+**What the tree held before the phase started** (surveyed 2026-10-04, `main` at `2abf2d7a`):
+
+- **The core compiled for `wasm32-unknown-unknown` and nothing had ever instantiated it.** No
+  browser arm of `platform/` had run; there was no host crate, no `cdylib`, no OPFS code.
+- **`launch::open` could not run in a browser as written**: it makes the data folder first,
+  opens a second, read-only connection, and returned it as a field that was not optional — and
+  `index::lifecycle`'s build and `invalidate_owned` each opened a connection of their own.
+- **Every launch download goes through a temp file**, which a browser does not have. The card
+  sync and the tagger feeds refuse before they ask; the combo and price feeds ask first and
+  then refuse, on every launch — which is why the host of §9.1 starts none of them.
+- **The page had two transports and no third**: `pickCore` answered `tableCore` or `tauriCore`,
+  so in a plain browser the production bundle waited on "Opening your collection…" for ever,
+  and `imageOrigin` answers two origins a browser cannot reach.
+
+Round one's web host is in git history and worked end to end — removed on 2026-09-27 for its
+faces, not its engine — and the plan names each file to read before writing the same thing
+again: ported, never restored. The toolchain was already on this machine: the
+`wasm32-unknown-unknown` target, clang 22.1.8 in `C:\Program Files\LLVM\bin` (not on `PATH`)
+and `wasm-bindgen` 0.2.127, the version `Cargo.lock` resolves. No `wasm-opt`, no `wasm-pack`,
+no `wrangler`.
+
+### 9.1 Step 5.1 — the engine in a browser (2026-10-04)
+
+**What was built.**
+
+- **`crates/grimoire-web`, the web host** (`grimoire-web`, library `grimoire_web`, crate types
+  `cdylib`/`rlib`). It holds almost nothing, and **three exports are the whole of it**:
+  `open(directory)` — the OPFS pool, the two databases on one connection, the state and the
+  facet index; `call(name, args, body?)` — every command, forwarded to
+  `grimoire_core::dispatch`, so a command the table lacks is refused in the table's own words;
+  and `listen(handler)` — the engine's events, handed to the Worker's script. `open` and `call`
+  answer **JSON text and never reject**: `{"kind":"ready",…}`, `{"kind":"already-open"}` or
+  `{"kind":"failed","message":…}` from the one, `{"ok":…}` or `{"err":"…"}` from the other. A
+  trap in a Worker arrives in its `onerror` with nothing a page can show, so a call before
+  `open`, arguments that are not JSON and a body where none belongs are each an answer.
+  **Only `glue.rs` is gated to the target** — the `#[wasm_bindgen]` shell, the pool's install
+  and three `thread_local`s. `wire.rs` (the JSON) and `host.rs` (everything the exports
+  *decide*) compile on every target and are tested natively: a module gated to the browser is
+  invisible to `cargo test`, and a typo in a wire string there is an `undefined` in a page.
+- **`open` runs once whoever asks.** `host::Once` keeps the first call's *future* and every
+  later caller awaits a clone of it — a second pool is never installed and the state is never
+  replaced under a call in flight (`the_first_open_is_the_only_one_and_everyone_gets_its_answer`).
+  A page that wants another attempt reloads, which is a new Worker.
+- **The host starts nothing.** No card sync, no feed, no image upkeep: a download in a browser
+  has no temp file to land in (step 5.2), and the upkeep loop evicts files this host does not
+  have. No write observers either — the desktop's three are its mirror, its other windows and
+  its live socket.
+- **The one-connection opener**, in the core. `db::open_single` is `open_write` statement for
+  statement — one private body, `open_pair`, serves both, so the pair cannot be opened two
+  ways — with two differences: **the journal each file got is answered rather than assumed**
+  (`db::Journal`; `apply_pragmas` and `attach_corpus` now return what `PRAGMA journal_mode =
+  WAL` *said*), and **`temp_store = FILE`**. `launch::open_single(databases, data_dir)` is the
+  launch over it — no folder made, no file asked after, no read connection: `Opened.read` is an
+  `Option` now and `None` here, handed to `State::new` as it is. `databases` is empty in a
+  browser, where the pool is the filesystem and its two names are bare; `data_dir` is what
+  Settings shows and need not be a path (`OPFS:/mtg-grimoire`). `State::one_connection()` says
+  which kind of host a state is, and `index::lifecycle::over_the_corpus` is the one place the
+  facet index's two long reads decide between a connection of their own and the state's.
+  `the_single_opener_sets_what_the_write_opener_sets_and_says_what_it_got` compares the two
+  openers pragma for pragma.
+- **Why `temp_store`, and what it is not.** The SQLite a browser build compiles keeps its
+  temporary b-trees — the sort behind a `CREATE INDEX`, an FTS rebuild — in memory unless told
+  otherwise, and in a browser memory is the module's linear memory, which grows and is never
+  given back. In the VFS they are files deleted when the statement ends. **It is a decision
+  about a browser's memory and not a measured necessity**: round one first set it against a
+  failure later traced to something else, and memory has never been measured in its place.
+  What it costs is file slots, which is why the pool is sized at 64 files against two
+  databases and two journals — round one's figure, and headroom nobody has justified by
+  measurement either.
+- **`platform::alone` — a native test made to feel the browser's one thread.** Three things
+  behave differently in a Worker and none can be seen from a native test: `spawn` runs its work
+  where it stands, `pause` answers that nothing was waited for, and a lock asked for twice by
+  the one thread is **a trap** (std's `Mutex` panics on a recursive lock on
+  `wasm32-unknown-unknown`) where a desktop's is a test that never ends. `alone::emulate()`
+  makes the *calling thread* such a host until its guard drops: both `spawn` arms run on the
+  caller, `pause` answers `false`, and `db`'s lock helpers panic on a lock already held, naming
+  the line that asked. Per thread and never global, `cfg(test)` and the `testing` feature only;
+  `emulated()` is a constant `false` in a build that ships.
+- **Every command, run that way.** `commands`' test
+  `every_command_answers_on_one_connection_and_one_thread` opens the database through
+  `launch::open_single`, builds a state with no read connection, stands in for a Worker and
+  dispatches every entry of `commands::TABLE` — 224 on the day — failing with the command's
+  name on a panic, on a `BUSY` answered against itself, and on a call that never answers. It
+  refuses a table that has grown a `blocking` or `task` entry without a row of chosen
+  arguments, because those are the kinds handed the state. **It found no lock taken twice.**
+  `a_lock_taken_twice_fails_by_name_instead_of_hanging` is the mutation that shows each failure
+  is caught. No request leaves the machine in it, so the far side of a download is not run
+  there.
+- **One site was found by reading, and fixed.** `index::lifecycle`'s `amend_owned` noted a
+  failed `owned` refresh to `error_log` while holding the reader — which on one connection is
+  the write connection's own mutex, so the row was never written. It hands the failure back
+  now and `invalidate_owned` writes it down once the pass has let go
+  (`a_failed_owned_refresh_on_one_connection_is_still_written_down`).
+- **The Worker, in `src/lib/core/web/`.** `worker.ts` is the dedicated Worker — not an
+  optimisation: OPFS's synchronous access handles exist only off the main thread, and the pool
+  permits one connection, so there is nowhere else for the database to be. It is **its own
+  `tsc` program** (`tsconfig.web-worker.json`, the `WebWorker` lib; the root program excludes
+  the one file), and everything it decides is in `engine.ts`, which the suite drives with
+  neither a Worker nor a module. `grimoire_web.d.ts` types the module **by hand**, because
+  `dist-wasm/` is ignored and `tsc` runs on machines that never built it. The Worker loads the
+  glue **by URL, through a variable, with an origin** — each of the three for a reason
+  `worker.ts` gives at its own site.
+- **The protocol** (`protocol.ts`, pinned by `protocol.test.ts`): `open` and `call` one way;
+  `opened`, `ok`, `err` and `event` the other. **Answers are matched by id and never by
+  arrival** — a slow search is overtaken by a fast one — and a byte payload is transferred
+  rather than copied, its headers riding as `args`, as `table.ts` carries the same call.
+- **The third `Core`, and how a build chooses it.** `src/lib/core/web/index.ts`'s `webCore`
+  sends every command to the Worker. **`src/lib/core/index.ts` chooses by
+  `import.meta.env.MODE === "web"`** — which build this is, replaced at compile time, not a
+  probe — and reaches `./web` by a **dynamic import with the comparison written out at the
+  `import()`**: Vite bundles a Worker for every file it transforms that spells
+  `new Worker(new URL(…))`, so a static import would put the Worker's chunk in the desktop's
+  `dist/` and the APK's `dist-mobile/`. `deferredCore` is what `core` is while that chunk is on
+  its way, and `refusedCore` what it becomes if the chunk never comes — the gate is then told
+  so, with a reload, where a rejected `startup_status` would have read as *still loading* for
+  ever. Every other mode still goes through `pickCore`. **A refusal is the engine's sentence as
+  a bare string**, because that is what a Tauri command rejects with and the pages read one.
+- **Loaded once, on both sides.** Two instances of a `wasm-bindgen` module in one Worker
+  corrupt each other's heap — round one measured it on 2026-08-28, a first run that failed two
+  times in three — and React's StrictMode is what asks twice. So: the page makes **one Worker**
+  on the first call or subscription and never another (`createWebCore`, a module singleton);
+  the Worker memoises the *load* as a promise (`engine.ts`'s `once`), so two messages landing in
+  one turn share one instantiate; and it memoises the *open*, as the module itself does.
+- **The startup gate is answered on the page.** `startup_status` is `loading` until the Worker
+  reports its open, and `startup:changed` is emitted when it does — the two things the Android
+  host answers in Rust — so `boot/useStartup.ts` is one gate on every host. A call made before
+  the database is open **waits and is not refused**: held, and sent in the order made. A
+  Worker that dies rejects every call in flight and refuses every later one.
+- **A second tab is told so, and offered a way out.** The pool holds exclusive access handles,
+  so a second document of the origin is refused at the *install*, before it names a database.
+  `wire::Opened::from_install_error` tells that from a real failure by the `DOMException`'s
+  **name** (`NoModificationAllowedError`), anywhere in the text. The page turns it into
+  `{ state: "failed", message, reload: true }`. **`StartupStatus` grew `reload?: true`** — a
+  host saying that starting again can cure the failure — and the web host sends it for a second
+  tab, for an engine that never loaded and for one that stopped; never for a database that
+  would not open, which will not open the second time either. **`mobile/BootScreen.tsx` draws
+  the way out from what the host answered, not from where it runs**: `ReloadLink`, a link to
+  where the reader already is, which `FaceBoundary` now draws too. A failure a reload can cure
+  is told in the plain text colour; one that stays failed keeps the destructive one.
+- **The `web` mode.** `vite.mobile.config.ts` in mode `web` builds the light entry into
+  **`dist-web/`**; every other mode is `dist-mobile/` as before. `npm run web:dev` serves it on
+  **port 5176** (the light server keeps 5175, so both can be up), `web:build` runs `tsc`, the
+  Worker's program and the bundle, and `web:preview` serves the result on 4176 with Vite's own
+  single-page fallback turned off, so a file a deploy removed is a 404 as on a real host.
+- **The engine's address is `/wasm/<build id>/`.** Its two files have fixed names
+  (`grimoire_web.js`, `grimoire_web_bg.wasm`), so without the id one URL would serve every
+  build there will ever be, and anything that keeps a response by URL would pair this build's
+  glue with the last build's module. **The id hashes the engine's files — each one's name, its
+  length and its bytes** (`assets.ts`'s `buildIdOf`, FNV-1a, sixteen hex digits) — so a deploy
+  that changed only the page keeps the address and a changed byte moves it; a dev server's id
+  is the word `dev` and it serves `dist-wasm/` uncached. A directory and not a query, because
+  the glue finds what it imports beside itself by its own URL. A `web` build whose engine is
+  not there **fails**, with the sentence that says what to run.
+- **`scripts/build-wasm.mjs`** (`npm run web:wasm`): `cargo build -p grimoire-web --lib` for
+  the target under **a profile of its own, `wasm`** — it inherits `release` and adds fat LTO,
+  one codegen unit and `panic = "abort"`, and `[profile.release]` is deliberately not written,
+  so nothing here reaches the desktop's or the APK's build — then `wasm-bindgen --target web`
+  into `dist-wasm/`, the name section stripped unless `--names` asks. It checks three things
+  that fail without naming themselves: the CLI is exactly the version `Cargo.lock` resolves,
+  clang 18 or newer is reachable (it looks in the LLVM installer's folder on Windows), and
+  every function the Worker imports is exported.
+- **`scripts/web-smoke.mjs`** (`npm run web:smoke`): serves `dist-web/` on `localhost`, opens
+  it in headless Chromium over the DevTools protocol with no dependency, and asks five things —
+  the app got past its gate and said which journal it got; the database is in OPFS; a read came
+  back through the engine; a reload opens the database a second time, heard as a second console
+  line; a second tab is told and offered a Reload. **It is the run that instantiates the
+  module**: vitest drives the Worker's logic over a fake and cargo compiles the engine for a
+  browser without starting one. **Its reload check is "it opens again", not "it kept what was
+  written"** — nothing in the script can write through the engine, so a browser that wiped OPFS
+  between the two opens would pass; that a write survives is the dev pass's, below. Everything
+  it starts is stopped whatever fails, and one timer bounds the whole run at three minutes.
+- **CI's `web` job** builds the module and the page on `ubuntu-24.04`, reports every `.wasm`
+  raw and `gzip -9`, runs the smoke script in the image's own Chrome and uploads `dist-web/`.
+  The router gives it everything `core` runs for and everything the page is bundled from.
+  [ci-and-releases.md](ci-and-releases.md) has each step and each arm. `lint:rust`'s and CI's
+  `cargo fmt` line gained `-p grimoire-web`, the `testing`-feature check names the host, and
+  release-please bumps its manifest and lockfile entry with the others
+  (`the_host_wears_the_cores_version` goes red if the versions part).
+
+**Measured, 2026-10-04, on Windows 11.**
+
+- **The module** (`node scripts/build-wasm.mjs`: profile `wasm`, name section stripped, no
+  `wasm-opt`): `grimoire_web_bg.wasm` is **8 548 543 B**, **2 982 372 B** through `gzip -9`; the
+  glue `grimoire_web.js` is 60 568 B. The build took 221.8 s cold on this machine and 142.3 s
+  warm. With the function names kept (`--names`) the root `Cargo.toml` records 10 146 090 B.
+  **Round one's module was 2 642 182 B.** Two causes were read off the build: the core is far
+  larger than round one's subset, and `ocrs`'s default `export-wasm` feature roots the OCR
+  runtime's own `#[wasm_bindgen]` API — about 1.84 MB that nothing calls, measured on a scratch
+  copy with the feature off at 6 703 909 B. `opt-level = "s"` measured 7 036 825 B. (Both
+  comparisons were taken against the build before the review's fixes, 8 547 708 B — 835 B
+  smaller than the one that ships.)
+  **Neither was adopted in this step**: no size-optimised build has been timed in a browser,
+  and the `ocrs` line is `crates/card-scanner`'s. Both are step 5.5's, with timings.
+- **Under Node 24's V8, before any browser** (the module through a temporary export, since
+  removed; which profile that module was built under is not on this record): the whole engine
+  as WASM over SQLite's in-memory VFS — launch to schema 59 in 76 ms, `journal: "delete"` on
+  both files, 27 commands of every kind answered, no trap.
+- **In a browser, the built app** (`npm run web:build`, then `npm run web:smoke`; headless
+  Chrome 154.0.8037.95, `--headless=new`, an 800-wide window and so the phone face). All five
+  checks passed, in 3.4 s to 4.1 s across five runs. The page's console line read `journal
+  delete, corpus journal delete, schema 59`; OPFS held `mtg-grimoire/` with 65 entries; the
+  read was the Search wall's "No cards match." over an empty corpus; the reload opened the
+  database again; and the second tab was told *"MTG Grimoire is already open in another tab of this
+  browser. Close that tab, then reload this one."* and offered a Reload. `dist-web/` is
+  11 996 428 B in total.
+- **In a browser, the dev build under React StrictMode** (`npm run web:dev`, Vite's dev server
+  on port 5176 over the module in `dist-wasm/`; the same Chrome, driven over CDP by importing
+  the page's own `core`). **One Worker** was requested. `startup_status` settled `ready` **900 ms** after
+  the page's first ask on an empty OPFS — instantiate, install the pool, open, migrate to head,
+  build the facet index. Then: `sync_status` 7.3 ms (`dataDir` reads `OPFS:/mtg-grimoire`,
+  `cardCount` 0); `deck_create` 13.9 ms; `deck_list` 0.3–0.6 ms; an unknown command refused in
+  the table's sentence — *"There is no command named no_such_command on this host."* — in
+  0.2 ms; malformed arguments refused in a sentence naming the field. The deck written was
+  still there after a fresh navigation (`deck_list` in 3 ms).
+- **Storage after that first open**: OPFS held 64 files totalling 1 507 328 B, while
+  `navigator.storage.estimate()` reported `usage` 67 122 634 — a second measurement of the
+  spec's rule that the estimate gates nothing. `navigator.storage.persisted()` was `false`;
+  nothing asks yet (step 5.2). (64 is also the pool's capacity in files. The smoke run's 65 is
+  a count of *entries*, and its walk counts a directory as one — the likeliest reason for the
+  difference, not checked.)
+- **The suites**: `cargo test` green for the core, `grimoire-web`, `grimoire-light` and the
+  desktop on the final tree, and clippy clean natively and for wasm32. The new TypeScript tests
+  are `src/lib/core/web/`'s four files, `deferred.test.ts`, `core.test.ts`'s *"the core a build
+  chooses"* and `mobile/BootScreen.test.tsx`.
+
+**CORS, measured 2026-10-04 with `curl`** sending `Origin: https://mtg-grimoire.app` and
+reading the response headers a browser's CORS check reads. **Server behaviour only: no browser
+has made these requests.** This is what §6.5 left as phase 5's first measurement, and what step
+5.2 builds on.
+
+| Host | `Access-Control-Allow-Origin` | Pre-flight (`OPTIONS`) | `Access-Control-Expose-Headers` | Notes |
+| --- | --- | --- | --- | --- |
+| `api.scryfall.com` (`/bulk-data`) | `*` | 200; `allow-headers` lists `If-Modified-Since`, `Cache-Control`, `Accept`, `User-Agent`, … — **not `If-None-Match`, not `Range`** | none | `ETag` is sent but a page cannot read it |
+| `data.scryfall.io` (the bulk files) | `*` on `GET`/`HEAD` | **403** | none | `Accept-Ranges: bytes`, and a ranged `GET` answers 206 with `ACAO: *`; `Content-Length` and `Last-Modified` are safelisted and readable, `ETag` and `Content-Range` are not |
+| `json.commanderspellbook.com` (`variants.json.gz`) | `*` | **403** | none | `Content-Encoding: gzip` — a `fetch` always decodes it, so `Content-Length` (28 832 784) is not the body's length; `Last-Modified` readable, `ETag` not |
+| `api.cardkingdom.com` (`/api/v2/pricelist`) | `*` | not asked | none | answered `Content-Type: text/html` to curl; read the body before trusting it |
+| `manapool.com` (`/api/v1/prices/singles`) | **absent** | — | — | only `Access-Control-Allow-Headers: sentry-trace, baggage`; unreachable from a page, as spec §4 says |
+| `cards.scryfall.io` (card images) | `*` | allowed (`GET, OPTIONS`) | none | a CORS `fetch` gets a readable (non-opaque) response, so Cache Storage holds it at its real size |
+
+What follows for the engine in a browser:
+
+- **No request may carry `If-None-Match`.** It is not a safelisted request header, so it costs
+  a pre-flight, and both `data.scryfall.io` and Spellbook answer a pre-flight 403 — the request
+  itself then fails. `api.scryfall.com` answers the pre-flight but does not list the header.
+- **No `ETag` can be read anywhere**: nobody sends `Access-Control-Expose-Headers`. A freshness
+  check in a browser has the descriptor's own body (`updated_at`, and a file name that carries
+  its timestamp), `Last-Modified` (safelisted) and the app's own refresh interval.
+- **A simple `Range: bytes=N-` is a safelisted request header** in current browsers and needs
+  no pre-flight, but `Content-Range` cannot be read, so a resumed download cannot verify what it
+  got. **A browser download is one streamed request with no resume.**
+- **`Retry-After` is not exposed either**: a 429's wait cannot be read from a page.
+- Bulk sizes on the day: `default_cards` 78 692 716 B gzipped, `oracle_tags` 5 977 799,
+  `art_tags` 12 975 578.
+
+**Not measured, and not built.**
+
+- **Any browser but Chromium on a desktop, and any phone.** Both browser passes above are one
+  Chrome on Windows; neither drove a page of the desktop face over the engine — the smoke run
+  is the phone face and the dev pass called `core` itself.
+- **The corpus.** No download runs in a browser — the host starts none — so every figure above
+  is over an empty one: no ingest, no search over cards, no memory high-water mark, no storage
+  figure worth comparing with round one's.
+- **Card images.** The page still asks the `mtgimg` origins, which a browser cannot reach
+  (step 5.3).
+- **Clipboard, links and files on the desktop face** in a browser (step 5.4), **a service
+  worker** (5.3) and **hosting** (5.5).
+- **CI's `web` job has not run.** Its first run is this step's pull request, and its sizes are
+  that run's summary — a Linux Chrome's, not the one above.
+- **A trap inside the engine.** With `panic = "abort"` a panic in a call is an uncaught error in
+  the Worker and the call's promise never settles; what the page hears is the Worker's own
+  `error` event, on which its core rejects everything in flight and refuses what follows. That
+  path is exercised by fakes only — nothing here made the real module trap.
+- **`eprintln!` is silent on wasm**, so the launch's logged passes say nothing in a browser.
+- **There is no backup before a schema climb in a browser**: `VACUUM INTO` needs a file, and
+  the copy is logged and skipped as on any host that cannot write it.
+- **A corpus that will not migrate cannot be replaced in a pool yet** —
+  `launch.rs`'s `unreadable_corpus_seam` is the line, and says what a browser gets today in
+  each of its three cases. One that is simply gone reads as a first run.
+- **Three values are round one's and were not re-measured**: `synchronous = NORMAL` on a
+  rollback journal, `temp_store = FILE`, and the pool's capacity of 64.
+
+**Reviewed before it shipped**, by a reader given the code and not the conclusion: no must-fix,
+and eight things that claimed more than they did — each closed in the same change.
+
+- **The one-connection test proved less than its name.** A bounded ask that found the
+  connection held answered `None` and its caller dropped the work in silence — the shape of the
+  bug found by reading. On an emulated thread `db::lock_for` now refuses by name
+  (`alone::refuse_held`), and re-running that bug's mutation fails at `sync.rs`'s line instead
+  of by a missing row. Arguments that never reach a body are counted and pinned by name; the
+  list is empty since the four commands on it were given real ones. **"By name instead of
+  hanging" holds for four locks** — a connection and the facet index (a panic), the sync lane
+  and the pairing offer (a deadline) — and not for `lock_plain` or a bare `.lock()`, which
+  would block the thread.
+- **The smoke run** left its server listening, and so its process alive, when the browser
+  failed to start; its deadline bounded only its own polls; and its reload check waited on a
+  tab bar the old document had already drawn.
+- **The dev server's engine route read outside `dist-wasm/` on Windows** for a path with a
+  backslash in it (`/wasm/dev/..\package.json`) — loopback only, and only from a client that is
+  not a browser. `wasmFileOf` is an allow-list of plain segments now.
+- **A byte payload that was a view of part of a buffer** would have handed over the whole
+  buffer, emptying every other view of it; such a view is copied and the copy crosses. **One
+  held call whose post throws** no longer strands the calls behind it.
+- **Two false sentences**: that a trap surfaces as a rejected call (above), and that the CLI's
+  install needed a `--target-dir` — `cargo install` from a registry never reads this
+  repository's cargo config. And one omission: `glue.rs` was linted by nothing, since the
+  `rust` job's clippy is native and `core`'s names the engine alone; the `web` job runs
+  `cargo clippy --lib -p grimoire-web` for wasm32 ahead of the build.
+- **What a `wasm-bindgen` mismatch does** had two accounts in the tree and both are partly
+  right: the CLI refuses a module on another *schema*, which is not the crate's version
+  (0.2.127 is on schema 0.2.122), so a neighbouring release can pass that check with glue
+  nobody has run. Exact equality stays the rule because it is the only pair anyone has.
+
+**Left for the rest of the phase** ([the plan](../superpowers/plans/2026-10-04-light-app-phase-5.md)):
+
+- **5.2 — the first run.** The launch's downloads without a temp file, each streamed into its
+  sink, on the CORS answers above; the pacing clock (§6.5's `performance.now()` arm) and a
+  deadline on a feed request; the corpus-build screen; searches queued behind an ingest,
+  measured; the corpus found missing at launch and a rebuild offered; `persist()` asked once
+  and recorded; the marketplace picker offering only what the host can reach.
+- **5.3 — the service worker.** The shell precached, card images from Cache Storage on the
+  app's own origin, the update flow, and a face whose chunk a deploy renamed recovering.
+- **5.4 — the browser's seams and the manifest.** Clipboard and open-a-link below
+  `@/lib/core`, file open and save on the desktop face, the phone card sheet's `Open on …`
+  rows, the manifest finished and moved out of `public/`, and phase 1's two history leftovers.
+- **5.5 — hosting, and the phase's own run.** The Cloudflare Worker with static assets at
+  `mtg-grimoire.app`, its runbook, the module's size taken up with timings, and the built app
+  driven end to end against round one's figures.

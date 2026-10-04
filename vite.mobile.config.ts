@@ -1,9 +1,41 @@
+// Node's own modules, in a file `tsc` never reads: a Vite config is type-stripped by Vite and
+// checked by nothing (`tsconfig.node.json` has why that project lists one file), and `@types/node`
+// is never installed. What this file decides that can be wrong lives in
+// `src/lib/core/web/assets.ts`, where the suite covers it; what stays here is the filesystem.
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { defineConfig, mergeConfig, type Plugin } from "vite";
 import base from "./vite.config.ts";
 import { FAKE_ALIASES } from "./.storybook/fake/aliases.ts";
+import {
+  buildIdOf,
+  GLUE_FILE,
+  isNavigation,
+  WASM_FILE,
+  wasmContentType,
+  wasmFileOf,
+  wasmPath,
+} from "./src/lib/core/web/assets.ts";
 
 /** The light app's document, from the repository root. */
 const ENTRY = "mobile/index.html";
+
+/** A request as Connect hands it over — Node's `IncomingMessage`, whose type is not installed. */
+interface Asked {
+  url?: string;
+  method?: string;
+  headers: { accept?: string };
+}
+
+/** As much of Node's `ServerResponse` as an answer written by hand needs. */
+interface Answer {
+  statusCode: number;
+  setHeader(name: string, value: string): void;
+  end(body?: string | Uint8Array): void;
+}
+
+/** A request's path, without its query. */
+const pathOf = (request: Asked): string => (request.url ?? "/").split("?")[0];
 
 /**
  * Serves the light entry to every page navigation, and puts it at the root of the build.
@@ -13,6 +45,7 @@ const ENTRY = "mobile/index.html";
  * against `mobile/`. With the root where it is, `/` would serve the *desktop's* `index.html` —
  * so a navigation is rewritten to the light document instead, which is also the history
  * fallback the light app's path-based URLs need (`/decks/12` must load the app, not 404).
+ * `isNavigation` is what a navigation is, and it is under `src/` so the suite holds it.
  */
 function lightEntry(): Plugin {
   return {
@@ -23,23 +56,10 @@ function lightEntry(): Plugin {
     configureServer(server) {
       server.middlewares.use((request, _res, next) => {
         // Connect's request extends Node's `IncomingMessage`, and `@types/node` is never
-        // installed here — so the type arrives with none of the three fields read below. A cast
-        // on the one read, for `vite.config.ts`'s reason about `process`.
-        const req = request as unknown as {
-          url?: string;
-          method?: string;
-          headers: { accept?: string };
-        };
-        const path = (req.url ?? "/").split("?")[0];
-        const navigation =
-          req.method === "GET" &&
-          String(req.headers.accept ?? "").includes("text/html") &&
-          // A file has an extension and a Vite internal starts `/@`; neither is a page. The
-          // extension is asked of the **last segment**: a dot further up the path is part of a
-          // route, and reading it as a file would hand that route the desktop's document.
-          !path.slice(path.lastIndexOf("/") + 1).includes(".") &&
-          !path.startsWith("/@");
-        if (navigation) req.url = `/${ENTRY}`;
+        // installed here — so the type arrives with none of the fields read below. A cast on the
+        // one read, for `vite.config.ts`'s reason about `process`.
+        const req = request as unknown as Asked;
+        if (isNavigation(req.method, req.headers.accept, pathOf(req))) req.url = `/${ENTRY}`;
         next();
       });
     },
@@ -76,9 +96,113 @@ function lightEntry(): Plugin {
  */
 const FAKE_UNBUNDLED = ["@tauri-apps/plugin-clipboard-manager", "@tauri-apps/plugin-opener"];
 
-export default defineConfig(({ mode }) =>
-  mergeConfig(base, {
-    plugins: [lightEntry()],
+/**
+ * Where `npm run web:wasm` (`scripts/build-wasm.mjs`) writes the engine: wasm-bindgen's glue and
+ * the module, and whatever the glue imports beside itself. Ignored, and read by the web mode
+ * alone. Resolved against this file rather than the working directory.
+ */
+const ENGINE_DIR = fileURLToPath(new URL("./dist-wasm/", import.meta.url));
+
+/** What a build, a dev server and a reader of the page are each told when it is not there. */
+const ENGINE_MISSING =
+  `The card engine has not been built: dist-wasm/ has no ${GLUE_FILE} and ${WASM_FILE}. ` +
+  "Run `npm run web:wasm` first.";
+
+/** Every file of the engine on disk, by its path under `dist-wasm/` — none, when it is not built. */
+function engineFiles(): { name: string; bytes: Uint8Array }[] {
+  if (!existsSync(ENGINE_DIR)) return [];
+  return (
+    (readdirSync(ENGINE_DIR, { recursive: true }) as string[])
+      .map((name) => name.replaceAll("\\", "/"))
+      // wasm-bindgen writes declarations beside the glue; nothing loads them.
+      .filter((name) => !name.endsWith(".d.ts") && statSync(ENGINE_DIR + name).isFile())
+      .map((name) => ({ name, bytes: readFileSync(ENGINE_DIR + name) }))
+  );
+}
+
+const engineBuilt = (files: { name: string }[]): boolean =>
+  [GLUE_FILE, WASM_FILE].every((wanted) => files.some(({ name }) => name === wanted));
+
+/**
+ * **The web app's engine, served and shipped** — the `web` mode's one plugin.
+ *
+ * The Worker loads the glue from `/wasm/<build>/grimoire_web.js` and the module from beside it
+ * (`src/lib/core/web/worker.ts`); `assets.ts` has why the build id is a directory. Neither file is
+ * in the module graph — they are a build of their own, and the page names them by URL — so they
+ * are put there by hand:
+ *
+ * - **In dev**, a middleware answers `/wasm/<anything>/…` from `dist-wasm/` as it is on disk at
+ *   that moment, uncached, so `npm run web:wasm` beside a running server is picked up by a reload.
+ *   A file that is not there is a 404 that says what to run — which the Worker's failed load
+ *   carries to the boot screen.
+ * - **In a build**, every file is emitted under `wasm/<build>/`, and an engine that was never
+ *   built **fails the build** with the same sentence rather than shipping a page that cannot open.
+ * - **In the preview**, a page navigation answers the built document, by `isNavigation` — the
+ *   rule the dev server serves by. (See `appType` below for what else the preview is told.)
+ */
+function webEngine(
+  build: string,
+  files: { name: string; bytes: Uint8Array }[],
+  building: boolean,
+): Plugin {
+  return {
+    name: "web:engine",
+    configureServer(server) {
+      server.middlewares.use((request, response, next) => {
+        const file = wasmFileOf(pathOf(request as unknown as Asked));
+        if (file === null) return next();
+        const res = response as unknown as Answer;
+        const onDisk = ENGINE_DIR + file;
+        if (!existsSync(onDisk) || !statSync(onDisk).isFile()) {
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.end(ENGINE_MISSING);
+          return;
+        }
+        res.statusCode = 200;
+        res.setHeader("Content-Type", wasmContentType(file));
+        // The address does not move in dev, so nothing may keep what it answered.
+        res.setHeader("Cache-Control", "no-store");
+        res.end(readFileSync(onDisk));
+      });
+    },
+    configurePreviewServer(server) {
+      server.middlewares.use((request, _res, next) => {
+        const req = request as unknown as Asked;
+        if (isNavigation(req.method, req.headers.accept, pathOf(req))) req.url = "/index.html";
+        next();
+      });
+    },
+    buildStart() {
+      // A dev server starts without it — the boot screen then says what is missing.
+      if (building && !engineBuilt(files)) this.error(ENGINE_MISSING);
+    },
+    generateBundle() {
+      for (const { name, bytes } of files) {
+        // An asset under a name of its own: the glue is written out as wasm-bindgen wrote it,
+        // unbundled and unhashed, because the id in its path is what versions it.
+        this.emitFile({ type: "asset", fileName: wasmPath(build, name).slice(1), source: bytes });
+      }
+    },
+  };
+}
+
+export default defineConfig(({ mode, command, isPreview }) => {
+  /**
+   * **`web` is the web app's build**: the light entry over the engine in a Worker, into
+   * `dist-web/` (`npm run web:build`, `web:dev`, `web:preview`). Every other mode is the light app
+   * as it was — `dist-mobile/`, which the Android host embeds, and `fake` for the Storybook fake.
+   * The page's code is the same; what differs is below `@/lib/core`, which reads this mode
+   * (`src/lib/core/index.ts`).
+   */
+  const web = mode === "web";
+  const building = command === "build";
+  const engine = web && building ? engineFiles() : [];
+  // A build's id is its engine's bytes; a dev server has one engine and serves it uncached.
+  const engineBuild = building ? buildIdOf(engine) : "dev";
+
+  return mergeConfig(base, {
+    plugins: [lightEntry(), ...(web ? [webEngine(engineBuild, engine, building)] : [])],
     // The Storybook fake, under the real `ipc.ts` — **the four aliases `.storybook/main.ts`
     // declares, read from the one list both use**, for its reason: the fake sits *under* the
     // hand-written mirror, so the light app in a plain browser exercises the mirror too.
@@ -86,18 +210,29 @@ export default defineConfig(({ mode }) =>
     // tried before that prefix.
     resolve: mode === "fake" ? { alias: FAKE_ALIASES } : {},
     optimizeDeps: mode === "fake" ? { exclude: FAKE_UNBUNDLED } : {},
+    // How the Worker is told where its engine is. `define` reaches the Worker's bundle as it
+    // reaches the page's, and an `import.meta.env` key is replaced by the dev server too.
+    define: web ? { "import.meta.env.VITE_ENGINE_BUILD": JSON.stringify(engineBuild) } : {},
+    // **The preview answers a missing file with a 404, as a real host does.** Vite's own
+    // single-page fallback hands the document to anything that accepts `*/*` — a script, a
+    // Worker's `import()` — so a file a deploy removed would arrive as HTML with a 200, and the
+    // failure the app is built to report would be a MIME error instead. `mpa` turns that off, and
+    // `web:engine` puts back the one fallback wanted: a page navigation.
+    ...(web && isPreview ? { appType: "mpa" } : {}),
     build: {
-      outDir: "dist-mobile",
+      outDir: web ? "dist-web" : "dist-mobile",
       emptyOutDir: true,
       rolldownOptions: { input: ENTRY },
     },
-    // Not 1420 (`tauri dev`), not 5174 (the share viewer), not 6006 (Storybook).
+    // Not 1420 (`tauri dev`), not 5174 (the share viewer), not 6006 (Storybook) — and the web app
+    // is not on the light server's 5175, so the two can be up at once.
     //
     // **No `watch` of its own.** The base config's `server.watch.ignored` is `vite.watch.ts`'s list,
     // which keeps the watcher out of every build output under the root — the `EBUSY` this server
     // died of on 2026-10-01 (`docs/reference/light-app.md` §4) — and `mergeConfig` carries it
     // here. This config restated those five globs until the base config grew the list for every
     // server; a second copy appended over the first changed nothing but what could drift.
-    server: { port: 5175, strictPort: true },
-  }),
-);
+    server: { port: web ? 5176 : 5175, strictPort: true },
+    preview: { port: 4176, strictPort: true },
+  });
+});

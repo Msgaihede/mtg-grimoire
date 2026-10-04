@@ -5501,7 +5501,7 @@ fn replace_attached_corpus(conn: &Connection, failed: rusqlite::Error) -> rusqli
             &format!("ATTACH DATABASE ?1 AS {CORPUS}"),
             [path.to_string_lossy().as_ref()],
         )?;
-        crate::db::apply_pragmas(conn, Some(CORPUS))
+        crate::db::apply_pragmas(conn, Some(CORPUS)).map(|_| ())
     };
     if let Err(why) = deleted {
         eprintln!(

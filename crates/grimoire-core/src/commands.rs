@@ -49,6 +49,12 @@
 //! kind `bytes` yet**; that arm is proven by this module's own tests, over a table of their own,
 //! until the scanner's frame joins.
 //!
+//! **Every entry also runs on a host with one connection and one thread** — a browser's shape,
+//! where a read asked for inside a write is the same mutex twice and work "on the pool" is on
+//! the caller. `tests::every_command_answers_on_one_connection_and_one_thread` drives the whole
+//! table that way natively ([`crate::platform::alone`]) and fails with the command's name; a
+//! new `blocking` or `task` entry owes it a row of arguments (`tests::chosen_args`).
+//!
 //! **A body is the desktop wrapper's own body**, its connection renamed, so a command answers the
 //! same thing on every host. **What a wrapper does beside the core is the desktop's and is left
 //! out**, said at the entry: telling the other windows through `AppState.changes` (a light host has
@@ -1477,6 +1483,622 @@ mod tests {
             Ok(Value::Null)
         );
         assert!(state.pairing.lock().await.is_none(), "the cancel took it");
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // One connection, one thread: every command, the way a browser's Worker runs it
+    // -----------------------------------------------------------------------------------------
+
+    /// How one call ended, on a thread standing in for a Worker.
+    #[derive(Debug)]
+    enum Alone {
+        /// It answered — `Ok` or a refusal of its own, either of which is an answer.
+        Answered(Result<Value, String>),
+        /// It panicked, and this is what it said. A lock this thread already held, asked for
+        /// again, is the one this harness is for ([`crate::platform::alone`]): in a browser a
+        /// trap, natively on one connection a deadlock. Any other panic is a trap there too.
+        Panicked(String),
+        /// It answered [`crate::db::BUSY`] with nothing else running: a press that asked for
+        /// the sync lane ([`State::lane_for_press`]) from inside the operation holding it, and
+        /// waited out its bound. (A bounded ask for a *connection* its caller holds is a panic
+        /// here, not a `BUSY` — [`crate::platform::alone::refuse_held`].)
+        BusyWithItself,
+        /// It never answered: an `async` lock (the sync lane, the pairing offer) awaited by the
+        /// task that holds it. In a browser that is a promise that never settles.
+        NeverAnswered,
+    }
+
+    impl Alone {
+        /// The sentence a failed command is reported with, or `None` for one that answered.
+        fn failure(&self) -> Option<String> {
+            match self {
+                Alone::Answered(_) => None,
+                Alone::Panicked(said) => Some(format!("panicked: {said}")),
+                Alone::BusyWithItself => Some(
+                    "answered \"busy\" with nothing else running: it asked, with a bound, for \
+                     something its own caller was holding"
+                        .to_owned(),
+                ),
+                Alone::NeverAnswered => Some(format!(
+                    "did not answer in {NEVER}s: it is awaiting a lock its own task holds",
+                    NEVER = NEVER_ANSWERED.as_secs()
+                )),
+            }
+        }
+    }
+
+    /// Long past any command over a near-empty database and a local mock server, and only ever
+    /// spent by a call that is not coming back.
+    const NEVER_ANSWERED: std::time::Duration = std::time::Duration::from_secs(30);
+
+    fn one_thread_runtime() -> tokio::runtime::Runtime {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime")
+    }
+
+    /// Drive `call` to its end **on this thread, as a Worker would**: the caller has said this
+    /// thread is the only one ([`crate::platform::alone`]), so the blocking pool is the caller,
+    /// a pause is no pause, and a connection or the facet index taken twice is a panic — caught
+    /// here and turned into an outcome, so the failure is a sentence with a command's name on
+    /// it and never a test that does not end.
+    ///
+    /// ⚠️ **"Never a test that does not end" is true of those two locks and of the two `async`
+    /// ones, and of nothing else.** A connection and the facet index go through `alone`; the
+    /// lane and the pairing offer are awaited, so the deadline here ends them. Every *other*
+    /// std lock in the crate — `db::lock_plain` and the bare `.lock()`s of the image cache, the
+    /// event sinks, the scanner, the undo tickets — is taken as it is natively: a recursive one
+    /// blocks this thread for good, and a deadline cannot fire on a current-thread runtime
+    /// whose one thread is blocked. They are left out on purpose (`platform::alone` says why:
+    /// some are process-wide, and other tests' threads hold them honestly), so for those this
+    /// harness proves nothing and would hang.
+    ///
+    /// A panic leaves the runtime in whatever state the unwind left it, so it is replaced.
+    fn drive<F>(runtime: &mut tokio::runtime::Runtime, call: F) -> Alone
+    where
+        F: std::future::Future<Output = Result<Value, String>>,
+    {
+        assert!(
+            crate::platform::alone::emulated(),
+            "`drive` is for a thread standing in for a host with one"
+        );
+        let ran = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            runtime.block_on(async { tokio::time::timeout(NEVER_ANSWERED, call).await })
+        }));
+        match ran {
+            Err(panic) => {
+                *runtime = one_thread_runtime();
+                Alone::Panicked(
+                    panic
+                        .downcast_ref::<String>()
+                        .cloned()
+                        .or_else(|| panic.downcast_ref::<&str>().map(|s| (*s).to_owned()))
+                        .unwrap_or_else(|| "it panicked, and did not say why".to_owned()),
+                )
+            }
+            Ok(Err(_elapsed)) => Alone::NeverAnswered,
+            Ok(Ok(Err(e))) if e == crate::db::BUSY => Alone::BusyWithItself,
+            Ok(Ok(answer)) => Alone::Answered(answer),
+        }
+    }
+
+    /// **The mutation**: commands that take the connection twice, in each of the ways a
+    /// one-connection host can — over a table of their own, as `kinds` is.
+    mod twice {
+        commands! {
+            // A read asked for inside a write. Two mutexes on the desktop; one in a browser.
+            blocking read_inside_a_write in commands::tests(key: String) = |state| {
+                crate::state::with_write(&state, |_conn| meta(&state.lock_db_read(), &key))
+            };
+            // The other way round, where the second ask is bounded. A Worker answers that one
+            // "busy" — against its own caller — rather than trapping.
+            blocking write_inside_a_read in commands::tests(key: String) = |state| {
+                let _reader = state.lock_db_read();
+                crate::state::with_write(&state, |conn| set_meta(conn, &key, "never"))
+            };
+            // **The one a trap-and-busy watch passes over**: a bounded ask whose caller drops
+            // its work on `None`. `note_database` is `if let Some(conn) = lock_for(…)`, so with
+            // the connection in hand the row is simply never written — and this answers `Ok`.
+            blocking note_inside_a_read in commands::tests(key: String) = |state| {
+                let _reader = state.lock_db_read();
+                crate::sync::note_database(&state, &key, "asked for with the connection held");
+                Ok(())
+            };
+            // Work handed to "the pool" while a lock it takes is held: off the caller natively,
+            // on it in a browser.
+            task spawn_inside_a_read in commands::tests(key: String) = |state| async move {
+                let held = state.lock_db_read();
+                let inner = ::std::sync::Arc::clone(&state);
+                let work = crate::platform::spawn::blocking(move || {
+                    meta(&inner.lock_db_read(), &key)
+                });
+                // Polled once with the guard in hand — never across an `.await`, which the
+                // compiler's own fence refuses.
+                let polled = ::futures_util::FutureExt::now_or_never(work);
+                drop(held);
+                polled
+                    .ok_or_else(|| "the work was taken off the caller".to_owned())?
+                    .map_err(|e| e.to_string())?
+            };
+            // An async lock awaited by the task that holds it: the lane, twice.
+            task lane_inside_the_lane in commands::tests() = |state| async move {
+                let _first = state.lane().await;
+                let _second = state.lane().await;
+                Ok(())
+            };
+            // And asked for as a press asks, with a bound: it waits the bound out and is told
+            // "busy" — by itself.
+            task press_inside_the_lane in commands::tests() = |state| async move {
+                let _held = state.lane().await;
+                let bound = ::std::time::Duration::from_millis(50);
+                state.lane_within(bound).await.map(|_| ())
+            };
+            // The control: the same three things, one after another, each let go first.
+            blocking one_at_a_time in commands::tests(key: String) = |state| {
+                crate::state::with_write(&state, |conn| set_meta(conn, &key, "written"))?;
+                let read = meta(&state.lock_db_read(), &key)?;
+                crate::collection_source::with_write_owned(&state, |conn| {
+                    set_meta(conn, &key, "again")
+                })?;
+                Ok(read)
+            };
+        }
+    }
+
+    /// **The detection, shown to work.** Each deliberate double lock is a failure with the
+    /// command's name on it — a panic that names the line, a "busy" against itself, a call that
+    /// never answers — and none of them hangs the test. On a host with two connections the
+    /// first is not a double lock at all, which is why no desktop test ever saw one.
+    ///
+    /// "Lock" here is a connection, the facet index, the sync lane and the pairing offer —
+    /// `drive`'s doc says which locks are outside it.
+    #[test]
+    fn a_lock_taken_twice_fails_by_name_instead_of_hanging() {
+        // Read before the test stands in for anything, so a slow machine cannot be what times
+        // the last case out.
+        let quick = std::time::Duration::from_millis(400);
+        let (state, _heard, _dir) =
+            crate::state::fixtures::single("commands-twice", "http://127.0.0.1:1");
+        let (two, _dir_two) =
+            crate::state::fixtures::on_files("commands-twice-two", "http://127.0.0.1:1");
+        let _alone = crate::platform::alone::emulate();
+        let mut runtime = one_thread_runtime();
+        let key = || json!({ "key": "probe" });
+
+        let taken = drive(
+            &mut runtime,
+            twice::dispatch(&state, "read_inside_a_write", key(), None),
+        );
+        let said = match &taken {
+            Alone::Panicked(said) => said.clone(),
+            other => panic!("a read inside a write must be refused, and was {other:?}"),
+        };
+        assert!(said.contains("a lock taken twice by one thread"), "{said}");
+        assert!(
+            said.contains("commands.rs"),
+            "it names the line that asked: {said}"
+        );
+
+        // A bounded ask for a held connection: `None` at once in a Worker, and here a panic
+        // that says it was bounded and names the line.
+        let bounded = drive(
+            &mut runtime,
+            twice::dispatch(&state, "write_inside_a_read", key(), None),
+        );
+        let said = match &bounded {
+            Alone::Panicked(said) => said.clone(),
+            other => panic!("a write inside a read must be refused, and was {other:?}"),
+        };
+        assert!(said.contains("a connection, with a bound"), "{said}");
+        assert!(said.contains("commands.rs"), "{said}");
+
+        // **The swallowed one.** Without `alone::refuse_held` this answers `Ok(null)` and the
+        // row is never written — nothing traps, nothing is busy, and a table test that watched
+        // only for those two passes over it.
+        let swallowed = drive(
+            &mut runtime,
+            twice::dispatch(&state, "note_inside_a_read", key(), None),
+        );
+        let said = match &swallowed {
+            Alone::Panicked(said) => said.clone(),
+            other => panic!("a bounded ask that drops its work must be refused: {other:?}"),
+        };
+        assert!(said.contains("a connection, with a bound"), "{said}");
+        assert!(
+            said.contains("sync.rs"),
+            "it names `note_database`'s ask: {said}"
+        );
+
+        let busy = drive(
+            &mut runtime,
+            twice::dispatch(&state, "press_inside_the_lane", Value::Null, None),
+        );
+        assert!(matches!(busy, Alone::BusyWithItself), "{busy:?}");
+        assert!(busy.failure().is_some());
+
+        let spawned = drive(
+            &mut runtime,
+            twice::dispatch(&state, "spawn_inside_a_read", key(), None),
+        );
+        assert!(matches!(spawned, Alone::Panicked(_)), "{spawned:?}");
+
+        // The lane has no panic to give — an awaited lock just never resolves — so this one is
+        // found by the wait. Asked with a short one here; the table test's is `NEVER_ANSWERED`.
+        let lane = {
+            let call = twice::dispatch(&state, "lane_inside_the_lane", Value::Null, None);
+            runtime.block_on(async { tokio::time::timeout(quick, call).await.is_err() })
+        };
+        assert!(lane, "a lane awaited twice by one task must not answer");
+
+        // And the state is not left broken by any of it: the same connection, one use at a time.
+        let control = drive(
+            &mut runtime,
+            twice::dispatch(&state, "one_at_a_time", key(), None),
+        );
+        assert!(
+            matches!(&control, Alone::Answered(Ok(Value::String(read))) if read == "written"),
+            "{control:?}"
+        );
+
+        // Two connections: a read inside a write is two mutexes, and answers.
+        let desktop = drive(
+            &mut runtime,
+            twice::dispatch(&two, "read_inside_a_write", key(), None),
+        );
+        assert!(matches!(desktop, Alone::Answered(Ok(_))), "{desktop:?}");
+
+        // Every case above is in the table, and nothing in the table went unasked.
+        let asked: Vec<_> = twice::TABLE.iter().map(|e| e.name).collect();
+        assert_eq!(
+            asked,
+            [
+                "read_inside_a_write",
+                "write_inside_a_read",
+                "note_inside_a_read",
+                "spawn_inside_a_read",
+                "lane_inside_the_lane",
+                "press_inside_the_lane",
+                "one_at_a_time",
+            ]
+        );
+    }
+
+    /// An argument for a command the table test has no row for, from its declared type: the
+    /// smallest value that parses, so the body runs and refuses for a reason of its own —
+    /// *there is no such deck* — rather than at the door. `None` leaves the argument out, which
+    /// is what an `Option` is on the wire.
+    fn any_value(name: &str, ty: &str) -> Option<Value> {
+        let ty: String = ty.chars().filter(|c| !c.is_whitespace()).collect();
+        Some(match ty.as_str() {
+            _ if ty.starts_with("Option<") => return None,
+            // The one string most deck commands refuse anything else for.
+            "String" if name == "variant" => json!("live"),
+            "String" => json!("x"),
+            "bool" => json!(false),
+            "f64" => json!(1.0),
+            "i64" | "u32" | "u64" | "usize" => json!(1),
+            _ if ty.starts_with("Vec<") => json!([]),
+            // A struct of the wire's, or a map: an empty object parses wherever every field has
+            // a default, and is a refusal in words where one does not.
+            _ => json!({}),
+        })
+    }
+
+    fn any_args(entry: &Entry) -> Value {
+        let mut args = serde_json::Map::new();
+        for (name, ty) in entry.args.iter().zip(entry.types) {
+            if let Some(value) = any_value(name, ty) {
+                args.insert(camel(name), value);
+            }
+        }
+        Value::Object(args)
+    }
+
+    /// `deck_id` as the wire spells it.
+    fn camel(name: &str) -> String {
+        let mut out = String::new();
+        let mut upper = false;
+        for c in name.chars() {
+            match c {
+                '_' => upper = true,
+                c if upper => {
+                    out.extend(c.to_uppercase());
+                    upper = false;
+                }
+                c => out.push(c),
+            }
+        }
+        out
+    }
+
+    /// What the table test calls a command with, where a made-up value would stop it at the
+    /// door. **Every `blocking` and `task` entry has a row** — those are the kinds whose body is
+    /// handed the state itself and so can take the connection twice; the test refuses a table
+    /// that has grown one without a row. The rest are here because a write that *lands* is what
+    /// reaches the code after it: the settle, the reconcile, the facet index's `owned` refresh.
+    fn chosen_args(name: &str, seeded: &Seeded) -> Option<Value> {
+        let reviewable = crate::sync_engine::commands::REVIEWABLE[0].0;
+        Some(match name {
+            // Writes that land, so what follows a write runs.
+            "deck_create" => json!({ "deck": { "name": "Alone" } }),
+            "collection_add" => {
+                json!({ "entry": { "cardId": "c-bolt", "finish": "nonfoil", "quantity": 3 } })
+            }
+            "collection_list" | "collection_summary" | "collection_shelf_counts" => {
+                json!({ "query": {} })
+            }
+            // Not the seeded copy, which `collection_to_deck` is about to move.
+            "collection_remove" => json!({ "id": 999_999 }),
+            "search_cards" => json!({ "req": { "text": "bolt" } }),
+            // Structs with a required field, which `{}` would stop at the door.
+            "search_marks" => json!({ "req": { "ids": ["c-bolt"] } }),
+            "set_home_layout" => json!({ "layout": seeded.layout }),
+            "deck_token_swap" => json!({
+                "deckId": seeded.deck,
+                "variant": "live",
+                "oracleId": "o-c-bolt",
+                "to": { "cardId": "c-bolt", "finish": "nonfoil" },
+            }),
+            "deck_token_remove" => json!({
+                "deckId": seeded.deck,
+                "variant": "live",
+                "oracleId": "o-c-bolt",
+                "entry": { "cardId": "c-bolt", "finish": "nonfoil" },
+            }),
+
+            // `blocking`. A ticket that is still good and a copy that is really there, so
+            // each reaches the write it decides on.
+            "bulk_undo" => json!({ "undoId": seeded.undo }),
+            "collection_to_deck" => json!({
+                "entryId": seeded.entry,
+                "deckId": seeded.deck,
+                "categoryName": seeded.pile,
+                "quantity": 1,
+            }),
+            "combos_status" | "combos_clear" | "cache_clear" | "sync_status" => Value::Null,
+            "art_tags_status" | "oracle_tags_status" => Value::Null,
+            // With text, so the facet pass reads the database rather than answering from memory.
+            "facet_cards" => json!({ "req": { "text": "bolt" } }),
+            "sync_review_clear" => json!({ "table": reviewable, "uid": "nobody" }),
+
+            // `task`. Each stops at the mock server's 404, or before any request.
+            "combos_refresh" => json!({ "force": false }),
+            "marketplace_feed_refresh" => json!({ "marketplace": "nowhere" }),
+            "sync_run" => json!({ "force": true }),
+            "art_tags_refresh" | "oracle_tags_refresh" => json!({ "force": true }),
+            "sync_patreon_claim" => json!({ "code": "not-a-code" }),
+            "sync_pairing_accept" => json!({ "code": "not-an-invite" }),
+            "sync_device_revoke" => json!({ "deviceId": "nobody" }),
+            "sync_now" | "sync_group_leave" => Value::Null,
+            "sync_pairing_begin"
+            | "sync_pairing_confirm"
+            | "sync_pairing_poll"
+            | "sync_pairing_cancel" => Value::Null,
+            _ => return None,
+        })
+    }
+
+    /// What a refusal at the door says — `parse`'s sentence, above.
+    const DID_NOT_PARSE: &str = "its arguments did not parse";
+
+    /// The commands the table test asks and **never runs**, in table order: their made-up
+    /// arguments do not parse, so the call is refused before its body and proves nothing about
+    /// it but the refusal.
+    ///
+    /// **Empty, and pinned so it stays a decision.** Counted on 2026-10-04 there were four —
+    /// `deck_token_swap`, `deck_token_remove`, `set_home_layout` and `search_marks`, each with a
+    /// struct argument that has a required field — and each now has a row in `chosen_args`.
+    /// (Every other struct argument in the table parses from `{}`.) A new command whose
+    /// arguments `any_args` cannot make up lands here by failing the test: give it a row, or
+    /// name it here with the reason it is not worth one.
+    ///
+    /// ⚠️ **Past the door is not the same as far.** Most made-up calls are refused by the body
+    /// for a reason of its own — *there is no such deck* — one statement in. What that proves
+    /// is the arm: the connection taken, the write's settle, and for an `owned` one the facet
+    /// refresh only when the body answered `Ok`.
+    const STOPPED_AT_THE_DOOR: &[&str] = &[];
+
+    /// What the table test put in the database before it asked anything, so the commands that
+    /// decide something *before* they take the connection have something to decide about.
+    struct Seeded {
+        deck: i64,
+        /// One of the deck's own piles, by name.
+        pile: String,
+        /// A copy of the seeded card, removed and waiting to be put back.
+        entry: i64,
+        /// The ticket that removal left.
+        undo: u64,
+        /// The home page as stored, to be stored again: a document at the version the store
+        /// accepts, whatever that is.
+        layout: Value,
+    }
+
+    /// **Every command in the table, on a host with one connection and one thread** — the
+    /// database opened the browser's way ([`crate::launch::open_single`]), a state with no read
+    /// connection, and the calling thread standing in for a Worker
+    /// ([`crate::platform::alone`]): the blocking pool is the caller, and a connection asked
+    /// for while it is held is a failure with the command's name on it.
+    ///
+    /// The desktop has two connections and a pool of threads, so none of its tests can see a
+    /// read asked for inside a write, or work handed "off the caller" with a lock in hand.
+    /// Those are exactly what a browser turns into a trap — and a trap in a Worker is a page
+    /// that stops answering, with nothing it can show.
+    ///
+    /// **What a failure is**: a panic (a connection or the facet index asked for while this
+    /// thread holds it — with or without a bound — or any other trap), a `BUSY` with nothing
+    /// else running, or no answer inside the deadline (the lane or the pairing offer awaited by
+    /// its holder). **What it cannot see**: a recursive lock of any other kind, which would
+    /// block this thread rather than fail it (`drive`'s doc), and a command whose body its
+    /// arguments never reach — which is what `STOPPED_AT_THE_DOOR` counts and pins.
+    ///
+    /// **What it reaches, and what it does not.** A `read`, `write` or `owned` body is handed
+    /// a connection and nothing else, so it cannot ask for one: what this proves for those is
+    /// the arm around them — `with_write`'s settle, the `owned` refresh after the write let go.
+    /// A `blocking` or `task` body is handed the state, and each has chosen arguments so it
+    /// runs. **No request leaves the machine**: Scryfall's client and the relay's override both
+    /// point at a local server that answers 404, the combo feed is stamped as just checked, and
+    /// the price feed is asked for a marketplace it has no feed for. So the far side of a
+    /// download — an ingest, a swap — is not run here; in a browser that side is refused at the
+    /// first file (`platform::files`), and is the web host's next step.
+    #[test]
+    fn every_command_answers_on_one_connection_and_one_thread() {
+        let nowhere = httpmock::MockServer::start();
+        let dir = crate::scratch::path("commands-alone");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        // The browser's launch: one connection, both files at head, the launch's passes run.
+        let opened = crate::launch::open_single(&dir, &dir).expect("a one-connection launch");
+        assert!(opened.read.is_none());
+        let heard = Arc::new(crate::events::fixtures::Recording::default());
+        let state = Arc::new(State::new(
+            opened.write,
+            opened.read,
+            dir.clone(),
+            heard.clone(),
+            Vec::new(),
+            // Never `opened.client`, which names Scryfall.
+            crate::scryfall::Client::new(nowhere.base_url()),
+            opened.images,
+        ));
+        assert!(state.one_connection());
+        {
+            let conn = state.lock_db();
+            crate::schema::fixtures::seed_card(&conn, "c-bolt", "lea", "161");
+            crate::sync_engine::client::set_state(
+                &conn,
+                crate::sync_engine::client::RELAY_URL,
+                &nowhere.base_url(),
+            )
+            .expect("the relay's override");
+            // Just checked, so an unforced refresh asks Commander Spellbook nothing.
+            conn.execute(
+                "INSERT INTO combo_meta (id, checked_at) VALUES (1, unixepoch())",
+                [],
+            )
+            .expect("the combo feed's stamp");
+        }
+
+        let _alone = crate::platform::alone::emulate();
+        // Warm, so an `owned` write has an index to refresh — through the one connection.
+        crate::index::lifecycle::build_now(&state).expect("an index over one connection");
+        let mut runtime = one_thread_runtime();
+
+        // A deck with a pile, and a copy of the card taken out again — through the table, so
+        // the ticket is one the table's own `bulk_undo` can spend.
+        let mut ask = |name: &str, args: Value| -> Value {
+            match drive(&mut runtime, dispatch(&state, name, args, None)) {
+                Alone::Answered(Ok(answer)) => answer,
+                other => panic!("{name} did not set the table test up: {other:?}"),
+            }
+        };
+        let deck = ask("deck_create", json!({ "deck": { "name": "Seeded" } }))["id"]
+            .as_i64()
+            .expect("the deck's id");
+        let piles = ask(
+            "deck_category_list",
+            json!({ "deckId": deck, "variant": "live" }),
+        );
+        let pile = piles[0]["name"].as_str().expect("a pile").to_owned();
+        // The deck plays the card, so a copy of it can be filed there.
+        ask(
+            "deck_add_card",
+            json!({
+                "deckId": deck, "cardId": "c-bolt", "categoryName": pile,
+                "variant": "live", "quantity": 1,
+            }),
+        );
+        let copy = json!({ "entry": { "cardId": "c-bolt", "finish": "nonfoil", "quantity": 2 } });
+        let entry = ask("collection_add", copy)["id"]
+            .as_i64()
+            .expect("the copy's id");
+        let undo = ask("collection_remove_many", json!({ "ids": [entry] }))["undoId"]
+            .as_u64()
+            .expect("a ticket for the removal");
+        let layout = ask("home_layout", Value::Null);
+        let seeded = Seeded {
+            deck,
+            pile,
+            entry,
+            undo,
+            layout,
+        };
+
+        let mut failed: Vec<String> = Vec::new();
+        let mut unchosen: Vec<&str> = Vec::new();
+        let mut at_the_door: Vec<&str> = Vec::new();
+        let mut ran = 0usize;
+        for entry in TABLE {
+            let args = match chosen_args(entry.name, &seeded) {
+                Some(args) => args,
+                None => {
+                    if matches!(entry.kind, Kind::Blocking | Kind::Task | Kind::Bytes) {
+                        unchosen.push(entry.name);
+                        continue;
+                    }
+                    any_args(entry)
+                }
+            };
+            let outcome = drive(&mut runtime, dispatch(&state, entry.name, args, None));
+            ran += 1;
+            if let Some(why) = outcome.failure() {
+                failed.push(format!("{} ({:?}): {why}", entry.name, entry.kind));
+            }
+            if matches!(&outcome, Alone::Answered(Err(e)) if e.contains(DID_NOT_PARSE)) {
+                at_the_door.push(entry.name);
+            }
+        }
+
+        assert!(
+            unchosen.is_empty(),
+            "a `blocking` or `task` command is handed the state, so it can take the connection \
+             twice — give each of these a row in `chosen_args` whose arguments let its body run \
+             without a request leaving the machine: {unchosen:?}"
+        );
+        assert!(
+            failed.is_empty(),
+            "{} of {ran} commands cannot run on a host with one connection and one thread:\n{}",
+            failed.len(),
+            failed.join("\n")
+        );
+        assert_eq!(ran, TABLE.len());
+        // **Asked is not the same as run**: a command refused at the door never reached its
+        // body, and this test proved nothing about it but its arm's refusal.
+        assert_eq!(
+            at_the_door, STOPPED_AT_THE_DOOR,
+            "the commands refused at the door are not the pinned ones: see STOPPED_AT_THE_DOOR"
+        );
+
+        // The writes that were meant to land did, and the index moved with the collection.
+        let decks = drive(
+            &mut runtime,
+            dispatch(&state, "deck_list", Value::Null, None),
+        );
+        assert!(
+            matches!(&decks, Alone::Answered(Ok(Value::Array(_)))),
+            "{decks:?}"
+        );
+        assert!(
+            crate::index::lifecycle::current(&state).is_some(),
+            "the index is warm through the one connection"
+        );
+        // Nothing the engine said went anywhere but the sink it was given.
+        let _ = heard.taken();
+    }
+
+    /// The made-up arguments are the wire's: camelCase, an `Option` left out.
+    #[test]
+    fn made_up_arguments_are_spelled_as_the_wire_spells_them() {
+        let entry = TABLE
+            .iter()
+            .find(|e| e.name == "deck_add_card")
+            .expect("deck_add_card");
+        assert_eq!(
+            any_args(entry),
+            json!({ "deckId": 1, "cardId": "x", "variant": "live", "quantity": 1 })
+        );
+        assert_eq!(camel("move_to_category_id"), "moveToCategoryId");
     }
 
     #[test]

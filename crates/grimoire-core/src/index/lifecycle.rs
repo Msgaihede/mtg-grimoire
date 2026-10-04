@@ -128,6 +128,33 @@ fn publish_amendment(state: &State, base: &Arc<CardIndex>, ix: CardIndex) -> boo
     true
 }
 
+/// Run `read` over a connection for **a long pass**: one opened for it where the host can open
+/// one, and the state's own where it cannot.
+///
+/// The desktop and Android open a read-only connection per pass, for the reason [`build_now`]
+/// gives — the pass must not hold the connection every search waits on. A host built with one
+/// connection ([`State::one_connection`]) is a browser: its storage permits exactly one, and
+/// [`crate::db::open_read`] names a folder it does not have. There the pass takes the state's
+/// connection for its length.
+///
+/// ⚠️ **On that host `read` runs holding the connection every write goes through**, so it may
+/// take no lock of the connection's — not [`crate::sync::note_database`], not a
+/// [`crate::state::with_write`]. That is a lock taken twice: a trap in a Worker. Hand a
+/// failure back and write it down once this has returned, as [`invalidate_owned`] does.
+///
+/// The error is the open's; on a one-connection host there is no open to fail.
+fn over_the_corpus<T>(
+    state: &State,
+    read: impl FnOnce(&rusqlite::Connection) -> T,
+) -> rusqlite::Result<T> {
+    if state.one_connection() {
+        return Ok(read(&state.lock_db_read()));
+    }
+    // Spelled here and in `desktop.rs`'s `init_state`, which is the one that creates it.
+    let conn = crate::db::open_read(&state.data_dir)?;
+    Ok(read(&conn))
+}
+
 /// Read the corpus and publish a new index, **clearing the old one first**.
 ///
 /// Clearing first is the whole contract and not tidiness: the caller is a swap that has just
@@ -138,13 +165,18 @@ fn publish_amendment(state: &State, base: &Arc<CardIndex>, ix: CardIndex) -> boo
 ///
 /// **It opens a connection of its own**, never the state's read connection: this is a full pass over
 /// `cards`, and holding the read connection for it would queue every search behind it at
-/// launch — which is the exact failure that second connection exists to prevent.
+/// launch — which is the exact failure that second connection exists to prevent. **Where the
+/// host has only one connection it reads through that one** ([`over_the_corpus`]): a second
+/// open is refused there, and with one thread nothing was going to answer beside it anyway.
 pub fn build_now(state: &State) -> Result<(), String> {
-    // Spelled here and in `desktop.rs`'s `init_state`, which is the one that creates it.
-    let conn =
-        crate::db::open_read(&state.data_dir).map_err(|e| format!("index connection: {e}"))?;
-    let generation = clear(state);
-    let ix = CardIndex::build(&conn).map_err(|e| format!("index build: {e}"))?;
+    let (generation, built) = over_the_corpus(state, |conn| {
+        // Cleared with the connection in hand and not before, as it always was: a build that
+        // could not get a connection has read nothing, and leaves the index as it found it.
+        let generation = clear(state);
+        (generation, CardIndex::build(conn))
+    })
+    .map_err(|e| format!("index connection: {e}"))?;
+    let ix = built.map_err(|e| format!("index build: {e}"))?;
     if !publish_build(state, generation, ix) {
         // Not an error: something cleared while this ran, and whatever cleared owes a rebuild
         // of its own. Said out loud because it is also the trace of the two-rebuild
@@ -199,11 +231,17 @@ pub fn invalidate_owned(state: &State) {
     let Some(base) = current(state) else {
         return;
     };
-    // A connection of its own, for [`build_now`]'s reason.
-    let Ok(conn) = crate::db::open_read(&state.data_dir) else {
+    // A connection of its own, for [`build_now`]'s reason — or the state's, where there is
+    // only one. A connection that would not open is a refresh that did not happen, in silence,
+    // as it always was.
+    let Ok(amended) = over_the_corpus(state, |conn| amend_owned(state, conn, base)) else {
         return;
     };
-    amend_owned(state, &conn, base);
+    // **Written down here, with the pass over and its connection let go**: on a host with one
+    // connection `note_database` asks for the very connection the pass was reading through.
+    if let Err(e) = amended {
+        crate::sync::note_database(state, "index_owned_refresh", &e);
+    }
 }
 
 /// How many times [`amend_owned`] re-clones after a refusal before it lets the amendment go.
@@ -223,23 +261,31 @@ const AMEND_ATTEMPTS: usize = 4;
 /// not the place to spend a build. **Replaced** — a sibling amendment or a build landed first —
 /// retries, because the index that won may have read `owned` before this write committed; see
 /// [`publish_amendment`] for the race that cost.
-fn amend_owned(state: &State, conn: &rusqlite::Connection, mut base: Arc<CardIndex>) {
+///
+/// **A read that failed is handed back, not written down here** — the caller holds the
+/// connection this reads through, and on a host with one connection the error log is behind
+/// the same mutex ([`over_the_corpus`]). `Err` is the sentence for `error_log`.
+fn amend_owned(
+    state: &State,
+    conn: &rusqlite::Connection,
+    mut base: Arc<CardIndex>,
+) -> Result<(), String> {
     for _ in 0..AMEND_ATTEMPTS {
         let mut next = (*base).clone();
         if let Err(e) = next.rebuild_owned(conn) {
             eprintln!("the owned facet could not be refreshed: {e}");
-            crate::sync::note_database(state, "index_owned_refresh", &e.to_string());
-            return;
+            return Err(e.to_string());
         }
         if publish_amendment(state, &base, next) {
-            return;
+            return Ok(());
         }
         let Some(live) = current(state) else {
-            return;
+            return Ok(());
         };
         base = live;
     }
     eprintln!("the owned facet refresh lost {AMEND_ATTEMPTS} races in a row and was dropped");
+    Ok(())
 }
 
 #[cfg(test)]
@@ -468,7 +514,7 @@ mod tests {
             own(&conn, "2", 1);
         }
         let conn = crate::db::open_read(&state.data_dir).unwrap();
-        amend_owned(&state, &conn, stale);
+        amend_owned(&state, &conn, stale).unwrap();
         assert_eq!(
             current(&state).unwrap().owned.count(),
             2,
@@ -485,8 +531,110 @@ mod tests {
         let base = current(&state).unwrap();
         clear(&state);
         let conn = crate::db::open_read(&state.data_dir).unwrap();
-        amend_owned(&state, &conn, base);
+        amend_owned(&state, &conn, base).unwrap();
         assert!(current(&state).is_none());
+    }
+
+    /// The four seeded printings on **a host with one connection** — a browser's shape — on a
+    /// thread standing in for its one thread, so a lock taken twice is a failure here rather
+    /// than a wait.
+    fn alone_with_seeded_cards(
+        name: &str,
+    ) -> (
+        Arc<State>,
+        crate::platform::alone::Emulation,
+        std::path::PathBuf,
+    ) {
+        let (state, _heard, dir) =
+            crate::state::fixtures::single(&format!("lifecycle-{name}"), "http://127.0.0.1:1");
+        crate::index::fixtures::seed(&state.lock_db());
+        (state, crate::platform::alone::emulate(), dir)
+    }
+
+    /// **A host with one connection builds the index through it**, and opens no other: the
+    /// build reads what the write connection wrote, with nothing but that connection in the
+    /// folder to read it from — a second open is what a browser's storage refuses.
+    #[test]
+    fn a_host_with_one_connection_builds_through_the_one_it_has() {
+        let (state, _alone, _dir) = alone_with_seeded_cards("single-build");
+        assert!(state.one_connection());
+        build_now(&state).unwrap();
+        assert_eq!(current(&state).unwrap().paper.count(), 3);
+        // And the spawned form, which on one thread has run by the time it returns.
+        {
+            let conn = state.lock_db();
+            conn.execute(
+                "INSERT INTO cards (id,name,set_code,collector_number,lang,layout,is_paper,raw)
+                 VALUES ('99','New Card','neo','1','en','normal',1,'{}')",
+                [],
+            )
+            .unwrap();
+        }
+        spawn_build(&state).join().unwrap();
+        assert_eq!(current(&state).unwrap().paper.count(), 4);
+    }
+
+    /// **And a collection write refreshes `owned` through it** — after the write has let the
+    /// connection go, which is the order `collection_source::with_write_owned` keeps: the
+    /// refresh asks for the same mutex the write held.
+    #[test]
+    fn a_host_with_one_connection_refreshes_owned_after_the_write_lets_go() {
+        let (state, _alone, _dir) = alone_with_seeded_cards("single-owned");
+        build_now(&state).unwrap();
+        assert_eq!(current(&state).unwrap().owned.count(), 0);
+
+        crate::collection_source::with_write_owned(&state, |conn| {
+            own(conn, "1", 1);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(current(&state).unwrap().owned.count(), 1);
+    }
+
+    /// **A refresh that cannot read is written down once the connection is let go.** The pass
+    /// holds the state's one connection, and `error_log` is behind the same mutex: noted from
+    /// inside the pass, the row is asked for by a thread that already holds the lock — which on
+    /// one thread can never be given, so the failure went unrecorded. (Natively, with a second
+    /// thread, the same ask spent `WRITE_LOCK_WAIT` and then gave up.)
+    #[test]
+    fn a_failed_owned_refresh_on_one_connection_is_still_written_down() {
+        let (state, _alone, _dir) = alone_with_seeded_cards("single-owned-fails");
+        build_now(&state).unwrap();
+        state.lock_db().execute_batch("DROP TABLE cards;").unwrap();
+
+        invalidate_owned(&state);
+
+        let noted: i64 = state
+            .lock_db()
+            .query_row(
+                "SELECT count(*) FROM error_log WHERE operation = 'index_owned_refresh'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(noted, 1, "the failed refresh must reach the error log");
+    }
+
+    /// A build that cannot read leaves a one-connection host cold too, and says so in the log
+    /// — from `spawn_build`, which notes it after `build_now` has returned.
+    #[test]
+    fn a_failed_build_on_one_connection_is_cold_and_written_down() {
+        let (state, _alone, _dir) = alone_with_seeded_cards("single-build-fails");
+        build_now(&state).unwrap();
+        state.lock_db().execute_batch("DROP TABLE cards;").unwrap();
+
+        spawn_build(&state).join().unwrap();
+
+        assert!(current(&state).is_none());
+        let noted: i64 = state
+            .lock_db()
+            .query_row(
+                "SELECT count(*) FROM error_log WHERE operation = 'index_build'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(noted, 1);
     }
 
     /// The wrapper the three call sites actually use: it must run the build, and it must not
