@@ -312,8 +312,13 @@ failure behind each at its own site:
   own writes. **Not yet**: folder management, a copy's purchase price, the deck tokens band's and
   stats band's writes.
 - **No WASM host, no service worker** — `public/light.webmanifest` is the whole of the PWA so
-  far — **and no sync on a light install**: the phone face runs none and draws the mana line at
-  rest. `mobile:tauri` is the desktop binary, not a light host.
+  far — **and no device sync on a light install**: the phone face pairs with nothing. **It does
+  hear the host's card sync and the feeds** — `phone/cardData.ts`'s `useCardDataWatch`, mounted
+  once in `PhoneFace`, runs the desktop shell's own listeners (`useSyncInvalidation`, the feed
+  hooks) and draws the loudest running job on the mana line; an empty card search says *No cards
+  match.* only over a database that has cards (`phone/search/NoCards.tsx`). Over the fake and in a
+  browser no sync event comes, so the line rests. `mobile:tauri` is the desktop binary, not a
+  light host.
 
 ## The Android host — `src-tauri/` here
 

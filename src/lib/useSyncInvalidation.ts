@@ -1,4 +1,5 @@
 import { useEffect, useRef } from "react";
+import type { QueryClient } from "@tanstack/react-query";
 import { ipc, type SyncProgressEvent } from "@/lib/ipc";
 import { queryClient } from "@/lib/query";
 
@@ -30,9 +31,9 @@ export const SYNC_INVALIDATED = [
 ];
 
 /** Mark all of it stale; only the queries actually on screen pay for a refetch. */
-function invalidateAll(): void {
+function invalidateAll(client: QueryClient): void {
   for (const queryKey of SYNC_INVALIDATED) {
-    void queryClient.invalidateQueries({ queryKey });
+    void client.invalidateQueries({ queryKey });
   }
 }
 
@@ -66,8 +67,16 @@ function invalidateAll(): void {
  * landed it renders under one, and the two are **the same object** — `App` provides this
  * client and the shell's tests wrap it in this client. Left as the direct import because
  * what fires it is an event listener rather than a render.
+ *
+ * **`client` is for the phone face's tests, not for a second client in the app.** The phone face
+ * mounts this too (`mobile/phone/cardData.ts`) and passes the client it renders under — which is
+ * this same module client in the app, and a fake world's own in `renderPhone`, where an
+ * invalidation of the module client would refresh nothing the test can see.
  */
-export function useSyncInvalidation(progress: SyncProgressEvent | null): void {
+export function useSyncInvalidation(
+  progress: SyncProgressEvent | null,
+  client: QueryClient = queryClient,
+): void {
   // The *phase*, not the event: `sync:progress` lands a new object every batch of an
   // ingest, and this effect must run on the transition into `done` rather than on each of
   // the hundred ticks that led to it.
@@ -91,13 +100,13 @@ export function useSyncInvalidation(progress: SyncProgressEvent | null): void {
     if (phase === "ingesting") sawIngest.current = true;
     if (phase === "done" || (phase === "error" && sawIngest.current)) {
       sawIngest.current = false;
-      invalidateAll();
+      invalidateAll(client);
     }
-  }, [phase]);
+  }, [phase, client]);
 
   // The unmount race and the registration that fails outside a Tauri window (a plain
   // `vite dev`) both belong to `lib/core/tauri.ts` now. Losing this trigger takes nothing
   // down: the `done` phase arrives through the props either way, and that is the trigger
   // that matters.
-  useEffect(() => ipc.onCollectionReconciled(invalidateAll), []);
+  useEffect(() => ipc.onCollectionReconciled(() => invalidateAll(client)), [client]);
 }

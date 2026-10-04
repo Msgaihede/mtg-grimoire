@@ -8,6 +8,7 @@ import type { LightView } from "@/lib/edition";
 import type { DeckVariant } from "@/lib/ipc";
 import { queryClient } from "@/lib/query";
 import type { Place } from "../routes";
+import { CardDataContext, useCardDataWatch } from "./cardData";
 import { CardSheet } from "./CardSheet";
 import type { WallItem } from "./CardWall";
 import { CollectionPage } from "./pages/CollectionPage";
@@ -94,6 +95,10 @@ export function PhoneFace() {
   // The stored folds, asked for at launch as `AppShell` asks for them — so neither cabinet draws
   // its shelves at the defaults and then re-folds a frame later.
   usePrefetchShelfFolds();
+  // The card sync and the three feeds, heard once for the whole face: what a finished download
+  // makes stale is refreshed, and what is running rides the mana line — `useCardDataWatch` says
+  // why the phone needs its own mount of the desktop shell's listeners.
+  const { data: cardData, activity } = useCardDataWatch();
 
   /**
    * Which list each deck has been switched to this session — **held here rather than by the deck
@@ -105,8 +110,8 @@ export function PhoneFace() {
   const pick = (deckId: number, list: DeckVariant) =>
     setPicks((now) => new Map(now).set(deckId, list));
   return (
-    <>
-      <Shell title={titleOf(place.view)}>
+    <CardDataContext.Provider value={cardData}>
+      <Shell title={titleOf(place.view)} activity={activity}>
         <Pages place={place} picks={picks} onPick={pick} />
       </Shell>
       {/* A sibling of the shell, not a child of a page: `Dialog`'s scrim is `fixed inset-0`, and
@@ -116,7 +121,7 @@ export function PhoneFace() {
         cardId={place.cardId}
         deckPicked={place.deckId === null ? null : (picks.get(place.deckId) ?? null)}
       />
-    </>
+    </CardDataContext.Provider>
   );
 }
 
