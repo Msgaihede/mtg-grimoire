@@ -319,7 +319,9 @@ the pull request that adds it. The record is
   corpus ingest (the host's `launch: card sync finished in N ms`, read from logcat's
   `RustStdoutStderr` tag), both databases' size through `adb root` — a release build is not
   debuggable, so `run-as` refuses it — a screenshot, and three cold starts to the summary and to
-  an artifact uploaded `if: always()`. **It fails when there is no ingest figure**, and a launch
+  an artifact uploaded `if: always()`, and then leaves the app twice — back from the start page,
+  and the activity destroyed on purpose. **It fails when there is no ingest figure, or when leaving
+  logs a `FORTIFY`, `destroyed mutex` or `Fatal signal` line for the app's process**, and a launch
   whose sync never started within 60 s is reported as *held — the emulator reported a metered
   network* rather than passed. Routed to `frontend` beside `release.yml`, for the two tests that
   read every workflow — **not `android`**: it builds its own APK and is proved by its own run.
