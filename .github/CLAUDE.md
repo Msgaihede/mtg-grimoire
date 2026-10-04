@@ -66,6 +66,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - `persist-credentials: false` is required on all checkouts to prevent leaking tokens.
   - Workflows must declare `permissions: {}` top-level and grant minimal required permissions per job.
   - **Fence**: `scripts/actions-pinned.test.mjs` enforces action SHA pinning and permissions.
+- **Scripts a workflow runs must exist**: `scripts/workflow-scripts.test.mjs` fails if a workflow, composite action, or npm script calls an `npm run <name>` that `package.json` lacks.
 
 ## `release.yml` — Automated Releases
 

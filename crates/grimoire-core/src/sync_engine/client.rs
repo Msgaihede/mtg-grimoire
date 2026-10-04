@@ -6,9 +6,10 @@
 //! every 60 s while the window has focus, push 2 s after the write mask goes quiet — and named
 //! a reason the alternative, a WebSocket, was not built: a socket opened **from the page** would
 //! need the CSP widened. That was true and was not the obstacle it looked like, because the
-//! socket that shipped is opened from **this process**, not from the page: `src-tauri`'s `sync_engine::live`'s
-//! connection manager holds a `tokio-tungstenite` client alongside the `reqwest` connection to
-//! the relay this file already made.
+//! socket that shipped is opened from **this process**, not from the page: [`super::live`]'s
+//! connection manager holds a socket ([`crate::platform::socket`] — `tokio-tungstenite`, on the
+//! desktop and on Android) alongside the `reqwest` connection to the relay this file already
+//! made.
 //! ⚠️ **Neither of those is "under" the CSP, and the phrasing this doc carried for a day said
 //! they were.** A Content-Security-Policy governs what the *webview* may fetch; a native HTTP or
 //! WebSocket client in the Rust process is outside its reach entirely — exempt, not permitted.
@@ -47,9 +48,10 @@
 //!
 //! What is lost against instant delivery is nothing measurable in practice: "within a few
 //! seconds, always" is the design's own bar (spec §2), and the two debounces above are what holds
-//! the request count down without missing it. See `src-tauri`'s `sync_engine::live` for the connection manager
+//! the request count down without missing it. See [`super::live`] for the connection manager
 //! itself — when it opens a socket, the jittered reconnect backoff, and the protocol ping that
-//! keeps a hibernating socket alive for free.
+//! keeps a hibernating socket alive for free. A host starts it: the desktop and the Android
+//! host do, and the web host will once [`crate::platform::socket`] has a browser's arm.
 //!
 //! # A trip holds nothing across a request
 //!

@@ -17,11 +17,11 @@
 //! writes it makes, and [`crate::reconcile`] already merges two versions of the reader's own
 //! rows and writes `needs_review` sentences from Rust.
 //!
-//! **Every layer but the socket is `grimoire-core`'s** since the sync step's second part,
-//! re-exported here at the paths it always had. What is still this crate's is [`live`] — the
-//! WebSocket connection manager, which is `tokio` tasks, `tokio-tungstenite` and a window to tell
-//! — and [`commands`]' `#[tauri::command]` wrappers, beside a glob re-export of the core's module
-//! of that name.
+//! **Every layer is `grimoire-core`'s** — the seven above since the sync step's second part, and
+//! the WebSocket connection manager since the light app's phase 6, when the Android host came to
+//! run it — re-exported here at the paths it always had. What is still this crate's is the push
+//! on the way out, in [`live`] beside a glob re-export of the core's module of that name, and
+//! [`commands`]' `#[tauri::command]` wrappers, beside another.
 
 pub use grimoire_core::sync_engine::apply;
 pub use grimoire_core::sync_engine::baseline;
@@ -31,7 +31,7 @@ pub use grimoire_core::sync_engine::client;
 pub mod commands;
 pub use grimoire_core::sync_engine::entitlement;
 pub use grimoire_core::sync_engine::hlc;
-/// The relay socket and the task that acts on it.
+/// The relay socket's manager, which is the core's, and this host's push on the way out.
 pub mod live;
 pub use grimoire_core::sync_engine::merge;
 pub use grimoire_core::sync_engine::schedule;

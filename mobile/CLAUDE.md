@@ -74,11 +74,12 @@ Navigation grammar is standardized in `routes.ts`: views, decks, `?folder=<id>` 
 ## 5. Host Architectures
 
 ### Android Host (`src-tauri/` in light mode)
-- Workspace member with minimal footprint: mobile entry, `core_call` IPC forwarding to `grimoire_core::dispatch`, and `mtgimg` image protocol.
+- Workspace member with minimal footprint: mobile entry, `core_call` IPC forwarding to `grimoire_core::dispatch`, `mtgimg` image protocol, and the launch's background tasks.
 - `gen/android/` configuration is pinned and validated by `host.test.ts` (backup disabled, camera optional, `cache/exports/` FileProvider).
 - Scoped capabilities in `capabilities/light.json`: `core:default`, `opener:allow-open-url`, and `opener:allow-default-urls`.
 - Metered network check: Launches hold heavy card downloads until user confirms or unmetered Wi-Fi is available.
 - Ships from the release tag, with the desktop and the web app: `release.yml` builds the APK as CI does (debug-signed), and a job that holds the release key and builds nothing re-signs it (`scripts/android-sign.sh`). The Gradle project reads no keystore — never add a signing config or a `keystore.properties` to `gen/android`. `src-tauri/release-signer.sha256` (absent until the owner makes the key) is the public fingerprint every release's signer is held to: never regenerate or replace it without the owner (`host.test.ts`; [ci-and-releases.md](../docs/reference/ci-and-releases.md), "The release rule").
+- Live sync: `start()` spawns the core's connection manager (`grimoire_core::sync_engine::live::run`) after `startup::settle`, with the write wake `open()` registered as the state's one `WriteObserver`. It opens no socket until the device is in a sync group; `sync:live` and `sync:applied` reach the page through `PageEvents`, and `sync_live_state` is answered by the core's table. There is no push on exit (Android gives the host no hook to await one in): the loop's 3 s write debounce pushes, and anything unpushed goes with the next launch's first trip.
 
 ### Web Worker Host (`crates/grimoire-web`)
 - Runs `grimoire-core` in WebAssembly inside a dedicated Web Worker using OPFS storage; see [`crates/grimoire-web/CLAUDE.md`](../crates/grimoire-web/CLAUDE.md).

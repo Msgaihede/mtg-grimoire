@@ -6,7 +6,7 @@
 //!
 //! | | Native | Browser |
 //! | --- | --- | --- |
-//! | [`Semaphore`], [`Lock`] | `tokio::sync` | `tokio::sync` |
+//! | [`Semaphore`], [`Lock`], [`Shared`], [`Bell`] | `tokio::sync` | `tokio::sync` |
 //!
 //! **One implementation, and it is the one this app has always used.** `tokio::sync` needs no
 //! runtime — nothing in it spawns, sleeps or reads a clock — so it is the one part of tokio a
@@ -96,6 +96,43 @@ impl<T> std::ops::DerefMut for Guard<'_, T> {
     }
 }
 
+/// A bell one side rings and one task waits on — **and a ring with nobody waiting is kept**.
+///
+/// Live sync's write wake is the one: the write connection's commit hook rings it
+/// (`sync_engine::live::WriteWake`), from inside SQLite's own callback, and the connection
+/// manager waits on it in one arm of its loop. That loop is *not* waiting there for most of its
+/// life — it is inside a round trip, asleep on a backoff or dialling the relay — so a bell that
+/// woke only whoever was already listening would lose every write that landed in one of those
+/// windows.
+///
+/// **So [`Bell::ring`] stores one permit when nobody is waiting, and the next [`Bell::rung`]
+/// takes it and returns at once.** One, not a count: ten rings in a row with nobody listening
+/// are one wake, which is all a listener that then asks "is there anything to do?" needs. A
+/// wait that was woken and then dropped before it was polled — the losing arm of a select —
+/// hands its ring on rather than swallowing it.
+///
+/// `tokio::sync::Notify`, by its `notify_one` and never its `notify_waiters`, which stores
+/// nothing. It needs no runtime, so it is the same on every host.
+#[derive(Debug, Default)]
+pub struct Bell(tokio::sync::Notify);
+
+impl Bell {
+    pub fn new() -> Bell {
+        Bell::default()
+    }
+
+    /// Ring it. Never blocks and cannot fail, which is what a commit hook requires of anything
+    /// it calls.
+    pub fn ring(&self) {
+        self.0.notify_one();
+    }
+
+    /// Wait for a ring — or take the one that was kept.
+    pub async fn rung(&self) {
+        self.0.notified().await;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -179,5 +216,54 @@ mod tests {
             task.await.unwrap();
         }
         assert_eq!(*shared.lock().await, 8);
+    }
+
+    /// **A ring with nobody waiting is kept, as one**: the next wait returns at once, and the
+    /// one after it waits — which is the whole of what live sync's write wake leans on. Polled
+    /// by hand rather than awaited, so "it would have waited" is an answer and not a test that
+    /// never ends.
+    #[test]
+    fn a_ring_with_nobody_waiting_is_kept_and_only_one_of_them() {
+        use futures_util::FutureExt;
+
+        let bell = Bell::new();
+        assert!(
+            bell.rung().now_or_never().is_none(),
+            "nothing rang, so there is nothing to take"
+        );
+
+        bell.ring();
+        bell.ring();
+        bell.ring();
+        assert!(
+            bell.rung().now_or_never().is_some(),
+            "a ring nobody was waiting for must still wake the next wait"
+        );
+        assert!(
+            bell.rung().now_or_never().is_none(),
+            "three rings with nobody listening are one wake, not three"
+        );
+    }
+
+    /// **A wait that was woken and then dropped unpolled hands its ring on** — the losing arm
+    /// of a select, which is exactly where the connection manager's wait sits when a frame and
+    /// a commit arrive together.
+    #[tokio::test]
+    async fn a_woken_wait_that_is_dropped_does_not_swallow_the_ring() {
+        use futures_util::FutureExt;
+
+        let bell = Bell::new();
+        {
+            let waiting = bell.rung();
+            let mut waiting = std::pin::pin!(waiting);
+            // Parked: polled once with nothing rung.
+            assert!(waiting.as_mut().now_or_never().is_none());
+            bell.ring();
+            // And dropped here, woken but never polled again.
+        }
+        assert!(
+            bell.rung().now_or_never().is_some(),
+            "the ring the dropped wait was given must reach the next one"
+        );
     }
 }

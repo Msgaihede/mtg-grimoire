@@ -17,6 +17,10 @@
 //! nothing, which was one stray timer for a relay request and would have been thousands for a
 //! body bounded a chunk at a time (`http::Body::chunk_within`).
 //!
+//! **And a beat**: [`interval`], a first tick at once and then one a period, on [`sleep`] and
+//! a monotonic tick rather than on either host's own interval — so live sync's connection
+//! manager keeps one grid on every host.
+//!
 //! **And a turn given back to the host**: [`yield_to_host`], and [`Breather`], which takes one
 //! on a budget of work. A loop of `chunk().await` and a synchronous push looks as though it
 //! lets go at every `.await`, and in a browser it does not — the first measured run found a
@@ -39,6 +43,84 @@ pub async fn sleep(duration: Duration) {
 /// unfinished — it is dropped, which for a request is the cancellation.
 pub async fn timeout<F: Future>(duration: Duration, future: F) -> Option<F::Output> {
     imp::timeout(duration, future).await
+}
+
+/// **A beat**: [`Interval::tick`] comes back at once the first time, and then once every
+/// `period`.
+///
+/// Live sync's connection manager keeps two — the quarter-second on which it asks its
+/// scheduler whether a trip is due, and the 45 s of its keepalive — and both were the async
+/// runtime's own interval while that loop was the desktop's. This is that interval's shape on
+/// [`sleep`], so a browser has it too:
+///
+/// * **the first tick is immediate**, so a socket that has just come up is pinged and asked
+///   about at once;
+/// * **a beat taken a little late keeps the grid**: the next is due one `period` after this one
+///   was *due*, not after it was taken, so lateness does not add up. Counted on [`Tick`], which
+///   a wall clock's step cannot move;
+/// * **beats that were missed outright are dropped, not owed.** A caller that comes back more
+///   than a period late takes one beat, and the next is a period from *then*;
+/// * **a tick dropped while it waits has lost nothing**: the next one waits out what is left.
+///   That is what lets it be one arm of a select.
+///
+/// ⚠️ **The third is where this deliberately parts from the runtime's interval**, whose default
+/// is to burst: every missed beat owed, taken back to back until the grid is caught up. A
+/// process the system froze for an hour — Android does that to an app in the background, a
+/// browser to a Worker, a lid to a laptop — would come back owing 14 400 quarter-second ticks
+/// and eighty keepalives. The runtime's own interval at least passes through a timer on each
+/// of them, which yields; this one, with nothing to wait for, would not — so the burst would
+/// hold its thread from end to end, and the loop that owns it would read no frame until it
+/// was over. And there is nothing in the beats to want back: a tick asks a scheduler whether
+/// something is due *now*, and eighty pings down a socket that slept for an hour say what one
+/// does.
+///
+/// [`Tick`]: super::clock::Tick
+#[derive(Debug)]
+pub struct Interval {
+    period: Duration,
+    due: super::clock::Tick,
+}
+
+/// An [`Interval`] of `period`, whose first tick is due now.
+pub fn interval(period: Duration) -> Interval {
+    Interval::starting(period, super::clock::Tick::now())
+}
+
+impl Interval {
+    /// [`interval`] with the moment handed in, so a test can say "an hour later" without
+    /// waiting for one.
+    pub fn starting(period: Duration, now: super::clock::Tick) -> Interval {
+        Interval { period, due: now }
+    }
+
+    /// How long until the next beat, as of `now`: nothing when it is already due.
+    pub fn wait_at(&self, now: super::clock::Tick) -> Duration {
+        self.due.saturating_duration_since(now)
+    }
+
+    /// Record a beat taken at `now`, and set when the next is due — [`Interval::tick`]'s
+    /// bookkeeping, apart so a test can drive the grid on a clock of its own.
+    ///
+    /// On the grid while the beat was taken within a period of when it fell due; a period
+    /// from `now` when it was later than that, which is what drops the beats missed between.
+    pub fn took_one_at(&mut self, now: super::clock::Tick) {
+        let late = now.saturating_duration_since(self.due);
+        self.due = if late > self.period {
+            now + self.period
+        } else {
+            self.due + self.period
+        };
+    }
+
+    /// Wait for the next beat.
+    pub async fn tick(&mut self) {
+        let wait = self.wait_at(super::clock::Tick::now());
+        if !wait.is_zero() {
+            sleep(wait).await;
+        }
+        // Only once the wait is over: a tick dropped above leaves `due` where it was.
+        self.took_one_at(super::clock::Tick::now());
+    }
 }
 
 /// **Give the host's event loop a turn, and come back after it.**
@@ -382,6 +464,84 @@ mod tests {
             "{:?}",
             tick.elapsed()
         );
+    }
+
+    /// **A beat is due at once the first time and a period apart after; one taken a little
+    /// late keeps the grid; and the beats missed outright are dropped, not owed** — on a clock
+    /// the test moves by hand, as the breather's is, so an hour away costs none and nothing
+    /// here turns on how busy the machine is.
+    #[test]
+    fn an_interval_is_due_at_once_keeps_its_grid_and_drops_the_beats_it_missed() {
+        let period = Duration::from_millis(250);
+        let ms = Duration::from_millis;
+        let t0 = Tick::now();
+        let mut beat = Interval::starting(period, t0);
+
+        assert_eq!(beat.wait_at(t0), Duration::ZERO, "the first is due at once");
+        beat.took_one_at(t0);
+        assert_eq!(beat.wait_at(t0), period, "and the second a period after");
+        assert_eq!(beat.wait_at(t0 + ms(100)), ms(150));
+        assert_eq!(beat.wait_at(t0 + period), Duration::ZERO);
+
+        // Taken forty milliseconds late: the third is still due at two periods from the
+        // start, so lateness does not add up.
+        beat.took_one_at(t0 + period + ms(40));
+        assert_eq!(beat.wait_at(t0 + period + ms(40)), period - ms(40));
+
+        // Late by exactly a period is still on the grid: the beat after is due now.
+        let on_the_edge = t0 + period * 3;
+        beat.took_one_at(on_the_edge);
+        assert_eq!(beat.wait_at(on_the_edge), Duration::ZERO);
+        beat.took_one_at(on_the_edge);
+        assert_eq!(beat.wait_at(on_the_edge), period);
+
+        // Away for an hour — 14 400 periods. One beat is owed, and the next is a period on.
+        let back = t0 + Duration::from_secs(3600);
+        let mut taken = 0;
+        while beat.wait_at(back).is_zero() {
+            beat.took_one_at(back);
+            taken += 1;
+            assert!(taken < 10, "the missed beats are being taken back to back");
+        }
+        assert_eq!(taken, 1, "one beat for the hour, not one per period of it");
+        assert_eq!(beat.wait_at(back), period);
+        assert_eq!(
+            beat.wait_at(back + ms(100)),
+            ms(150),
+            "and on a grid from there"
+        );
+    }
+
+    /// **A tick waits for its beat** — lower bounds only, which a sleep never undercuts, so a
+    /// stalled machine cannot fail it.
+    #[tokio::test]
+    async fn an_interval_tick_waits_out_its_period() {
+        let period = Duration::from_millis(30);
+        let start = Tick::now();
+        let mut beat = interval(period);
+        beat.tick().await;
+        beat.tick().await;
+        assert!(start.elapsed() >= period, "{:?}", start.elapsed());
+        beat.tick().await;
+        assert!(start.elapsed() >= period * 2, "{:?}", start.elapsed());
+    }
+
+    /// **A tick dropped while it waits has lost nothing** — what lets it be an arm of a select
+    /// that another arm keeps winning: the beat is still due when it was, not a full period
+    /// after the last time somebody asked. An hour's period, so the wait given up on can never
+    /// have been over, and what is compared is the due moment itself.
+    #[tokio::test]
+    async fn an_interval_tick_dropped_mid_wait_moves_nothing() {
+        let mut beat = interval(Duration::from_secs(3600));
+        beat.tick().await;
+        let due = beat.due;
+        for _ in 0..4 {
+            assert_eq!(timeout(Duration::from_millis(5), beat.tick()).await, None);
+            assert_eq!(
+                beat.due, due,
+                "an abandoned wait must not start the period again"
+            );
+        }
     }
 
     /// **A yield is a turn**: work that was queued on the runtime runs before the yield comes

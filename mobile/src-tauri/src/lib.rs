@@ -18,7 +18,10 @@
 //!
 //! **What it starts is the desktop's launch less what is the desktop's alone** ([`start`]): the
 //! facet index, the image upkeep, the card sync and, behind it on a first run, the optional
-//! feeds. No mirror, no updater, no second window, no live sync (phase 6).
+//! feeds — and **live sync's connection manager**, the core's loop
+//! ([`grimoire_core::sync_engine::live::run`]), which opens no socket until this device is in a
+//! sync group. No mirror, no updater, no second window, and no push on the way out
+//! ([`spawn_live_sync`] says why).
 //!
 //! **It also builds and runs on a desktop**, as a debugging aid: `cargo run -p grimoire-light`
 //! after `npm run mobile:build` opens the light app in a phone-sized window over its own data
@@ -28,6 +31,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use grimoire_core::platform::clock::Tick;
+use grimoire_core::platform::sync::Bell;
 use grimoire_core::state::State;
 use serde_json::Value;
 use tauri::Manager;
@@ -209,7 +213,11 @@ fn data_dir(app: &tauri::AppHandle) -> Result<PathBuf, String> {
 /// task, for the desktop's reason: before it the page mounts nothing, after it every piece of
 /// state a command reaches is in place.
 fn start(app: &tauri::AppHandle) {
-    let state = match open(app) {
+    // Live sync's write wake: one bell for the process, rung by the write connection's commit
+    // hook (`open` registers it) and waited on by the loop spawned at the foot of this function.
+    let writes = Arc::new(Bell::new());
+
+    let state = match open(app, &writes) {
         Ok(state) => Arc::new(state),
         Err(message) => {
             eprintln!("{message}");
@@ -247,6 +255,33 @@ fn start(app: &tauri::AppHandle) {
     if start_downloads {
         spawn_downloads(&state);
     }
+
+    // The relay doorbell — after `settle`, like everything else that runs in the background,
+    // and whatever the link: it asks the relay nothing until this device is in a sync group.
+    spawn_live_sync(&state, writes);
+}
+
+/// Live sync: the core's connection manager, as a detached task of its own — a schedule of its
+/// own, which must not be the reason a download stops, nor stop for one. It holds one socket
+/// to the relay for as long as this device is in a sync group, runs a round trip when a peer
+/// pushes or this device writes, and opens nothing at all on an install that has paired
+/// nothing. What it says — `sync:live`, `sync:applied` — reaches the page through
+/// [`PageEvents`], and `sync_live_state` is answered by the core's table like any command.
+///
+/// `writes` must be the bell [`open`] registered on the write connection.
+///
+/// **No push on the way out, unlike the desktop.** The desktop holds its exit open for one last
+/// round trip, bounded, when something is unpushed. Android gives this host no such moment: the
+/// process ends by `_exit` (`end_on_exit`) or by the system's own kill of a cached process,
+/// and neither is a hook a request can be awaited in. Nothing is lost by it — a write is pushed
+/// by the loop's own debounce, three seconds after the reader stops, while the app is still in
+/// front; and an op that did not make it is still `pushed_at IS NULL`, which the next launch's
+/// first trip sends.
+fn spawn_live_sync(state: &Arc<State>, writes: Arc<Bell>) {
+    tauri::async_runtime::spawn(grimoire_core::sync_engine::live::run(
+        Arc::clone(state),
+        writes,
+    ));
 }
 
 /// The card sync, and the optional feeds — behind it on a first run, beside it after: on a first
@@ -281,9 +316,13 @@ pub(crate) fn spawn_downloads(state: &Arc<State>) {
 }
 
 /// Open the data folder and build the state over it: the core's [`grimoire_core::launch::open`],
-/// an event sink that forwards to the page, and no write observers — the desktop's three are its
-/// mirror, its other windows and its live socket, and this host has none of them.
-fn open(app: &tauri::AppHandle) -> Result<State, String> {
+/// an event sink that forwards to the page, and **one write observer — live sync's wake**. The
+/// desktop has three; its mirror and its other windows are the two this host has no use for.
+///
+/// `writes` is the bell the wake rings on every commit, which [`start`] made and hands to the
+/// loop it spawns ([`spawn_live_sync`]). Registered here because the write connection's hook is
+/// installed as the state is built, and an observer cannot be added afterwards.
+fn open(app: &tauri::AppHandle, writes: &Arc<Bell>) -> Result<State, String> {
     let data_dir = data_dir(app)?;
     let opened = grimoire_core::launch::open(&data_dir)?;
     Ok(State::new(
@@ -292,7 +331,9 @@ fn open(app: &tauri::AppHandle) -> Result<State, String> {
         opened.read,
         data_dir,
         Arc::new(PageEvents(app.clone())),
-        Vec::new(),
+        vec![Arc::new(grimoire_core::sync_engine::live::WriteWake(
+            Arc::clone(writes),
+        ))],
         opened.client,
         opened.images,
     ))
@@ -351,9 +392,10 @@ fn check_corpus(state: &State) {
     }
 }
 
-/// The engine's events, forwarded to the page — `sync:progress`, the feeds' progress and
-/// `collection:reconciled`, each as `app.emit` sends one. A dropped event is never worth failing
-/// anything over.
+/// The engine's events, forwarded to the page — `sync:progress`, the feeds' progress,
+/// `collection:reconciled`, and live sync's two: `sync:live`, when the relay socket's state
+/// changes, and `sync:applied`, when a round trip changed something — each as `app.emit` sends
+/// one. A dropped event is never worth failing anything over.
 struct PageEvents(tauri::AppHandle);
 
 impl grimoire_core::events::EventSink for PageEvents {

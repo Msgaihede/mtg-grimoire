@@ -32,7 +32,7 @@ use std::path::Path;
 use grimoire_core::commands::TABLE;
 
 /// Commands that name this host — a window, its updater, its file dialogs, its mirror, its
-/// launch, its socket — and never join the table, each with the reason.
+/// launch — and never join the table, each with the reason.
 const DESKTOP_ONLY: &[(&str, &str)] = &[
     ("window_new", "a second window is this host's"),
     ("window_count", "how many windows this host has open"),
@@ -60,10 +60,6 @@ const DESKTOP_ONLY: &[(&str, &str)] = &[
     (
         "startup_status",
         "the window this host draws before its state exists",
-    ),
-    (
-        "sync_live_state",
-        "live sync's socket is this host's connection manager",
     ),
 ];
 
