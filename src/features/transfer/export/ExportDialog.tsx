@@ -73,8 +73,9 @@
  * that claim could go stale** (2026-08-14, code review). Switching format redraws the preview
  * but does nothing to the clipboard, which still holds whatever text was on screen at the last
  * Copy — so the format radios clear `copied` on every press rather than leaving a "Copied." line
- * sitting beside text it is no longer true of. And a clipboard write can itself be refused (the
- * plugin is a real Tauri command, not a browser API guaranteed to succeed), so `handleCopy`
+ * sitting beside text it is no longer true of. And a clipboard write can itself be refused (on
+ * the desktop it is a real Tauri command, and in a browser an API that is absent off a secure
+ * origin and may refuse a write it has — `@/lib/core`'s `host` is whichever), so `handleCopy`
  * reports a rejection through the same `role="alert"` line `handleSaveAs`'s refusal uses, rather
  * than swallowing it — the "reported, not fatal" rule above is not just the save button's.
  *
@@ -300,9 +301,10 @@ function Body({
     setCopied(false);
     copyText(text).then(
       () => setCopied(true),
-      // A real rejection path, not a hypothetical: the clipboard goes through a Tauri plugin
-      // command, so an ACL or platform failure surfaces as a rejected promise — reported the
-      // same way a refused save is, rather than swallowed.
+      // A real rejection path, not a hypothetical: the clipboard is the host's — a Tauri plugin
+      // command on the desktop, where an ACL or platform failure rejects, and the browser's own
+      // in the web app, which has none off a secure origin — reported the same way a refused
+      // save is, rather than swallowed.
       (e: unknown) => setError(`Couldn't copy that export — ${ipcError(e)}`),
     );
   }, [text]);

@@ -1,22 +1,19 @@
 /**
- * How a file gets **into** the phone face, and how text reaches the clipboard — a `File` from an
- * `<input type="file">` read as text, and `navigator.clipboard`. **Saving moved below the `Core`
- * seam in phase 4** (`@/lib/core/files`): a browser downloads, the Android host opens the system's
- * save dialog. Picking needed no seam — Android's WebView answers an `<input type="file">` with the
- * system picker and hands the page a `File` for the `content://` document, as a browser does.
+ * **What a browser does with a file**: a `File` from an `<input type="file">` read as a decklist,
+ * and text handed back as a download. The file half of the `Core` seam's browser arm (the
+ * light-app spec §3.5), and a leaf — it imports nothing of the seam, so both of its readers can
+ * import it without a cycle.
  *
- * **A stand-in, and a deliberate one.** The light-app spec puts file open and save below the
- * `Core` seam (§3.5): the desktop answers with Rust opening the native dialog
- * (`src/features/transfer/files.ts`, `import_pick_file` / `export_save_file`), an Android host
- * will answer with the system picker, and the web host with exactly what is written here. Phase 3
- * has no host seam for it yet — no new command and no Rust this phase — so the phone face uses the
- * web answer directly, and every install draws the same two controls. When phases 4 and 5 give
- * `@/lib/core` a file seam, this module is what moves behind it; nothing that calls it decides
- * anything about where it is running, and nothing here may start.
+ * **Two readers, one decode.** The phone face picks through an `<input>` of its own on every
+ * host — Android's WebView answers one with the system picker and hands the page a `File` for the
+ * `content://` document, as a browser does — and reads what it was handed with
+ * {@link readDecklistFile}. The desktop face asks `import_pick_file` and `export_save_file`, which
+ * a native host answers with a dialog it opens itself; in the web app `web/files.ts` answers both
+ * on the page, with the read and the download written here.
  *
- * **Not in `src/lib/`**, because no desktop surface can share it: the desktop's whole point
- * (issue #545) is that no path and no file handle reaches the page, and its clipboard is the
- * Tauri plugin `@/lib/clipboard` names, for that module's own reason.
+ * It was `mobile/phone/transfer/browserFiles.ts` until the web host needed the same megabyte and
+ * the same four readings (phase 5, step 5.4). The clipboard it also carried is `@/lib/clipboard`'s
+ * now, on both faces.
  */
 import type { ImportFile } from "@/lib/ipc";
 
@@ -106,13 +103,44 @@ export async function readDecklistFile(file: File): Promise<ImportFile> {
 }
 
 /**
- * Put `text` on the clipboard. **Rejects rather than pretending**: the API is absent outside a
- * secure context and a browser may refuse the write, and the export sheet says either in the
- * same line a refused copy takes on the desktop.
+ * How long a download's object URL is kept before it is released.
+ *
+ * **A browser reads the `Blob` through the URL after the press, on its own schedule** — at once
+ * in the Chrome this was driven in, and after a save prompt or a "keep this file?" bar in
+ * others — and a URL revoked before that read is a download that fails or lands empty. Nothing
+ * says when the read is done, so the release is a wait: forty seconds, FileSaver.js's figure for
+ * the same reason, and since step 5.4 the wait behind the desktop face's Save in every browser.
+ * It was a single task, which only headless Chrome had been asked to survive. The cost of
+ * waiting is one decklist's text kept in memory that much longer.
  */
-export async function copyToClipboard(text: string): Promise<void> {
-  // A browser that has no clipboard API (an insecure origin) leaves the property undefined.
-  const clipboard = navigator.clipboard as Clipboard | undefined;
-  if (clipboard === undefined) throw new Error("this browser offers no clipboard here.");
-  await clipboard.writeText(text);
+export const DOWNLOAD_URL_LIFE_MS = 40_000;
+
+/**
+ * Hand `text` to the browser as a file called `fileName` — a `Blob`, an object URL and an
+ * `<a download>` pressed once, then the URL released ({@link DOWNLOAD_URL_LIFE_MS} later).
+ *
+ * **Where it lands is the browser's**: a download folder, or a save prompt where the reader has
+ * asked for one. There is no answer to wait for and no cancel to report — a native save dialog
+ * answers whether a file was written; a download cannot, so this returns when the browser has
+ * been handed the file.
+ *
+ * Plain text in UTF-8, which is what every writer in `export/` emits and every reader of a
+ * decklist expects.
+ */
+export function downloadText(fileName: string, text: string): void {
+  const url = URL.createObjectURL(new Blob([text], { type: "text/plain;charset=utf-8" }));
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  // Off-screen rather than unattached: an anchor outside the document is not pressed by every
+  // engine.
+  link.style.display = "none";
+  document.body.append(link);
+  try {
+    link.click();
+  } finally {
+    link.remove();
+    // Long after the press, not beside it: see `DOWNLOAD_URL_LIFE_MS`.
+    setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_LIFE_MS);
+  }
 }

@@ -53,14 +53,21 @@ function apply(place: Place): void {
  * after this adapter would miss that change — a stale address bar turned into a stale app. So a
  * refused write is swallowed: the URL is one step behind, and the next write the browser accepts
  * puts it right.
+ *
+ * **It answers whether the browser took the write, read off the address rather than off the
+ * `catch`**: one browser throws on a rationed call and another drops it without a word, and the
+ * only thing both leave behind is an address that did not move. A refused *replace* costs a
+ * stale URL and nothing else; a refused *push* costs an entry, which is what the answer is for —
+ * see `owed` below.
  */
-function write(how: "push" | "replace", href: string, state: unknown = null): void {
+function write(how: "push" | "replace", href: string, state: unknown = null): boolean {
   try {
     if (how === "push") window.history.pushState(state, "", href);
     else window.history.replaceState(state, "", href);
   } catch {
-    // Refused. Nothing to report and nothing to retry — see above.
+    // Refused. Nothing to report — the caller is told below, like a call that was dropped.
   }
+  return placeHref(here()) === href;
 }
 
 /**
@@ -110,7 +117,19 @@ export function useDesktopPlace(): void {
     // written back, it pushes `/decks/7` and then `/decks` over the entry the reader just went
     // back to. So nothing is written while following.
     let following = false;
+
+    // **A push the browser refused is still owed.** Swallowed like a refused replace, it cost
+    // more than a stale URL: the entry was never made, so the browser is still standing on the
+    // place the reader left — and the next write, a card opened over the new page, was a replace
+    // that renamed *that* entry. The page they had left was gone from the path Back walks. So
+    // while a push is owed, the next write is made as the push, whatever kind it would have
+    // been: the entry the store's place deserves is made late rather than never. The debt ends
+    // when the browser takes one, when the store comes back to the place the URL still names,
+    // or when the reader traverses — the browser has moved, and the store follows it.
+    let owed = false;
+
     const onPop = () => {
+      owed = false;
       following = true;
       try {
         apply(here());
@@ -145,6 +164,8 @@ export function useDesktopPlace(): void {
       // Forward landed on Search. So the press is refused rather than spelled: the store goes
       // back to the place the URL still names, and history is not touched.
       if (!isLightView(state.activeView)) {
+        // The store is going back to the URL's place, so nothing is owed for where it was.
+        owed = false;
         following = true;
         try {
           apply(here());
@@ -164,14 +185,25 @@ export function useDesktopPlace(): void {
       const href = placeHref(next);
       // Equal when a change lands on the place the URL already names — writing then would add a
       // second entry for one place.
-      if (href === window.location.pathname + window.location.search) return;
+      if (href === window.location.pathname + window.location.search) {
+        owed = false;
+        return;
+      }
 
       if (moved && !pushed) {
         pushed = true;
         queueMicrotask(() => {
           pushed = false;
         });
-        write("push", href);
+        owed = !write("push", href);
+        return;
+      }
+
+      // The entry the browser is on is the one the reader left, so nothing below — which reads
+      // that entry's card and its mark — is about the place being written. A card carried on the
+      // late push is over a page with no entry of its own, which is what `OVERLAID` says.
+      if (owed) {
+        owed = !write("push", href, next.cardId !== null ? OVERLAID : null);
         return;
       }
 

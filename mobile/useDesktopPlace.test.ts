@@ -200,6 +200,96 @@ describe("useDesktopPlace", () => {
     });
   });
 
+  /**
+   * A refused push is not a refused replace: the entry was never made, so the browser is still on
+   * the place the reader left. Swallowed and forgotten, the next write — a card opened over the
+   * new page — renamed *that* entry, and the page they had left was gone from Back's path.
+   */
+  describe("a push the browser refuses", () => {
+    /** Refuse the next `pushState`, the way `how` says: one browser throws, another drops it. */
+    function refusePush(how: "throws" | "drops") {
+      return vi.spyOn(window.history, "pushState").mockImplementationOnce(() => {
+        if (how === "throws") {
+          throw new DOMException("Too many calls to the History API", "SecurityError");
+        }
+      });
+    }
+
+    it.each(["throws", "drops"] as const)(
+      "makes the entry late, on the next write, when the push %s",
+      async (how) => {
+        window.history.replaceState(null, "", SEARCH);
+        renderHook(() => useDesktopPlace());
+        const heard = vi.fn();
+        onTestFinished(useAppStore.subscribe(heard));
+        const pushState = refusePush(how);
+        const replaceState = vi.spyOn(window.history, "replaceState");
+
+        expect(() => act(() => useAppStore.getState().setActiveView("wishlist"))).not.toThrow();
+        // The store moved and everyone heard; the address is one step stale.
+        expect(heard).toHaveBeenCalled();
+        expect(useAppStore.getState().activeView).toBe("wishlist");
+        expect(url()).toBe(SEARCH);
+        await endOfTask();
+
+        // A card opened over the new page is a replace by rule — and here it must not be, or it
+        // would rename the Search entry the reader left.
+        act(() => useAppStore.getState().setSelectedCardId(CARD));
+
+        expect(replaceState).not.toHaveBeenCalled();
+        expect(pushState).toHaveBeenCalledTimes(2);
+        expect(pushState).toHaveBeenLastCalledWith(
+          OVERLAID,
+          "",
+          placeHref({ view: "wishlist", deckId: null, cardId: CARD }),
+        );
+        // Search is still beneath it, where Back finds it.
+        const landed = new Promise<void>((resolve) =>
+          window.addEventListener("popstate", () => resolve(), { once: true }),
+        );
+        act(() => window.history.back());
+        await act(() => landed);
+        expect(url()).toBe(SEARCH);
+        expect(useAppStore.getState().activeView).toBe("search");
+      },
+    );
+
+    it("owes one entry, not one per write after it", async () => {
+      window.history.replaceState(null, "", SEARCH);
+      renderHook(() => useDesktopPlace());
+      const pushState = refusePush("throws");
+      act(() => useAppStore.getState().setActiveView("wishlist"));
+      await endOfTask();
+      act(() => useAppStore.getState().setSelectedCardId(CARD));
+      await endOfTask();
+      const replaceState = vi.spyOn(window.history, "replaceState");
+
+      // The debt is paid: closing the card is the replace it always was.
+      act(() => useAppStore.getState().setSelectedCardId(null));
+
+      expect(pushState).toHaveBeenCalledTimes(2);
+      expect(replaceState).toHaveBeenCalledTimes(1);
+      expect(replaceState).toHaveBeenCalledWith(null, "", "/wishlist");
+    });
+
+    it("owes nothing once the reader is back on the place the URL still names", async () => {
+      window.history.replaceState(null, "", SEARCH);
+      renderHook(() => useDesktopPlace());
+      const pushState = refusePush("drops");
+      act(() => useAppStore.getState().setActiveView("wishlist"));
+      await endOfTask();
+      act(() => useAppStore.getState().setActiveView("search"));
+      await endOfTask();
+      const replaceState = vi.spyOn(window.history, "replaceState");
+
+      // Back where the address says: a card here is written onto this entry, as ever.
+      act(() => useAppStore.getState().setSelectedCardId(CARD));
+
+      expect(pushState).toHaveBeenCalledTimes(1);
+      expect(replaceState).toHaveBeenCalledWith(OVERLAID, "", searchWith(CARD));
+    });
+  });
+
   describe("the open card", () => {
     it("opens the URL's card over the URL's view", () => {
       window.history.replaceState(null, "", searchWith(CARD));

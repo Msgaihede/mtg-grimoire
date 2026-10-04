@@ -175,6 +175,34 @@ export function chooseTcgplayerLink(ids: TcgplayerIds, finish: Finish): Tcgplaye
 }
 
 /**
+ * Where this card is at this marketplace, **from product ids already in hand** — the exact
+ * TCGplayer page where one can be named, and the name search everywhere else.
+ *
+ * The whole decision of {@link openMarketplaceForCard} with the lookup taken out, so a surface
+ * that draws the row as a real link — the light app's phone sheet, whose `href` has to exist
+ * before the press — lands where the desktop's press does. `ids` is `null` for everything that is
+ * not an answer about this printing: a marketplace that is not TCGplayer, a read still on its
+ * way, a read that was refused. Each of those is the search, for the reason below: a link must
+ * never go nowhere.
+ */
+export function marketplaceUrlForCard(args: {
+  marketplace: Marketplace;
+  cardName: string;
+  ids: TcgplayerIds | null;
+  finish: Finish | null;
+  finishes: string | null;
+}): string {
+  const { marketplace, cardName, ids, finish, finishes } = args;
+  const link =
+    marketplace.id === "tcgplayer" && ids !== null
+      ? chooseTcgplayerLink(ids, linkFinish(finish, finishes))
+      : null;
+  return link === null
+    ? marketplaceSearchUrl(marketplace.id, cardName)
+    : tcgplayerProductUrl(link.productId, link.printing);
+}
+
+/**
  * The press: open this card at this marketplace, exactly where possible and by name otherwise.
  *
  * **Nothing is resolved until the press.** `externalLinks.ts`'s first doctrine is that a menu
@@ -206,22 +234,15 @@ export async function openMarketplaceForCard(args: {
   finishes: string | null;
 }): Promise<void> {
   const { marketplace, cardId, cardName, finish, finishes } = args;
-  const search = () => openExternal(marketplaceSearchUrl(marketplace.id, cardName));
-  if (marketplace.id !== "tcgplayer") {
-    await search();
-    return;
+  // `null` is every way of not having the ids, and `marketplaceUrlForCard` searches for each: no
+  // call at all for the other four marketplaces, and a refused one swallowed.
+  let ids: TcgplayerIds | null = null;
+  if (marketplace.id === "tcgplayer") {
+    try {
+      ids = await ipc.cardTcgplayerIds(cardId);
+    } catch {
+      // The search, below.
+    }
   }
-  let ids: TcgplayerIds;
-  try {
-    ids = await ipc.cardTcgplayerIds(cardId);
-  } catch {
-    await search();
-    return;
-  }
-  const link = chooseTcgplayerLink(ids, linkFinish(finish, finishes));
-  if (link === null) {
-    await search();
-    return;
-  }
-  await openExternal(tcgplayerProductUrl(link.productId, link.printing));
+  await openExternal(marketplaceUrlForCard({ marketplace, cardName, ids, finish, finishes }));
 }

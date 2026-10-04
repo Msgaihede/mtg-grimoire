@@ -44,3 +44,26 @@ export interface Core {
    */
   listen<T>(event: string, handler: (payload: T) => void): () => void;
 }
+
+/**
+ * The two things a face asks of its host that are not commands: put text on the clipboard, and
+ * open a page somewhere that is not this app (the light-app spec §3.5's third row).
+ *
+ * A second interface rather than two more methods on {@link Core}, because a `Core` is the
+ * command boundary — it can be deferred, refused or wrapped as a whole — and neither of these
+ * ever reaches a backend: each is answered by the window the page is in. `host.ts` has the
+ * implementations and `index.ts` chooses one, where it chooses the `Core`.
+ */
+export interface Host {
+  /**
+   * Put `text` on the clipboard. **Rejects rather than pretending**: a caller draws `Copied.`
+   * only once this resolves, and frames a rejection as its own failure.
+   */
+  copyText(text: string): Promise<void>;
+
+  /**
+   * Open `url` outside the app — the system browser, or a new tab. **Rejects when nothing
+   * opened**, where the host can tell: a press that did nothing has to be reportable.
+   */
+  openUrl(url: string): Promise<void>;
+}

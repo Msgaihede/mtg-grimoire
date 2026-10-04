@@ -7,10 +7,10 @@ import { CsvNotes } from "@/features/transfer/import/shared/CsvNotes";
 import { useImportSource } from "@/features/transfer/import/useImportSource";
 import { plural } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
+import { DECKLIST_ACCEPT, readDecklistFile } from "@/lib/core/browserFiles";
 import { ipcError } from "@/lib/ipc";
 import { PRESS_SOFT } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { DECKLIST_ACCEPT, readDecklistFile } from "./browserFiles";
 
 /**
  * **The touch floor for the desktop's second step**, set from the container rather than on each
@@ -39,12 +39,13 @@ const PRIMARY = cn(
  *
  * **What is the phone's own is the first step's drawing and the file.** The box is 16px, so
  * focusing it does not zoom the page, and fills the sheet's width; the file arrives through a
- * browser `<input type="file">` (`browserFiles.ts`, the phone face's stand-in for the host seam
- * phases 4 and 5 own) where the desktop has Rust open a native dialog. **Everything else is
- * shared**: `useImportSource` holds the text, the parse, the one resolve press and the step
- * machine for both shells, and the second step is the destination's own `Preview` — the desktop
- * component, store-free, under a touch floor — so a list previews, files and commits exactly as it
- * does on the desktop.
+ * browser `<input type="file">`, read by `@/lib/core/browserFiles` — on every host alike, since
+ * Android's WebView answers one with the system picker — where the desktop face asks its host
+ * for a file (`import_pick_file`: a native dialog, or in a browser that same read).
+ * **Everything else is shared**: `useImportSource` holds the text, the parse, the one resolve
+ * press and the step machine for both shells, and the second step is the destination's own
+ * `Preview` — the desktop component, store-free, under a touch floor — so a list previews, files
+ * and commits exactly as it does on the desktop.
  *
  * **The whole window below 640px**, the add search's shape: a pasted list and a preview are both
  * taller than a bottom sheet leaves room for. A sheet over the page, not a place.

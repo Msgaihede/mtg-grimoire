@@ -5,10 +5,11 @@
  * ⚠️ **A to-do list is not a note**, and this is not `noteBody.tsx`: it borrows the notes' inline
  * runs (`MarkdownInlines`) and nothing else.
  *
- * **Out of `TodoListCard.tsx` so the phone face can draw a list.** The card reaches the opener
- * plugin through `openExternal`, which the phone face may not import (`mobile/phone/fence.test.ts`);
- * the link's press is a prop now, and so is the tick — the phone's deck page is read-only, and a
- * list it draws must not offer a box that looks pressable.
+ * **Out of `TodoListCard.tsx` so the phone face can draw a list.** When it moved, the card
+ * reached the opener plugin through `openExternal`, which the phone face could not import
+ * (`mobile/phone/fence.test.ts` — it can since the light app's step 5.4, and `noteBody.tsx` has
+ * why it still hands in nothing); the link's press is a prop, and so is the tick — the phone's
+ * deck page is read-only, and a list it draws must not offer a box that looks pressable.
  */
 import { type JSX } from "react";
 import { Check } from "lucide-react";
