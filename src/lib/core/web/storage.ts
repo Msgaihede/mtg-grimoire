@@ -282,6 +282,16 @@ export const CLEARED_TITLE = "Your browser cleared MTG Grimoire's saved data";
  * the card download by itself, so a silent app would look like a first run that is simply slow —
  * and a reader would go on waiting for a collection the download was never going to bring back.
  * It says so plainly, and names the one way back there is: a file they exported.
+ *
+ * **The fourth is about a place in a pairing group, and it is an *if*** (the light-app spec §7:
+ * "Clearing site data mints a new device and spends a slot"). A browser's device identity and
+ * its keys were rows of the database that went, so the app has opened on a new identity — and if
+ * the old one was paired, it is still on the roster of every other device in its group, counted
+ * against the group's five, until one of them removes it. **This page cannot know whether it
+ * was**: the only record that it was paired is the record that was cleared, and the mark that
+ * outlives the database (`HELD_KEY`) says a database was held and nothing about what was in it.
+ * So the sentence is conditional, and it names where the press is rather than promising there
+ * is something to press. Last, because it is the one of the four most readers have no use for.
  */
 export const CLEARED_LINES: readonly string[] = [
   "Browsers can remove what a site has stored — when the device runs low on space, or when the " +
@@ -290,6 +300,9 @@ export const CLEARED_LINES: readonly string[] = [
   "Anything you had added in this browser — your collection, wishlist and decks — was removed " +
     "with it, and this browser has nothing to restore it from. If you exported them, you can " +
     "import those files again.",
+  "If this browser was paired with your other devices, it is a new device now, and its old " +
+    "entry still counts toward the group's five. Remove the old entry in Settings, under Sync, " +
+    "on one of the others, then pair this browser again.",
 ];
 
 /**

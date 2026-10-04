@@ -730,12 +730,15 @@ describe("storage cleared under the app", () => {
     // What happened, what is being rebuilt by itself, and what is not coming back — in that
     // order, and each for a reader rather than as a code.
     expect(answer?.title).toBe("Your browser cleared MTG Grimoire's saved data");
-    expect(answer?.lines).toHaveLength(3);
+    expect(answer?.lines).toHaveLength(4);
     expect(answer?.lines[0]).toMatch(/Browsers can remove what a site has stored/);
     expect(answer?.lines[1]).toBe("The card data downloads again by itself.");
     expect(answer?.lines[2]).toMatch(/collection, wishlist and decks/);
     expect(answer?.lines[2]).toMatch(/nothing to restore it from/);
     expect(answer?.lines[2]).toMatch(/import those files again/);
+    // And, as an *if*: a paired browser's old entry still holds a place in its group.
+    expect(answer?.lines[3]).toMatch(/^If this browser was paired/);
+    expect(answer?.lines[3]).toMatch(/Remove the old entry in Settings, under Sync/);
     // And on the console, where a bug report can carry it — with what the open made of it.
     expect(warned).toHaveBeenCalledWith(`${CLEARED_LINE} — a new, empty one was created`);
     expect(CLEARED_LINE).toBe(

@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { Heart, Link2, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type JSX } from "react";
+import { core } from "@/lib/core";
+import { storageIsLent } from "@/lib/core/hostStorage";
 import { count, plural, verb } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -28,7 +30,7 @@ import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { nowSeconds } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { BUTTON } from "./controls";
+import { BUTTON, TOUCH_FIELD } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import { QrCode } from "./QrCode";
 import { QrScanner } from "./QrScanner";
@@ -67,6 +69,46 @@ export const REMOVAL_WARNING =
 export const LEAVE_WARNING =
   "Your collection stays on this device. If the relay can't be reached, other devices may " +
   "still list this one until they remove it.";
+
+/**
+ * What a paired browser is told about its own storage — the light-app spec §7: *"Clearing site
+ * data mints a new device and spends a slot. The panel says so before a reader presses anything
+ * that would."*
+ *
+ * **The press it warns about is not in this app.** A device's identity and its keys are rows of
+ * `user.db`, and no command the app has deletes them — every clear on the Settings page was read
+ * for it on 2026-10-04 (`reset.rs` names the collection, the wishlist, the decks and the picture
+ * cache, and nothing of `sync_identity` or `sync_group`; *Leave group* is the one press that
+ * touches the group, and it is the cure). What does delete them is the browser's own *clear site
+ * data*, on a host whose database is in storage the browser lends it. The app then opens on a
+ * fresh identity, and the old one is still on every other device's roster, holding one of the
+ * group's five places until somebody there removes it. Nothing on this side can say so
+ * afterwards — the page that would have known it was paired is the page that was cleared — so it
+ * is said here, standing, while there is still a group to leave.
+ *
+ * **Two sentences, because it stands on a phone.** It opened with a third — where the identity
+ * is kept — and at a 360px window the three ran to seven lines of the panel for something most
+ * readers never do. What is left is the consequence and the two presses; five lines there.
+ *
+ * **Both ways out, in the order they cost least.** Leaving first frees the place at once and
+ * needs nothing from another device; removing the old entry afterwards is what is left to a
+ * reader who has already cleared, and it is the press this panel's roster already has.
+ *
+ * Drawn only on a host that answers {@link storageIsLent}, and only in a group: a desktop or a
+ * phone keeps its database in a folder that is its own, and a browser in no group has no place
+ * to lose.
+ */
+export const SITE_DATA_WARNING =
+  "Clearing this browser's site data makes it a new device, and the old entry still counts " +
+  "toward the group's five until it is removed. Leave the group here first, or remove the old " +
+  "entry from another device afterwards.";
+
+/**
+ * Whether the host keeps the database in storage that is lent to it. Outside the `["sync"]`
+ * root on purpose: it is a fact about the host, which no round trip and no pairing changes, so
+ * nothing this panel invalidates should ask it again.
+ */
+const LENT_STORAGE_KEY: QueryKey = ["host", "storage", "lent"];
 
 /**
  * What the panel says when a pairing attempt ran out of time.
@@ -149,6 +191,10 @@ function Paste({
           className={cn(
             "w-full resize-y rounded-md border border-border bg-surface px-2 py-1.5",
             "font-mono text-xs leading-relaxed break-all",
+            TOUCH_FIELD,
+            // Room for the whole code at a finger's type size: 105 characters and their hyphens
+            // are five lines in a 268px box, where the three rows above show two and a half.
+            "coarse:min-h-36",
             "focus:border-accent focus:outline-none",
           )}
         />
@@ -239,8 +285,22 @@ function DeviceRow({
           One fact a name cannot carry: which of these is the machine you are looking at. There
           used to be a second — which one was taken off — and it went with the rows that carried
           it, because a reader who removed a device asked for it to be gone rather than struck
-          through. */}
-      <span className="flex min-w-0 flex-1 items-center gap-2">
+          through.
+
+          **In a narrow roster the group is as wide as its name before it grows, so the presses
+          drop under a name they cannot stand beside** (2026-10-04). It grew from a basis of
+          nothing, which a wrapping row never breaks before — so at a 360px window the two presses
+          took their 163px first and the name had 105 left: eleven capitals, on a roster where the
+          machine names Windows mints (`DESKTOP-` and seven characters) differ only in the part
+          that was cut off. From its content's width, a row that cannot fit both wraps — the name
+          has the whole first line and the presses the second — and a short name still shares one
+          line with them.
+
+          **A question about the roster's own box, so it is asked of the roster** (the list is the
+          container): under 24rem inside, which a 360 and a 412px phone are and the Settings
+          column never is — its narrowest, at a 1024px window with the rail open, is 437px. There
+          the group is what it always was, a long name truncates on one line, and no box moves. */}
+      <span className="flex min-w-0 flex-1 items-center gap-2 @max-sm:flex-auto">
         {editing === null ? (
           <span className="min-w-0 truncate text-sm">{device.name}</span>
         ) : (
@@ -259,6 +319,8 @@ function DeviceRow({
             aria-label={`Name for ${device.name}`}
             className={cn(
               "h-8 min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 text-sm",
+              TOUCH_FIELD,
+              "coarse:min-h-[var(--target-min)]",
               "focus:border-accent focus:outline-none",
             )}
           />
@@ -266,31 +328,38 @@ function DeviceRow({
         {isThisDevice && <span className={THIS_DEVICE_PILL}>This device</span>}
       </span>
 
-      {/* **Rename stays on every row, this device's own included, and it matters more now than
-          it did.** The name a device mints is its hostname, which travels to every device in the
-          group at the next pairing — so this press is the reader's way out of sending one they
-          would rather not. The pill does not replace it and must not crowd it out. */}
-      <button
-        type="button"
-        onClick={() => setEditing(device.name)}
-        className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
-      >
-        Rename
-      </button>
-      {/* **No Remove on this device's own row**, because the backend refuses it and offering a
-          press that cannot work is worse than not offering it: leaving a group throws this
-          device's own key away, which is a different act with different consequences. */}
-      {!isThisDevice && (
+      {/* **The row's presses are one item of the row, so they wrap together or not at all.** As
+          two items of a wrapping row they parted company at a 412px window: Rename fitted beside
+          the name, Remove did not, and every row but this device's own stood 113px tall with
+          one press on each line. In a group of their own, at the row's own gap, they are placed
+          exactly where they were wherever both fit. */}
+      <span className="flex shrink-0 items-center gap-2">
+        {/* **Rename stays on every row, this device's own included, and it matters more now
+            than it did.** The name a device mints is its hostname, which travels to every device
+            in the group at the next pairing — so this press is the reader's way out of sending
+            one they would rather not. The pill does not replace it and must not crowd it out. */}
         <button
           type="button"
-          onClick={onRemove}
-          aria-label={`Remove ${device.name}`}
+          onClick={() => setEditing(device.name)}
           className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
         >
-          <X aria-hidden="true" className="size-3.5" />
-          Remove
+          Rename
         </button>
-      )}
+        {/* **No Remove on this device's own row**, because the backend refuses it and offering
+            a press that cannot work is worse than not offering it: leaving a group throws this
+            device's own key away, which is a different act with different consequences. */}
+        {!isThisDevice && (
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label={`Remove ${device.name}`}
+            className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
+          >
+            <X aria-hidden="true" className="size-3.5" />
+            Remove
+          </button>
+        )}
+      </span>
     </li>
   );
 }
@@ -871,6 +940,8 @@ function SupporterSection({
                       // A code is data, and data is Geist Mono — the role prices, versions and
                       // collector numbers already carry in this window.
                       "font-mono text-xs tracking-[0.1em] uppercase",
+                      TOUCH_FIELD,
+                      "coarse:min-h-[var(--target-min)]",
                       "focus:border-accent focus:outline-none",
                     )}
                   />
@@ -1059,6 +1130,19 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
 
   const read = useQuery({ queryKey: PAIRING_KEY, queryFn: () => ipc.syncPairingStatus() });
   const status: PairingStatus | null = read.data ?? null;
+
+  /**
+   * Asked of the host and of nothing else — the panel never learns *which* host it is on, only
+   * whether this one answered. `staleTime: Infinity` because the answer cannot change while the
+   * page lives. Unanswered and refused both read as `undefined`/`false`, and both draw nothing:
+   * a warning about a browser's storage over a host that has not said it is one would be a
+   * sentence about the wrong machine.
+   */
+  const lent = useQuery({
+    queryKey: LENT_STORAGE_KEY,
+    queryFn: () => storageIsLent(core),
+    staleTime: Infinity,
+  });
 
   const refresh = () => void client.invalidateQueries({ queryKey: PAIRING_KEY });
 
@@ -1323,7 +1407,9 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
           </div>
 
           {paired && (
-            <ul className="rounded-md border border-border px-3">
+            // A container, for `DeviceRow`'s one question about how wide the roster is. Nothing
+            // that covers the window is mounted inside it — the two dialogs are the section's.
+            <ul className="@container rounded-md border border-border px-3">
               {status.devices.map((d) => (
                 <DeviceRow
                   key={d.deviceId}
@@ -1335,6 +1421,12 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
               ))}
             </ul>
           )}
+
+          {/* Under the roster it is about, and above the presses that act on it — *Leave group*
+              is the first of the two ways out it names, and is in the row below. A plain
+              paragraph and not a `PanelAlert`: nothing has gone wrong, and it stands for as long
+              as the group does rather than arriving. */}
+          {paired && lent.data === true && <p className="text-sm text-dim">{SITE_DATA_WARNING}</p>}
 
           {flow.kind === "idle" && (
             <div className="flex flex-wrap gap-2">
@@ -1433,9 +1525,22 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                   <p className="text-sm">
                     Point the other device&rsquo;s camera at this, or type the code into it.
                   </p>
+                  {/* **The typed form has a floor of its own, so it drops under the picture rather
+                      than standing beside it in whatever is left.** It grew from a basis of
+                      nothing with no floor, and a wrapping row only breaks before an item that
+                      does not fit — which a floorless one always does. At a 412px window the
+                      picture left it 20px: two characters a line, 1 228px tall (measured
+                      2026-10-04). With 8rem as its least it takes the next line wherever less
+                      than that is left over, and the whole of that line.
+
+                      **8rem and not more, because of the desktop's narrowest column.** At a
+                      1024px window with the Settings rail open the step is 437px inside and the
+                      code stands beside the picture in 137 of them; a floor above that would
+                      move it under the picture there, and nothing on the desktop may move for
+                      a phone's sake. */}
                   <div className="flex flex-wrap items-start gap-3">
                     <QrCode matrix={flow.offer.qr} label="Pairing code as a QR code" />
-                    <p className="min-w-0 flex-1 font-mono text-xs leading-relaxed break-all">
+                    <p className="min-w-32 flex-1 font-mono text-xs leading-relaxed break-all">
                       {flow.offer.code}
                     </p>
                   </div>

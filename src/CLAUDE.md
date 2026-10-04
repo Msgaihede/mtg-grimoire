@@ -41,6 +41,10 @@ For global repo workflow, style, and testing conventions, refer to:
   - Foil glyphs from `FinishMark`: `Sparkles` (foil), `Gem` (etched), `Aperture` (special non-foil).
   - Top-right corner chip: `FoilOverlay` combines finish glyphs and `GameChangerMark`.
   - Count badges: `CountTag` for counts overlaid on card art (no `×`, grey by default). Counts beside cards keep `×`.
+- **Touch floor (the light app's phone face draws these components too)**:
+  - A control grows for a finger through the `coarse:` variant and `--target-min` (44px), never a raw pointer query (`touchTargets.test.ts`). Under a mouse nothing changes size.
+  - Settings panels: `controls.ts`' `BUTTON` carries the floor; a text box adds `TOUCH_FIELD` (16px type, below which a phone zooms the page on focus) and its own height.
+  - A fold that depends on a box's width asks that box (`@container`), and a fix for a phone's width must leave every desktop box where it was: measure both, do not reason from the classes.
 - **Design tokens**:
   - Dim text uses `text-dim` (never `text-muted`).
   - Magic colors strictly use `--color-mana-w|u|b|r|g|c`. Gold accent uses `--color-accent`.

@@ -18,6 +18,15 @@ import type { QrMatrix } from "@/lib/ipc";
  * is 4.72, which is the difference between a code a phone's camera locks onto at once and one it
  * has to hunt for.
  *
+ * **288px is the width it asks for, and the box it is in may hand it less** (2026-10-04). It was
+ * a fixed square that refused to shrink, and on the light app's phone face that put it through
+ * its own frame: at a 360px window the bordered step around it has 268px inside, and the code
+ * stood 20px past that, over the border. Now it is as wide as its container up to 288 and square
+ * by its own ratio — 268px at 360, which is 4.26px a module for the 53-module invite once the
+ * 4px of padding is out, decoded from a screenshot of that drawing and through a camera feed of
+ * it — and 288 at every width that has the room, which is every desktop one (measured box for
+ * box against the fixed square it replaced).
+ *
  * ⚠️ **`bg-white` and `fill="#000"` are literal and stay literal.** This is the one surface in
  * the app that must not follow the theme: a QR code inverted by dark mode is a QR code no camera
  * reads. A later theme pass that "fixes" the hard-coded colours here breaks the feature and
@@ -32,7 +41,7 @@ export function QrCode({ matrix, label }: { matrix: QrMatrix; label: string }) {
       role="img"
       aria-label={label}
       viewBox={`0 0 ${side} ${side}`}
-      className="size-72 shrink-0 rounded bg-white p-1"
+      className="aspect-square w-72 max-w-full shrink-0 rounded bg-white p-1"
       shapeRendering="crispEdges"
     >
       {matrix.modules.map((dark, i) =>

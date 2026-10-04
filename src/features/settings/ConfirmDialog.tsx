@@ -2,7 +2,7 @@ import { useEffect, useId, useRef, useState, type JSX, type ReactNode } from "re
 import { Dialog } from "@/components/Dialog";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { BUTTON } from "./controls";
+import { BUTTON, TOUCH_FIELD } from "./controls";
 
 /**
  * The word a reader has to type out before an irreversible clear will run.
@@ -181,6 +181,10 @@ function Body({
             spellCheck={false}
             className={cn(
               "w-full rounded-md border border-border bg-bg px-2 py-1.5",
+              // This box takes the caret as the dialog opens, so on a phone a 14px one zooms
+              // the page on a press that only asked a question.
+              TOUCH_FIELD,
+              "coarse:min-h-[var(--target-min)]",
               "disabled:cursor-not-allowed disabled:opacity-50",
               FOCUS,
             )}

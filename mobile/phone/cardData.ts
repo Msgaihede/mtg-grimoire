@@ -9,6 +9,7 @@ import {
   type Activity,
 } from "@/lib/activity";
 import { useComboProgress } from "@/lib/useComboProgress";
+import { useDeviceSyncInvalidation } from "@/lib/useDeviceSyncInvalidation";
 import { useMarketplace, useMarketplaceProgress } from "@/lib/useMarketplace";
 import { useOracleTagProgress } from "@/lib/useOracleTagProgress";
 import { useSync } from "@/lib/useSync";
@@ -54,6 +55,12 @@ export function useCardData(): CardData {
  *   each invalidating its own roots on a terminal event, so the card sheet open over a download
  *   that lands is refilled rather than left reading the old answer.
  *
+ * - **`sync:applied`** through `useDeviceSyncInvalidation` — a round trip with the reader's other
+ *   devices that changed rows here. It is emitted for every trip, the automatic ones included, so
+ *   a change another device made lands while the reader stands on their collection with Settings
+ *   closed; unheard, the wall goes on drawing the rows as they were, which reads as the change
+ *   having been lost. Handed this face's own client, as the card sync's listener is.
+ *
  * **Plus one trigger the desktop does not have: the polled count leaving zero.** Tauri drops an
  * event emitted before the page listens, so a first run whose `done` was missed would otherwise
  * leave the wall empty until a relaunch. `sync_status` is polled each second while a sync runs,
@@ -67,6 +74,7 @@ export function useCardDataWatch(): { data: CardData; activity: Activity | null 
   const { status, error, refreshing } = useSync();
   const progress = useSyncProgress();
   useSyncInvalidation(progress, client);
+  useDeviceSyncInvalidation(client);
   useMarketplaceProgress();
   const oracleTags = useOracleTagProgress();
   const combos = useComboProgress();

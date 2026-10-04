@@ -120,6 +120,23 @@ describe("per-story isolation", () => {
     ).resolves.toMatchObject({ quantity: 1 });
   });
 
+  /**
+   * `lentStorage` is the one fault about the *host*: a browser answers `storage_persistence`,
+   * and a desktop — which is what a story is unless it says otherwise — refuses the name. The
+   * handler is put over that one world's table and never into `allHandlers`, which
+   * `parity.test.ts` holds to the commands `desktop.rs` registers.
+   */
+  it("makes a world a browser's for `lentStorage`, and leaves the next one a desktop", async () => {
+    installWorld({ seed: "paired", fault: "lentStorage" });
+    await expect(invoke("storage_persistence")).resolves.toEqual({
+      askedAt: expect.any(Number),
+      granted: false,
+    });
+
+    installWorld({ seed: "paired" });
+    await expect(invoke("storage_persistence")).rejects.toThrow(/No fake handler registered/);
+  });
+
   it("defaults to starter with no fault when a story says nothing", () => {
     const db = installWorld(undefined).db;
     expect(db.fault).toBeNull();

@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useState, type ReactNode } from "react";
@@ -65,6 +65,19 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
 /** The clipboard is the operating system's, and jsdom has nothing behind Tauri's `invoke`. */
 vi.mock("@/lib/clipboard", () => ({ copyText: vi.fn().mockResolvedValue(undefined) }));
 
+/**
+ * **The host, under `@/lib/core`** — the one thing the panel asks that is not a command of the
+ * engine's. `storage_persistence` is answered by a host whose database is in storage a browser
+ * lends it and refused, by name, by every host that owns its folder; the panel draws its note
+ * about cleared site data on the first kind and on no other. Every `ipc.*` call above is a stub,
+ * so this `invoke` is reached by that one question and nothing else.
+ */
+const hostInvoke = vi.hoisted(() => vi.fn());
+vi.mock("@tauri-apps/api/core", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@tauri-apps/api/core")>()),
+  invoke: hostInvoke,
+}));
+
 // `supporterState` moved to `@/lib/query` when the collection cabinet's Share control became its
 // second reader — see that file's note above `SUPPORTER_KEY`. The cases below are unchanged;
 // only where the function is declared moved.
@@ -72,6 +85,7 @@ import { supporterState } from "@/lib/query";
 import {
   LEAVE_WARNING,
   REMOVAL_WARNING,
+  SITE_DATA_WARNING,
   SyncPanel,
   liveNote,
   outcomeText,
@@ -290,6 +304,8 @@ beforeEach(() => {
   // `liveNote` says nothing about: a test that wants `"offline"` drives it with `onSyncLive`'s
   // captured callback instead of restating the seed.
   syncLiveState.mockReset().mockResolvedValue("off");
+  // A desktop, which is what every test above was written against: the host has no such command.
+  hostInvoke.mockReset().mockRejectedValue("Command storage_persistence not found");
 });
 
 describe("SyncPanel", () => {
@@ -346,6 +362,12 @@ describe("SyncPanel", () => {
     const group = pill.parentElement as HTMLElement;
     expect(group.classList.contains("flex-1")).toBe(true);
     expect(group.classList.contains("min-w-0")).toBe(true);
+    // In a narrow roster the group starts from its name's own width, which is what lets a
+    // phone-width row wrap its presses under a long name instead of squeezing it to eleven
+    // characters. The roster is the container the question is asked of. jsdom lays nothing out;
+    // the wrap itself was measured in a browser at 360 and 412px.
+    expect(group.classList.contains("@max-sm:flex-auto")).toBe(true);
+    expect(group.closest("ul")?.classList.contains("@container")).toBe(true);
     expect(within(group).queryByRole("button")).toBeNull();
 
     const name = within(group).getByText("Desk");
@@ -786,6 +808,122 @@ describe("leaving the group", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent(/not in a pairing group/i);
     // Refused, so the reader is still where they were and can press again.
     expect(screen.getByRole("button", { name: "Leave group" })).toBeInTheDocument();
+  });
+});
+
+/**
+ * **The warning before anything that clears site data** — the light-app spec §7: *"Clearing site
+ * data mints a new device and spends a slot. The panel says so before a reader presses anything
+ * that would."*
+ *
+ * The press is the browser's and not the app's, so there is no dialog to put the sentence in: it
+ * stands in the devices half for as long as both things are true — the host keeps its database
+ * in storage a browser can clear, and this device is in a group. Each test below takes one of
+ * the two away, or changes what the host says without changing what kind of host it is.
+ */
+describe("a paired browser and its site data", () => {
+  /** A host of the browser's kind, answering `storage_persistence` with `record`. */
+  const browser = (record: unknown) =>
+    hostInvoke.mockImplementation((command: string) =>
+      command === "storage_persistence"
+        ? Promise.resolve(record)
+        : Promise.reject(`Command ${command} not found`),
+    );
+  const asked = () => expect(hostInvoke).toHaveBeenCalledWith("storage_persistence");
+  /**
+   * Long enough for an answer the host has already given to have reached the screen. An absence
+   * asserted the instant a promise settles is asserted before the query has told React — and
+   * would pass over a panel that draws the note a frame later.
+   */
+  const drawn = () => act(() => new Promise<void>((settled) => setTimeout(settled, 50)));
+
+  it("tells a paired browser what clearing its site data costs, and both ways out", async () => {
+    browser({ askedAt: 1_700_000_000_000, granted: false });
+    render(<SyncPanel />, { wrapper: paired });
+
+    const note = await screen.findByText(SITE_DATA_WARNING);
+    // What clearing it does, and what the old entry goes on costing.
+    expect(note).toHaveTextContent(/clearing this browser's site data makes it a new device/i);
+    expect(note).toHaveTextContent(/still counts toward the group's five until it is removed/i);
+    // Leave first, or remove the old entry from another device afterwards.
+    expect(note).toHaveTextContent(/leave the group here first/i);
+    expect(note).toHaveTextContent(/remove the old entry from another device afterwards/i);
+    // A standing note, not an alarm: nothing has gone wrong.
+    expect(note).not.toHaveAttribute("role");
+  });
+
+  /**
+   * Under the roster it is about and above the press it names first. A note below the buttons
+   * would be read after *Leave group* had been passed.
+   */
+  it("stands between the roster and the Leave group press", async () => {
+    browser({ askedAt: null, granted: false });
+    render(<SyncPanel />, { wrapper: paired });
+
+    const note = await screen.findByText(SITE_DATA_WARNING);
+    const roster = screen.getByRole("list");
+    const leave = screen.getByRole("button", { name: "Leave group" });
+    expect(roster.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(note.compareDocumentPosition(leave) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  /**
+   * **What kind of host it is, not what the browser promised.** A browser that granted
+   * persistence will not evict the database by itself, and a reader who clears the site's data
+   * clears it all the same; one with no way to ask answers `null`. All three are a browser.
+   */
+  it.each([
+    ["granted persistence", { askedAt: 1_700_000_000_000, granted: true }],
+    ["was never asked and keeps it anyway", { askedAt: null, granted: true }],
+    ["has no way to be asked", null],
+  ])("says it to a browser that %s", async (_what, record) => {
+    browser(record);
+    render(<SyncPanel />, { wrapper: paired });
+    expect(await screen.findByText(SITE_DATA_WARNING)).toBeInTheDocument();
+  });
+
+  /** A desktop and a phone keep their database in a folder that is theirs. Red if the panel
+   *  draws the note without asking, or on an answer of any kind. */
+  it("says nothing on a host that owns its folder", async () => {
+    render(<SyncPanel />, { wrapper: paired });
+
+    await screen.findByText("Phone");
+    await waitFor(asked);
+    await expect(hostInvoke.mock.results[0].value).rejects.toMatch(/not found/);
+    // The refusal has been heard and drawn from by now; a note would have come with it.
+    await drawn();
+    expect(screen.queryByText(SITE_DATA_WARNING)).not.toBeInTheDocument();
+  });
+
+  /** A browser in no group has no place to lose, and a warning there teaches a reader who has
+   *  paired nothing that there is something to worry about. */
+  it("says nothing to a browser that is in no group", async () => {
+    browser({ askedAt: null, granted: false });
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    await screen.findByRole("button", { name: /pair a device/i });
+    await waitFor(asked);
+    await expect(hostInvoke.mock.results[0].value).resolves.toEqual({
+      askedAt: null,
+      granted: false,
+    });
+    await drawn();
+    expect(screen.queryByText(SITE_DATA_WARNING)).not.toBeInTheDocument();
+  });
+
+  /** The first way out, taken: the note goes with the group it was about. */
+  it("stops saying it once this device has left the group", async () => {
+    browser({ askedAt: null, granted: false });
+    const user = userEvent.setup();
+    render(<SyncPanel />, { wrapper: paired });
+    await screen.findByText(SITE_DATA_WARNING);
+
+    syncPairingStatus.mockResolvedValue({ ...UNPAIRED, deviceName: "Desk" });
+    await user.click(screen.getByRole("button", { name: "Leave group" }));
+    await user.click(screen.getByRole("button", { name: "Leave the group" }));
+
+    expect(await screen.findByText(/not paired yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(SITE_DATA_WARNING)).not.toBeInTheDocument();
   });
 });
 

@@ -12737,6 +12737,29 @@ describe("the pairing ceremony's poll", () => {
     expect(w.sync_pairing_poll()).toEqual({ stage: "complete", sas: null });
     expect(db.pairing.pending).not.toBeNull();
   });
+
+  /**
+   * **A scanned code is a URL, and only its fragment is the code** — `Invite::decode`'s first
+   * step. This fake kept every alphanumeric of whatever it was handed, so the relay's hostname
+   * was folded into the payload and a perfectly good scan was refused as *not a full pairing
+   * code* — which is also what a reader who pasted the link got. The same digits for both forms
+   * is the assertion: they are one invite.
+   */
+  it("reads the code out of the URL a QR carries, and answers what the typed form answers", () => {
+    const offerCode = writeHandlers(seed("starter")).sync_pairing_begin().code;
+    const url = `https://mtg-grimoire-relay.denmark-east.workers.dev/pair#${offerCode.replace(/-/g, "")}`;
+
+    const typed = writeHandlers(seed("starter")).sync_pairing_accept({ code: offerCode });
+    const scanned = writeHandlers(seed("starter")).sync_pairing_accept({ code: url });
+    expect(scanned).toEqual(typed);
+
+    // An address with no code after it is still half a paste, in the crate's words.
+    expect(() =>
+      writeHandlers(seed("starter")).sync_pairing_accept({
+        code: "https://mtg-grimoire-relay.denmark-east.workers.dev/pair#",
+      }),
+    ).toThrow(/105 characters/);
+  });
 });
 
 /**

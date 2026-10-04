@@ -34,7 +34,13 @@
  *    {@link installWorld}.
  */
 import { QueryClient } from "@tanstack/react-query";
-import { allHandlers, applySupporterFault, errorLogSeed, mirrorFailedPass } from "./db";
+import {
+  CLOCK_BASE,
+  allHandlers,
+  applySupporterFault,
+  errorLogSeed,
+  mirrorFailedPass,
+} from "./db";
 import type { FakeDb, Fault } from "./db";
 import { installCorpus } from "./images";
 import {
@@ -50,6 +56,7 @@ import { seed } from "./seeds";
 import type { SeedName } from "./seeds";
 import { resetWindow } from "./window";
 import { resetBulkUndo } from "@/lib/bulkUndo";
+import { STORAGE_PERSISTENCE, type StoragePersistence } from "@/lib/core/hostStorage";
 import { useAppStore } from "@/lib/store";
 
 /**
@@ -228,6 +235,13 @@ export function installWorld(
   applySupporterFault(db);
 
   const scope = createScope(allHandlers(db));
+  // The one fault that is about the *host*: a browser, which answers a name the desktop refuses.
+  // Over the world's table and not in `allHandlers`, which `parity.test.ts` holds to the commands
+  // `desktop.rs` registers — `db.ts` has the rest of why, at `lentStorage`.
+  if (db.fault === "lentStorage") {
+    const asked: StoragePersistence = { askedAt: CLOCK_BASE * 1000, granted: false };
+    scope.commands = { ...scope.commands, [STORAGE_PERSISTENCE]: () => asked };
+  }
   activateScope(scope);
 
   // The window is a singleton and therefore not part of `scope` — see `fake/window.ts`. That

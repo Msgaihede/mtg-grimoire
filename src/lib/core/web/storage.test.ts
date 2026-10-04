@@ -387,9 +387,27 @@ describe("what a reader is told", () => {
     const text = [CLEARED_TITLE, ...CLEARED_LINES].join(" ");
     // No code, no key, no API name — and nothing that blames the reader.
     expect(text).not.toMatch(/OPFS|localStorage|persist|evict|quota|error/i);
-    // The three things it owes them: why, what comes back by itself, and what does not.
-    expect(CLEARED_LINES).toHaveLength(3);
+    // The three things it owes them: why, what comes back by itself, and what does not — and a
+    // fourth for the reader whose browser was one of their paired devices.
+    expect(CLEARED_LINES).toHaveLength(4);
     expect(CLEARED_LINES[1]).toMatch(/downloads again by itself/);
     expect(CLEARED_LINES[2]).toMatch(/nothing to restore it from/);
+  });
+
+  /**
+   * The light-app spec §7: clearing site data mints a new device and spends one of the group's
+   * five places. **The page cannot know it was paired** — the record that it was is the record
+   * that went — so the sentence is an *if*, never a statement, and it names the press that frees
+   * the place and where that press is.
+   */
+  it("tells a reader who may have been paired where the old device's entry is removed", () => {
+    const line = CLEARED_LINES[3];
+    expect(line).toMatch(/^If this browser was paired/);
+    expect(line).toMatch(/new device now/);
+    expect(line).toMatch(/still counts toward the group's five/);
+    expect(line).toMatch(/Remove the old entry in Settings, under Sync, on one of the others/);
+    expect(line).toMatch(/pair this browser again/);
+    // Nothing that claims the pairing as a fact.
+    expect(line).not.toMatch(/\byou were paired\b|\bwas removed from\b/i);
   });
 });

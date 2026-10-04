@@ -1,4 +1,5 @@
 import { useEffect } from "react";
+import type { QueryClient } from "@tanstack/react-query";
 import { DEVICE_SYNC_INVALIDATED } from "@/lib/crossWindow";
 import { ipc } from "@/lib/ipc";
 import { queryClient, SYNC_KEY } from "@/lib/query";
@@ -32,20 +33,26 @@ import { queryClient, SYNC_KEY } from "@/lib/query";
  * read under one of those roots that ever wrote a synced table would push, firing the event that
  * re-ran it: `multi-window.md`'s refresh loop, with the relay inside it.
  *
- * Uses the module-level `queryClient` from `@/lib/query` rather than `useQueryClient()`: what
- * fires this is an event listener, not a render.
+ * **The client is the module-level `queryClient` from `@/lib/query` unless a caller hands one
+ * in**, and never `useQueryClient()` read in here: what fires this is an event listener, not a
+ * render. The desktop shell says nothing and gets the app's one client. The light app's phone
+ * face hands in the client its own provider holds (`mobile/phone/cardData.ts`) — the same object
+ * in the shipped app, and the fake world's own under a test, which is the only way a test of that
+ * face can watch one of its lists refetch.
  *
- * **Call this once.** `AppShell` does. Every extra call is another `sync:applied` `listen`
- * registration for the life of the app.
+ * **Call this once per face.** `AppShell` does for the desktop, and the desktop face of the light
+ * app is that shell; the phone face has no shell of the desktop's and mounts it beside its other
+ * listeners. Every extra call is another `sync:applied` `listen` registration for the life of the
+ * face that made it.
  */
-export function useDeviceSyncInvalidation(): void {
+export function useDeviceSyncInvalidation(client: QueryClient = queryClient): void {
   useEffect(
     () =>
       ipc.onSyncApplied((outcome) => {
         for (const queryKey of outcome.changed ? DEVICE_SYNC_INVALIDATED : [SYNC_KEY]) {
-          void queryClient.invalidateQueries({ queryKey });
+          void client.invalidateQueries({ queryKey });
         }
       }),
-    [],
+    [client],
   );
 }

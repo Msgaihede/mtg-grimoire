@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type JSX } from "react";
 import jsQR from "jsqr";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { BUTTON } from "./controls";
+import { BUTTON, TOUCH_FIELD } from "./controls";
 
 /**
  * Camera to decoded string — the in-app reader for the other half of pairing's QR code.
@@ -40,6 +40,13 @@ import { BUTTON } from "./controls";
  * own error branch and the manual fallback below it — the same branch a real `NotSupportedError`
  * takes today. That fallback's textarea → `onCode` wiring is what the story exercises; the frame
  * loop and the decode are the live pass's to prove.
+ *
+ * **That pass is a command since 2026-10-04**: `scripts/pairing-scan-smoke.mjs` runs the light
+ * app in a headless Chromium whose camera is a file — a screenshot of the Sync panel's own QR
+ * code at a phone's width — and watches this loop decode it and hand the text over, then the
+ * refused-camera branch land on the box below. What no flag can stand in for is the *grant*: the
+ * WebView2 handler above, Android's runtime prompt (wry's `RustWebChromeClient` asks for it when
+ * the page asks for video), a browser's own.
  */
 export function QrScanner({
   onCode,
@@ -159,7 +166,15 @@ export function QrScanner({
 
   return (
     <div className="space-y-3">
-      <div className="aspect-square w-64 max-w-full overflow-hidden rounded-md border border-border bg-bg">
+      {/* **256px, or half the window's height where that is less** (2026-10-04). A phone held
+          sideways is 360px tall, and the light app's phone face spends 102 of them on its title
+          row and the open group's row: the square stood 256 in the 258 left, with the line that
+          says what to do and the way out both under the fold. At half the height it is 180 there
+          and the sentence is on screen with it. The picture is only what the reader aims by —
+          the decode reads the camera's whole frame, not this crop — so a smaller square reads
+          the same code. Every window 512px tall or more keeps the 256, which is every desktop
+          one. */}
+      <div className="aspect-square w-[min(16rem,50dvh)] max-w-full overflow-hidden rounded-md border border-border bg-bg">
         {/* Decorative: the status line below is the whole of what a screen reader needs, and a
             camera feed has nothing an `alt`-style description could usefully say. */}
         <video ref={videoRef} muted playsInline aria-hidden="true" className="size-full object-cover" />
@@ -223,7 +238,17 @@ function describeError(err: unknown): { name: string; message: string } {
     err instanceof DOMException ? err.name : err instanceof Error ? err.name : "Error";
   switch (name) {
     case "NotAllowedError":
-      return { name, message: "MTG Grimoire needs camera access to scan a code." };
+      // **Both ways forward, as its two neighbours say theirs.** It stopped at the first
+      // sentence, over a box labelled *Or type the code* — and on a phone, where the refusal is
+      // usually a prompt dismissed by a thumb, a reader was told what the app needs and not
+      // that asking again is one press away (Cancel, then *Scan a code*). It names no setting
+      // and no browser: where a grant is changed differs on every host this is drawn on.
+      return {
+        name,
+        message:
+          "MTG Grimoire needs camera access to scan a code. Allow the camera and try again, " +
+          "or type the code instead.",
+      };
     case "NotFoundError":
       return { name, message: "No camera found. Type the code instead." };
     default:
@@ -266,6 +291,9 @@ function ManualEntry({ onSubmit }: { onSubmit: (text: string) => void }): JSX.El
           className={cn(
             "w-full resize-y rounded-md border border-border bg-surface px-2 py-1.5",
             "font-mono text-xs leading-relaxed break-all",
+            // `SyncPanelBody`'s `Paste`, to the class: 16px under a finger, and room for the code.
+            TOUCH_FIELD,
+            "coarse:min-h-36",
             "focus:border-accent focus:outline-none",
           )}
         />

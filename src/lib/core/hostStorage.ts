@@ -15,6 +15,7 @@
  * `light_downloads`' arrangement (`mobile/DownloadsPrompt.tsx`), and the reason this file is
  * plain names and shapes with no host in it — it is read by the page and by the web host alike.
  */
+import type { Core } from "./types";
 
 /**
  * Asks whether the host found its storage cleared. Answers {@link StorageCleared}, or `null`
@@ -35,6 +36,32 @@ export const STORAGE_CLEARED_DISMISS = "storage_cleared_dismiss";
  * prompting, an ask still unanswered reads as asked just now and not granted.
  */
 export const STORAGE_PERSISTENCE = "storage_persistence";
+
+/**
+ * Whether the reader's database is kept in storage that is **lent** to this host — storage
+ * somebody other than the app can clear while the app still opens.
+ *
+ * **Answered by whether the host answers {@link STORAGE_PERSISTENCE} at all**, and not by what it
+ * says: a browser that granted persistence, one that refused and one with no way to ask (the
+ * `null`) are all the same kind of host, because a reader who clears a site's data clears it
+ * whatever the browser promised about evicting it. A host that owns its folder refuses the name,
+ * which is this file's whole arrangement, and that refusal is the `false`.
+ *
+ * It is the one question here with a second reader. `mobile/StorageNotice.tsx` speaks *after*
+ * the storage has gone; the Sync panel asks this *before*, because what goes with a paired
+ * browser's storage is its place in the group — a device identity the reader's other devices go
+ * on counting until one of them removes it (the light-app spec §7: "Clearing site data mints a
+ * new device and spends a slot. The panel says so before a reader presses anything that would").
+ *
+ * Takes the `Core` to ask rather than importing one: this file is plain names and shapes with no
+ * host in it, and stays that way.
+ */
+export function storageIsLent(core: Pick<Core, "call">): Promise<boolean> {
+  return core.call<StoragePersistence | null>(STORAGE_PERSISTENCE).then(
+    () => true,
+    () => false,
+  );
+}
 
 /**
  * One occurrence of the host's storage having been cleared under the app, **in the host's own

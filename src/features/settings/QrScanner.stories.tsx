@@ -31,7 +31,8 @@ const meta = {
           "that error is a known, unpatched WebView2 gap, not a bug in this file). The story " +
           "below drives the manual textarea that fallback offers, which is the real `onCode` " +
           "wiring a reader falls back to either way. **The frame loop and the decode itself are " +
-          "the live CDP pass's to prove.**",
+          "the live pass's to prove**, and `scripts/pairing-scan-smoke.mjs` is that pass: a " +
+          "headless Chromium with a file for a camera, pointed at the Sync panel's own QR code.",
       },
     },
   },
