@@ -1,6 +1,6 @@
 # grimoire-web — the light app's web host
 
-`grimoire-core` compiled to WebAssembly (WASM) and loaded by one dedicated Web Worker, with the page communicating via the `Core` seam (see [light-app.md](../../docs/reference/light-app.md) §6 & §9). The cargo workspace's fourth member. It holds almost nothing of its own: three exports, the OPFS pool for the two databases, and state management. The engine's core rules in [`crates/grimoire-core/CLAUDE.md`](../grimoire-core/CLAUDE.md) strictly bind here.
+`grimoire-core` compiled to WebAssembly (WASM) and loaded by one dedicated Web Worker, with the page communicating via the `Core` seam (see [grimoire-web.md](../../docs/reference/grimoire-web.md) and [light-app.md](../../docs/reference/light-app.md) §6 & §9). The cargo workspace's fourth member. It holds almost nothing of its own: three exports, the OPFS pool for the two databases, and state management. The engine's core rules in [`crates/grimoire-core/CLAUDE.md`](../grimoire-core/CLAUDE.md) strictly bind here.
 
 For global repo workflow, style, and testing conventions, refer to:
 - [Workflow & Commits](../../docs/agent/WORKFLOW.md)

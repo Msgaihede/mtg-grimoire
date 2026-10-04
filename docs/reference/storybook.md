@@ -37,12 +37,17 @@ it says `tags: ["autodocs"]`.
   second, and let `@storybook/addon-a11y` check contrast and names per story. **Not visual
   regression, deliberately**: no screenshots are stored, so nothing here can fail because a
   font rendered a pixel differently on a different machine.
-- **`.storybook/main.ts` aliases three specifiers** — `@tauri-apps/api/core`,
-  `@tauri-apps/api/event` and `@/lib/images` — to `.storybook/fake/`. **The fake sits _under_
-  `src/lib/ipc.ts`, not in place of it**, and that is the point: `ipc.ts` is a hand-written
-  mirror of the Rust structs and is exactly the thing that can drift from them, so a fake
-  beneath it means every story exercises the mirror too. Aliasing `ipc.ts` itself would story
-  the components against a second, agreeing copy of a contract nobody had checked.
+- **`.storybook/main.ts` aliases four specifiers** — listed in `fake/aliases.ts`:
+  `@tauri-apps/api/core`, `@tauri-apps/api/event`, `@tauri-apps/api/window` and `@/lib/images` —
+  to `.storybook/fake/`. **The fake sits _under_ `src/lib/ipc.ts` and `src/lib/window.ts`, not in place of them**,
+  and that is the point: `ipc.ts` and `window.ts` are hand-written mirrors of backend contracts and are
+  exactly what can drift, so a fake beneath them means every story exercises the mirror too.
+- **`fake/parity.test.ts` is the command fence** (issue #559): It reads `src-tauri/src/desktop.rs` as text,
+  extracts `generate_handler!` command names, and fails if a backend command lacks a fake handler or if a fake
+  handler exists for a command Rust no longer registers. Commands deliberately left unimplemented must be
+  declared with an explicit reason in the `ABSENT` map.
+- **The fake is shared with `npm run mobile:dev`** (`vite.mobile.config.ts`, port 5175): Both configs import
+  `fake/aliases.ts`, ensuring web and mobile mock behaviors stay identical.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because **`ownedQuantity`
   means three different things on three DTOs**: every copy of one printing and finish-blind on
   `CardSummary`; the copies filling one wish and finish-**aware** on `WishRow`; and on `DeckCard`

@@ -3,6 +3,7 @@
 TypeScript owns deck validation, category management, view presentation, and editing interactions. Rust supplies facts via `DeckCardRow` (legalities, color identity, P/T, game changers) and executes database transactions.
 
 Detailed storage architectures, live measurements, and visual findings are in reference docs:
+- Architecture, validation, notes TDZ, and to-do autosave: [deck-builder.md](../../../docs/reference/deck-builder.md)
 - Storage, tables, and undo: [decks-storage.md](../../../docs/reference/decks-storage.md)
 - Live WebView verification and interaction findings: [decks-live-findings.md](../../../docs/reference/decks-live-findings.md)
 - Commander bracket rules and calculations: [commander-brackets.md](../../../docs/reference/commander-brackets.md)

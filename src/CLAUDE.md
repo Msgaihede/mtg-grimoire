@@ -3,6 +3,7 @@
 React 19 + TypeScript frontend for mtg-grimoire. TypeScript owns presentation and domain logic (deck validation, import/export parsing, query syntax); Rust supplies facts and database operations.
 
 Detailed measurements, rationale, and design history are preserved in reference docs:
+- [Frontend Architecture Reference](../docs/reference/frontend-architecture.md)
 - [Frontend Design Reference](../docs/reference/frontend-design.md)
 - [Motion Reference](../docs/reference/motion.md)
 - [Keyboard Shortcuts Reference](../docs/reference/keyboard-shortcuts.md)

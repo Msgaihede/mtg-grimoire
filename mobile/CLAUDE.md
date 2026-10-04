@@ -1,6 +1,6 @@
 # mobile — the light app
 
-A second app surface sharing the core `src/` components and Rust engine: card search, decks, collection, wishlist, and scanner, targeting Android and web browsers (see [the light-app spec](../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md) and reference [light-app.md](../docs/reference/light-app.md)).
+A second app surface sharing the core `src/` components and Rust engine: card search, decks, collection, wishlist, and scanner, targeting Android and web browsers (see [the light-app spec](../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md), [frontend-architecture.md](../docs/reference/frontend-architecture.md), [grimoire-web.md](../docs/reference/grimoire-web.md), and [light-app.md](../docs/reference/light-app.md)).
 
 "Light" refers to the menu and presentation face, never the underlying data. It executes the same commands against the same SQLite databases (`user.db` and `corpus.db`).
 

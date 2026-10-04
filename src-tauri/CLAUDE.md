@@ -2,7 +2,7 @@
 
 Desktop Tauri 2 application host for mtg-grimoire. Responsible for native windowing, SQLite database hosting, desktop IPC command wrappers, the `mtgimg://` image protocol, background filesystem mirroring, and device sync networking.
 
-Core domain logic, database engines, and cross-platform abstractions reside in [`crates/grimoire-core`](../crates/grimoire-core/CLAUDE.md).
+Core domain logic, database engines, and cross-platform abstractions reside in [`crates/grimoire-core`](../crates/grimoire-core/CLAUDE.md) (and [grimoire-core.md](../docs/reference/grimoire-core.md)).
 
 For global repo workflow, style, and testing conventions, refer to:
 - [Workflow & Commits](../docs/agent/WORKFLOW.md)

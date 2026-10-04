@@ -1,6 +1,6 @@
 # src/features/transfer — card import and export
 
-Covers `import/` and `export/`: decklist parsing, destination planning, format writing, and import/export UI dialogs and sheets. Serves desktop decks, collection, wishlist, and the mobile/web light app (see [import-export.md](../../../docs/reference/import-export.md), [decks-storage.md](../../../docs/reference/decks-storage.md), and [text-mirror.md](../../../docs/reference/text-mirror.md)).
+Covers `import/` and `export/`: decklist parsing, destination planning, format writing, and import/export UI dialogs and sheets. Serves desktop decks, collection, wishlist, and the mobile/web light app (see [import-export.md](../../../docs/reference/import-export.md), [frontend-architecture.md](../../../docs/reference/frontend-architecture.md), [decks-storage.md](../../../docs/reference/decks-storage.md), and [text-mirror.md](../../../docs/reference/text-mirror.md)).
 
 For global repo workflow, style, and testing conventions, refer to:
 - [Workflow & Commits](../../../docs/agent/WORKFLOW.md)

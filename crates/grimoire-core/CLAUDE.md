@@ -1,6 +1,6 @@
 # grimoire-core — the engine with no window
 
-The shared Rust core linked by all three application hosts: the desktop host (`src-tauri`), the light app's Android host (`mobile/src-tauri`), and the WebAssembly web host (`crates/grimoire-web`). It contains domain logic, database engines (`user.db` and `corpus.db`), sync infrastructure, and platform abstractions (see [the light-app spec](../../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md) §2 and reference [light-app.md](../../docs/reference/light-app.md)).
+The shared Rust core linked by all three application hosts: the desktop host (`src-tauri`), the light app's Android host (`mobile/src-tauri`), and the WebAssembly web host (`crates/grimoire-web`). It contains domain logic, database engines (`user.db` and `corpus.db`), sync infrastructure, and platform abstractions (see [the light-app spec](../../docs/superpowers/specs/2026-10-01-light-app-android-and-web-design.md) §2, reference [grimoire-core.md](../../docs/reference/grimoire-core.md), and [light-app.md](../../docs/reference/light-app.md)).
 
 For global repo workflow, style, and testing conventions, refer to:
 - [Workflow & Commits](../../docs/agent/WORKFLOW.md)

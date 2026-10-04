@@ -26,7 +26,7 @@ Also supports a light app (Android APK via Tauri and Web via WebAssembly in a Cl
 
 ### Reference Docs
 
-- [`docs/reference/README.md`](docs/reference/README.md) — Index of all 31 reference deep-dives, live measurements, and design rationale documents.
+- [`docs/reference/README.md`](docs/reference/README.md) — Index of all 35 reference deep-dives, live measurements, and design rationale documents.
 
 ---
 
