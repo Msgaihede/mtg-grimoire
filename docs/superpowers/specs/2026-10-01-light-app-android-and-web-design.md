@@ -984,7 +984,13 @@ and no policy violation. **Later the same day**: a second build deployed at 13:2
 bringing the version's files back within seconds; the update flow of this section's list seen
 across all three under one open tab, with the reader's data intact and nothing downloaded
 again; and the owner's one sentence that it works in Firefox. **Not seen**: a deploy that
-renames a chunk, the app's own check for a new build, Safari, a phone.
+renames a chunk, the app's own check for a new build, Safari, a phone. **And then a third
+deploy, at 13:43 UTC from `main` at `e1e76f78`, which is what production serves** — the first
+to rename chunks: a page in the service worker's control went on opening faces from its own
+build's cache, a page the worker did not serve got a 404 and a *Reload*, and the update cost
+the chunks that changed and nothing of the engine. The owner saw the app's own update notice
+in Firefox and used the site on a phone, a sentence each. **Still not seen**: Safari, an
+installed app, a phone's figures.
 [light-app.md](../../reference/light-app.md) §9.7 is the record.
 
 ---
