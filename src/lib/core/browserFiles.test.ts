@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { decodeDecklist, downloadText, MAX_DECKLIST_BYTES, readDecklistFile } from "./browserFiles";
+import {
+  decodeDecklist,
+  DOWNLOAD_URL_LIFE_MS,
+  downloadText,
+  MAX_DECKLIST_BYTES,
+  readDecklistFile,
+} from "./browserFiles";
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 const ascii = (text: string) => [...text].map((c) => c.charCodeAt(0));
@@ -92,10 +98,12 @@ describe("downloadText, the browser arm", () => {
 
       expect(pressed).toEqual([{ href: "blob:export", download: "Burn.txt" }]);
       expect(await blob?.text()).toBe("4 Lightning Bolt\n");
-      // The anchor does not outlive the press, and the URL outlives it by one task.
+      // The anchor does not outlive the press. The URL outlives it by long enough for a browser
+      // that reads the Blob late — after a prompt — to have read it.
       expect(document.querySelector("a[download]")).toBeNull();
+      vi.advanceTimersByTime(DOWNLOAD_URL_LIFE_MS - 1);
       expect(revoke).not.toHaveBeenCalled();
-      vi.runAllTimers();
+      vi.advanceTimersByTime(1);
       expect(revoke).toHaveBeenCalledWith("blob:export");
     } finally {
       for (const [name, was] of [

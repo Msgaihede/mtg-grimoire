@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_DECKLIST_BYTES } from "../browserFiles";
 import { STORAGE_CLEARED, STORAGE_CLEARED_DISMISS, STORAGE_PERSISTENCE } from "../hostStorage";
 import type { Core } from "../types";
-import { answeringFiles, suggestedName } from "./files";
+import { answeringFiles, PICK_FOCUS_GRACE_MS, suggestedName } from "./files";
 import { createWebCore, type WorkerPort } from "./index";
 import type { ToWorker } from "./protocol";
 
@@ -25,7 +25,7 @@ function engine(): { core: Core; calls: unknown[][]; listened: string[] } {
 
 /**
  * Every download the page made, by the name it was given. jsdom has no object URLs at all, so
- * both are written for the test — `afterEach` takes them back.
+ * both are written for the test.
  */
 function catchDownloads(): { name: string; blob: Blob }[] {
   const caught: { name: string; blob: Blob }[] = [];
@@ -65,8 +65,8 @@ beforeEach(() => {
 });
 afterEach(() => {
   vi.restoreAllMocks();
-  Reflect.deleteProperty(URL, "createObjectURL");
-  Reflect.deleteProperty(URL, "revokeObjectURL");
+  // The two object-URL stand-ins are left for the life of the file: a download releases its URL
+  // long after the test that made it, and a release with nothing to call is a throw in a timer.
   document.body.replaceChildren();
 });
 
@@ -140,8 +140,69 @@ describe("the web host's file commands", () => {
     expect(picker()).toBeNull();
   });
 
+  describe("on a browser that reports no cancel", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("takes the pick as cancelled once the window has had focus back for a moment", async () => {
+      // The Import dialog greys its button while the pick is pending, so a closed picker that
+      // says nothing would leave it greyed for good.
+      vi.useFakeTimers();
+      let answered: unknown = "pending";
+      void answeringFiles(engine().core)
+        .call("import_pick_file")
+        .then((file) => (answered = file));
+
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(PICK_FOCUS_GRACE_MS - 1);
+      expect(answered).toBe("pending");
+
+      await vi.advanceTimersByTimeAsync(1);
+      expect(answered).toBeNull();
+      expect(picker()).toBeNull();
+    });
+
+    it("lets a change inside that moment win, and waits for nothing after it", async () => {
+      vi.useFakeTimers();
+      const asked = answeringFiles(engine().core).call("import_pick_file");
+
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(PICK_FOCUS_GRACE_MS / 2);
+      choose(new File(["4 Lightning Bolt\n"], "burn.txt"));
+
+      await expect(asked).resolves.toEqual({ text: "4 Lightning Bolt\n", encoding: "utf-8" });
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
+    it("answers a file already on the input when the moment is up, rather than a cancel", async () => {
+      // The file is there and the browser has not said so yet: asked of the input, not assumed.
+      vi.useFakeTimers();
+      const asked = answeringFiles(engine().core).call("import_pick_file");
+      const input = picker();
+      if (input === null) throw new Error("no picker is open");
+      Object.defineProperty(input, "files", {
+        configurable: true,
+        value: [new File(["1 Sol Ring\n"], "ring.txt")],
+      });
+
+      window.dispatchEvent(new Event("focus"));
+      await vi.advanceTimersByTimeAsync(PICK_FOCUS_GRACE_MS);
+
+      await expect(asked).resolves.toEqual({ text: "1 Sol Ring\n", encoding: "utf-8" });
+    });
+
+    it("hears no focus once the pick is answered", async () => {
+      vi.useFakeTimers();
+      const asked = answeringFiles(engine().core).call("import_pick_file");
+      picker()?.dispatchEvent(new Event("cancel"));
+      await expect(asked).resolves.toBeNull();
+
+      window.dispatchEvent(new Event("focus"));
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  });
+
   it("answers the first ask with null when a second one opens", async () => {
-    // A browser that reports no cancel leaves the first ask waiting; the next press must not.
+    // One picker at a time, for a caller that can ask twice — the dialog's own button cannot.
     const files = answeringFiles(engine().core);
     const first = files.call("import_pick_file");
     const second = files.call("import_pick_file");

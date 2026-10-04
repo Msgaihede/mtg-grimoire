@@ -59,14 +59,28 @@ function save(args: CallArgs | undefined): Promise<boolean> {
 let picking: { input: HTMLInputElement; settle: (file: File | null) => void } | undefined;
 
 /**
+ * How long the window may have had focus back, with no word from the picker's input, before the
+ * pick is taken as cancelled. A browser that reports a cancel never waits this long, and a
+ * `change` arrives with the focus or just after it; the second is for a browser that reports
+ * neither. Chosen, not measured in any browser.
+ */
+export const PICK_FOCUS_GRACE_MS = 1000;
+
+/**
  * `import_pick_file`, in a browser: **a hidden `<input type="file">`, pressed for the reader.**
  *
  * - **A cancelled picker is `null`, not a failure** — the desktop's answer. The input's own
- *   `cancel` event says so. It is younger than `change` (2023 in Chrome and Safari), and a
- *   browser that fires neither leaves the caller waiting — nothing else reports a closed picker
- *   without guessing from a focus change, and a guess that lands before a slow `change` drops
- *   the file the reader chose. So **a second ask answers the first with `null`**: there is one
- *   picker at a time, and the newer ask is the one a reader is looking at.
+ *   `cancel` event says so, and it is younger than `change` (2023 in Chrome and Safari). On a
+ *   browser without it a closed picker says nothing at all, and the Import dialog's button —
+ *   which is greyed while this is pending — would stay greyed. So **the window's focus coming
+ *   back is the fallback**: a picker takes the focus while it is open, and
+ *   {@link PICK_FOCUS_GRACE_MS} after it returns with neither event the input itself is asked —
+ *   a file on it is the pick, and none is a cancel. A `change` or a `cancel` inside that moment
+ *   wins and ends the wait, so the fallback decides only where both were silent. What it cannot
+ *   rule out is a browser that hands the file over later than that after giving the focus back:
+ *   that pick would be read as cancelled, and the reader would choose again.
+ * - **One picker at a time**: a second ask answers the first with `null`. The dialog cannot make
+ *   one while its button is greyed, so this is for a caller that can — a second mount, a script.
  * - **The megabyte and the four readings are `readDecklistFile`'s**, which are `import.rs`'s —
  *   the cap is checked against the file's size before a byte is read, and the bytes are UTF-8,
  *   UTF-16 by its mark, or Windows-1252, with the reading answered beside the text.
@@ -87,17 +101,29 @@ function pick(): Promise<ImportFile | null> {
     input.type = "file";
     input.accept = DECKLIST_ACCEPT;
     input.hidden = true;
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const chosen = (): File | null => input.files?.[0] ?? null;
+    // The picker has closed, or the reader came back to the window some other way: either way
+    // the input is asked once the moment is up, and a file on it is never read as a cancel.
+    const onFocus = (): void => {
+      clearTimeout(grace);
+      grace = setTimeout(() => settle(chosen()), PICK_FOCUS_GRACE_MS);
+    };
     const settle = (file: File | null): void => {
       if (picking?.input !== input) return;
       picking = undefined;
+      clearTimeout(grace);
+      window.removeEventListener("focus", onFocus);
       input.remove();
       resolve(file);
     };
     picking = { input, settle };
-    input.addEventListener("change", () => settle(input.files?.[0] ?? null));
+    input.addEventListener("change", () => settle(chosen()));
     input.addEventListener("cancel", () => settle(null));
     document.body.append(input);
     input.click();
+    // After the press, so the focus heard is one that came back from the picker.
+    window.addEventListener("focus", onFocus);
   }).then((file) =>
     file === null
       ? null

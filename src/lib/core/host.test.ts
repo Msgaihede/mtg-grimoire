@@ -7,7 +7,13 @@ const openUrl = vi.hoisted(() => vi.fn(() => Promise.resolve()));
 vi.mock("@tauri-apps/plugin-clipboard-manager", () => ({ writeText }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl }));
 
-import { browserHost, NO_CLIPBOARD, NOT_OPENED, tableHost } from "@/lib/core/host";
+import {
+  browserHost,
+  NO_CLIPBOARD,
+  NOT_A_WEB_ADDRESS,
+  NOT_OPENED,
+  tableHost,
+} from "@/lib/core/host";
 import { tauriHost } from "@/lib/core/tauri";
 
 afterEach(() => {
@@ -66,6 +72,31 @@ describe("a browser's host services", () => {
 
     expect(open).toHaveBeenCalledWith("https://scryfall.com/card/2x2/117", "_blank");
     expect(tab.opener).toBeNull();
+  });
+
+  it.each([
+    "javascript:alert(document.domain)",
+    "JavaScript:void 0",
+    "data:text/html,<script>1</script>",
+    "blob:https://mtg-grimoire.app/1",
+    "file:///C:/Users/x/user.db",
+    "mailto:someone@example.com",
+    "/decks/7",
+    "decks",
+    "//scryfall.com/card/lea/161",
+    "",
+  ])("opens nothing for %j, which is not a whole web address", async (url) => {
+    // The desktop's opener scope refuses these whatever a caller hands it; a page's
+    // `window.open` would run the first in the app's own origin.
+    const open = vi.spyOn(window, "open");
+    await expect(browserHost.openUrl(url)).rejects.toThrow(NOT_A_WEB_ADDRESS);
+    expect(open).not.toHaveBeenCalled();
+  });
+
+  it("opens an http address as it opens an https one", async () => {
+    const open = vi.spyOn(window, "open").mockReturnValue({ opener: null } as Window);
+    await browserHost.openUrl("http://localhost:8787/oauth/patreon/callback");
+    expect(open).toHaveBeenCalledTimes(1);
   });
 
   it("rejects when the browser made no tab, so the press can say so", async () => {

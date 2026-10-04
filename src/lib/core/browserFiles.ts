@@ -103,8 +103,21 @@ export async function readDecklistFile(file: File): Promise<ImportFile> {
 }
 
 /**
+ * How long a download's object URL is kept before it is released.
+ *
+ * **A browser reads the `Blob` through the URL after the press, on its own schedule** — at once
+ * in the Chrome this was driven in, and after a save prompt or a "keep this file?" bar in
+ * others — and a URL revoked before that read is a download that fails or lands empty. Nothing
+ * says when the read is done, so the release is a wait: forty seconds, FileSaver.js's figure for
+ * the same reason, and since step 5.4 the wait behind the desktop face's Save in every browser.
+ * It was a single task, which only headless Chrome had been asked to survive. The cost of
+ * waiting is one decklist's text kept in memory that much longer.
+ */
+export const DOWNLOAD_URL_LIFE_MS = 40_000;
+
+/**
  * Hand `text` to the browser as a file called `fileName` — a `Blob`, an object URL and an
- * `<a download>` pressed once, then the URL released.
+ * `<a download>` pressed once, then the URL released ({@link DOWNLOAD_URL_LIFE_MS} later).
  *
  * **Where it lands is the browser's**: a download folder, or a save prompt where the reader has
  * asked for one. There is no answer to wait for and no cancel to report — a native save dialog
@@ -127,8 +140,7 @@ export function downloadText(fileName: string, text: string): void {
     link.click();
   } finally {
     link.remove();
-    // After the press has been handed over, not before — revoking in the same task can cancel
-    // the download it started.
-    setTimeout(() => URL.revokeObjectURL(url), 0);
+    // Long after the press, not beside it: see `DOWNLOAD_URL_LIFE_MS`.
+    setTimeout(() => URL.revokeObjectURL(url), DOWNLOAD_URL_LIFE_MS);
   }
 }
