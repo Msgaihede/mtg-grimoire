@@ -113,9 +113,13 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     header. It is the web app's hosting: a third Worker's `wrangler.jsonc`, Cloudflare's
     `_headers` file and a small script. `frontend` runs `tsc -p tsconfig.app-worker.json` (in
     `npm run build`), `eslint` and the directory's tests — `hosting.test.ts` reads `_headers`,
-    `wrangler.jsonc`, the desktop's shipped CSP and each of the engine's `.rs` files that names
-    a host as text, and fails when the policy's `connect-src` and the hosts the engine's constants name differ
-    in either direction. `web` because the light config imports `app-worker/src/headers.ts` at
+    `wrangler.jsonc`, the desktop's shipped CSP, the line of `src/lib/core/web/index.ts` that
+    constructs the engine's Worker, and **every `.rs` file of `grimoire-core`, `grimoire-web`
+    and `card-scanner`'s library** as text. It fails when the policy's `connect-src` and the
+    addresses the engine names differ in either direction, and when shipped Rust gains an
+    `https://` literal that is neither in the policy nor on the test's list of hosts a browser's
+    engine never asks. Each of those trees already routes to `frontend`, which is the only
+    reason a glob the census cannot see is safe here. `web` because the light config imports `app-worker/src/headers.ts` at
     load, in every mode, and emits `_headers` into `dist-web/` in `web` mode — so a file there
     that will not load or parse stops `web:build`. **Not `rust`**: the census finds no Rust
     source reading that tree, which is the difference from `share-worker/` (one does, so that

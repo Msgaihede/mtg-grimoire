@@ -67,7 +67,11 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
     and a script of a few lines. `frontend` type-checks it (`tsc -p tsconfig.app-worker.json`,
     in `npm run build`), lints it and runs its tests, among them the fence that reads
     `_headers` and the engine's Rust as text and fails when the Content-Security-Policy and the
-    hosts the engine asks part. `web` because `vite.mobile.config.ts` imports
+    hosts the engine asks part. ⚠️ **That fence reads three crates by a glob**, which
+    `ci-route.test.mjs`'s census of `?raw` imports does not see: it is safe only because
+    `crates/grimoire-core/**`, `crates/grimoire-web/**` and `crates/*` each already set
+    `frontend`. An arm that took `frontend` off any of them would skip the one test that
+    notices a new host in the engine. `web` because `vite.mobile.config.ts` imports
     `app-worker/src/headers.ts` at load and copies `_headers` into `dist-web/`. **Not `rust`**:
     no Rust source reads a file there — unlike `share-worker/`, which for that reason still has
     no arm and falls to the fail-safe. Its `README.md` is prose and routes nowhere.

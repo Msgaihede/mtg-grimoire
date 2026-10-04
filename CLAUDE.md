@@ -150,7 +150,10 @@ Worker's reason, blast radius, and unlike them it holds **no secret and no bindi
 assets**: no D1, no R2, no `vars`. **The origin is the app's identity, not an address that can
 move** — a browser keys both OPFS databases, the service worker and the install to it, and phase
 6 names it in the relay's CORS allow-list. Its policy's `connect-src` is exactly the hosts the
-engine asks, and a test reads the Rust to hold it there. No job deploys it and no agent may;
+engine asks, and a test reads the engine's shipped Rust to hold it there: a host that moves, and
+a new address written as a literal, are each a red build. **An address a server sends is not**
+— Scryfall's bulk-file host is in no line of ours, so if that moves every suite stays green and
+a browser's first run fails. No job deploys it and no agent may;
 [`app-worker/README.md`](app-worker/README.md) is the runbook, and every probe in it is marked
 *not yet run* — ask the host before you believe this or its opposite.
 

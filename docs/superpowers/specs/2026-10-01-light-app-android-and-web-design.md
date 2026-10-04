@@ -841,7 +841,10 @@ either. Three things the bullet does not say, each built:
   response, because a dedicated Worker and a service worker each take the policy on *their own
   script's* response (measured, Chrome 154): `'wasm-unsafe-eval'` for the engine and never
   `'unsafe-eval'`, the desktop's `style-src 'self'`, and a `connect-src` that is exactly the
-  hosts the engine asks — held there by a test that reads the Rust. Mana Pool is not on it,
+  hosts the engine asks — held there by a test that reads the engine's shipped Rust, for a host
+  that moves and for a new one written as a literal; not for an address a server sends, which
+  is what Scryfall's bulk-file host is. The engine's Worker is the one hashed file that is not
+  kept for a year, because a change to the policy has to reach its script. Mana Pool is not on it,
   which is §4's rule from the other side; the relay is not on it until phase 6.
 - **A card picture is drawn from this origin alone.** `img-src` does not name Scryfall's image
   host: Chrome checks the address of the response a service worker returns, so the worker must
