@@ -332,3 +332,67 @@ describe("the card sheet's adds", () => {
     ).toBeInTheDocument();
   });
 });
+
+/**
+ * The sheet's **In your grimoire** line, read off the sheet. It is one read under a key no
+ * writer names (`cardHoldingsKey`) and is kept for 30 s, so until 2026-10-04 it said `Owned 0`
+ * straight after the sheet's own *Added 1 × Sol Ring to your collection.* — and said it again
+ * when the sheet was closed and opened. Each test here would pass a second read in half a
+ * minute; none waits that long.
+ */
+describe("the card sheet's figures", () => {
+  const bolt = printing("2x2", "117");
+  /** One figure of the line, once the read has answered. */
+  const figure = async (sheet: HTMLElement, label: string): Promise<number> => {
+    const term = await within(sheet).findByText(label, { selector: "dt" }, SETTLE);
+    return Number(term.nextElementSibling?.textContent);
+  };
+  const reads = async (sheet: HTMLElement, label: string, value: number) =>
+    waitFor(async () => expect(await figure(sheet, label)).toBe(value), SETTLE);
+
+  it("move on the sheet's own adds, without a reload", async () => {
+    renderPhone(<PhoneFace />, { path: `/search?card=${bolt.id}` });
+    const sheet = await screen.findByRole("dialog", { name: "Lightning Bolt" }, SETTLE);
+    const owned = await figure(sheet, "Owned");
+    const wished = await figure(sheet, "Wished");
+
+    await userEvent.click(within(sheet).getByRole("button", { name: "Add to collection" }));
+    await reads(sheet, "Owned", owned + 1);
+
+    await userEvent.click(within(sheet).getByRole("button", { name: "Add to wishlist" }));
+    await reads(sheet, "Wished", wished + 1);
+    // And the first figure was not put back by the second write's read.
+    expect(await figure(sheet, "Owned")).toBe(owned + 1);
+
+    // The add's own Undo is a write like any other.
+    await userEvent.click(
+      within(sheet).getByRole("button", { name: "Undo — take back the copy of Lightning Bolt" }),
+    );
+    await reads(sheet, "Owned", owned);
+  });
+
+  it("have moved when the sheet is opened again after a copy went on the page behind it", async () => {
+    renderPhone(<PhoneFace />, { path: "/collection" });
+    const open = async () => {
+      await userEvent.click(
+        await screen.findByRole("button", { name: /^Tarmogoyf, FUT 153, \d+ cop/ }, SETTLE),
+      );
+      return screen.findByRole("dialog", { name: "Tarmogoyf" }, SETTLE);
+    };
+
+    // Opened once, so the figure is in the cache — and closed: the write below is made with no
+    // card open at all.
+    const owned = await figure(await open(), "Owned");
+    expect(owned).toBeGreaterThanOrEqual(3);
+    await userEvent.click(screen.getByRole("button", { name: "Close card" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    const actions = await act("Tarmogoyf, FUT 153");
+    await userEvent.click(within(actions).getByRole("button", { name: "One fewer Tarmogoyf" }));
+    await waitFor(async () => expect((await copy(8))?.quantity).toBe(2));
+    await userEvent.click(within(actions).getByRole("button", { name: "Close copy actions" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await reads(await open(), "Owned", owned - 1);
+  });
+});

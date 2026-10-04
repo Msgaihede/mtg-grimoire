@@ -370,10 +370,20 @@ no other path.
 | --- | --- | --- |
 | Windows | `MAIN-PC` | `COMPUTERNAME`. Measured on this machine, 2026-08-29, debug |
 | Linux / macOS | `HOSTNAME`, or `Desktop` | a shell variable that a process usually does **not** inherit, so the fallback is the ordinary answer there rather than the exceptional one |
+| Android | `HOSTNAME`, or `Android` | the same variable, which is usually not there. What a real phone mints has not been read off one |
+| A browser | `Browser` | nothing: a page is told no machine name, so the fallback is the only answer |
 
 **One question — the machine's hostname — and it is infallible**: failing to read a name must
 never stop a device minting an identity, so it falls back to a word rather than returning an
 error.
+
+**The word is the kind of machine, since 2026-10-04** — `platform::device::kind()`: `Desktop`,
+`Android`, `Browser`. It was `Desktop` on every host until the web host's first run drew
+"Desktop — not paired yet." in a browser tab, and this is the name every other device in a
+group files this one under. **A browser install cannot pair yet** — every command that would
+ask the relay is refused there in a sentence (`entitlement::NOT_FROM_A_BROWSER_YET`, until the
+light app's phase 6 gives the relay its CORS answers) — so the word is so far only what its
+own Devices panel reads.
 
 **The privacy trade was made knowingly and is the reader's, not this file's.** The comment on the
 old constant argued the other way — a hostname is often a person's own name and it would travel
@@ -3910,7 +3920,7 @@ verb, headers and body:
 | --- | --- | --- |
 | A relay request | `reqwest`, directly | `platform::http`: natively the same connect and read bounds; in a browser a whole-request `deadline` — **120 s** for the client (whose pull is unpaged), **30 s** for the entitlement — because `fetch` has no other bound and a request that never ended would be a Leave that never ran |
 | The pending offer | `AppState.pairing`, a `tokio::sync::Mutex` | `State.pairing`, a `platform::sync::Shared` — the same lock, on every host |
-| A device's default name | `COMPUTERNAME` / `HOSTNAME` read in `identity` | `platform::device::name()`; `None` in a browser, where `mint_name` falls back to its word |
+| A device's default name | `COMPUTERNAME` / `HOSTNAME` read in `identity` | `platform::device::name()`; `None` in a browser, where `mint_name` falls back to its word — `platform::device::kind()` since 2026-10-04: `Desktop`, `Android` or `Browser` |
 | The relay clients' per-call test client | `cfg(test)` | `cfg(any(test, feature = "testing"))`, because the desktop's sync tests link the core with `testing` on, and a dependency's `cfg(test)` is off |
 | A client that cannot be built | `reqwest`'s builder `.unwrap_or_default()`, a client with no timeouts | `platform::http::Client::new`'s `expect`, as every other client in the core has panicked since the I/O step — unreachable with a fixed configuration, and a panic beats a client with no bounds |
 | `client::kind_of` | an `is_status()` arm answering `Http` | gone: only `error_for_status` builds that error, and neither file ever called it |

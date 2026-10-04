@@ -294,6 +294,10 @@ describe("connect-src, against the hosts the engine asks", () => {
     // Sync in a browser is not built, and the relay's CORS allow-list does not name this origin,
     // so the request fails either way. **Phase 6 deletes this test** in the change that adds
     // the host here and the origin there — and replaces it with the row above.
+    //
+    // Since step 5.5b the engine refuses a relay call on a page before anything is sent
+    // (`sync_engine::entitlement::NOT_FROM_A_BROWSER_YET`), so this absence is no longer what
+    // a reader hits first: it is the fence behind that refusal, and goes in the same change.
     expect(csp["connect-src"]).not.toContain(origin(RELAY_BASE));
   });
 

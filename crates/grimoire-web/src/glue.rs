@@ -77,7 +77,9 @@ pub fn instantiated() {
 ///
 /// **`already-open` is the one-tab guard, and it fires at the install**: a second document of
 /// this origin cannot take the pool's access handles, and is refused before it names a
-/// database. Not retried and not queued — the first tab wins and the second says so.
+/// database. Not retried and not queued **here** — the first tab wins. What the page makes
+/// of the refusal is its own: it tells a second tab so, and asks again, with a new Worker,
+/// when the Web Lock says no other document is alive (`src/lib/core/web/holder.ts`).
 ///
 /// **A `ready` answer starts the launch's downloads and does not wait for them**
 /// ([`host::launch_downloads`]): the card sync and then, one after another, the optional

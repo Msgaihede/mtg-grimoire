@@ -146,8 +146,8 @@ export function usePrintingDwell(): PrintingDwell {
    * is already `null` does not commit — but React may still *render* the component once before
    * discovering that, and one commit is enough to matter: `CardModalPrintings` calls `cancel`
    * from an effect keyed on its rows, so a list re-rendering while a write is in flight got an
-   * extra pass, and `CardDetailModal`'s grimoire counts — which refresh on the falling edge of
-   * `useIsMutating` — stopped seeing the edge. Found 2026-09-04 by a counts test going red on a
+   * extra pass, and `CardDetailModal`'s grimoire counts — which refreshed, then, on the falling edge
+   * of `useIsMutating` — stopped seeing the edge. Found 2026-09-04 by a counts test going red on a
    * change that had nothing to do with counts.
    */
   const shownRef = useRef<Shown | null>(null);

@@ -51,9 +51,6 @@ pub struct Device {
 /// carry faithfully. A `MARKUS-PC` is fifteen; Windows cannot exceed that.
 const MAX_NAME_LEN: usize = 64;
 
-/// What a desktop calls itself when the environment will not say.
-const FALLBACK_DESKTOP: &str = "Desktop";
-
 /// The one string every install used to share, and the only name [`ensure`] will overwrite.
 ///
 /// Kept as a constant rather than spelled inline because two places must agree on it exactly:
@@ -85,14 +82,19 @@ pub(crate) const PLACEHOLDER: &str = "This device";
 /// error.
 fn mint_name() -> String {
     // `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere — [`crate::platform::device::name`],
-    // which has the reasons. **`HOSTNAME` is usually not exported to a process**, so
-    // `FALLBACK_DESKTOP` is the ordinary answer on Linux and macOS rather than the exceptional
-    // one, and it is the only answer in a browser, which is told no such thing.
+    // which has the reasons. **`HOSTNAME` is usually not exported to a process**, so the
+    // fallback is the ordinary answer on Linux and macOS rather than the exceptional one, and
+    // it is the only answer in a browser, which is told no such thing.
+    //
+    // **The fallback is the kind of machine this is** (`platform::device::kind`): `Desktop`,
+    // `Android`, `Browser`. It was the word `Desktop` on every host until a browser install
+    // drew "Desktop — not paired yet." — and this is the name every other device in a group
+    // files this one under.
     let name = crate::platform::device::name()
         .map(|v| tidy(&v))
         .unwrap_or_default();
     if name.is_empty() {
-        return FALLBACK_DESKTOP.to_owned();
+        return crate::platform::device::kind().to_owned();
     }
     name
 }
@@ -1505,6 +1507,19 @@ mod tests {
 
         // ...and it settles: a second launch mints nothing new.
         assert_eq!(ensure(&conn).unwrap().name, upgraded.name);
+    }
+
+    /// **A browser install calls itself a browser.** A page is told no machine name, so the
+    /// name it mints is the fallback — and that word is what every other device in a group
+    /// files this one under. It was `Desktop` on every host.
+    #[test]
+    fn a_device_minted_on_a_page_is_called_a_browser() {
+        let conn = db();
+        let _page = crate::platform::host::emulate_page();
+        assert_eq!(mint_name(), "Browser");
+        let me = ensure(&conn).unwrap();
+        assert_eq!(me.name, "Browser");
+        assert_eq!(ensure(&conn).unwrap().name, "Browser", "and it settles");
     }
 
     /// **A reader who renamed this device is never renamed back**, however many times `ensure`

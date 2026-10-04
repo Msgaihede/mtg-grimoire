@@ -86,12 +86,28 @@ export function wasmContentType(file: string): string {
 }
 
 /**
+ * **Where nothing is a page**, whatever the caller accepts: the two trees a build writes its
+ * files into, the tree the service worker answers card pictures under (`src/lib/images.ts`'s
+ * `WEB_IMAGE_PREFIX`; `assets.test.ts` holds this spelling to that constant), and `/_headers`,
+ * which a host parses and does not serve.
+ *
+ * A path under any of them names a file or nothing. Answered with the document, a chunk a
+ * deploy renamed would be a 200 of HTML where a script was asked for, and a picture a page asks
+ * for before its service worker controls it would be a 200 a cache has no reason to refuse.
+ *
+ * **Here, and read by {@link isNavigation}, so the dev server, the preview, the smoke run's
+ * server and the hosting Worker's script answer by one rule.** It was the Worker's own list
+ * until the three local servers were found handing the document to `/mtgimg/x`.
+ */
+export const NOT_A_PLACE: readonly string[] = ["/assets/", "/wasm/", "/mtgimg/", "/_headers"];
+
+/**
  * Whether a request is a page navigation the app's document answers — the history fallback its
  * path-based URLs need (`/decks/12` must load the app, not 404).
  *
- * A file has an extension and a Vite internal starts `/@`; neither is a page. The extension is
- * asked of the **last segment**: a dot further up the path is part of a route, and reading it as
- * a file would hand that route the wrong document.
+ * A file has an extension and a Vite internal starts `/@`; neither is a page, and nothing under
+ * {@link NOT_A_PLACE} is. The extension is asked of the **last segment**: a dot further up the
+ * path is part of a route, and reading it as a file would hand that route the wrong document.
  */
 export function isNavigation(
   method: string | undefined,
@@ -102,6 +118,7 @@ export function isNavigation(
     method === "GET" &&
     String(accept ?? "").includes("text/html") &&
     !path.slice(path.lastIndexOf("/") + 1).includes(".") &&
-    !path.startsWith("/@")
+    !path.startsWith("/@") &&
+    !NOT_A_PLACE.some((tree) => path.startsWith(tree))
   );
 }

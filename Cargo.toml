@@ -104,25 +104,50 @@ opt-level = 3
 #
 # What it adds, each for a module a phone downloads once and then runs an ingest in:
 # - `lto = "fat"` and `codegen-units = 1` — one unit for the whole graph, so what no export
-#   reaches is dropped rather than carried. ⚠️ **One thing is carried that should not be**: the
-#   core links the card scanner, the scanner's `ocrs` comes with its default `export-wasm`
-#   feature, and that feature's `#[wasm_bindgen]` classes (`OcrEngine` and nine more) are
-#   exports of *this* module — roots that keep the whole OCR runtime in a build that calls none
-#   of it. Measured 2026-10-04 in a scratch copy of the tree with that one feature off:
-#   6 703 909 B against 8 547 708 B, and three exported classes (`reqwest`'s streams) against
-#   ten. The cure is one line in `crates/card-scanner/Cargo.toml` — `default-features = false`
-#   on `ocrs`, keeping its `rten` — and is not made here.
+#   reaches is dropped rather than carried. **That is the whole of how the card scanner stays
+#   out of this module**: the core links it on every target, no command in the table reaches
+#   its session, and so its detection, its hashes, `ocrs`, the eleven `rten*` crates and the
+#   image codecs are all dropped at link time — read off the name section on 2026-10-04, what
+#   is left of the scanner is 35 583 B of code: the review tray's and the preferences' reads
+#   and writes, which a browser does call, and the drop glue of what they name. ⚠️ **An export is a root, and that is how it went wrong
+#   once**: `ocrs`'s default `export-wasm` feature is a `#[wasm_bindgen]` API of its own, its
+#   seven classes were exports of *this* module, and they kept the whole OCR runtime — 1 882 984 B
+#   — in a build that calls none of it. `crates/card-scanner/Cargo.toml` takes `ocrs` without
+#   its defaults since step 5.5; the glue now exports `reqwest`'s three stream classes and
+#   nothing else that is not ours. **A new class in `dist-wasm/grimoire_web.js` is the symptom
+#   to look for**, and no build fails on one.
 # - `panic = "abort"` — what this target does anyway (there is no unwinding on
 #   `wasm32-unknown-unknown`), said, so no landing pad is emitted for one.
 # - **`opt-level` is left at `release`'s 3.** SQLite's C is compiled at the profile's level
-#   too, and the first web host's figures — a 15.6–16.3 s first ingest, a 53 ms search — were
-#   taken at 3; a size-optimised level has not been timed in a browser, and a smaller module
-#   that ingests slower is not an obvious trade for a download a service worker caches. What
-#   `"s"` would buy is measured: 7 036 825 B against 8 547 708 B, the same day.
+#   too — `sqlite-wasm-rs`'s build script hands `cc` the profile's `OPT_LEVEL` — and the first
+#   web host's figures, a 15.6–16.3 s first ingest and a 53 ms search, were taken at 3. What a
+#   size-optimised level buys is the table below; **what it costs was timed in a browser, and
+#   is why 3 stays** — four first runs of each build in headless Chrome 154, the same bytes off
+#   loopback for all of them: the card phase's download and ingest was 14.03 s at 3, 16.38 s
+#   at `"s"`, 21.03 s at `"z"`, and 16.38 s again with only SQLite's C left at 3 — so the cost
+#   is in the Rust, and that last build buys nothing back. Searches, the finishes and a reload
+#   did not separate. `docs/reference/light-app.md` §9.6 has the table and what it does not
+#   prove: one desktop CPU, and no slow link.
 #
 # The script prints the module's size; the artifact lands in
-# `<target>/wasm32-unknown-unknown/wasm/`. Measured 2026-10-04, this machine, no `wasm-opt`:
-# 8 547 708 B without the function names and 10 146 090 B with them (`--names`).
+# `<target>/wasm32-unknown-unknown/wasm/`. **Measured 2026-10-04, step 5.5, this machine, no
+# `wasm-opt`, the name section stripped** — each a build of the same tree, differing in this
+# profile's `opt-level` alone (`CARGO_PROFILE_WASM_OPT_LEVEL` sets it without an edit here):
+#
+# | `opt-level` | Module | `gzip -9` | Its code section |
+# | --- | --- | --- | --- |
+# | 3 | 6 801 761 B | 2 388 746 B | 5 992 636 B |
+# | `"s"` | 5 535 141 B | 1 865 782 B | 4 714 312 B |
+# | `"z"` | 4 771 206 B | 1 617 653 B | 3 938 573 B |
+# | `"s"`, with `[profile.wasm.package.sqlite-wasm-rs] opt-level = 3` | 6 090 581 B | 2 055 851 B | — |
+#
+# **Of what `"s"` takes out of the code, 547 320 B of 1 278 324 is SQLite's C** (1 303 141 B at
+# 3, 755 821 B at `"s"`), which is the ingest's own hot path — the last row is the build that
+# shrinks the Rust and leaves that alone. Before the `ocrs` line the module at 3 was
+# 8 684 745 B, 3 030 884 B through `gzip -9`. With the function names kept (`--names`) the
+# module at 3 is 7 729 043 B. **The table is of the tree the four were timed on; the module
+# that step shipped is 6 767 338 B, 2 372 783 B through `gzip -9`** — the same profile, with
+# the step's last engine changes in it — and was not timed again.
 [profile.wasm]
 inherits = "release"
 lto = "fat"

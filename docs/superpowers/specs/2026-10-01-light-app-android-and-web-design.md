@@ -796,7 +796,8 @@ fat LTO, one codegen unit and `panic = "abort"`), no `wasm-opt`, name section st
 2 982 372 B through `gzip -9`. Two causes were read off the build: the core is far larger than
 round one's subset, and the scanner's `ocrs` roots about 1.84 MB of OCR runtime nothing calls.
 Neither was cut in this step, because no size-optimised build has been timed in a browser; both
-are the last step's, with timings. **No other row of the table has a figure from this host
+are the last step's, with timings (taken there: the OCR runtime is out and `opt-level` stays 3
+— the last note of this section). **No other row of the table has a figure from this host
 yet** — there is no corpus in a browser to take one over.
 
 **The origin is `https://mtg-grimoire.app`** (Markus, 2026-10-04): a domain he bought on
@@ -928,8 +929,46 @@ The headers are a `_headers` file the web build emits into `dist-web/` and no ot
 reader. **No agent deployed it**, as this section says; the runbook is
 [`app-worker/README.md`](../../../app-worker/README.md), every probe in it is marked not yet
 run, and [light-app.md](../../reference/light-app.md) §9.5 is the record. This is the step's
-first half: the module's size with timings, CI's smoke run under the policy and the phase's
-end-to-end run are still to come — and after them sync, which is phase 6.
+first half; the module's size with timings, CI's smoke run under the policy and the phase's
+end-to-end run are the note below — and after them sync, which is phase 6.
+
+**Built 2026-10-04 (step 5.5, the phase's own run): the size settled by timings, and the built
+app driven on both faces.** Nothing deployed; headless Chrome 154.0.8037.95 on Windows 11, the
+built app on `localhost` under the hosting policy.
+
+- **The module is 6 767 338 B, 2 372 783 B through `gzip -9`, at `opt-level = 3`.** The
+  scanner's `ocrs` is taken without its `export-wasm` feature, which was 1 882 984 B of OCR
+  runtime nothing called. `"s"`, `"z"` and a build with only the Rust at `"s"` were each given
+  four first runs beside 3, and each was slower where a first run spends its time — `"s"` by
+  2.35 s on the card phase for 522 964 B less through `gzip -9` — so none was taken.
+- **The table's fourth column, from one run against the real hosts** (on the 6 801 761 B
+  build, before the last change to it):
+
+  | | Round one | Step 5.3, one run | Step 5.5, one run |
+  | --- | --- | --- | --- |
+  | WASM module | 2 642 182 B | 8 684 745 B | 6 801 761 B on the run; 6 767 338 B as shipped |
+  | First run | 117 606 rows, 15.6–16.3 s | `done` at 24.48 s | 118 470 cards, `done` at 20.88 s; every launch feed in at 43.81 s |
+  | Linear memory, peak | 148.6–171.6 MB | 205 979 648 B | 198 377 472 B |
+  | `search_cards` | median 53 ms, cold 134 ms | not taken | `dragon` + playable, 2 363 hits: first 52.3 ms, then a median of 48.95 |
+  | `facet_cards` | 5 ms | not taken | no text: 7.7 ms, then 4.3 |
+  | Storage | about 526 MB with every feed | 959 537 152 B in OPFS | 959 348 736 B in OPFS |
+
+- **"One tab" is built differently from how the list above and the first note say it.** The
+  second tab is no longer told by the pool's refusal: the document that holds the database
+  holds a Web Lock for its lifetime, a new document that finds it held is told at once and
+  starts no engine, and one that finds it free and is still refused is looking at a Worker of
+  a page that has gone — it asks again with a fresh Worker, for up to 10 s. The run found why:
+  a reload that landed inside a long engine call left the reader on the second-tab sentence
+  with no second tab open.
+- **A page does not ask the relay.** §7's first item is still unbuilt, so on a web install
+  every command that would reach the relay answers one sentence instead; phase 6 deletes that
+  refusal in the change that gives the relay its CORS answers.
+
+Zero policy violations across the run's tasks; the phone face's twelve reader tasks and the
+desktop face's nine all worked, with a reload offline, a second tab, the update flow and the
+cleared-storage notice. **One browser, one machine, and no phone**:
+[light-app.md](../../reference/light-app.md) §9.6 is the record, with the five things the run
+found and what only the owner can close.
 
 ---
 

@@ -6,6 +6,7 @@ import type { CallArgs, CallOptions, Core } from "../types";
 import { answerAsk } from "./sw/bridge";
 import { clearPictures, type CachesLike } from "./sw/pictures";
 import { UPDATE_READY, watchUpdates, type UpdateWatch, type WorkerContainer } from "./update";
+import { claimDatabase, retryDelay, type Claim, type LockManagerLike } from "./holder";
 import {
   callMessage,
   type FromWorker,
@@ -41,6 +42,21 @@ export const OPFS_DIRECTORY = "mtg-grimoire";
  */
 export const ALREADY_OPEN =
   "MTG Grimoire is already open in another tab of this browser. Close that tab, then reload this one.";
+
+/**
+ * What the reader is told when the pool stayed taken and **no other tab holds the lock** — so it
+ * must not say one is open. `holder.ts` has what this is: a Worker of a page that has gone, still
+ * inside the engine past every retry — or a tab of a build from before the lock, which is why
+ * the sentence still says where to look. A reload asks again.
+ */
+export const STILL_HELD =
+  "MTG Grimoire could not open your collection: this browser has not let go of it yet. " +
+  "Reload to try again. If the app is open in another window, close that one first.";
+
+/** One line for the console when the open needed more than one ask. A bug report can carry it. */
+export const retriedLine = (attempts: number, waited: number): string =>
+  `MTG Grimoire: the database was still held by a page that had gone — opened on attempt ` +
+  `${attempts}, ${waited} ms after the first`;
 
 /** What the reader is told when there was no engine to open anything with. */
 const unloaded = (detail: string): string =>
@@ -81,6 +97,8 @@ export interface WorkerPort {
   postMessage(message: ToWorker, transfer: ArrayBuffer[]): void;
   addEventListener(type: "message", listener: (event: { data: FromWorker }) => void): void;
   addEventListener(type: "error", listener: (event: { message?: string }) => void): void;
+  /** End it. For a Worker whose open was refused: it is replaced, never asked twice. */
+  terminate(): void;
 }
 
 /** The engine's command for where a picture is — asked on the service worker's behalf. */
@@ -119,6 +137,10 @@ export interface Browser {
   workers?: WorkerContainer;
   /** The document, for the update flow's one reload. */
   page?: Page;
+  /** `navigator.locks`: how a document says, for as long as it lives, that the database is its. */
+  locks?: LockManagerLike;
+  /** Run `run` after `ms` — `setTimeout`, handed in so the suite owns the wait between retries. */
+  after?: (ms: number, run: () => void) => void;
   /** Unix milliseconds. */
   now: () => number;
 }
@@ -153,6 +175,7 @@ function pageBrowser(): Browser {
           if (globalThis.document.visibilityState === "visible") heard();
         }),
     },
+    locks: reach(() => globalThis.navigator.locks),
     now: () => Date.now(),
   };
 }
@@ -166,11 +189,20 @@ interface Pending {
 /**
  * **The web host's `Core`: every command to the database Worker** (the light-app spec §3.5).
  *
- * - **One Worker, made on the first use and never again.** `spawn` is a factory so that nothing
- *   is created at import; the first call or subscription makes the Worker and asks it to open the
- *   database, and every later one finds both done. The page asks once however many times React
- *   mounts the gate — StrictMode runs its effect twice, and a face crossing mounts a new face's
- *   worth of queries — which is the page's half of the rule `engine.ts` states for the Worker.
+ * - **One Worker, made on the first use and never again — unless its open was refused because
+ *   the pool was still held.** `spawn` is a factory so that nothing is created at import; the
+ *   first call or subscription makes the Worker and asks it to open the database, and every later
+ *   one finds both done. The page asks once however many times React mounts the gate —
+ *   StrictMode runs its effect twice, and a face crossing mounts a new face's worth of queries —
+ *   which is the page's half of the rule `engine.ts` states for the Worker.
+ * - **A second tab is told by a lock, and a pool that is merely still being let go is asked
+ *   again** (`holder.ts`, which has the measurement). The document asks for a Web Lock before it
+ *   starts an engine: held by another document, it is a second tab and is told so at once; its
+ *   own, it opens — and an `already-open` it then meets is a Worker of a page that has gone,
+ *   still holding its handles, so the refused Worker is ended and a fresh one asked, on a short
+ *   backoff, with the gate still `loading`. Only when the bound is spent does it say anything,
+ *   and not that another tab is open. A browser with no Web Locks cannot tell the two apart: it
+ *   retries the same, and then says the second-tab sentence, which is the likelier truth by then.
  * - **Ids and not order.** The Worker answers a slow search after a fast one sent later, so a
  *   pending call is kept by its id and settled by that alone.
  * - **A call made before the database is open waits; it is not refused.** Calls are held here
@@ -229,6 +261,14 @@ export function createWebCore(
   const whenSettled = new Promise<void>((resolve) => (settled = resolve));
   /** The service worker's registration and its waiting build. Unset where there is no worker. */
   let updates: UpdateWatch | undefined;
+  /** What asking for the database's lock found. `unknown` until asked, and where nobody could be. */
+  let claim: Claim = "unknown";
+  /** Lets the lock go for a document whose database did not open. */
+  let letGo: () => void = () => undefined;
+  /** How many Workers have been asked to open, and when the first was refused as `already-open`. */
+  let attempts = 0;
+  let refusedAt: number | undefined;
+  const after = browser.after ?? ((ms: number, run: () => void) => void setTimeout(run, ms));
 
   const emit = (event: string, payload: unknown): void => {
     // A copy: a handler may unsubscribe itself, and the gate's does.
@@ -272,7 +312,19 @@ export function createWebCore(
     const waiting = held;
     held = [];
     if (next.state === "ready") waiting.forEach(send);
-    else if (next.state === "failed") rejectAll(next.message);
+    else if (next.state === "failed") {
+      rejectAll(next.message);
+      // A document whose database did not open must hold nothing, and must not look to the next
+      // tab as if it did. **The Worker first, then the lock**: the engine installs the pool
+      // before it opens a database, so a Worker whose open failed — or was refused part-way
+      // through taking the pool's handles — still holds them for as long as it lives, and with
+      // only the lock let go the next tab would find the lock free, the pool taken, and wait out
+      // its whole bound on a page that will never open. Nothing is lost by ending it: every call
+      // is refused from here on, and only a new document opens a database.
+      worker?.terminate();
+      worker = undefined;
+      letGo();
+    }
     settled();
     emit(STARTUP_CHANGED, next);
   }
@@ -401,13 +453,45 @@ export function createWebCore(
     }
   }
 
+  /**
+   * The pool answered `already-open`. Answers whether the open is being asked again — and then
+   * nothing about this answer is said or noted: to the gate it has not happened.
+   *
+   * **Only for a document that is not known to have a neighbour.** With the lock its own, the
+   * holder is a Worker whose page has gone (`holder.ts`); with nobody to ask, it may be, and the
+   * retry is how to find out. The refused Worker is ended before the wait — it may have taken
+   * some of the pool's handles before it met one it could not — and the next ask is a new one,
+   * because a Worker memoises its open and would answer the same refusal for ever.
+   */
+  function askAgain(): boolean {
+    if (status.state !== "loading") return false;
+    refusedAt ??= browser.now();
+    const delay = retryDelay(attempts, browser.now() - refusedAt);
+    if (delay === null) return false;
+    worker?.terminate();
+    worker = undefined;
+    after(delay, open);
+    return true;
+  }
+
   function receive(message: FromWorker): void {
     switch (message.kind) {
       case "opened":
+        if (message.opened.kind === "already-open") {
+          if (askAgain()) return;
+          // The bound is spent. Holding the lock, there is no other tab to name.
+          if (claim === "ours") {
+            openedIn(message.existed, false);
+            return settle({ state: "failed", message: STILL_HELD, reload: true });
+          }
+        }
         if (message.opened.kind === "ready") {
           // The journal each file actually got, said where a bug report can carry it. The OPFS
           // pool refuses WAL, so `delete` is the expected answer and anything else is news.
           console.info(openedLine(message.opened));
+          if (attempts > 1 && refusedAt !== undefined) {
+            console.info(retriedLine(attempts, browser.now() - refusedAt));
+          }
         }
         openedIn(message.existed, message.opened.kind === "ready");
         return settle(statusOf(message.opened));
@@ -465,19 +549,51 @@ export function createWebCore(
     rejectAll(dead);
   }
 
-  function start(): void {
-    if (started) return;
-    started = true;
-    if (browser.workers) serve(core, browser.workers);
+  /**
+   * Make a Worker and ask it to open the database. The first time, and again after each refusal
+   * {@link askAgain} took.
+   *
+   * **A Worker that is no longer the one is not heard.** A refused one is ended before the next
+   * is made, and a message it had already posted — or an `error` on its way down — would be
+   * read as the new Worker's.
+   */
+  function open(): void {
+    // The gate may have closed while the wait ran: an engine that never loaded, on an earlier ask.
+    if (status.state !== "loading") return;
+    attempts += 1;
     try {
-      worker = spawn();
-      worker.addEventListener("message", (event) => receive(event.data));
-      worker.addEventListener("error", (event) => crashed(event.message));
-      worker.postMessage({ kind: "open", directory }, []);
+      const made = spawn();
+      worker = made;
+      made.addEventListener("message", (event) => {
+        if (worker === made) receive(event.data);
+      });
+      made.addEventListener("error", (event) => {
+        if (worker === made) crashed(event.message);
+      });
+      made.postMessage({ kind: "open", directory }, []);
     } catch (error) {
       // No Worker at all — a browser without module workers, or a policy that refuses one.
       crashed(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  function start(): void {
+    if (started) return;
+    started = true;
+    if (browser.workers) serve(core, browser.workers);
+    // With nobody to ask, the engine is started in this turn, as it always was.
+    if (browser.locks === undefined) return open();
+    // **The lock before the engine**, so that the document holding the one is the document that
+    // may open the other: started side by side, two tabs opened together could each win one.
+    const claimed = claimDatabase(browser.locks);
+    letGo = claimed.release;
+    void claimed.claim.then((found) => {
+      claim = found;
+      // Another living document has it: a second tab, told at once, with no engine started —
+      // there is nothing a Worker could add, and nothing for it to hold while it tried.
+      if (found === "elsewhere") return settle(statusOf({ kind: "already-open" }));
+      open();
+    });
   }
 
   const core: Core = {

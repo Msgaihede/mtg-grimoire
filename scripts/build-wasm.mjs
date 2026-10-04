@@ -9,7 +9,8 @@
 // files, and prints the module's size in bytes and how long the build took.
 //
 // **The function names are taken out unless `--names` asks for them.** They are a custom
-// section nothing executes — 1.6 MB of a 10.1 MB module, measured 2026-10-04 — and what they
+// section nothing executes — 927 282 B of a 7 729 043 B module, measured 2026-10-04 at step
+// 5.5 (it was 1.6 MB of 10.1 MB while the module still carried an OCR runtime) — and what they
 // buy is a named wasm frame in a trap's stack. A panic's own sentence and its file and line do
 // not need them: the panic hook writes those to the Worker's console either way.
 //

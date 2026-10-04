@@ -12,6 +12,7 @@ import {
   buildIdOf,
   GLUE_FILE,
   isNavigation,
+  NOT_A_PLACE,
   WASM_FILE,
   wasmContentType,
   wasmFileOf,
@@ -59,12 +60,32 @@ function lightEntry(): Plugin {
     // and an unenforced plugin here would rename a file that has not been emitted yet.
     enforce: "post",
     configureServer(server) {
-      server.middlewares.use((request, _res, next) => {
+      server.middlewares.use((request, response, next) => {
         // Connect's request extends Node's `IncomingMessage`, and `@types/node` is never
         // installed here — so the type arrives with none of the fields read below. A cast on the
         // one read, for `vite.config.ts`'s reason about `process`.
         const req = request as unknown as Asked;
-        if (isNavigation(req.method, req.headers.accept, pathOf(req))) req.url = `/${ENTRY}`;
+        const path = pathOf(req);
+        if (isNavigation(req.method, req.headers.accept, path)) {
+          req.url = `/${ENTRY}`;
+          return next();
+        }
+        // **A page asked for where nothing is a page is a 404 here too** (`NOT_A_PLACE`). Left to
+        // Vite, its own single-page fallback would answer `/mtgimg/x` or `/assets/chunk` with
+        // `/index.html` — which at this root is the *desktop's* document. Only what that
+        // fallback would have taken: a path with a file on the end is Vite's to serve or refuse.
+        const fallsBack =
+          req.method === "GET" &&
+          String(req.headers.accept ?? "").includes("text/html") &&
+          !path.slice(path.lastIndexOf("/") + 1).includes(".");
+        if (fallsBack && NOT_A_PLACE.some((tree) => path.startsWith(tree))) {
+          const res = response as unknown as Answer;
+          res.statusCode = 404;
+          res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader("X-Content-Type-Options", "nosniff");
+          res.setHeader("Cache-Control", "no-store");
+          return res.end("Not found");
+        }
         next();
       });
     },
@@ -214,8 +235,10 @@ const WEB_BUILD = fileURLToPath(new URL("./dist-web", import.meta.url));
  *   Content-Security-Policy meets the app on `localhost` and not first on the day of a deploy.
  *   The *built* copy, because a preview serves the build. **A file that is not there gets none
  *   of them**, as on the host: there the 404 is the Worker's own answer, which `_headers` does
- *   not reach — and a year's `immutable` on a 404 is a chunk no rebuild could bring back.
- *   **`/_headers` itself is a 404**, as on the host, which parses the file and does not serve it.
+ *   not reach — and a year's `immutable` on a 404 is a chunk no rebuild could bring back. **It
+ *   gets the host's 404 instead** — `text/plain`, `nosniff`, `no-store` — written here, for
+ *   every path that is neither a file of the build's nor a place in the app.
+ *   **`/_headers` itself is one**, as on the host, which parses the file and does not serve it.
  *
  * **Not in dev.** Vite's dev server injects `<style>` elements and an inline preamble and talks
  * to the page over a WebSocket, each of which the shipped policy forbids on purpose.
@@ -237,21 +260,33 @@ function webHosting(): Plugin {
         const req = request as unknown as Asked;
         const path = pathOf(req);
         const res = response as unknown as Answer;
-        // The host parses this file and does not serve it. Served here, a service worker whose
-        // precache list named it would install in the preview and fail on the day of a deploy.
-        if (path === "/_headers") {
+        const onDisk = WEB_BUILD + path;
+        // A file of the build's — and never `_headers`, which the host parses and does not
+        // serve: served here, a service worker whose precache list named it would install in
+        // the preview and fail on the day of a deploy. A path that climbs is nobody's file.
+        // **`/` is the document's own address**, a file to every caller: the service worker's
+        // precache asks for it with `Accept: */*`, which is no navigation.
+        const file =
+          path === "/" ||
+          (path !== "/_headers" &&
+            !path.includes("..") &&
+            existsSync(onDisk) &&
+            statSync(onDisk).isFile());
+        if (!file && !isNavigation(req.method, req.headers.accept, path)) {
+          // **The host's own 404, word for word** (`app-worker/src/index.ts`'s `REFUSAL`): plain
+          // text nothing may sniff into something else, and nothing may keep — the same address
+          // is a real file the moment a build puts one there. Answered here rather than left to
+          // Vite, whose bare 404 carries none of the three. `isNavigation` knows the trees where
+          // nothing is a place, so `/mtgimg/x` asked for as a page ends here too, as on the host.
           res.statusCode = 404;
           res.setHeader("Content-Type", "text/plain; charset=utf-8");
+          res.setHeader("X-Content-Type-Options", "nosniff");
           res.setHeader("Cache-Control", "no-store");
           res.end("Not found");
           return;
         }
-        const answered =
-          isNavigation(req.method, req.headers.accept, path) || existsSync(WEB_BUILD + path);
-        if (answered) {
-          for (const [name, value] of Object.entries(headersFor(rules, path))) {
-            res.setHeader(name, value);
-          }
+        for (const [name, value] of Object.entries(headersFor(rules, path))) {
+          res.setHeader(name, value);
         }
         next();
       });
@@ -283,7 +318,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
     // order its plugin is listed, and this one only *sets headers and passes on*: listed after a
     // plugin that answers — `web:engine`'s rewrite of a navigation, or the service worker's
     // middleware for `/sw.js` (`vite.sw.ts`), which ends the response itself — that answer would
-    // leave without the policy, and the one local server that enforces it would have a hole
+    // leave without the policy, and a local server that enforces it would have a hole
     // exactly where a worker's script is served. Listed first, its headers are already on the
     // response when the service worker's middleware writes its own `Cache-Control: no-cache` over
     // the same value and ends it.

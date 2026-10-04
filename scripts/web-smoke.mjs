@@ -5,8 +5,12 @@
 //
 // A green suite proves the host it ran on, and no suite runs the WASM module: vitest drives the
 // Worker's logic over a fake, and cargo compiles the engine for a browser without starting one.
-// This is the run that instantiates it. It serves `dist-web/`, opens it in headless Chromium over
-// the DevTools protocol, and asks fourteen things, in this order:
+// This is the run that instantiates it. It serves `dist-web/` **as the production host will** —
+// every response under the headers `dist-web/_headers` gives its address, the
+// Content-Security-Policy among them, and a miss as the hosting Worker's own 404 — opens it in
+// headless Chromium over the DevTools protocol, and asks sixteen things, in this order — the
+// first fifteen of one browser, and the last of a second, because it needs a first run of its
+// own:
 //
 //   1. the app got past its startup gate — the engine loaded, and opened and migrated a database
 //      on a rollback journal, which the page says on its console
@@ -22,10 +26,10 @@
 //      nothing in the error log
 //   8. Settings offers the price lists this host can reach: Mana Pool greyed, and Card Kingdom
 //      downloaded and stored when it is picked
-//   9. **offline** — the server refusing every connection and every other host gone — a reload
-//      draws the app, opens the database, answers a search and draws the cached picture, having
-//      asked no host for anything; back online, a check forced past its interval asks for the
-//      card listing and for no card file
+//   9. **offline** — the server refusing every connection, every other host gone and the HTTP
+//      cache emptied — a reload draws the app, opens the database, answers a search and draws
+//      the cached picture, having asked no host for anything; back online, a check forced past
+//      its interval asks for the card listing and for no card file
 //  10. Settings' Clear cache empties the picture cache and leaves the shell
 //  11. a second tab is told the app is open elsewhere, and offered a reload
 //  12. a new build of the worker installs and *waits*: the page draws its bar, a second shell
@@ -34,11 +38,19 @@
 //      build's shell alone, with no bar — and the second tab is neither told nor reloaded
 //  14. no request would cost a CORS pre-flight — the worker's picture fetch included — and none
 //      went to a host this script has no answer for
+//  15. the host's Content-Security-Policy refused nothing, anywhere: not in a page, not in the
+//      engine's Worker, not in the service worker (`watchPolicy` has why those are three)
+//  16. on a fresh profile whose card file is thirty thousand cards, a reload made the moment
+//      the engine stops answering — it is inside a synchronous call, and the Worker the page
+//      leaves behind still holds the database — draws the app and no refusal, and the page says
+//      it had to ask again (`reloadInsideTheIngest` has why that line is the check, and what
+//      happens when the reload misses). Under the same policy, with the same two fences.
 //
 // **No request leaves the machine.** The engine starts the launch's downloads the moment the
 // database opens, and the service worker fetches a picture for every tile, so every
 // cross-origin request is paused by the DevTools `Fetch` domain and answered from
-// `scripts/web-smoke/` with the headers the real host sends. Two fences stand behind that: a
+// `scripts/web-smoke/` with the headers the real host sends — the sixteenth check's card file
+// excepted, which is those six cards grown in memory. Two fences stand behind that: a
 // request to a host with no fixture is failed *and fails the run*, and the browser is started
 // with a resolver that knows no name but `localhost`, so a request the interception never saw
 // cannot be answered by anyone.
@@ -60,13 +72,17 @@
 // else the first of Chrome and Edge found where they install.
 
 import { spawn } from "node:child_process";
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, extname, join, normalize, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
+// Plain TypeScript with nothing but erasable types, which Node strips as it loads: the host's own
+// reader of `_headers`, and the rule its script and both local servers tell a place by.
+import { headersFor, parseHeaders } from "../app-worker/src/headers.ts";
+import { isNavigation } from "../src/lib/core/web/assets.ts";
 
 const DIST = resolve("dist-web");
 /** What the hosts answer with. Beside this file, so it is found whatever the working directory. */
@@ -85,6 +101,7 @@ const TYPES = {
   ".webmanifest": "application/manifest+json",
   ".svg": "image/svg+xml",
   ".png": "image/png",
+  ".woff": "font/woff",
   ".woff2": "font/woff2",
   // Chromium refuses to stream-compile a module served as anything else.
   ".wasm": "application/wasm",
@@ -181,8 +198,11 @@ function pictureAddress(path) {
  * - **Every picture address the six cards name is answered with one small WebP** (`card.webp`,
  *   50 × 70, encoded by Chrome's own canvas): four sizes of each card or face. The service
  *   worker asks with CORS and rebuilds what it stores from the bytes and the `Content-Type`.
+ *
+ * `cardFile` is the card file's lines when they are not the committed six; the listing's
+ * `compressed_size` follows it, being read off the bytes.
  */
-function fixtures() {
+function fixtures(cardFile) {
   const read = (name) => readFileSync(join(FIXTURES, name));
   /** `body` as a page reads a response the host gzipped in transit. `declares` is whether the
    *  host sent a `Content-Length` at all: Scryfall's `/sets` and Card Kingdom do not. */
@@ -223,7 +243,8 @@ function fixtures() {
       api,
       true,
     );
-  const cards = gzipSync(read("default-cards.jsonl"));
+  // The committed six cards, unless a check brought a card file of its own ({@link grownCards}).
+  const cards = gzipSync(cardFile ?? read("default-cards.jsonl"));
   const oracle = gzipSync(read("oracle-tags.jsonl"));
   const art = gzipSync(read("art-tags.jsonl"));
   const picture = {
@@ -343,22 +364,30 @@ function preflightCost(request, userAgent) {
 // The server and the browser
 // ---------------------------------------------------------------------------------------------
 
+/** What the hosting Worker's script answers a miss with (`app-worker/src/index.ts`'s `REFUSAL`). */
+const NOT_FOUND = {
+  "Content-Type": "text/plain; charset=utf-8",
+  "X-Content-Type-Options": "nosniff",
+  "Cache-Control": "no-store",
+};
+
 /**
- * `dist-web/` on a port of the system's choosing, as a static host serves it — and two things a
- * check changes about that host while the run goes on (`site`).
+ * `dist-web/` on a port of the system's choosing, **answered as the production host answers
+ * it** — and two things a check changes about that host while the run goes on (`site`).
  *
- * - **A place gets the document; a file gets itself or a bare 404.** An address with no
- *   extension is a place in the app — except under the picture prefix, which is the service
- *   worker's alone: a host that handed the document to `/mtgimg/…` would be a 200 of HTML to a
- *   page nothing controls yet, where the truth is that there is no picture there.
- * - **Everything is `no-cache`**, as the preview serves it: kept, and never used without asking
- *   again. So a new `sw.js` is found, and nothing this run reads offline can have come from the
- *   HTTP cache rather than from Cache Storage — a revalidation has nobody to ask.
- *   **Not `no-store`, which hangs the worker's install on this server** (measured, Chrome 154):
- *   the precache starts all its fetches at once and reads no body until every one has
- *   answered, an uncacheable body leaves its socket only as fast as its reader takes it, and
- *   HTTP/1.1 has six sockets to a host. Seven of the 42 requests reached the server, and the
- *   worker stayed `installing` for good.
+ * - **Every 200 carries what `dist-web/_headers` says that address is sent**, read by the
+ *   hosting Worker's own reader (`app-worker/src/headers.ts`) and matched against the path the
+ *   browser asked, never the file that answered it. So the Content-Security-Policy, `nosniff`
+ *   and each tree's `Cache-Control` meet the app here, and not first on the day of a deploy.
+ * - **A file is itself; a place is the document; everything else is the host's bare 404.**
+ *   `/` is the document to every caller. A request that says it is a navigation
+ *   (`Sec-Fetch-Mode: navigate`) is answered with the document before the Worker's script
+ *   runs, as Cloudflare does; one that does not say is a place by `isNavigation`, the script's
+ *   own rule, which knows the trees where nothing is one — so `/mtgimg/…` asked for by an
+ *   `<img>`, a missing chunk and `/_headers` are each a 404 that nothing may keep.
+ * - **No `no-store` on the shell, and it matters less than it did.** The precache used to start
+ *   every fetch at once and read no body until all had answered; uncacheable bodies then held
+ *   all six of HTTP/1.1's sockets and the install never ended. It takes four at a time now.
  * - **`site.refusing` is the host gone**: every connection is dropped unanswered.
  * - **`site.build` is a second deploy**: `sw.js` is served with its build id — a literal in the
  *   file, and the whole of what names its shell cache — swapped for another, and nothing else
@@ -368,32 +397,41 @@ async function serve() {
   if (!existsSync(join(DIST, "index.html"))) {
     fail("dist-web/index.html is missing. Run `npm run web:wasm` and `npm run web:build` first.");
   }
+  if (!existsSync(join(DIST, "_headers"))) {
+    fail("dist-web/_headers is missing: the build did not emit the host's policy.");
+  }
+  const rules = parseHeaders(readFileSync(join(DIST, "_headers"), "utf8"));
   const site = { refusing: false, build: null };
   const server = createServer(async (request, response) => {
     if (site.refusing) return void request.socket.destroy();
     const path = decodeURIComponent((request.url ?? "/").split("?")[0]);
-    const file = normalize(join(DIST, path));
-    // A path that climbs out of the folder is nobody's request.
-    const inside = file === DIST || file.startsWith(DIST + sep);
-    const picture = path === PICTURE_PREFIX || path.startsWith(`${PICTURE_PREFIX}/`);
-    // An address with no extension is a place in the app, and every place is the one document.
-    const target =
-      !inside || picture ? null : extname(file) === "" ? join(DIST, "index.html") : file;
-    try {
-      if (target === null) throw new Error("outside");
-      let body = await readFile(target);
-      if (path === "/sw.js" && site.build) {
-        body = Buffer.from(body.toString("utf8").replace(site.build.from, site.build.to));
-      }
-      response.writeHead(200, {
-        "Content-Type": TYPES[extname(target)] ?? "application/octet-stream",
-        "Cache-Control": "no-cache",
-      });
-      response.end(body);
-    } catch {
-      response.writeHead(404, { "Content-Type": "text/plain" });
-      response.end("not found");
+    const onDisk = normalize(join(DIST, path));
+    // A path that climbs out of the folder is nobody's file, and neither is the host's own.
+    const file =
+      onDisk.startsWith(DIST + sep) &&
+      path !== "/_headers" &&
+      existsSync(onDisk) &&
+      statSync(onDisk).isFile();
+    const place =
+      path === "/" ||
+      request.headers["sec-fetch-mode"] === "navigate" ||
+      isNavigation(request.method, request.headers.accept, path);
+    const target = file ? onDisk : place ? join(DIST, "index.html") : null;
+    if (target === null) {
+      response.writeHead(404, NOT_FOUND);
+      response.end("Not found");
+      return;
     }
+    let body = await readFile(target);
+    if (path === "/sw.js" && site.build) {
+      body = Buffer.from(body.toString("utf8").replace(site.build.from, site.build.to));
+    }
+    const sent = headersFor(rules, path);
+    response.writeHead(200, {
+      "Content-Type": TYPES[extname(target)] ?? "application/octet-stream",
+      ...sent,
+    });
+    response.end(body);
   });
   await new Promise((done) => server.listen(0, "127.0.0.1", done));
   undo.push(() => {
@@ -419,7 +457,8 @@ function browserPath() {
   return fail("no browser found. Set CHROME to a Chromium-based browser's executable.");
 }
 
-/** Start the browser and answer its DevTools address, which it prints once it is listening. */
+/** Start the browser and answer its DevTools address, which it prints once it is listening,
+ *  and the way to stop it. */
 async function launch(profile) {
   const args = [
     "--headless=new",
@@ -441,13 +480,14 @@ async function launch(profile) {
   if (process.env.CI) args.push("--no-sandbox");
   const child = spawn(browserPath(), args, { stdio: ["ignore", "ignore", "pipe"] });
   // Registered before anything can fail, so a browser that never listens is still stopped.
-  undo.push(() => child.kill());
+  const kill = () => child.kill();
+  undo.push(kill);
   let heard = "";
   return new Promise((found, lost) => {
     child.stderr.on("data", (chunk) => {
       heard += chunk;
       const hit = /DevTools listening on (ws:\/\/\S+)/.exec(heard);
-      if (hit) found(hit[1]);
+      if (hit) found({ address: hit[1], kill });
     });
     child.on("exit", (code) => lost(new Error(`the browser exited (${code}): ${heard}`)));
     // Unreferenced: a timer still pending must not hold a finished run open for its length.
@@ -467,13 +507,14 @@ async function connect(address) {
   let next = 0;
   const pending = new Map();
   const heard = [];
-  /** An event that has to be *answered* — a paused request — as well as kept. */
+  /** An event that is *acted on* — a paused request, a refusal — instead of kept: its
+   *  parameters, and the session it came from. */
   const handlers = new Map();
   socket.addEventListener("message", (event) => {
     const message = JSON.parse(event.data);
     if (message.id === undefined) {
       const handler = handlers.get(message.method);
-      if (handler) return void handler(message.params);
+      if (handler) return void handler(message.params, message.sessionId);
       return heard.push(message);
     }
     const waiter = pending.get(message.id);
@@ -499,13 +540,12 @@ async function connect(address) {
  *
  * **A request with no fixture, and one that would cost a pre-flight, are written down rather
  * than thrown**: this runs in the socket's listener, where a throw reaches nobody. `problems`
- * is read by every wait and once more at the end.
+ * is the run's one list of them — `watchPolicy` writes to it too — read by every wait and once
+ * more at the end.
  */
-async function intercept(browser, origin, userAgent) {
-  const routes = fixtures();
+async function intercept(browser, origin, userAgent, problems, routes) {
   /** Each cross-origin request that has a fixture, in order: `{ method, url, headers }`. */
   const asked = [];
-  const problems = [];
   /** URLs whose answer waits on a caller: `url -> promise`. */
   const held = new Map();
   /** No network: a request that has a fixture is still written down, and then fails. */
@@ -560,7 +600,8 @@ async function intercept(browser, origin, userAgent) {
     },
     /** Fail the run on anything written down so far. */
     check() {
-      if (problems.length > 0) fail(problems.join("\n"));
+      // Each once: an issue is reported again to a session that starts listening after it.
+      if (problems.length > 0) fail([...new Set(problems)].join("\n"));
     },
     /** Keep `url` unanswered until the returned function is called. */
     hold(url) {
@@ -573,14 +614,85 @@ async function intercept(browser, origin, userAgent) {
   };
 }
 
-/** A tab on `url`, with what it threw kept. `problems` is checked on every wait. */
-async function openPage(browser, url, problems) {
+/**
+ * Hear every Content-Security-Policy refusal, in every place one can happen, and write each
+ * down as a problem — which fails the run at the next wait.
+ *
+ * **Three targets, each under a policy of its own.** A page is held to the policy on its
+ * document; a dedicated Worker and a service worker are each held to the policy on *their own
+ * script's* response. So the engine's downloads are allowed or refused by what came with
+ * `assets/worker-*.js`, and a card picture's fetch by what came with `sw.js` — and a
+ * `securitypolicyviolation` listener on the page hears neither. Each target is therefore a
+ * DevTools session of its own here, asked for its `Audits` issues: a
+ * `ContentSecurityPolicyIssue` names the directive and what it refused — a connection, a
+ * picture, a script, a WebAssembly compile — and one raised before the session was listening is
+ * sent again when it starts. (A request the policy stopped also fails on `Network` with
+ * `blockedReason: "csp"`, but only for a page's own resources: a Worker's refused `fetch`
+ * never appears there. Measured, Chrome 154; so that domain is not asked.)
+ *
+ * **Attached once each, and that is load-bearing** (measured, Chrome 154): a service worker
+ * that two auto-attaching sessions both took — the browser's and the page's — never finished
+ * installing. So the browser's session takes service workers and nothing else, and a page's
+ * takes its dedicated Workers and nothing else.
+ */
+async function watchPolicy(browser, problems) {
+  /** Session → what it is, for the sentence. */
+  const targets = new Map();
+  const watch = async (sessionId, name) => {
+    targets.set(sessionId, name);
+    await browser.send("Audits.enable", {}, sessionId);
+  };
+
+  browser.on("Audits.issueAdded", ({ issue }, sessionId) => {
+    const refused = issue.details?.contentSecurityPolicyIssueDetails;
+    if (issue.code !== "ContentSecurityPolicyIssue" || !refused) return;
+    problems.push(
+      `the Content-Security-Policy on ${targets.get(sessionId)} was violated: ` +
+        `${refused.violatedDirective} (${refused.contentSecurityPolicyViolationType})` +
+        (refused.blockedURL ? ` refused ${refused.blockedURL}` : ""),
+    );
+  });
+  browser.on("Target.attachedToTarget", async ({ sessionId, targetInfo }) => {
+    // Held at its first instruction until it is being listened to, so nothing it does first
+    // goes unheard. A target that has already gone has nothing left to say.
+    await watch(sessionId, `${targetInfo.type} ${targetInfo.url}`).catch(() => undefined);
+    await browser.send("Runtime.runIfWaitingForDebugger", {}, sessionId).catch(() => undefined);
+  });
+  const attach = (only, sessionId) =>
+    browser.send(
+      "Target.setAutoAttach",
+      {
+        autoAttach: true,
+        waitForDebuggerOnStart: true,
+        flatten: true,
+        // The first entry that matches a target decides: this kind, and no other.
+        filter: [{ type: only }, { exclude: true }],
+      },
+      sessionId,
+    );
+  await attach("service_worker");
+
+  return {
+    /** Watch a page, and every dedicated Worker it starts. */
+    async page(sessionId, name) {
+      await watch(sessionId, name);
+      await attach("worker", sessionId);
+    },
+    /** Every target that was listened to, by what it is. */
+    watched: () => [...targets.values()],
+  };
+}
+
+/** A tab on `url`, with what it threw kept. `problems` is checked on every wait, and `policy`
+ *  is told of the tab before it loads anything. */
+async function openPage(browser, url, problems, policy) {
   const { targetId } = await browser.send("Target.createTarget", { url: "about:blank" });
   const { sessionId } = await browser.send("Target.attachToTarget", { targetId, flatten: true });
   await browser.send("Runtime.enable", {}, sessionId);
   await browser.send("Page.enable", {}, sessionId);
   // A tab that is not the browser's front one still takes typed text as a focused page does.
   await browser.send("Emulation.setFocusEmulationEnabled", { enabled: true }, sessionId);
+  await policy?.page(sessionId, `the page at ${url}`);
   await browser.send("Page.navigate", { url }, sessionId);
   const evaluate = async (expression) => {
     const { result, exceptionDetails } = await browser.send(
@@ -616,6 +728,8 @@ async function openPage(browser, url, problems) {
       .filter((m) => m.sessionId === sessionId && m.method === "Runtime.consoleAPICalled")
       .map((m) => m.params.args.map((arg) => arg.value ?? arg.description ?? "").join(" "));
   const reload = () => browser.send("Page.reload", {}, sessionId);
+  /** Empty the browser's HTTP cache — every tab's. Cache Storage is another thing, and stays. */
+  const forget = () => browser.send("Network.clearBrowserCache", {}, sessionId);
   /**
    * A real press — the pointer down and up at the middle of the element `find` answers — once
    * that element is on the page with a box. Not `element.click()`: the phone router takes only
@@ -644,7 +758,7 @@ async function openPage(browser, url, problems) {
   };
   /** Type into whatever the last press focused, as the keyboard's own input event. */
   const type = (text) => browser.send("Input.insertText", { text }, sessionId);
-  return { evaluate, until, thrown, said, reload, press, type };
+  return { evaluate, until, thrown, said, reload, forget, press, type };
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -754,23 +868,191 @@ function engineFiles() {
   ];
 }
 
-async function main() {
-  const { origin, site } = await serve();
-  const chunk = coreChunk();
+/**
+ * A browser on a profile of its own — so a first run — with every request it makes answered
+ * from `routes` and the host's policy listened to on every target. `close` stops it and removes
+ * the profile; it is on the undo list too, so a run that fails anywhere leaves neither behind.
+ */
+async function browse(origin, routes) {
   const profile = await mkdtemp(join(tmpdir(), "grimoire-web-smoke-"));
-  undo.push(async () => {
+  let socket = null;
+  let stop = () => undefined;
+  let closed = false;
+  const close = async () => {
+    if (closed) return;
+    closed = true;
+    socket?.close();
+    stop();
     // The browser lets go of its profile a moment after it is told to stop.
     await pause(500);
     await rm(profile, { recursive: true, force: true, maxRetries: 5 });
-  });
-  const browser = await connect(await launch(profile));
-  undo.push(() => browser.close());
+  };
+  undo.push(close);
+  const { address, kill } = await launch(profile);
+  stop = kill;
+  const browser = (socket = await connect(address));
 
   // Asked of a blank tab before anything is intercepted: what every request's `User-Agent` must
   // still be when it leaves. The page's own, not `Browser.getVersion`'s, which is unreduced.
   const blank = await openPage(browser, "about:blank", () => undefined);
   const userAgent = await blank.evaluate("navigator.userAgent");
-  const hosts = await intercept(browser, origin, userAgent);
+  /** Everything that fails the run without throwing where it happened. */
+  const problems = [];
+  const hosts = await intercept(browser, origin, userAgent, problems, routes);
+  const policy = await watchPolicy(browser, problems);
+  return { browser, hosts, policy, close };
+}
+
+// ---------------------------------------------------------------------------------------------
+// A reload that lands inside a synchronous engine call
+// ---------------------------------------------------------------------------------------------
+
+/** How many cards the grown card file holds. The six fixture cards are ingested inside one
+ *  poll of this script; this many keep the engine inside one synchronous call for well over
+ *  {@link BUSY_MS} — about a second of it on the machine this was written on. */
+const GROWN_CARDS = 30_000;
+/** A read the engine has not answered in this long is a read queued behind a synchronous call:
+ *  an idle engine answers `sync_status` in a millisecond or two. */
+const BUSY_MS = 250;
+/** How many first runs the check may stage before it gives up on landing a reload in time. */
+const RELOAD_ATTEMPTS = 3;
+/** What the page says when an open it had to retry got through (`src/lib/core/web/index.ts`). */
+const RETRIED = "still held by a page that had gone";
+
+/**
+ * The card file, grown: the six fixture lines over and over, each copy under an `id` and a
+ * collector number of its own, so every line is another printing to the engine. Made here and
+ * never committed — it is tens of megabytes of text, and a megabyte or so gzipped.
+ */
+function grownCards(count) {
+  const lines = readFileSync(join(FIXTURES, "default-cards.jsonl"), "utf8")
+    .split("\n")
+    .filter((line) => line !== "");
+  const grown = [];
+  for (let index = 0; grown.length < count; index += 1) {
+    const line = lines[index % lines.length];
+    // The first round is the fixture as committed, so the cards a wall draws are still there.
+    if (index < lines.length) {
+      grown.push(line);
+      continue;
+    }
+    const renamed = line
+      .replace(
+        /"id":"[0-9a-f-]{36}"/,
+        `"id":"aaaaaaaa-0000-4000-8000-${index.toString(16).padStart(12, "0")}"`,
+      )
+      .replace(/"collector_number":"[^"]*"/, `"collector_number":"G${index}"`);
+    if (renamed === line) fail("a fixture card has no id or collector number to rename");
+    grown.push(renamed);
+  }
+  return Buffer.from(`${grown.join("\n")}\n`);
+}
+
+/**
+ * Check 16: a reload while the engine is inside a synchronous call opens the app.
+ *
+ * **What it stages.** A page that goes while its database Worker is inside a synchronous call
+ * leaves that Worker holding the OPFS pool until the call returns, so the document that
+ * replaces it asks for the database and is told it is open elsewhere. The page's answer is to
+ * hold the database's Web Lock — which says whether another *page* is alive — and, holding it,
+ * to stop the Worker and ask again on a short backoff. Before that, the reader was told the app
+ * was open in another tab, and stayed told.
+ *
+ * **Why the card file is grown, and why the reload is timed off the engine.** A reload with the
+ * download merely in flight passes on a build without the retry (measured by the fix's author):
+ * a Worker awaiting bytes dies at once. The ingest's finish is the long synchronous call, and a
+ * six-card file finishes inside one poll. So the file is {@link GROWN_CARDS} cards, and the
+ * moment to reload is the first time a read of the engine goes unanswered for {@link BUSY_MS}.
+ *
+ * **It never passes on luck.** A reload that lands as the call returns opens at the first ask,
+ * and a document that opened at the first ask proves nothing. The page's own console line is
+ * the witness that the retry ran; without it the scenario is staged again on a new profile, up
+ * to {@link RELOAD_ATTEMPTS} times, and a run that could not stage it at all fails saying so.
+ */
+async function reloadInsideTheIngest(origin, chunk) {
+  const routes = fixtures(grownCards(GROWN_CARDS));
+  const READ = `Promise.race([
+    import(${JSON.stringify(chunk)})
+      .then((module) => module.webCore.call("sync_status"))
+      .then(() => true, () => true),
+    new Promise((answered) => setTimeout(() => answered(false), ${BUSY_MS})),
+  ])`;
+
+  for (let attempt = 1; attempt <= RELOAD_ATTEMPTS; attempt += 1) {
+    const { browser, hosts, policy, close } = await browse(origin, routes);
+    const page = await openPage(browser, `${origin}/search`, hosts.check, policy);
+    await page.until("the grown first run got past its startup gate", `${SHELL} || ${ALERT}`);
+    const refusedOpen = await page.evaluate(ALERT);
+    if (refusedOpen) fail(`the grown first run did not open its database:\n${refusedOpen}`);
+    // A mark on the document: gone is the reload having replaced it.
+    await page.evaluate("window.__smokeDocument = true");
+
+    const from = performance.now();
+    for (const stop = from + 60_000; await page.evaluate(READ); await pause(20)) {
+      hosts.check();
+      if (performance.now() > stop) {
+        fail(
+          `the engine answered every read within ${BUSY_MS} ms for a minute of a ` +
+            `${GROWN_CARDS}-card first run — it was never inside a synchronous call`,
+        );
+      }
+    }
+    const busyAfter = Math.round(performance.now() - from);
+    await page.reload();
+    await page.until(
+      "the document after a reload inside the ingest drew the app or said why not",
+      `window.__smokeDocument === undefined && (${SHELL} || ${ALERT})`,
+      30_000,
+    );
+    const told = await page.evaluate(ALERT);
+    if (told) {
+      fail(
+        `a reload while the engine was inside a synchronous call (${busyAfter} ms into the ` +
+          `first run) was told:\n${told}\nConsole: ${page.said().join(" | ") || "nothing"}`,
+      );
+    }
+    // The line is written as the retried open succeeds, which is before the shell is drawn;
+    // the console's events are a moment behind the page.
+    let retried = null;
+    for (const stop = performance.now() + 2_000; performance.now() < stop; await pause(50)) {
+      retried = page.said().find((text) => text.includes(RETRIED)) ?? null;
+      if (retried !== null) break;
+    }
+    const thrown = page.thrown();
+    if (thrown.length > 0) fail(`the reloaded page threw:\n${thrown.join("\n")}`);
+    hosts.check();
+    const watched = policy.watched().filter((name) => name.startsWith("worker ")).length;
+    if (watched === 0) fail("the grown first run's engine Worker was never listened to");
+    await close();
+
+    if (retried !== null) {
+      console.log(
+        `ok  a reload inside a synchronous engine call opened the app — the engine went quiet ` +
+          `${busyAfter} ms into a ${GROWN_CARDS}-card first run, the next document drew its ` +
+          `tab bar and no refusal, and said: ${/opened on attempt.*$/.exec(retried)?.[0] ?? retried}` +
+          (attempt > 1 ? ` (staged ${attempt} times: the earlier reloads missed the call)` : ""),
+      );
+      return;
+    }
+    console.log(
+      `--  staging ${attempt} of ${RELOAD_ATTEMPTS}: the reload ${busyAfter} ms into the first ` +
+        "run missed the synchronous call — the next document opened its database at the first " +
+        "ask, which proves nothing" +
+        (attempt < RELOAD_ATTEMPTS ? "; staging it again on a new profile" : ""),
+    );
+  }
+  fail(
+    `a reload could not be landed inside a synchronous engine call in ${RELOAD_ATTEMPTS} first ` +
+      "runs: every one opened at the first ask. That is this check failing to stage its " +
+      "scenario, not the app refusing a reload — the card file may need to be larger for this " +
+      "machine (GROWN_CARDS).",
+  );
+}
+
+async function main() {
+  const { origin, site } = await serve();
+  const chunk = coreChunk();
+  const { browser, hosts, policy, close } = await browse(origin, fixtures());
   // Held until the page has been seen saying it is a first run: answered at once, a six-card
   // file is ingested inside one poll of this script and the sentence is never on screen.
   const releaseCards = hosts.hold(CARDS_FILE);
@@ -793,7 +1075,7 @@ async function main() {
 
   // A headless window is 800 wide — under the 1024 floor — so the face is the phone's, and its
   // tab bar is the thing to wait for.
-  const first = await openPage(browser, `${origin}/search`, hosts.check);
+  const first = await openPage(browser, `${origin}/search`, hosts.check, policy);
   /** One command through the page's `Core`; a refusal is the engine's sentence, and fails. */
   const engine = async (command, args) => {
     const answer = await first.evaluate(
@@ -995,11 +1277,12 @@ async function main() {
   await errors("after Card Kingdom's price list");
   console.log(`ok  Settings greys Mana Pool and stored ${prices.rowCount} Card Kingdom prices`);
 
-  // Offline, for real: the server drops every connection and every other host is gone. What
-  // draws now is drawn from Cache Storage and OPFS — nothing here is in the HTTP cache, which
-  // the server forbids — so a browser that wiped either between the two documents is a blank
-  // page, a first-run screen or an empty frame.
+  // Offline, for real: the server drops every connection, every other host is gone, and the
+  // HTTP cache — which the host's policy lets keep `assets/` and `wasm/` for a year — is
+  // emptied first. What draws now is drawn from Cache Storage and OPFS, so a browser that wiped
+  // either between the two documents is a blank page, a first-run screen or an empty frame.
   const mark = hosts.asked.length;
+  await first.forget();
   site.refusing = true;
   hosts.offline(true);
   let documents = opens(first);
@@ -1054,7 +1337,7 @@ async function main() {
   }
   console.log(`ok  Clear cache emptied ${PICTURE_CACHE} and left ${shells[0]}`);
 
-  const second = await openPage(browser, `${origin}/search`, hosts.check);
+  const second = await openPage(browser, `${origin}/search`, hosts.check, policy);
   const told = await second.until("a second tab was told", `${ALERT} || ${SHELL}`);
   if (told === true) fail("a second tab opened the database the first one holds");
   if (!/already open in another tab/.test(told)) fail(`a second tab said:\n${told}`);
@@ -1139,6 +1422,22 @@ async function main() {
     `ok  ${hosts.asked.length} requests answered from fixtures, none needing a pre-flight, ` +
       "and none to a host without one",
   );
+  // No refusal is only worth saying of targets that were listened to: a run that never
+  // attached to the engine's Worker, or to a service worker, heard nothing because it asked
+  // nobody.
+  const watched = policy.watched();
+  const count = (kind) => watched.filter((name) => name.startsWith(`${kind} `)).length;
+  if (count("worker") === 0 || count("service_worker") === 0) {
+    fail(`the policy was watched on ${watched.join(", ")} — no Worker, or no service worker`);
+  }
+  console.log(
+    `ok  the host's Content-Security-Policy refused nothing — heard on ${count("the page")} ` +
+      `pages, ${count("worker")} engine Workers and ${count("service_worker")} service workers`,
+  );
+
+  // The second phase is a first run of its own, on a profile of its own.
+  await close();
+  await reloadInsideTheIngest(origin, chunk);
 
   const seconds = ((performance.now() - started) / 1000).toFixed(1);
   console.log(`web-smoke: passed in ${seconds} s`);

@@ -8,6 +8,7 @@ import { RarityGem } from "@/components/RarityGem";
 import { cardDetailKey } from "@/features/card/cardDetailKey";
 import { cardHoldingsKey, cardPrintingsKey } from "@/features/card/cardKeys";
 import { facesOf } from "@/features/card/faces";
+import { useHoldingsFreshness } from "@/features/card/useHoldingsFreshness";
 import { FINISH_LABEL, parseFinishes } from "@/lib/finish";
 import { ipc, ipcError, type CardDetail, type DeckVariant, type Printing } from "@/lib/ipc";
 import { formatPrice, pricesAsOf } from "@/lib/prices";
@@ -66,6 +67,18 @@ export function CardSheet({
   const place = usePlace();
   const close = () => back({ ...place, cardId: null });
   const { marketplace } = useMarketplace();
+  /**
+   * **The "In your grimoire" figures move when a write lands** — the desktop modal's own hook.
+   * Nothing settled them here until 2026-10-04: after the sheet's *Add to collection* it still
+   * read `Owned 0`, and read it again when closed and opened seconds later, the figure being
+   * cached for 30 s under a key no writer on this face names.
+   *
+   * **Here, in the sheet's shell, and not beside the read in `CardBody`**: the shell is mounted
+   * for as long as the face is, card or no card, so a copy removed on the page *behind* a closed
+   * sheet marks the figure stale too, and the next open asks again. Mounted with the card, it
+   * would hear only the writes made while one was open.
+   */
+  useHoldingsFreshness();
 
   /**
    * The printings of the card on screen, by id — read by `placeholderData` below, which runs

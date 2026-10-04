@@ -40,7 +40,12 @@ run over one. So every way an export can go wrong is an *answer*:
   `DOMException`'s **name** (`NoModificationAllowedError`) anywhere in the text — the wording
   has changed between Chrome versions, and `sqlite-wasm-vfs` wraps a variant of its own around
   it. Everything else is a real failure and says so, rather than telling a reader to close a
-  tab that is not open.
+  tab that is not open. **`already-open` says a Worker of this origin holds the pool, not that
+  a tab is open** (step 5.5b): a Worker inside a long synchronous call outlives its document
+  by one to three seconds, measured in Chrome 154. The page tells the two apart by a Web Lock
+  and retries with a fresh Worker when the lock is its own
+  ([`mobile/CLAUDE.md`](../../mobile/CLAUDE.md), `src/lib/core/web/holder.ts`); this crate
+  still opens once and never retries.
 - An answer that will not serialise is still a parseable `{"err": …}` (`wire::text`).
 - The panic hook is installed as the module is instantiated, so a bug that does trap leaves its
   sentence and its line in the Worker's console first. **The core's own `eprintln!` goes
@@ -202,7 +207,7 @@ no write observers, and builds the facet index. `glue`'s `open` then spawns
 | `npm run web:wasm` | The module into `dist-wasm/`: `cargo build -p grimoire-web --lib --target wasm32-unknown-unknown --profile wasm --locked`, then `wasm-bindgen --target web`. Prints the module's size and the build's time. `-- --names` keeps the function names, for a readable wasm stack |
 | `npm run web:dev` | The dev server on port 5176, over whatever `dist-wasm/` holds at that moment |
 | `npm run web:build` | `tsc`, the Worker's and the service worker's `tsc` programs, and the page into `dist-web/` with the engine under `wasm/<build id>/` and, last, `sw.js` at its root |
-| `npm run web:smoke` | The built app in headless Chromium, as an offline first run: every request the engine and the service worker make is answered from `scripts/web-smoke/` or fails the run. The module instantiates, the database opens on a rollback journal, the card sync and the launch's feeds finish, a typed search draws a card and its picture, Settings greys Mana Pool and downloads Card Kingdom, a reload with the server gone still holds the cards and draws the cached picture, a second tab is refused, and a newer worker waits for the press |
+| `npm run web:smoke` | The built app in headless Chromium, as an offline first run: every request the engine and the service worker make is answered from `scripts/web-smoke/` or fails the run. The module instantiates, the database opens on a rollback journal, the card sync and the launch's feeds finish, a typed search draws a card and its picture, Settings greys Mana Pool and downloads Card Kingdom, a reload with the server gone still holds the cards and draws the cached picture, a second tab is refused, and a newer worker waits for the press. **Served under the hosting's `_headers` since step 5.5b**: a Content-Security-Policy refusal in the page, this Worker or the service worker fails the run |
 | `npm run web:preview` | The built app on port 4176, with its service worker — the one of these that draws card pictures besides the smoke run; `web:dev` registers no worker |
 
 - **`web:wasm` finds clang by itself on this machine** — `C:\Program Files\LLVM\bin`, which is
@@ -219,10 +224,20 @@ no write observers, and builds the facet index. `glue`'s `open` then spawns
   one codegen unit and `panic = "abort"`. **`[profile.release]` is deliberately not written
   there** — a change to it for the browser's sake would change the binaries people have
   installed. No `wasm-opt` and no `wasm-pack`; neither is on the machines that build this.
-- **The module is large and the reason is known**: measured 2026-10-04, 8 547 708 B, about
-  1.84 MB of it an OCR runtime nothing calls. The root `Cargo.toml` and the core's `CLAUDE.md`
-  carry the measurement and the cure, which is `crates/card-scanner`'s line to change; it and a
-  size-optimised level are step 5.5's, with timings.
+- **The module is the core, and what is in it was read off its name section** (2026-10-04,
+  step 5.5, at `opt-level` 3): of 5 992 636 B of code, `grimoire_core` is 58 % — the command
+  table and its JSON alone 915 659 B, the sync engine 586 598 B — and SQLite's C 22 %. The
+  scanner's pipeline, which no browser can run before phase 7, is not in it: LTO drops what no
+  export reaches, and 35 583 B of the scanner's tray and preferences is what stays. The OCR
+  runtime that step 5.1 found rooted by `ocrs`'s `export-wasm` feature, 1 882 984 B, went with
+  one line in `crates/card-scanner/Cargo.toml`. The root `Cargo.toml`'s `wasm` profile has the
+  sizes at each `opt-level`. **`opt-level` stays 3, by timings**: `"s"` was 2.35 s slower on a
+  first run's card phase and `"z"` 7.01 s, in headless Chrome 154 (light-app.md §9.6, with what
+  that does not prove); the module that shipped is 6 767 338 B, 2 372 783 B through `gzip -9`.
+  **The glue's exports are the check nothing else makes**: `open`,
+  `call`, `listen`, the start function `instantiated`, and `reqwest`'s three `IntoUnderlying*`
+  classes — any other class in `dist-wasm/grimoire_web.js` is some dependency's
+  `#[wasm_bindgen]` API, and a root that keeps its whole crate.
 - **Never `cargo fmt --all`** — it follows path dependencies into `crates/card-scanner`, which
   is hand-formatted. `cargo fmt -p grimoire-web`.
 - **A green suite here proves a desktop.** Every figure taken in a browser names the browser

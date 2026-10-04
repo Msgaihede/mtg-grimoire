@@ -135,8 +135,8 @@ const DECKS: readonly QueryKey[] = [["decks"]];
  * spelled rather than imported.
  *
  * **No mutation names it, and that is why it has to be named here.** The writing window refreshes
- * it on the falling edge of `useIsMutating` — *any* write, while a card is open — and that edge
- * never crosses a window. `card_holdings` counts `collection_entries`, `wishlist_entries` and the
+ * it when a mutation settles (`useHoldingsFreshness`) — *any* write, while a card is open — and
+ * a mutation's settling never crosses a window. `card_holdings` counts `collection_entries`, `wishlist_entries` and the
  * live `deck_cards`, so those three owe it; the first two reach it through `["card"]` below.
  */
 const HOLDINGS: QueryKey = ["card", "holdings"];
