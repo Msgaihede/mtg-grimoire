@@ -98,8 +98,7 @@ export function SearchLine({ search, label }: { search: CardSearch; label: strin
   const { query, marketplace } = search;
   const [sheetOpen, setSheetOpen] = useState(false);
   const opener = useRef<HTMLButtonElement>(null);
-  const filtered = search.activeCount;
-  // Not `filtered`: the box's text is in that count and is no chip — it is on screen in the box.
+  // Not `activeCount`: the box's text is in that count and is no chip — it is on screen in the box.
   const chips = activeChips(search, marketplace.currency).length;
   // The count is worth a line once the reader has narrowed anything — a chip or a word. Over the
   // unfiltered wall it is the size of the database, which nobody asked.
@@ -128,7 +127,7 @@ export function SearchLine({ search, label }: { search: CardSearch; label: strin
           />
           <FiltersButton
             ref={opener}
-            active={filtered}
+            search={search}
             expanded={sheetOpen}
             onClick={() => setSheetOpen(true)}
           />

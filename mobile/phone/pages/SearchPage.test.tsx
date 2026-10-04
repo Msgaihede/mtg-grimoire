@@ -68,6 +68,22 @@ describe("the Filters button", () => {
     expect(filtersButton()).toHaveAccessibleName("Filters");
     expect(within(filtersButton()).queryByText(/\d/)).toBeNull();
   });
+
+  // The first phone run, 2026-10-04: a typed query lit the button `Filters — 1 active` over a
+  // sheet with nothing chosen in it. The box is beside the button, not in the sheet.
+  it("does not count the query in the box, which is not in the sheet", async () => {
+    renderPhone(<PhoneFace />, { path: "/search" });
+    const box = screen.getByRole("searchbox", { name: "Search cards" });
+    await userEvent.type(box, "bolt");
+
+    expect(filtersButton()).toHaveAccessibleName("Filters");
+    expect(within(filtersButton()).queryByText(/\d/)).toBeNull();
+    await userEvent.click(filtersButton());
+    const sheet = await screen.findByRole("dialog", { name: "Filters" });
+    expect(within(sheet).getByRole("button", { name: /^Reset all/ })).toHaveAccessibleName(
+      "Reset all — 0 filters active",
+    );
+  });
 });
 
 describe("the filters sheet", () => {
@@ -106,6 +122,28 @@ describe("the filters sheet", () => {
       "aria-disabled",
       "true",
     );
+  });
+
+  it("resets what the sheet holds and leaves the query in the box beside it", async () => {
+    renderPhone(<PhoneFace />, { path: "/search" });
+    const box = screen.getByRole("searchbox", { name: "Search cards" });
+    await userEvent.type(box, "bolt");
+    await userEvent.click(filtersButton());
+    const sheet = await screen.findByRole("dialog", { name: "Filters" });
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Red\b/ }));
+
+    // One kind in the sheet, and the word in the box is not a second.
+    await userEvent.click(within(sheet).getByRole("button", { name: /^Reset all — 1 filter / }));
+
+    expect(within(sheet).getByRole("button", { name: /^Red\b/ })).toHaveAttribute(
+      "aria-pressed",
+      "false",
+    );
+    expect(within(sheet).getByRole("button", { name: /^Reset all — 0 filters/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(box).toHaveValue("bolt");
   });
 
   it("is not a place: opening it writes no history, and Escape hands the caret back", async () => {

@@ -49,7 +49,7 @@ export function CabinetFilters<SortKey extends string>({
         />
         <FiltersButton
           ref={opener}
-          active={surface.activeCount}
+          search={surface}
           expanded={open}
           onClick={() => setOpen(true)}
         />

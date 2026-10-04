@@ -62,21 +62,60 @@ export const BADGE =
   "rounded-full bg-accent px-1.5 font-mono text-[0.7rem] leading-4 text-accent-foreground";
 
 /**
+ * How many kinds of filter **the sheet** holds: the surface's `activeCount` without the box.
+ *
+ * **The box is not in the sheet on this face**, and that is the whole difference from the
+ * desktop. There the search box, the Filters button and Reset all are one bar, so a count that
+ * includes the typed query is a count of that bar (`FilterChips`' `FiltersButton` says so). Here
+ * the box sits beside the button, outside the sheet, with its own words on screen — so a query
+ * counted on the button lit it `Filters — 1 active` over a sheet with nothing chosen in it (the
+ * first phone run, 2026-10-04).
+ *
+ * Subtracted rather than recounted, because `activeFilterCount` counts the text as exactly one
+ * kind — `text.trim().length > 0` — on every surface that feeds it (the card search, the
+ * collection, the wishlist), and a second list of the other kinds here would be a copy that
+ * drifts the day a kind is added there.
+ */
+export function sheetFilterCount(
+  search: Pick<FilterSurface<string>, "activeCount" | "text">,
+): number {
+  return Math.max(0, search.activeCount - (search.text.trim().length > 0 ? 1 : 0));
+}
+
+/**
+ * The sheet's Reset all: every filter the sheet holds, **and not the box beside it**.
+ *
+ * Its caption is {@link sheetFilterCount}, and `ResetAll`'s number answers "how much would this
+ * press change" — so a press that also emptied the box would change one thing more than it says,
+ * and empty it out of sight behind a sheet that fills the window. The query is the reader's own
+ * words in a control of its own, cleared there; putting the chips back is not starting over.
+ * `resetAll` is the surface's, unforked: the text goes back in the same batch, so the box never
+ * renders empty and no search is asked for the empty query in between.
+ */
+function resetSheet(search: Pick<FilterSurface<string>, "text" | "setText" | "resetAll">) {
+  const text = search.text;
+  search.resetAll();
+  search.setText(text);
+}
+
+/**
  * The one `Filters` button a page's line carries, beside its box — Search's, the collection's and
- * the wishlist's, so the three draw one control.
+ * the wishlist's, so the three draw one control. Its count is {@link sheetFilterCount}: what the
+ * sheet it opens holds, never the box beside it.
  */
 export function FiltersButton({
   ref,
-  active,
+  search,
   expanded,
   onClick,
 }: {
   ref?: Ref<HTMLButtonElement>;
-  /** The surface's `activeCount`. */
-  active: number;
+  /** The surface whose sheet this opens — read for {@link sheetFilterCount} and nothing else. */
+  search: Pick<FilterSurface<string>, "activeCount" | "text">;
   expanded: boolean;
   onClick: () => void;
 }) {
+  const active = sheetFilterCount(search);
   return (
     <button
       ref={ref}
@@ -595,7 +634,7 @@ function SheetBody<SortKey extends string>({
           TOUCH_FLOOR,
         )}
       >
-        <ResetAll count={search.activeCount} onReset={search.resetAll} />
+        <ResetAll count={sheetFilterCount(search)} onReset={() => resetSheet(search)} />
         <button
           type="button"
           onClick={onDone}

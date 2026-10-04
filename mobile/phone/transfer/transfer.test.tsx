@@ -6,6 +6,22 @@ vi.mock("@tauri-apps/api/core", () => import("../../../.storybook/fake/core"));
 vi.mock("@tauri-apps/api/event", () => import("../../../.storybook/fake/event"));
 vi.mock("@tauri-apps/api/window", () => import("../../../.storybook/fake/window"));
 
+/**
+ * What the save dialog answered, for the one test that plays the host whose save is a dialog —
+ * `null` everywhere else, which is the real `saveText` and so the browser's download.
+ */
+const dialogAnswer = vi.hoisted(() => ({ next: null as "saved" | "cancelled" | null }));
+vi.mock("@/lib/core/files", async (importOriginal) => {
+  const real = await importOriginal<typeof import("@/lib/core/files")>();
+  return {
+    ...real,
+    saveText: (fileName: string, text: string) =>
+      dialogAnswer.next === null
+        ? real.saveText(fileName, text)
+        : Promise.resolve(dialogAnswer.next),
+  };
+});
+
 import { exportFileName } from "@/features/decks/deckExport";
 import { formatExport, isActivePile } from "@/features/transfer/export/format";
 import { defaultFields } from "@/features/transfer/fields";
@@ -175,20 +191,47 @@ describe("a deck's export, on the phone", () => {
     expect(usePhoneTransferPrefs.getState().exportPrefs.collection.format).toBe("csv");
   });
 
-  it("downloads the same text as a file named after the deck", async () => {
+  it("saves the same text as a file named after the deck — a download in a browser", async () => {
     const caught = catchDownloads();
     const user = userEvent.setup();
     renderPhone(<PhoneFace />, { path: `/decks/${MODERN}` });
     await user.click(await screen.findByRole("button", { name: "Export this deck" }, SETTLE));
     const sheet = await screen.findByRole("dialog", { name: /^Export "/ }, SETTLE);
 
-    await user.click(within(sheet).getByRole("button", { name: "Download" }));
+    await user.click(within(sheet).getByRole("button", { name: "Save file" }));
 
     const deck = await ipc.deckGet(MODERN, "live", DEFAULT_MARKETPLACE);
     const name = `${exportFileName(deck?.deck.name ?? "", "")}.txt`;
     expect(caught.map((c) => c.name)).toEqual([name]);
     expect(await caught[0]?.blob.text()).toBe(await deckText("plain"));
     expect(within(sheet).getByRole("status")).toHaveTextContent(`Downloading ${name}.`);
+  });
+
+  // The first phone run, 2026-10-04: the button read `Download` over the system's save dialog.
+  // One label for both hosts; the line under it says what the host actually did.
+  it("says Saved when the save dialog wrote a file, and nothing when it was cancelled", async () => {
+    const user = userEvent.setup();
+    renderPhone(<PhoneFace />, { path: `/decks/${MODERN}` });
+    await user.click(await screen.findByRole("button", { name: "Export this deck" }, SETTLE));
+    const sheet = await screen.findByRole("dialog", { name: /^Export "/ }, SETTLE);
+    const deck = await ipc.deckGet(MODERN, "live", DEFAULT_MARKETPLACE);
+    const name = `${exportFileName(deck?.deck.name ?? "", "")}.txt`;
+
+    try {
+      dialogAnswer.next = "saved";
+      await user.click(within(sheet).getByRole("button", { name: "Save file" }));
+      await waitFor(() =>
+        expect(within(sheet).getByRole("status")).toHaveTextContent(`Saved ${name}.`),
+      );
+
+      dialogAnswer.next = "cancelled";
+      await user.click(within(sheet).getByRole("button", { name: "Save file" }));
+      // A dialog dismissed is nothing to report — and the last save's claim does not stand over it.
+      await waitFor(() => expect(within(sheet).getByRole("status")).toBeEmptyDOMElement());
+      expect(within(sheet).queryByRole("alert")).toBeNull();
+    } finally {
+      dialogAnswer.next = null;
+    }
   });
 });
 
@@ -258,7 +301,7 @@ describe("CollectionTransfer", () => {
     await within(sheet).findByText("Copied.", undefined, SETTLE);
     expect(await navigator.clipboard.readText()).toBe(expected);
 
-    await user.click(within(sheet).getByRole("button", { name: "Download" }));
+    await user.click(within(sheet).getByRole("button", { name: "Save file" }));
     expect(caught.map((c) => c.name)).toEqual(["collection.csv"]);
     expect(await caught[0]?.blob.text()).toBe(expected);
   });

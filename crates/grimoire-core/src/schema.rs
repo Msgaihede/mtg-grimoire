@@ -8258,11 +8258,21 @@ fn rebuild_combo_tables(conn: &Connection, schema: &str) -> rusqlite::Result<()>
 /// from the next sync. Nothing in the collection, the decks or the wishlist is touched,
 /// which is the whole point of the split stated as code.
 ///
+/// **A corpus that is not there at all is not one that could not be opened**, and answers
+/// `false` in silence. That is every first launch of the light app's Android host — which has no
+/// `split::convert` to make the file first — and on the desktop it is a reader who deleted
+/// `corpus.db` to force a resync. Both used to take the replace path, because
+/// [`corpus_is_readable`] answers `false` for a missing file, and log that the card database
+/// "could not be opened and has been replaced" over a folder that had never held one (the first
+/// phone run, 2026-10-04). Nothing needs doing: the `ATTACH` creates it, as above. A *mark* over a
+/// missing file still goes the long way, so the mark is cleared.
+///
 /// The desktop's `prepare_data_dir` is this behind `split::convert`, which takes a pre-27
 /// single file apart first and stays in `src-tauri`.
 pub fn replace_unreadable_corpus(data_dir: &std::path::Path) -> bool {
     let marked = crate::platform::files::is_file(&data_dir.join(CORPUS_DAMAGED_MARK));
-    if !marked && corpus_is_readable(data_dir) {
+    let present = crate::platform::files::is_file(&data_dir.join(crate::db::CORPUS_DB));
+    if !marked && (!present || corpus_is_readable(data_dir)) {
         return false;
     }
     // **The mark goes only when the corpus did** (issue #550). A delete refused by a sharing
