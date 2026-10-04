@@ -9,12 +9,13 @@ import { SyncPanelBody } from "./SyncPanelBody";
 export * from "./SyncPanelBody";
 
 /**
- * Sync, on the desktop: {@link SyncPanelBody} with the desktop's way of opening a link.
+ * Sync: {@link SyncPanelBody} with the app's way of opening a link, on both faces.
  *
- * **Split so the light app's phone face can draw the same panel.** That face may not reach
- * `@tauri-apps/*` except through `@/lib/core`, and `openExternal` is the plugin-opener — so the
- * one import that welded the panel to the desktop lives here, and everything the panel draws lives
- * in the file the phone face imports. Every desktop caller still writes `<SyncPanel />`.
+ * **Split while a link was the desktop's alone.** `openExternal` was `@tauri-apps/plugin-opener`
+ * itself, which the light app's phone face may not reach, so the one import that welded the panel
+ * to the desktop lived here and that face handed the body a `window.open` of its own. Since phase
+ * 5 (step 5.4) how a link leaves is the host's, below `@/lib/core`, and the phone face draws this
+ * component too. The body keeps the prop, which is how its suite watches the press.
  */
 export function SyncPanel(): JSX.Element {
   return <SyncPanelBody openLink={openExternal} />;

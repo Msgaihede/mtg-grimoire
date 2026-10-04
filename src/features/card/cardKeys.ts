@@ -48,3 +48,16 @@ export const HOLDINGS_KEY = ["card", "holdings"] as const;
 export function cardHoldingsKey(oracleId: string | null) {
   return [...HOLDINGS_KEY, oracleId] as const;
 }
+
+/**
+ * One printing's two TCGplayer product ids — `card_tcgplayer_ids`, by card id, because the ids
+ * are a printing's and not an oracle card's.
+ *
+ * Read under a key only by the light app's phone sheet, whose marketplace row is a real link and
+ * needs its `href` before the press; the desktop's rail and menu ask on the press and keep
+ * nothing (`openMarketplace.ts`). Under `["card", …]` beside the card's other reads, so whatever
+ * refreshes those after a card sync refreshes this.
+ */
+export function cardTcgplayerIdsKey(cardId: string) {
+  return ["card", "tcgplayer-ids", cardId] as const;
+}

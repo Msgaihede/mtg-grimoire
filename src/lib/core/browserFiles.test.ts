@@ -1,10 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import {
-  copyToClipboard,
-  decodeDecklist,
-  MAX_DECKLIST_BYTES,
-  readDecklistFile,
-} from "./browserFiles";
+import { decodeDecklist, downloadText, MAX_DECKLIST_BYTES, readDecklistFile } from "./browserFiles";
 
 const bytes = (...values: number[]) => new Uint8Array(values);
 const ascii = (text: string) => [...text].map((c) => c.charCodeAt(0));
@@ -64,24 +59,52 @@ describe("readDecklistFile", () => {
   });
 });
 
-describe("copyToClipboard", () => {
-  const was = Object.getOwnPropertyDescriptor(navigator, "clipboard");
-  const clipboard = (value: unknown) =>
-    Object.defineProperty(navigator, "clipboard", { configurable: true, value });
+describe("downloadText, the browser arm", () => {
   afterEach(() => {
-    if (was === undefined) Reflect.deleteProperty(navigator, "clipboard");
-    else Object.defineProperty(navigator, "clipboard", was);
+    vi.restoreAllMocks();
+    vi.useRealTimers();
   });
 
-  it("writes through navigator.clipboard", async () => {
-    const writeText = vi.fn(() => Promise.resolve());
-    clipboard({ writeText });
-    await copyToClipboard("1 Sol Ring\n");
-    expect(writeText).toHaveBeenCalledWith("1 Sol Ring\n");
-  });
+  it("hands the browser a Blob of the text under the name, and releases the URL", async () => {
+    vi.useFakeTimers();
+    let blob: Blob | undefined;
+    // jsdom has no object URLs at all, so both are written for the test and taken back after.
+    const created = Object.getOwnPropertyDescriptor(URL, "createObjectURL");
+    const revoked = Object.getOwnPropertyDescriptor(URL, "revokeObjectURL");
+    const revoke = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", {
+      configurable: true,
+      value: (b: Blob) => {
+        blob = b;
+        return "blob:export";
+      },
+    });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revoke });
+    const pressed: { href: string; download: string }[] = [];
+    vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(function (
+      this: HTMLAnchorElement,
+    ) {
+      pressed.push({ href: this.getAttribute("href") ?? "", download: this.download });
+    });
 
-  it("rejects where the browser offers no clipboard, rather than pretending it copied", async () => {
-    clipboard(undefined);
-    await expect(copyToClipboard("1 Sol Ring\n")).rejects.toThrow(/no clipboard/);
+    try {
+      downloadText("Burn.txt", "4 Lightning Bolt\n");
+
+      expect(pressed).toEqual([{ href: "blob:export", download: "Burn.txt" }]);
+      expect(await blob?.text()).toBe("4 Lightning Bolt\n");
+      // The anchor does not outlive the press, and the URL outlives it by one task.
+      expect(document.querySelector("a[download]")).toBeNull();
+      expect(revoke).not.toHaveBeenCalled();
+      vi.runAllTimers();
+      expect(revoke).toHaveBeenCalledWith("blob:export");
+    } finally {
+      for (const [name, was] of [
+        ["createObjectURL", created],
+        ["revokeObjectURL", revoked],
+      ] as const) {
+        if (was === undefined) Reflect.deleteProperty(URL, name);
+        else Object.defineProperty(URL, name, was);
+      }
+    }
   });
 });

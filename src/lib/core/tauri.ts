@@ -1,6 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import type { CallArgs, CallOptions, Core } from "./types";
+import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { openUrl } from "@tauri-apps/plugin-opener";
+import type { CallArgs, CallOptions, Core, Host } from "./types";
 
 /** The desktop implementation: Tauri's own IPC. */
 export const tauriCore: Core = {
@@ -46,4 +48,27 @@ export const tauriCore: Core = {
       off = undefined;
     };
   },
+};
+
+/**
+ * The desktop's clipboard and its way out to a browser: **the two Tauri plugins, and the only
+ * place either is named.**
+ *
+ * - **The clipboard is `tauri-plugin-clipboard-manager` rather than `navigator.clipboard`,
+ *   deliberately.** The web API *should* work — `http://tauri.localhost` is a subdomain of
+ *   localhost and therefore a secure context — but nothing in this app had ever proved it, and the
+ *   failure mode would be the packaged exe only: green in dev, green in Storybook, green in jsdom,
+ *   silent in the shipped window. The plugin costs one narrow permission
+ *   (`clipboard-manager:allow-write-text`, and not the read) and removes the class of surprise.
+ *   One direction because nothing in this app reads the clipboard.
+ * - **A link is `tauri-plugin-opener`'s `openUrl`**, never a `window.open`, which in a Tauri
+ *   webview navigates the app's own window.
+ *
+ * Imported here and not in `host.ts` because this file is the one door to `@tauri-apps/*` that
+ * `mobile/phone/fence.test.ts` lets the phone face through — the reason `table.ts` calls through
+ * {@link tauriCore} rather than importing Tauri's API.
+ */
+export const tauriHost: Host = {
+  copyText: (text) => writeText(text),
+  openUrl: (url) => openUrl(url),
 };

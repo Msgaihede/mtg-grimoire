@@ -37,6 +37,22 @@ scratch directory rather than over `src-tauri/icons/`: the command also emits `a
 and a `64x64.png`, none of which this repo tracks, and `icon.icns` belongs to `src-tauri/icons/`
 alone while the Windows `.ico` is copied to `logos/icon.ico` as well.
 
+## The light app's icons
+
+`mobile/public/icons/` holds the four PNGs the web manifest names (`mobile/public/light.webmanifest`):
+`icon-192.png` and `icon-512.png` are the mark, transparent, for the reason above; `maskable-192.png`
+and `maskable-512.png` are the mark on the `#0C0D12` field to every edge, drawn at `scale(0.70)` so
+that all of it — clasp and ribbon too — is inside the circle Android keeps whole when it cuts an
+installed icon to the launcher's shape (80% of the width; the mark reaches **37.5%** from the
+centre against the 40% allowed, measured from the pixels on 2026-10-04).
+
+**Made by `node scripts/light-icons.mjs`**, from `svg/mtg-grimoire-mark.svg` alone: it derives the
+maskable drawing from the mark rather than reading a third SVG, renders each size in headless
+Chromium over the DevTools protocol (no image library is a dependency of this repo), and fails if
+the maskable mark reaches past the safe zone. Run it again after editing the mark and commit what
+it writes. `mobile/public/mtg-grimoire-mark.svg` is a second copy of the mark, as
+`public/mtg-grimoire-mark.svg` is the first; `mobile/host.test.ts` holds it equal to the master.
+
 ## Notes
 
 - Below about 24 px the casting circle and the clasp rivets fill in. If you want a crisper small

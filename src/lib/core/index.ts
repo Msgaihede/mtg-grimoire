@@ -1,9 +1,10 @@
 import { deferredCore, refusedCore } from "./deferred";
+import { browserHost, tableHost } from "./host";
 import { tableCore } from "./table";
-import { tauriCore } from "./tauri";
-import type { CallArgs, CallOptions, Core } from "./types";
+import { tauriCore, tauriHost } from "./tauri";
+import type { CallArgs, CallOptions, Core, Host } from "./types";
 
-export type { CallArgs, CallOptions, Core };
+export type { CallArgs, CallOptions, Core, Host };
 
 /**
  * The mark a host that answers through the command table sets before the page's first script
@@ -22,6 +23,11 @@ export function isTableHost(scope: object): boolean {
 /** Which implementation a window with these globals calls through, in a build that has Tauri. */
 export function pickCore(scope: object): Core {
   return isTableHost(scope) ? tableCore : tauriCore;
+}
+
+/** Whose clipboard and whose way out a window with these globals has — {@link pickCore}'s twin. */
+export function pickHost(scope: object): Host {
+  return isTableHost(scope) ? tableHost : tauriHost;
 }
 
 /** What the gate is told when the web host's own chunk never arrived. */
@@ -44,13 +50,31 @@ const HOST_UNLOADED = "MTG Grimoire could not finish loading. Check your connect
  * embeds. With the literal folded to `false` the bundler drops the branch before it follows the
  * import, and `./web` is never read. `deferredCore` is what `core` is while that chunk is on its
  * way, and `refusedCore` what it becomes if the chunk never comes.
+ *
+ * **Two files a browser answers on the page ride with it** (`./web/files`): the desktop's
+ * `export_save_file` and `import_pick_file`, which on the other two hosts are a native dialog the
+ * host opens. The engine's table has neither — a Worker has no document to pick a file with —
+ * so the web host's `Core` is the Worker's with those two names answered in front of it.
  */
 export const core: Core =
   import.meta.env.MODE === "web"
     ? deferredCore(() =>
-        import("./web").then(
-          (host) => host.webCore,
+        Promise.all([import("./web"), import("./web/files")]).then(
+          ([host, files]) => files.answeringFiles(host.webCore),
           () => refusedCore(HOST_UNLOADED),
         ),
       )
     : pickCore(globalThis);
+
+/**
+ * The clipboard and the way out to a browser, **chosen where the `Core` is chosen and by the
+ * same two questions** (the light-app spec §3.5): the web build is a browser's own two answers,
+ * the light app's Android host is a browser's clipboard and Tauri's opener, and the desktop is the
+ * two Tauri plugins. `@/lib/clipboard` and `@/lib/externalLinks` are the two callers; a page asks
+ * through them and never learns which this is.
+ *
+ * **Not deferred, unlike {@link core}**: the browser's implementation spells no Worker, so there
+ * is no chunk to keep out of the other builds and nothing to wait for. In the web build the
+ * literal folds, `pickHost` is never called, and the two plugins fall out of the bundle with it.
+ */
+export const host: Host = import.meta.env.MODE === "web" ? browserHost : pickHost(globalThis);

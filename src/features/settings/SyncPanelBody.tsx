@@ -36,12 +36,11 @@ import { QrScanner } from "./QrScanner";
 /**
  * How this panel sends a reader to a page outside the app — today, Patreon's authorize page.
  *
- * **A prop, and the reason is the light app's fence** (`mobile/phone/fence.test.ts`). The desktop
- * opens a link through `@/lib/externalLinks`, which is `@tauri-apps/plugin-opener`; a panel that
- * imported it could not be drawn by the phone face, so the panel is this file and the desktop's
- * `SyncPanel.tsx` beside it is one line that hands it `openExternal`. A face that opens links some
- * other way hands that in instead. It rejects when nothing opened, and the press reports that as
- * a refusal — see `connect` below.
+ * **A prop since the phone face first drew this panel**, when `@/lib/externalLinks` was Tauri's
+ * opener plugin and that face could not import it. It is the host's now (`@/lib/core`, phase 5),
+ * and `SyncPanel.tsx` beside this file hands `openExternal` in for both faces; the prop stays as
+ * the seam a test watches the press through. It rejects when nothing opened, and the press
+ * reports that as a refusal — see `connect` below.
  */
 export type OpenLink = (url: string) => Promise<void>;
 
