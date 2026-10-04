@@ -2615,14 +2615,17 @@ Android host (§8.1) is the first caller**, through `core_call`; no device has r
 
 ### 8.3 Step 4.3 — the back gesture, the insets and files (2026-10-03)
 
-**The back gesture needed no code, and the record says why.** Read off the shipped sources
-(`tauri` 2.11.5's `AppPlugin.kt`, `wry` 0.55.1's `WryActivity.kt`): both register an
-`OnBackPressedCallback` that calls `webView.goBack()` while `canGoBack()` and hands the press to
-the activity only from the first entry — and the plugin's `back-button` event, which would replace
-that, has no listener here. A `pushState` is an entry `canGoBack()` counts, so the phone router's
-pushes are exactly what the gesture walks: a card sheet closes, a folder level goes up, and from
-the page the app opened on the gesture leaves the app. `mobile/host.test.ts` holds that
-`MainActivity` neither turns `handleBackNavigation` off nor takes `onBackPressed` itself.
+**The back gesture's history walk needed no code, and the record says why.** Read off the
+shipped sources (`tauri` 2.11.5's `AppPlugin.kt`): it registers an `OnBackPressedCallback` that
+calls `webView.goBack()` while `canGoBack()` and hands the press to the activity only from the
+first entry — and the plugin's `back-button` event, which would replace that, has no listener
+here. (This paragraph also named `wry`'s `WryActivity` as registering one; it does not here, because
+Tauri's `TauriActivity` turns `handleBackNavigation` off — corrected 2026-10-04.) A `pushState` is
+an entry `canGoBack()` counts, so the phone router's pushes are exactly what the gesture walks: a
+card sheet closes, a folder level goes up. **What the last back does was changed on 2026-10-04**,
+after a real phone aborted the process on it (§8.6): `MainActivity` now registers a callback of
+its own that moves the task to the back instead of letting the activity finish — §8.6 has the
+chain and `mobile/host.test.ts` holds the edit.
 
 **The insets are the host's, as padding rather than `env()`.** From target SDK 35 Android draws
 every app edge to edge and no longer resizes a window for the keyboard, and whether a WebView
@@ -2918,6 +2921,34 @@ sync runs, or *No card data yet* (with the last error, if any) when none does �
 metered link, or a failed first download. A deck's Add cards shares the same results, so it says
 the same. `cardData.test.tsx` holds the in-flight text, the refill on a `done` event, the refill on
 the count leaving zero with no event, and the empty seed's sentence. **Not yet driven on a phone.**
+
+**Fixed since — leaving the app ends nothing (3).** Read off `tauri` 2.11.5, `tao` 0.35.3, `wry`
+0.55.1 and `tauri-runtime-wry` 2.11.4: `TauriActivity` sets `handleBackNavigation = false`, so the
+only back handler is Tauri's `AppPlugin`, which walks the WebView's history and from the first entry
+turns itself off and calls `activity.onBackPressed()` — and on that phone the root activity
+finished. `WryActivity.onDestroy` → `Rust.onActivityDestroy` → tao sends `WindowEvent::Destroyed`;
+`tauri-runtime-wry` removes the last window, `ExitRequested` is not prevented, the loop exits, and
+**tao's Android `EventLoop::run` calls `std::process::exit`** on its own thread. `exit()` runs every
+loaded library's static destructors while the framework's threads are alive — the second abort
+fired 5 ms after HWUI's `RenderThread::destroyRenderingContext`, at the same faulting address in
+both processes, which fits a static in a zygote-preloaded system library. The process cannot simply
+be kept: Tauri builds its window once per process (wry keys its WebView attributes by the first
+activity, and the plugin manager ignores a second `onActivityCreate`), so a second activity would
+be blank. **Two fixes.** `MainActivity` registers an `OnBackPressedCallback` in `onCreate`, ahead
+of the plugin's, so it is reached only when the plugin hands the press on: it checks the WebView's
+`canGoBack()` itself (in case a later Tauri orders the callbacks differently) and otherwise calls
+`moveTaskToBack(true)` — Android 12+'s own default for a root launcher activity — so the app stays
+warm and nothing exits. And the host now `.build()`s and `.run()`s the app so that on Android
+`RunEvent::Exit` prints a marker line and ends the process with `libc::_exit(0)`, running no
+destructors — the way Android kills a cached process; committed SQLite data is durable and an
+uncommitted write rolls back on the next open — for an activity destroyed any other way.
+**`scripts/android-first-run.sh` now leaves the app twice** after the cold starts: back ×2 from an
+untouched start page (process kept, return launch's `TotalTime` and `LaunchState`), then the
+activity destroyed on purpose (*Don't keep activities* and Home, or a clear-task launch as the
+fallback), and the run **fails on a `FORTIFY`, `destroyed mutex` or `Fatal signal` line in the
+app's process** in either. Stock API 34 already moves a root task to the back, so the first step
+cannot fail there the way the phone did; the second is the test of the exit path. **Not yet seen
+on the phone.**
 
 **Method notes.** This phone's logcat ring buffers are 256 KiB and had turned over by the end, so
 the record is a `logcat` streamed from before the first launch. The phone's clock ran 9.69 s ahead

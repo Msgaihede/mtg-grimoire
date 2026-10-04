@@ -8,6 +8,11 @@ name: Android emulator
 # emulator cannot stand in for — a phone's CPU, its storage, its thermal limits, a real metered
 # link.
 #
+# **Then it leaves the app, and fails if leaving aborted it.** A phone's back gesture from the start
+# page ended the process with `FORTIFY: pthread_mutex_lock called on a destroyed mutex`
+# (2026-10-04): the script presses back from the start page, then destroys the activity on purpose,
+# and reads logcat for a FORTIFY line, a destroyed mutex or a fatal signal in the app's process.
+#
 # **A measurement, not a gate.** It is not in `ci.yml`, `ci-ok` never reads it, and nothing is
 # branch-protected on it. It runs on dispatch, and on a push to `main` that changed what the APK
 # is built from — the host, the engine, the lockfile, or this file and its script.
@@ -121,7 +126,7 @@ jobs:
       #
       # **`script:` is one command.** The action runs each of its lines as a separate shell, so
       # the measuring lives in a file rather than in a block here.
-      - name: Measure the first run
+      - name: Measure the first run, then leave the app
         uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d # v2.38.0
         with:
           api-level: 34

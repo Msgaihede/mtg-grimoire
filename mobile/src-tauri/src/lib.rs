@@ -125,8 +125,40 @@ pub fn run() {
                 .spawn(move || start(&handle))?;
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("the light app could not start");
+        .build(tauri::generate_context!())
+        .expect("the light app could not start")
+        .run(|_app, _event| {
+            #[cfg(target_os = "android")]
+            end_on_exit(&_event);
+        });
+}
+
+/// **On Android the process ends with `_exit`, never `exit`** — the one thing the event loop's
+/// end does here. Tauri ends its event loop when its last window goes, which on Android is the
+/// activity being destroyed (tao's `onActivityDestroy`), and tao's `EventLoop::run` then calls
+/// `std::process::exit`. That runs every loaded library's static destructors on the event loop's
+/// thread while the framework's own threads are still running — HWUI's RenderThread trimming its
+/// context as the window goes among them — and the next lock one of them takes is on a mutex a
+/// destructor has already destroyed: `FORTIFY: pthread_mutex_lock called on a destroyed mutex`,
+/// an abort, found on a phone on 2026-10-04. `_exit` ends the process as Android's own kill does,
+/// running nothing, so nothing races. Nothing is lost by it: a committed SQLite transaction is
+/// already durable against a process that stops, and an uncommitted one is rolled back by the
+/// next open — the guarantee every Android app already leans on, since a cached process is killed
+/// rather than asked. The process has to end at all because Tauri builds its window once per
+/// process: a second activity in this one would be a blank screen. The ordinary way out, the back
+/// gesture from the first page, no longer comes here — `MainActivity.kt` moves the task to the back
+/// instead — so this is the path for an activity destroyed any other way.
+#[cfg(target_os = "android")]
+fn end_on_exit(event: &tauri::RunEvent) {
+    if matches!(event, tauri::RunEvent::Exit) {
+        // `.github/workflows/android-emulator.yml` reads this line from logcat to know the
+        // process left by this path. stderr reaches logcat through tao's pipe and a reader thread,
+        // so it is given a moment before the process stops under it.
+        eprintln!("host: the window is gone; ending the process with _exit");
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        // SAFETY: `_exit` takes no pointer, touches no Rust state, and does not return.
+        unsafe { libc::_exit(0) }
+    }
 }
 
 /// One image request's answer, before the state exists and after.
