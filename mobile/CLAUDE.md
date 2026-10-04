@@ -382,7 +382,8 @@ failure behind each at its own site:
   from Cache Storage, and a newer build held until the reader takes it. **The manifest and its
   icons** are in `mobile/public/`, the light builds' own public directory since step 5.4, so no
   other build carries them; `scripts/light-icons.mjs` renders the icons from the mark, and
-  **there is no install button**: a browser's own install UI is the install. **Nothing is deployed**: the
+  **there is no install button**: a browser's own install UI is the install. **It is deployed at
+  `https://mtg-grimoire.app` since 2026-10-04** (light-app.md §9.7): the
   hosting Worker and its policy are source in `app-worker/` (step 5.5's first half), and the
   built app was driven end to end under that policy in one headless Chrome (its second half,
   light-app.md §9.6).
@@ -546,10 +547,9 @@ built in the `web` mode.
   takes a lock. The *Running it* table has each.
 - **A web install builds its corpus** (step 5.2): a `ready` open starts the card sync and then
   each feed in turn, on every launch, and one first run against the real hosts is measured in
-  [light-app.md](../docs/reference/light-app.md) §9.2. **Not there yet**, each with the step
-  that owns it in [the plan](../docs/superpowers/plans/2026-10-04-light-app-phase-5.md): no
-  deploy — the hosting Worker is built and nothing is at the address; that is the owner's
-  (§9.5, and §9.6 for the phase's own run and what it left) — and no sync (phase 6).
+  [light-app.md](../docs/reference/light-app.md) §9.2. **Not there yet**: sync, which is phase
+  6. **It is deployed** — since 2026-10-04, when this line stopped listing the deploy beside
+  sync; §9.7 is that day's record, and a deploy is still the owner's, run by no agent unasked.
 - **The service worker is the web host's, and nothing here names it** (step 5.3;
   `src/lib/core/web/sw/`, registered by the page's half of the web core in a built app and
   never by the dev server). What a page sees of it is three things, each through the seam:
