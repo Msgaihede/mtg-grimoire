@@ -9,6 +9,7 @@
  */
 import type { ImportDestination } from "../destination";
 import { NewDeckPreview } from "./NewDeckPreview";
+import { NEW_DECK_DESTINATION } from "./NewDeckPreviewBody";
 
 /**
  * The new deck as a destination.
@@ -20,7 +21,6 @@ import { NewDeckPreview } from "./NewDeckPreview";
  * `Preview` with a wrapper closing over them; see `DecksPage`.
  */
 export const newDeckDestination: ImportDestination = {
-  key: "newDeck",
-  label: "a new deck",
+  ...NEW_DECK_DESTINATION,
   Preview: NewDeckPreview,
 };

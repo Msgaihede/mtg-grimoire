@@ -135,10 +135,89 @@ describe("the deck gallery", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Your decks could not be read.");
   });
 
-  it("says so, and offers nothing, when there are no decks", async () => {
+  it("says there are no decks yet, and offers both ways to make one", async () => {
     renderPhone(<PhoneFace />, { path: "/decks", fake: { seed: "empty" } });
-    expect(await screen.findByText("No decks", undefined, SETTLE)).toBeInTheDocument();
+    expect(await screen.findByText("No decks yet.", undefined, SETTLE)).toBeInTheDocument();
     expect(screen.queryByRole("list", { name: "Your decks" })).toBeNull();
+    // A light install has no other way to its first deck — no sync, and no desktop face.
+    expect(screen.getByRole("button", { name: "New deck" })).toHaveAttribute(
+      "aria-haspopup",
+      "dialog",
+    );
+    expect(screen.getByRole("button", { name: "New deck from a list" })).toBeInTheDocument();
+  });
+
+  it("makes a first deck through the desktop's own dialog and opens it", async () => {
+    const user = userEvent.setup();
+    renderPhone(<PhoneFace />, { path: "/decks", fake: { seed: "empty" } });
+    await screen.findByText("No decks yet.", undefined, SETTLE);
+
+    await user.click(screen.getByRole("button", { name: "New deck" }));
+    const dialog = await screen.findByRole("dialog", { name: "New deck" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Pauper Elves");
+    await user.click(within(dialog).getByRole("button", { name: "Create deck" }));
+
+    // On the deck's own page, by a push — Back is the gallery it was made from.
+    await waitFor(() => expect(window.location.pathname).toMatch(/^\/decks\/\d+$/), SETTLE);
+    expect(
+      await screen.findByRole("heading", { level: 2, name: "Pauper Elves" }, SETTLE),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText("No cards in this deck yet.", undefined, SETTLE),
+    ).toBeInTheDocument();
+    expect(screen.queryByRole("dialog", { name: "New deck" })).toBeNull();
+  });
+
+  it("offers New deck beside the decks too, and files one made in a folder there", async () => {
+    const user = userEvent.setup();
+    renderPhone(<PhoneFace />, { path: "/decks" });
+    await screen.findByRole("list", { name: "Your decks" }, SETTLE);
+    expect(screen.getByRole("button", { name: "New deck" })).toBeInTheDocument();
+
+    await user.click(
+      within(screen.getByRole("list", { name: "Folders" })).getByRole("link", {
+        name: /^Constructed/,
+      }),
+    );
+    expect(window.location.search).toBe("?folder=1");
+
+    await user.click(screen.getByRole("button", { name: "New deck" }));
+    const dialog = await screen.findByRole("dialog", { name: "New deck" });
+    await user.type(within(dialog).getByRole("textbox", { name: "Name" }), "Filed here");
+    await user.click(within(dialog).getByRole("button", { name: "Create deck" }));
+
+    await screen.findByRole("heading", { level: 2, name: "Filed here" }, SETTLE);
+    const id = Number(window.location.pathname.split("/").pop());
+    const made = (await ipc.deckList()).find((deck) => deck.id === id);
+    expect(made?.folderId).toBe(1);
+    // And its way back is the folder it was made in.
+    expect(screen.getByRole("link", { name: "Back to decks" })).toHaveAttribute(
+      "href",
+      "/decks?folder=1",
+    );
+  });
+
+  it("makes a deck from a pasted list, filed where the gallery stands, and opens it", async () => {
+    const user = userEvent.setup();
+    renderPhone(<PhoneFace />, { path: "/decks?folder=1" });
+    await screen.findByRole("heading", { level: 2, name: "Constructed" }, SETTLE);
+
+    await user.click(screen.getByRole("button", { name: "New deck from a list" }));
+    const sheet = await screen.findByRole("dialog", { name: "Import a decklist" });
+    expect(sheet).toHaveTextContent("Into a new deck in Constructed");
+    await user.click(within(sheet).getByRole("textbox"));
+    await user.paste("4 Lightning Bolt\n4 Sol Ring");
+    await user.click(within(sheet).getByRole("button", { name: "Preview" }));
+
+    const name = await within(sheet).findByRole("textbox", { name: "Name" }, SETTLE);
+    await user.type(name, "Pasted in");
+    await user.click(within(sheet).getByRole("button", { name: "Import" }));
+
+    await screen.findByRole("heading", { level: 2, name: "Pasted in" }, SETTLE);
+    const id = Number(window.location.pathname.split("/").pop());
+    const made = (await ipc.deckList()).find((deck) => deck.id === id);
+    expect(made?.folderId).toBe(1);
+    expect(made?.cardCount).toBeGreaterThan(0);
   });
 });
 
