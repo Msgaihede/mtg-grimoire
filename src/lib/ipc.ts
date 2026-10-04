@@ -5529,6 +5529,11 @@ export interface SyncStatus {
  * human-written, multi-line sentence naming the folder that would not open, meant to be shown
  * as it is.
  *
+ * **One host makes one more move, `ready → failed`, once**: the web host, when its engine's
+ * Worker dies under a page that had opened (`core/web/index.ts`). Still never back — nothing
+ * returns to `ready` — and never from a native host, whose engine cannot stop while its window
+ * lives. `boot/useStartup.ts` keeps its listener after `ready` for exactly this.
+ *
  * **`reload` is a host saying that starting again can cure the failure** — and only a host that
  * can mean it sends it. The web host does, for a second tab (the first tab holds the database, and
  * may since have closed) and for an engine that never loaded; neither native host does, because a
@@ -5739,6 +5744,20 @@ export interface MarketplaceFeedStatus {
    * this one is only as fresh as the last status read.
    */
   refreshing: boolean;
+  /**
+   * Whether **this host** can ask the feed at all.
+   *
+   * `false` for a feed its host has no way to request — Mana Pool in a browser, whose endpoint
+   * sends no cross-origin permission, so a page's `fetch` is refused before it leaves (the
+   * light-app spec §4; measured in light-app.md §9.1). `true` otherwise, and on every native
+   * host always.
+   *
+   * **A fact about the host and not about the feed's rows**, which is why it is its own field
+   * rather than a sixth {@link FeedState}: the picker greys the row and says why, and
+   * `useMarketplace` quotes another marketplace instead of drawing a window of em dashes — both
+   * from this answer and from nothing a page could find out about where it runs.
+   */
+  reachable: boolean;
 }
 
 /** The phases `marketplace_feed.rs` emits. Four, against `SyncPhase`'s eight: a feed is one

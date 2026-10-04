@@ -274,6 +274,30 @@ Chrome, where the web host opened its database in OPFS. `http` has made no reque
 browser, because the host starts no download yet. [light-app.md](../../reference/light-app.md)
 §9.1 is the record.
 
+**Built 2026-10-04 (step 5.2), `platform::host` and a yield — and `http` has now made its
+requests from a browser.** Two additions, each because the web host's first download called
+for it, and one correction to the table above:
+
+- **`platform::host` is two facts rather than a fifth interface**: `keeps_files()` and
+  `asks_as_a_page()`. A download is not one call that behaves two ways; it is two shapes of the
+  whole run, so each native download keeps its statements and the arm for a host with no files
+  branches before it sends anything — a body streamed into its sink, no conditional header, no
+  resume, a stall bound on every wait. `host::emulate_page()` is `alone`'s larger sibling: the
+  same one thread, with `files` refusing and the response headers CORS hides hidden, so each
+  download's mock-server tests run the page's arm on a desktop.
+- **`timer::yield_to_host()`, and `Breather`, which takes one on a budget of work.** An
+  `.await` is not a turn of the event loop: in a browser a chunk the network had already
+  buffered resumes its reader on the microtask queue, and a command a page sends is a task.
+  The first measured run found it — a `sync_status` sent once a second was taken eight times
+  in a 16.4 s card download, 3.5–8.4 s late (headless Chrome 154). A yield is a message posted
+  to itself over a `MessageChannel`; every streamed loop takes one each 50 ms of work.
+- **The table's `Clock` row is half right now**: the wall clock is `Date.now()`, but `Tick` —
+  what a wait and Scryfall's pacing gate count with — is `performance.now()` in a browser, so a
+  clock stepped forwards cannot open the gate early. And `http` sets no `User-Agent` there: a
+  page may not choose one.
+
+[light-app.md](../../reference/light-app.md) §9.2 is the record.
+
 ### 2.6 State, events and the one update hook
 
 - **`AppState` splits.** `core::State` holds what every host needs. The desktop wraps it with its
@@ -641,6 +665,10 @@ Carried over from August without re-asking:
 - **Mana Pool is unavailable in a browser.** Its endpoint sends no `Access-Control-Allow-Origin`.
   The marketplace picker offers what the host can reach, and a database synced from a desktop that
   chose Mana Pool falls back rather than drawing blanks. Android reaches it natively.
+  **Built 2026-10-04 (step 5.2)**: the engine refuses the feed before any request, in a
+  sentence, and answers `reachable: false` on its status; the picker greys that row with the
+  reason, and a stored Mana Pool choice is *quoted* as TCGplayer — the same currency, and
+  prices that ride the card data — without the stored choice ever being written away.
 - **The mobile-data prompt.** Any feed over 5 MB shows its measured size and, where the connection
   reports itself metered, defaults to *Not now*.
 
@@ -742,6 +770,47 @@ Nothing is deployed there. What is left of the list — the corpus that can vani
 `persist()`, the update flow, hosting — is in the four steps that remain;
 [the plan](../plans/2026-10-04-light-app-phase-5.md) has them and
 [light-app.md](../../reference/light-app.md) §9 is the record.
+
+**Built 2026-10-04 (step 5.2): the first run.** The launch's downloads run in a browser — the
+card sync and then each feed in turn, every body streamed into its sink with no temp file —
+and the third bullet of the list above is built, differently from how it is written in two
+places.
+
+**The table has a second column now, from one run** (headless Chrome 154.0.8037.95 on Windows
+11, the built app, the phone face, against the real hosts; **one run on a machine that was not
+quiet**, on a module from before that step's review and before its yield):
+
+| | Round one | Step 5.2, one run |
+| --- | --- | --- |
+| WASM module | 2 642 182 B | 8 587 535 B on the run; 8 592 080 B as shipped, 3 001 242 B through `gzip -9` |
+| First run | 117 606 rows, 15.6–16.3 s | 118 469 cards, `done` 23 812 ms after navigation — 16.40 s of it the 78 692 716 B download |
+| Linear memory, peak | 148.6–171.6 MB | 203 358 208 B (193.9 MiB) |
+| `search_cards` | median 53 ms, cold 134 ms | `dragon` + playable, 2 363 hits: first 67.6 ms, then a median of 59; `bolt`: 8.5, then 1.7 |
+| `facet_cards` | 5 ms | no text: 5.6 ms, then 4.8; `bolt`: 4.9, then 1.7 |
+| Storage | about 526 MB with every feed | 960 569 344 B in OPFS, the corpus 959 451 136 B of it — the desktop's `corpus.db` on the same machine is 950 554 624 B |
+
+- **One connection means the synchronous tails block, and that is the list's first bullet
+  measured.** The feeds were all done at 76.6 s, and while a tail ran no command was
+  answered: 11.3 s for the oracle tags' finish, 23.4 s for the art tags', 3.7 s for the
+  combos' store, and a longest single wait of 26.1 s. *Searches queue behind an ingest* is
+  true, and the queue is that long. Left open, with what closing it would take, in
+  light-app.md §9.2.
+- **A cleared storage is a notice, not an offered rebuild.** The rebuild needs no offer: an
+  engine that opens an empty corpus downloads the cards by itself. What a reader needs is to be
+  told why the app is empty and that their collection is not coming back with the cards. The
+  Worker asks whether the OPFS folder existed before the open, the page compares that with a
+  mark in `localStorage`, and one dismissible notice is drawn from the host's own answer —
+  nothing under `mobile/` asks where it runs. A corpus that will not open or migrate is a
+  different case and is replaced by the engine, through the pool's delete; `user.db` is never
+  deleted.
+- **`persist()` is asked again, at most once a week, while the answer is no — not once.**
+  Chromium decides at the moment of the call, from engagement, a bookmark, an install; a first
+  visit's no, frozen for good, would never become a yes after the reader installs the app.
+  Each launch reads `persisted()` first, a yes ends the asking, and the ask is stamped before
+  the answer. Recorded and not trusted, as the bullet says; `estimate()` still gates nothing —
+  it read 278 MB above the files on this run.
+
+What is left of the list — the update flow and hosting — is in the three steps that remain.
 
 ---
 

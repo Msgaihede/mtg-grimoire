@@ -22,10 +22,13 @@
 //! gated to the browser is invisible to `cargo test`, and a typo in a wire string there is a
 //! silent `undefined` in a page — the first web host's rule, kept.
 //!
-//! **What it does not do yet**: start a download (a browser has no temp file for one to land
-//! in), keep a card image, or notice a corpus the browser evicted. Those are the web phase's
-//! next steps; `grimoire_core::launch`'s `unreadable_corpus_seam` is where the last one is
-//! written down.
+//! **What a `ready` open starts** (step 5.2): the launch's downloads — the card sync and then,
+//! one after another, the optional feeds — as one task on the Worker's own event loop, never
+//! awaited by `open` ([`host::launch_downloads`]). A corpus that will not open is thrown away
+//! through the pool's own delete and built again ([`host::start_replacing`]).
+//!
+//! **What it does not do yet**: keep a card image, or notice a corpus damaged inside a file
+//! whose first page is sound. Those are the web phase's later steps.
 //!
 //! ⚠️ **Compiling is not running.** This crate's tests run its decisions natively, on a thread
 //! standing in for a Worker (`grimoire_core::platform::alone`); the module itself is run by

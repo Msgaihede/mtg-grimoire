@@ -11,6 +11,7 @@ import { ipc, ipcError, type FeedProgressEvent, type MarketplaceFeedStatus } fro
 import {
   DEFAULT_MARKETPLACE,
   FEED_MARKETPLACES,
+  fallbackMarketplace,
   resolveMarketplace,
   type Marketplace,
   type MarketplaceId,
@@ -72,6 +73,16 @@ export interface FeedInfo {
   status: MarketplaceFeedStatus | null;
   /** Why the last refresh failed, `null` otherwise. */
   error: string | null;
+  /**
+   * Whether this host can ask the feed at all — the host's own answer
+   * (`MarketplaceFeedStatus.reachable`), never something this side works out.
+   *
+   * **`true` until a status says otherwise**: a read that has not landed, and a host whose build
+   * predates the field, are both "nothing has said it is out of reach". Only an explicit `false`
+   * greys a row or moves the window onto another marketplace, because the cost of guessing wrong
+   * the other way is a reader told that a marketplace they are quoting from cannot be used.
+   */
+  reachable: boolean;
 }
 
 /**
@@ -287,8 +298,14 @@ export function useMarketplace() {
       // a failure this window did not cause: there is no message on a progress event, and
       // inventing one would be worse than the state alone.
       error: attempt?.failed ? attempt.error : null,
+      reachable: status?.reachable !== false,
     };
   });
+
+  /** Whether the host has said it cannot ask this marketplace's feed. `false` for one with no
+   *  feed, and for one whose status has not been read: see {@link FeedInfo.reachable}. */
+  const outOfReach = (id: MarketplaceId) =>
+    feeds.some((f) => f.marketplace.id === id && !f.reachable);
 
   /**
    * Pull one feed and rewrite its rows.
@@ -335,15 +352,50 @@ export function useMarketplace() {
     },
   });
 
-  const chosen = resolveMarketplace(query.data ?? DEFAULT_MARKETPLACE);
+  const stored = resolveMarketplace(query.data ?? DEFAULT_MARKETPLACE);
+  /**
+   * **What this window quotes, which is the stored choice unless this host cannot ask it.**
+   *
+   * A database can name a marketplace its host has no way to reach: Mana Pool chosen on a desktop
+   * and then opened in a browser, where its price list may not be read. Quoting it anyway would
+   * be every price in the window as an em dash, with nothing on screen saying why — so the window
+   * quotes {@link fallbackMarketplace}'s answer instead (the light-app spec §4).
+   *
+   * **Here, because every price query takes its marketplace from this hook.** The marketplace is
+   * a parameter and part of each query's key, so answering a different one from this one place
+   * re-asks every priced list at a marketplace that has prices, with no call site knowing.
+   *
+   * **The stored choice is read around, never written over.** The same database may sync back to
+   * a desktop that can reach Mana Pool, and a setting this window had rewritten would arrive
+   * there as a choice the reader never made. Only a press in the picker writes.
+   *
+   * It costs one re-ask, once, on a database in that state: the feed status lands a moment after
+   * the stored id, so the first priced queries go out at the stored marketplace and are asked
+   * again when the answer says it is out of reach. Both are local reads.
+   */
+  const chosen = outOfReach(stored.id) ? fallbackMarketplace(stored) : stored;
 
   return {
-    /** Never null — an unset or unrecognised stored id resolves to the default. */
+    /** Never null — an unset or unrecognised stored id resolves to the default, and one this
+     *  host cannot ask resolves to its fallback. What every price query is keyed on. */
     marketplace: chosen,
+    /**
+     * What the database names, whether or not this window can quote it. The same object as
+     * `marketplace` everywhere but on a host that cannot reach the stored one — which is the
+     * one case the picker has to explain, and the only reader of this field.
+     */
+    stored,
     /** Convenience: what every price *formatter* in this app takes. The marketplace decides
      *  which number arrives; this decides how it is written. */
     currency: chosen.currency,
-    select: (id: MarketplaceId) => select.mutate(id),
+    /**
+     * Choose a marketplace. **One the host cannot ask is not written**: the picker greys that
+     * row and ignores the press, and this is the same refusal for any caller that is not the
+     * picker — a stored choice the window would then have to fall back from is not a choice.
+     */
+    select: (id: MarketplaceId) => {
+      if (!outOfReach(id)) select.mutate(id);
+    },
     selecting: select.isPending,
     error: select.error ? ipcError(select.error) : null,
     /** Both downloaded feeds, in picker order — what Settings draws. Empty until the status

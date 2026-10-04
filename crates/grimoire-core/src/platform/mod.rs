@@ -12,10 +12,11 @@
 //!
 //! | Interface | Native | Web | Landed with |
 //! | --- | --- | --- | --- |
-//! | [`clock`] — the wall clock, a moment that can be stored, and a tick to measure a wait from | `SystemTime`, `Instant` | `Date.now()` | the leaves; the tick with the storage step; the stored moment with the image cache |
+//! | [`clock`] — the wall clock, a moment that can be stored, and a tick to measure a wait from | `SystemTime`, `Instant` | `Date.now()`; `performance.now()` for the tick | the leaves; the tick with the storage step; the stored moment with the image cache; the monotonic tick with the web host's first download |
 //! | [`pause`] — standing aside for another thread | `thread::sleep` | nothing: there is no other thread | the storage step, for `db::lock_for` |
 //! | [`timer`] — a sleep a future awaits, and a deadline on one | the async runtime's | `setTimeout` | the I/O step, for `scryfall`'s pacing and its image deadline |
-//! | [`http`] — a request, a streamed body | `reqwest` over rustls | `reqwest` over `fetch` | the I/O step, for `scryfall`; `POST`, a text body and a browser's deadline with the sync client |
+//! | [`http`] — a request, a streamed body, a wait that gives up on a stall | `reqwest` over rustls | `reqwest` over `fetch`, with no `User-Agent` of its own | the I/O step, for `scryfall`; `POST`, a text body and a browser's deadline with the sync client; the stall bounds with the web host's first download |
+//! | [`host`] — whether a download has a file to land in, and whether a request is a page's | it has, and it is not | it has not, and it is | the web host's first download (phase 5, step 5.2) |
 //! | [`device`] — the machine's own name | the environment | none | the sync step, for the name a device mints |
 //! | [`files`] — a download on disk, the files the schema keeps, the image cache's pictures | `std::fs`, `tokio::fs` | refused | the I/O step, for `scryfall`, `ingest` and `schema`; a listing, a stamp and a rename for `images` |
 //! | [`sync`] — a permit and a lock an `async fn` holds across an `.await`, first come first served | `tokio::sync` | `tokio::sync`: it needs no runtime | the I/O step, for the image cache; a lock that guards a value with the sync step, for the pending pairing offer |
@@ -24,6 +25,8 @@
 //!
 //! [`alone`] is the odd one out: not an interface with two arms but a way for a native **test**
 //! to feel the browser's — one thread, work run where it stands, a lock taken twice a failure.
+//! [`host::emulate_page`] is its larger sibling: the same thread, with no files and with the
+//! response headers a cross-origin `fetch` hides hidden — a native test's whole page.
 //!
 //! **Each is here because something calls it**: an interface written before the code that calls
 //! it is a guess.
@@ -37,12 +40,15 @@
 //! `wasm32-unknown-unknown`. The first run of any of them was 2026-10-04, under Node's V8 rather
 //! than a browser: the module instantiated over SQLite's in-memory VFS and commands of every
 //! kind driven through it — which reached [`clock`], [`pause`], [`spawn`]'s `blocking` and the
-//! refusing [`files`], and not [`http`], [`timer`] or `spawn`'s `background`.
+//! refusing [`files`], and not [`http`], [`timer`] or `spawn`'s `background`. Those three are
+//! first called by the web host's launch downloads (phase 5, step 5.2), and what a browser
+//! made of them is `docs/reference/light-app.md`'s to record.
 
 pub mod alone;
 pub mod clock;
 pub mod device;
 pub mod files;
+pub mod host;
 pub mod http;
 mod pause;
 pub mod spawn;

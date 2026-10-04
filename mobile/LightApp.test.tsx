@@ -12,9 +12,24 @@ vi.mock("./phone/PhoneApp", () => ({
   },
 }));
 
+// Stood in for, so the test of where it is mounted does not need a host that answers it.
+vi.mock("./StorageNotice", () => ({ StorageNotice: () => <div>the storage notice</div> }));
+
 const startupStatus = vi.hoisted(() => vi.fn());
+/** The gate's one subscription, so a test can be the host saying something after `ready`. */
+const gate = vi.hoisted(() => ({
+  heard: undefined as ((status: unknown) => void) | undefined,
+}));
 vi.mock("@/lib/ipc", () => ({
-  ipc: { startupStatus, onStartupChanged: () => () => undefined },
+  ipc: {
+    startupStatus,
+    onStartupChanged: (cb: (status: unknown) => void) => {
+      gate.heard = cb;
+      return () => {
+        if (gate.heard === cb) gate.heard = undefined;
+      };
+    },
+  },
 }));
 
 import { LightApp } from "./LightApp";
@@ -86,6 +101,31 @@ describe("LightApp", () => {
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
+  it("mounts the storage notice after whichever face is drawn, and not before the gate opens", async () => {
+    // After, in the document: the notice shares a rung with the desktop face's first-run screen,
+    // and equal rungs paint in document order — mounted ahead of the face it would be drawn
+    // under the screen it explains. jsdom stacks nothing, so the order is what can be held.
+    const resize = stubViewport(true);
+    render(<LightApp gate={false} />);
+    const desktop = await screen.findByText("the desktop face");
+    const notice = screen.getByText("the storage notice");
+    expect(desktop.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+
+    // Outside the face's boundary, so a crossing keeps the one that is there.
+    act(() => resize(false));
+    const phone = await screen.findByText("the phone face");
+    expect(screen.getByText("the storage notice")).toBe(notice);
+    expect(phone.compareDocumentPosition(notice) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("asks the host nothing about its storage while the data folder is still opening", async () => {
+    stubViewport(false);
+    startupStatus.mockResolvedValue({ state: "loading" });
+    render(<LightApp gate />);
+    await screen.findByRole("status");
+    expect(screen.queryByText("the storage notice")).toBeNull();
+  });
+
   it("draws neither face until the data folder is open", async () => {
     stubViewport(false);
     startupStatus.mockResolvedValue({ state: "loading" });
@@ -115,5 +155,76 @@ describe("LightApp", () => {
     startupStatus.mockResolvedValue({ state: "ready" });
     render(<LightApp gate />);
     expect(await screen.findByText("the phone face")).toBeInTheDocument();
+  });
+
+  /**
+   * **The gate can close again, once**: a host whose engine stops under an open app says so on
+   * the startup status, and what is drawn is the boot screen *instead of* the app — never a
+   * shell whose every read now fails quietly.
+   */
+  describe("when the host says its engine stopped under an open app", () => {
+    const STOPPED = {
+      state: "failed",
+      message: "MTG Grimoire's card engine stopped. Reload to start it again.",
+      reload: true,
+    };
+
+    it.each([
+      ["the phone face", false],
+      ["the desktop face", true],
+    ])("replaces %s with the host's sentence and a way out", async (face, wide) => {
+      stubViewport(wide);
+      startupStatus.mockResolvedValue({ state: "ready" });
+      render(<LightApp gate />);
+      await screen.findByText(face);
+      expect(gate.heard).toBeDefined();
+
+      act(() => gate.heard?.(STOPPED));
+
+      expect(screen.getByRole("alert")).toHaveTextContent(
+        "MTG Grimoire's card engine stopped. Reload to start it again.",
+      );
+      expect(screen.getByRole("link", { name: "Reload" })).toBeInTheDocument();
+      // The whole app is gone with it, and so is everything mounted beside the faces: nothing
+      // left on screen is asking an engine that is not there.
+      expect(screen.queryByText(face)).toBeNull();
+      expect(screen.queryByText("the storage notice")).toBeNull();
+    });
+
+    it("draws it over a face that had already failed by itself, as the one account", async () => {
+      // An engine that stops fails the face's own reads too, and a face can throw on one before
+      // the gate is heard. The boundary's sentence is then replaced, not left beside the host's.
+      vi.spyOn(console, "error").mockImplementation(() => undefined);
+      phone.throws = true;
+      stubViewport(false);
+      startupStatus.mockResolvedValue({ state: "ready" });
+      render(<LightApp gate />);
+      expect(await screen.findByRole("alert")).toHaveTextContent("This page could not be drawn.");
+
+      act(() => gate.heard?.(STOPPED));
+
+      const alerts = screen.getAllByRole("alert");
+      expect(alerts).toHaveLength(1);
+      expect(alerts[0]).toHaveTextContent("card engine stopped");
+      expect(screen.getAllByRole("link", { name: "Reload" })).toHaveLength(1);
+    });
+
+    it("stays closed across a resize, and whatever the host says next", async () => {
+      const resize = stubViewport(false);
+      startupStatus.mockResolvedValue({ state: "ready" });
+      render(<LightApp gate />);
+      await screen.findByText("the phone face");
+      const heard = gate.heard;
+      act(() => heard?.(STOPPED));
+
+      // Crossing the floor picks a face; it must not bring one back over a dead engine.
+      act(() => resize(true));
+      // And the listener that heard it is finished: a late `ready` is not an app again.
+      act(() => heard?.({ state: "ready" }));
+
+      expect(screen.getByRole("alert")).toHaveTextContent("card engine stopped");
+      expect(screen.queryByText("the desktop face")).toBeNull();
+      expect(screen.queryByText("the phone face")).toBeNull();
+    });
   });
 });

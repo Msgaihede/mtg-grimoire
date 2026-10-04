@@ -50,10 +50,18 @@ export interface Engine {
  * The pool is registered by name and a second registration would be handed the first, so this is
  * hygiene rather than a fix — what a second open would make is a second connection, a second run
  * of every migration and a second build of the facet index, on a host that permits one connection.
+ *
+ * **Whether the database's folder was already there is asked before the open, and once.** `held`
+ * answers it — `worker.ts` hands in the one that looks in OPFS — and the answer rides back on
+ * `opened`. Before, because the open is what creates the folder: asked afterwards, every launch
+ * would find one. It is how the page tells storage a browser cleared from a first run
+ * (`storage.ts`); a browser that cannot be asked, or an ask that throws, is `null`, and never a
+ * reason not to open.
  */
 export function createEngine(
   load: () => Promise<Glue>,
   post: (message: FromWorker) => void,
+  held: (directory: string) => Promise<boolean | null> = () => Promise.resolve(null),
 ): Engine {
   const loaded = once(async () => {
     const glue = await load();
@@ -72,19 +80,38 @@ export function createEngine(
     return glue;
   });
 
-  let opening: Promise<Opening> | undefined;
+  /** What one open found: the engine's answer, and whether the folder was there beforehand. */
+  interface Asked {
+    opened: Opening;
+    existed: boolean | null;
+  }
+
+  let opening: Promise<Asked> | undefined;
 
   /** The one open, memoised on the first ask — its answer included, a refusal too. */
-  const open = (directory: string): Promise<Opening> =>
-    (opening ??= loaded().then(
-      (glue) =>
-        glue.open(directory).then(
-          openedOf,
-          // `open` answers its refusals as JSON, so a rejection is the glue's own throw.
-          (error: unknown): Opening => ({ kind: "failed", message: readable(error) }),
+  const open = (directory: string): Promise<Asked> =>
+    (opening ??= (async (): Promise<Asked> => {
+      // Beside the module's load rather than after it — neither waits on the other — and both
+      // are done before `glue.open` runs, which is the only order that matters.
+      const [existed, glue] = await Promise.all([
+        Promise.resolve()
+          .then(() => held(directory))
+          .catch(() => null),
+        loaded().then(
+          (module) => ({ module }),
+          (error: unknown) => ({ unloaded: readable(error) }),
         ),
-      (error: unknown): Opening => ({ kind: "unloaded", message: readable(error) }),
-    ));
+      ]);
+      if ("unloaded" in glue) {
+        return { opened: { kind: "unloaded", message: glue.unloaded }, existed };
+      }
+      const opened = await glue.module.open(directory).then(
+        openedOf,
+        // `open` answers its refusals as JSON, so a rejection is the glue's own throw.
+        (error: unknown): Opening => ({ kind: "failed", message: readable(error) }),
+      );
+      return { opened, existed };
+    })());
 
   async function call(message: Extract<ToWorker, { kind: "call" }>): Promise<void> {
     const { id } = message;
@@ -92,7 +119,7 @@ export function createEngine(
       // The page holds its calls until it hears `opened`, so one that arrives early is asked of
       // an open already under way and waits for it. Refused only where nobody ever asked.
       if (opening === undefined) return post({ kind: "err", id, message: NOT_OPENED });
-      const opened = await opening;
+      const { opened } = await opening;
       if (opened.kind !== "ready") {
         const why = opened.kind === "already-open" ? NOT_OPENED : opened.message;
         return post({ kind: "err", id, message: why });
@@ -113,7 +140,9 @@ export function createEngine(
     handle(message: ToWorker): Promise<void> {
       switch (message.kind) {
         case "open":
-          return open(message.directory).then((opened) => post({ kind: "opened", opened }));
+          return open(message.directory).then(({ opened, existed }) =>
+            post({ kind: "opened", opened, existed }),
+          );
         case "call":
           return call(message);
       }

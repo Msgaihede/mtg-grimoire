@@ -79,7 +79,13 @@ pub fn instantiated() {
 /// this origin cannot take the pool's access handles, and is refused before it names a
 /// database. Not retried and not queued — the first tab wins and the second says so.
 ///
-/// **It starts no download and no upkeep loop** ([`host::start`] says why).
+/// **A `ready` answer starts the launch's downloads and does not wait for them**
+/// ([`host::launch_downloads`]): the card sync and then, one after another, the optional
+/// feeds, as one task on this Worker's own event loop. They say what they are doing through
+/// [`listen`]'s handler. **No upkeep loop** ([`host::start`] says why).
+///
+/// **A corpus that will not open is thrown away and built again**, through the pool's own
+/// delete ([`host::start_replacing`]); `user.db` is never touched, and the console is told.
 #[wasm_bindgen]
 pub async fn open(directory: String) -> String {
     let opening = OPENING.with(|once| once.get(move || open_once(directory).boxed_local()));
@@ -88,18 +94,41 @@ pub async fn open(directory: String) -> String {
 
 async fn open_once(directory: String) -> String {
     console_error_panic_hook::set_once();
-    if let Err(text) = install_pool(&directory).await {
-        return Opened::from_install_error(&text).to_json();
-    }
+    let pool = match install_pool(&directory).await {
+        Ok(pool) => pool,
+        Err(text) => return Opened::from_install_error(&text).to_json(),
+    };
+    // The pool's delete only. What decides that it is called, and how often, is the core's
+    // (`launch::open_single_replacing`); which files are the corpus's, in what order, and
+    // that every one is attempted whatever an earlier one answered, are `host`'s.
+    let mut delete_corpus = || -> Result<(), String> {
+        host::delete_corpus(&pool.list(), &mut |name| {
+            pool.delete_db(name)
+                .map(|_| ())
+                .map_err(|e| format!("{e}: {e:?}"))
+        })
+    };
     // An empty place: the pool is the filesystem, and its two names are bare.
-    match host::start(Path::new(""), &directory, Arc::new(PageEvents)) {
+    let started = host::start_replacing(
+        Path::new(""),
+        &directory,
+        Arc::new(PageEvents),
+        &mut delete_corpus,
+    );
+    match started {
         Ok(started) => {
+            if started.corpus_replaced {
+                warn(host::CORPUS_REPLACED);
+            }
             if let Err(e) = &started.index {
                 warn(&format!(
                     "card index unavailable, facets will stay open: {e}"
                 ));
             }
-            STATE.with(|state| *state.borrow_mut() = Some(started.state));
+            STATE.with(|state| *state.borrow_mut() = Some(Arc::clone(&started.state)));
+            // Spawned, never awaited: `open` answers now, and the downloads run between the
+            // calls that follow it. Its first poll comes after this function has returned.
+            wasm_bindgen_futures::spawn_local(host::launch_downloads(started.state));
             started.opened.to_json()
         }
         Err(message) => Opened::Failed { message }.to_json(),
@@ -116,11 +145,13 @@ async fn open_once(directory: String) -> String {
 /// [`Opened::from_install_error`] tells "held by another tab" from "broken" by the
 /// `DOMException`'s name inside it.
 ///
-/// What the install answers — the pool's management handle — is let go. **It is where a later
-/// step finds `delete_db`**, for a corpus that has to be thrown away (`launch`'s
-/// `unreadable_corpus_seam`): asking `install` again for a VFS that is registered answers the
-/// handle and installs nothing.
-async fn install_pool(directory: &str) -> Result<(), String> {
+/// What the install answers is the pool's management handle, **kept for one thing**: its
+/// `delete_db`, which is how a corpus that will not open is thrown away ([`open_once`]). It
+/// is not stored past the open — asking `install` again for a VFS that is registered answers
+/// the handle and installs nothing, should a later step want it.
+async fn install_pool(
+    directory: &str,
+) -> Result<sqlite_wasm_vfs::sahpool::OpfsSAHPoolUtil, String> {
     let cfg = sqlite_wasm_vfs::sahpool::OpfsSAHPoolCfgBuilder::new()
         .vfs_name(host::POOL_VFS)
         .directory(directory)
@@ -128,7 +159,6 @@ async fn install_pool(directory: &str) -> Result<(), String> {
         .build();
     sqlite_wasm_vfs::sahpool::install::<rusqlite::ffi::WasmOsCallback>(&cfg, true)
         .await
-        .map(|_| ())
         // Both forms: the crate's own sentence, and the debug text, which is where the
         // browser's `DOMException` — and so its name — is.
         .map_err(|e| format!("{e}: {e:?}"))

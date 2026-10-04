@@ -1,0 +1,58 @@
+{
+  "meta": { "created_at": "2026-10-04 08:07:02" },
+  "data": [
+    {
+      "id": 100101,
+      "scryfall_id": "ce711943-c1a1-43a0-8b89-8d169cfb8e06",
+      "name": "Lightning Bolt",
+      "variation": "",
+      "is_foil": "false",
+      "price_retail": "449.99",
+      "condition_values": { "nm_price": "449.99", "ex_price": "359.99", "vg_price": "269.99", "g_price": "179.99" }
+    },
+    {
+      "id": 100102,
+      "scryfall_id": "11bf83bb-c95b-4b4f-9a56-ce7a1816307a",
+      "name": "Delver of Secrets",
+      "variation": "",
+      "is_foil": "false",
+      "price_retail": "1.99",
+      "condition_values": { "nm_price": "1.99", "ex_price": "1.59", "vg_price": "1.19", "g_price": "0.80" }
+    },
+    {
+      "id": 100103,
+      "scryfall_id": "11bf83bb-c95b-4b4f-9a56-ce7a1816307a",
+      "name": "Delver of Secrets",
+      "variation": "",
+      "is_foil": "true",
+      "price_retail": "24.99",
+      "condition_values": { "nm_price": "24.99", "ex_price": "19.99", "vg_price": "14.99", "g_price": "10.00" }
+    },
+    {
+      "id": 100104,
+      "scryfall_id": "a3f2c9d1-6b8e-4c07-9a2d-3e4f5a6b7c81",
+      "name": "Fire // Ice",
+      "variation": "",
+      "is_foil": "false",
+      "price_retail": "2.49",
+      "condition_values": { "nm_price": "2.49", "ex_price": "1.99", "vg_price": "1.49", "g_price": "1.00" }
+    },
+    {
+      "id": 100105,
+      "scryfall_id": "03ac9b21-8c79-49ec-a0df-0fd22e4a0ed7",
+      "name": "Rhystic Study",
+      "variation": "",
+      "is_foil": "true",
+      "price_retail": "99.99",
+      "condition_values": { "nm_price": "99.99", "ex_price": "79.99", "vg_price": "59.99", "g_price": "40.00" }
+    },
+    {
+      "id": 100106,
+      "name": "Commander Legends Draft Booster Box",
+      "variation": "",
+      "is_foil": "false",
+      "price_retail": "189.99",
+      "condition_values": { "nm_price": "189.99", "ex_price": "0.00", "vg_price": "0.00", "g_price": "0.00" }
+    }
+  ]
+}

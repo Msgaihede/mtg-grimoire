@@ -27,13 +27,26 @@ function feed(id: MarketplaceId, state: FeedState, over: Partial<FeedInfo> = {})
       // arithmetic on this side, and a never-fetched feed is stale by definition there.
       stale: state === "never" || state === "stale",
       refreshing: state === "fetching",
+      // The host's answer about itself, and `true` on every host but a browser.
+      reachable: true,
     },
     error: null,
+    reachable: true,
     ...over,
   };
 }
 
 const BOTH_FRESH = [feed("cardkingdom", "fresh"), feed("manapool", "fresh")];
+
+/**
+ * Mana Pool as a browser's engine answers it: a feed its host cannot ask, so never fetched and
+ * never going to be. **An argument rather than a seed or a fault**, because what differs is the
+ * *host* and not the database — the Storybook fake stands in for a host that can ask every feed.
+ */
+const MANA_POOL_OUT_OF_REACH: FeedInfo = (() => {
+  const never = feed("manapool", "never");
+  return { ...never, status: { ...never.status!, reachable: false }, reachable: false };
+})();
 
 /**
  * What `useMarketplace` would have answered.
@@ -46,6 +59,7 @@ const BOTH_FRESH = [feed("cardkingdom", "fresh"), feed("manapool", "fresh")];
 function state(over: Partial<MarketplaceState> = {}): MarketplaceState {
   return {
     marketplace: MARKETPLACES.tcgplayer,
+    stored: MARKETPLACES.tcgplayer,
     currency: "usd",
     select: fn(),
     selecting: false,
@@ -92,7 +106,12 @@ const meta = {
           "Card Kingdom shows the marketplace's own build stamp beside it — two dates " +
           "answering two questions. Selecting a feed with no rows fetches it; a fetch that " +
           "fails leaves the previous prices in place, which is what its note says rather than " +
-          "claiming the table is now empty.",
+          "claiming the table is now empty.\n\n" +
+          "**A feed the host cannot ask is drawn like the fifth row.** Mana Pool's price list " +
+          "may not be read from a web page, so in a browser its row is greyed, stays in the tab " +
+          "order, says why and where its prices can be had, and offers no refresh. The panel " +
+          "draws that from the host's own answer on the feed's status row — the desktop, the " +
+          "Android app and a browser run this one panel.",
       },
     },
   },
@@ -243,6 +262,61 @@ export const Failed: Story = {
       /Download failed\. Showing prices from 2 hours ago\./,
     );
     await expect(canvas.getByRole("alert")).toHaveTextContent(/timed out/);
+  },
+};
+
+/**
+ * In a browser — the one host that cannot ask Mana Pool, whose endpoint sends no cross-origin
+ * permission. The row is Card trader's row for a different reason: listed, greyed, a tab stop,
+ * explaining itself and deaf to the press. It draws no feed line and no refresh, because "No
+ * prices yet. Selecting this marketplace downloads them." is a promise this host cannot keep.
+ */
+export const OutOfReachInABrowser: Story = {
+  args: {
+    marketplace: state({ feeds: [feed("cardkingdom", "fresh"), MANA_POOL_OUT_OF_REACH] }),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement);
+    const manaPool = canvas.getByRole("button", { name: "Mana Pool USD" });
+    await expect(manaPool).toHaveAttribute("aria-disabled", "true");
+    await expect(manaPool).not.toBeDisabled();
+    await expect(manaPool).toHaveAccessibleDescription(
+      /Not available in a browser\. Mana Pool's price list can't be read from a web page/,
+    );
+    await userEvent.click(manaPool);
+    await expect(args.marketplace.select).not.toHaveBeenCalled();
+
+    // Nothing to fetch, so nothing offering to fetch it — and the feed beside it is untouched.
+    await expect(canvas.queryByRole("button", { name: "Refresh Mana Pool prices" })).toBeNull();
+    await expect(canvas.getByRole("button", { name: "Refresh Card Kingdom prices" })).toBeVisible();
+  },
+};
+
+/**
+ * A database that chose Mana Pool on a desktop, opened in a browser.
+ *
+ * The window quotes TCGplayer in its place — same currency, and prices that arrive with the card
+ * data — rather than drawing every price as an em dash (`useMarketplace`). So the mark is on a
+ * row the reader never pressed, and the greyed row is the one that says why: it is their choice,
+ * this is what stands in for it, and choosing another makes the substitution their own. The
+ * stored choice itself is left alone, for the desktop it may sync back to.
+ */
+export const StoredChoiceOutOfReach: Story = {
+  args: {
+    marketplace: state({
+      stored: MARKETPLACES.manapool,
+      feeds: [feed("cardkingdom", "fresh"), MANA_POOL_OUT_OF_REACH],
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await expect(canvas.getByRole("button", { name: "TCGplayer USD" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(canvas.getByRole("button", { name: "Mana Pool USD" })).toHaveAccessibleDescription(
+      /Your prices are set to Mana Pool, so prices here are TCGplayer's until you choose another\./,
+    );
   },
 };
 

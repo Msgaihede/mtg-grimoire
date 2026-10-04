@@ -50,9 +50,10 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
     arm above the engine's (not `core`: the engine does not depend on a host), and for what the
     page is bundled from: `mobile/**`, `src/**`, `public/**`, `package.json` and its lockfile,
     `.nvmrc`, every root `tsconfig*.json`, `vite.config.ts` and `vite.watch.ts`, each beside
-    `frontend` and `storybook`. **Three single files sit above the tree that would take them**,
-    because that tree's arm does not set `web`: `scripts/build-wasm.mjs` and
-    `scripts/web-smoke.mjs` above `scripts/*`, and `.storybook/fake/aliases.ts` above
+    `frontend` and `storybook`. **Three single files and one folder sit above the tree that
+    would take them**, because that tree's arm does not set `web`: `scripts/build-wasm.mjs`,
+    `scripts/web-smoke.mjs` and `scripts/web-smoke/*` (the smoke's fixtures, since step 5.2)
+    above `scripts/*`, and `.storybook/fake/aliases.ts` above
     `.storybook/*` — the light config imports it in every mode. **`vite.mobile.config.ts` →
     `frontend`, `rust`, `android` and `web`**: `android` because its `beforeBuildCommand` is the
     only CI build of that config's default mode, and `rust` only because every arm that sets
@@ -200,11 +201,17 @@ record is [card-scanner.md](../docs/reference/card-scanner.md) §10.
     `google-chrome` on `PATH`, else `CHROME_BIN`, else the step fails saying so. Nothing is
     downloaded. Its version goes in the summary. The smoke step is bounded at ten minutes,
     because the failure it guards is a page that waits for ever.
-  - **What it proves is `scripts/web-smoke.mjs`'s to say** — the module instantiates and the
-    engine opens its database, in one Chrome on Linux. It runs no suite in the browser and
-    downloads no corpus; the engine's tests are `rust`'s. **Nothing in this bullet was measured
-    on the job when it was written** — its first run is the pull request that adds it, and its
-    sizes are that run's summary.
+  - **What it proves is `scripts/web-smoke.mjs`'s to say**, and since step 5.2 that is **an
+    offline first run** — the module instantiates, the engine opens its database, and the
+    launch's downloads run to their end, in one Chrome on Linux, with every cross-origin
+    request answered from `scripts/web-smoke/`. A request with no fixture fails the run, as
+    does one that would cost a CORS pre-flight, and no real host resolves. Nine checks, in the
+    script's header. It runs no suite in the browser and the corpus it ingests is six fixture
+    cards; the engine's tests are `rust`'s. **A fixture is an input to this job**: a
+    changed one is a changed first run, which is why `scripts/web-smoke/*` sets `web`. **Nothing in this bullet was
+    measured on the job when it was first written** — its first run was the pull request that
+    added it (#805, 2026-10-04): 4 min 59 s cold, green, and
+    [ci-and-releases.md](../docs/reference/ci-and-releases.md) has what it built.
 - **The `core` job is a compile gate for `grimoire-core` on the two targets a desktop build
   never touches** (2026-10-02): a matrix over `wasm32-unknown-unknown` and
   `aarch64-linux-android` on `ubuntu-24.04`, each leg `cargo build --lib -p grimoire-core

@@ -1,0 +1,24 @@
+{
+  "object": "list",
+  "has_more": false,
+  "data": [
+    {
+      "object": "migration",
+      "id": "c8f1b0a2-5e3d-4c67-9a41-7d2e6f8b0c93",
+      "uri": "https://api.scryfall.com/migrations/c8f1b0a2-5e3d-4c67-9a41-7d2e6f8b0c93",
+      "performed_at": "2026-09-30",
+      "migration_strategy": "delete",
+      "old_scryfall_id": "5f0d3a7e-1b2c-4d8f-a9e6-0c4b7d2f1a35",
+      "new_scryfall_id": null,
+      "note": "This card was added in error and never printed.",
+      "metadata": {
+        "id": "5f0d3a7e-1b2c-4d8f-a9e6-0c4b7d2f1a35",
+        "lang": "en",
+        "name": "Example Card",
+        "set_code": "tst",
+        "oracle_id": "9e4c1d7a-3f6b-4a20-8c5d-b1e7f0a2d468",
+        "collector_number": "1"
+      }
+    }
+  ]
+}
