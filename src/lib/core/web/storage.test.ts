@@ -13,6 +13,7 @@ import {
   readCleared,
   readPersistence,
   settlePersistence,
+  SITE_DATA_WARNING,
   type KeyStore,
 } from "./storage";
 
@@ -387,9 +388,44 @@ describe("what a reader is told", () => {
     const text = [CLEARED_TITLE, ...CLEARED_LINES].join(" ");
     // No code, no key, no API name — and nothing that blames the reader.
     expect(text).not.toMatch(/OPFS|localStorage|persist|evict|quota|error/i);
-    // The three things it owes them: why, what comes back by itself, and what does not.
-    expect(CLEARED_LINES).toHaveLength(3);
+    // The three things it owes them: why, what comes back by itself, and what does not — and a
+    // fourth for the reader whose browser was one of their paired devices.
+    expect(CLEARED_LINES).toHaveLength(4);
     expect(CLEARED_LINES[1]).toMatch(/downloads again by itself/);
     expect(CLEARED_LINES[2]).toMatch(/nothing to restore it from/);
+  });
+
+  /**
+   * The light-app spec §7: clearing site data mints a new device and spends one of the group's
+   * five places. **The page cannot know it was paired** — the record that it was is the record
+   * that went — so the sentence is an *if*, never a statement, and it names the press that frees
+   * the place and where that press is.
+   */
+  it("tells a reader who may have been paired where the old device's entry is removed", () => {
+    const line = CLEARED_LINES[3];
+    expect(line).toMatch(/^If this browser was paired/);
+    expect(line).toMatch(/new device now/);
+    expect(line).toMatch(/still counts toward the group's five/);
+    expect(line).toMatch(/Remove the old entry in Settings, under Sync, on one of the others/);
+    expect(line).toMatch(/pair this browser again/);
+    // Nothing that claims the pairing as a fact.
+    expect(line).not.toMatch(/\byou were paired\b|\bwas removed from\b/i);
+  });
+
+  /**
+   * The same cost, said **before** anything is cleared, to a browser that is in a group — this
+   * host's answer to `storage_group_warning`, drawn by the Sync panel. The sentence lives here
+   * with the notice's lines because its words are a browser's; the panel has none of its own.
+   */
+  it("tells a paired browser what clearing its site data costs, and both ways out", () => {
+    // What clearing does, and what the old entry goes on costing.
+    expect(SITE_DATA_WARNING).toMatch(/^Clearing this browser's site data makes it a new device/);
+    expect(SITE_DATA_WARNING).toMatch(/still counts toward the group's five until it is removed/);
+    // Leave first, or remove the old entry from another device afterwards — in that order.
+    expect(SITE_DATA_WARNING).toMatch(
+      /Leave the group here first, or remove the old entry from another device afterwards\.$/,
+    );
+    // The app's voice: no code, no key, no API name.
+    expect(SITE_DATA_WARNING).not.toMatch(/OPFS|localStorage|persist|evict|quota|slot/i);
   });
 });

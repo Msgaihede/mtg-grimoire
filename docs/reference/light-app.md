@@ -3538,7 +3538,9 @@ shapes*; the host's are [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-
   that creates the folder and then fails leaves a launch that looks ordinary behind it.
   `mobile/StorageNotice.tsx` asks the host command `storage_cleared` and draws one dismissible
   notice from the answer — the host's own sentences — so nothing under `mobile/` asks where it
-  runs; the Android host and the desktop refuse the name, which is nothing to draw.
+  runs; the Android host and the desktop refuse the name, which is nothing to draw. (**Since
+  step 6.4 there is a second name the web host alone answers, `storage_group_warning` —
+  §10.4.**)
 - **The startup status may move once more, from `ready` to `failed` with `reload`**, when the
   Worker dies. A dead engine then replaces the whole app with a sentence and a Reload, rather
   than leaving each page to find out alone. `useStartup` keeps its listener after `ready` for
@@ -5801,6 +5803,104 @@ lints clean for `wasm32-unknown-unknown`.
 - **The browser's arm — step 6.3**: a page's own `WebSocket` in `platform::socket` (the bearer in
   the sub-protocol, the text `ping`, the same pong deadline from the text `pong`), the web host
   registering the wake and spawning the loop, and `wss://` in the policy's `connect-src`.
+
+### 10.4 Step 6.4 — pairing on the phone face (2026-10-04)
+
+The phone face has drawn the desktop's own `SyncPanel` since step 3.7, and nothing had driven it
+at a phone's width. **Driven now, and what was wrong is fixed in the shared components** — in
+headless Chrome 154 under a touch pointer (so `pointer: coarse` matches), dark scheme, at 360×800,
+412×915, 800×600 (the side-rail width) and 800×360, over the Storybook fake, state by state: idle,
+the offer, the six digits on both sides, a typed and a pasted code, the scanner, a roster of five
+long names, Rename, both confirm dialogs, the claim-code row, each alert and the four socket
+states. **Nothing here asked the relay**: the fake has none.
+
+**A sync that applied refreshes the face.** `useDeviceSyncInvalidation` was `AppShell`'s alone —
+the desktop face of the light app is that shell, so it had it — and the phone face mounted nothing
+that hears `sync:applied`. It is mounted in `useCardDataWatch`, once for the face, handed the
+face's own query client; `cardData.test.tsx` clears the fake's wishlist behind a wall with Settings
+closed and watches the tile leave on the event, and stay for a trip that only pushed. Red without
+the mount.
+
+**What was measured** (before → after; nothing scrolled sideways in any state, before or after):
+
+| Viewport, state | Before | After |
+| --- | --- | --- |
+| 360, the offer's QR code | 288×288 in a step 268px wide inside: 20px through its frame | 268×268, inside, 4.26px a module for the 53-module invite, white on the dark theme |
+| 412, the typed code | 20px wide and 1 228px tall beside the picture: two characters a line | 320×58, on the line under it |
+| every button on the panel | 34px tall; the roster's Rename and Remove 28 | 44 |
+| text boxes | 12–14px type, 32px tall | 16px type, 44px; a code box 144px, the whole code on screen |
+| 360, a roster name | 105px beside its two presses, about eleven capitals | the whole row; the presses wrap under a long name, together |
+| 800×360, the viewfinder | 256×256 in the 258px left under the pinned row | 180×180, its sentence on screen |
+
+The two dialogs were already over the window and not in the list: a fixed scrim at 0,0 the size of
+the viewport, hit at the top, bottom and left edge. The socket's line draws for `offline` alone
+and fits at every width. **The desktop is unmoved**: the desktop face over the same fake at
+1280×800 and 1024×768, every visible box of the Sync, Local cache and Clear data panels and their
+dialogs recorded before and after — identical in 28 of 30 captures, and the two that differ are
+the refused camera, whose sentence is a line longer on every host.
+
+**The touch floor is Settings' own.** `PANEL_BUTTON` is `BUTTON` plus a 44px least height under a
+coarse pointer, and every panel in `src/features/settings/` draws its buttons from it; a text box
+adds `TOUCH_FIELD`, 16px, below which a phone zooms the page on focus. `BUTTON` itself is
+unchanged, because the share menu, the two share dialogs and the public share viewer import it and
+none was measured under a finger. `controls.test.ts` pins each utility in its constant and
+compiles it against `src/index.css`; the panel's and the dialog's suites pin them on the rendered
+boxes.
+
+**The scanner, with a camera** — `npm run mobile:scan-smoke` (`scripts/pairing-scan-smoke.mjs`),
+against `mobile:dev`. A headless Chromium launched with
+`--headless=new --remote-debugging-port=0 --user-data-dir=<temp> --use-fake-device-for-media-stream
+--use-fake-ui-for-media-stream --use-file-for-fake-video-capture=<invite.y4m>` takes a file for a
+camera, and the file is a screenshot of the panel's own QR code at 360px, centred on a 640×480
+frame. `jsQR` reads that drawing before any camera sees it (162 bytes, the relay's `/pair#` URL);
+the scanner's `getUserMedia` → `<video>` → canvas → `jsQR` loop then decodes it and calls
+`sync_pairing_accept` once with exactly that text, about 130 ms after the press, and the six
+digits follow. With `--deny-permission-prompts` and no fake device the same press lands on
+*MTG Grimoire needs camera access to scan a code. Allow the camera and try again, or type the code
+instead.* over a box to type into, and the typed code gives the same digits. **For that the fake
+grew a real QR encoder** (`.storybook/fake/qr.ts`: version 9 at level M, read back by `jsQR`),
+where it drew a 21×21 picture; its `sync_pairing_accept` takes the URL a QR carries, as
+`Invite::decode` does; and its copy of `RELAY_BASE` is held to `entitlement.rs`.
+
+**The camera's grant was read, not seen.** On Android, wry 0.55.1's
+`RustWebChromeClient.onPermissionRequest` asks for the `CAMERA` runtime permission when the page
+asks for video, and grants or denies the page's request by the answer; the manifest already
+declares the permission and an optional camera, and nothing was added. On the web app, a page
+served with exactly the headers `app-worker/_headers` sends for `/` — `main`'s, with the relay in
+`connect-src` — ran the scanner's chain against the fake camera and decoded the invite: no
+`Permissions-Policy` is sent, `srcObject` is not a fetch, and `jsQR` needs no `eval` (the probe's
+own `eval` was the one violation, refused).
+
+**Clearing site data** (spec §7). No press in the app deletes a device's identity: `reset.rs`
+names the collection, the wishlist, the decks and the picture cache, and nothing of
+`sync_identity` or `sync_group`; *Leave group* is the one press that touches the group, and it is
+the cure. The browser's own *clear site data* does, and the app then opens as a new device while
+the old entry still counts toward the group's five. So there is no dialog for the sentence, and
+it stands under the roster instead: the Sync panel asks the host `storage_group_warning` and draws
+the answer while the device is in a group. The web host alone answers, with its own sentence
+(`web/storage.ts`, beside the cleared notice's lines); the desktop and the Android host refuse the
+name, silently. The panel never learns what kind of host it is on. The storage notice gained a
+fourth paragraph, an *if* — the page cannot know it was paired once the database is gone — saying
+where the old entry is removed.
+
+**Open after this step:**
+
+- **No grant prompt has been seen on a phone**: Android's runtime prompt, first use and after a
+  refusal; a browser's on the installed web app; iOS Safari at all.
+- **No real lens has read the code off a real screen**, and the decode loop — `jsQR` over the
+  camera's whole frame, every animation frame — has not been timed on a phone.
+- **A browser pairing end to end against the deployed relay.** The relay half was deployed on
+  2026-10-04 at 17:22 UTC and `connect-src` names it on `main`; what it waits on now is the web
+  app's deploy and step 6.3.
+- **Whether 16px type stops the zoom on the owner's browsers**, and the on-screen keyboard over
+  the code box and the typed word's box.
+- **A browser that really clears its site data**: whether `localStorage` outlives OPFS there is
+  the limit `web/storage.ts` states for the whole notice, and it decides whether the fourth
+  paragraph is ever read.
+- **The four importers of `BUTTON` outside Settings under a finger.**
+- **Android's system *Clear storage* has the same effect and says nothing**: the Android host
+  answers no `storage_group_warning` yet.
+- **The scan smoke runs nowhere but by hand**: no CI job starts `mobile:dev` for it.
 
 ### 10.6 Step 6.6 — the release rule: the three hosts ship from one tag (2026-10-04)
 

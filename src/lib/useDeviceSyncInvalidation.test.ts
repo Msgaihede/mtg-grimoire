@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { beforeEach, expect, it, vi, type MockInstance } from "vitest";
-import type { QueryClient } from "@tanstack/react-query";
+import { QueryClient } from "@tanstack/react-query";
 import type { RelayOutcome } from "@/lib/ipc";
 
 const onSyncApplied = vi.hoisted(() => vi.fn());
@@ -90,6 +90,22 @@ it("does not invalidate the set list, and does reach the card root", () => {
   const keys = JSON.stringify(invalidatedKeys());
   expect(keys).not.toContain("sets");
   expect(invalidatedKeys()).toContainEqual(["card"]);
+});
+
+/**
+ * The light app's phone face hands in the client its own provider holds. In the shipped app that
+ * is the same object as the default; under a test of that face it is the fake world's, and a
+ * refresh of the module's client there would refresh nothing the face is drawing.
+ */
+it("invalidates the client it is handed, and leaves the app's own alone", () => {
+  const own = new QueryClient();
+  const handed = vi.spyOn(own, "invalidateQueries").mockReturnValue(Promise.resolve());
+  renderHook(() => useDeviceSyncInvalidation(own));
+  emit(outcome());
+  expect(handed.mock.calls.map(([filters]) => filters?.queryKey)).toEqual([
+    ...DEVICE_SYNC_INVALIDATED,
+  ]);
+  expect(invalidate).not.toHaveBeenCalled();
 });
 
 it("registers exactly one listener", () => {

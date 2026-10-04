@@ -2,7 +2,7 @@ import type { JSX } from "react";
 import { Eye } from "lucide-react";
 import { TAG_NAMESPACE_LABEL } from "@/features/tags/namespaces";
 import { cn } from "@/lib/utils";
-import { BUTTON } from "./controls";
+import { PANEL_BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import { mutedKey, type HiddenTags } from "./useHiddenTags";
 
@@ -82,7 +82,7 @@ export function HiddenTagsPanel({ hidden }: { hidden: HiddenTags }): JSX.Element
                 aria-label={`Show again — ${tag.slug}, ${TAG_NAMESPACE_LABEL[
                   tag.namespace
                 ].toLowerCase()} tag`}
-                className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+                className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
               >
                 <Eye className="size-4" aria-hidden="true" />
                 Show again

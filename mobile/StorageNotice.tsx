@@ -27,6 +27,15 @@ import { cn } from "@/lib/utils";
  * once by the host that can be in that state, and both faces show the same notice because
  * `LightApp` mounts it above them. `DownloadsPrompt` is the same arrangement one file over.
  *
+ * **The last paragraph is about a pairing group, and it is an *if*** (phase 6, step 6.4). What
+ * went with the storage included this install's device identity, so a browser that was paired
+ * has come back as a new device and its old entry still holds one of its group's five places.
+ * The host cannot know whether it was — the record that it was paired is the record that was
+ * cleared — so its sentence says *if*, and says where the old entry is removed. The same host
+ * says it beforehand too, by the same arrangement: the Sync panel asks `storage_group_warning`
+ * and draws the answer under its roster while this device is in a group — the half a reader can
+ * still act on, by leaving the group first.
+ *
  * **Once per occurrence**: the host goes on answering until it is told the reader has read it,
  * across reloads — a reader who reloads because the app looks empty is still told why — and
  * never after. The press closes it here whatever the host then says: a notice that could not be
@@ -73,7 +82,7 @@ function readable(answer: StorageCleared | null | undefined): StorageCleared | n
  * - **`role="alert"` on the words, mounted with them.** Announcing on insertion is what that
  *   role is for, and this arrives a moment after the app does, in answer to a question the page
  *   asked — never with the document itself. The button is outside the alert, so what is
- *   announced is the three sentences and not the control beneath them.
+ *   announced is the host's paragraphs and not the control beneath them.
  * - **Drawn on the first-run screen's own rung, after it in the document.** At 1024px and wider
  *   an empty card database is the desktop face's full-window "Setting up your card database",
  *   which is `LAYER.gate` and covers everything the app draws — and that is the screen this

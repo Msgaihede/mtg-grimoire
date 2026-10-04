@@ -43,7 +43,9 @@ const meta = {
         component:
           "Shown once when a browser has cleared what the app had stored: what happened, what " +
           "is being rebuilt by itself (the card data) and what is not coming back from this " +
-          "browser alone (a collection, a wishlist and decks kept only there). Not a modal — a " +
+          "browser alone (a collection, a wishlist and decks kept only there) — and, for a " +
+          "browser that may have been paired, that its old entry still holds a place in its " +
+          "group and where to remove it. Not a modal — a " +
           "card at the top of the window, announced as it arrives, with one button to put it " +
           "away. It is drawn on the first-run screen's own layer and after it in the document, " +
           "so it is read over the download it explains.",
@@ -63,6 +65,10 @@ export const Phone: Story = {
     await expect(alert).toHaveTextContent("Your browser cleared MTG Grimoire's saved data");
     await expect(alert).toHaveTextContent("The card data downloads again by itself.");
     await expect(alert).toHaveTextContent(/collection, wishlist and decks/);
+    // The paragraph for a browser that was one of the reader's paired devices: an *if*, because
+    // the page cannot know, and where the old device's entry is removed.
+    await expect(alert).toHaveTextContent(/If this browser was paired with your other devices/);
+    await expect(alert).toHaveTextContent(/Remove the old entry in Settings, under Sync/);
     await expect(canvas.getByRole("region")).toHaveAccessibleName(
       "Your browser cleared MTG Grimoire's saved data",
     );

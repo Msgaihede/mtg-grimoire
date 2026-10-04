@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MAX_DECKLIST_BYTES } from "../browserFiles";
-import { STORAGE_CLEARED, STORAGE_CLEARED_DISMISS, STORAGE_PERSISTENCE } from "../hostStorage";
+import {
+  STORAGE_CLEARED,
+  STORAGE_CLEARED_DISMISS,
+  STORAGE_GROUP_WARNING,
+  STORAGE_PERSISTENCE,
+} from "../hostStorage";
+import { SITE_DATA_WARNING } from "./storage";
 import type { Core } from "../types";
 import { answeringFiles, PICK_FOCUS_GRACE_MS, suggestedName } from "./files";
 import { createWebCore, type WorkerPort } from "./index";
@@ -281,6 +287,7 @@ describe("the web host's two sets of page commands, composed as a build composes
     await expect(core.call(STORAGE_CLEARED)).resolves.toBeNull();
     await expect(core.call(STORAGE_CLEARED_DISMISS)).resolves.toBeNull();
     await expect(core.call(STORAGE_PERSISTENCE)).resolves.toBeNull();
+    await expect(core.call(STORAGE_GROUP_WARNING)).resolves.toBe(SITE_DATA_WARNING);
 
     // Answered on the page, every one: the Worker was asked to open, and nothing else.
     expect(posted.map((message) => message.kind)).toEqual(["open"]);

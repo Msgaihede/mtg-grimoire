@@ -1,7 +1,7 @@
 import { useState, type JSX, type ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { BUTTON } from "./controls";
+import { PANEL_BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import type { ClearAction, DangerZone } from "./useDataReset";
 
@@ -142,7 +142,7 @@ export function DangerZonePanel({ danger }: { danger: DangerZone }): JSX.Element
               disabled={action[row.key].pending}
               aria-busy={action[row.key].pending || undefined}
               className={cn(
-                BUTTON,
+                PANEL_BUTTON,
                 "border-destructive text-destructive",
                 "transition-colors duration-150 hover:bg-destructive hover:text-bg",
                 "disabled:hover:bg-transparent disabled:hover:text-destructive",

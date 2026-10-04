@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { QueryKey } from "@tanstack/react-query";
 import { Heart, Link2, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type JSX } from "react";
+import { core } from "@/lib/core";
+import { STORAGE_GROUP_WARNING } from "@/lib/core/hostStorage";
 import { count, plural, verb } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -28,7 +30,7 @@ import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { nowSeconds } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { BUTTON } from "./controls";
+import { PANEL_BUTTON, TOUCH_CODE_ROOM, TOUCH_FIELD, TOUCH_FLOOR } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import { QrCode } from "./QrCode";
 import { QrScanner } from "./QrScanner";
@@ -67,6 +69,45 @@ export const REMOVAL_WARNING =
 export const LEAVE_WARNING =
   "Your collection stays on this device. If the relay can't be reached, other devices may " +
   "still list this one until they remove it.";
+
+/**
+ * What the host has to say to a paired device about its storage — the light-app spec §7:
+ * *"Clearing site data mints a new device and spends a slot. The panel says so before a reader
+ * presses anything that would."* Outside the `["sync"]` root on purpose: it is the host's
+ * sentence, which no round trip and no pairing changes, so nothing this panel invalidates should
+ * ask it again.
+ */
+const STORAGE_WARNING_KEY: QueryKey = ["host", "storage", "group-warning"];
+
+/**
+ * The host's answer to {@link STORAGE_GROUP_WARNING} as something to draw: a sentence, or
+ * nothing. A host that answers the name with anything else is not one to put words in the mouth
+ * of — `StorageNotice`'s `readable`, for its reason.
+ */
+function sentence(answer: unknown): string | null {
+  return typeof answer === "string" && answer.trim() !== "" ? answer : null;
+}
+
+/**
+ * Ask the host, once, what it says to a device in a group about its storage.
+ *
+ * **The panel does not know what kind of host answered, and has no words of its own for this.**
+ * A browser lends its storage and can take it back, and with it this device's identity — so the
+ * web host answers a sentence about its site data (`src/lib/core/web/storage.ts`, where the
+ * wording and the argument for it live). A host with another way of losing its storage would
+ * answer its own. A host that owns its folder has no such command and refuses the name.
+ *
+ * **That refusal is deliberate, and it is silent.** The desktop app proper asks a command it
+ * does not register every time this panel is first drawn — one call per Settings visit, since
+ * the answer is kept for as long as the query is — and the Android host asks its table the same.
+ * Both answer a rejected promise and nothing else: an unknown name never reaches a handler, so
+ * nothing writes `error_log`, and the rejection is turned into `null` here, so nothing reaches a
+ * banner or the console. It is `hostStorage.ts`'s arrangement, the one `StorageNotice` and
+ * `DownloadsPrompt` already ask by: the refusal *is* how a page stays ignorant of where it runs,
+ * and asking is cheaper than a second way of knowing.
+ */
+const askStorageWarning = (): Promise<string | null> =>
+  core.call<unknown>(STORAGE_GROUP_WARNING).then(sentence, () => null);
 
 /**
  * What the panel says when a pairing attempt ran out of time.
@@ -149,6 +190,8 @@ function Paste({
           className={cn(
             "w-full resize-y rounded-md border border-border bg-surface px-2 py-1.5",
             "font-mono text-xs leading-relaxed break-all",
+            TOUCH_FIELD,
+            TOUCH_CODE_ROOM,
             "focus:border-accent focus:outline-none",
           )}
         />
@@ -158,7 +201,7 @@ function Paste({
         aria-disabled={pending || empty}
         onClick={submit}
         className={cn(
-          BUTTON,
+          PANEL_BUTTON,
           "border-border hover:bg-bg",
           (pending || empty) && "cursor-not-allowed opacity-50 active:scale-100",
           FOCUS,
@@ -239,8 +282,22 @@ function DeviceRow({
           One fact a name cannot carry: which of these is the machine you are looking at. There
           used to be a second — which one was taken off — and it went with the rows that carried
           it, because a reader who removed a device asked for it to be gone rather than struck
-          through. */}
-      <span className="flex min-w-0 flex-1 items-center gap-2">
+          through.
+
+          **In a narrow roster the group is as wide as its name before it grows, so the presses
+          drop under a name they cannot stand beside** (2026-10-04). It grew from a basis of
+          nothing, which a wrapping row never breaks before — so at a 360px window the two presses
+          took their 163px first and the name had 105 left: eleven capitals, on a roster where the
+          machine names Windows mints (`DESKTOP-` and seven characters) differ only in the part
+          that was cut off. From its content's width, a row that cannot fit both wraps — the name
+          has the whole first line and the presses the second — and a short name still shares one
+          line with them.
+
+          **A question about the roster's own box, so it is asked of the roster** (the list is the
+          container): under 24rem inside, which a 360 and a 412px phone are and the Settings
+          column never is — its narrowest, at a 1024px window with the rail open, is 437px. There
+          the group is what it always was, a long name truncates on one line, and no box moves. */}
+      <span className="flex min-w-0 flex-1 items-center gap-2 @max-sm:flex-auto">
         {editing === null ? (
           <span className="min-w-0 truncate text-sm">{device.name}</span>
         ) : (
@@ -259,6 +316,8 @@ function DeviceRow({
             aria-label={`Name for ${device.name}`}
             className={cn(
               "h-8 min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 text-sm",
+              TOUCH_FIELD,
+              TOUCH_FLOOR,
               "focus:border-accent focus:outline-none",
             )}
           />
@@ -266,31 +325,38 @@ function DeviceRow({
         {isThisDevice && <span className={THIS_DEVICE_PILL}>This device</span>}
       </span>
 
-      {/* **Rename stays on every row, this device's own included, and it matters more now than
-          it did.** The name a device mints is its hostname, which travels to every device in the
-          group at the next pairing — so this press is the reader's way out of sending one they
-          would rather not. The pill does not replace it and must not crowd it out. */}
-      <button
-        type="button"
-        onClick={() => setEditing(device.name)}
-        className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
-      >
-        Rename
-      </button>
-      {/* **No Remove on this device's own row**, because the backend refuses it and offering a
-          press that cannot work is worse than not offering it: leaving a group throws this
-          device's own key away, which is a different act with different consequences. */}
-      {!isThisDevice && (
+      {/* **The row's presses are one item of the row, so they wrap together or not at all.** As
+          two items of a wrapping row they parted company at a 412px window: Rename fitted beside
+          the name, Remove did not, and every row but this device's own stood 113px tall with
+          one press on each line. In a group of their own, at the row's own gap, they are placed
+          exactly where they were wherever both fit. */}
+      <span className="flex shrink-0 items-center gap-2">
+        {/* **Rename stays on every row, this device's own included, and it matters more now
+            than it did.** The name a device mints is its hostname, which travels to every device
+            in the group at the next pairing — so this press is the reader's way out of sending
+            one they would rather not. The pill does not replace it and must not crowd it out. */}
         <button
           type="button"
-          onClick={onRemove}
-          aria-label={`Remove ${device.name}`}
-          className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
+          onClick={() => setEditing(device.name)}
+          className={cn(PANEL_BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
         >
-          <X aria-hidden="true" className="size-3.5" />
-          Remove
+          Rename
         </button>
-      )}
+        {/* **No Remove on this device's own row**, because the backend refuses it and offering
+            a press that cannot work is worse than not offering it: leaving a group throws this
+            device's own key away, which is a different act with different consequences. */}
+        {!isThisDevice && (
+          <button
+            type="button"
+            onClick={onRemove}
+            aria-label={`Remove ${device.name}`}
+            className={cn(PANEL_BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
+          >
+            <X aria-hidden="true" className="size-3.5" />
+            Remove
+          </button>
+        )}
+      </span>
     </li>
   );
 }
@@ -835,7 +901,7 @@ function SupporterSection({
                 type="button"
                 onClick={() => connect.mutate()}
                 disabled={connect.isPending}
-                className={cn(BUTTON, "border-accent text-accent hover:bg-bg")}
+                className={cn(PANEL_BUTTON, "border-accent text-accent hover:bg-bg")}
               >
                 <Heart aria-hidden="true" className="size-4" />
                 Connect Patreon
@@ -871,6 +937,8 @@ function SupporterSection({
                       // A code is data, and data is Geist Mono — the role prices, versions and
                       // collector numbers already carry in this window.
                       "font-mono text-xs tracking-[0.1em] uppercase",
+                      TOUCH_FIELD,
+                      TOUCH_FLOOR,
                       "focus:border-accent focus:outline-none",
                     )}
                   />
@@ -882,7 +950,7 @@ function SupporterSection({
                     aria-disabled={code.trim() === "" || claim.isPending}
                     onClick={submit}
                     className={cn(
-                      BUTTON,
+                      PANEL_BUTTON,
                       "border-border hover:bg-bg",
                       code.trim() === "" && "cursor-not-allowed opacity-50 active:scale-100",
                       FOCUS,
@@ -947,7 +1015,7 @@ function SupporterSection({
             onClick={() => sync.mutate()}
             disabled={syncing}
             aria-busy={syncing || undefined}
-            className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+            className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
           >
             <RefreshCw aria-hidden="true" className={cn("size-4", syncing && "animate-spin")} />
             Sync now
@@ -1059,6 +1127,17 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
 
   const read = useQuery({ queryKey: PAIRING_KEY, queryFn: () => ipc.syncPairingStatus() });
   const status: PairingStatus | null = read.data ?? null;
+
+  /**
+   * The host's own sentence, or nothing — see {@link askStorageWarning}. `staleTime: Infinity`
+   * because the answer cannot change while the page lives. Unanswered and refused both read as
+   * nothing to draw.
+   */
+  const storageWarning = useQuery({
+    queryKey: STORAGE_WARNING_KEY,
+    queryFn: askStorageWarning,
+    staleTime: Infinity,
+  });
 
   const refresh = () => void client.invalidateQueries({ queryKey: PAIRING_KEY });
 
@@ -1323,7 +1402,9 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
           </div>
 
           {paired && (
-            <ul className="rounded-md border border-border px-3">
+            // A container, for `DeviceRow`'s one question about how wide the roster is. Nothing
+            // that covers the window is mounted inside it — the two dialogs are the section's.
+            <ul className="@container rounded-md border border-border px-3">
               {status.devices.map((d) => (
                 <DeviceRow
                   key={d.deviceId}
@@ -1336,13 +1417,22 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
             </ul>
           )}
 
+          {/* What the host says about its storage, to a device in a group and to no other: the
+              host answers as if a paired device asked, and `paired` is this panel's half. Under
+              the roster it is about and above the row *Leave group* is in — the way out a host
+              that says anything here names first. A plain paragraph and not a `PanelAlert`:
+              nothing has gone wrong, and it stands for as long as the group does. */}
+          {paired && storageWarning.data != null && (
+            <p className="text-sm text-dim">{storageWarning.data}</p>
+          )}
+
           {flow.kind === "idle" && (
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={() => begin.mutate()}
                 disabled={begin.isPending}
-                className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+                className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
               >
                 <Link2 aria-hidden="true" className="size-4" />
                 Pair a device
@@ -1354,7 +1444,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                   setEndedNote(null);
                   setFlow({ kind: "reading" });
                 }}
-                className={cn(BUTTON, "border-border hover:bg-bg")}
+                className={cn(PANEL_BUTTON, "border-border hover:bg-bg")}
               >
                 Enter a code from another device
               </button>
@@ -1365,7 +1455,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                   setEndedNote(null);
                   setFlow({ kind: "scanning" });
                 }}
-                className={cn(BUTTON, "border-border hover:bg-bg")}
+                className={cn(PANEL_BUTTON, "border-border hover:bg-bg")}
               >
                 Scan a code
               </button>
@@ -1385,7 +1475,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                 <button
                   type="button"
                   onClick={() => setLeaving(true)}
-                  className={cn(BUTTON, "border-border text-dim hover:bg-bg")}
+                  className={cn(PANEL_BUTTON, "border-border text-dim hover:bg-bg")}
                 >
                   <LogOut aria-hidden="true" className="size-4" />
                   Leave group
@@ -1433,9 +1523,22 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                   <p className="text-sm">
                     Point the other device&rsquo;s camera at this, or type the code into it.
                   </p>
+                  {/* **The typed form has a floor of its own, so it drops under the picture rather
+                      than standing beside it in whatever is left.** It grew from a basis of
+                      nothing with no floor, and a wrapping row only breaks before an item that
+                      does not fit — which a floorless one always does. At a 412px window the
+                      picture left it 20px: two characters a line, 1 228px tall (measured
+                      2026-10-04). With 8rem as its least it takes the next line wherever less
+                      than that is left over, and the whole of that line.
+
+                      **8rem and not more, because of the desktop's narrowest column.** At a
+                      1024px window with the Settings rail open the step is 437px inside and the
+                      code stands beside the picture in 137 of them; a floor above that would
+                      move it under the picture there, and nothing on the desktop may move for
+                      a phone's sake. */}
                   <div className="flex flex-wrap items-start gap-3">
                     <QrCode matrix={flow.offer.qr} label="Pairing code as a QR code" />
-                    <p className="min-w-0 flex-1 font-mono text-xs leading-relaxed break-all">
+                    <p className="min-w-32 flex-1 font-mono text-xs leading-relaxed break-all">
                       {flow.offer.code}
                     </p>
                   </div>
@@ -1466,7 +1569,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                     if (flow.sas !== null && !confirm.isPending) confirm.mutate();
                   }}
                   className={cn(
-                    BUTTON,
+                    PANEL_BUTTON,
                     "border-accent text-accent hover:bg-bg",
                     flow.sas === null && "cursor-not-allowed opacity-50 active:scale-100",
                     FOCUS,
@@ -1561,7 +1664,7 @@ function Cancel({ onCancel }: { onCancel: () => void }): JSX.Element {
     <button
       type="button"
       onClick={onCancel}
-      className={cn(BUTTON, "border-border text-dim hover:bg-bg")}
+      className={cn(PANEL_BUTTON, "border-border text-dim hover:bg-bg")}
     >
       Cancel
     </button>

@@ -2,6 +2,7 @@ import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 import { CONFIRM_WORD, ConfirmDialog, type ConfirmDialogProps } from "./ConfirmDialog";
+import { TOUCH_FIELD, TOUCH_FLOOR } from "./controls";
 
 function open(over: Partial<ConfirmDialogProps> = {}) {
   const props: ConfirmDialogProps = {
@@ -141,5 +142,21 @@ describe("ConfirmDialog", () => {
     open({ open: false });
 
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  /**
+   * **The question under a finger.** The light app's phone face asks it through this same
+   * dialog, and the typed word's box takes the caret as it opens — so at 14px a phone zoomed the
+   * page on a press that only asked something. Class pins, `FilterChips.test.tsx`'s way: jsdom
+   * applies no media query, and `controls.test.ts` is where each utility is compiled.
+   */
+  it("gives the typed word 16px type and both presses the touch floor", () => {
+    open();
+
+    expect(field().classList.contains(TOUCH_FIELD)).toBe(true);
+    expect(field().classList.contains(TOUCH_FLOOR)).toBe(true);
+    for (const name of ["Cancel", "Clear collection"]) {
+      expect(screen.getByRole("button", { name }).classList.contains(TOUCH_FLOOR)).toBe(true);
+    }
   });
 });
