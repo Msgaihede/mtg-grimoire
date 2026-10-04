@@ -132,7 +132,8 @@ then the zone checks `app-worker/README.md` lists~~ — a run in a real phone's 
 chat and an agent ran it — `wrangler dev --local` first, the zone read through Cloudflare's API,
 then the runbook's probes and one browser run at the real address. The table's *Who deploys*
 row stands; the ask was for one deploy. A second deploy and a rollback test followed the same
-day, each asked for, and **production is `main` at `4929cc6e`**. Of the list above, Firefox has
-the owner's one sentence that the live site works there; Safari, a phone and Android's
-clipboard stand.
+day, each asked for, and **production is `main` at `4929cc6e`** — until a third deploy at
+13:43 UTC, also asked for, from `main` at `e1e76f78`, which is what it serves now. Of the list
+above, Firefox and a phone's browser each have the owner's one sentence that the live site
+works there; Safari and Android's clipboard stand, and so does a phone run with figures.
 ([light-app.md](../../reference/light-app.md) §9.7 is the record, with what it has not proved.)

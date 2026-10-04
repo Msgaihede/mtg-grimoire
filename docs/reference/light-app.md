@@ -20,7 +20,7 @@ served under that policy, and the built app has been driven end to end on both f
 the real hosts** (§9.6). **It is deployed at `https://mtg-grimoire.app` since 2026-10-04**
 (§9.7) — the deploy is the owner's, and each one that day was run by an agent at his ask; one
 headless Chrome on Windows has driven the web host, and the owner has used it in Firefox and
-said so in a sentence. There is no sync on a light install,
+on a phone and said so in a sentence each. There is no sync on a light install,
 which is phase 6 — a browser install says so in a sentence rather than asking the relay.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
@@ -4955,7 +4955,9 @@ during it was not recorded.
    *Add Rampant Growth to Sorcery* and the card landed in Ramp. **Found, not fixed here**:
    handed off as its own task. (**Fixed in #813**, merged 2026-10-04 at 13:17 UTC — **on
    `main` and not in production**: the build then deployed was taken from `main` one merge
-   earlier, and the live deck editor still read the old wording. §9.7.)
+   earlier, and the live deck editor still read the old wording. §9.7.) (**Deployed at 13:43
+   UTC the same day, and seen**: on the live site the control read *Add Cultivate to Ramp*,
+   and the card landed in Ramp — §9.7, *The final deploy*.)
 5. ***Copy card image* on the web copies the picture's address as text** — the clipboard
    held `text/plain`, a `cards.scryfall.io` URL, and no image. That is what the row's code
    does on every host (`cardMenu.tsx`'s `copyCardImage` copies the address it is answered);
@@ -5004,7 +5006,9 @@ during it was not recorded.
   deploy in chat and an agent ran it, `wrangler dev` first, the zone read before it, and every
   probe answered at the real address afterwards. One feature that rewrites HTML was found on,
   and idle. The three below stand.
-- **A run in a real phone's browser.** Every figure here is a desktop CPU's.
+- **A run in a real phone's browser.** Every figure here is a desktop CPU's. (**Run, by the
+  owner, on the live site on 2026-10-04 — one sentence, §9.7.** No phone, browser or figure was
+  named, so every figure here is still a desktop CPU's.)
 - **Firefox and Safari.** One Chrome, headless, on Windows is the whole of what has run the
   web host — the lock, the pool, the service worker and the policy included. (**Firefox, since:
   the owner used the live site in it on 2026-10-04 and reported one sentence — §9.7.** That it
@@ -5022,10 +5026,12 @@ runbook this followed and now carries each answer in its tables; this section is
 record. **Every figure is one deploy's, one minute's or one run's**, taken from one machine in
 Denmark.
 
-**Where the day ended: production is `main` at `4929cc6e`**, a second build deployed at 13:27
-UTC and then rolled back and forward again to see a rollback work — *Three deploys*, below.
-**That is not `main`**: #813 merged at 13:17 UTC, after that build was taken, and is in no
-build that has been deployed.
+**Where the day ended: production is `main`'s code, at `e1e76f78`** — version
+`e9947184-6ee1-4a07-ad79-841d93196210`, the third build, deployed at 13:43:02 UTC and the first
+to rename chunks (*The final deploy*, below). `main`'s head had gained only prose past that
+commit. Before it, a second build went out at 13:27 UTC and was rolled back and forward again
+to see a rollback work — *Three deploys*. (Until the final deploy this paragraph said
+production was `4929cc6e` and not `main`: #813 had merged after that build was taken.)
 
 **What was deployed.** `main` at `d8c3779b`, the merge of #810, from a clean tree:
 `npm run web:build` over the engine `npm run web:wasm` built from the same source — engine
@@ -5043,7 +5049,8 @@ the edge sends none; every `ETag` was another value for the same bytes; and the 
 brotli transfer was 1 986 553 B, which is not what the edge sends.
 
 **The zone, read through Cloudflare's API before the deploy** — read-only, and nothing was
-changed.
+changed by it. (Two of the rows below were changed an hour later, at the owner's ask — *Two
+zone settings*, further down. The table is the read.)
 
 | Read | 2026-10-04 |
 | --- | --- |
@@ -5103,10 +5110,12 @@ into the runbook's table. **The policy line was compared byte for byte with
 - **The edge sends `text/html` and `text/javascript` with no `charset`.** The document
   declares its own.
 - **The `workers.dev` name is a 404, and `www.mtg-grimoire.app` does not resolve.** ⚠️ A
-  per-version preview address was not asked; the runbook has no probe for one.
+  per-version preview address was not asked; the runbook has no probe for one. (**`www` is a
+  redirect to the apex since 13:48 UTC** — *Two zone settings*, below.)
 - ⚠️ **Plain `http` is answered: `HTTP/1.1 200 OK`, the document, no redirect.** *Always Use
   HTTPS* is off. A browser never asks — `.app` is preloaded — but a `curl http://` is handed
-  the document in the clear. Turning the setting on is the owner's.
+  the document in the clear. Turning the setting on is the owner's. (**He asked for it, and
+  since 13:48 UTC plain `http` is a `301`** — the same paragraph.)
 - **The document served is the document built** — `diff` against `dist-web/index.html` printed
   nothing, for a navigation and for a plain `GET /`. That is the check no zone feature can
   pass by being off in a dashboard; it was made from Denmark and from nowhere else.
@@ -5239,7 +5248,8 @@ rebuild.
   through its printings; *Open on Scryfall*; a context menu's copy pasted back; the deck editor;
   an export of 127 B; an import through *Choose file*; the collection and wishlist pages.
   **The docked search's control still read *Add Rampant Growth to Sorcery*** — §9.6's fourth
-  finding, as it was. Its fix, #813, is in neither build that has been deployed.
+  finding, as it was. Its fix, #813, is in neither build that has been deployed. (It is in
+  the third — *The final deploy*, below.)
 - **Offline, with the engine asked to fetch** — what §9.6's cut never reached. A browser that
   resolves no name, so the engine's Worker had no network. The app opened from the service
   worker in 1 975 ms. A Card Kingdom refresh: *Download failed. No prices yet.*, the alert
@@ -5354,7 +5364,7 @@ were `_headers` and `sw.js`**. Below, **v1** is the first deploy — version
   resources* — this Worker has none but its assets. **`rollback` takes any version id**, so the
   same command rolled forward. `wrangler deployments list` shows the three deployments with
   their messages.
-- **Production ends on v2, which is `main` at `4929cc6e`.** The runbook's probes 1–11 and
+- **Production ended that test on v2, which is `main` at `4929cc6e`.** The runbook's probes 1–11 and
   14–18, asked again of it, answered as they had of v1 — the policy equal on each response
   that should carry it, the 304 included, and the document equal to the built one. The
   module's brotli transfer was 2 139 182 B this time, 159 B more than v1's for the same bytes.
@@ -5402,26 +5412,183 @@ handovers, v1 → v2 → v1 → v2:
   `registration.update()`. Headless Chrome would not fire `visibilitychange`, and the app asks
   at most hourly; the page had been open under two minutes each time. So that a reader is
   *offered* a new build without anybody calling for it has not been seen at the real origin.
+  (**Seen once since, in the owner's Firefox — below.** And the event was not what held it: in
+  the final deploy's session `visibilitychange` was made to fire and the app still did not
+  ask.)
 - **Which cache answered a given document** — inferred from the controller, not observed.
 - **A second tab standing by during a handover**, an installed app, any other browser.
 - **Why the database opened at about 2.5 s in the document after a handover**, against
   1.6–1.9 s on an ordinary reload. Not looked into.
 
+**A phone, by the owner — one sentence.** Of the live site, the same day: *"i tested on a
+phone too. looks good."* **That is the whole of the report** — no phone, no browser and no
+figure named. It is the first phone browser to run the web host. How long its first run took,
+and what its browser said when asked for some 960 MB of storage, are not known.
+
+**The app's own update check, seen once — in Firefox, by the owner.** With the live site open
+in Firefox he wrote, at about 13:42 UTC: *"That worked i got a little toast notifying me a new
+version is available"*. **That is the first sighting of the page asking by itself** — no
+driver called `registration.update()` in his browser — and it is in a second engine.
+
+- **Which build the toast offered is inferred, not reported.** His message arrived before the
+  final deploy was run — that finished at 13:43:02 UTC — so the build waiting for his tab was
+  the marker, v2, on the host since 13:27 and again since 13:30. Nothing his tab said is the
+  source of that; the timing is.
+- **Not reported**: whether he pressed it, and what the tab did afterwards.
+
+**The final deploy: the first to rename chunks.** Asked for by the owner in chat — *"Lets go
+ahead and run the last deploy"*, then *"go ahead and run the deploy"*. `wrangler deploy` at
+**13:43:02 UTC**, from `main` at `e1e76f78`, the merge of #813; `npm run web:smoke` had passed
+on the bundle first (15.3 s). Version `e9947184-6ee1-4a07-ad79-841d93196210` — **v3** below —
+and *Uploaded 9 files (34 already uploaded)*.
+
+- **Against v2**: seven chunks renamed — `DesktopFace`, `NoteEditor`, `PhoneApp`, `index`,
+  `list`, `routes` and `web` — with `index.html` and `sw.js` changed, which is the nine. The
+  engine, `6d63009f7fa1062b`, and the engine's Worker chunk kept their names and their bytes.
+- **The host served v3's `sw.js` at the first look.** The document served was byte for byte
+  the built one. An old chunk's name answered `404 text/plain; charset=utf-8`, and the new
+  name 200.
+- **All eighteen of the runbook's probes, asked of v3, answered as its table says** — the
+  policy equal byte for byte on every response that carries it, the 304 included; the module
+  2 138 948 B as brotli; the `workers.dev` name a 404; plain `http` still a 200, five minutes
+  before the setting behind it was turned on.
+
+**Two browsers held open across it.** Headless Chrome 154, a fresh profile each, the real
+hosts; each made its own first run on v2 beforehand — cards `done` at 21.5 s and 18.9 s, every
+feed in at 38.8 s and 40.7 s. One was an ordinary page, in the service worker's control; the
+other was staged as a page that worker does not serve. **The two are the two shapes of §9.3's
+question**, what a page meets when a deploy renames a chunk it has not loaded yet.
+
+- **A page the service worker controls never meets the rename.** Browser 1 was on v2 at
+  360 × 800 with a reader's data in it — a deck of Command Tower and Rampant Growth, a
+  collection card, a wishlist card — and `DesktopFace`, `list` and `NoteEditor` not yet
+  loaded. After the deploy the host answered all seven of v2's renamed chunks `404`,
+  `text/plain; charset=utf-8`, `no-store`. **The page then opened the desktop face, the deck
+  editor and the note editor anyway**: each of the three old chunks was answered by the
+  service worker out of its own shell cache, 0 B on the wire, among 21 requests to the origin
+  that it answered every one of. **That is step 5.3's promise — a page's build held whole
+  while the page is open — seen at the real host.** Its docked search read *Add Cultivate to
+  Sorcery*, which is v2.
+- **`visibilitychange` fired, and the app did not check.** The event was made to fire three
+  ways — another tab brought in front and back, the page frozen and resumed, the window
+  minimised and restored. **The app asks at most hourly, and the document was 226 s old.** So
+  the check was again the driver's `registration.update()`.
+- **The handover, with chunks to fetch this time.** The bar 659 ms after the check; both shell
+  caches held while v3 waited; a reload stayed on v2, the database open at 1 565 ms and the
+  bar back; the press gave a new document in 2 655 ms, the database open at 2 569 ms, with
+  `grimoire-shell-f09946cade8a42f6` alone, the reader's data intact and 118 470 cards.
+
+  | The install's 43 requests, each a 200 | On the wire |
+  | --- | --- |
+  | `DesktopFace` | 250 301 B |
+  | `routes` | 235 688 B |
+  | `NoteEditor` | 153 487 B |
+  | `index` | 127 539 B |
+  | `PhoneApp` | 35 839 B |
+  | `web` | 5 781 B |
+  | **The engine's module — not downloaded again** | **843 B** |
+  | All 43 | 839 607 B |
+
+  The seventh renamed chunk, `list`, is about a kilobyte and is in the total. So a deploy that
+  changes the page costs a returning reader the chunks that changed and nothing of the
+  engine — against 35 KB for the marker, which changed none.
+- **The fix, on v3.** The docked search's control read *Add Cultivate to Ramp*; pressed, and
+  Cultivate landed in Ramp beside Rampant Growth. §9.6's fourth finding, closed where a reader
+  is.
+- **A page the service worker does not serve gets a 404, not HTML, and a sentence.** Browser 2
+  was staged with `Network.setBypassServiceWorker` and the HTTP cache off, on v2 at
+  `/settings`, its files fetched from the network. After the deploy the window was widened to
+  1280: `GET /assets/DesktopFace-mRVVnW91.js` and `/assets/list-uE7upxBf.js` were each **`404`,
+  `text/plain; charset=utf-8`, `no-store` — the script's answer, and not the document with a
+  200**, which is what `app-worker/` has a script for. The console said *Failed to fetch
+  dynamically imported module*. **The reader saw the app's mark, *This page could not be
+  drawn.*, and one control, a *Reload* link** — `FaceBoundary`. That link drew the desktop
+  face on v3 in 2 109 ms, 737 142 B from the network, with 118 470 cards and the reader's
+  data intact.
+- ⚠️ **What that staging is and is not.** `navigator.serviceWorker.controller` still named
+  `sw.js` throughout: a page with a null controller could not be held, because the worker
+  claims it. So this is a page whose requests go past the worker, not a browser with none.
+  **With the bypass lifted, the next ordinary load was served v2's shell again** by the
+  still-active v2 worker, with v3 waiting and the bar drawn, and the press gave v3 — a step
+  back that may be the staging's own doing and nothing a reader would meet.
+- **Otherwise**: no failed request but browser 2's two expected 404s, no console error but the
+  failed import they caused, and no policy violation but the one below. The database again
+  opened at about 2.5 s in the document after a handover against about 1.6 s on a plain
+  reload. Still not looked into.
+
+**One finding: opening the deck note editor raises two policy violations.** Pressing *New
+note* on the desktop face logged two `style-src-elem` violations — an inline `<style>` element
+refused by `style-src 'self'` — on v2 and on v3 alike, so the deploy did not bring it.
+
+- **The editor still opened**, drew its toolbar and took typing. What the refused styles would
+  have changed was not looked at.
+- **The cause, read and not run.** The editor is Tiptap, whose `injectCSS` option defaults to
+  true — `node_modules/@tiptap/core/dist/index.js` builds a style tag with
+  `createStyleTag(style, this.options.injectNonce)` when it is — and `NoteEditor.tsx`'s
+  `useEditor` does not set it.
+- ⚠️ **The packaged desktop sends the same `style-src 'self'`, so it is presumably refused
+  there too. Not checked.**
+- **Why no earlier pass saw it: none opened the note editor.** Every "zero violations" in this
+  section and in §9.5 and §9.6 stands for the surfaces that pass drew; this is the one surface
+  on the live site known to break the policy.
+- **Found, not fixed here**: handed off as its own task.
+
+**Two zone settings, changed at the owner's ask.** In chat: *"always use https should be
+**on** and we should add a redirect from www. to the plain domain"*. An agent made both
+through Cloudflare's API at about 13:48 UTC. **Neither is in this repository, and no deploy of
+the Worker touches either.**
+
+- **Always Use HTTPS is on.** `curl -sI http://mtg-grimoire.app/` is a `301` with `Location:
+  https://mtg-grimoire.app/`, and `http://mtg-grimoire.app/decks/12?x=1` a `301` to that path
+  and query on `https`. So the runbook's probe 13 has two answers that day: the document in
+  the clear at 12:48 and at 13:43, and a redirect since.
+- **`www.mtg-grimoire.app` redirects to the apex** — a rule on the zone and never a second
+  Custom Domain on the Worker, which is the shape the runbook already prescribed.
+  - A proxied DNS record with no origin behind it, `AAAA www → 100::`, its comment saying it
+    exists only so the rule runs. No Worker is attached to it.
+  - One Single Redirect rule in the zone's `http_request_dynamic_redirect` entrypoint ruleset,
+    which held none: when `http.host eq "www.mtg-grimoire.app"`, a `301` to
+    `concat("https://mtg-grimoire.app", http.request.uri.path)`, the query string preserved.
+  - The zone's certificates already covered `*.mtg-grimoire.app` — an advanced pack and a
+    universal one, both active.
+- **Probed after**, through Cloudflare's resolver, the local one holding a cached *no such
+  name* from the 12:48 probe for a little while. `https://www.mtg-grimoire.app/` → `301` to
+  `https://mtg-grimoire.app/`. `https://www…/decks/12?x=1` → `301` to the same path and query
+  on the apex. `http://www…/search` → `301` straight to `https://mtg-grimoire.app/search`, one
+  hop. `http://www…/decks/12` followed as a navigation → `200` at
+  `https://mtg-grimoire.app/decks/12` after one redirect.
+- **The apex was unchanged by either**: its document still byte for byte the built one, and
+  the policy still equal on every response that carries it.
+- **`www` is not an origin of the app.** A browser that follows the redirect lands on the
+  apex, so there is still exactly one OPFS, one service worker and one install.
+- **Email Address Obfuscation is still on**, still idle, and still the owner's. Of the zone
+  table above it is the one row left as found that the policy has a stake in.
+
 **Not proved**, as the day ended.
 
-- **A deploy that renames a chunk.** v1 and v2 differ in `_headers` and `sw.js` alone, so a
+- ~~**A deploy that renames a chunk.** v1 and v2 differ in `_headers` and `sw.js` alone, so a
   page meeting a renamed chunk across a deploy — the case §9.3 built the held cache for — is
   still unseen at the real host. A deploy of `main` as it stands would be the first to rename
-  one: #813 changed the page's code.
+  one: #813 changed the page's code.~~ **Seen in both shapes at 13:43 UTC — *Two browsers
+  held open across it*, above**: a controlled page never meets it, and a page the worker does
+  not serve gets a 404 and a *Reload*.
+- **A page with no controller at all.** The second shape was a bypass, with
+  `navigator.serviceWorker.controller` still set. A browser with no service worker, or one
+  that evicted the cache under a live page, was not staged.
 - **A rollback across a schema rung, or of a build that renamed chunks.** The one made rolled
   back neither. The runbook's rule for the first is unchanged: fix forwards.
-- **The app's own update check**, above.
+- **The app's own update check in a driven browser.** Seen once, in the owner's Firefox, by
+  his sentence. Never in a browser anything was measured in: in Chrome the hourly limit held
+  it every time, and no session has kept a page open for an hour.
 - **A spent free-plan day.** §9.5 has what Cloudflare's source says it does; nobody has seen
   the 429.
-- **Any browser but one Chrome and one sentence about Firefox, and any phone.** The policy,
-  the lock, the pool and the service worker have been *measured* in Chrome 154, headless, on
-  Windows, and nowhere else. Safari has not run it at all.
+- **Any browser's figures but one Chrome's.** The policy, the lock, the pool and the service
+  worker have been *measured* in Chrome 154, headless, on Windows, and nowhere else. Firefox
+  and a phone have the owner's sentence each. **Safari has not run it at all.**
+- **A phone's first run** — how long it takes, what the browser answers when asked for the
+  storage, whether the corpus survives there.
 - **A real install.** Nothing stands in its way by Chrome's own check; none was made.
+- **What the note editor's refused styles cost**, on the web and on the packaged desktop.
 - **What a reload inside the card sync's finish costs on a slow link.** It cost the whole card
   download again both times it was seen; what that is to a reader on a slow link was not
   measured.
