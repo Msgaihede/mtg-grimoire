@@ -32,6 +32,7 @@ function status(over: Partial<MarketplaceFeedStatus> = {}): MarketplaceFeedStatu
     rowCount: 149_989,
     stale: false,
     refreshing: false,
+    reachable: true,
     ...over,
   };
 }
@@ -243,6 +244,106 @@ describe("useMarketplace", () => {
     for (const key of [["collection"], ["wishlist"], ["decks"]]) {
       expect(invalidate).toHaveBeenCalledWith({ queryKey: key });
     }
+  });
+});
+
+/**
+ * **A marketplace the host cannot ask** — Mana Pool in a browser, whose price list a page may
+ * not read. The host says so on the feed's status row (`reachable: false`), and everything below
+ * follows from that answer: nothing here knows, or asks, what kind of host it is.
+ */
+describe("a marketplace this host cannot reach", () => {
+  /** Mana Pool's row as a browser's engine answers it: never fetched, and never going to be. */
+  const UNREACHABLE: MarketplaceFeedStatus[] = [
+    status(),
+    status({
+      marketplace: "manapool",
+      fetchedAt: null,
+      feedBuiltAt: null,
+      rowCount: null,
+      stale: true,
+      reachable: false,
+    }),
+  ];
+
+  /**
+   * The state the spec names: a database that chose Mana Pool on a desktop, opened where Mana
+   * Pool cannot be asked. Quoted as stored, every price in the window is an em dash.
+   */
+  it("quotes the fallback instead of a stored choice it cannot ask", async () => {
+    getMarketplace.mockResolvedValue("manapool");
+    marketplaceFeedStatus.mockResolvedValue(UNREACHABLE);
+    const { result } = renderHook(() => useMarketplace(), { wrapper });
+
+    // Both reads landed — the default before either is TCGplayer too, which proves nothing.
+    await waitFor(() => expect(result.current.stored.id).toBe("manapool"));
+    await waitFor(() => expect(result.current.feeds[1].reachable).toBe(false));
+
+    // Same money, another shop — and one whose prices arrive with the card data.
+    expect(result.current.marketplace.id).toBe("tcgplayer");
+    expect(result.current.currency).toBe("usd");
+    expect(result.current.feed).toBeNull();
+    // What the database names is still known, so the picker can say what happened.
+    expect(result.current.stored.id).toBe("manapool");
+  });
+
+  /**
+   * **Read around, never written over.** The same database may sync back to a desktop that can
+   * reach Mana Pool; a setting this window had rewritten would arrive there as a choice the
+   * reader never made.
+   */
+  it("leaves the stored choice alone, and downloads nothing for it", async () => {
+    getMarketplace.mockResolvedValue("manapool");
+    marketplaceFeedStatus.mockResolvedValue(UNREACHABLE);
+    const { result } = renderHook(() => useMarketplace(), { wrapper });
+    await waitFor(() => expect(result.current.stored.id).toBe("manapool"));
+    await waitFor(() => expect(result.current.marketplace.id).toBe("tcgplayer"));
+
+    expect(setMarketplace).not.toHaveBeenCalled();
+    expect(marketplaceFeedRefresh).not.toHaveBeenCalled();
+  });
+
+  /** The picker greys the row and ignores the press; this is the same refusal for any other
+   *  caller, because a choice the window would have to fall back from is not a choice. */
+  it("does not write a choice of it", async () => {
+    marketplaceFeedStatus.mockResolvedValue(UNREACHABLE);
+    const { result } = renderHook(() => useMarketplace(), { wrapper });
+    await waitFor(() => expect(result.current.feeds[1].reachable).toBe(false));
+
+    result.current.select("manapool");
+    result.current.select("cardkingdom");
+
+    // The one after it landed, so the refused one was never on its way.
+    await waitFor(() => expect(setMarketplace).toHaveBeenCalledWith("cardkingdom"));
+    expect(setMarketplace).toHaveBeenCalledTimes(1);
+  });
+
+  it("quotes the stored choice itself on a host that can ask it", async () => {
+    getMarketplace.mockResolvedValue("manapool");
+    const { result } = renderHook(() => useMarketplace(), { wrapper });
+    await waitFor(() => expect(result.current.feeds[1].status).not.toBeNull());
+
+    expect(result.current.marketplace.id).toBe("manapool");
+    expect(result.current.stored).toBe(result.current.marketplace);
+  });
+
+  /**
+   * **Only an explicit `false` is out of reach.** A status read that has not landed, and a host
+   * whose build predates the field, have not said anything — and guessing "unreachable" from
+   * silence would tell a reader that a marketplace they are quoting from cannot be used.
+   */
+  it("reads a status that does not say as reachable", async () => {
+    getMarketplace.mockResolvedValue("manapool");
+    const silent: Partial<MarketplaceFeedStatus> = status({ marketplace: "manapool" });
+    delete silent.reachable;
+    marketplaceFeedStatus.mockResolvedValue([status(), silent]);
+    const { result } = renderHook(() => useMarketplace(), { wrapper });
+
+    // Before the read lands, and after it.
+    expect(result.current.feeds[1].reachable).toBe(true);
+    await waitFor(() => expect(result.current.feeds[1].status).not.toBeNull());
+    expect(result.current.feeds[1].reachable).toBe(true);
+    expect(result.current.marketplace.id).toBe("manapool");
   });
 });
 

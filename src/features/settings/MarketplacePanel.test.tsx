@@ -21,14 +21,26 @@ function feed(id: MarketplaceId, state: FeedState, over: Partial<FeedInfo> = {})
       rowCount: state === "never" ? null : 149_989,
       stale: state === "never" || state === "stale",
       refreshing: state === "fetching",
+      reachable: true,
     },
     error: null,
+    reachable: true,
     ...over,
   };
 }
 
+/**
+ * Mana Pool as a browser's engine answers it: a feed this host cannot ask, so never fetched and
+ * never going to be. `reachable` is the host's own answer — nothing in the panel works it out.
+ */
+const UNREACHABLE = (() => {
+  const never = feed("manapool", "never");
+  return { ...never, status: { ...never.status!, reachable: false }, reachable: false };
+})();
+
 const state = (over: Partial<MarketplaceState> = {}): MarketplaceState => ({
   marketplace: MARKETPLACES.tcgplayer,
+  stored: MARKETPLACES.tcgplayer,
   currency: "usd",
   select: vi.fn(),
   selecting: false,
@@ -256,6 +268,83 @@ describe("MarketplacePanel", () => {
     expect(new Set(reached).size).toBe(stops);
     // The last one walked to is the last one drawn, so nothing was skipped on the way.
     expect(document.activeElement).toBe(row("Card trader EUR"));
+  });
+
+  /**
+   * **The picker offers what the host can reach** (the light-app spec §4). Mana Pool in a
+   * browser has a price list the page may not read, and the host says so on the feed's status
+   * row — so the row is Card trader's row: greyed, still a tab stop, explaining itself, and deaf
+   * to the press.
+   */
+  describe("a feed this host cannot ask", () => {
+    const unreachable = (over: Partial<MarketplaceState> = {}) =>
+      state({ feeds: [feed("cardkingdom", "fresh"), UNREACHABLE], ...over });
+
+    it("is aria-disabled and never disabled, and ignores the press", async () => {
+      const select = vi.fn();
+      render(<MarketplacePanel marketplace={unreachable({ select })} />);
+
+      expect(row("Mana Pool USD")).toHaveAttribute("aria-disabled", "true");
+      expect(row("Mana Pool USD")).not.toBeDisabled();
+      expect(row("Mana Pool USD")).toHaveAttribute("aria-pressed", "false");
+      await userEvent.click(row("Mana Pool USD"));
+      expect(select).not.toHaveBeenCalled();
+
+      // The feed beside it is this host's to ask, and is untouched by any of it.
+      expect(row("Card Kingdom USD")).not.toHaveAttribute("aria-disabled");
+      await userEvent.click(row("Card Kingdom USD"));
+      expect(select).toHaveBeenCalledExactlyOnceWith("cardkingdom");
+    });
+
+    /** What happened and where the prices can still be had — "not available" alone reads as
+     *  "gone", and this marketplace is neither gone nor unsupported. */
+    it("says why, and where its prices can be had", () => {
+      render(<MarketplacePanel marketplace={unreachable()} />);
+
+      expect(row("Mana Pool USD")).toHaveAccessibleDescription(
+        "Not available in a browser. Mana Pool's price list can't be read from a web page — " +
+          "the desktop and Android apps can show it.",
+      );
+    });
+
+    /**
+     * **Neither a feed line nor a refresh.** "No prices yet. Selecting this marketplace downloads
+     * them." is a promise this host cannot keep, and a refresh is a press that can only fail.
+     */
+    it("draws no feed state and no refresh for it", () => {
+      render(<MarketplacePanel marketplace={unreachable()} />);
+
+      expect(row("Mana Pool USD")).not.toHaveAccessibleDescription(/No prices yet/);
+      expect(
+        within(panel()).queryByRole("button", { name: "Refresh Mana Pool prices" }),
+      ).toBeNull();
+      // Five rows and the one refresh that is left.
+      expect(within(panel()).getAllByRole("button")).toHaveLength(ALL.length + 1);
+    });
+
+    /**
+     * The state the fallback exists for: the database names Mana Pool and the window is quoting
+     * TCGplayer in its place. The mark is on what is being quoted, and the greyed row says that
+     * it is the reader's own choice and what is standing in for it.
+     */
+    it("marks what the window quotes, and says whose prices stand in for the stored choice", () => {
+      render(<MarketplacePanel marketplace={unreachable({ stored: MARKETPLACES.manapool })} />);
+
+      expect(row("TCGplayer USD")).toHaveAttribute("aria-pressed", "true");
+      expect(row("Mana Pool USD")).toHaveAttribute("aria-pressed", "false");
+      expect(row("Mana Pool USD")).toHaveAccessibleDescription(
+        "Your prices are set to Mana Pool, so prices here are TCGplayer's until you choose " +
+          "another. Not available in a browser. Mana Pool's price list can't be read from a " +
+          "web page — the desktop and Android apps can show it.",
+      );
+      // Said once, on the row it is about — the stand-in itself has nothing to excuse.
+      expect(row("TCGplayer USD")).not.toHaveAccessibleDescription();
+    });
+
+    it("says nothing about a stand-in when the reader's choice is one the host can ask", () => {
+      render(<MarketplacePanel marketplace={unreachable()} />);
+      expect(row("Mana Pool USD")).not.toHaveAccessibleDescription(/Your prices are set to/);
+    });
   });
 
   /** A refused write has to be sayable — the panel's other failure state. */

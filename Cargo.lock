@@ -1786,8 +1786,10 @@ name = "grimoire-web"
 version = "0.40.0"
 dependencies = [
  "console_error_panic_hook",
+ "flate2",
  "futures-util",
  "grimoire-core",
+ "httpmock",
  "js-sys",
  "rusqlite",
  "serde",

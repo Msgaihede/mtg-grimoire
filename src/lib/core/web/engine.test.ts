@@ -15,8 +15,14 @@ function gate<T>() {
   return { promise, resolve, reject };
 }
 
-/** An engine over a glue the test wrote, and everything it posted. */
-function harness(over: Partial<Glue> = {}) {
+/**
+ * An engine over a glue the test wrote, and everything it posted. `held` is what the browser's
+ * storage is found to hold before the open — the folder is there, unless a test says otherwise.
+ */
+function harness(
+  over: Partial<Glue> = {},
+  held: (directory: string) => Promise<boolean | null> = () => Promise.resolve(true),
+) {
   const posted: FromWorker[] = [];
   let sink: ((name: string, payload: string) => void) | undefined;
   const glue = {
@@ -28,7 +34,7 @@ function harness(over: Partial<Glue> = {}) {
     ...over,
   };
   const load = vi.fn(() => Promise.resolve(glue as Glue));
-  const engine = createEngine(load, (message) => posted.push(message));
+  const engine = createEngine(load, (message) => posted.push(message), held);
   return {
     engine,
     glue,
@@ -76,10 +82,52 @@ describe("the Worker's engine", () => {
     expect(glue.listen).toHaveBeenCalledTimes(1);
     // Every ask is answered, and with the one answer.
     expect(posted).toEqual([
-      { kind: "opened", opened: READY },
-      { kind: "opened", opened: READY },
-      { kind: "opened", opened: READY },
+      { kind: "opened", opened: READY, existed: true },
+      { kind: "opened", opened: READY, existed: true },
+      { kind: "opened", opened: READY, existed: true },
     ]);
+  });
+
+  it("asks what the browser held before it opens anything, once, and says what it found", async () => {
+    // Opening is what creates the folder, so the question is only worth asking ahead of it.
+    const order: string[] = [];
+    const held = vi.fn((directory: string) => {
+      order.push(`held ${directory}`);
+      return Promise.resolve(false);
+    });
+    const { engine, posted } = harness(
+      {
+        open: vi.fn((directory: string) => {
+          order.push(`open ${directory}`);
+          return Promise.resolve(JSON.stringify(READY));
+        }),
+      },
+      held,
+    );
+
+    await engine.handle({ kind: "open", directory: "mtg-grimoire" });
+    await engine.handle({ kind: "open", directory: "mtg-grimoire" });
+
+    expect(order).toEqual(["held mtg-grimoire", "open mtg-grimoire"]);
+    // The second ask is answered with the first's finding: asked again now, it would find the
+    // folder the first open made and call a cleared database an ordinary launch.
+    expect(posted).toEqual([
+      { kind: "opened", opened: READY, existed: false },
+      { kind: "opened", opened: READY, existed: false },
+    ]);
+  });
+
+  it("opens the database all the same when the browser cannot be asked what it held", async () => {
+    const thrown = harness({}, () => Promise.reject(new DOMException("no", "SecurityError")));
+    await thrown.engine.handle({ kind: "open", directory: "mtg-grimoire" });
+    expect(thrown.posted).toEqual([{ kind: "opened", opened: READY, existed: null }]);
+
+    // A throw before any promise is the same answer: not known, and never a reason not to open.
+    const synchronous = harness({}, () => {
+      throw new TypeError("navigator.storage is undefined");
+    });
+    await synchronous.engine.handle({ kind: "open", directory: "mtg-grimoire" });
+    expect(synchronous.posted).toEqual([{ kind: "opened", opened: READY, existed: null }]);
   });
 
   it("answers a second tab's refusal as the open's answer, and remembers it", async () => {
@@ -91,8 +139,8 @@ describe("the Worker's engine", () => {
 
     expect(glue.open).toHaveBeenCalledTimes(1);
     expect(posted).toEqual([
-      { kind: "opened", opened: { kind: "already-open" } },
-      { kind: "opened", opened: { kind: "already-open" } },
+      { kind: "opened", opened: { kind: "already-open" }, existed: true },
+      { kind: "opened", opened: { kind: "already-open" }, existed: true },
     ]);
   });
 
@@ -111,6 +159,7 @@ describe("the Worker's engine", () => {
           kind: "unloaded",
           message: "TypeError: Failed to fetch dynamically imported module",
         },
+        existed: true,
       },
     ]);
 
@@ -130,7 +179,11 @@ describe("the Worker's engine", () => {
     });
     await engine.handle({ kind: "open", directory: "mtg-grimoire" });
     expect(posted).toEqual([
-      { kind: "opened", opened: { kind: "failed", message: "RuntimeError: unreachable" } },
+      {
+        kind: "opened",
+        opened: { kind: "failed", message: "RuntimeError: unreachable" },
+        existed: true,
+      },
     ]);
   });
 

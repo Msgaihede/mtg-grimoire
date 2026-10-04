@@ -68,3 +68,8 @@ console_error_panic_hook = "0.1"
 # only, never on the `[dependencies]` line above.
 grimoire-core = { path = "../grimoire-core", features = ["testing"] }
 tokio = { version = "1", features = ["macros", "rt", "time"] }
+# The launch's downloads are driven against a local mock Scryfall, never the real one — the
+# core's own test dependency, at its version — and its bulk files are gzipped as the bulk
+# origin serves them.
+httpmock = "0.8"
+flate2 = "1"

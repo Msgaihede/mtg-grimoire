@@ -1,0 +1,130 @@
+{
+  "timestamp": "2026-10-04T03:12:44Z",
+  "version": "v2",
+  "variants": [
+    {
+      "id": "1529-4131",
+      "status": "OK",
+      "uses": [
+        {
+          "card": {
+            "name": "Rhystic Study",
+            "oracleId": "53236dd7-845a-444c-96d5-f41ed7325d8f",
+            "typeLine": "Enchantment"
+          },
+          "zoneLocations": ["B"],
+          "battlefieldCardState": "",
+          "exileCardState": "",
+          "libraryCardState": "",
+          "graveyardCardState": "",
+          "mustBeCommander": false,
+          "quantity": 1
+        },
+        {
+          "card": {
+            "name": "Miara, Thorn of the Glade",
+            "oracleId": "e2f30415-2637-4859-a06b-7c8d9e0f1a2b",
+            "typeLine": "Legendary Creature — Elf Scout"
+          },
+          "zoneLocations": ["B", "C"],
+          "battlefieldCardState": "",
+          "exileCardState": "",
+          "libraryCardState": "",
+          "graveyardCardState": "",
+          "mustBeCommander": false,
+          "quantity": 1
+        }
+      ],
+      "requires": [{ "template": { "name": "an Elf sacrifice outlet" }, "quantity": 1 }],
+      "produces": [{ "feature": { "name": "Near-infinite card draw" }, "quantity": 1 }],
+      "of": [],
+      "includes": [],
+      "identity": "BGU",
+      "manaNeeded": "{1}",
+      "manaValueNeeded": 1,
+      "easyPrerequisites": "All permanents on the battlefield.",
+      "notablePrerequisites": "Opponents do not pay for Rhystic Study.",
+      "description": "Sacrifice an Elf, drawing a card from Miara.\nRepeat for each Elf you control.",
+      "notes": "",
+      "popularity": 412,
+      "spoiler": false,
+      "bracketTag": "S",
+      "legalities": { "commander": true, "legacy": true, "vintage": true, "pauper": false },
+      "prices": { "tcgplayer": "48.12" },
+      "variantCount": 1
+    },
+    {
+      "id": "2207-3312",
+      "status": "OK",
+      "uses": [
+        {
+          "card": {
+            "name": "Lightning Bolt",
+            "oracleId": "4457ed35-7c10-48c8-9776-456485fdf070",
+            "typeLine": "Instant"
+          },
+          "zoneLocations": ["H"],
+          "battlefieldCardState": "",
+          "exileCardState": "",
+          "libraryCardState": "",
+          "graveyardCardState": "",
+          "mustBeCommander": false,
+          "quantity": 1
+        },
+        {
+          "card": {
+            "name": "Fire // Ice",
+            "oracleId": "d0a5b1c2-3d4e-4f50-8617-2839a4b5c6d7",
+            "typeLine": "Instant // Instant"
+          },
+          "zoneLocations": ["H"],
+          "battlefieldCardState": "",
+          "exileCardState": "",
+          "libraryCardState": "",
+          "graveyardCardState": "",
+          "mustBeCommander": false,
+          "quantity": 1
+        }
+      ],
+      "requires": [],
+      "produces": [{ "feature": { "name": "Infinite damage" }, "quantity": 1 }],
+      "of": [],
+      "includes": [],
+      "identity": "UR",
+      "manaNeeded": "{1}{R}{R}",
+      "manaValueNeeded": 3,
+      "easyPrerequisites": "",
+      "notablePrerequisites": "",
+      "description": "Cast Lightning Bolt.\nCast Fire.",
+      "notes": "",
+      "popularity": 88,
+      "spoiler": false,
+      "bracketTag": "C",
+      "legalities": { "commander": true, "legacy": true, "vintage": true, "pauper": false },
+      "prices": { "tcgplayer": "403.10" },
+      "variantCount": 1
+    },
+    {
+      "id": "5001-5002",
+      "status": "NW",
+      "uses": [],
+      "requires": [],
+      "produces": [],
+      "of": [],
+      "includes": [],
+      "identity": "C",
+      "manaNeeded": "",
+      "manaValueNeeded": 0,
+      "easyPrerequisites": "",
+      "notablePrerequisites": "",
+      "description": "",
+      "notes": "A draft the editors have not published.",
+      "popularity": null,
+      "spoiler": false,
+      "bracketTag": "C",
+      "legalities": { "commander": false },
+      "prices": { "tcgplayer": "0.00" },
+      "variantCount": 0
+    }
+  ]
+}

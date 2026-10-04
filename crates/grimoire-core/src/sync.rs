@@ -23,6 +23,14 @@
 //!   download and ingest that can still fail — would let one dead download throttle
 //!   every *automatic* retry for 24 h, and the app has no other way to start one.
 //!
+//! **On a host that keeps no files the download and the ingest are one pass**
+//! ([`ingest_streamed`]; `platform::host`). A browser has no `tmp/` for 77 MB to land in, so
+//! there the body is pushed into the ingest a chunk at a time — the same check before it and
+//! the same run after the swap, with the first rule above doing more work than it does
+//! natively: a Worker is one thread, so a guard held across the `.await` between two chunks
+//! would be a lock no command arriving in that gap could ever take. What is given up is the
+//! resume, and what is kept is the size check (`scryfall::Client::stream`).
+//!
 //! Failures are also *persisted*, to `last_error`. A sync spawned at startup emits its
 //! `sync:progress` events within milliseconds, before the webview has registered a
 //! listener, and Tauri drops events that nobody is listening for — so the event is the
@@ -835,6 +843,15 @@ async fn do_sync(state: &Arc<State>, force: bool) -> Result<SyncOutcome, String>
 
     let expected_size = check_download_size(info.compressed_size)?;
 
+    // **A host that keeps no files has no `tmp/` for the download to land in** — a browser,
+    // whose only storage is the two databases. There the body is fed to the ingest as it
+    // arrives, and what follows the swap is the same run. Decided before anything is asked
+    // for, so that host never spends a request it then has nowhere to put.
+    if !crate::platform::host::keeps_files() {
+        let stats = ingest_streamed(state, &info, expected_size).await?;
+        return finish_ingested(state, now, &info, updated_at, stats, None).await;
+    }
+
     let gz = state.data_dir.join("tmp").join("default-cards.jsonl.gz");
     if let Some(parent) = gz.parent() {
         crate::platform::files::create_dir_all(parent)
@@ -899,6 +916,105 @@ async fn do_sync(state: &Arc<State>, force: bool) -> Result<SyncOutcome, String>
             return Err(e.to_string());
         }
     };
+    finish_ingested(state, now, &info, updated_at, stats, Some(&gz)).await
+}
+
+/// The download and the ingest as one pass, **on a host that keeps no files**: one streamed
+/// `GET`, each chunk pushed into [`ingest::StreamIngest`] as it arrives, nothing written
+/// anywhere but `cards_staging`.
+///
+/// **No lock crosses an `.await`.** The sink takes the write connection once per batch of
+/// 2 000 rows, inside `push`, and has let go before `push` returns — so between two chunks
+/// the connection is free. **And the loop gives the host a turn on a budget** (its
+/// `Breather`): awaiting a chunk is not one, so without it no command is taken mid-download.
+///
+/// **What the page is told** is the two phases a file-backed run has, each in the unit that
+/// is true of it here. `downloading` counts bytes against the listing's size for as long as
+/// the body is arriving — which on this host is also how far the ingest has got, since it
+/// keeps pace chunk for chunk. `ingesting` is what is left once the last byte is in: the
+/// tail, the swap and the index replay, said once with the rows staged so far and once more,
+/// by the sink, with the final count.
+///
+/// **A run that fails leaves no staging behind** ([`ingest::StreamIngest::abandon`]). On a
+/// host with files a failed *download* never reaches the ingest, so staging is only ever
+/// left by a kill; here a dropped connection mid-body is an ordinary failure, and what it
+/// would leave is most of a card database inside an origin's storage quota.
+///
+/// The size check is [`scryfall::Stream::chunk`]'s: the end of the body is answered only when
+/// exactly the listed number of bytes arrived, so the `finish` below — the swap — is
+/// unreachable over a short body.
+async fn ingest_streamed(
+    state: &Arc<State>,
+    info: &scryfall::BulkInfo,
+    expected_size: u64,
+) -> Result<ingest::IngestStats, String> {
+    // The sink first, the request second: a database that cannot take a staging table is
+    // found out before 77 MB is asked for, not after.
+    let mut sink = ingest::StreamIngest::begin(&state.db).map_err(|e| e.to_string())?;
+    emit(state, "downloading", 0, expected_size);
+    let mut stream = match state
+        .client
+        .stream(&info.jsonl_download_uri, expected_size)
+        .await
+    {
+        Ok(stream) => stream,
+        Err(e) => {
+            sink.abandon();
+            note_scryfall(state, "bulk_download", &e);
+            return Err(e.to_string());
+        }
+    };
+    let mut staged = 0u64;
+    let mut last_emit = 0u64;
+    let mut breather = crate::platform::timer::Breather::new(crate::feed::WORK_BUDGET);
+    loop {
+        // Nothing is held across either `.await` of the loop: `sink` owns rows and a
+        // decoder, never a guard.
+        let chunk = match stream.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(e) => {
+                sink.abandon();
+                note_scryfall(state, "bulk_download", &e);
+                return Err(e.to_string());
+            }
+        };
+        if let Err(e) = sink.push(&chunk, &mut |n| staged = n) {
+            sink.abandon();
+            return Err(e.to_string());
+        }
+        let done = stream.received();
+        if done.saturating_sub(last_emit) >= DOWNLOAD_EMIT_BYTES || done >= expected_size {
+            emit(state, "downloading", done, expected_size);
+            last_emit = done;
+        }
+        // **The await above is not a turn of the event loop**: a chunk the network had
+        // already buffered resumes this loop without one, and the push is synchronous — so
+        // while the body arrives faster than it is ingested, nothing else on a one-thread
+        // host would run. This is the turn, every `feed::WORK_BUDGET` of work.
+        breather.breathe().await;
+    }
+    // The body is whole. What is left is the long synchronous tail — the last batch, the
+    // swap, every index replayed, the search index rebuilt — and on a host with one thread
+    // nothing else runs until it returns.
+    emit(state, "ingesting", staged, INGEST_TOTAL_ESTIMATE);
+    sink.finish(&mut |n| emit(state, "ingesting", n, INGEST_TOTAL_ESTIMATE))
+        // `finish` drops the staging table itself on its two refusals; a database error has
+        // left it, and the next run's `create_staging` or the next launch takes it.
+        .map_err(|e| e.to_string())
+}
+
+/// Everything a run does once the ingest has swapped a new `cards` in — the same on a host
+/// that downloaded to a file and one that streamed. `gz` is the downloaded file, where there
+/// was one.
+async fn finish_ingested(
+    state: &Arc<State>,
+    now: u64,
+    info: &scryfall::BulkInfo,
+    updated_at: Option<String>,
+    stats: ingest::IngestStats,
+    gz: Option<&std::path::Path>,
+) -> Result<SyncOutcome, String> {
     // **The swap has landed, so the facet index is now a liar — go cold immediately, before
     // anything else in this function gets a turn.** `swap_staging` dropped and recreated
     // `cards`, which renumbers every rowid, and the index is nothing but rowids: left
@@ -940,7 +1056,9 @@ async fn do_sync(state: &Arc<State>, force: bool) -> Result<SyncOutcome, String>
 
     // Only now the unlink. 77 MB of blocking I/O, and until this line moved above it, it sat
     // inside the window the paragraph above is about.
-    scryfall::discard_partial(&gz);
+    if let Some(gz) = gz {
+        scryfall::discard_partial(gz);
+    }
 
     reclaim_freed_pages(state).await;
 

@@ -68,7 +68,7 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
 
 ## Steps — one PR each
 
-- [ ] **5.1 — the engine in a browser.** `crates/grimoire-web`: `open`, `call` and the event
+- [x] **5.1 — the engine in a browser** (#805, merged 2026-10-04). `crates/grimoire-web`: `open`, `call` and the event
   sink over `grimoire_core::dispatch`; the OPFS pool and one connection with no WAL, the journal
   reported rather than assumed; `launch::open` and the facet index on a host with one connection,
   and every table command run that way natively so a lock taken twice fails a test instead of
@@ -78,10 +78,15 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   a CI `web` job that builds both and opens the database in a headless browser.
 - [ ] **5.2 — the first run.** The launch's downloads without a temp file: the card sync, both
   tagger feeds, the combos and the Card Kingdom list, each streamed into its sink; CORS and the
-  pacing clock measured, which phase 2 left as this phase's first measurements; a deadline on a
-  feed request. The corpus-build screen with its progress; searches queued behind an ingest,
-  measured; the corpus found missing at launch and a rebuild offered; `persist()` asked once and
-  recorded. The marketplace picker offers what the host can reach.
+  pacing clock measured, which phase 2 left as this phase's first measurements; a stall bound on
+  each wait of a download — the answer, and every chunk — rather than a deadline on the whole
+  request. The corpus-build screen with its progress; searches queued behind an ingest,
+  measured; storage found cleared at launch and the reader **told so in a notice** — not a
+  rebuild offered, because the rebuild is the launch's own download; `persist()` asked when the
+  database opens and **again, at most once a week, while the answer is no** — not once, because
+  Chromium decides at the call and a first visit's no would otherwise stand after an install —
+  and recorded. The marketplace picker offers what the host can reach.
+  ([light-app.md](../../reference/light-app.md) §9.2 is the record.)
 - [ ] **5.3 — the service worker.** The shell precached; card images answered from Cache Storage
   on the app's own origin, the Scryfall address asked of the core; the image-cache panel over
   it; the update flow — a waiting worker, a bar, and only that press activates it; a face whose

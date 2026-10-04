@@ -267,7 +267,12 @@ export const ARMS = [
   // over it, and `web:smoke`, which serves `dist-web/` and opens it in a headless browser.
   // `frontend` lints them like the rest of `scripts/`; `web` is the job that runs them.
   // **Above `scripts/*`**, which would lint a broken build script and never run it.
-  { match: ["scripts/build-wasm.mjs", "scripts/web-smoke.mjs"], jobs: ["frontend", "web"] },
+  // `scripts/web-smoke/*` is what the smoke answers the engine with instead of the real hosts: a
+  // fixture changed is a first run changed, and nothing but `web` runs it.
+  {
+    match: ["scripts/build-wasm.mjs", "scripts/web-smoke.mjs", "scripts/web-smoke/*"],
+    jobs: ["frontend", "web"],
+  },
   // `scripts/` because `eslint .` lints it — its ignore list does not name it — and because
   // `vitest` collects `scripts/**/*.test.mjs`.
   { match: ["scripts/*"], jobs: ["frontend"] },

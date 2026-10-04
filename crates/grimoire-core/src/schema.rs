@@ -5241,7 +5241,41 @@ fn create_fts_in(conn: &Connection, schema: &str) -> rusqlite::Result<()> {
 /// side of it changed, and none changed order. They stay two because a host may want the first
 /// without the second — a test that needs a schema at head and no launch.
 pub fn bring_to_head(conn: &Connection) -> rusqlite::Result<()> {
-    migrate_user(conn).map_err(|e| in_file(e, "your collection (user.db)"))?;
+    bring_to_head_or_say(conn).map_err(Stopped::into_error)
+}
+
+/// What stopped a climb to head, **for a host that can do something about one of the two**.
+///
+/// [`bring_to_head`] answers a plain error because every host with a folder has already done
+/// what it can by then: a corpus that would not migrate was detached, deleted and built
+/// again inside the call. A host whose databases are names in a pooled VFS — a browser —
+/// cannot do the middle step from here ([`crate::platform::files`] refuses), so the corpus is
+/// attached again and the launch stops. That host *can* delete it another way, once this
+/// connection is closed — the pool's own delete — and this is how it is told that doing so is
+/// worth it: [`crate::launch::open_single_replacing`] is the reader.
+#[derive(Debug)]
+pub enum Stopped {
+    /// The corpus would not climb, and the failure was about the file rather than about the
+    /// disk under it ([`says_nothing_about_the_file`] is the other case): throwing it away
+    /// and opening again builds an empty one at head, at the price of a resync.
+    Corpus(rusqlite::Error),
+    /// Anything else — the reader's own file, the capture triggers, or a corpus failure that
+    /// says nothing about the file. **Never a reason to delete anything.**
+    Other(rusqlite::Error),
+}
+
+impl Stopped {
+    /// The error [`bring_to_head`] has always answered.
+    pub fn into_error(self) -> rusqlite::Error {
+        match self {
+            Stopped::Corpus(e) | Stopped::Other(e) => e,
+        }
+    }
+}
+
+/// [`bring_to_head`], saying which kind of stop it was. The same statements in the same order.
+pub fn bring_to_head_or_say(conn: &Connection) -> Result<(), Stopped> {
+    migrate_user(conn).map_err(|e| Stopped::Other(in_file(e, "your collection (user.db)")))?;
     // **A corpus that will not migrate is a corpus to replace, not a launch to stop** (issue
     // #550). Everything in it comes back from a feed, so the price of a rebuild is a resync —
     // and the price of stopping was an app that would not start, with a message naming the
@@ -5250,10 +5284,10 @@ pub fn bring_to_head(conn: &Connection) -> rusqlite::Result<()> {
     // [`says_nothing_about_the_file`].
     if let Err(e) = migrate_corpus(conn) {
         if says_nothing_about_the_file(&e) {
-            return Err(in_file(e, "the card database (corpus.db)"));
+            return Err(Stopped::Other(in_file(e, "the card database (corpus.db)")));
         }
         replace_attached_corpus(conn, e)
-            .map_err(|e| in_file(e, "the card database (corpus.db)"))?;
+            .map_err(|e| Stopped::Corpus(in_file(e, "the card database (corpus.db)")))?;
     }
     // **Fatal, like the two migrations above and unlike the two repairs below.** A device whose
     // capture triggers are missing goes on working perfectly and records nothing, so its edits
@@ -5263,8 +5297,8 @@ pub fn bring_to_head(conn: &Connection) -> rusqlite::Result<()> {
     // **The stale apply guard first, and fatal for the same reason**: a kill inside a
     // `capture::suppressed` window leaves `sync_state.applying` on disk, and every trigger
     // installed below reads it and records nothing.
-    crate::sync_engine::capture::clear_stale_guard(conn)?;
-    crate::sync_engine::capture::install(conn)?;
+    crate::sync_engine::capture::clear_stale_guard(conn).map_err(Stopped::Other)?;
+    crate::sync_engine::capture::install(conn).map_err(Stopped::Other)?;
     Ok(())
 }
 
@@ -5316,7 +5350,14 @@ pub fn bring_to_head(conn: &Connection) -> rusqlite::Result<()> {
 /// does need a `VACUUM` runs after a sync instead, once per database: see
 /// [`crate::maintenance::convert_to_incremental`].
 pub fn prepare_database(conn: &Connection) -> rusqlite::Result<()> {
-    bring_to_head(conn)?;
+    prepare_database_or_say(conn).map_err(Stopped::into_error)
+}
+
+/// [`prepare_database`], saying which kind of stop it was ([`Stopped`]) — for
+/// [`crate::launch::open_single_replacing`], whose host can delete a corpus this connection
+/// could not. The same statements in the same order.
+pub fn prepare_database_or_say(conn: &Connection) -> Result<(), Stopped> {
+    bring_to_head_or_say(conn)?;
     if let Err(e) = crate::maintenance::rebuild_fts_if_pending(conn) {
         eprintln!(
             "the search index still owes a rebuild from an interrupted compaction, and it \
@@ -5453,7 +5494,7 @@ fn in_file(e: rusqlite::Error, file: &str) -> rusqlite::Error {
 /// function names what *is* damage, this one what is *not*, because a migration fails in more
 /// ways than a read — `table cards already exists`, `no such column`, a constraint — and every
 /// one of those is a fact about a file the app is free to throw away.
-fn says_nothing_about_the_file(e: &rusqlite::Error) -> bool {
+pub(crate) fn says_nothing_about_the_file(e: &rusqlite::Error) -> bool {
     use rusqlite::ffi::ErrorCode;
     matches!(
         e.sqlite_error_code(),
