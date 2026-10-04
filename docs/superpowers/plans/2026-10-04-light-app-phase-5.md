@@ -113,6 +113,12 @@ seams); the record of each step is [light-app.md](../../reference/light-app.md) 
   service worker and a WASM module need, its `wrangler.jsonc` with `mtg-grimoire.app` as its
   custom domain, and a runbook that opens with asking the host. Then the built app driven end to end against round one's
   figures — the module's size, the first run, a search, storage.
+  **The hosting half is built and not deployed** (`app-worker/`;
+  [light-app.md](../../reference/light-app.md) §9.5 is the record), **differently in one
+  place**: the Worker is not assets alone — the fallback by itself answers a missing file with
+  the document, so a script of a few lines makes that a 404. The headers are a `_headers` file
+  only the web build carries. **The box stays open for the second half**: the module's size
+  with timings, and the phase's own run.
 
 What only Markus can close stays open on the issue: the deploy itself, and a run on a real phone's
 browser over `adb reverse`.

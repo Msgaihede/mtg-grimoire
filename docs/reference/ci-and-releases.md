@@ -108,6 +108,23 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `FAKE_ALIASES` from it at load, in every mode, so a version that will not load is a
     `web:build` that never starts. The rest of `.storybook/**` is aliased in under `fake` mode
     alone and does not set `web`.
+  - **`app-worker/**` → `frontend` and `web`** (step 5.5, 2026-10-04), where it would have
+    fallen to the fail-safe and run the Rust matrix, `core` and `storybook` for a response
+    header. It is the web app's hosting: a third Worker's `wrangler.jsonc`, Cloudflare's
+    `_headers` file and a small script. `frontend` runs `tsc -p tsconfig.app-worker.json` (in
+    `npm run build`), `eslint` and the directory's tests — `hosting.test.ts` reads `_headers`,
+    `wrangler.jsonc`, the desktop's shipped CSP, the line of `src/lib/core/web/index.ts` that
+    constructs the engine's Worker, and **every `.rs` file of `grimoire-core`, `grimoire-web`
+    and `card-scanner`'s library** as text. It fails when the policy's `connect-src` and the
+    addresses the engine names differ in either direction, and when shipped Rust gains an
+    `https://` literal that is neither in the policy nor on the test's list of hosts a browser's
+    engine never asks. Each of those trees already routes to `frontend`, which is the only
+    reason a glob the census cannot see is safe here. `web` because the light config imports `app-worker/src/headers.ts` at
+    load, in every mode, and emits `_headers` into `dist-web/` in `web` mode — so a file there
+    that will not load or parse stops `web:build`. **Not `rust`**: the census finds no Rust
+    source reading that tree, which is the difference from `share-worker/` (one does, so that
+    tree keeps the fail-safe). The crossing runs the other way, and `crates/grimoire-core/**`
+    already sets `frontend`. `app-worker/README.md` is prose. **Nothing in CI deploys it.**
   - **The fail-safe sets `web` and still does not set `android`**, and the two answers come
     from one question: can a path nobody placed be an input? Never to the APK, whose inputs each
     have an arm. To a build of the page *and* the engine, easily — a new root config Vite or

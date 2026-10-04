@@ -284,6 +284,21 @@ export const ARMS = [
   // `vitest` collects `scripts/**/*.test.mjs`.
   { match: ["scripts/*"], jobs: ["frontend"] },
 
+  // **The web app's hosting** (phase 5, step 5.5): `app-worker/`, the third Cloudflare Worker —
+  // its `wrangler.jsonc`, the `_headers` file a deploy reads, and a script of a few lines.
+  // `frontend` type-checks it (`tsc -p tsconfig.app-worker.json` in `npm run build`), lints it
+  // and runs its tests, the fence between the Content-Security-Policy and the engine's hosts
+  // among them. **And `web`**, which is the only job that *uses* what is here:
+  // `vite.mobile.config.ts` imports `app-worker/src/headers.ts` at load and copies `_headers`
+  // into `dist-web/`, so a file here that will not load, or will not parse, is a `web:build`
+  // that stops. Until this arm the tree fell to the fail-safe and ran the whole Rust matrix,
+  // `core` and `storybook` for a response header.
+  // **Not `rust`, and the census says so**: no Rust source reads a file here — unlike
+  // `share-worker/`, whose `wrangler.jsonc` one does, which is why that tree still has no arm.
+  // The crossing runs the other way (`hosting.test.ts` reads `crates/grimoire-core`), and the
+  // engine's arm already sets `frontend`. No job deploys it.
+  { match: ["app-worker/*"], jobs: ["frontend", "web"] },
+
   // **The light app's web host** (phase 5, step 5.1): `grimoire-web`, a workspace member, so
   // `rust` formats, lints and tests it natively, and `web` is the only job that compiles it for
   // `wasm32-unknown-unknown`, runs `wasm-bindgen` over it and loads what comes out. `frontend`

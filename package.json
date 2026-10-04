@@ -10,7 +10,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && tsc -p .storybook && tsc -p tsconfig.relay.json && tsc -p tsconfig.share-worker.json && tsc -p tsconfig.web-worker.json && tsc -p tsconfig.web-sw.json && vite build",
+    "build": "tsc && tsc -p .storybook && tsc -p tsconfig.relay.json && tsc -p tsconfig.share-worker.json && tsc -p tsconfig.app-worker.json && tsc -p tsconfig.web-worker.json && tsc -p tsconfig.web-sw.json && vite build",
     "preview": "vite preview",
     "tauri": "tauri",
     "share:dev": "vite --config vite.share.config.ts",

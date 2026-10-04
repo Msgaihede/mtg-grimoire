@@ -289,7 +289,7 @@ failure behind each at its own site:
 | `npm run web:wasm` | — | The engine as a WASM module into `dist-wasm/` (`scripts/build-wasm.mjs`). Needs clang 18 or newer and the `wasm-bindgen` CLI at the version `Cargo.lock` resolves; minutes, cold. **Run it before any of the three below** |
 | `npm run web:dev` | **The web host**: the real engine in a Worker, its databases in this browser's OPFS | The web app in a browser on port 5176 — driven in Chrome only so far. No Rust process, **no lock**. A `web:wasm` beside a running server is picked up by a reload. **Registers no service worker, so it draws no card picture** — `web:preview` does |
 | `npm run web:build` | — | `tsc`, the Worker's and the service worker's own `tsc` programs, then the bundle into `dist-web/` with the engine under `wasm/<build id>/` — and last, `sw.js` at its root, built from the list of what was just written. Fails, in a sentence, when `dist-wasm/` is not built |
-| `npm run web:preview` | The same engine, from `dist-web/` | The built app on port 4176, where a missing file is a 404 as on a real host and `sw.js` is served `no-cache`. **The one command here that runs the service worker**: pictures, the offline shell, the update bar |
+| `npm run web:preview` | The same engine, from `dist-web/` | The built app on port 4176, where a missing file is a 404 as on a real host, every response carries what the hosting's `_headers` gives its address — the Content-Security-Policy on `sw.js` and the Worker's chunk among them — and `sw.js` is served `no-cache`. **The one command here that runs the service worker**: pictures, the offline shell, the update bar — and the one that enforces the policy |
 | `npm run web:smoke` | The same engine, in headless Chromium | The built app opened over CDP as an **offline first run**: every request the engine and the service worker make is answered from `scripts/web-smoke/`, and the checks in the script's header run over it — the card sync, the feeds, the picker, a card picture, a reload with the server gone, a waiting build and its press, and a second tab's refusal among them. `CHROME` names the browser; otherwise the first of Chrome and Edge found installed |
 
 - **`mobile:tauri` is the desktop binary with a config overlay** (`src-tauri/tauri.light.conf.json`):
@@ -528,7 +528,9 @@ built in the `web` mode.
   each feed in turn, on every launch, and one first run against the real hosts is measured in
   [light-app.md](../docs/reference/light-app.md) §9.2. **Not there yet**, each with the step
   that owns it in [the plan](../docs/superpowers/plans/2026-10-04-light-app-phase-5.md): no
-  hosting (5.5); no sync (phase 6).
+  deploy — the hosting Worker is built and nothing is at the address, and the step's second half
+  (the module's size with timings, CI's smoke run under the policy, the phase's end-to-end run)
+  is not done (5.5, §9.5); no sync (phase 6).
 - **The service worker is the web host's, and nothing here names it** (step 5.3;
   `src/lib/core/web/sw/`, registered by the page's half of the web core in a built app and
   never by the dev server). What a page sees of it is three things, each through the seam:
@@ -557,6 +559,15 @@ built in the `web` mode.
     first activates, and a picture asked for before that is a 404 the frame's retry heals.
     **A hard reload starts a page no worker controls**, by the browser's own rule; the page
     asks the active worker to take it, and it does (driven in Chrome, 2026-10-04).
+- **The web build is served under `style-src 'self'`, as the desktop is** (step 5.5): the
+  hosting's `_headers` sends the desktop's policy with what a browser adds, so the rule
+  [`src/CLAUDE.md`](../src/CLAUDE.md) states for the shipped window — **no runtime `<style>`**,
+  so no portal or popper library and neither forbidden `motion` API — binds the phone face in a
+  browser too, and fails there as silently. **`web:preview` is where that policy is enforced,
+  not `web:dev`**: Vite's dev server sends no policy and injects `<style>` itself, so a page
+  that works in dev has proved nothing about it. A card picture is drawn from this origin alone
+  (`img-src 'self' data:`), and the engine may ask only the hosts `connect-src` names —
+  [`app-worker/README.md`](../app-worker/README.md) has both lists and why.
 - **The desktop face's file dialogs are answered on the page** (step 5.4): `export_save_file` is
   a download and `import_pick_file` a hidden `<input type="file">`, in front of the Worker
   (`src/lib/core/web/files.ts`), in the desktop commands' own result shapes — so
