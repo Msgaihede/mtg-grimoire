@@ -7,9 +7,12 @@ phone-sized window over the real Rust core (§2.2). Underneath it, phase 2 moved
 crate those hosts can link (§6), **phase 4 built the Android host on it** (§8) — an APK
 CI builds, which a phone first ran on 2026-10-04 (§8.6) — and **phase 5 is building the web host** (§9): since
 step 5.1 (2026-10-04) the engine is a WASM module in a dedicated Worker, and it opens its
-database in a browser's OPFS and answers commands there. **It downloads nothing in a browser
-yet**, so a web install has no cards; there is no service worker, nothing is hosted, and there
-is no sync on a light install.
+database in a browser's OPFS and answers commands there, and **since step 5.2 (the same day) it
+builds its corpus there** — the launch's downloads streamed into their sinks, run once against
+the real hosts (§9.2) — and **since step 5.4 the clipboard, a link out and the desktop face's
+file dialogs are a browser's own there, and the manifest is finished** (§9.4). **It draws no
+card picture in a browser yet**; there is no service worker, nothing is hosted, and there is no
+sync on a light install.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
@@ -253,19 +256,28 @@ purpose; the phase that owns the surface owns the fix.
 
 ### Phase 5 — the web host
 
-**Step 5.1 (§9.1) closed none of these four**, and each has a step that owns it in
-[the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md): the first is 5.3's,
-the other three 5.4's. What 5.1 itself left open is at the foot of §9.1.
+**Steps 5.1 and 5.2 (§9.1, §9.2) closed none of these four; step 5.4 (§9.4) closed the last
+three**, and the first is 5.3's in
+[the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md). What each step
+itself left open is at its own foot — §9.1's, §9.2's *Found and left*, §9.4's *Not measured*.
 
 - `FaceBoundary` catches a face that throws — a lazy chunk that never arrives included — and
   offers a reload. What it does not do is recover: a deploy that renamed the chunks needs the
   service worker's update story, which is this phase's.
-- A refused history **push** is swallowed like a refused replace, but costs more than a stale
+- ~~A refused history **push** is swallowed like a refused replace, but costs more than a stale
   URL — the entry is never made. `back()`'s latch has one release, a `popstate`; a
-  `history.back()` the browser drops leaves ✕ and Escape inert until the next one.
-- `public/light.webmanifest` is copied into every build's output, the desktop's and the share
-  viewer's included, because `public/` is shared. It is inert there.
-- The manifest's and the page's `#0e0f13` is two levels off `--color-bg`'s real sRGB value.
+  `history.back()` the browser drops leaves ✕ and Escape inert until the next one.~~ **Closed
+  2026-10-04 (§9.4)**: the phone router holds a place the browser would not write, `back()`
+  waits a bounded time for its Back and then renames the entry, and the desktop adapter makes a
+  refused push late, on its next write. Each is held by a test with the refusal simulated —
+  thrown and dropped — and by nothing a real browser was made to do.
+- ~~`public/light.webmanifest` is copied into every build's output, the desktop's and the share
+  viewer's included, because `public/` is shared. It is inert there.~~ **Closed 2026-10-04
+  (§9.4)**: the manifest, its icons and a copy of the favicon are in `mobile/public/`, the
+  light builds' own public directory.
+- ~~The manifest's and the page's `#0e0f13` is two levels off `--color-bg`'s real sRGB
+  value.~~ **Closed 2026-10-04 (§9.4)**: `#0C0D12` in the manifest, the page's `theme-color`
+  and Android's window ground, held equal by `mobile/host.test.ts`.
 
 ### The fences
 
@@ -519,7 +531,9 @@ gates those on `any(test, feature = "testing")` and `src-tauri` asks for the fea
 `clock::Tick` (`Instant` natively, `Date.now()` in a browser) and `pause(Duration) -> bool`
 (`thread::sleep` natively; `false` at once in a browser, where no other thread can let a lock
 go). On the desktop the arithmetic is unchanged. **Neither browser arm has run.** The fence
-found one clock read the plan had missed, in an `#[ignore]`d benchmark.
+found one clock read the plan had missed, in an `#[ignore]`d benchmark. (**Both have since, and
+the browser's `Tick` is no longer `Date.now()`**: it is `performance.now()` since step 5.2,
+2026-10-04 — §9.2. `now_ms` and `now_secs` are still `Date.now()` there.)
 
 **It compiles for WASM with SQLite's storage layer in it**: `cargo build --lib -p grimoire-core
 --target wasm32-unknown-unknown`, 24 s, and `clippy -- -D warnings` clean. Compiles is still all
@@ -1112,9 +1126,9 @@ compared equal — and four things that were wrong anyway.
 **Open after this part:**
 
 - **No browser arm has run.** `http`, `timer` and `files` compile for `wasm32` and are linted
-  there; the first thing to call one is phase 5's Worker. (**Some have since**: §9.1, 2026-10-04.
-  `http` is not among them — the web host starts no download, and no request from a browser is
-  on record.)
+  there; the first thing to call one is phase 5's Worker. (**All three have since, on 2026-10-04**:
+  the refusing `files` in step 5.1 (§9.1), and `http` and `timer` in step 5.2, when the web
+  host first started a download — §9.2 has the requests a browser made.)
 - **CORS is unmeasured, and it decides whether the browser arm of the client works at all.** A
   request from a Worker is cross-origin: `If-None-Match` and `Range` cost a pre-flight, and
   `ETag`, `Retry-After` and `Content-Range` read as absent unless the host exposes them — in
@@ -1124,14 +1138,17 @@ compared equal — and four things that were wrong anyway.
   `curl` — §9.1's CORS table.** None of the three exposes any of them.)
 - **A browser's `Tick` is the wall clock**, in whole milliseconds, so a clock stepped forwards
   opens the pacing gate early there. `performance.now()` is monotonic and a Worker has it; the
-  web host should give `platform::clock` that arm before it paces a request. (**Still open
-  after step 5.1**, which paces no request; it is step 5.2's.)
+  web host should give `platform::clock` that arm before it paces a request. (**Closed in step
+  5.2, 2026-10-04**: a browser's `Tick` is `performance.now()`, read off the Worker's global
+  scope and counted in whole microseconds, with the wall clock as the fallback for a host that
+  has no `performance` object — §9.2.)
 - **`futures_util`'s mutex is not FIFO-fair** where tokio's was. The gate promises spacing, not
   order, and one request is in flight at a time in this app — but a caller that needed the order
   would not get it.
 - **A download in a browser is unanswered.** `Client::download` writes a temp file and
   `ingest_gz` reads one; `StreamIngest` already takes chunks, so the web host can feed it a body
-  directly. That is its decision.
+  directly. That is its decision. (**Answered in step 5.2**: `platform::host` says whether a
+  host keeps files, and each download streams into its sink where it does not — §9.2.)
 - **The fence's fifth rule does not read below a file's tests.** Code there that is not a test
   would be missed; every file keeps its tests and fixtures at the foot and nothing else.
 - **`sync::run_sync`, which drives all three moved modules, is still the desktop's**, as are the
@@ -1979,8 +1996,11 @@ about ten to a screen, and opens the card sheet; a rule break is red with a warn
   list, which a phone draws without the cards' edit controls.
 - **Links in deck notes and to-do lists** are a plain `<a target="_blank" rel="noopener
   noreferrer">` on the phone, because nothing below `@/lib/core` opens a URL yet; on a Tauri light
-  host that is for phases 4 and 5's seams to settle. A to-do box on the phone is drawn and cannot
-  be pressed, and says `Done:` or `To do:`.
+  host that is for phases 4 and 5's seams to settle. (**They are still plain links, and that is
+  now the choice rather than the stand-in**: since step 5.4 `@/lib/core` does open a URL — §9.4 —
+  and a link a reader can long-press needs no host to open it; phase 4's guard hands it to the
+  system browser on Android.) A to-do box on the phone is drawn and cannot be pressed, and says
+  `Done:` or `To do:`.
 - **Not on the phone yet**: Compare, the theory-match ticks on the Actual list, the deck's
   description, and the stats band beyond the mana curve (the band carries write buttons).
 
@@ -2249,6 +2269,9 @@ decoded; a `Blob` handed to an `<a download>` and its URL released a task later;
 `navigator.clipboard.writeText`, which rejects where the browser offers none rather than claiming
 a copy. It is not in `src/lib/`, because the desktop cannot share it — its whole rule (issue #545)
 is that no file handle reaches the page. When phases 4 and 5 seam it, this module is what moves.
+(**It moved on 2026-10-04, step 5.4 — §9.4**: the read, the decode and the download are
+`src/lib/core/browserFiles.ts`, which the web host's own file commands read too, and the copy is
+`@/lib/clipboard`'s on both faces, refused in the same sentence.)
 
 - **The decode follows `import.rs`'s order** — a UTF-8 mark, a UTF-16 mark, valid UTF-8, then
   Windows-1252 — and refuses a file over the megabyte in that file's own sentence before reading a
@@ -2314,7 +2337,9 @@ reason. `SettingsPage` is the edition's second reader, as spec §3.1 grants; `na
 - **`SyncPanel` was welded** through `@/lib/externalLinks` (the plugin-opener, for *Connect
   Patreon*). It is now `SyncPanelBody`, which takes `openLink`, and a one-line `SyncPanel` that
   hands it `openExternal`; the phone face hands it a `window.open` until the host seam for opening
-  a link exists (phases 4 and 5).
+  a link exists (phases 4 and 5). (**It exists since step 5.4 — §9.4**: `openExternal` is the
+  host's, and the phone's Settings draws `SyncPanel` itself. The body keeps the prop for its
+  suite.)
 - **Driven in Chromium over the fake** (`mobile:dev`, which this record puts on port 5176 — the
   config's port for that script was 5175 then and is now, so the pass named another by hand or
   the figure is a slip; **since 2026-10-04 port 5176 is `web:dev`'s**): every group opened at 360 wide
@@ -2651,14 +2676,17 @@ the app does not ship. So `MainActivity` pads `android.R.id.content` by `systemB
 `env()` insets read 0, and a search box is never under the keyboard. Both bars draw light icons
 (`SystemBarStyle.dark`), and the window behind them is `#0e0f13`, the web manifest's
 `background_color` — so the bars, the launch and the page's ground agree, two levels off
-`--color-bg` exactly as the manifest already is (§5, phase 5's).
+`--color-bg` exactly as the manifest already is (§5, phase 5's). (**`#0C0D12` since step 5.4 —
+§9.4**: the token's own sRGB value, in the manifest, the page's `theme-color` and `colors.xml`
+alike. No device has drawn the new ground.)
 
 **Files.**
 
 - **Picking needed no seam.** wry's `RustWebChromeClient.onShowFileChooser` answers an
   `<input type="file">` with the system picker and hands the page a `File` over the chosen
   `content://` document, which the page reads as it reads any other. `phone/transfer/browserFiles.ts`
-  keeps the read and the decode. **One catch, found in review**: both that chooser and the dialog
+  keeps the read and the decode (`src/lib/core/browserFiles.ts` since step 5.4). **One catch,
+  found in review**: both that chooser and the dialog
   plugin turn each extension into a MIME type through `MimeTypeMap` and drop the ones it does not
   know, so `.dec` and `.dek` were greyed out. `DECKLIST_ACCEPT` now carries
   `application/octet-stream` — what the system picker calls a file of an unknown extension — and
@@ -2692,7 +2720,11 @@ run time, since `tauri android dev` may serve from the machine's address. **The 
 a tablet past 1024px — opens its links through `@tauri-apps/plugin-opener` from the page, so the
 capability grants the desktop's exact pair, `opener:allow-open-url` and `opener:allow-default-urls`.
 **What this does not do** is give the phone card sheet its `Open on …` rows — those are still not
-drawn; with the guard in place they can be plain links.
+drawn; with the guard in place they can be plain links. (**Drawn since step 5.4, as plain
+links — §9.4.** The plugin is no longer imported by `externalLinks.ts`: `src/lib/core/tauri.ts`
+names it, `src/lib/core/index.ts` picks it as this host's way out, and a press on either face
+that has to compute its address first — *Connect Patreon* — goes through it. The clipboard on
+this host is the WebView's own, since the host registers no clipboard plugin.)
 
 **Measured, 2026-10-03, on Linux**: clippy clean on the three crates with the plugins in;
 `cargo test -p grimoire-light` adds the guard's four tests and the file module's two; the lockfile
@@ -3013,7 +3045,8 @@ request each; the rules for the host crate are
   `index::lifecycle`'s build and `invalidate_owned` each opened a connection of their own.
 - **Every launch download goes through a temp file**, which a browser does not have. The card
   sync and the tagger feeds refuse before they ask; the combo and price feeds ask first and
-  then refuse, on every launch — which is why the host of §9.1 starts none of them.
+  then refuse, on every launch — which is why the host of §9.1 starts none of them, and what
+  step 5.2 gave each a second shape for (§9.2).
 - **The page had two transports and no third**: `pickCore` answered `tableCore` or `tauriCore`,
   so in a plain browser the production bundle waited on "Opening your collection…" for ever,
   and `imageOrigin` answers two origins a browser cannot reach.
@@ -3050,7 +3083,8 @@ no `wrangler`.
 - **The host starts nothing.** No card sync, no feed, no image upkeep: a download in a browser
   has no temp file to land in (step 5.2), and the upkeep loop evicts files this host does not
   have. No write observers either — the desktop's three are its mirror, its other windows and
-  its live socket.
+  its live socket. (**True of this step only.** Since step 5.2 a `ready` open starts the
+  launch's downloads — §9.2. Still no upkeep loop and no observers.)
 - **The one-connection opener**, in the core. `db::open_single` is `open_write` statement for
   statement — one private body, `open_pair`, serves both, so the pair cannot be opened two
   ways — with two differences: **the journal each file got is answered rather than assumed**
@@ -3110,6 +3144,8 @@ no `wrangler`.
   `opened`, `ok`, `err` and `event` the other. **Answers are matched by id and never by
   arrival** — a slow search is overtaken by a fast one — and a byte payload is transferred
   rather than copied, its headers riding as `args`, as `table.ts` carries the same call.
+  (**`opened` carries a second field since step 5.2**: `existed`, whether OPFS already held the
+  database's folder before the open — §9.2.)
 - **The third `Core`, and how a build chooses it.** `src/lib/core/web/index.ts`'s `webCore`
   sends every command to the Worker. **`src/lib/core/index.ts` chooses by
   `import.meta.env.MODE === "web"`** — which build this is, replaced at compile time, not a
@@ -3175,6 +3211,8 @@ no `wrangler`.
   written"** — nothing in the script can write through the engine, so a browser that wiped OPFS
   between the two opens would pass; that a write survives is the dev pass's, below. Everything
   it starts is stopped whatever fails, and one timer bounds the whole run at three minutes.
+  (**It asks nine things since step 5.2**, as an offline first run over fixtures, and its
+  reload check is now "it still holds the cards" — §9.2.)
 - **CI's `web` job** builds the module and the page on `ubuntu-24.04`, reports every `.wasm`
   raw and `gzip -9`, runs the smoke script in the image's own Chrome and uploads `dist-web/`.
   The router gives it everything `core` runs for and everything the page is bundled from.
@@ -3223,7 +3261,7 @@ no `wrangler`.
 - **Storage after that first open**: OPFS held 64 files totalling 1 507 328 B, while
   `navigator.storage.estimate()` reported `usage` 67 122 634 — a second measurement of the
   spec's rule that the estimate gates nothing. `navigator.storage.persisted()` was `false`;
-  nothing asks yet (step 5.2). (64 is also the pool's capacity in files. The smoke run's 65 is
+  nothing asked on that build (each launch does since step 5.2 — §9.2). (64 is also the pool's capacity in files. The smoke run's 65 is
   a count of *entries*, and its walk counts a directory as one — the likeliest reason for the
   difference, not checked.)
 - **The suites**: `cargo test` green for the core, `grimoire-web`, `grimoire-light` and the
@@ -3233,8 +3271,9 @@ no `wrangler`.
 
 **CORS, measured 2026-10-04 with `curl`** sending `Origin: https://mtg-grimoire.app` and
 reading the response headers a browser's CORS check reads. **Server behaviour only: no browser
-has made these requests.** This is what §6.5 left as phase 5's first measurement, and what step
-5.2 builds on.
+had made these requests** when the table was taken. This is what §6.5 left as phase 5's first
+measurement, and what step 5.2 builds on — and §9.2 is where a browser first made every one of
+them but the last row's and Mana Pool's, which is never asked.
 
 | Host | `Access-Control-Allow-Origin` | Pre-flight (`OPTIONS`) | `Access-Control-Expose-Headers` | Notes |
 | --- | --- | --- | --- | --- |
@@ -3267,13 +3306,19 @@ What follows for the engine in a browser:
   is the phone face and the dev pass called `core` itself.
 - **The corpus.** No download runs in a browser — the host starts none — so every figure above
   is over an empty one: no ingest, no search over cards, no memory high-water mark, no storage
-  figure worth comparing with round one's.
+  figure worth comparing with round one's. (**§9.2 has one run of each.**)
 - **Card images.** The page still asks the `mtgimg` origins, which a browser cannot reach
   (step 5.3).
-- **Clipboard, links and files on the desktop face** in a browser (step 5.4), **a service
-  worker** (5.3) and **hosting** (5.5).
+- **Clipboard, links and files on the desktop face** in a browser (step 5.4 — **built and
+  driven 2026-10-04, §9.4**), **a service worker** (5.3) and **hosting** (5.5).
 - **CI's `web` job has not run.** Its first run is this step's pull request, and its sizes are
   that run's summary — a Linux Chrome's, not the one above.
+  - **It has since, on this step's pull request** (#805, merged 2026-10-04): the job's first
+    run, on `ubuntu-24.04` with a cold cache, took **4 min 59 s** for the whole job — clang
+    18.1.3 from apt, the `wasm-bindgen` CLI compiled from crates.io at the lockfile's 0.2.127,
+    the host linted for wasm32, the module built (**8 571 014 B**; Vite reported it
+    3 040.62 kB gzipped), the page built, and the smoke run passed in the runner's own Chrome.
+    `ci-ok` was green on the pull request's first run. A warm run's time is not on this record.
 - **A trap inside the engine.** With `panic = "abort"` a panic in a call is an uncaught error in
   the Worker and the call's promise never settles; what the page hears is the Worker's own
   `error` event, on which its core rejects everything in flight and refuses what follows. That
@@ -3283,7 +3328,11 @@ What follows for the engine in a browser:
   the copy is logged and skipped as on any host that cannot write it.
 - **A corpus that will not migrate cannot be replaced in a pool yet** —
   `launch.rs`'s `unreadable_corpus_seam` is the line, and says what a browser gets today in
-  each of its three cases. One that is simply gone reads as a first run.
+  each of its three cases. One that is simply gone reads as a first run. (**Closed in step 5.2
+  for the bullet's own case**, and the seam is deleted: `launch::open_single_replacing` throws a
+  corpus that will not open or migrate away through the pool's own delete. One that is simply
+  gone still reads to the engine as a first run — what the page now notices is the whole folder
+  gone — and a corpus damaged inside a sound first page is still not looked for. §9.2.)
 - **Three values are round one's and were not re-measured**: `synchronous = NORMAL` on a
   rollback journal, `temp_store = FILE`, and the pool's capacity of 64.
 
@@ -3320,16 +3369,587 @@ and eight things that claimed more than they did — each closed in the same cha
 
 **Left for the rest of the phase** ([the plan](../superpowers/plans/2026-10-04-light-app-phase-5.md)):
 
-- **5.2 — the first run.** The launch's downloads without a temp file, each streamed into its
-  sink, on the CORS answers above; the pacing clock (§6.5's `performance.now()` arm) and a
-  deadline on a feed request; the corpus-build screen; searches queued behind an ingest,
-  measured; the corpus found missing at launch and a rebuild offered; `persist()` asked once
-  and recorded; the marketplace picker offering only what the host can reach.
+- ~~**5.2 — the first run.**~~ **Built 2026-10-04 — §9.2**, with two things built differently
+  from this line as it stood: a storage clearing is a **notice** rather than an offered
+  rebuild, because the rebuild is the launch's own download, and `persist()` is asked **again,
+  at most weekly, while the answer is no** rather than once.
 - **5.3 — the service worker.** The shell precached, card images from Cache Storage on the
   app's own origin, the update flow, and a face whose chunk a deploy renamed recovering.
-- **5.4 — the browser's seams and the manifest.** Clipboard and open-a-link below
-  `@/lib/core`, file open and save on the desktop face, the phone card sheet's `Open on …`
-  rows, the manifest finished and moved out of `public/`, and phase 1's two history leftovers.
+- ~~**5.4 — the browser's seams and the manifest.**~~ **Built 2026-10-04 — §9.4**, with one
+  thing built differently from the plan's line as it stood: the Android host opens a link
+  through Tauri's opener, which its capability grants, rather than through the WebView.
 - **5.5 — hosting, and the phase's own run.** The Cloudflare Worker with static assets at
   `mtg-grimoire.app`, its runbook, the module's size taken up with timings, and the built app
   driven end to end against round one's figures.
+
+### 9.2 Step 5.2 — the first run (2026-10-04)
+
+A web install builds its corpus: the launch's downloads run in a browser with no temp file, and
+the page says what the browser did with its storage. The engine's rules for it are
+[`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md)'s *A download has two
+shapes*; the host's are [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-web/CLAUDE.md)'s
+*What the host starts*.
+
+**What was built — the engine.**
+
+- **`platform::host` is two facts, not a download abstraction.** `keeps_files()` — is there a
+  folder a download can land in and be read back from — and `asks_as_a_page()` — is every
+  request a cross-origin `fetch`. Each native download keeps its statements as they were, and
+  the arm for a host with no files **branches before it sends anything**: `sync`'s
+  `ingest_streamed` into `ingest::StreamIngest`, `tags`' `refresh_streamed` into `StreamTags`,
+  and `combos`' and `marketplace_feed`'s into a `StreamRead` each and then `store`. No host is a
+  page that keeps files, so both questions are answered from one switch; they stay two
+  functions because a call site asks one of them.
+- **`host::emulate_page()` makes a native test a page.** Until its guard drops, every
+  `platform::files` call on that thread refuses as the browser arm does, `platform::http` hides
+  the response headers that are outside the CORS safelist, and the thread is alone
+  (`platform::alone`). It is what lets each download's mock-server tests run the page's arm on
+  a desktop — a run that passes there has written no file and read no `ETag` — and the core's
+  table test stands under it too.
+- **What a download is on a page**, each line from §9.1's CORS table:
+  - **No conditional header is sent and no `ETag` is read.** "Unchanged" is the descriptor's
+    `updated_at` against the stored one for the card file and both Tagger files, and the
+    answer's `Last-Modified` for the combos, which have no descriptor — kept where a desktop
+    keeps the ETag, with the response dropped unread when it matches.
+  - **One streamed request with no resume.** A page cannot read `Content-Range`.
+  - **The card file and the tag files end only at exactly the descriptor's
+    `compressed_size`** (`scryfall::Stream::chunk`), so a sink's `finish` — the swap — is
+    unreachable over a body that is short or long. The combos and the price list have no
+    listed size on any host; they are held to a bound, and a body the browser has already
+    gunzipped is held to a decoded one.
+  - **A stall bound of 60 s** (`scryfall::STALL`, the native read timeout's own figure) on the
+    wait for an answer to begin and on each chunk — never on the whole body. A deadline that
+    fires is given **a one-second second look** (`http::SECOND_LOOK`) on the same wait, which is
+    not dropped between the two, before it is called a stall: a timer on one thread counts
+    whatever that thread was doing, and a chunk that arrived during a long synchronous stretch
+    is due beside the timer that would have condemned it.
+  - **No `User-Agent` is set on wasm** — a page may not choose one, so the browser's own is
+    what every host sees.
+  - **`Tick` is `performance.now()`**, off the Worker's global scope, in whole microseconds. It
+    was `Date.now()` until this step first paced a request (§6.5's open item); a host with no
+    `performance` object falls back to the wall clock rather than trapping.
+  - **A deadline that was beaten clears its `setTimeout`.** It used to be left to fire into
+    nothing, which was one stray timer for a relay request and would have been one per chunk
+    here.
+- **Card Kingdom's list goes through a push parser** (`marketplace_feed::StreamRead`). The list
+  was 66 787 283 B decoded when the feed was measured on 2026-08-12; buffered whole it would be
+  64 MB of linear memory, and linear memory never shrinks.
+- **A pushed body that ends inside its array is refused** (`feed::frame::Elements::cut_short`,
+  asked by both `StreamRead::finish`es), never stored as a prefix. A real `.gz` fails at its
+  trailer; a body the browser decoded has none.
+- **`feed::StreamedProgress`**: a report on a byte step, never per chunk, and a total only for
+  a body that arrived still gzipped — otherwise `total: 0`. A `Content-Length` is the wire's
+  length, and a body `fetch` has decoded is not that long.
+- **Mana Pool is refused before any request, in a sentence.** `marketplace_feed::reachable` is
+  `FeedProvider::permits_a_page()` or `!host::asks_as_a_page()`; a refresh of a feed that fails
+  it answers *"… prices cannot be downloaded in a browser: … does not let a web page read its
+  price list. The desktop and Android apps can."* with nothing asked, nothing logged and no
+  phase said, `selected_due` never calls it due, and `FeedStatus.reachable` is `false`.
+- **`timer::yield_to_host()` and `timer::Breather`.** A yield is a message posted to itself
+  over a `MessageChannel`, awaited — a task on the source a page's own messages arrive on —
+  and every streamed loop keeps a `Breather` on a 50 ms budget (`feed::WORK_BUDGET`), taking one
+  turn each time the budget is spent. **Added after the first measured run below found the
+  engine starved during the card download**; that run is of the module without it.
+- **`launch::open_single_replacing`.** A corpus that will not open, or will not migrate, for a
+  reason that is about the file, is deleted through the host's own delete — the pool's
+  `delete_db`, the journal before the database, every file attempted whatever an earlier one
+  answered — and the pair is opened again. **`user.db` is never deleted**, and a failure that
+  says nothing about the file (busy, locked, full, an I/O error) never deletes anything. It is
+  tried once; `Opened.corpus_replaced` says it happened and the console is told.
+- **The web host starts the launch's downloads.** `glue`'s `open` answers `ready` and then
+  `spawn_local`s `host::launch_downloads`: the card sync, then each feed in turn — the price
+  list if a feed marketplace is selected, the oracle tags, the art tags, the combos — each when
+  it is due, **on every launch and never side by side**. A Worker is one thread and its memory
+  is linear memory that never shrinks, so two ingests at once gain overlap on the network and
+  a high-water mark that is a sum. **No upkeep loop, and no hold on a metered connection.**
+
+**What was built — the page.**
+
+- **The marketplace picker offers what the host can reach.** `MarketplaceFeedStatus.reachable`
+  mirrors the engine's field; an unreachable feed's row is greyed with a sentence saying why
+  and where the prices can be had, and draws neither a feed line nor a refresh. **A stored
+  choice that is unreachable here is quoted as the same-currency marketplace whose prices ride
+  the card data** (`fallbackMarketplace`: TCGplayer for a dollar marketplace) **and is never
+  written away** — the same database may sync back to a host that can reach it.
+- **`persist()` is asked again while the answer is no, at most once a week — a deliberate
+  departure from the spec's "asked once".** Each launch reads `persisted()` first, which asks
+  nobody; a yes ends the asking; otherwise `persist()` is asked if a week has passed since the
+  last ask, and the ask is stamped **before** the answer, so a prompt left unanswered still
+  counts as the week's. The reason is Chromium's: it decides at the moment of the call — from
+  engagement, a bookmark, an install — so a first visit's no, frozen for good, would never
+  become a yes after the reader installs the app. The record is in `localStorage`
+  (`grimoire.storage.persist`), said on the console beside the open's line, and read back
+  through the host command `storage_persistence`. Nothing reads it to decide anything, and
+  nothing reads `estimate()`.
+- **Storage cleared under the app is a notice, not an offered rebuild.** The plan and the spec
+  both say *a rebuild offered*; the rebuild is automatic — it is the launch's own download —
+  so what a reader needs is to be told why the app is empty and what is not coming back. The
+  Worker reads whether the OPFS folder existed **before** the open, which is what creates it
+  (`existed`, on the protocol's `opened` message); the page compares that with a mark it keeps
+  in `localStorage` and **records the occurrence whatever became of the open**, because an open
+  that creates the folder and then fails leaves a launch that looks ordinary behind it.
+  `mobile/StorageNotice.tsx` asks the host command `storage_cleared` and draws one dismissible
+  notice from the answer — the host's own sentences — so nothing under `mobile/` asks where it
+  runs; the Android host and the desktop refuse the name, which is nothing to draw.
+- **The startup status may move once more, from `ready` to `failed` with `reload`**, when the
+  Worker dies. A dead engine then replaces the whole app with a sentence and a Reload, rather
+  than leaving each page to find out alone. `useStartup` keeps its listener after `ready` for
+  it; the desktop and the Android host never emit after `ready`, so nothing changes for them.
+- **The web core's `emit` isolates each handler**: one message fans out to every subscriber of
+  a name in a loop, and a throw left to climb would take the event from every handler behind
+  it.
+
+**What was built — the smoke run.** `scripts/web-smoke.mjs` is an **offline first run** now,
+and no request leaves the machine.
+
+- **One browser-level `Fetch.enable`** pauses the Worker's requests. Measured on the way
+  (Chrome 154, 2026-10-04): the Worker's own CDP session has no `Fetch` domain; a fulfilled
+  response is CORS-checked like any other; and `Fetch.fulfillRequest` does not decode a
+  `Content-Encoding`.
+- **Every cross-origin request is answered from `scripts/web-smoke/` or fails the run** — six
+  real-shaped cards from the core's own test fixture, tags, sets, migrations, a Card Kingdom
+  list and Spellbook variants. **A request carrying a header that would cost a pre-flight
+  fails the run**, and the real hosts cannot resolve (`--host-resolver-rules`), so a request
+  the interception never saw is answered by nobody.
+- **Nine checks**, listed in the script's header: past the gate on a rollback journal; the
+  database in OPFS; an empty corpus reading as a first run while the card file is on its way;
+  the card sync finished and a typed search drawing that card's tile; the launch's three feeds
+  stored with nothing in the error log; Settings greying Mana Pool and downloading Card
+  Kingdom when it is picked; a reload that still holds the cards and asks no host for
+  anything, and a forced check that asks for the listing and no card file; a second tab told
+  and offered a reload; and no request that would cost a pre-flight or that went to a host
+  with no fixture. **So §9.1's caveat is closed**: the reload check is "it kept the cards".
+- **`scripts/ci-route.mjs` routes `scripts/web-smoke/*` to `web`** (and `frontend`), beside the
+  script itself: a fixture changed is a first run changed.
+
+**Measured, 2026-10-04, offline: the smoke run.** Windows 11, headless Chrome 154.0.8037.95.
+Sixteen consecutive passes at 3.8–4.8 s, on the module as it stood before the review's fixes,
+and one more in headless Edge 154.0.4258.53.
+
+**Measured, 2026-10-04: one first run against the real hosts.** Windows 11, Ryzen 9 5900X,
+32 GB; headless Chrome 154.0.8037.95; the built app through `web:preview`; a fresh profile; the
+default headless window, inner 764 × 485, so the phone face. Started 04:40:05 UTC. **One run,
+and the machine was not quiet** — a game held about five logical cores, and total CPU read
+36–53 % for the length of it. **The module is the one before the review's fixes and before the
+yield**, 8 587 535 B. Round one's figures beside these are the spec's §6 table: August,
+desktop Edge.
+
+- **The card sync**, in milliseconds after navigation:
+
+  | | ms |
+  | --- | --- |
+  | Worker constructed | 113 |
+  | Database open | 1 007 |
+  | Shell drawn | about 1 350 |
+  | First-run words on the page | 1 364 |
+  | First `downloading` | 1 369 |
+  | Last `downloading` | 17 767 |
+  | `ingesting` — the synchronous finish | 17 770 → 22 465 |
+  | `sets` | 22 503 |
+  | `done` | 23 812 |
+
+  **16.40 s for the 78 692 716 B download**, `reclaiming` 201 pages, no `compacting`, and
+  **`done` with 118 469 cards and 0 skipped**. Round one, over a narrower card row: 117 606
+  rows in 15.6–16.3 s.
+- **The feeds, all done at 76.6 s.** Oracle tags: 1.9 s of download (5 977 799 B) and an
+  **11.3 s finish** — 4 560 tags, 235 037 taggings. Art tags: 7.7 s (12 975 578 B) and a
+  **23.4 s finish** — 11 611 tags, 492 784 taggings. Combos: 3.9 s (28.87 MB on the wire,
+  677 301 311 B decoded) and a 3.7 s store — 111 486 combos, 7 387 cards.
+- **Card Kingdom is not asked at launch**, because the default marketplace is TCGplayer.
+  Chosen through the engine it took 4.75 s (9.65 MB on the wire, 67 800 789 B decoded, 0.8 s
+  store, 151 684 rows). **Its answer is `Content-Type: text/html; charset=utf-8`, is JSON, and
+  has no `Content-Length`** — which settles §9.1's "read the body before trusting it".
+- **Mana Pool was never requested.** `reachable` was `false`, and the refusal is the sentence
+  above.
+- **All nine cross-origin requests were answered 200 over h2.** The request headers were the
+  browser's own `User-Agent`, `accept` and `Referer` — **no `If-None-Match`, no `Range`**.
+  `error_log` was empty and nothing was thrown.
+- **Responsiveness** — a `sync_status` sent once a second through the page's core. **During the
+  card download the Worker took a queued call eight times in 16.4 s**, at a latency of
+  3.5–8.4 s, median 6.4 s. During Card Kingdom's download the same calls answered in
+  0.7–119 ms, median 1.4 ms. The card download was CPU-bound rather than waiting on the
+  network: an offline run of 60 000 synthetic cards ingested at about the same rate. **The
+  longest single wait was 26.1 s**, across the end of the art download and its finish. The
+  page's main thread never stalled over 200 ms.
+- **The same run again, on the module that ships** (8 592 080 B, with the review's fixes and the
+  yield; started 05:18:23 UTC; a quieter machine — 19–32 % total CPU during it, against 36–53 % —
+  so the two runs are not like for like). **The yield is what it was added for: all 15
+  `sync_status` calls sent during the card download answered, in 24–440 ms, median 185 ms.**
+  Cards searchable at 21 870 ms (the download 15.30 s); all launch feeds done at 76.07 s; the
+  same rows in every table; no error. During the feeds' downloads the same call answered in
+  56 and 298 ms (oracle tags), 15 ms–1.48 s with a median of 266 ms (art tags), 4–37 ms (combos)
+  and 0.5–0.7 ms (Card Kingdom). **The synchronous tails are as long as they were, because
+  nothing in them takes a turn**: the card finish 4.28 s, the oracle tags' finish 10.76 s, the
+  art tags' 23.56 s, the combos' store 3.80 s, Card Kingdom's 0.80 s — and the longest single
+  wait was the art finish, 23.57 s. Combos reported 348 `downloading` events, every one with
+  `total: 0`, where the earlier module sent 327 with a total that climbed; Card Kingdom 48,
+  against 157. Linear memory could be watched now that the Worker answers while it downloads:
+  127.9 MiB at 2 s, 160.0 MiB from 5 s through the cards and both tag feeds, and its peak of
+  193.8 MiB after the combos' store. **A reload on that database asked nothing of any host**
+  (20 card pictures to `mtgimg.localhost` aside): open at 1 685 ms, the shell at 1 995 ms, first
+  tiles at 2 860 ms; the console's persistence line ended `(from the record)`. The offline smoke
+  passed five times in a row on this module, in 3.8–4.7 s.
+- **The desktop face's first run**, at 1280 wide (inner 1264 × 705), over the smoke's fixtures
+  with the card file held back four seconds — not the real hosts. A full-window dialog named
+  *Setting up your card database* was up 1 175 ms after navigation, with an indeterminate bar
+  and the generic label *Syncing card data*: the page hears neither `checking` nor the first
+  `downloading`, which fire before the dialog mounts. **It went away about 240 ms after the card
+  sync's `done`, and does not wait for the feeds.** A real download's phases in that dialog
+  were not seen.
+- **Storage afterwards**: OPFS held 64 files, 960 569 344 B — one file of 959 451 136 B (the
+  corpus), `user.db` at 864 256 B and 62 empty slots. `estimate()` said 1 238 382 026 B of
+  11 975 800 266 B, and `persisted()` was `false`. Round one was about 526 MB; this machine's
+  desktop `corpus.db` is 950 554 624 B, so **the web corpus is the desktop's size**.
+- **Memory**: the module's linear memory was **203 358 208 B (193.9 MiB)**, read from the
+  Worker's live instance over its CDP session — already there at the first reading, 8.8 s in,
+  and it never grew through the tags, the combos or Card Kingdom. Round one: 148.6–171.6 MB.
+  The Worker's JS heap peaked at 33.3 MB used (sampled every 2 s), and the renderer process's
+  working set at 645.8 MB.
+- **Search afterwards**, nine calls each — the first, then the median of the rest, in ms:
+
+  | Call | First | Median of the rest |
+  | --- | --- | --- |
+  | `bolt` | 8.5 | 1.7 |
+  | `bolt`, playable | 2.4 | 1.9 |
+  | `dragon`, playable (2 363 hits) | 67.6 | 59 |
+  | no text, playable | 42.2 | 42.5 |
+  | `forest` | 50.5 | 55.9 |
+  | `facet_cards`, `bolt` | 4.9 | 1.7 |
+  | `facet_cards`, no text | 5.6 | 4.8 |
+
+  Round one: search median 53 ms, cold 134 ms; facet 5 ms.
+- **A reload with the corpus present**: the database open at 1 843 ms, the shell at 2 161 ms,
+  the first tiles at 3 107 ms. No cross-origin request went out but the card pictures', which
+  fail — the page still asks `mtgimg.localhost`, and that is step 5.3's — so every tile shows
+  the card's name and "Retrying…".
+- **The suites, on the final tree**: `cargo test` green for the four packages, and clippy clean
+  natively and for wasm32. The frontend suite green in four shards but for one test in a file
+  this change does not touch (`src/components/table/VirtualTable.test.tsx`), which failed once
+  under load and passed alone. **The final module is 8 592 080 B, 3 001 242 B through
+  `gzip -9`.**
+
+**Reviewed before it shipped**, by a reader given the code and not the conclusion. **No
+must-fix**: the native paths are unchanged request for request, and the streamed card sync
+cannot reach its swap over a short body or a long one. Seven should-fixes, each closed in the
+same change and each with a mutation run against its test:
+
+- A pushed feed body that ended early was stored as a prefix.
+- The stall timer could fire over another future's synchronous work — which is the second look,
+  and the launch's downloads run in turn rather than joined.
+- `persist()` froze a first visit's no.
+- Progress on a decoded body was an event per chunk, with the bar pinned at 100 %.
+- The attach-side guard — never delete a corpus for a transient failure — had no test.
+- The cleared-storage detection missed an open that created the folder and then failed.
+- False sentences.
+
+**Found and left**, each with what is known:
+
+- **The synchronous tails freeze the engine, with the wall drawn and nothing saying why.** The
+  figures are above: the card sync's `ingesting` from 17 770 to 22 465 ms, 11.3 s and 23.4 s of
+  tag finish, 3.7 s of combo store, and a longest wait of 26.1 s. Assessed and not built: the tag and combo tails already
+  write staging tables in short transactions and swap at the end, so each could be written
+  once as an `async fn` that takes a turn between batches — under a hundred lines.
+  `ancestor_closures` is pure CPU with no batch boundary; each batch commit is a
+  rollback-journal cycle in OPFS, which may be most of the time; and the card swap is one
+  transaction by need, as Card Kingdom's store is by contract.
+- **A chunk is inflated whole before it is framed.** A synthetic 1.9 MB chunk that inflates to
+  185 MB took linear memory to 946 733 056 B; real data peaked at the 193.9 MiB above. Feeding
+  the decoder in slices is about forty lines, and touches the native paths' batch boundaries.
+- **With no denominator, the feed rows show no byte figure at all** (`src/lib/activity.ts`
+  draws megabytes only against a total).
+- **The first-run label reads the generic "Syncing card data" until a `downloading` event is
+  heard**, because the launch's downloads start before a face has mounted its listeners.
+- **`estimate()` was 278 MB above the files.** Not explained; it gates nothing.
+- **No metered-connection hold on the web host.** Android has one (§8.4).
+- **A corpus damaged inside a sound first page is not looked for in a browser**:
+  `check_corpus` needs a second connection.
+- **`eprintln!` is still silent on wasm.**
+- **On an Android tablet at desktop width with an empty corpus, `DownloadsPrompt` — a `Dialog`
+  — would sit under the first-run gate.** Read, not driven.
+- **A deck-category write's readback is priced at the stored marketplace, not the fallback**,
+  until the next list read (`deck_meta.rs`'s `readback_marketplace`). Reachable only once a
+  stored Mana Pool choice can arrive in a browser, which is sync — phase 6.
+- **The notice's mark is `localStorage`**: a browser that clears it together with OPFS shows a
+  silent first run. No real eviction has been seen.
+
+**Not measured.**
+
+- **Any second run, and a quiet machine**, for every figure of the first run above.
+- **The desktop face's first-run dialog over the engine** — the run was the phone face.
+- **Any browser but Chromium on Windows, and any phone.**
+- **The dead-engine screen, and a real trap.**
+- **A real eviction.**
+- **The pool's `delete_db` in a browser**: the native tests stand a closure in for it.
+
+### 9.4 Step 5.4 — the browser's seams and the manifest (2026-10-04)
+
+What a face still asked a Tauri window for, answered below `@/lib/core`; the web manifest
+finished and moved to where only the light builds copy it; and phase 1's two history leftovers
+(§5). Numbered for its step: 5.3 was still in flight when this was written, so there is no
+§9.3 above it yet. The rules that came out of it are in [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
+
+**What was built — the clipboard and a link out.**
+
+- **A second seam beside `Core`: `Host`** (`src/lib/core/types.ts`) — `copyText` and `openUrl`,
+  the spec's §3.5 third row. Not two more methods on `Core`: a `Core` is the command boundary,
+  which can be deferred, refused or wrapped whole, and neither of these reaches a backend.
+  **`src/lib/core/index.ts` chooses `host` where it chooses `core`, by the same two questions**:
+
+  | Build, or window | Chosen by | Copy | Open a link |
+  | --- | --- | --- | --- |
+  | The web build | `import.meta.env.MODE === "web"` | `navigator.clipboard.writeText` | `window.open(url, "_blank")`, the opener cut at once |
+  | The Android host | the mark it sets, `__GRIMOIRE_CORE__` | `navigator.clipboard.writeText` | Tauri's opener plugin |
+  | The desktop, `mobile:tauri`, the fake | everything else | Tauri's clipboard plugin | Tauri's opener plugin |
+
+- **`@/lib/clipboard`'s `copyText` and `@/lib/externalLinks`' `openExternal` keep their
+  signatures**, so no call site changed and every suite that mocks either module still does.
+  The two plugins are imported in `src/lib/core/tauri.ts` and nowhere else — the one door
+  `fence.test.ts` lets the phone face through — so the URL builders beside `openExternal` are
+  importable by that face.
+- **One sentence for a copy with no clipboard, on both faces**: `this browser offers no
+  clipboard here.`, the tail of whatever the caller frames. The phone's own `copyToClipboard` is
+  deleted and its export sheet copies through `@/lib/clipboard`. No `execCommand` fallback.
+- **A link is opened without the `noopener` feature, and the opener is cut on the next line.**
+  The feature makes `window.open` answer `null` whether or not a tab opened, and `null` is the
+  only thing that says a pop-up blocker refused one — which is what the Sync panel's *Connect
+  Patreon* meets, opening after a round trip to the engine. A refusal is a rejection the panel
+  reports: `The link could not be opened. This browser may be blocking new tabs.`
+- **A browser's `openUrl` opens only a whole `http` or `https` address** (added in review). On
+  the desktop the opener's `allow-default-urls` scope refuses anything else whatever a caller
+  hands it; a page's `window.open` refuses nothing, and a `javascript:` URL there would run in
+  the app's own origin, beside the database. Every caller today builds its address or takes it
+  from the note dialect, which keeps only `http(s)`, so this is the fence behind them. No
+  `mailto:` or `tel:`: nothing in the app opens one. The Android host never reaches
+  `window.open` — its arm is the opener — so its fence is still the scope.
+- **The Android host opens through Tauri's opener, which is not what this step's brief said.**
+  The brief had neither plugin granted to that page. The opener is: `capabilities/light.json`
+  holds the desktop's exact pair and `mobile/host.test.ts` holds the list. It is also the
+  answer that needs nothing from the WebView — a `window.open` there navigates the app's own
+  window, and only the host's guard turns that back into a hand-off. The clipboard *is* the
+  WebView's own, because the host registers no clipboard plugin; until this step the desktop
+  face on a tablet asked for one that was not there (read off `mobile/src-tauri/src/lib.rs`,
+  not driven). **That an Android WebView grants the write is an assumption**: its origin,
+  `http://tauri.localhost`, is a secure context, so the API is there to call, and no copy has
+  run on a device from either face — the phone's export sheet has called it since phase 3 and
+  no record shows it doing so on a phone. If it is refused the cure is a clipboard plugin on
+  that host, which this step did not add.
+- **`dist-web/` carries neither plugin, and this step's first build of it carried both.** The
+  first `tableHost` read
+  `browserHost.copyText` and `tauriHost.openUrl` at the top of its module, and a member read
+  there is something a bundler must assume has an effect: the object stayed in the web build,
+  and both plugins' calls with it. Written as two functions that call, it and they fall out.
+  The desktop's `dist/` and the APK's `dist-mobile/` carry both, as they always did.
+
+**What was built — files on the desktop face in a browser.**
+
+- **The web host answers `export_save_file` and `import_pick_file` on the page**
+  (`src/lib/core/web/files.ts`'s `answeringFiles`), in the desktop commands' own result shapes
+  — `boolean` and `ImportFile | null`, a refusal a bare string — so
+  `src/features/transfer/files.ts`, both dialogs and `ipc.ts` are untouched. The engine's table
+  has neither: a Worker has no document. It is a wrapper round the Worker's `Core`, composed at
+  the dynamic import in `src/lib/core/index.ts`, so `web/index.ts` did not change.
+- **Two sets of page commands, each with its own answerer.** `web/index.ts` answers the gate
+  and step 5.2's three storage commands; this answers the two files in front of it and sends
+  everything else on. A test builds the pair as a build does and holds that the Worker is asked
+  to open and nothing else for the first five, and is never sent a file command.
+- **What a save reports, per host:**
+
+  | Host | The desktop face's `export_save_file` | The phone face's `saveText` |
+  | --- | --- | --- |
+  | Desktop | `true` written, `false` cancelled | — |
+  | Android | `true`, `false` | `"saved"`, `"cancelled"` |
+  | Web | `true`: *handed to the browser* | `"handed"`, drawn as `Downloading <name>.` |
+
+  The web's `true` is honest only because of what its one reader draws: `ExportDialog` says
+  nothing after a save on any host and never reads the boolean. Its button still says
+  `Save as…`, and a browser may not ask where.
+- **The pick is a hidden `<input type="file">`, pressed for the reader**, with the phone
+  picker's accept list. `change` answers the file and the input's own `cancel` answers `null`,
+  as the desktop's cancelled dialog does. **Where a browser reports no `cancel`, the window's
+  focus coming back is the fallback** (added in review): a second after it returns with
+  neither event, the input itself is asked — a file on it is the pick, none is a cancel — and
+  a `change` or a `cancel` inside that second wins. The first build had no fallback and said a
+  second ask would rescue the first; the Import dialog greys its button while the pick is
+  pending, so no second ask could come. A second ask still answers the first with `null`, for
+  a caller that can make one. Held by tests with the events simulated; the second is a chosen
+  figure, and a browser that hands a file over later than that after giving the focus back
+  would have the pick read as cancelled.
+- **A download's object URL is released after forty seconds, not after a task** (changed in
+  review). A browser reads the `Blob` through the URL on its own schedule — after a save
+  prompt, in some — and a URL revoked first is a download that fails; forty seconds is
+  FileSaver.js's figure for the same reason. Only headless Chrome was driven, where one task
+  had been enough.
+- **The megabyte and the four readings are shared, not copied**:
+  `mobile/phone/transfer/browserFiles.ts` moved to `src/lib/core/browserFiles.ts` — a leaf, so
+  `files.ts` and the web host both import it without a cycle — and took `downloadText` with
+  it. The phone's import sheet keeps an input of its own on every host and reads through the
+  same module.
+
+**What was built — the phone card sheet's `Open on` rows.**
+
+- **`mobile/phone/card/OpenOn.tsx`**: Scryfall, EDHREC and the selected marketplace, the
+  desktop's ladder in the desktop's order, **as `<a target="_blank" rel="noopener noreferrer">`**
+  — which a browser opens in a tab, and phase 4's guard hands to the system browser on Android.
+  The implementer's pick, to be redirected in review: at the foot of the sheet, under Combos;
+  the heading reads `Open on`, a row's visible text is the site, and its accessible name is the
+  whole phrase.
+- **The addresses are the desktop's own.** `openMarketplace.ts` grew `marketplaceUrlForCard` —
+  the press's whole decision with the lookup taken out — and `openMarketplaceForCard` now calls
+  it, so the link and the press cannot disagree. A link always names a printing
+  ([external-links.md](external-links.md)): the sheet names no finish, so the printing answers
+  for itself.
+- **One read the desktop does not make until the press.** An `href` has to exist before it is
+  pressed, so the sheet asks `card_tcgplayer_ids` as it opens, and only while the marketplace
+  is TCGplayer. Until it answers, and if it is refused, the row is the name search.
+- **The phone's Settings draws `SyncPanel`**, the desktop's own, and its hand-written
+  `window.open` is gone. The Spellbook link under Combos is still not drawn.
+
+**What was built — the manifest.**
+
+- **`mobile/public/light.webmanifest`**: an `id`, `start_url` and `scope` of `/`,
+  `display: standalone`, both names, and both colours `#0C0D12` — `oklch(0.16 0.01 270)`
+  converted by hand, and the value this Chrome rasterised the token to. The page's
+  `theme-color` and Android's `colors.xml` took the same value, and `mobile/host.test.ts` holds
+  the three equal.
+- **Raster icons at 192 and 512 in two drawings**: the transparent mark, for the reason the
+  desktop's icon is the mark ([`logos/README.md`](../../logos/README.md)), and a **maskable**
+  one on the ground to every edge. One purpose to a file.
+- **`node scripts/light-icons.mjs` made them**, from `logos/svg/mtg-grimoire-mark.svg` alone:
+  it derives the maskable drawing rather than reading a third SVG, renders each size in
+  headless Chromium over the DevTools protocol — no image library is a dependency — and
+  **measures the furthest painted pixel**, failing a mark that leaves the safe zone. At
+  `scale(0.70)` the mark reaches **37.5%** of the width from the centre, against 40%.
+- **`mobile/public/` is the light builds' own public directory** (`vite.mobile.config.ts`'s
+  `publicDir`), so the manifest and its icons reach `dist-mobile/`, `dist-web/` and both dev
+  servers and nothing else. The favicon is a second copy of the mark there, held equal to the
+  master by a test.
+- **No install button, and nothing asks a `display-mode` question**: a browser's own install UI
+  is the install.
+
+**What was built — history.**
+
+- **The phone router holds a place the browser would not write.** `navigate` writes, then
+  reads the address: one browser throws on a rationed call and another drops it without a
+  word, and the only thing both leave is an address that did not move. The place is then kept
+  in memory, the listeners are told and the page draws it; the next write the browser takes,
+  or the next Back, puts the address in step again. **Not a fallback to a replace**: the
+  ration is one counter for both verbs, and a replace that was taken would rename the entry
+  beneath — the page under an open card — and break `PUSHED`'s promise. Leaving a held place
+  is forgetting it, unless the browser's own entry is a pushed card over the same page.
+- **A card is pushed over its own page, or not at all** (found in review). The first build
+  broke `PUSHED`'s promise itself: a press to `/decks/7` refused and held, then a card opened
+  there and *that* push taken, left a marked card directly over `/collection` — and ✕, which
+  goes back to what the mark promises is beneath, landed the reader on the page they had left.
+  The router now writes the card's page first where the browser's entry is not it, and the
+  card only once that landed; a page the browser still refuses leaves the card held with it.
+  **Paid, rather than pushing the card unmarked**, which would also keep the promise: unmarked,
+  ✕ renames the entry and is right, but Android's back gesture leaves the page with the sheet.
+  It costs one more write from a browser that was rationing them.
+- **Not every held page is paid back.** One the reader leaves by a push elsewhere never gets
+  an entry, and Back's path is then a page short. **And a hold ends with the address it was
+  made over**: a traversal ends it, and so does a write the desktop face made after a resize
+  crossed the floor — the first build kept it until the next `popstate`, and would have drawn
+  it over an address that had moved on.
+- **`back()` waits `BACK_WAIT_MS`, 500 ms, for its Back.** Its one release was the `popstate`.
+  When the wait is up and the reader is still where they pressed, the entry is renamed, as a
+  linked card's is — which leaves the page as two entries, the cost a rename has there.
+- **The desktop adapter owes a push the browser refused**, and makes its next write as that
+  push whatever kind it would have been, marked `OVERLAID` if it carries a card.
+
+**Measured and driven, 2026-10-04.** Windows 11, headless Chrome 154.0.8037.95, a fresh
+profile for each pass, on the tree with step 5.2 merged in. Every host but `localhost` was
+unresolvable (`--host-resolver-rules`), so nothing below is over a corpus.
+
+- **The built app, through `vite preview` on port 4196**, at inner 360 × 800 and 1280 × 800:
+  `Page.getAppManifest` answered the manifest with **no errors**, `Page.getInstallabilityErrors`
+  answered **none**, and the four PNGs came back `image/png` and decoded at their declared
+  sizes. **Not on 4176**: another worktree's preview held that port, the first pass read *its*
+  manifest without saying so, and every pass here was moved to a port of its own.
+- **What each output holds beside `assets/`**: `dist/` — `index.html` and the mark;
+  `dist-share/` — the mark; `dist-mobile/` and `dist-web/` — the document, the manifest, the
+  mark and the four icons, `dist-web/` with the engine under `wasm/<build id>/` as well.
+- **The web app over the real engine, a dev server in the `web` mode on port 5196.** The
+  database opened on a rollback journal. `copyText` put its text on the clipboard, read back
+  with `readText`. `openExternal` outside a user activation was refused in the sentence above;
+  inside one it opened a tab whose `window.opener` read `null`. `ipc.exportSaveFile` with a
+  path for a name answered `true` and downloaded `Burn.txt` holding the text it was given.
+- **The desktop face, 1280 wide.** *Export deck*: Copy drew `Copied.` and replaced what the
+  clipboard held; Save as… downloaded `Burn.txt` and drew no alert. *Import cards*: Choose
+  file… opened a chooser on the hidden input; a Windows-1252 file arrived in the box as
+  `1 Séance` under the dialog's own notice about that reading, and the input was gone
+  afterwards; a file one byte over the megabyte drew `Couldn't read a decklist from a file —
+  That file is over 1 MB. …`. *Connect Patreon* opened Patreon's authorize address in a new
+  tab.
+- **The phone face, 360 wide.** The export sheet's Copy drew `Copied.`, its Save file drew
+  `Downloading Burn.txt.`, and *Connect Patreon* opened the same address.
+- **Two limits on that pass.** The deck was empty — nothing can be added with no corpus — so
+  both dialog saves were empty files and the text was proven by the direct call. And **the
+  desktop face's presses were scripted clicks inside a user activation, not pointer presses**:
+  with no host to download from, that face sits under its full-window first-run screen, which
+  takes the pointer. The dialogs are a rung beneath it and were found by their content.
+- **The card sheet over the fake** (`mobile:dev`'s config on port 5215), 360 wide: three rows,
+  44px each, nothing scrolling sideways; for Agadeem's Awakening, ZNR 90, the Scryfall
+  permalink, EDHREC's router by name and
+  `https://www.tcgplayer.com/product/222163?Printing=Normal`; each found by its computed
+  accessible name; a press opened the Scryfall address in a new tab with no opener, and the
+  app's own tab did not move. **Over the fake the phone's Copy and *Connect Patreon* are
+  no-ops, and were not driven there**: that build picks the desktop's host, whose two plugin
+  commands the fake accepts and does nothing with — a `Copied.` over it is the press accepted,
+  not text on a clipboard. The copy and the link above are the web build's, over the engine.
+- **The smoke run passed on the merged tree** (`npm run web:smoke`), with no request to a
+  host without a fixture. The manifest and the icons are requests to the app's own origin,
+  which that run lets through — and which it does not ask for: nothing in CI opens the
+  manifest in a browser.
+
+**Measured, 2026-10-04: what Chrome delivers for the light edition's chords.** The same
+Chrome, over the fake, two tabs in one window, keys sent with `Input.dispatchKeyEvent`, and
+each tab's `visibilityState` as the witness for a tab switch.
+
+- **`Ctrl+1` to `Ctrl+9` reach the page first**, every one a trusted `keydown`.
+- **Where the page prevents the default, the tab switcher does not run**: `Ctrl+4` moved the
+  app to `/decks` and its tab stayed visible. On the desktop face the light edition takes 2,
+  4, 5, 6 and 7.
+- **Where it does not, the tab switcher runs**: `Ctrl+9` hid the app's tab and showed the last
+  one, and `Ctrl+1` hid it for the first, the tab the browser opened itself with. That is 1, 3, 8 and 9 on the desktop face, and every
+  digit on the phone face, which binds none.
+- **`F1`** reached the page, which leaves it alone, and Chrome opened a tab of its own.
+  **`Ctrl+Shift+N` never reached the page**: no `keydown` arrived and new browser targets
+  appeared — the chord's private window, read from that and not seen.
+- **So the guess `mobile/CLAUDE.md` carried from phase 3 is wrong for Chrome**, and it now says
+  what was seen: the digits are not the tab switcher's *before* the page sees them. That the
+  browser acted on these keys at all — the tab switch, the private window — is what makes the
+  order Chrome's own and not an artefact of injecting past it. Nothing was built from it: the
+  chords the edition leaves inert still switch tabs, and whether to take them is a decision
+  for whoever owns the web host's keys.
+
+**Not measured.**
+
+- **A real keyboard in a window with a tab strip.** The keys were injected over the DevTools
+  protocol into a headless browser. Nor Firefox, Safari, an installed standalone window —
+  which has no tabs to switch — or a hardware keyboard on Android.
+- **Anything on an Android device**: a copy through the WebView's clipboard, **from the phone
+  face as much as from the desktop face** — no record shows either; *Connect Patreon* on the
+  phone face through the opener plugin rather than `window.open`; the sheet's `_blank` rows
+  reaching the navigation guard; and the window's new ground. And **`tauri android dev` served
+  from a LAN address is not a secure context**, so there the page has no clipboard at all and
+  a copy is refused in the seam's own sentence.
+- **A copy after an `await`.** `cardMenu`'s *Copy card image* asks the engine for the address
+  before it copies; a browser that ties the clipboard to a user activation may refuse that as a
+  stricter one refuses `window.open` after an `await`. Chrome, with the clipboard permission
+  granted to the test profile, is all that was driven, and of the desktop face's copies only
+  the Export dialog's: not *Copy card image*, *Copy card name*, or `ShareFolderMenu`'s *Copy
+  link*.
+- **`mobile:tauri`**, where the phone face's copy now goes through the desktop's clipboard
+  plugin. It takes the `app` lock and was not run.
+- **Any browser but Chromium on Windows.** In particular a stricter browser's rule for
+  `window.open` after an `await`, which is *Connect Patreon*'s shape and the TCGplayer press's
+  on the desktop face; and a real cancelled picker, which only jsdom has been made to report.
+- **A browser rationing its History API.** Every history fix above — the hold, the page paid
+  before its card, the bounded Back, the adapter's late push — is held by tests in which the
+  refusal is simulated, thrown and dropped. No browser was driven to its limit.
+- **The picker's focus fallback, and the forty-second release, in any browser.** Both are for
+  browsers that were not driven; the Chrome that was reports a cancel and reads a `Blob` at
+  once.
+- **An install.** No installability errors is Chrome's reading of the manifest; no prompt was
+  accepted, no icon was drawn by a launcher, and no `apple-touch-icon` was added.
+- **The desktop face's dialogs by pointer over a corpus**, for the reason above.

@@ -13,18 +13,21 @@
 //! | [`aio`] | `tokio::fs` | refused, the same way |
 //!
 //! **A browser has no filesystem, and nothing here pretends otherwise.** There the database
-//! lives in the origin-private file system behind SQLite's own VFS, and a download wants a
-//! different shape altogether — a stream handed straight to the ingest, no temp file. What that
-//! shape is belongs to the web host (the light-app spec §6), which is the first thing that could
-//! run it. Until then every function here answers `Unsupported` in a browser, and the two
-//! questions answer `false`. That is a refusal a caller already handles: a download that cannot
-//! be written is a failed sync — the card sync makes the download's folder first, so it stops
-//! there, after the bulk check and before the download is asked for, with its reason in
-//! `sync_meta`'s `last_error`, and the tag engine does the same. **The combo feed and the
-//! price feeds ask first and find out at the folder**, so there each launch would spend a
-//! request it cannot keep and fold a row into `error_log`; that is theirs to reorder when a
-//! web host first runs them. A backup before a climb is logged and skipped, and `schema::replace_unreadable_corpus` — which a browser's host has no reason
-//! to call — would try, be refused, say so and leave everything as it was.
+//! lives in the origin-private file system behind SQLite's own VFS, and every function here
+//! answers `Unsupported`; the two questions answer `false`. **A download does not come here
+//! on such a host at all**: each one asks [`super::host::keeps_files`] before it sends
+//! anything and, where the answer is no, streams its body straight into its sink — no temp
+//! file, and no request spent on a body it has nowhere to put (the light app's phase 5,
+//! step 5.2; until then the card sync and the tag engine stopped at the folder they could not
+//! make, and the combo and price feeds asked first and found out there). What is still
+//! refused here is what has no other shape: a backup before a schema climb is logged and
+//! skipped, the image cache stores nothing, and `schema::replace_unreadable_corpus` — which a
+//! browser's host has no reason to call — would try, be refused, say so and leave everything
+//! as it was.
+//!
+//! **A native test standing in for a page is refused the same way** ([`super::host`]'s
+//! `emulate_page`): every function asks [`kept`] first, so a run that passes there has
+//! touched no file through this module.
 //!
 //! `std::fs` itself compiles for a browser and fails there when called, which is why `schema`
 //! could name it directly until the I/O step. `tokio::fs` does not compile there at all.
@@ -38,6 +41,18 @@ pub fn unsupported() -> io::Error {
     io::Error::new(io::ErrorKind::Unsupported, "this host keeps no files")
 }
 
+/// `Ok` where the host keeps files ([`super::host::keeps_files`]). Every function here asks it
+/// first, so a native test standing in for a page (`host::emulate_page`) is refused exactly as
+/// the browser arm refuses — and a run that passes there has touched no file through this
+/// module. A constant `Ok` in a native build that ships.
+fn kept() -> io::Result<()> {
+    if super::host::keeps_files() {
+        Ok(())
+    } else {
+        Err(unsupported())
+    }
+}
+
 /// A file open for reading from its start.
 pub struct Reader(imp::Reader);
 
@@ -48,37 +63,44 @@ impl io::Read for Reader {
 }
 
 pub fn open(path: &Path) -> io::Result<Reader> {
+    kept()?;
     imp::open(path).map(Reader)
 }
 
 /// The whole of `path`, in memory — for code already off the async runtime that wants a file
 /// whole, as the scanner's asset load does with its 12 MB of models.
 pub fn read(path: &Path) -> io::Result<Vec<u8>> {
+    kept()?;
     imp::read(path)
 }
 
 /// Write `bytes` as the whole of `path`, replacing what was there.
 pub fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    kept()?;
     imp::write(path, bytes)
 }
 
 pub fn remove(path: &Path) -> io::Result<()> {
+    kept()?;
     imp::remove(path)
 }
 
 pub fn create_dir_all(path: &Path) -> io::Result<()> {
+    kept()?;
     imp::create_dir_all(path)
 }
 
 /// Remove `path`, a directory with nothing in it. One that still holds something is refused
 /// and left as it was.
 pub fn remove_dir(path: &Path) -> io::Result<()> {
+    kept()?;
     imp::remove_dir(path)
 }
 
 /// Every entry of `dir`, as its file name and its path. An entry whose name is not Unicode is
 /// left out: nothing this app writes has one.
 pub fn entries(dir: &Path) -> io::Result<Vec<(String, PathBuf)>> {
+    kept()?;
     imp::entries(dir)
 }
 
@@ -120,26 +142,28 @@ pub struct Entry {
 /// On Windows a file's length and time come out of the directory listing itself, so this is
 /// one call per directory; elsewhere it is one more per file.
 pub fn listing(dir: &Path) -> io::Result<Option<Vec<Entry>>> {
+    kept()?;
     imp::listing(dir)
 }
 
 /// Set `path`'s modified time. **It never creates the file**: a path that is not there is
 /// `NotFound`, and stays not there.
 pub fn set_modified(path: &Path, when: Wall) -> io::Result<()> {
+    kept()?;
     imp::set_modified(path, when)
 }
 
 pub fn is_file(path: &Path) -> bool {
-    imp::is_file(path)
+    super::host::keeps_files() && imp::is_file(path)
 }
 
 pub fn exists(path: &Path) -> bool {
-    imp::exists(path)
+    super::host::keeps_files() && imp::exists(path)
 }
 
 /// The same files from inside an `async fn`.
 pub mod aio {
-    use super::imp;
+    use super::{imp, kept};
     use std::io;
     use std::path::Path;
 
@@ -149,11 +173,13 @@ pub mod aio {
     impl Writer {
         /// Create `path`, or empty it if it is there.
         pub async fn create(path: &Path) -> io::Result<Writer> {
+            kept()?;
             imp::create(path).await.map(Writer)
         }
 
         /// Open `path` to write after its last byte.
         pub async fn append(path: &Path) -> io::Result<Writer> {
+            kept()?;
             imp::append(path).await.map(Writer)
         }
 
@@ -177,28 +203,34 @@ pub mod aio {
 
     /// The file's length in bytes.
     pub async fn len(path: &Path) -> io::Result<u64> {
+        kept()?;
         imp::len(path).await
     }
 
     pub async fn read_to_string(path: &Path) -> io::Result<String> {
+        kept()?;
         imp::read_to_string(path).await
     }
 
     /// Write `bytes` as the whole of `path`, replacing what was there.
     pub async fn write(path: &Path, bytes: &[u8]) -> io::Result<()> {
+        kept()?;
         imp::write_async(path, bytes).await
     }
 
     pub async fn remove(path: &Path) -> io::Result<()> {
+        kept()?;
         imp::remove_async(path).await
     }
 
     /// The whole of `path`, in memory.
     pub async fn read(path: &Path) -> io::Result<Vec<u8>> {
+        kept()?;
         imp::read_async(path).await
     }
 
     pub async fn create_dir_all(path: &Path) -> io::Result<()> {
+        kept()?;
         imp::create_dir_all_async(path).await
     }
 
@@ -206,6 +238,7 @@ pub mod aio {
     /// that has files, which is what lets a writer finish a file under another name and swap
     /// it in whole.
     pub async fn rename(from: &Path, to: &Path) -> io::Result<()> {
+        kept()?;
         imp::rename_async(from, to).await
     }
 }

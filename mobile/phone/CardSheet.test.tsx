@@ -173,3 +173,64 @@ describe("the sheet's empty states", () => {
     ).toBeInTheDocument();
   });
 });
+
+/**
+ * The ways out, at the foot of the sheet: the desktop's ladder, as links a reader can long-press
+ * or open beside the app — which need no host to open them.
+ */
+describe("the sheet's Open on rows", () => {
+  const rows = async () =>
+    within(await screen.findByRole("region", { name: "Open on" })).getAllByRole("link");
+
+  it("draws the desktop's ladder in the desktop's order, as links that leave in a new tab", async () => {
+    openOn(ALPHA_BOLT.id);
+    const links = await rows();
+    // Named whole: out of the section a bare site name says nothing about the press.
+    expect(links.map((link) => link.getAttribute("aria-label"))).toEqual([
+      "Open on Scryfall",
+      "Open on EDHREC",
+      "Open on TCGplayer",
+    ]);
+    expect(links[0]).toHaveAccessibleName("Open on Scryfall");
+    for (const link of links) {
+      expect(link).toHaveAttribute("target", "_blank");
+      expect(link).toHaveAttribute("rel", "noopener noreferrer");
+    }
+  });
+
+  it("names the printing on screen, and the exact product once its ids are read", async () => {
+    openOn(ALPHA_BOLT.id);
+    const [scryfall, edhrec, market] = await rows();
+    expect(scryfall).toHaveAttribute("href", "https://scryfall.com/card/lea/161");
+    expect(edhrec).toHaveAttribute("href", "https://edhrec.com/route/?cc=Lightning%20Bolt");
+    // Alpha was printed in one finish, so the printing answers for itself: the plain card.
+    await waitFor(() =>
+      expect(market).toHaveAttribute("href", "https://www.tcgplayer.com/product/1174?Printing=Normal"),
+    );
+  });
+
+  it("searches by name while the ids are not in hand, so the link never goes nowhere", async () => {
+    vi.spyOn(ipc, "cardTcgplayerIds").mockRejectedValue("the database is locked");
+    openOn(ALPHA_BOLT.id);
+    const market = (await rows())[2];
+    expect(market).toHaveAttribute(
+      "href",
+      "https://www.tcgplayer.com/search/magic/product?q=Lightning%20Bolt",
+    );
+  });
+
+  it("follows the marketplace Settings selects, and asks for no product id it cannot use", async () => {
+    vi.spyOn(ipc, "getMarketplace").mockResolvedValue("cardkingdom");
+    const asked = vi.spyOn(ipc, "cardTcgplayerIds");
+    openOn(ALPHA_BOLT.id);
+    await waitFor(async () =>
+      expect((await rows())[2]).toHaveAccessibleName("Open on Card Kingdom"),
+    );
+    // The other four publish no product page: the name search is the only shape there is.
+    expect((await rows())[2]).toHaveAttribute(
+      "href",
+      "https://www.cardkingdom.com/catalog/search?search=header&filter%5Bname%5D=Lightning%20Bolt",
+    );
+    expect(asked).not.toHaveBeenCalled();
+  });
+});

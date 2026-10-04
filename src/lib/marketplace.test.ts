@@ -5,6 +5,7 @@ import {
   MARKETPLACES,
   MARKETPLACE_IDS,
   MARKETPLACE_LIST,
+  fallbackMarketplace,
   isMarketplaceId,
   resolveMarketplace,
 } from "./marketplace";
@@ -106,5 +107,30 @@ describe("resolving a stored id", () => {
     expect(isMarketplaceId("manapool")).toBe(true);
     expect(isMarketplaceId("ManaPool")).toBe(false);
     expect(isMarketplaceId("")).toBe(false);
+  });
+});
+
+/**
+ * What a window quotes in place of a marketplace its host cannot ask — Mana Pool in a browser.
+ *
+ * Both halves of the rule are asserted for every entry rather than for the one that needs it
+ * today, because the next feed a page cannot read will not announce itself here.
+ */
+describe("falling back from a marketplace the host cannot reach", () => {
+  it("quotes TCGplayer for a dollar marketplace and Cardmarket for a euro one", () => {
+    expect(fallbackMarketplace(MARKETPLACES.manapool).id).toBe("tcgplayer");
+    expect(fallbackMarketplace(MARKETPLACES.cardkingdom).id).toBe("tcgplayer");
+    expect(fallbackMarketplace(MARKETPLACES.cardtrader).id).toBe("cardmarket");
+  });
+
+  it("never moves the currency, and never lands on something that needs a download", () => {
+    for (const from of MARKETPLACE_LIST) {
+      const to = fallbackMarketplace(from);
+      // The money under every figure stays the reader's: only the shop changes.
+      expect(to.currency).toBe(from.currency);
+      // Prices that arrive with the card data, so the fallback cannot itself be out of reach.
+      expect(to.priced).toBe(true);
+      expect(to.feed).toBe(false);
+    }
   });
 });

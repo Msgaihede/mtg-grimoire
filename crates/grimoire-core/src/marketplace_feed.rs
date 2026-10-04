@@ -44,6 +44,19 @@
 //! Implement [`FeedProvider`] and add the value to [`PROVIDERS`]. Nothing else branches on a
 //! marketplace id: the fetch, the dedupe, the replace, the meta row, the status command and
 //! the progress event are all written once against the trait.
+//!
+//! **For a browser to price from it, two more methods**: [`FeedProvider::permits_a_page`] —
+//! measure whether the host answers a cross-origin request with a permission, and say so —
+//! and [`FeedProvider::fold_element`], the push entrance [`StreamRead`] drives where there is
+//! no file to read back (`platform::host`). Both default to the safe answer: a feed that says
+//! neither is refused on a page in a sentence, before any request ([`reachable`]).
+//!
+//! # A host that keeps no files
+//!
+//! A refresh there is one streamed `GET` pushed into [`StreamRead`] and then [`store`] — no
+//! temp file, a stall bound on every wait, and the same one-transaction replace
+//! (`refresh_streamed`). Card Kingdom permits a page; **Mana Pool does not**, so in a browser
+//! it is never asked and [`FeedStatus::reachable`] is `false` for it.
 use crate::platform::files::aio;
 use crate::platform::http;
 use crate::state::State;
@@ -229,7 +242,79 @@ pub trait FeedProvider: Send + Sync {
     /// several times that as live `serde_json::Value`s, and none of it is needed at once: the
     /// only thing that outlives a row is the deduplicated map, which is ~100 000 entries of a
     /// key and two numbers.
+    ///
+    /// **This is the *pull* half, and a host that keeps no files cannot drive it** — see
+    /// [`fold_element`](FeedProvider::fold_element), which is the same rule reached from the
+    /// other side.
     fn parse(&self, body: &mut dyn Read, feed: &mut Feed) -> Result<(), FeedError>;
+
+    /// Fold **one already-framed `data` element**, given its JSON text and its ordinal.
+    ///
+    /// The push-shaped half of [`FeedProvider::parse`], for [`StreamRead`]. `parse` is a pull
+    /// parser — `from_reader` calls `read()` when it wants more and blocks until it gets it —
+    /// and a response body in a browser is pushed, a chunk at a time, with no thread to block
+    /// and no file to read back. So the same document has two entrances. **What it must not
+    /// have is two copies of the pricing rules**: both decode into the same row struct and
+    /// hand it to the same `*_fold` function, so which finish a Card Kingdom variation is, and
+    /// which Mana Pool column is Near Mint, are each written down once.
+    ///
+    /// A row that will not deserialise is `skipped`, not fatal — [`crate::ingest`]'s rule.
+    ///
+    /// **The default counts every row skipped**, so a provider with no push entrance, driven
+    /// through one, yields a feed with no prices — which [`store`] refuses as
+    /// [`FeedError::Empty`] and leaves the previous prices in place. Loud, and never a table
+    /// quietly emptied.
+    fn fold_element(&self, _json: &[u8], _position: i64, feed: &mut Feed) {
+        feed.rows_seen += 1;
+        feed.skipped += 1;
+    }
+
+    /// The top-level key carrying this feed's own build stamp, where it publishes one.
+    ///
+    /// Read by [`StreamRead`] only. Its framer starts at the first `[` and never models the
+    /// enclosing object, so a stamp written beside the array is scraped out of the document's
+    /// head — `crate::feed::frame::scrape_string`, which `combos` uses for the same reason.
+    /// `None` for a feed that publishes none, and **nothing may fill it in from the clock**.
+    fn built_at_key(&self) -> Option<&'static str> {
+        None
+    }
+
+    /// Does this feed's host let a web page read it — does it answer a cross-origin request
+    /// with an `Access-Control-Allow-Origin` that permits one?
+    ///
+    /// **A fact about the provider, measured, and half of [`reachable`]**: the other half is
+    /// whether the host this runs on asks as a page at all (`platform::host`). A desktop and
+    /// a phone ask as themselves and never read this.
+    ///
+    /// `false` unless a provider says otherwise, which is the safe direction: a feed nobody
+    /// has measured is refused in a sentence on a page rather than asked and failed.
+    fn permits_a_page(&self) -> bool {
+        false
+    }
+}
+
+/// Can this host ask `provider` for its feed at all?
+///
+/// Always, natively. On a host whose requests are a page's (`platform::host::asks_as_a_page`)
+/// only when the provider's own server permits one ([`FeedProvider::permits_a_page`]) — a
+/// request to one that does not would leave, be answered, and be withheld from the page by the
+/// browser, which is a failed fetch with nothing in it to show a reader.
+///
+/// [`refresh`] refuses an unreachable feed in a sentence **before any request**,
+/// [`selected_due`] never calls it due, and [`FeedStatus::reachable`] is how a page learns
+/// not to offer it.
+pub fn reachable(provider: &dyn FeedProvider) -> bool {
+    provider.permits_a_page() || !crate::platform::host::asks_as_a_page()
+}
+
+/// What a refresh of a feed this host cannot reach is told.
+fn unreachable(provider: &dyn FeedProvider) -> String {
+    format!(
+        "{} prices cannot be downloaded in a browser: {} does not let a web page read its \
+         price list. The desktop and Android apps can.",
+        provider.marketplace(),
+        host_of(provider.url())
+    )
 }
 
 /// Every feed this build can fetch. The *only* place a marketplace id is mapped to a feed.
@@ -308,9 +393,32 @@ impl FeedProvider for CardKingdom {
         feed.feed_built_at = built_at;
         Ok(())
     }
+
+    fn fold_element(&self, json: &[u8], position: i64, feed: &mut Feed) {
+        match serde_json::from_slice::<CkRow>(json) {
+            Ok(row) => ck_fold(row, position, feed),
+            Err(_) => {
+                feed.rows_seen += 1;
+                feed.skipped += 1;
+            }
+        }
+    }
+
+    /// `meta.created_at`, which Card Kingdom writes ahead of `data`.
+    fn built_at_key(&self) -> Option<&'static str> {
+        Some("created_at")
+    }
+
+    /// `api.cardkingdom.com` answers `Access-Control-Allow-Origin: *` — measured 2026-10-04
+    /// with `curl` and an `Origin` (`docs/reference/light-app.md` §9.1). Its `Content-Type` is
+    /// `text/html` and it sends no `Content-Length`; the body is JSON all the same, read from a
+    /// page in headless Chrome the same day (§9.2).
+    fn permits_a_page(&self) -> bool {
+        true
+    }
 }
 
-/// Card Kingdom's pricing rule for one row.
+/// Card Kingdom's pricing rule for one row — **the only copy**, called by both entrances.
 fn ck_fold(row: CkRow, position: i64, feed: &mut Feed) {
     feed.rows_seen += 1;
 
@@ -425,9 +533,28 @@ impl FeedProvider for ManaPool {
         // No `meta.created_at`, and none is invented: `feed_built_at` stays NULL.
         Ok(())
     }
+
+    fn fold_element(&self, json: &[u8], position: i64, feed: &mut Feed) {
+        match serde_json::from_slice::<MpRow>(json) {
+            Ok(row) => mp_fold(row, position, feed),
+            Err(_) => {
+                feed.rows_seen += 1;
+                feed.skipped += 1;
+            }
+        }
+    }
+
+    /// **`manapool.com` sends no `Access-Control-Allow-Origin`** — measured 2026-10-04: its
+    /// only CORS header is `Access-Control-Allow-Headers: sentry-trace, baggage`. A page
+    /// cannot read this feed, so on a host that asks as one it is refused before any request
+    /// ([`reachable`]). The push entrance above is written anyway: it costs nothing, and the
+    /// day Mana Pool permits a page this is the one line that changes.
+    fn permits_a_page(&self) -> bool {
+        false
+    }
 }
 
-/// Mana Pool's pricing rule for one row.
+/// Mana Pool's pricing rule for one row — **the only copy**, called by both entrances.
 fn mp_fold(row: MpRow, position: i64, feed: &mut Feed) {
     feed.rows_seen += 1;
 
@@ -472,6 +599,148 @@ fn from_cents(cents: i64) -> Option<f64> {
 // ---------------------------------------------------------------------------------------
 // The streaming reader
 // ---------------------------------------------------------------------------------------
+
+/// Reading a price feed as an object the caller pushes bytes into.
+///
+/// **Why this exists beside [`read_document`].** That one streams with
+/// `serde_json::Deserializer::from_reader` and a `DeserializeSeed` — a *pull* parser, which
+/// calls `read()` when it wants more and blocks until it gets it. A host that keeps no files
+/// (a browser) is handed its body a chunk at a time and has no thread to block, so
+/// `from_reader` cannot be driven from one at all. This frames each `data` element by brace
+/// depth and hands it whole to [`FeedProvider::fold_element`], which keeps serde doing the
+/// part serde is good at — and keeps the pricing rules in one place rather than two.
+///
+/// **The alternative was to buffer the body and run the pull parser over it, and the number
+/// is why not**: Card Kingdom's list is 66 787 283 bytes (63.7 MiB, measured 2026-08-12), and
+/// in a browser the buffer would be the module's linear memory, which grows and is never
+/// given back — every launch that refreshed prices would leave the Worker 64 MB larger for
+/// the rest of the session, for a parse whose whole output is ~100 000 small rows. Pushed,
+/// peak memory is one element plus the deduplicated map, which is what `read_document` also
+/// ends with; [`Self::peak_buffer`] is how a test checks the first half of that claim.
+///
+/// `combos::StreamRead` is the same construction against Commander Spellbook's document, down
+/// to the head scrape. The first web host built this one, and it was removed with that host
+/// on 2026-09-27; this is it ported back, with its tests.
+pub struct StreamRead {
+    provider: &'static dyn FeedProvider,
+    feed: Feed,
+    decoder: crate::feed::frame::Decoder,
+    elements: crate::feed::frame::Elements,
+    decoded: Vec<u8>,
+    /// Card Kingdom's `meta.created_at` sits before `data`, so it is scraped from the head
+    /// rather than parsed structurally — the framer deliberately does not model the enclosing
+    /// object. Empty for a provider that publishes no stamp.
+    head: Vec<u8>,
+    ordinal: i64,
+    /// Decoded bytes seen, against [`Self::limit`].
+    bytes: u64,
+    /// How many decoded bytes this sink will take before refusing.
+    ///
+    /// **Counted after decompression, on purpose**: a browser hands over a
+    /// `Content-Encoding: gzip` body already decoded, so "bytes on the wire" is not a number
+    /// this sink can know on every host, and the decoded size is the one that is the same on
+    /// all of them. `feed::frame`'s own cap is a different question — it refuses a framer that
+    /// has *stopped draining*, which is a malformed document rather than a large one.
+    limit: u64,
+}
+
+impl StreamRead {
+    /// A sink budgeted at [`MAX_FEED_BYTES`], which is what a download is worth taking.
+    pub fn new(provider: &'static dyn FeedProvider) -> Self {
+        Self::with_limit(provider, MAX_FEED_BYTES)
+    }
+
+    /// …and one budgeted at whatever the caller can afford.
+    ///
+    /// A named budget rather than a constant read inside `push`, because the guard is
+    /// otherwise unreachable from a test: to reach 256 MiB with a document that *drains*
+    /// takes a quarter of a gigabyte of well-formed JSON, and a document that does not drain
+    /// trips the framer's cap first.
+    pub fn with_limit(provider: &'static dyn FeedProvider, limit: u64) -> Self {
+        StreamRead {
+            provider,
+            feed: Feed::new(provider.marketplace()),
+            decoder: crate::feed::frame::Decoder::new(),
+            elements: crate::feed::frame::Elements::new(),
+            decoded: Vec::new(),
+            head: Vec::new(),
+            ordinal: 0,
+            bytes: 0,
+            limit,
+        }
+    }
+
+    /// The largest the element framer's buffer has ever been, in bytes.
+    ///
+    /// A price row is a handful of short fields, so anything approaching the document's own
+    /// size means the framer has desynchronised and is silently accumulating rather than
+    /// draining — the failure `combos::StreamRead::peak_buffer` was added for.
+    pub fn peak_buffer(&self) -> usize {
+        self.elements.peak_buffer()
+    }
+
+    /// Whether the bytes pushed so far arrived gzipped — `None` until two of them have. What
+    /// a caller reporting progress asks: only a body that is still gzipped is the length the
+    /// response declared.
+    pub fn is_gzip(&self) -> Option<bool> {
+        self.decoder.is_gzip()
+    }
+
+    /// Feed one chunk of the body. Gzipped or not — the decoder decides from the bytes.
+    pub fn push(&mut self, chunk: &[u8]) -> Result<(), FeedError> {
+        self.decoded.clear();
+        self.decoder.push(chunk, &mut self.decoded)?;
+        self.frame()
+    }
+
+    /// Flush the decoder's tail, frame what it held back, and answer the feed.
+    pub fn finish(mut self) -> Result<Feed, FeedError> {
+        self.decoded.clear();
+        self.decoder.finish(&mut self.decoded)?;
+        self.frame()?;
+        // **A body that ended inside `data` is not the feed**, however many whole rows came
+        // before the cut — and every row the framer handed over was whole, so nothing above
+        // has noticed. [`read_document`] fails on the same body by itself (it is not JSON);
+        // this entrance has to ask, or [`store`] would replace a marketplace's whole table
+        // with the prefix and stamp it as fetched today.
+        if self.elements.cut_short() {
+            return Err(FeedError::Io(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!(
+                    "the price feed ended before its list of prices did, after {} rows",
+                    self.feed.rows_seen
+                ),
+            )));
+        }
+        self.feed.feed_built_at = self
+            .provider
+            .built_at_key()
+            .and_then(|key| crate::feed::frame::scrape_string(&self.head, key));
+        Ok(self.feed)
+    }
+
+    /// Count, keep the head, and fold every element `self.decoded` completed.
+    fn frame(&mut self) -> Result<(), FeedError> {
+        self.bytes += self.decoded.len() as u64;
+        if self.bytes > self.limit {
+            return Err(FeedError::TooLarge {
+                host: host_of(self.provider.url()),
+            });
+        }
+        crate::feed::frame::take_head(&mut self.head, &self.decoded);
+        let provider = self.provider;
+        let feed = &mut self.feed;
+        let ordinal = &mut self.ordinal;
+        self.elements
+            .push(&self.decoded, |el| {
+                let position = *ordinal;
+                *ordinal += 1;
+                provider.fold_element(el, position, feed);
+            })
+            .map_err(std::io::Error::from)?;
+        Ok(())
+    }
+}
 
 /// Read `{ … "data": [ … ] … }` from `body`, handing every element to `sink` as it arrives and
 /// returning `meta.created_at` if the document carries one.
@@ -1001,6 +1270,11 @@ async fn refresh_from(
     url: &'static str,
     progress: &mut (dyn FnMut(&str, u64, u64) + Send),
 ) -> Result<FeedStatus, String> {
+    // Before the claim and before any request: a feed this host cannot read is not a refresh
+    // that failed, so nothing is asked, nothing is logged and no phase is said.
+    if !reachable(provider) {
+        return Err(unreachable(provider));
+    }
     let Some(_guard) = RefreshGuard::claim(provider.marketplace()) else {
         // Refused rather than queued, exactly as a second concurrent sync is: the run already
         // in flight is the one driving the progress event, and a second would download the
@@ -1010,6 +1284,22 @@ async fn refresh_from(
             provider.marketplace()
         ));
     };
+
+    // A host that keeps no files has no `tmp/` to download into: the body is parsed as it
+    // arrives. Decided here, before anything is asked for — this used to send its request
+    // and find out at the folder. The claim above is held for the whole of it and given back
+    // however it ends, a stall included.
+    if !crate::platform::host::keeps_files() {
+        return refresh_streamed(
+            state,
+            provider,
+            url,
+            MAX_FEED_BYTES,
+            crate::scryfall::STALL,
+            progress,
+        )
+        .await;
+    }
 
     let path = temp_path(state, provider);
     progress("downloading", 0, 0);
@@ -1073,6 +1363,125 @@ async fn refresh_from(
     }
 }
 
+/// [`refresh_from`]'s download, parse and store as one pass, **on a host that keeps no
+/// files**: one streamed `GET`, each chunk pushed into [`StreamRead`] as it arrives, then
+/// [`store`].
+///
+/// **No lock crosses an `.await`, and none is taken while the body arrives**: the push
+/// parser never touches the database. The write is [`store`]'s one transaction, after the
+/// last chunk — the same replace a file-backed run makes, held for its length, which on a
+/// host with one thread means nothing else runs until it commits.
+///
+/// **Every wait is bounded by `stall`** — for the answer to begin and for each chunk — which
+/// is the only bound a browser's `fetch` has; and the decoded bytes are counted against
+/// `max_bytes` by the sink itself. Both fail the refresh in a sentence, write it to
+/// `error_log`, and give the claim back.
+///
+/// The phases are the file-backed run's: `downloading` in bytes received, on the byte step —
+/// with a total only for a body that arrived still gzipped, and `0` otherwise, because a body
+/// the host decompressed is not the length the response declared (`feed::StreamedProgress`)
+/// — and `ingesting` once, for the store.
+async fn refresh_streamed(
+    state: &Arc<State>,
+    provider: &'static dyn FeedProvider,
+    url: &'static str,
+    max_bytes: u64,
+    stall: Duration,
+    progress: &mut (dyn FnMut(&str, u64, u64) + Send),
+) -> Result<FeedStatus, String> {
+    progress("downloading", 0, 0);
+    let read = read_streamed(provider, url, max_bytes, stall, &mut |done, total| {
+        progress("downloading", done, total)
+    })
+    .await;
+    let feed = match read {
+        Ok(feed) => feed,
+        Err(e) => {
+            note_failure(&state.db, provider, &e);
+            // What arrived and could not be used rests the feed for a day, as on a host with
+            // files; a connection that failed, stalled or answered a status does not.
+            if matches!(e, FeedError::TooLarge { .. } | FeedError::Io(_)) {
+                note_unusable(&state.db, provider);
+            }
+            progress("error", 0, 0);
+            return Err(e.to_string());
+        }
+    };
+
+    progress("ingesting", 0, 0);
+    match store(&state.db, &feed, unix_now()) {
+        Ok(_) => {
+            // `refresh_from`'s reason, at the one place this path succeeds.
+            state.corpus_replaced();
+            if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+                let _ = crate::feed::backoff::clear(&conn, &backoff_feed(provider));
+            }
+            progress("done", 0, 0);
+            Ok(status_of(state, provider))
+        }
+        Err(e) => {
+            // `ingest_file` writes this row on a host with files.
+            note_failure(&state.db, provider, &e);
+            if !matches!(e, FeedError::Busy(_)) {
+                note_unusable(&state.db, provider);
+            }
+            progress("error", 0, 0);
+            Err(e.to_string())
+        }
+    }
+}
+
+/// The request and the parse of [`refresh_streamed`], with no database in it.
+async fn read_streamed(
+    provider: &'static dyn FeedProvider,
+    url: &'static str,
+    max_bytes: u64,
+    stall: Duration,
+    progress: &mut (dyn FnMut(u64, u64) + Send),
+) -> Result<Feed, FeedError> {
+    let host = host_of(url);
+    let resp = client()
+        .get(url)
+        .header("Accept", "application/json")
+        .send_within(stall)
+        .await
+        .map_err(|source| FeedError::Http { host, source })?;
+    let status = resp.status();
+    if !(200..300).contains(&status) {
+        return Err(FeedError::Status { host, status });
+    }
+    // The wire's length: a bound to refuse on, and a progress bar's denominator only for a
+    // body that arrives still gzipped (`feed::StreamedProgress`) — a browser asks for
+    // compression by itself and hands the body over decoded, so for this feed's JSON the
+    // length declared is usually not the length delivered.
+    let declared = resp.content_length().unwrap_or(0);
+    if declared > max_bytes {
+        return Err(FeedError::TooLarge { host });
+    }
+
+    let mut sink = StreamRead::with_limit(provider, max_bytes);
+    let mut done = 0u64;
+    let mut said = crate::feed::StreamedProgress::new(declared, PROGRESS_EMIT_BYTES);
+    let mut breather = crate::platform::timer::Breather::new(crate::feed::WORK_BUDGET);
+    let mut body = resp.into_body();
+    progress(0, 0);
+    while let Some(chunk) = body.chunk_within(stall).await {
+        let chunk = chunk.map_err(|source| FeedError::Http { host, source })?;
+        done += chunk.len() as u64;
+        sink.push(&chunk)?;
+        if let Some((done, total)) = said.after(done, sink.is_gzip()) {
+            progress(done, total);
+        }
+        // The turn a queued command is answered in: a chunk the network had already buffered
+        // resumes this loop without one (`platform::timer::yield_to_host`).
+        breather.breathe().await;
+    }
+    if let Some((done, total)) = said.at_end(done, sink.is_gzip()) {
+        progress(done, total);
+    }
+    sink.finish()
+}
+
 /// A provider's name in [`crate::feed::backoff`] — the `error_log` operation it already writes
 /// under, so the two read as one feed.
 fn backoff_feed(provider: &dyn FeedProvider) -> String {
@@ -1109,6 +1518,11 @@ pub struct FeedStatus {
     pub stale: bool,
     /// A refresh is in flight right now.
     pub refreshing: bool,
+    /// Whether this host can ask for this feed at all — [`reachable`]. **`true` for every
+    /// feed on a desktop and a phone**; `false` in a browser for a feed whose server does not
+    /// permit a web page to read it (Mana Pool), which a refresh refuses in a sentence before
+    /// any request. A page reads it to offer only the marketplaces whose prices it can show.
+    pub reachable: bool,
 }
 
 /// Has this feed earned a refresh? `None` — never fetched — is stale by definition, and a
@@ -1151,6 +1565,7 @@ pub fn read_status(conn: &Connection, provider: &dyn FeedProvider, now: i64) -> 
         row_count: row.as_ref().map(|r| r.2),
         stale: is_stale(row.as_ref().map(|r| r.0), now),
         refreshing: is_refreshing(marketplace),
+        reachable: reachable(provider),
     }
 }
 
@@ -1195,11 +1610,14 @@ pub fn emit(state: &State, marketplace: &str, phase: &str, done: u64, total: u64
 
 /// The selected marketplace, when it is feed-backed and its feed is due at a launch: stale, and
 /// not resting after a file that arrived and could not be used ([`crate::feed::backoff`]).
-/// `None` for a marketplace priced from `cards.prices`, which downloads nothing, ever.
+/// `None` for a marketplace priced from `cards.prices`, which downloads nothing, ever — and
+/// for a feed this host cannot reach ([`reachable`]), which is never due because asking for it
+/// could only be refused: a reader who chose Mana Pool on a phone and opens the same account
+/// in a browser gets no failed refresh at every launch for it.
 /// [`refresh_selected_if_due`] and [`crate::downloads::launch_due`] both ask it.
 pub fn selected_due(conn: &Connection, now: i64) -> Option<String> {
     let id = crate::marketplace::stored(conn);
-    let provider = provider_for(&id)?;
+    let provider = provider_for(&id).filter(|p| reachable(*p))?;
     let fetched_at = read_status(conn, provider, now).fetched_at;
     let resting = crate::feed::backoff::resting(conn, &backoff_feed(provider), now);
     (is_stale(fetched_at, now) && !resting).then_some(id)
@@ -1815,6 +2233,7 @@ mod tests {
                 row_count: None,
                 stale: true,
                 refreshing: false,
+                reachable: true,
             }
         );
     }
@@ -1886,6 +2305,7 @@ mod tests {
             row_count: Some(97_239),
             stale: false,
             refreshing: true,
+            reachable: true,
         })
         .unwrap();
         assert_eq!(
@@ -1897,6 +2317,7 @@ mod tests {
                 "rowCount": 97_239,
                 "stale": false,
                 "refreshing": true,
+                "reachable": true,
             })
         );
 
@@ -2231,6 +2652,643 @@ mod tests {
                 })
             ),]
         );
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    // ---- the push-shaped reader -------------------------------------------------------
+    //
+    // `StreamRead` is what a host that keeps no files drives — a browser. What these hold is
+    // that it answers what `read_document` answers — the same prices, the same counts, the
+    // same stamp — because the moment the two disagree a browser prices a collection
+    // differently from the desktop beside it. Written for the first web host and removed
+    // with it on 2026-09-27; ported back with the reader.
+
+    /// Push `body` through [`StreamRead`] `chunk` bytes at a time.
+    fn stream(
+        provider: &'static dyn FeedProvider,
+        body: &str,
+        chunk: usize,
+    ) -> Result<Feed, FeedError> {
+        let mut sink = StreamRead::new(provider);
+        for c in body.as_bytes().chunks(chunk) {
+            sink.push(c)?;
+        }
+        sink.finish()
+    }
+
+    fn gzipped(bytes: &[u8]) -> Vec<u8> {
+        use flate2::{write::GzEncoder, Compression};
+        use std::io::Write as _;
+        let mut e = GzEncoder::new(Vec::new(), Compression::fast());
+        e.write_all(bytes).unwrap();
+        e.finish().unwrap()
+    }
+
+    /// The document the two entrances are compared on: every trap the pull parser's own
+    /// tests cover — the string foil flag, etched winning over it, a row with no id, a
+    /// nonsense price, unknown keys before and after `data`, and `meta` carrying the stamp.
+    const CK_BODY: &str = r#"{
+      "version": 2,
+      "meta": {"created_at": "2026-08-11 21:07:02", "base_url": "https://x"},
+      "data": [
+        {"id": 1, "scryfall_id": "a", "variation": "", "is_foil": "false", "price_retail": "0.35"},
+        {"id": 2, "scryfall_id": "a", "variation": "", "is_foil": "false", "price_retail": "0.25"},
+        {"id": 3, "scryfall_id": "b", "variation": "Foil Etched", "is_foil": "true", "price_retail": "9.99"},
+        {"id": 4, "name": "Sealed, with a {brace} and a \"quote\"", "price_retail": "99.99"},
+        {"id": 5, "scryfall_id": "c", "is_foil": "true", "price_retail": "not a price"},
+        {"id": 6, "scryfall_id": "d", "is_foil": "true", "price_retail": "1.50",
+         "condition_values": {"nm_price": "1.50"}}
+      ],
+      "trailing": {"after": "data"}
+    }"#;
+
+    /// **The two entrances must not disagree**, and the chunk size must not change the answer.
+    ///
+    /// Three bytes at a time splits every JSON token, every string and every nested object in
+    /// the middle, which is the only shape a browser stream ever arrives in.
+    #[test]
+    fn a_chunked_push_prices_exactly_what_the_pull_parser_prices() {
+        let pulled = collect(&CardKingdom, CK_BODY).unwrap();
+        let pushed = stream(&CardKingdom, CK_BODY, 3).unwrap();
+
+        assert_eq!(priced(&pushed), priced(&pulled));
+        assert_eq!(pushed.rows_seen, pulled.rows_seen);
+        assert_eq!(pushed.skipped, pulled.skipped);
+        assert_eq!(pushed.collisions, pulled.collisions);
+        assert_eq!(pushed.feed_built_at, pulled.feed_built_at);
+        // …and the answer is the right one, not merely the same one twice.
+        assert_eq!(
+            priced(&pushed),
+            vec![
+                ("a".into(), "nonfoil", 0.25),
+                ("b".into(), "etched", 9.99),
+                ("d".into(), "foil", 1.5),
+            ]
+        );
+        assert_eq!(pushed.feed_built_at.as_deref(), Some("2026-08-11 21:07:02"));
+        assert_eq!(pushed.collisions, 1, "two rows for `a`, the cheaper wins");
+    }
+
+    /// Mana Pool's half of the same claim — three finish columns per row, an ordinal
+    /// tie-break, and no build stamp to scrape.
+    #[test]
+    fn mana_pools_chunked_push_prices_what_its_pull_parser_prices() {
+        let body = r#"{"data": [
+            {"scryfall_id": "a", "price_cents_nm": 218, "price_cents_nm_foil": 500,
+             "price_cents_nm_etched": null},
+            {"scryfall_id": "b", "price_cents_nm": null, "price_cents_nm_foil": null,
+             "price_cents_nm_etched": null},
+            {"scryfall_id": "a", "price_cents_nm": 100}
+        ]}"#;
+        let pulled = collect(&ManaPool, body).unwrap();
+        let pushed = stream(&ManaPool, body, 5).unwrap();
+
+        assert_eq!(priced(&pushed), priced(&pulled));
+        assert_eq!(pushed.rows_seen, 3);
+        assert_eq!(pushed.skipped, 1, "the row quoting nothing");
+        assert_eq!(
+            pushed.feed_built_at, None,
+            "Mana Pool publishes no stamp and none may be invented"
+        );
+        assert_eq!(
+            priced(&pushed),
+            vec![
+                ("a".into(), "foil", 5.0),
+                // The later, cheaper row wins the nonfoil collision.
+                ("a".into(), "nonfoil", 1.0),
+            ]
+        );
+    }
+
+    /// **The browser shape.** `fetch` transparently decodes a `Content-Encoding: gzip`
+    /// response and offers no way to opt out, so the same feed arrives compressed on a
+    /// desktop and plain in a browser. The decoder decides from the two magic bytes.
+    #[test]
+    fn a_gzipped_stream_and_a_plain_one_price_the_same() {
+        let plain = stream(&CardKingdom, CK_BODY, 64).unwrap();
+
+        let gz = gzipped(CK_BODY.as_bytes());
+        let mut sink = StreamRead::new(&CardKingdom);
+        for c in gz.chunks(7) {
+            sink.push(c).unwrap();
+        }
+        let compressed = sink.finish().unwrap();
+
+        assert_eq!(priced(&compressed), priced(&plain));
+        assert_eq!(compressed.feed_built_at, plain.feed_built_at);
+    }
+
+    /// A row serde cannot read is counted and stepped over, never fatal — [`crate::ingest`]'s
+    /// rule. **The push entrance has to decide this for itself**, because the pull parser's
+    /// `next_element` would abort the whole document on the same row.
+    #[test]
+    fn an_unreadable_row_is_skipped_rather_than_ending_the_feed() {
+        let body = r#"{"data": [
+            {"id": 1, "scryfall_id": "a", "is_foil": "false", "price_retail": "0.35"},
+            {"id": "not an integer", "scryfall_id": "b", "price_retail": "1.00"},
+            {"id": 3, "scryfall_id": "c", "is_foil": "false", "price_retail": "0.75"}
+        ]}"#;
+        let feed = stream(&CardKingdom, body, 11).unwrap();
+
+        assert_eq!(
+            priced(&feed),
+            vec![("a".into(), "nonfoil", 0.35), ("c".into(), "nonfoil", 0.75)],
+            "the good rows on either side of the bad one both survive"
+        );
+        assert_eq!(feed.rows_seen, 3);
+        assert_eq!(feed.skipped, 1);
+    }
+
+    /// The framer must drain, and a row count cannot see that it is not.
+    ///
+    /// This is `feed::frame`'s own regression test aimed at this feed's document: a few
+    /// thousand rows pushed 64 bytes at a time must frame every one and leave the buffer
+    /// holding a row, not the payload.
+    #[test]
+    fn a_long_document_frames_every_row_and_keeps_the_buffer_small() {
+        let mut body = String::from(r#"{"meta":{"created_at":"2026-08-11 21:07:02"},"data":["#);
+        for i in 0..3000 {
+            if i > 0 {
+                body.push(',');
+            }
+            body.push_str(&format!(
+                r#"{{"id":{i},"scryfall_id":"card-{i}","is_foil":"false","price_retail":"1.00","pad":"{}"}}"#,
+                "x".repeat(200)
+            ));
+        }
+        body.push_str("]}");
+
+        let mut sink = StreamRead::new(&CardKingdom);
+        for c in body.as_bytes().chunks(64) {
+            sink.push(c).unwrap();
+        }
+        let peak = sink.peak_buffer();
+        let feed = sink.finish().unwrap();
+
+        assert_eq!(feed.rows_seen, 3000);
+        assert_eq!(feed.row_count(), 3000);
+        assert_eq!(feed.feed_built_at.as_deref(), Some("2026-08-11 21:07:02"));
+        // The document is ~800 KB. A framer that stops draining holds all of it.
+        assert!(
+            peak < 8 * 1024,
+            "peak buffer was {peak} bytes; the framer is not draining"
+        );
+    }
+
+    /// **The web path has no `download` in front of it**, so the size guard `download`
+    /// applies to the declared length and the running total has to live in the sink too.
+    /// Without it a browser would build the whole of whatever it was served.
+    ///
+    /// **The body here is perfectly well-formed and drains**, which is the only way to reach
+    /// this guard rather than the framer's: `feed::frame`'s cap refuses a framer that has
+    /// stopped draining, and garbage trips that one first.
+    ///
+    /// ⚠️ **The first version of this test was unfailable** (2026-08-31). It pushed
+    /// non-draining bytes at the real 256 MiB budget, so the framer refused at 8 MiB and the
+    /// assertion accepted `TooLarge` *or* `Io` — deleting this entire guard left it green.
+    /// The named budget is what made the guard reachable, and the assertion names one error.
+    #[test]
+    fn a_well_formed_body_past_the_budget_is_refused_by_the_sink_itself() {
+        let mut body = String::from(r#"{"data":["#);
+        for i in 0..40 {
+            if i > 0 {
+                body.push(',');
+            }
+            body.push_str(&format!(
+                r#"{{"id":{i},"scryfall_id":"c{i}","is_foil":"false","price_retail":"1.00"}}"#
+            ));
+        }
+        body.push_str("]}");
+        assert!(body.len() > 1024, "the fixture has to pass the budget");
+
+        let mut small = StreamRead::with_limit(&CardKingdom, 1024);
+        let refusal = body
+            .as_bytes()
+            .chunks(256)
+            .find_map(|c| small.push(c).err())
+            .expect("a body past the budget must be refused");
+        // One error and not "either of two": a refusal from the framer would mean this guard
+        // was never reached, which is exactly how the previous version of this passed.
+        assert!(
+            matches!(&refusal, FeedError::TooLarge { host } if *host == "api.cardkingdom.com"),
+            "expected TooLarge naming the host, got {refusal:?}"
+        );
+
+        // …and the same body sails through the default budget, so the refusal above is the
+        // budget rather than anything about the document.
+        let feed = stream(&CardKingdom, &body, 256).unwrap();
+        assert_eq!(feed.row_count(), 40);
+    }
+
+    /// The host in a refusal has to be the feed's, not the whole URL — it is what the
+    /// sentence a reader sees is built from.
+    #[test]
+    fn the_stream_names_the_host_it_refused() {
+        assert_eq!(host_of(CardKingdom.url()), "api.cardkingdom.com");
+        assert_eq!(host_of(ManaPool.url()), "manapool.com");
+    }
+
+    // ---- the refresh on a host that keeps no files, and a feed a page cannot reach -------
+    //
+    // `platform::host::emulate_page` makes the test's thread a browser's Worker: one thread,
+    // no files, and requests that have to pass CORS. The state is the browser's too — one
+    // connection.
+
+    /// Card Kingdom's document and both of its entrances, under a name no other test claims
+    /// (the refresh registry is process-wide), from a host that permits a page.
+    struct OnPage(&'static str);
+    impl FeedProvider for OnPage {
+        fn marketplace(&self) -> &'static str {
+            self.0
+        }
+        fn url(&self) -> &'static str {
+            "http://127.0.0.1:1/never-asked"
+        }
+        fn parse(&self, body: &mut dyn Read, feed: &mut Feed) -> Result<(), FeedError> {
+            CardKingdom.parse(body, feed)
+        }
+        fn fold_element(&self, json: &[u8], position: i64, feed: &mut Feed) {
+            CardKingdom.fold_element(json, position, feed)
+        }
+        fn built_at_key(&self) -> Option<&'static str> {
+            CardKingdom.built_at_key()
+        }
+        fn permits_a_page(&self) -> bool {
+            true
+        }
+    }
+
+    const CK_FEED: &str = r#"{"meta":{"created_at":"2026-08-11 21:07:02"},"data":[
+        {"id":1,"scryfall_id":"a","variation":"","is_foil":"false","price_retail":"0.35"},
+        {"id":2,"scryfall_id":"a","variation":"Foil Etched","is_foil":"true","price_retail":"9.99"},
+        {"id":3,"name":"Sealed"}
+    ]}"#;
+
+    fn error_rows(state: &State) -> i64 {
+        state
+            .lock_db()
+            .query_row("SELECT count(*) FROM error_log", [], |r| r.get(0))
+            .unwrap()
+    }
+
+    /// **A price refresh with nowhere to put a file**: the body goes from the request into
+    /// the push parser a chunk at a time, then the one replace — the phases the file-backed
+    /// run says, the prices it stores, the build stamp it reads, and nothing on disk but the
+    /// database.
+    #[tokio::test]
+    async fn a_refresh_with_no_files_streams_into_the_push_parser_and_stores() {
+        static ON_PAGE: OnPage = OnPage("page-refresh-test");
+        let server = httpmock::MockServer::start_async().await;
+        let file = server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/pricelist");
+                then.status(200).body(CK_FEED);
+            })
+            .await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/gone");
+                then.status(404);
+            })
+            .await;
+        let good: &'static str = Box::leak(server.url("/pricelist").into_boxed_str());
+        let gone: &'static str = Box::leak(server.url("/gone").into_boxed_str());
+
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("feed-page-refresh", "http://127.0.0.1:1");
+
+        let mut said: Vec<(String, u64, u64)> = Vec::new();
+        let status = refresh_from(&state, &ON_PAGE, good, &mut |phase, done, total| {
+            said.push((phase.to_owned(), done, total))
+        })
+        .await
+        .unwrap();
+        let mut phases: Vec<&str> = said.iter().map(|(p, _, _)| p.as_str()).collect();
+        phases.dedup();
+        assert_eq!(phases, ["downloading", "ingesting", "done"]);
+        let size = CK_FEED.len() as u64;
+        assert!(
+            said.contains(&("downloading".to_owned(), size, 0)),
+            "every byte counted, and no total: a plain body on a page may be one the host \
+             decompressed, so the length it declared is not vouched for: {said:?}"
+        );
+        assert!(
+            said.iter()
+                .filter(|(phase, _, _)| phase == "downloading")
+                .all(|(_, _, total)| *total == 0),
+            "{said:?}"
+        );
+        assert_eq!(status.marketplace, "page-refresh-test");
+        assert_eq!(status.row_count, Some(2));
+        assert_eq!(status.feed_built_at.as_deref(), Some("2026-08-11 21:07:02"));
+        assert!(status.reachable);
+        assert_eq!(
+            stored_prices(&state.db, "page-refresh-test"),
+            vec![
+                ("a".to_owned(), "etched".to_owned(), 9.99),
+                ("a".to_owned(), "nonfoil".to_owned(), 0.35),
+            ]
+        );
+        assert!(!dir.join("tmp").exists(), "nothing was written to a file");
+        assert!(
+            !is_refreshing("page-refresh-test"),
+            "the claim is given back"
+        );
+        file.assert_calls_async(1).await;
+
+        // A refused fetch: the previous prices stay, the reason is logged, the claim is free.
+        let err = refresh_from(&state, &ON_PAGE, gone, &mut |_, _, _| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("404"), "{err}");
+        assert_eq!(stored_prices(&state.db, "page-refresh-test").len(), 2);
+        assert_eq!(error_rows(&state), 1);
+        assert!(!is_refreshing("page-refresh-test"));
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A feed body that stops arriving ends the refresh after the stall bound**, and the
+    /// claim is given back — in a browser nothing else would ever end it, and a claim held
+    /// for good is "already being refreshed" at every later press.
+    #[tokio::test]
+    async fn a_feed_that_stops_arriving_with_no_files_fails_after_the_stall_bound() {
+        static ON_PAGE: OnPage = OnPage("page-stall-test");
+        let quiet = crate::feed::quiet_host::start(
+            CK_FEED.as_bytes()[..CK_FEED.len() / 2].to_vec(),
+            CK_FEED.len(),
+        );
+        let url: &'static str = Box::leak(format!("{quiet}/pricelist").into_boxed_str());
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("feed-page-stall", "http://127.0.0.1:1");
+
+        let began = crate::platform::clock::Tick::now();
+        let mut phases: Vec<String> = Vec::new();
+        let err = {
+            // Through the claim, as a refresh takes it, with a bound short enough to wait out.
+            let _guard = RefreshGuard::claim(ON_PAGE.marketplace()).unwrap();
+            refresh_streamed(
+                &state,
+                &ON_PAGE,
+                url,
+                MAX_FEED_BYTES,
+                Duration::from_millis(300),
+                &mut |phase, _, _| phases.push(phase.to_owned()),
+            )
+            .await
+            .unwrap_err()
+        };
+        assert!(err.contains("stalled"), "{err}");
+        assert!(
+            began.elapsed() < Duration::from_secs(20),
+            "the stall bound is what ended it: {:?}",
+            began.elapsed()
+        );
+        assert_eq!(phases.last().map(String::as_str), Some("error"));
+        assert!(!phases.iter().any(|p| p == "ingesting"), "{phases:?}");
+        assert!(!is_refreshing("page-stall-test"));
+        let kind: String = state
+            .lock_db()
+            .query_row("SELECT kind FROM error_log", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(kind, "timeout");
+        assert!(stored_prices(&state.db, "page-stall-test").is_empty());
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **Mana Pool is refused on a page in a sentence, before any request** — its server sends
+    /// no `Access-Control-Allow-Origin`, so the request would leave and the browser would
+    /// withhold the answer. Nothing is asked, nothing is logged, no phase is said; the status
+    /// says the feed cannot be reached, and the launch never calls it due. Natively none of
+    /// that applies.
+    #[tokio::test]
+    async fn mana_pool_is_refused_on_a_page_before_any_request() {
+        let server = httpmock::MockServer::start_async().await;
+        let any = server
+            .mock_async(|when, then| {
+                when.any_request();
+                then.status(200).body(r#"{"data":[]}"#);
+            })
+            .await;
+        let url: &'static str = Box::leak(server.url("/prices/singles").into_boxed_str());
+
+        // A native host can ask every feed.
+        assert!(reachable(&ManaPool) && reachable(&CardKingdom));
+        assert!(!ManaPool.permits_a_page() && CardKingdom.permits_a_page());
+
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("feed-page-manapool", "http://127.0.0.1:1");
+
+        let mut phases: Vec<String> = Vec::new();
+        let err = refresh_from(&state, &ManaPool, url, &mut |phase, _, _| {
+            phases.push(phase.to_owned())
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err,
+            "manapool prices cannot be downloaded in a browser: manapool.com does not let a web \
+             page read its price list. The desktop and Android apps can."
+        );
+        // And by the name a command asks with, which is the real host's address.
+        let by_name = refresh(&state, "manapool", &mut |phase, _, _| {
+            phases.push(phase.to_owned())
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(by_name, err);
+
+        any.assert_calls_async(0).await;
+        assert!(phases.is_empty(), "nothing started, so nothing is said");
+        assert_eq!(error_rows(&state), 0, "a refusal is not a failed refresh");
+        assert!(!is_refreshing("manapool"));
+
+        {
+            let conn = state.lock_db_read();
+            let now = unix_now();
+            assert!(!read_status(&conn, &ManaPool, now).reachable);
+            assert!(read_status(&conn, &CardKingdom, now).reachable);
+        }
+        // A reader who chose Mana Pool elsewhere is not asked for it at every launch here.
+        {
+            let conn = state.lock_db();
+            crate::marketplace::store(&conn, "manapool").unwrap();
+            assert_eq!(selected_due(&conn, unix_now()), None);
+            crate::marketplace::store(&conn, "cardkingdom").unwrap();
+            assert_eq!(
+                selected_due(&conn, unix_now()).as_deref(),
+                Some("cardkingdom")
+            );
+        }
+        drop(_page);
+        {
+            let conn = state.lock_db();
+            crate::marketplace::store(&conn, "manapool").unwrap();
+            assert_eq!(
+                selected_due(&conn, unix_now()).as_deref(),
+                Some("manapool"),
+                "a host that asks as itself is due it as before"
+            );
+            assert!(read_status(&conn, &ManaPool, unix_now()).reachable);
+        }
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A provider with no push entrance cannot empty a price table by being streamed**: every
+    /// row is counted skipped, the store refuses the feed as empty, and yesterday's prices stay.
+    #[tokio::test]
+    async fn a_provider_with_no_push_entrance_is_refused_rather_than_stored_empty() {
+        struct PullOnly;
+        impl FeedProvider for PullOnly {
+            fn marketplace(&self) -> &'static str {
+                "pull-only-test"
+            }
+            fn url(&self) -> &'static str {
+                "http://127.0.0.1:1/never-asked"
+            }
+            fn parse(&self, body: &mut dyn Read, feed: &mut Feed) -> Result<(), FeedError> {
+                CardKingdom.parse(body, feed)
+            }
+            fn permits_a_page(&self) -> bool {
+                true
+            }
+        }
+        static PULL_ONLY: PullOnly = PullOnly;
+
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/pricelist");
+                then.status(200).body(CK_FEED);
+            })
+            .await;
+        let url: &'static str = Box::leak(server.url("/pricelist").into_boxed_str());
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("feed-page-pull-only", "http://127.0.0.1:1");
+        // Yesterday's prices, from a feed read the other way.
+        store(
+            &state.db,
+            &collect(&PULL_ONLY, CK_FEED).unwrap(),
+            1_800_000_000,
+        )
+        .unwrap();
+        assert_eq!(stored_prices(&state.db, "pull-only-test").len(), 2);
+
+        let err = refresh_from(&state, &PULL_ONLY, url, &mut |_, _, _| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("held no prices"), "{err}");
+        assert_eq!(
+            stored_prices(&state.db, "pull-only-test").len(),
+            2,
+            "the previous prices are exactly where they were"
+        );
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A body that ends before its list does is refused, however many whole rows came
+    /// first.** Every row the framer hands over is a whole one, so a feed cut off after its
+    /// second row frames two good prices and no error — and stored, that prefix would replace
+    /// the marketplace's whole table and be stamped as today's. The pull parser fails on the
+    /// same bytes by itself; this entrance has to ask whether the array ever closed. Cut
+    /// inside a row and cut between two rows are the same refusal.
+    #[test]
+    fn a_feed_that_ends_before_its_list_does_is_refused_by_the_push_reader() {
+        const WHOLE: &str = r#"{"meta":{"created_at":"2026-08-11 21:07:02"},"data":[
+            {"id":1,"scryfall_id":"a","is_foil":"false","price_retail":"0.35"},
+            {"id":2,"scryfall_id":"b","is_foil":"false","price_retail":"0.50"},
+            {"id":3,"scryfall_id":"c","is_foil":"false","price_retail":"0.75"}
+        ]}"#;
+        assert_eq!(stream(&CardKingdom, WHOLE, 7).unwrap().row_count(), 3);
+
+        let inside_the_third = &WHOLE[..WHOLE.find(r#""scryfall_id":"c""#).unwrap()];
+        let after_the_second = &WHOLE[..WHOLE.find(r#"{"id":3"#).unwrap()];
+        for cut in [inside_the_third, after_the_second] {
+            assert!(
+                collect(&CardKingdom, cut).is_err(),
+                "the pull parser refuses a document that is not whole"
+            );
+            for chunk in [1, 7, 4096] {
+                let refused = stream(&CardKingdom, cut, chunk)
+                    .expect_err("two whole rows of a cut body are not the feed");
+                assert!(
+                    matches!(&refused, FeedError::Io(e)
+                        if e.kind() == std::io::ErrorKind::UnexpectedEof),
+                    "{refused:?}"
+                );
+                assert_eq!(
+                    refused.to_string(),
+                    "could not read the downloaded price feed: the price feed ended before \
+                     its list of prices did, after 2 rows"
+                );
+            }
+        }
+
+        // A document that never opens a list is a different refusal, and still one: no rows.
+        let no_list = stream(&CardKingdom, r#"{"meta":{"created_at":"x"}}"#, 5).unwrap();
+        assert_eq!(no_list.rows_seen, 0);
+    }
+
+    /// **And through the whole refresh, on a host that keeps no files**: a body cut short
+    /// leaves yesterday's prices exactly where they were, says why, and gives the claim back.
+    #[tokio::test]
+    async fn a_refresh_whose_body_is_cut_short_with_no_files_keeps_the_previous_prices() {
+        static ON_PAGE: OnPage = OnPage("page-cut-test");
+        let cut = &CK_FEED[..CK_FEED.find(r#"{"id":3"#).unwrap()];
+        let server = httpmock::MockServer::start_async().await;
+        server
+            .mock_async(|when, then| {
+                when.method(httpmock::Method::GET).path("/pricelist");
+                then.status(200).body(cut);
+            })
+            .await;
+        let url: &'static str = Box::leak(server.url("/pricelist").into_boxed_str());
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("feed-page-cut", "http://127.0.0.1:1");
+        store(
+            &state.db,
+            &collect(&ON_PAGE, CK_FEED).unwrap(),
+            1_800_000_000,
+        )
+        .unwrap();
+        let before = stored_prices(&state.db, "page-cut-test");
+        assert_eq!(before.len(), 2);
+
+        let mut phases: Vec<String> = Vec::new();
+        let err = refresh_from(&state, &ON_PAGE, url, &mut |phase, _, _| {
+            phases.push(phase.to_owned())
+        })
+        .await
+        .unwrap_err();
+        assert!(err.contains("ended before its list of prices did"), "{err}");
+        assert_eq!(phases.last().map(String::as_str), Some("error"));
+        assert!(!phases.iter().any(|p| p == "ingesting"), "{phases:?}");
+        assert_eq!(stored_prices(&state.db, "page-cut-test"), before);
+        let fetched_at: i64 = state
+            .lock_db()
+            .query_row(
+                "SELECT fetched_at FROM marketplace_feed_meta WHERE marketplace = 'page-cut-test'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fetched_at, 1_800_000_000, "and the stamp did not move");
+        assert_eq!(error_rows(&state), 1);
+        assert!(!is_refreshing("page-cut-test"));
+
         drop(state);
         let _ = std::fs::remove_dir_all(dir);
     }

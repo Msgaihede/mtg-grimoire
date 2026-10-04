@@ -231,6 +231,7 @@ describe("the arms", () => {
     // The web build's two scripts, which `scripts/*` would lint and never run.
     ["scripts/build-wasm.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke.mjs", T, F, F, F, F, F, T],
+    ["scripts/web-smoke/default-cards.jsonl", T, F, F, F, F, F, T],
     // The web host: a workspace member `rust` tests, and the crate `web` compiles for a browser.
     // Not `core` — the engine does not depend on a host.
     ["crates/grimoire-web/src/lib.rs", T, T, F, F, F, F, T],
@@ -322,6 +323,7 @@ describe("the arms", () => {
   it.each([
     ["scripts/build-wasm.mjs", "scripts/*"],
     ["scripts/web-smoke.mjs", "scripts/*"],
+    ["scripts/web-smoke/*", "scripts/*"],
     [".storybook/fake/aliases.ts", ".storybook/*"],
   ])("puts `%s` above `%s`", (file, tree) => {
     const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));

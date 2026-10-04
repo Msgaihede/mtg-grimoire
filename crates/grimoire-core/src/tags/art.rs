@@ -419,4 +419,102 @@ mod tests {
         // And the staging tables were dropped rather than left lying around.
         assert_eq!(staging_tables(&conn), 0);
     }
+
+    /// **The art taxonomy refreshes on a host that keeps no files**, through the same engine
+    /// and the same sink the oracle one does: one streamed body into
+    /// [`crate::tags::StreamTags`], against a mock Scryfall, on a thread standing in for a
+    /// browser's Worker — and the closure it leaves is the one the file-backed ingest of the
+    /// same fixture leaves.
+    #[tokio::test]
+    async fn the_art_file_refreshes_with_no_files_and_stores_what_the_file_backed_ingest_stores() {
+        use httpmock::prelude::*;
+        let bytes = std::fs::read(art_fixture()).unwrap();
+        let server = MockServer::start_async().await;
+        let conditional = server.mock(|when, then| {
+            when.method(GET)
+                .path("/bulk-data/art_tags")
+                .header_exists("if-none-match");
+            then.status(500);
+        });
+        let file = server.mock(|when, then| {
+            when.method(GET).path("/art-tags.jsonl.gz");
+            then.status(200).body(bytes.clone());
+        });
+        server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/art_tags");
+            then.status(200)
+                .header("etag", "W/\"a1\"")
+                .json_body(serde_json::json!({
+                    "updated_at": "2026-08-20T21:00:00.000+00:00",
+                    "jsonl_download_uri": server.url("/art-tags.jsonl.gz"),
+                    "compressed_size": bytes.len() as u64
+                }));
+        });
+
+        // What the file-backed ingest makes of the same bytes, to compare against.
+        let expected = {
+            let db = mem_db();
+            ingest(&db, &art_fixture()).unwrap();
+            let conn = crate::db::lock_blocking(&db);
+            let mut stmt = conn
+                .prepare(
+                    "SELECT illustration_id, slug, weight FROM art_tag_illustrations
+                      ORDER BY illustration_id, slug",
+                )
+                .unwrap();
+            let rows: Vec<(String, String, String)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows
+        };
+        assert!(!expected.is_empty());
+
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("art-tags-page", &server.base_url());
+        // The refresh claim is process-wide per dataset, and one other test in this binary
+        // asks for this one in passing; being told so is not what this test is about.
+        let mut phases: Vec<String> = Vec::new();
+        let status = loop {
+            phases.clear();
+            match refresh(&ART, &state, false, &mut |phase, _, _| {
+                phases.push(phase.to_owned())
+            })
+            .await
+            {
+                Err(e) if e.contains("already being refreshed") => {
+                    tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+                }
+                other => break other.unwrap(),
+            }
+        };
+        phases.dedup();
+        assert_eq!(phases, ["checking", "downloading", "ingesting", "done"]);
+        assert!(status.tag_count.is_some_and(|n| n > 0));
+
+        let stored = {
+            let conn = state.lock_db();
+            let mut stmt = conn
+                .prepare(
+                    "SELECT illustration_id, slug, weight FROM art_tag_illustrations
+                      ORDER BY illustration_id, slug",
+                )
+                .unwrap();
+            let rows: Vec<(String, String, String)> = stmt
+                .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
+            rows
+        };
+        assert_eq!(stored, expected);
+        file.assert_calls(1);
+        conditional.assert_calls(0);
+        assert!(!dir.join("tmp").exists(), "nothing was written to a file");
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

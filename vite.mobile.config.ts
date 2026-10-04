@@ -21,6 +21,9 @@ import {
 /** The light app's document, from the repository root. */
 const ENTRY = "mobile/index.html";
 
+/** What is served at the light app's root as it stands — resolved against this file. */
+const PUBLIC_DIR = fileURLToPath(new URL("./mobile/public/", import.meta.url));
+
 /** A request as Connect hands it over — Node's `IncomingMessage`, whose type is not installed. */
 interface Asked {
   url?: string;
@@ -199,10 +202,11 @@ const WEB_BUILD = fileURLToPath(new URL("./dist-web", import.meta.url));
  * **The web build's hosting file, shipped and enforced** — the `web` mode's second plugin.
  *
  * - **In a build**, `app-worker/_headers` is emitted at the root of `dist-web/`, where
- *   `wrangler deploy` reads it. Emitted here and **not kept in `public/`**, which every build
- *   copies: the desktop's `dist/`, the APK's `dist-mobile/` and the share viewer's `dist-share/`
- *   must not carry a policy that is none of theirs. A file that does not parse fails the build,
- *   by line, rather than deploying as fewer rules than it looks.
+ *   `wrangler deploy` reads it. Emitted here and **kept in neither public directory**: the root's
+ *   is copied into the desktop's `dist/` and the share viewer's `dist-share/`, and
+ *   `mobile/public/` into the APK's `dist-mobile/` as well as this build — none of which may
+ *   carry a policy that is not theirs. A file that does not parse fails the build, by line,
+ *   rather than deploying as fewer rules than it looks.
  * - **In the preview**, every response carries what the built file says that address is sent —
  *   `app-worker/src/headers.ts` reads the format as Cloudflare does — so the
  *   Content-Security-Policy meets the app on `localhost` and not first on the day of a deploy.
@@ -265,6 +269,13 @@ export default defineConfig(({ mode, command, isPreview }) => {
       lightEntry(),
       ...(web ? [webHosting(), webEngine(engineBuild, engine, building)] : []),
     ],
+    // **The light builds' own public directory**: the web manifest, its icons and the favicon.
+    // Vite copies a public directory into every build that names it, and the one at the root is
+    // every build's — there the manifest went out in the desktop's `dist/` and the share
+    // viewer's `dist-share/`, which have no use for it. Here it reaches `dist-mobile/`, `dist-web/`
+    // and the two dev servers, and nothing else. The favicon is a second copy of the mark for
+    // that reason; `mobile/host.test.ts` holds it equal to the master.
+    publicDir: PUBLIC_DIR,
     // The Storybook fake, under the real `ipc.ts` — **the four aliases `.storybook/main.ts`
     // declares, read from the one list both use**, for its reason: the fake sits *under* the
     // hand-written mirror, so the light app in a plain browser exercises the mirror too.

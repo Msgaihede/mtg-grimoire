@@ -22,6 +22,19 @@ vi.mock("@/lib/core/files", async (importOriginal) => {
   };
 });
 
+/**
+ * What the last Copy put on the clipboard. The sheet copies through `@/lib/clipboard`, whose
+ * host under this suite is the desktop's plugin — which the fake accepts and does not keep — so
+ * the seam is stood in for, as the desktop dialog's suite stands in for it.
+ */
+const copied = vi.hoisted(() => ({ text: null as string | null }));
+vi.mock("@/lib/clipboard", () => ({
+  copyText: (text: string) => {
+    copied.text = text;
+    return Promise.resolve();
+  },
+}));
+
 import { exportFileName } from "@/features/decks/deckExport";
 import { formatExport, isActivePile } from "@/features/transfer/export/format";
 import { defaultFields } from "@/features/transfer/fields";
@@ -178,14 +191,14 @@ describe("a deck's export, on the phone", () => {
     ).toBeInTheDocument();
     await user.click(within(sheet).getByRole("button", { name: "Copy" }));
     expect(await within(sheet).findByText("Copied.", undefined, SETTLE)).toBeInTheDocument();
-    expect(await navigator.clipboard.readText()).toBe(await deckText("plain"));
+    expect(copied.text).toBe(await deckText("plain"));
 
     await user.click(within(sheet).getByRole("radio", { name: "Moxfield" }));
     // A change to the text takes the claim about the clipboard down.
     expect(within(sheet).queryByText("Copied.")).toBeNull();
     await user.click(within(sheet).getByRole("button", { name: "Copy" }));
     await within(sheet).findByText("Copied.", undefined, SETTLE);
-    expect(await navigator.clipboard.readText()).toBe(await deckText("moxfield"));
+    expect(copied.text).toBe(await deckText("moxfield"));
     // The choice is remembered per surface, for the session.
     expect(usePhoneTransferPrefs.getState().exportPrefs.deck.format).toBe("moxfield");
     expect(usePhoneTransferPrefs.getState().exportPrefs.collection.format).toBe("csv");
@@ -299,7 +312,7 @@ describe("CollectionTransfer", () => {
 
     await user.click(within(sheet).getByRole("button", { name: "Copy" }));
     await within(sheet).findByText("Copied.", undefined, SETTLE);
-    expect(await navigator.clipboard.readText()).toBe(expected);
+    expect(copied.text).toBe(expected);
 
     await user.click(within(sheet).getByRole("button", { name: "Save file" }));
     expect(caught.map((c) => c.name)).toEqual(["collection.csv"]);
@@ -328,7 +341,7 @@ describe("CollectionTransfer", () => {
 
     await user.click(within(sheet).getByRole("button", { name: "Copy" }));
     await within(sheet).findByText("Copied.", undefined, SETTLE);
-    expect(await navigator.clipboard.readText()).toBe(
+    expect(copied.text).toBe(
       formatExport(rows.map(fromCollectionRow), "csv", defaultFields("csv", "collection")),
     );
   });

@@ -69,7 +69,11 @@ collection`, **10 s** for `/cards/manifest`, **100 ms** for everything else — 
 - **`scryfall.com/docs/*` and `tagger.scryfall.com` 403 a non-browser User-Agent;
   `api.scryfall.com` and `data.scryfall.io` do not.** The block is on the UA rather than on
   authentication — `curl.exe` sending an ordinary Chrome UA gets HTTP 200 from both HTML sites,
-  and the API wants `MTGGrimoire/0.1 (+…)` and answers normally. **This is not a tooling bug to
+  and the API wants `MTGGrimoire/0.1 (+…)` and answers normally. (**The light app's web host is
+  the one client that does not send that string**: a page may not choose its `User-Agent`, so
+  `platform::http` sets none on wasm and a browser's requests carry the browser's own.
+  `api.scryfall.com` and `data.scryfall.io` both answered such requests 200 on 2026-10-04, from
+  headless Chrome 154 — [light-app.md](light-app.md) §9.2.) **This is not a tooling bug to
   re-investigate**: WebFetch cannot reach either HTML site, and neither can headless Edge behind
   the Cloudflare challenge. Verified 2026-08-14 for the docs site and 2026-08-20 for Tagger. It is
   also the reason nothing in this app scrapes Tagger: everything it needs is in the two bulk

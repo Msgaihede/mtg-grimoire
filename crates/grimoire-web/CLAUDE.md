@@ -45,6 +45,15 @@ run over one. So every way an export can go wrong is an *answer*:
 - The panic hook is installed as the module is instantiated, so a bug that does trap leaves its
   sentence and its line in the Worker's console first. **The core's own `eprintln!` goes
   nowhere on this target**; `console.warn` is declared in `glue.rs` for what must not be silent.
+- **The launch's downloads are a task on this same thread**, so a trap inside one is a trap
+  in the Worker like any other — and **a lock they held across an `.await` would be one**:
+  every `call` taken during a download takes the connection, and std's `Mutex` panics on a
+  second lock where there are no threads. The core's streamed downloads hold none; its tests
+  run them on one connection and one thread to prove it. **A `call` is taken during a
+  download only because the download gives the event loop a turn** — every 50 ms of work
+  (`grimoire_core::platform::timer::yield_to_host`): an `.await` on a chunk the network has
+  already buffered is a microtask, and the Worker's `message` is a task. Without that turn
+  the first measured run answered a page's `sync_status` 3.5–8.4 s late.
 - **No `RefCell` borrow is held across an `.await`**: `call` clones the state's `Arc` out of
   its `thread_local` first. A borrow held there is a `BorrowMutError` the first time a call
   arrives while another is in flight — and that is a trap.
@@ -71,7 +80,7 @@ the page with and without `COOP`/`COEP` and passed both ways. Do not add those h
 | Module | Compiled for | Holds |
 | --- | --- | --- |
 | `wire` | every target | The JSON each export answers, and the one-tab guard's string match |
-| `host` | every target | What the exports decide: `start`, a call's refusals, `Once`, the pool's name and capacity |
+| `host` | every target | What the exports decide: `start` and `start_replacing`, which of a pool's files are the corpus's and how they are deleted, what a launch downloads and in what order, a call's refusals, `Once`, the pool's name and capacity |
 | `glue` | `wasm32` only | The `#[wasm_bindgen]` shell, the pool's install, three `thread_local`s |
 
 - **Only `glue.rs` is target-gated, and a decision never goes in it.** A module gated to the
@@ -106,25 +115,61 @@ the page with and without `COOP`/`COEP` and passed both ways. Do not add those h
   moving the CLI with it, on every machine that builds.
 - **`rusqlite` here is the core's WASM line** — `hooks`, and ⚠️ never `default-features =
   false`, which switches off the backend that makes SQLite build for a browser at all.
+- **`httpmock` and `flate2` are `[dev-dependencies]`**, at the core's versions: the launch's
+  downloads are driven against a local mock Scryfall, never the real one. ⚠️ A test of
+  `launch_downloads` must stamp `combo_meta` as just checked, as that one does — the combo
+  feed's address is a constant, and a due one would ask Commander Spellbook.
 - **A new workspace member's chores were all done for this one, and are the list for the
   next**: a `-p` on the `cargo fmt` line in `ci.yml` and in `lint:rust`, a manifest and a
   lockfile entry in `release-please-config.json`, its package name in the `rust` job's
   `testing` check, and an arm in `scripts/ci-route.mjs`.
 
-## What the host deliberately does not start
+## What the host starts, and what it deliberately does not
 
-`host::start` opens the pair on one connection (`grimoire_core::launch::open_single`), builds a
-`State` with no read connection and no write observers, builds the facet index, and stops.
+`host::start_replacing` opens the pair on one connection
+(`grimoire_core::launch::open_single_replacing`), builds a `State` with no read connection and
+no write observers, and builds the facet index. `glue`'s `open` then spawns
+`host::launch_downloads` and answers without waiting for it (step 5.2, 2026-10-04).
 
-- **No download** — no card sync, no feed. A download in a browser has no temp file to land in
-  (`platform::files` refuses there), and what it looks like instead is step 5.2's. Until then a
-  web install has no cards.
+- **The launch's downloads, as one task on the Worker's own event loop**
+  (`wasm_bindgen_futures::spawn_local`), **one after another**: the card sync when it is due,
+  then the selected marketplace's price list, the oracle tags, the art tags and the combos,
+  each when it is due. **Always the cards first** — issue #551's rule for a first run, and
+  here for every later launch too, where a host with threads runs the feeds beside the card
+  sync and all four at once. A Worker is one thread, which changes three things: two ingests
+  at once gain nothing but overlap on the network; its memory is the module's linear memory,
+  which grows and is never given back, so together the session's high-water mark is a sum
+  rather than the largest; and **a download waiting on its next chunk is waiting on a timer
+  that counts through whatever else the thread does** — beside a card sync's swap, reclaim
+  and index build, a feed's stall bound would be timing that tail and not its connection.
+  Each is still its own run with its own claim and its own stall bound, so none can stop the
+  next. ⚠️ It costs the feeds a wait behind a slow card sync. Chosen by reasoning, not by
+  comparison: a browser has run this arrangement (all launch feeds done 76 s after
+  navigation, light-app.md §9.2) and never the other.
+- **How a download works here is the core's**: no temp file, a body streamed into its sink,
+  no conditional header, a stall bound on every wait
+  ([`crates/grimoire-core/CLAUDE.md`](../grimoire-core/CLAUDE.md), *A download has two
+  shapes*). Nothing in this crate knows a URL. **What to start, and in what order, is
+  `host.rs`'s** — `a_launch_downloads_the_cards_and_then_each_feed_in_turn_on_every_launch`
+  runs it natively against a mock Scryfall — and `glue.rs` only spawns it.
+- **It runs once per launch and ends.** Not an upkeep loop: a feed that was not due is not
+  looked at again until the next launch, or until a page presses its Refresh.
 - **No image upkeep loop.** `images::upkeep_tick` evicts files this host does not have, and a
   Worker has no thread to sleep on.
-- **Nothing replaces a corpus that will not open.** `launch`'s `unreadable_corpus_seam` is
-  where that is written down. The pool's management handle — where a later step finds
-  `delete_db` — is let go by `install_pool` today; asking `install` again for a registered VFS
-  answers the handle and installs nothing.
+- **A corpus that will not open, or will not migrate, is thrown away and built again** — the
+  desktop's "replace it and resync", through the pool's own delete. `install_pool` keeps the
+  pool's management handle for the length of `open`; the closure `glue` hands
+  `host::start_replacing` is `host::delete_corpus(&pool.list(), …)` over the pool's
+  `delete_db`. **`host::corpus_files` puts the journal before the database, and
+  `delete_corpus` attempts every file whatever an earlier one answered** and reports the first
+  failure — so a delete that goes half way leaves an old database with nothing beside it,
+  which the next launch throws away again, never an old journal beside a new corpus.
+  **Which failures delete a corpus, that it is tried once, and that `user.db` is never
+  touched are the core's to decide** and are tested there and here natively; the console is
+  told (`host::CORPUS_REPLACED`), and the page finds no cards, which reads as a first run
+  that the launch's card sync then fills. ⚠️ **The pool's `delete_db` has run in no
+  browser**: the native tests stand a closure in for it, and what the pool names its files
+  (`pool.list()`) has been read in the crate's source and not seen.
 - **A facet index that could not be built is a `console.warn`, never a failed `open`**:
   faceting fails open by design.
 - **The pool's capacity is 64 files, not bytes** (`host::POOL_CAPACITY`) — two databases, a
@@ -140,7 +185,7 @@ the page with and without `COOP`/`COEP` and passed both ways. Do not add those h
 | `npm run web:wasm` | The module into `dist-wasm/`: `cargo build -p grimoire-web --lib --target wasm32-unknown-unknown --profile wasm --locked`, then `wasm-bindgen --target web`. Prints the module's size and the build's time. `-- --names` keeps the function names, for a readable wasm stack |
 | `npm run web:dev` | The dev server on port 5176, over whatever `dist-wasm/` holds at that moment |
 | `npm run web:build` | `tsc`, the Worker's `tsc` program, and the page into `dist-web/` with the engine under `wasm/<build id>/` |
-| `npm run web:smoke` | The built app in headless Chromium: the module instantiates, the database opens on a rollback journal, a read comes back, a reload reopens it, a second tab is refused |
+| `npm run web:smoke` | The built app in headless Chromium, as an offline first run: every request the engine makes is answered from `scripts/web-smoke/` or fails the run. The module instantiates, the database opens on a rollback journal, the card sync and the launch's feeds finish, a typed search draws a card, Settings greys Mana Pool and downloads Card Kingdom, a reload still holds the cards, a second tab is refused |
 | `npm run web:preview` | The built app on port 4176 |
 
 - **`web:wasm` finds clang by itself on this machine** — `C:\Program Files\LLVM\bin`, which is

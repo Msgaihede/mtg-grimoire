@@ -39,7 +39,26 @@ async function load(): Promise<Glue> {
   return glue;
 }
 
-const engine = createEngine(load, (message) => self.postMessage(message));
+/**
+ * Whether this browser's OPFS already holds the database's folder — asked before the engine
+ * opens it, which is what creates one (`engine.ts`).
+ *
+ * `getDirectoryHandle` without `create` is the whole question: it answers a folder that is
+ * there and throws `NotFoundError` for one that is not. Anything else — a browser with no OPFS,
+ * a name that is somehow a file — is `null`, *not known*, which the page reads as nothing to
+ * report. A handle on a directory locks nothing, so asking does not get in the pool's way.
+ */
+async function held(directory: string): Promise<boolean | null> {
+  try {
+    const root = await self.navigator.storage.getDirectory();
+    await root.getDirectoryHandle(directory);
+    return true;
+  } catch (error) {
+    return error instanceof DOMException && error.name === "NotFoundError" ? false : null;
+  }
+}
+
+const engine = createEngine(load, (message) => self.postMessage(message), held);
 
 self.addEventListener("message", (event: MessageEvent<ToWorker>) => {
   void engine.handle(event.data);

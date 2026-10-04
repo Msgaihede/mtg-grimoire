@@ -1,5 +1,6 @@
 import type { StartupStatus } from "@/lib/ipc";
 import { STARTUP_CHANGED, STARTUP_COMMAND } from "../deferred";
+import { STORAGE_CLEARED, STORAGE_CLEARED_DISMISS, STORAGE_PERSISTENCE } from "../hostStorage";
 import type { CallArgs, CallOptions, Core } from "../types";
 import {
   callMessage,
@@ -8,6 +9,18 @@ import {
   type Outgoing,
   type ToWorker,
 } from "./protocol";
+import {
+  CLEARED_LINE,
+  dismissCleared,
+  forgiving,
+  noteOpened,
+  persistenceLine,
+  readCleared,
+  readPersistence,
+  settlePersistence,
+  type KeyStore,
+  type PersistManager,
+} from "./storage";
 
 /**
  * The OPFS folder the databases live in. A bare name and not a path: the pool *is* the
@@ -66,6 +79,39 @@ export interface WorkerPort {
   addEventListener(type: "error", listener: (event: { message?: string }) => void): void;
 }
 
+/**
+ * What the page's half asks of the browser itself, apart from the Worker — handed in so the
+ * suite gives it a store and a clock of its own. `store` and `storage` are each absent in a
+ * browser that has none, and neither may be a reason the database does not open.
+ */
+export interface Browser {
+  /** `localStorage`: where the host's own records about storage are kept (`storage.ts`). */
+  store?: KeyStore;
+  /** `navigator.storage`: who is asked to keep this origin's data. */
+  storage?: PersistManager;
+  /** Unix milliseconds. */
+  now: () => number;
+}
+
+/**
+ * The page's own. **Each global is reached inside a `try`**: naming `localStorage` throws in a
+ * profile that blocks site data, and this runs on the way to opening the database.
+ */
+function pageBrowser(): Browser {
+  const reach = <T>(get: () => T): T | undefined => {
+    try {
+      return get();
+    } catch {
+      return undefined;
+    }
+  };
+  return {
+    store: reach(() => globalThis.localStorage),
+    storage: reach(() => globalThis.navigator.storage),
+    now: () => Date.now(),
+  };
+}
+
 interface Pending {
   resolve: (value: unknown) => void;
   /** Rejected with the engine's sentence as a bare string — what a Tauri `invoke` rejects with. */
@@ -88,11 +134,29 @@ interface Pending {
  * - **The startup gate is answered here**, from the open's outcome, without reaching the engine:
  *   `startup_status` is `loading` until the Worker reports, and `startup:changed` is emitted when
  *   it does — the two things the Android host answers in Rust (`mobile/src-tauri/src/startup.rs`),
- *   so `boot/useStartup.ts` is one gate on every host.
+ *   so `boot/useStartup.ts` is one gate on every host. **One thing this host says that no other
+ *   does**: a Worker that dies after the database opened moves the status from `ready` to
+ *   `failed`, once, with a reload (`crashed`) — the app is over until a new document, and the
+ *   gate is where a whole window is told so.
  * - **A rejection is the engine's sentence as a string**, because that is what a Tauri command
  *   rejects with and the pages above read one (`ipcError`).
+ * - **What the browser did with its storage is answered here too**, without the engine
+ *   (`../hostStorage.ts` has the three commands). The moment the database opens this settles
+ *   whether the browser is keeping it — asking where it has not said yes, no more than once a
+ *   week — and every open, a failed one too, notes whether it found a database this browser had
+ *   held gone. Both are said on the console beside the open's own line, and both are read back
+ *   by a page through a command only this host answers, so the page never has to know it is in
+ *   a browser to ask.
+ * - **One subscriber's throw is that subscriber's alone.** Tauri calls each registration by
+ *   itself; here one message fans out to every handler of the name in a loop, so a throw left to
+ *   climb would take the event from every handler behind it — and the sync's `done` reaches the
+ *   ribbon, the invalidation and the first-run screen through one `sync:progress`.
  */
-export function createWebCore(spawn: () => WorkerPort, directory: string = OPFS_DIRECTORY): Core {
+export function createWebCore(
+  spawn: () => WorkerPort,
+  directory: string = OPFS_DIRECTORY,
+  browser: Browser = pageBrowser(),
+): Core {
   let started = false;
   let worker: WorkerPort | undefined;
   let status: StartupStatus = { state: "loading" };
@@ -103,10 +167,24 @@ export function createWebCore(spawn: () => WorkerPort, directory: string = OPFS_
   /** Set once the Worker has died: what every later call is refused with. */
   let dead: string | undefined;
   const listeners = new Map<string, Set<(payload: never) => void>>();
+  const store = forgiving(browser.store);
+  /** Whether the first word about the open has been noted (`openedIn`). */
+  let noted = false;
+  /** This launch's look at persistence, once the database has opened. Unset where it never did. */
+  let persistence: Promise<void> | undefined;
+  /** Resolved when the gate leaves `loading`: what this host's own answers about storage wait on. */
+  let settled!: () => void;
+  const whenSettled = new Promise<void>((resolve) => (settled = resolve));
 
   const emit = (event: string, payload: unknown): void => {
     // A copy: a handler may unsubscribe itself, and the gate's does.
-    for (const handler of [...(listeners.get(event) ?? [])]) handler(payload as never);
+    for (const handler of [...(listeners.get(event) ?? [])]) {
+      try {
+        handler(payload as never);
+      } catch (error) {
+        console.error(`A subscriber to ${event} threw.`, error);
+      }
+    }
   };
 
   /**
@@ -129,7 +207,11 @@ export function createWebCore(spawn: () => WorkerPort, directory: string = OPFS_
     pending.clear();
   };
 
-  /** Leave `loading`, once. The state never moves again, as on every other host. */
+  /**
+   * Leave `loading`, once. **The state never moves back** — not to `loading`, not to `ready` —
+   * as on every other host; the one later move there is, `ready` to `failed` when the engine
+   * dies, is {@link crashed}'s.
+   */
   function settle(next: StartupStatus): void {
     if (status.state !== "loading" || next.state === "loading") return;
     status = next;
@@ -137,15 +219,83 @@ export function createWebCore(spawn: () => WorkerPort, directory: string = OPFS_
     held = [];
     if (next.state === "ready") waiting.forEach(send);
     else if (next.state === "failed") rejectAll(next.message);
+    settled();
     emit(STARTUP_CHANGED, next);
+  }
+
+  /**
+   * What the first word about the open means for the browser's storage — once per page,
+   * whatever the Worker repeats.
+   *
+   * **Whether the old database was found gone is noted for every open, one that failed
+   * included** (`noteOpened` has the sequence that needs it: the open after a clearing creates
+   * the folder and then fails, and the launch after that looks ordinary). **Synchronous, and
+   * ahead of the gate**, so `storage_cleared`'s answer is settled before a page can ask.
+   *
+   * **Persistence is settled only for a database that opened** — there is nothing to keep
+   * otherwise. It is the browser's own time: started here and waited for by nobody but the
+   * command that reads the record back, and never past the point where a reader would have to
+   * answer a prompt (`settlePersistence`).
+   */
+  function openedIn(existed: boolean | null, ready: boolean): void {
+    if (noted) return;
+    noted = true;
+    if (noteOpened(store, existed, browser.now(), ready)) {
+      console.warn(
+        ready
+          ? `${CLEARED_LINE} — a new, empty one was created`
+          : `${CLEARED_LINE} — and a new one could not be opened`,
+      );
+    }
+    if (!ready) return;
+    persistence = settlePersistence(browser.storage, store, browser.now()).then(
+      ({ record, from, answered }) => {
+        // A fresh ask is said when the browser answers it, which for one that prompts is when
+        // the reader does; everything else is known now.
+        if (answered) {
+          void answered.then((answer) => console.info(persistenceLine(answer, "asked")));
+        } else {
+          console.info(persistenceLine(record, from));
+        }
+      },
+      // `settlePersistence` has no path that rejects; this is so that one found later costs
+      // nothing on the way to opening a collection — least of all an unhandled rejection.
+      () => undefined,
+    );
+  }
+
+  /**
+   * The commands this host answers itself, about the browser's storage. Each waits for the gate
+   * to leave `loading`, because what an open found is half of every answer here.
+   */
+  function own(command: string): (() => unknown) | undefined {
+    switch (command) {
+      case STORAGE_CLEARED:
+        return () => readCleared(store);
+      case STORAGE_CLEARED_DISMISS:
+        return () => {
+          dismissCleared(store);
+          return null;
+        };
+      case STORAGE_PERSISTENCE:
+        // The record as it stands, once this launch has looked — never the browser's answer to
+        // a fresh ask, which may be waiting on a reader. A host that never opened looked at
+        // nothing: what an earlier launch recorded.
+        return () => (persistence ?? Promise.resolve()).then(() => readPersistence(store));
+      default:
+        return undefined;
+    }
   }
 
   function receive(message: FromWorker): void {
     switch (message.kind) {
       case "opened":
-        // The journal each file actually got, said where a bug report can carry it. The OPFS
-        // pool refuses WAL, so `delete` is the expected answer and anything else is news.
-        if (message.opened.kind === "ready") console.info(openedLine(message.opened));
+        if (message.opened.kind === "ready") {
+          // The journal each file actually got, said where a bug report can carry it. The OPFS
+          // pool refuses WAL, so `delete` is the expected answer and anything else is news.
+          console.info(openedLine(message.opened));
+        }
+        openedIn(message.existed, message.opened.kind === "ready");
         return settle(statusOf(message.opened));
       case "ok":
         pending.get(message.id)?.resolve(message.result);
@@ -169,12 +319,35 @@ export function createWebCore(spawn: () => WorkerPort, directory: string = OPFS_
    * **And every later call is refused too.** A trap leaves the module's memory in whatever state
    * it was in, and its task queue may never run again — so a call sent after one can go
    * unanswered with no second `error` to say so, or be answered from a heap nobody should write
-   * a collection through. The gate's state does not move back (it never does); the pages already
-   * drawn show this sentence where their data would be.
+   * a collection through.
+   *
+   * **So the gate is told, even after it opened: `ready` moves to `failed`, with a reload, exactly
+   * once.** Until a reload there is no app behind this page, and that is one fact about the whole
+   * window — left for each page to find out by itself, it was a first-run bar that never moved
+   * again (`useSync` keeps the last `syncing` it heard when a poll is refused), walls that
+   * stopped answering, and the sentence shown only wherever a query happened to draw its error.
+   * `startup:changed` says it once and the light app draws its boot screen in place of the faces,
+   * with the way out. It is the one move this state makes after leaving `loading`, it is this
+   * host's alone — a desktop's or a phone's engine cannot stop while its window lives — and it is
+   * never a move *back*: nothing returns to `ready`, and only a new document opens a database.
+   *
+   * **Only from `loading` or `ready`.** A gate already `failed` — a second tab, a database that
+   * would not open — keeps its own sentence: that is why there is no app, and a Worker that then
+   * also errors has nothing to add. **And only the first time**: a dead engine can go on raising
+   * `error`, and each one after the first changes nothing and says nothing.
    */
   function crashed(detail: string | undefined): void {
+    if (dead !== undefined) return;
     dead = stopped(detail);
-    settle({ state: "failed", message: dead, reload: true });
+    const next: StartupStatus = { state: "failed", message: dead, reload: true };
+    if (status.state === "loading") {
+      settle(next);
+    } else if (status.state === "ready") {
+      status = next;
+      // The gate before the calls: it takes the pages down, and what the rejections below would
+      // have drawn in them is this same sentence, a query at a time.
+      emit(STARTUP_CHANGED, next);
+    }
     rejectAll(dead);
   }
 
@@ -196,6 +369,10 @@ export function createWebCore(spawn: () => WorkerPort, directory: string = OPFS_
     call<T>(command: string, args?: CallArgs, options?: CallOptions): Promise<T> {
       start();
       if (command === STARTUP_COMMAND) return Promise.resolve(status as T);
+      // Ahead of the two refusals below: these are about the browser and not the engine, and a
+      // notice that the storage was cleared is still true of a page whose engine then stopped.
+      const answer = own(command);
+      if (answer) return whenSettled.then(answer) as Promise<T>;
       if (dead !== undefined) return Promise.reject(dead);
       if (status.state === "failed") return Promise.reject(status.message);
 

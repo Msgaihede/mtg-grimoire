@@ -7,7 +7,11 @@ import themes from "./src-tauri/gen/android/app/src/main/res/values/themes.xml?r
 import nightThemes from "./src-tauri/gen/android/app/src/main/res/values-night/themes.xml?raw";
 import colors from "./src-tauri/gen/android/app/src/main/res/values/colors.xml?raw";
 import lightCapability from "./src-tauri/capabilities/light.json?raw";
-import manifestJson from "../public/light.webmanifest?raw";
+import manifestJson from "./public/light.webmanifest?raw";
+import lightMark from "./public/mtg-grimoire-mark.svg?raw";
+import masterMark from "../logos/svg/mtg-grimoire-mark.svg?raw";
+import lightDocument from "./index.html?raw";
+import iconScript from "../scripts/light-icons.mjs?raw";
 import buildTask from "./src-tauri/gen/android/buildSrc/src/main/java/com/mtggrimoire/app/kotlin/BuildTask.kt?raw";
 import packageJson from "../package.json?raw";
 import lightConf from "./src-tauri/tauri.conf.json?raw";
@@ -86,6 +90,90 @@ describe("the Android window's insets", () => {
   });
 });
 
+/**
+ * **The web manifest, and where it lives.** It is the light app's alone — a browser installs the
+ * web build from it, and Android's window takes its ground from it (above) — so it sits in
+ * `mobile/public/`, the light builds' own public directory, with the icons it names. In the
+ * `public/` at the repository root it was copied into the desktop's `dist/` and the share
+ * viewer's `dist-share/` too.
+ */
+describe("the light app's web manifest", () => {
+  interface Icon {
+    src: string;
+    sizes: string;
+    type: string;
+    purpose: string;
+  }
+  const manifest = JSON.parse(manifestJson) as {
+    id: string;
+    start_url: string;
+    scope: string;
+    display: string;
+    background_color: string;
+    theme_color: string;
+    icons: Icon[];
+  };
+  /** Every file under a directory, by its path from the repository root. Keys only: nothing is
+   *  loaded, so a picture costs the suite nothing. */
+  const lightPublic = Object.keys(import.meta.glob("/mobile/public/**/*"));
+  const sharedPublic = Object.keys(import.meta.glob("/public/**/*"));
+
+  it("is one app at the origin's root, whatever page it was installed from", () => {
+    // An `id` is what a browser knows an install by: without one it is the `start_url`, and a
+    // later change to that would be a second app beside the first.
+    expect(manifest.id).toBe("/");
+    expect(manifest.start_url).toBe("/");
+    expect(manifest.scope).toBe("/");
+    expect(manifest.display).toBe("standalone");
+  });
+
+  it("names only icons that are in the light app's public directory", () => {
+    expect(lightPublic).toContain("/mobile/public/light.webmanifest");
+    for (const icon of manifest.icons) {
+      expect(lightPublic, icon.src).toContain(`/mobile/public${icon.src}`);
+    }
+  });
+
+  it("offers a raster icon at both sizes a browser asks for, and a maskable one", () => {
+    const has = (purpose: string, sizes: string) =>
+      manifest.icons.some(
+        (icon) => icon.purpose === purpose && icon.sizes === sizes && icon.type === "image/png",
+      );
+    expect(has("any", "192x192")).toBe(true);
+    expect(has("any", "512x512")).toBe(true);
+    // Android cuts an installed icon to the launcher's shape; without a maskable one it shrinks
+    // the transparent mark onto a white plate instead.
+    expect(has("maskable", "512x512")).toBe(true);
+    // One icon, one purpose: a single file declared `any maskable` is padded for one and wrong
+    // for the other.
+    for (const icon of manifest.icons) expect(icon.purpose).toMatch(/^(any|maskable)$/);
+  });
+
+  it("paints the page's chrome in the manifest's colour before a stylesheet loads", () => {
+    expect(manifest.theme_color).toBe(manifest.background_color);
+    expect(lightDocument).toContain(`<meta name="theme-color" content="${manifest.theme_color}" />`);
+    expect(lightDocument).toContain('<link rel="manifest" href="/light.webmanifest" />');
+  });
+
+  it("is in no build but the light app's", () => {
+    // `public/` is copied into the desktop's bundle and the share viewer's as it stands.
+    expect(sharedPublic.length).toBeGreaterThan(0);
+    expect(sharedPublic.filter((path) => /\.webmanifest$|\/icons\//.test(path))).toEqual([]);
+  });
+
+  it("draws the maskable icons on the manifest's ground", () => {
+    // The PNGs are rendered and committed (`scripts/light-icons.mjs`), so the colour under the
+    // mark is that script's constant. Held here so a ground that moves is rendered again.
+    expect(iconScript).toContain(`const GROUND = "${manifest.background_color}";`);
+    expect(manifest.background_color).toMatch(/^#[0-9A-F]{6}$/);
+  });
+
+  it("serves the mark the desktop serves", () => {
+    // Two public directories, so two copies of the favicon — and one master both must equal.
+    expect(lightMark).toBe(masterMark);
+  });
+});
+
 describe("Android's back gesture", () => {
   // The callback MainActivity adds, from `addCallback(` to the end of its `handleOnBackPressed`.
   const callback = (() => {
@@ -142,8 +230,10 @@ describe("Android's back gesture", () => {
 
 describe("the light host's capability", () => {
   it("grants core's defaults and the desktop's opener pair, and no dialog or fs permission", () => {
-    // The opener pair is the desktop face's, on a tablet past 1024px (`externalLinks.ts`); dialog
-    // and fs are used from Rust only, so the page is granted neither.
+    // The opener pair is this host's way out to a browser for a press on either face
+    // (`src/lib/core/host.ts`'s `tableHost`); dialog and fs are used from Rust only, so the page
+    // is granted neither. No clipboard permission: the host has no such plugin, and the page
+    // copies through `navigator.clipboard`.
     const cap = JSON.parse(lightCapability) as { permissions: string[] };
     expect(cap.permissions).toEqual([
       "core:default",

@@ -738,6 +738,16 @@ impl<'a> StreamTags<'a> {
         Ok(())
     }
 
+    /// Give up on a stream that will not be finished, and drop the staging tables it filled —
+    /// for a caller that feeds this from the network, where a body that stops arriving is an
+    /// ordinary failure ([`crate::ingest::StreamIngest::abandon`] has the argument). Best-effort:
+    /// tables that could not be dropped now are dropped by the next run's
+    /// [`Dataset::create_staging`].
+    pub fn abandon(self) {
+        let conn = crate::db::lock_background(self.db);
+        let _ = (self.ds.drop_staging)(&conn);
+    }
+
     /// Flush what is owed, refuse a file that is not a taxonomy, and swap staging into place.
     ///
     /// `progress` is called with the running row count every [`BATCH`] rows, and once more
@@ -1559,6 +1569,12 @@ async fn refresh_once(
         ));
     }
 
+    // A host that keeps no files has no `tmp/` to download into: the body goes to the sink
+    // as it arrives. Decided before the download is asked for, never after.
+    if !crate::platform::host::keeps_files() {
+        return refresh_streamed(ds, state, &info, updated_at, progress).await;
+    }
+
     let gz = temp_path(ds, state);
     if let Some(parent) = gz.parent() {
         if let Err(e) = crate::platform::files::create_dir_all(parent) {
@@ -1636,6 +1652,107 @@ async fn refresh_once(
                 "the {} file could not be processed: {e}",
                 ds.bulk_name
             ))
+        }
+    }
+}
+
+/// The download and the ingest of [`refresh_once`] as one pass, **on a host that keeps no
+/// files**: one streamed `GET`, each chunk pushed into [`StreamTags`] as it arrives.
+///
+/// `sync`'s streamed card run, one family over, and its three rules: **no lock crosses an
+/// `.await`** — the sink takes the write connection a batch at a time inside `push` and has
+/// let go before it returns; **the size check is the stream's**, which answers the end of the
+/// body only when the listed number of bytes arrived, so the swap in `finish` is unreachable
+/// over a short one; and **a run that fails drops what it staged**, because here a connection
+/// that dies mid-body is an ordinary failure rather than a kill.
+///
+/// The phases are the file-backed run's, each true as said: `downloading` counts bytes while
+/// the body arrives, and `ingesting` — once, with no count, as that run says it — is the
+/// graph walk, the closure and the swap that follow the last byte. On a host with one thread
+/// nothing else runs during that tail.
+async fn refresh_streamed(
+    ds: &'static Dataset,
+    state: &Arc<State>,
+    info: &crate::scryfall::BulkInfo,
+    updated_at: Option<String>,
+    progress: &mut (dyn FnMut(&str, u64, u64) + Send),
+) -> Result<TagStatus, String> {
+    let total = info.compressed_size;
+    // The sink first, the request second: a database that cannot take the staging tables is
+    // found out before the file is asked for, not after.
+    let mut sink = match StreamTags::begin(ds, &state.db) {
+        Ok(sink) => sink,
+        Err(e) => {
+            note_failure(ds, &state.db, e.kind(), &e.to_string());
+            progress("error", 0, 0);
+            return Err(e.to_string());
+        }
+    };
+    progress("downloading", 0, total);
+    let mut stream = match state.client.stream(&info.jsonl_download_uri, total).await {
+        Ok(stream) => stream,
+        Err(e) => {
+            sink.abandon();
+            note_failure(ds, &state.db, crate::errors::kind_of(&e), &e.to_string());
+            progress("error", 0, 0);
+            return Err(e.to_string());
+        }
+    };
+
+    let mut last_emit = 0u64;
+    let mut breather = crate::platform::timer::Breather::new(crate::feed::WORK_BUDGET);
+    loop {
+        // Nothing is held across either `.await` of the loop.
+        let chunk = match stream.chunk().await {
+            Ok(Some(chunk)) => chunk,
+            Ok(None) => break,
+            Err(e) => {
+                sink.abandon();
+                note_failure(ds, &state.db, crate::errors::kind_of(&e), &e.to_string());
+                // The body ended and disagreed with the listing's size: upstream's answer,
+                // and it will be the same answer next launch.
+                if matches!(e, crate::scryfall::ScryfallError::SizeMismatch { .. }) {
+                    note_unusable(ds, &state.db);
+                }
+                progress("error", 0, 0);
+                return Err(e.to_string());
+            }
+        };
+        if let Err(e) = sink.push(&chunk, &mut |_| {}) {
+            sink.abandon();
+            note_failure(ds, &state.db, e.kind(), &e.to_string());
+            note_unusable(ds, &state.db);
+            progress("error", 0, 0);
+            return Err(e.to_string());
+        }
+        let done = stream.received();
+        if done.saturating_sub(last_emit) >= DOWNLOAD_EMIT_BYTES || done >= total {
+            last_emit = done;
+            progress("downloading", done, total);
+        }
+        // The turn a queued command is answered in — `sync`'s streamed run has why the
+        // await above is not one.
+        breather.breathe().await;
+    }
+
+    progress("ingesting", 0, 0);
+    let stamp = FileStamp {
+        etag: info.etag.clone(),
+        updated_at,
+    };
+    match sink.finish(&stamp, unix_now(), &mut |_| {}) {
+        Ok(_) => {
+            if let Some(conn) = crate::db::lock_for(&state.db, crate::db::WRITE_LOCK_WAIT) {
+                let _ = crate::feed::backoff::clear(&conn, ds.bulk_name);
+            }
+            progress("done", 0, 0);
+            Ok(status_of(ds, state))
+        }
+        Err(e) => {
+            note_failure(ds, &state.db, e.kind(), &e.to_string());
+            note_unusable(ds, &state.db);
+            progress("error", 0, 0);
+            Err(e.to_string())
         }
     }
 }

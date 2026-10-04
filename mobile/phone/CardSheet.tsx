@@ -16,6 +16,7 @@ import { useMarketplace } from "@/lib/useMarketplace";
 import { ActionsSection } from "./card/Actions";
 import { CombosSection } from "./card/Combos";
 import { LegalitySection } from "./card/Legality";
+import { OpenOnSection } from "./card/OpenOn";
 import { OracleTagsSection } from "./card/OracleTags";
 import { Note, Source } from "./card/parts";
 import { PrintingsSection } from "./card/Printings";
@@ -45,13 +46,14 @@ import { back, usePlace } from "./router";
  *
  * The desktop card modal's contents, in the order a reader on a phone reaches for them: the
  * picture and the words; what each finish costs, and whose prices they are; what the reader holds;
- * every printing; where the card is legal; its Oracle tags; and the combos that name it. Every
- * read is the desktop's own under the desktop's own key, so a card one face has open paints from
- * the cache on the other when a resize crosses 1024px.
+ * every printing; where the card is legal; its Oracle tags; the combos that name it; and the
+ * ways out to Scryfall, EDHREC and the reader's marketplace. Every read is the desktop's own
+ * under the desktop's own key, so a card one face has open paints from the cache on the other
+ * when a resize crosses 1024px.
  *
  * **Its writes are at the top, in `card/Actions.tsx`'s slot list** — today one: `Add to <deck>`,
- * over a deck page. **What it does not do yet** is anything that leaves the app: the `Open on …`
- * rows go through the opener, a host seam this face has not got.
+ * over a deck page. **Its ways out are at the foot, in `card/OpenOn.tsx`** — the desktop's
+ * `Open on …` ladder as three real links (phase 5, step 5.4).
  */
 export function CardSheet({
   cardId,
@@ -281,6 +283,7 @@ function CardBody({
       <LegalitySection legalities={card.legalities} />
       <OracleTagsSection oracleId={card.oracleId} />
       <CombosSection oracleId={card.oracleId} />
+      <OpenOnSection card={card} marketplace={marketplace} />
 
       {/* Required wherever art is shown — Scryfall's usage rule rather than a courtesy. */}
       <Source>

@@ -1,7 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { StartupStatus } from "@/lib/ipc";
-import { ALREADY_OPEN, createWebCore, OPFS_DIRECTORY, type WorkerPort } from "./index";
+import type { StorageCleared, StoragePersistence } from "../hostStorage";
+import {
+  ALREADY_OPEN,
+  createWebCore,
+  OPFS_DIRECTORY,
+  type Browser,
+  type WorkerPort,
+} from "./index";
 import type { FromWorker, Opening, ToWorker } from "./protocol";
+import {
+  CLEARED_KEY,
+  CLEARED_LINE,
+  CLEARED_TITLE,
+  HELD_KEY,
+  PERSIST_KEY,
+  type KeyStore,
+} from "./storage";
 
 const READY: Opening = {
   kind: "ready",
@@ -46,11 +61,33 @@ class FakeWorker implements WorkerPort {
   }
 }
 
-/** A core over one fake Worker, and a count of how many it asked for. */
-function harness() {
+/** A `localStorage` the test owns: what the host wrote down, readable as a plain object. */
+function fakeStore(initial: Record<string, string> = {}) {
+  const kept = new Map(Object.entries(initial));
+  const store: KeyStore = {
+    getItem: (key) => kept.get(key) ?? null,
+    setItem: (key, value) => void kept.set(key, value),
+    removeItem: (key) => void kept.delete(key),
+  };
+  return { store, kept };
+}
+
+/** The clock every record below is stamped by: 2026-10-04T12:00:00Z. */
+const NOW = Date.UTC(2026, 9, 4, 12);
+
+/**
+ * A core over one fake Worker, and a count of how many it asked for.
+ *
+ * **Its browser is the test's own** — a store nothing else writes to, a clock that does not move
+ * and, unless a test hands one in, no `navigator.storage` at all — so no test here reads what
+ * another left in jsdom's `localStorage`.
+ */
+function harness(browser: Partial<Browser> = {}) {
   const worker = new FakeWorker();
   const spawn = vi.fn(() => worker);
-  return { core: createWebCore(spawn), worker, spawn };
+  const { store, kept } = fakeStore();
+  const core = createWebCore(spawn, OPFS_DIRECTORY, { store, now: () => NOW, ...browser });
+  return { core, worker, spawn, kept };
 }
 
 const status = (core: ReturnType<typeof createWebCore>) =>
@@ -58,21 +95,26 @@ const status = (core: ReturnType<typeof createWebCore>) =>
 
 /** What the core said on the console. Caught, so an opened database does not print in the run. */
 let said: ReturnType<typeof vi.spyOn>;
+let warned: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   said = vi.spyOn(console, "info").mockImplementation(() => undefined);
+  warned = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 });
-afterEach(() => said.mockRestore());
+afterEach(() => {
+  said.mockRestore();
+  warned.mockRestore();
+});
 
 describe("the web core's Worker", () => {
   it("says which journal each file got when the database opens, and nothing when it does not", () => {
     const refused = harness();
     void status(refused.core);
-    refused.worker.say({ kind: "opened", opened: { kind: "already-open" } });
+    refused.worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
     expect(said).not.toHaveBeenCalled();
 
     const { core, worker } = harness();
     void status(core);
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
     // `web-smoke.mjs` reads this line off a real browser's console; the words are its contract.
     expect(said).toHaveBeenCalledWith(
       "MTG Grimoire: database open in OPFS — journal delete, corpus journal delete, schema 59",
@@ -121,10 +163,10 @@ describe("the startup gate, answered from the open", () => {
     const heard: StartupStatus[] = [];
     core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
 
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
     // A second `open` is answered with the first's answer (`engine.ts`), so `opened` can arrive
     // twice. The state moves once.
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
 
     expect(await status(core)).toEqual({ state: "ready" });
     expect(heard).toEqual([{ state: "ready" }]);
@@ -145,7 +187,7 @@ describe("the startup gate, answered from the open", () => {
     // Two calls held behind the open; the first cannot be posted when the open lands.
     const refused = core.call("uncloneable");
     void core.call("deck_list");
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
 
     await expect(refused).rejects.toBe("could not be cloned");
     expect(worker.messages[worker.messages.length - 1]).toMatchObject({ command: "deck_list" });
@@ -157,7 +199,7 @@ describe("the startup gate, answered from the open", () => {
     const heard: StartupStatus[] = [];
     core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
 
-    worker.say({ kind: "opened", opened: { kind: "already-open" } });
+    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
 
     const told = { state: "failed", message: ALREADY_OPEN, reload: true };
     expect(await status(core)).toEqual(told);
@@ -173,6 +215,7 @@ describe("the startup gate, answered from the open", () => {
     worker.say({
       kind: "opened",
       opened: { kind: "unloaded", message: "TypeError: Failed to fetch" },
+      existed: null,
     });
     const answered = await status(core);
     expect(answered).toMatchObject({ state: "failed", reload: true });
@@ -186,18 +229,28 @@ describe("the startup gate, answered from the open", () => {
   it("passes the engine's own failure on as it is, and offers no reload for it", async () => {
     const { core, worker } = harness();
     void status(core);
-    worker.say({ kind: "opened", opened: { kind: "failed", message: "The pool would not open." } });
+    worker.say({
+      kind: "opened",
+      opened: { kind: "failed", message: "The pool would not open." },
+      existed: true,
+    });
     // No `reload` key at all: a database that would not open will not open the second time.
     expect(await status(core)).toEqual({ state: "failed", message: "The pool would not open." });
   });
 
-  it("never moves again once it has settled", async () => {
-    const { core, worker } = harness();
-    void status(core);
-    worker.say({ kind: "opened", opened: READY });
-    worker.say({ kind: "opened", opened: { kind: "already-open" } });
-    worker.crash("late");
-    expect(await status(core)).toEqual({ state: "ready" });
+  it("is not moved by a second word about the open, whichever way it settled", async () => {
+    const opened = harness();
+    void status(opened.core);
+    opened.worker.say({ kind: "opened", opened: READY, existed: true });
+    opened.worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    expect(await status(opened.core)).toEqual({ state: "ready" });
+
+    // And never back: a database that did not open is not opened by a later `ready`.
+    const refused = harness();
+    void status(refused.core);
+    refused.worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    refused.worker.say({ kind: "opened", opened: READY, existed: true });
+    expect(await status(refused.core)).toMatchObject({ state: "failed", message: ALREADY_OPEN });
   });
 });
 
@@ -209,7 +262,7 @@ describe("a call through the web core", () => {
     // Queued, not refused and not sent: the Worker has heard `open` and nothing else.
     expect(worker.messages).toHaveLength(1);
 
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
     expect(worker.messages.slice(1)).toEqual([
       { kind: "call", id: 1, command: "list_sets" },
       { kind: "call", id: 2, command: "deck_get", args: { id: 4 } },
@@ -224,7 +277,7 @@ describe("a call through the web core", () => {
   it("goes straight to the Worker once the database is open", () => {
     const { core, worker } = harness();
     void status(core);
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
     void core.call("list_sets");
     expect(worker.messages[worker.messages.length - 1]).toEqual({
       kind: "call",
@@ -236,7 +289,7 @@ describe("a call through the web core", () => {
   it("matches an answer to its call by id, not by the order answers arrive in", async () => {
     const { core, worker } = harness();
     void status(core);
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
 
     const slow = core.call("search_cards", { text: "the" });
     const fast = core.call("list_sets");
@@ -251,7 +304,7 @@ describe("a call through the web core", () => {
   it("rejects with the engine's sentence as a string, as a Tauri command does", async () => {
     const { core, worker } = harness();
     void status(core);
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
 
     const call = core.call("deck_get", { id: 999 });
     worker.say({ kind: "err", id: 1, message: "No such deck." });
@@ -263,7 +316,7 @@ describe("a call through the web core", () => {
   it("rejects what was waiting on a database that did not open, and whatever is asked after", async () => {
     const { core, worker } = harness();
     const waiting = core.call("list_sets");
-    worker.say({ kind: "opened", opened: { kind: "already-open" } });
+    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
 
     await expect(waiting).rejects.toBe(ALREADY_OPEN);
     await expect(core.call("deck_list")).rejects.toBe(ALREADY_OPEN);
@@ -274,7 +327,7 @@ describe("a call through the web core", () => {
   it("hands a byte payload over rather than copying it, with its headers as the arguments", () => {
     const { core, worker } = harness();
     void status(core);
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
 
     const frame = new Uint8Array([9, 8, 7]);
     void core.call("scanner_frame", frame, { headers: { "x-scanner-options": "{}" } });
@@ -310,6 +363,444 @@ describe("an event through the web core", () => {
     expect(first).toEqual([{ done: 3 }]);
     expect(second).toEqual([{ done: 3 }, { done: 4 }]);
   });
+
+  it("is not heard by a subscriber that arrives after it, and is not kept for one", () => {
+    // What Tauri does with an event nobody is listening for, and what every reader of one is
+    // written against: `sync_status` is the half that survives a face mounting late.
+    const { core, worker } = harness();
+    void status(core);
+    worker.say({ kind: "event", event: "sync:progress", payload: { phase: "checking" } });
+
+    const late: unknown[] = [];
+    core.listen("sync:progress", (payload) => late.push(payload));
+    expect(late).toEqual([]);
+
+    worker.say({ kind: "event", event: "sync:progress", payload: { phase: "downloading" } });
+    expect(late).toEqual([{ phase: "downloading" }]);
+  });
+
+  it("still reaches the subscribers behind one that threw", () => {
+    // One message fans out to every handler of the name: the ribbon's line, the invalidation
+    // and the first-run screen all hang off one `sync:progress`.
+    const logged = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const { core, worker } = harness();
+    const heard: unknown[] = [];
+    core.listen("sync:progress", () => {
+      throw new Error("a page's own bug");
+    });
+    core.listen("sync:progress", (payload) => heard.push(payload));
+
+    worker.say({ kind: "event", event: "sync:progress", payload: { phase: "done" } });
+    // And the next message is still read: the throw did not climb out of the Worker's listener.
+    worker.say({ kind: "event", event: "sync:progress", payload: { phase: "checking" } });
+
+    expect(heard).toEqual([{ phase: "done" }, { phase: "checking" }]);
+    expect(logged).toHaveBeenCalledTimes(2);
+    logged.mockRestore();
+  });
+});
+
+/**
+ * `navigator.storage.persist()` — recorded and never trusted (the light-app spec §6), and asked
+ * **again while the answer is no, at most once a week**: the spec's "asked once" froze a first
+ * visit's `false` for good, which `storage.ts`'s `settlePersistence` has in full. A reload is a
+ * second core over the first one's store, and the clock is the harness's, so "a week later" is a
+ * number handed in and nothing here waits.
+ */
+describe("asking the browser to keep its storage", () => {
+  const DAY = 86_400_000;
+  /** The record as `storage_persistence` answers it, once anything this launch began has landed. */
+  const persistence = async (core: ReturnType<typeof createWebCore>) => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    return core.call<StoragePersistence | null>("storage_persistence");
+  };
+  const recorded = (record: StoragePersistence) => ({ [PERSIST_KEY]: JSON.stringify(record) });
+
+  /** A page load over `store` at `now`: the database opens, and the launch looks. */
+  function launch(browser: Partial<Browser>) {
+    const loaded = harness(browser);
+    void status(loaded.core);
+    loaded.worker.say({ kind: "opened", opened: READY, existed: true });
+    return loaded;
+  }
+
+  it("asks once the database has opened, writes the answer down and says it was a fresh ask", async () => {
+    const persist = vi.fn(() => Promise.resolve(true));
+    const { core, worker, kept } = harness({ storage: { persist } });
+    void status(core);
+    // Not at import, not at the first call: there is nothing to keep until a database is open.
+    expect(persist).not.toHaveBeenCalled();
+
+    worker.say({ kind: "opened", opened: READY, existed: false });
+
+    expect(await persistence(core)).toEqual({ askedAt: NOW, granted: true });
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(kept.get(PERSIST_KEY) ?? "null")).toEqual({ askedAt: NOW, granted: true });
+    // Beside the open's own line, where a bug report can carry both.
+    expect(said).toHaveBeenCalledWith(
+      "MTG Grimoire: persistent storage granted, asked 2026-10-04T12:00:00.000Z " +
+        "(asked on this launch)",
+    );
+  });
+
+  it("does not ask again within a week of a no, and says the answer is the record's", async () => {
+    const { store } = fakeStore(recorded({ askedAt: NOW - 6 * DAY, granted: false }));
+    const persist = vi.fn(() => Promise.resolve(true));
+    const { core } = launch({ store, storage: { persist } });
+
+    // The recorded answer, with the day it was given — a browser that prompts is not prompted
+    // at every launch.
+    expect(await persistence(core)).toEqual({ askedAt: NOW - 6 * DAY, granted: false });
+    expect(persist).not.toHaveBeenCalled();
+    expect(said).toHaveBeenCalledWith(
+      "MTG Grimoire: persistent storage not granted, asked 2026-09-28T12:00:00.000Z " +
+        "(from the record)",
+    );
+  });
+
+  /**
+   * **The case "asked once" got wrong.** Chromium answers from what it knows at the call — a
+   * first visit to a site that is neither installed nor bookmarked is a `false` — and a reader
+   * who installs the app afterwards would be granted the next time anyone asked.
+   */
+  it("asks again a week after a no, and takes the yes it is then given", async () => {
+    const { store, kept } = fakeStore(recorded({ askedAt: NOW - 7 * DAY, granted: false }));
+    const persist = vi.fn(() => Promise.resolve(true));
+    const { core } = launch({ store, storage: { persist } });
+
+    expect(await persistence(core)).toEqual({ askedAt: NOW, granted: true });
+    expect(persist).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(kept.get(PERSIST_KEY) ?? "null")).toEqual({ askedAt: NOW, granted: true });
+  });
+
+  it("never asks again once the browser has said yes", async () => {
+    const { store } = fakeStore(recorded({ askedAt: NOW - 400 * DAY, granted: true }));
+    const persist = vi.fn(() => Promise.resolve(false));
+    const { core } = launch({ store, storage: { persist } });
+
+    expect(await persistence(core)).toEqual({ askedAt: NOW - 400 * DAY, granted: true });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Storage can become persistent with no ask from this app — an install does it. `persisted()`
+   * asks nobody and prompts nothing, so every launch reads it first.
+   */
+  it("records storage the browser made persistent by itself, without asking", async () => {
+    const { store, kept } = fakeStore(recorded({ askedAt: NOW - 2 * DAY, granted: false }));
+    const persist = vi.fn(() => Promise.resolve(true));
+    const persisted = vi.fn(() => Promise.resolve(true));
+    const { core } = launch({ store, storage: { persist, persisted } });
+
+    // Granted, and the date is still the last time this app asked: it did not ask today.
+    expect(await persistence(core)).toEqual({ askedAt: NOW - 2 * DAY, granted: true });
+    expect(persist).not.toHaveBeenCalled();
+    expect(JSON.parse(kept.get(PERSIST_KEY) ?? "null")).toMatchObject({ granted: true });
+    expect(said).toHaveBeenCalledWith(
+      "MTG Grimoire: persistent storage granted, asked 2026-10-02T12:00:00.000Z " +
+        "(the browser says so, unasked)",
+    );
+
+    // And a browser that was never asked at all has no date to give.
+    const fresh = launch({ storage: { persisted } });
+    expect(await persistence(fresh.core)).toEqual({ askedAt: null, granted: true });
+    expect(said).toHaveBeenCalledWith(
+      "MTG Grimoire: persistent storage granted, never asked (the browser says so, unasked)",
+    );
+  });
+
+  it("believes a browser that says its storage is no longer persistent over a yes on record", async () => {
+    const { store, kept } = fakeStore(recorded({ askedAt: NOW - 2 * DAY, granted: true }));
+    const persist = vi.fn(() => Promise.resolve(true));
+    const { core } = launch({
+      store,
+      storage: { persist, persisted: () => Promise.resolve(false) },
+    });
+
+    // Recorded, not trusted — and not asked again inside the week either.
+    expect(await persistence(core)).toEqual({ askedAt: NOW - 2 * DAY, granted: false });
+    expect(persist).not.toHaveBeenCalled();
+    expect(JSON.parse(kept.get(PERSIST_KEY) ?? "null")).toMatchObject({ granted: false });
+  });
+
+  /**
+   * A browser that asks by prompting answers when the reader does — which may be never. The
+   * week's ask is stamped before the browser is asked, so an unanswered prompt is not a prompt
+   * at every launch, and nothing that reads the record waits on a reader.
+   */
+  it("stamps the ask before it is answered, and does not wait on a reader to say so", async () => {
+    const persist = vi.fn(() => new Promise<boolean>(() => undefined));
+    const first = launch({ storage: { persist } });
+    const store: KeyStore = {
+      getItem: (key) => first.kept.get(key) ?? null,
+      setItem: (key, value) => void first.kept.set(key, value),
+      removeItem: (key) => void first.kept.delete(key),
+    };
+
+    // Answered now, while the prompt is still up: asked, and not granted yet.
+    expect(await persistence(first.core)).toEqual({ askedAt: NOW, granted: false });
+    expect(persist).toHaveBeenCalledTimes(1);
+
+    // The next launch, the prompt never answered: this week's ask has been made.
+    const next = launch({ store, storage: { persist }, now: () => NOW + DAY });
+    expect(await persistence(next.core)).toEqual({ askedAt: NOW, granted: false });
+    expect(persist).toHaveBeenCalledTimes(1);
+  });
+
+  it("asks once however many times the Worker says the database opened", async () => {
+    const persist = vi.fn(() => Promise.resolve(false));
+    const { core, worker } = launch({ storage: { persist } });
+    worker.say({ kind: "opened", opened: READY, existed: true });
+
+    expect(await persistence(core)).toEqual({ askedAt: NOW, granted: false });
+    expect(persist).toHaveBeenCalledTimes(1);
+  });
+
+  it("records a browser that threw as one that did not say yes — and asks it again in a week", async () => {
+    const { store, kept } = fakeStore();
+    const persist = vi.fn(() => Promise.reject(new Error("SecurityError")));
+    const { core } = launch({ store, storage: { persist } });
+    expect(await persistence(core)).toEqual({ askedAt: NOW, granted: false });
+    expect(kept.has(PERSIST_KEY)).toBe(true);
+
+    const later = launch({ store, storage: { persist }, now: () => NOW + 7 * DAY });
+    await persistence(later.core);
+    expect(persist).toHaveBeenCalledTimes(2);
+  });
+
+  it("says so, and writes nothing, in a browser with no way to ask", async () => {
+    const { core, kept } = launch({ storage: {} });
+
+    expect(await persistence(core)).toBeNull();
+    // Nothing written, so a browser that gains the method starts clean.
+    expect(kept.has(PERSIST_KEY)).toBe(false);
+    expect(said).toHaveBeenCalledWith(
+      "MTG Grimoire: persistent storage not asked — this browser has no way to ask",
+    );
+  });
+
+  it("asks nothing for a database that did not open", async () => {
+    const persist = vi.fn(() => Promise.resolve(true));
+    const persisted = vi.fn(() => Promise.resolve(true));
+    const { core, worker } = harness({ storage: { persist, persisted } });
+    void status(core);
+    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+
+    // A second tab keeps nothing of its own; the first tab is the one that looked.
+    expect(await persistence(core)).toBeNull();
+    expect(persist).not.toHaveBeenCalled();
+    expect(persisted).not.toHaveBeenCalled();
+  });
+
+  it("opens the database all the same in a browser whose storage cannot be named", async () => {
+    const refusing: KeyStore = {
+      getItem: () => {
+        throw new Error("SecurityError");
+      },
+      setItem: () => {
+        throw new Error("SecurityError");
+      },
+      removeItem: () => {
+        throw new Error("SecurityError");
+      },
+    };
+    const persist = vi.fn(() => Promise.resolve(true));
+    const { core, worker } = harness({ store: refusing, storage: { persist } });
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: false });
+
+    expect(await status(core)).toEqual({ state: "ready" });
+    // Asked, and remembered for the life of the page — which is all there is to remember it in.
+    expect(await persistence(core)).toEqual({ askedAt: NOW, granted: true });
+  });
+});
+
+/**
+ * **Storage cleared under the app** (the light-app spec §6: "the corpus can vanish while the
+ * shell survives"). A browser can take back what a site stored while the page still opens; the
+ * engine then creates an empty database and downloads the card data again by itself — and a
+ * silent empty app reads as a bug, or as a first run that will bring a collection back.
+ *
+ * Found by comparing two things that are evicted apart: a mark in `localStorage` saying this
+ * browser holds a database, and whether OPFS held the database's folder before this open.
+ */
+describe("storage cleared under the app", () => {
+  const cleared = (core: ReturnType<typeof createWebCore>) =>
+    core.call<StorageCleared | null>("storage_cleared");
+  const HELD = { [HELD_KEY]: JSON.stringify({ at: NOW - 86_400_000 }) };
+
+  /** A page load: a new core over a store that outlives it, told what the Worker found. */
+  function load(store: KeyStore, existed: boolean | null) {
+    const loaded = harness({ store });
+    void status(loaded.core);
+    loaded.worker.say({ kind: "opened", opened: READY, existed });
+    return loaded.core;
+  }
+
+  it("says nothing on a first run, and remembers that a database is now held", async () => {
+    const { store, kept } = fakeStore();
+    expect(await cleared(load(store, false))).toBeNull();
+    expect(JSON.parse(kept.get(HELD_KEY) ?? "null")).toEqual({ at: NOW });
+    expect(warned).not.toHaveBeenCalled();
+  });
+
+  it("says nothing on an ordinary launch", async () => {
+    const { store, kept } = fakeStore(HELD);
+    expect(await cleared(load(store, true))).toBeNull();
+    // The mark is the day the database was first held, not the last time it was opened.
+    expect(JSON.parse(kept.get(HELD_KEY) ?? "null")).toEqual({ at: NOW - 86_400_000 });
+  });
+
+  it("starts remembering a database that is older than its mark", async () => {
+    // One opened by a build before this, or whose mark alone was lost.
+    const { store, kept } = fakeStore();
+    expect(await cleared(load(store, true))).toBeNull();
+    expect(kept.has(HELD_KEY)).toBe(true);
+  });
+
+  it("tells a reader, in the host's own words, when a database it held is gone", async () => {
+    const { store } = fakeStore(HELD);
+    const answer = await cleared(load(store, false));
+
+    expect(answer).toEqual({ at: NOW, title: CLEARED_TITLE, lines: expect.any(Array) });
+    // What happened, what is being rebuilt by itself, and what is not coming back — in that
+    // order, and each for a reader rather than as a code.
+    expect(answer?.title).toBe("Your browser cleared MTG Grimoire's saved data");
+    expect(answer?.lines).toHaveLength(3);
+    expect(answer?.lines[0]).toMatch(/Browsers can remove what a site has stored/);
+    expect(answer?.lines[1]).toBe("The card data downloads again by itself.");
+    expect(answer?.lines[2]).toMatch(/collection, wishlist and decks/);
+    expect(answer?.lines[2]).toMatch(/nothing to restore it from/);
+    expect(answer?.lines[2]).toMatch(/import those files again/);
+    // And on the console, where a bug report can carry it — with what the open made of it.
+    expect(warned).toHaveBeenCalledWith(`${CLEARED_LINE} — a new, empty one was created`);
+    expect(CLEARED_LINE).toBe(
+      "MTG Grimoire: this browser cleared the app's storage since the database was last " +
+        "opened here",
+    );
+  });
+
+  it("goes on saying it across reloads until it is dismissed, and never after", async () => {
+    const { store, kept } = fakeStore(HELD);
+    await cleared(load(store, false));
+
+    // A reader who reloads because the app looks empty is still told why. The folder exists
+    // now — the open that found it gone created a new one — so nothing new is noted.
+    const again = load(store, true);
+    expect(await cleared(again)).toMatchObject({ at: NOW, title: CLEARED_TITLE });
+
+    expect(await again.call("storage_cleared_dismiss")).toBeNull();
+    expect(await cleared(again)).toBeNull();
+    expect(kept.has(CLEARED_KEY)).toBe(false);
+    expect(await cleared(load(store, true))).toBeNull();
+  });
+
+  it("tells a second clearing as a new occurrence", async () => {
+    const { store } = fakeStore(HELD);
+    const first = load(store, false);
+    await first.call("storage_cleared_dismiss");
+    expect(await cleared(first)).toBeNull();
+
+    // The mark was renewed for the database the first clearing left, so its loss is seen too.
+    expect(await cleared(load(store, false))).toMatchObject({ title: CLEARED_TITLE });
+  });
+
+  it("says nothing where the Worker could not ask what the browser held", async () => {
+    const { store } = fakeStore(HELD);
+    expect(await cleared(load(store, null))).toBeNull();
+  });
+
+  /**
+   * **The likeliest way a clearing is met, and the one a note taken only on success misses.**
+   * The pool's install creates the folder before anything can fail. So: the browser evicts; the
+   * next open makes a folder and then fails — out of quota, a trap, the tab closed mid-open; and
+   * the launch after that finds a folder beside the mark and looks perfectly ordinary. The
+   * clearing is recorded by the open that saw it, whatever became of that open, and waits for a
+   * launch that gets far enough to draw it.
+   */
+  it("still tells it when the open that found the database gone then failed", async () => {
+    const { store, kept } = fakeStore(HELD);
+
+    // Launch one: no folder, a mark — and the open fails after making the folder.
+    const failed = harness({ store });
+    void status(failed.core);
+    failed.worker.say({
+      kind: "opened",
+      opened: { kind: "failed", message: "The pool would not open." },
+      existed: false,
+    });
+    expect(await status(failed.core)).toMatchObject({ state: "failed" });
+    expect(kept.has(CLEARED_KEY)).toBe(true);
+    expect(warned).toHaveBeenCalledWith(`${CLEARED_LINE} — and a new one could not be opened`);
+    // No database opened, so the mark is not renewed: it still says what was held before.
+    expect(JSON.parse(kept.get(HELD_KEY) ?? "null")).toEqual({ at: NOW - 86_400_000 });
+
+    // Launch two: the folder is there now, the mark is there — nothing new to see, and the
+    // reader is told all the same.
+    const answer = await cleared(load(store, true));
+    expect(answer).toMatchObject({ at: NOW, title: CLEARED_TITLE });
+  });
+
+  it.each<[string, Opening]>([
+    ["a second tab", { kind: "already-open" }],
+    ["an engine that never loaded", { kind: "unloaded", message: "TypeError: Failed to fetch" }],
+  ])("records it for %s too, and leaves the mark alone", async (_name, opened) => {
+    const { store, kept } = fakeStore(HELD);
+    const { core, worker } = harness({ store });
+    void status(core);
+    worker.say({ kind: "opened", opened, existed: false });
+    expect(await status(core)).toMatchObject({ state: "failed" });
+
+    // The folder was gone when this page looked, whoever goes on to open a database.
+    expect(kept.has(CLEARED_KEY)).toBe(true);
+    expect(JSON.parse(kept.get(HELD_KEY) ?? "null")).toEqual({ at: NOW - 86_400_000 });
+  });
+
+  it("writes no mark for a first run whose database did not open", async () => {
+    // Nothing is held, so nothing says so — or the next launch's empty folder would be told
+    // as a clearing of a database that never was.
+    const { store, kept } = fakeStore();
+    const { core, worker } = harness({ store });
+    void status(core);
+    worker.say({
+      kind: "opened",
+      opened: { kind: "failed", message: "The pool would not open." },
+      existed: false,
+    });
+    expect(await status(core)).toMatchObject({ state: "failed" });
+
+    expect(kept.has(HELD_KEY)).toBe(false);
+    expect(kept.has(CLEARED_KEY)).toBe(false);
+    expect(await cleared(load(store, true))).toBeNull();
+  });
+
+  it("waits for the open rather than answering before it is known what the open found", async () => {
+    const { store } = fakeStore(HELD);
+    const { core, worker } = harness({ store });
+    let answered: StorageCleared | null | undefined;
+    void cleared(core).then((answer) => (answered = answer));
+    await Promise.resolve();
+    await Promise.resolve();
+    // Asked while the database is opening: an answer now would be "nothing to say", and wrong.
+    expect(answered).toBeUndefined();
+
+    worker.say({ kind: "opened", opened: READY, existed: false });
+    await vi.waitFor(() => expect(answered).toMatchObject({ title: CLEARED_TITLE }));
+    // Answered by the host and never sent to the engine, whose table has no such command.
+    expect(worker.messages).toEqual([{ kind: "open", directory: "mtg-grimoire" }]);
+  });
+
+  it("is still answered by a page whose engine has since stopped", async () => {
+    const { store } = fakeStore(HELD);
+    const { core, worker } = harness({ store });
+    void status(core);
+    worker.say({ kind: "opened", opened: READY, existed: false });
+    worker.crash("RuntimeError: unreachable");
+
+    await expect(core.call("deck_list")).rejects.toMatch(/card engine stopped/);
+    // About the browser and not the engine: true of a page whatever became of its Worker.
+    expect(await cleared(core)).toMatchObject({ title: CLEARED_TITLE });
+  });
 });
 
 describe("a Worker that died", () => {
@@ -328,7 +819,7 @@ describe("a Worker that died", () => {
   it("rejects every call in flight when it dies later, and every call after", async () => {
     const { core, worker } = harness();
     void status(core);
-    worker.say({ kind: "opened", opened: READY });
+    worker.say({ kind: "opened", opened: READY, existed: true });
     const one = core.call("search_cards");
     const two = core.call("list_sets");
 
@@ -341,6 +832,96 @@ describe("a Worker that died", () => {
     const sent = worker.messages.length;
     await expect(core.call("deck_list")).rejects.toMatch(/Reload to start it again/);
     expect(worker.messages).toHaveLength(sent);
+  });
+
+  /**
+   * **The one move the gate makes after it opened.** From the Worker's `error` until a reload
+   * there is no app behind the page, and that is said once, for the whole window — not left for
+   * each page to find in a rejected read (a first-run bar that never moved again was the first
+   * to find it, and it said nothing).
+   */
+  it("moves the gate from ready to failed, with a reload, and says so on the event", async () => {
+    const { core, worker } = harness();
+    const heard: StartupStatus[] = [];
+    core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    expect(heard).toEqual([{ state: "ready" }]);
+
+    worker.crash("RuntimeError: unreachable");
+
+    const told = {
+      state: "failed",
+      message: expect.stringMatching(/card engine stopped[\s\S]*RuntimeError: unreachable/),
+      reload: true,
+    };
+    expect(heard).toEqual([{ state: "ready" }, told]);
+    // The poll's half agrees with the event's: a gate mounted afterwards is told the same.
+    expect(await status(core)).toEqual(heard[1]);
+  });
+
+  it("makes that move exactly once, however many times a dead Worker errors", async () => {
+    const { core, worker } = harness();
+    const heard: StartupStatus[] = [];
+    core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    const inFlight = core.call("search_cards");
+
+    worker.crash("RuntimeError: unreachable");
+    // A dead engine can go on raising `error`; the first is the news and the rest are not.
+    worker.crash("RuntimeError: memory access out of bounds");
+    worker.crash(undefined);
+
+    expect(heard.map((next) => next.state)).toEqual(["ready", "failed"]);
+    // The first error's sentence, on the gate and on every call: nothing later rewrote it.
+    const first = heard[1];
+    expect(first).toMatchObject({ message: expect.stringMatching(/RuntimeError: unreachable/) });
+    expect(await status(core)).toBe(first);
+    await expect(inFlight).rejects.toMatch(/RuntimeError: unreachable/);
+    await expect(core.call("deck_list")).rejects.toMatch(/RuntimeError: unreachable/);
+  });
+
+  it("never comes back from it: a late word from the Worker opens nothing", async () => {
+    const { core, worker } = harness();
+    const heard: StartupStatus[] = [];
+    core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
+    worker.say({ kind: "opened", opened: READY, existed: true });
+    worker.crash("RuntimeError: unreachable");
+    const sent = worker.messages.length;
+
+    // A Worker whose queue limps on after a trap can still post; none of it is an app again.
+    worker.say({ kind: "opened", opened: READY, existed: true });
+
+    expect(await status(core)).toMatchObject({ state: "failed", reload: true });
+    expect(heard).toHaveLength(2);
+    await expect(core.call("deck_list")).rejects.toMatch(/card engine stopped/);
+    expect(worker.messages).toHaveLength(sent);
+  });
+
+  it("leaves a gate that had already failed with its own sentence", async () => {
+    // A second tab: that is why there is no app here, and a Worker that then also errors has
+    // nothing to add — least of all "reload", into the same refusal.
+    const { core, worker } = harness();
+    const heard: StartupStatus[] = [];
+    core.listen<StartupStatus>("startup:changed", (next) => heard.push(next));
+    worker.say({ kind: "opened", opened: { kind: "already-open" }, existed: true });
+    worker.crash("late");
+
+    expect(await status(core)).toEqual({ state: "failed", message: ALREADY_OPEN, reload: true });
+    expect(heard).toHaveLength(1);
+
+    // And one that would not open keeps offering no reload at all.
+    const broken = harness();
+    void status(broken.core);
+    broken.worker.say({
+      kind: "opened",
+      opened: { kind: "failed", message: "The pool would not open." },
+      existed: true,
+    });
+    broken.worker.crash("late");
+    expect(await status(broken.core)).toEqual({
+      state: "failed",
+      message: "The pool would not open.",
+    });
   });
 
   it("says so when there is no Worker to make at all", async () => {

@@ -198,6 +198,23 @@ impl<'a> StreamIngest<'a> {
         flush_full_batches(self.db, &mut self.stats, &mut self.batch, progress)
     }
 
+    /// Give up on a stream that will not be finished, and drop what it staged.
+    ///
+    /// **For a caller that feeds this from the network** (`sync`'s streamed run, on a host that
+    /// keeps no files). There a body that stops arriving is an ordinary failure, and without
+    /// this every one would leave a committed `cards_staging` — most of a card database —
+    /// parked until the next run or the next launch dropped it. A file-backed run has no need
+    /// of it: its download finishes before the ingest begins, so staging is only ever left by
+    /// a kill. Best-effort: a table that could not be dropped now is dropped by
+    /// [`schema::create_staging`] before the next run writes a row.
+    pub fn abandon(self) {
+        let conn = crate::db::lock_background(self.db);
+        let _ = conn.execute_batch(&format!(
+            "DROP TABLE IF EXISTS {}.cards_staging",
+            crate::db::CORPUS
+        ));
+    }
+
     /// Flush what is still owed, refuse an empty file, and swap staging into place.
     ///
     /// **The full-batch drain runs again here, and that is not belt-and-braces.**

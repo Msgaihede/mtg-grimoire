@@ -99,9 +99,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `android` runs for a page-side input**: `mobile/**`, `src/**` and `vite.config.ts` feed the
     APK's bundle too and still do not set it, because `web` now builds that same page through
     that same config on every such change.
-  - **Three single files sit above the tree that would otherwise take them**, each because
-    that tree's arm does not set `web`: `scripts/build-wasm.mjs` and `scripts/web-smoke.mjs`
-    above `scripts/*` (which would lint a broken build script and never run it), and
+  - **Three single files and one folder sit above the tree that would otherwise take them**,
+    each because that tree's arm does not set `web`: `scripts/build-wasm.mjs`,
+    `scripts/web-smoke.mjs` and — since step 5.2 — `scripts/web-smoke/*`, the fixtures the smoke
+    answers the engine with, above `scripts/*` (which would lint a broken build script and
+    never run it; a fixture changed is a first run changed, and nothing but `web` runs it), and
     `.storybook/fake/aliases.ts` above `.storybook/*` — `vite.mobile.config.ts` imports
     `FAKE_ALIASES` from it at load, in every mode, so a version that will not load is a
     `web:build` that never starts. The rest of `.storybook/**` is aliased in under `fake` mode
@@ -403,14 +405,26 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `if-no-files-found: error`) **whenever the bundle was built, a failed smoke included** — a
     page that would not open on the runner is the one somebody needs to serve and look at.
 
-  **What it proves is the smoke script's to say** (`scripts/web-smoke.mjs`): the module
-  instantiates and the engine opens its database, in one Chrome on Linux. It runs no test suite
-  in the browser and downloads no corpus; the engine's tests are still `rust`'s, natively.
-  **No run had happened when this was written** — the first is the pull request that adds the
-  job, and its sizes are that run's summary. What only that run can settle: whether the image's
-  clang, Chrome and `CHROME_BIN` are what this assumes; whether Chrome's sandbox starts under
-  24.04's AppArmor for the system binary; whether `rust-cache` really brings the CLI back; and
-  what the job costs cold and warm.
+  **What it proves is the smoke script's to say** (`scripts/web-smoke.mjs`), and since step 5.2
+  (2026-10-04) that is **an offline first run**: the module instantiates, the engine opens its
+  database, and the launch's downloads — the card sync, both Tagger files, the combos, and
+  Card Kingdom's list when Settings picks it — run to their end in one Chrome on Linux, with
+  **every cross-origin request answered from `scripts/web-smoke/`** through the DevTools
+  `Fetch` domain. A request to a host with no fixture fails the run, so does one carrying a
+  header that would cost a CORS pre-flight, and the browser is started with a resolver that
+  knows no name but `localhost` — so nothing leaves the runner. Nine checks, listed in the
+  script's header; [light-app.md](light-app.md) §9.2 has them. It runs no test suite in the
+  browser, and **the corpus it ingests is six fixture cards, not Scryfall's**; the engine's
+  tests are still `rust`'s, natively. (Until step 5.2 it asked five things over an empty
+  database and nothing was downloaded at all.)
+  **No run had happened when this was first written** — the first was the pull request that
+  added the job (#805, merged 2026-10-04): on a cold cache the whole job took **4 min 59 s** —
+  clang 18.1.3 from apt, the `wasm-bindgen` CLI compiled from crates.io at the lockfile's
+  0.2.127, the host linted for wasm32, the module built (8 571 014 B; Vite reported it
+  3 040.62 kB gzipped), the page built, and the smoke passed in the runner's own Chrome — and
+  `ci-ok` was green on that first run. So the image's clang and Chrome were what this assumed,
+  and Chrome started. Still not on record: whether it started under its sandbox, whether
+  `rust-cache` brings the CLI back, and what a warm run costs.
 - **`.github/workflows/android-emulator.yml` runs the APK, on an emulator** (phase 4, step 4.5,
   2026-10-03) — a fourth workflow, **outside `ci.yml` and never a gate**: `ci-ok` does not read
   it and nothing is protected on it. It runs on `workflow_dispatch`, and on a pull request to or a push to `main` that

@@ -95,17 +95,19 @@ over there is this crate's item unless that file defines one.
 | | Native | Browser |
 | --- | --- | --- |
 | `platform::clock::now_ms`, `now_secs` | `SystemTime` | `Date.now()` |
-| `platform::clock::Tick` — `now()`, `elapsed()`, for how long a wait has run; `==`, `+ Duration` and `saturating_duration_since`, so a test can say "two seconds later" without waiting | `Instant` | `Date.now()`, never negative |
+| `platform::clock::Tick` — `now()`, `elapsed()`, for how long a wait has run; `==`, `+ Duration` and `saturating_duration_since`, so a test can say "two seconds later" without waiting | `Instant` | **`performance.now()`**, read off the global scope (a Worker has no `window`), in whole microseconds — monotonic since step 5.2, because Scryfall's pacing gate counts with it. A host with no `performance` falls back to `Date.now()` rather than trapping |
 | `platform::clock::Wall` — a moment that can be **stored and compared**: `now()`, `+` and `-` a `Duration`, `as_secs()` | whole milliseconds since the epoch | the same |
 | `platform::pause(Duration) -> bool` — stand aside for another thread | `thread::sleep`, `true` | **`false`, at once**: a Worker has no other thread to wait for |
-| `platform::timer::sleep`, `timeout` — a wait a future awaits, and a deadline on one | `tokio::time` | a `Promise` around the global `setTimeout` |
-| `platform::http` — `Client` (`get`, `post`, `deadline`), `Request` (`header`, `body`), `Response` (`bytes`, `text`), `Body`, `Error` | `reqwest` over rustls, with a connect bound and a per-read bound; `deadline` is **not applied** | `reqwest` over `fetch`: **no connect or read bound to set**, so `deadline` — the whole request — is the only bound there is; `is_connect()` is always `false` |
+| `platform::timer::sleep`, `timeout` — a wait a future awaits, and a deadline on one | `tokio::time` | a `Promise` around the global `setTimeout`, cleared when the wait is dropped |
+| `platform::timer::yield_to_host`, and `Breather` — a turn of the host's event loop, and one taken every so much work | `tokio::task::yield_now` | **a message posted to itself over a `MessageChannel`**, awaited: a task on the source a page's own messages arrive on, queued behind them. Falls back to a zero `setTimeout` |
+| `platform::http` — `Client` (`get`, `post`, `deadline`), `Request` (`header`, `body`, `send`, `send_within`), `Response` (`bytes`, `text`), `Body` (`chunk`, `chunk_within`), `Error` | `reqwest` over rustls, with a connect bound and a per-read bound; `deadline` is **not applied** | `reqwest` over `fetch`: **no connect or read bound to set**, so a request is bounded by `deadline` — the whole of it — or, for a body too long for one, by `send_within` and `chunk_within`, which give up on a wait rather than on the request; **no `User-Agent` is set** (a page may not choose one); `is_connect()` is always `false` |
+| `platform::host` — `keeps_files()`, `asks_as_a_page()`: the two facts a download picks its shape by | `true`, `false` | `false`, `true`: a download is streamed into its sink, no request carries a conditional header, and a feed whose server permits no page is not asked |
 | `platform::device::name()` — what this machine is called, for a device's default name | `COMPUTERNAME` on Windows, `HOSTNAME` elsewhere | `None`: a page has no such thing to ask, and `identity::mint_name` falls back to a word |
 | `platform::files` — `open`, `read`, `write`, `remove`, `remove_dir`, `create_dir_all`, `entries`, `listing`, `set_modified`, `is_file`, `exists`; and `files::aio` for an `async fn`, with `read` and `rename` | `std::fs`; `tokio::fs` | **refused**, `ErrorKind::Unsupported`; the two questions answer `false` |
 | `platform::sync::Semaphore`, `Lock` — a permit and a lock an `async fn` holds across an `.await`, **first come, first served**; `Shared<T>` — a value one holder at a time changes, the same lock with something behind it | `tokio::sync` | `tokio::sync`: it needs no runtime |
 | `platform::Sendable` — what a fence over a future's `Send`-ness bounds by | `Send` | anything: no request is `Send` there, and there is no other thread |
 | `platform::spawn::blocking(f).await` — synchronous work under an `async fn`; `spawn::background(f)` — work nobody waits for | the async runtime's blocking pool, **started by the call**; a thread | **run where it stands**: a Worker has no second thread, so `blocking` runs at its first poll and `background` before it returns |
-| `platform::alone` — **not an interface with two arms: a way for a native test to feel the browser's.** `alone::emulate()` makes the calling thread a host with one: `spawn` runs on the caller, `pause` answers `false`, and a connection or the facet index asked for while held is a panic naming the line | a `thread_local` flag, `cfg(test)` and `testing` only; `emulated()` is a constant `false` in a build that ships | nothing: it is what the browser arms already are |
+| `platform::alone` — **not an interface with two arms: a way for a native test to feel the browser's.** `alone::emulate()` makes the calling thread a host with one: `spawn` runs on the caller, `pause` answers `false`, and a connection or the facet index asked for while held is a panic naming the line. **`host::emulate_page()` is the whole page**: that, plus `files` refusing as the browser arm does and `http` hiding the response headers CORS hides | a `thread_local` flag each, `cfg(test)` and `testing` only; `emulated()` is a constant `false` in a build that ships | nothing: it is what the browser arms already are |
 
 `db::lock_for` and `db::lock_background` are why `Tick` and `pause` exist. **A wait that polls is
 a wait that cannot succeed in a browser**, so `lock_for` gives up on its first contended attempt
@@ -114,9 +116,11 @@ Node before a browser**: step 5.1 instantiated the module under Node's V8 over S
 in-memory VFS and drove commands of every kind through it (launch to head in 76 ms, no trap) —
 the clock, `pause`, `spawn`'s `blocking` and the refusing `files`. **The same day the web host
 opened its database in headless Chrome**, over the OPFS pool, and answered commands there
-([light-app.md](../../docs/reference/light-app.md) §9.1). `http` has made no request from a
-browser — the web host starts no download — and whether `timer` or `spawn`'s `background` ran
-there is not on record.
+([light-app.md](../../docs/reference/light-app.md) §9.1). **Since step 5.2 the web host starts
+the launch's downloads**, which is what first calls `http`, `timer`, the monotonic `Tick` and
+`spawn`'s `background` there. **The figures of the first run are light-app.md §9.2's**: one
+run against the real hosts, headless Chrome 154, 2026-10-04, on a module from before the
+yield described below.
 
 - **`http` is the wire and nothing above it.** Pacing, retry, the 429 lockout and the size checks
   are rules about Scryfall or about a feed, and live with the client that owns them
@@ -126,23 +130,82 @@ there is not on record.
   type crosses out of the module, which is what lets the fence refuse the name everywhere else.
 - **`timer`'s native arm needs a tokio runtime on the current task** — every host's async code
   runs on one — and panics outside it, as `tokio::time::sleep` always has.
-- **`files` refuses in a browser rather than pretending.** The database there is OPFS behind
-  SQLite's own VFS, and a download with no temp file is a different shape that the web host
-  decides (spec §6). Until then a download that cannot be written is a failed sync — it stops
-  at the folder it cannot make, after the bulk check and before the download is asked for, with
-  its reason in `sync_meta`'s `last_error` — and `schema`'s backup before a climb is logged and
-  skipped. ⚠️ **The combo feed and the price feeds are the other way round**: each sends its
-  request and only then makes the folder, so in a browser every launch would spend a request
-  (27.5 MB asked for, the body abandoned) and fold an `error_log` row, with no backoff —
-  `Unsupported` is not one of the failures that rests a feed. Reorder them, or give them a
-  stream, before a web host runs either.
-- ⚠️ **A feed's request has no deadline in a browser.** `http` sets no connect or read bound
-  there, and neither feed races its `send()` with `timer::timeout`, as `scryfall::fetch_image`
-  does, or sets `Client::deadline`, as both relay clients do. A host that never answers holds
-  that feed's refresh claim for good: every later refresh says "already being refreshed", and
-  `reset::cache_clear_refusal` says a download is running. ⚠️ **A deadline is a bound on the
-  whole body**, so a feed's would have to outlast its slowest honest download (27.5 MB for the
-  combos) — which is why it was not simply copied from the relay's.
+- **`files` refuses in a browser rather than pretending**, and `schema`'s backup before a
+  climb is logged and skipped there. The database is OPFS behind SQLite's own VFS, and nothing
+  else is stored by this crate.
+- **A download has two shapes, and `platform::host` is what picks one** (step 5.2,
+  2026-10-04). Where the host keeps files it is what it always was — to `<data>/tmp/`, then
+  read back — **request for request and statement for statement**: each download's mock-server
+  tests pass unedited, and they are the proof. Where it keeps none (`!host::keeps_files()`),
+  the same function branches **before it asks for anything** and feeds the body to its sink a
+  chunk at a time: `sync`'s `ingest_streamed` into `ingest::StreamIngest`, `tags`'
+  `refresh_streamed` into `StreamTags`, `combos`' into `combos::StreamRead` and then `store`,
+  `marketplace_feed`'s into `marketplace_feed::StreamRead` and then `store`. The rules of that
+  arm, each held by a test that runs it natively under `host::emulate_page()`:
+  - **No lock crosses an `.await`.** A sink takes the write connection a batch at a time
+    inside `push` and has let go before it returns, so between two chunks the connection is
+    free.
+  - ⚠️ **An `.await` is not a turn of the event loop, so the loop takes one on a budget.**
+    In a browser a chunk the network had already buffered resumes its reader on the
+    *microtask* queue, and a command a page sends is a *task*: a loop of `chunk().await` and
+    a synchronous push never lets one in while chunks are buffered. Measured on the first
+    browser run (headless Chrome 154, 2026-10-04): `sync_status` once a second was taken
+    eight times in a 16.4 s card download, 3.5–8.4 s late. Every streamed loop therefore
+    keeps a `timer::Breather` on `feed::WORK_BUDGET` (50 ms) and calls `breathe().await`
+    once per chunk — one `timer::yield_to_host` each time the budget is spent, never per
+    chunk. **A new streamed loop owes the same line**, and holds nothing across it: a turn
+    is exactly when a command runs. **Measured on the module that ships** (the same probe,
+    the same day): all fifteen calls sent during the card download answered, in 24–440 ms,
+    median 185 ms. The synchronous tails after a download are another matter and take no
+    turn — [light-app.md](../../docs/reference/light-app.md) §9.2 has their lengths.
+  - **No conditional header, and no `ETag`.** `scryfall::Client::check_bulk_dataset` drops an
+    `If-None-Match` it is handed, at the one place the header is built, and "unchanged" is the
+    descriptor's `updated_at` against the stored one — the test every caller already made for
+    a 200. The combo feed has no descriptor, so it reads the answer's `Last-Modified` (the
+    one validator a page can read), keeps it where a desktop keeps the ETag, and drops the
+    response unread when it matches — which aborts the request.
+  - **No resume**: one request, from byte zero. A page cannot read `Content-Range`.
+  - **The size check is the stream's** (`scryfall::Stream::chunk`): the end of the body is
+    answered only when exactly `compressed_size` bytes arrived, so a sink's `finish` — the
+    swap — is unreachable over a short body. The combo feed and the price list have no
+    listed size, natively or here; they are held to a bound, and a body the browser has
+    already gunzipped (`Content-Encoding: gzip`) is held to the decoded one.
+  - **Every wait is bounded by `scryfall::STALL`** — 60 s, the native read timeout's own
+    figure — for the answer to begin and for each chunk, through `http`'s `send_within` and
+    `chunk_within`. It is what gives a feed's refresh claim back when a host goes quiet.
+    ⚠️ **A timer on one thread counts whatever that thread was doing**, not only a quiet
+    network: a long synchronous stretch elsewhere on the Worker leaves the timer due beside
+    the chunk that arrived meanwhile, and which the engine runs first is its own business.
+    So a deadline that fires is given **a second look** (`http::SECOND_LOOK`, 1 s, the same
+    wait polled again and never dropped between) before it is called a stall, and the web
+    host runs its launch downloads one after another so that no download waits through
+    another's tail.
+  - **A body that ends before its list does is refused by the push reader**
+    (`feed::frame::Elements::cut_short`, asked by both `StreamRead::finish`es): every element
+    the framer hands over is whole, so a body cut off after its second row would otherwise
+    store as a two-row feed and stamp the day. A real `.gz` fails at its trailer; a body the
+    browser decoded has none.
+  - **Progress on a streamed body has a denominator only when the body arrived still
+    gzipped** (`feed::StreamedProgress`): the declared length is the wire's, and a decoded
+    body is not that long — Spellbook declares 28.8 MB and delivers 639. Otherwise the total
+    is `0`, which the page draws as a bar with no fraction, and reports go out on the byte
+    step, never per chunk.
+  - **A run that fails drops what it staged** (`StreamIngest::abandon`, `StreamTags::abandon`):
+    here a connection that dies mid-body is an ordinary failure, not a kill.
+  - **A feed this host cannot reach is refused before any request**:
+    `marketplace_feed::reachable` is `FeedProvider::permits_a_page()` or
+    `!host::asks_as_a_page()`. Mana Pool sends no `Access-Control-Allow-Origin`, so on a page
+    its refresh is a sentence, `selected_due` never calls it due, and `FeedStatus.reachable`
+    is `false`. Natively every feed is reachable.
+  - ⚠️ **The long synchronous tails are still synchronous**: `StreamIngest::finish` (the
+    swap, every index replayed, the FTS rebuild), `StreamTags::finish` (the closure),
+    `combos::store`, `marketplace_feed::store`, `maintenance::reclaim_freed_pages` and the
+    facet index's build each run to their end on the caller. On a host with one thread no
+    command is answered while one runs. Timed on the first browser run: card ingest finish
+    4.7 s, oracle tags 11.3 s, art tags 23.4 s, combos store 3.7 s, Card Kingdom store 0.8 s;
+    the longest single wait for a call was 26.1 s. The two tag tails and the combo store
+    already write staging in short transactions and swap at the end, so each could be driven
+    a batch at a time with a turn between — not done yet.
 - **`spawn` takes work off the caller only where there is somewhere to put it.** The card
   sync's ingest, its migration pass, its reclaim and its compaction go through `blocking`; the
   facet index's build through `background`. In a browser both run on the caller, to completion —
@@ -204,11 +267,16 @@ statement for statement plus `temp_store = FILE`, and **answers the journal each
 got** (`db::Journal`: `wal` on a folder, `delete` on a browser's OPFS pool, never assumed).
 `Opened.read` is `None`, and it is handed to `State::new` as it is. `databases` is empty where the
 VFS is the filesystem (a pool's names are bare); `data_dir` is what the host shows and what the
-image cache is told, and need not be a path (`OPFS:/<directory>`). ⚠️ **What stands in for
-"replace a corpus that will not open" is not built**: `launch::unreadable_corpus_seam` is the
-line, and its doc says what a browser gets today in each of the three cases — a corpus that is
-gone reads as a first run, one that will not migrate refuses every launch. It is the web
-phase's next step (5.2).
+image cache is told, and need not be a path (`OPFS:/<directory>`). **A host that can delete
+its corpus by name calls `launch::open_single_replacing(databases, data_dir, delete)`** (step
+5.2): a corpus that will not attach or will not migrate is thrown away through the host's
+closure — the pool's `delete_db`, called once, with no connection open — and the pair is
+opened again; `user.db` is never touched, and `Opened.corpus_replaced` says it happened. What
+decides it is here (`db::Unopened`, `schema::Stopped`, and `says_nothing_about_the_file` for
+the failures that must *not* delete a corpus); only the delete is the host's. ⚠️ **A corpus
+damaged inside a sound first page is still never looked for on such a host**:
+`schema::check_corpus` opens a connection of its own and leaves a mark file, and a browser
+has neither. One that is simply gone reads as a first run.
 
 **A host builds one `state::State` and everything else is handed it.**
 `State::new(write, read, data_dir, events, observers, client, images)` takes connections the
@@ -272,9 +340,14 @@ where the pictures are kept are the host's to know. ⚠️ **Seven arguments is 
     So a self-contended one is a write that silently never happens: no trap, no `BUSY`. On an
     emulated thread `lock_for` panics instead (`alone::refuse_held`), which is how the
     `amend_owned` bug above fails by name at `sync.rs`'s ask rather than as a missing row.
-    ⚠️ The table test reaches none of those helpers on a failing download — no request leaves
-    the machine — so for the feeds' and the card sync's failure paths the claim rests on
-    reading: each is called with no guard in scope (2026-10-04).
+    The table test itself reaches none of those helpers on a failing download — its mock
+    answers 404 — so each download's own tests run the far side the same way, one connection
+    and one thread under `host::emulate_page()`: a whole streamed run, a short body, a body
+    that stalls (`sync::run_tests`, `tags::oracle`, `tags::art`, `combos`,
+    `marketplace_feed`). A `note_*` or a stamp asked for with the connection held fails
+    there by name. **The table test stands under `emulate_page()` too** since step 5.2, so
+    the five download commands take the streamed arm and a command that asks for a file is
+    refused as a browser refuses it.
   - **Asked is not run.** A made-up argument that does not parse is refused before the body;
     the test counts those and pins them by name (`STOPPED_AT_THE_DOOR`, empty since the four
     it found were given rows), so a new command it never reaches is a red test, not a
@@ -567,7 +640,8 @@ is `#[ignore]`d and so never goes red for it. (The v59 conversion test's chain c
 - **The package version is the app's, and it is not decoration.** `scryfall::USER_AGENT` is
   `concat!("MTGGrimoire/", env!("CARGO_PKG_VERSION"), …)`, `env!` reads the package that compiles
   it, and every client in the app — Scryfall's, the feeds', the relay's, the updater's — sends
-  that string. release-please bumps this manifest and its `Cargo.lock` entry with `src-tauri`'s
+  that string **on a native host**; in a browser `platform::http` sets no `User-Agent`, and
+  the browser's own goes out. release-please bumps this manifest and its `Cargo.lock` entry with `src-tauri`'s
   (`release-please-config.json`'s `extra-files`), and `src-tauri`'s
   `the_core_wears_the_apps_version` goes red if the two part. **Never set it back to `0.0.0`.**
 - **`reqwest` is one line for every target**, the same line as `src-tauri`'s: `rustls-tls` names

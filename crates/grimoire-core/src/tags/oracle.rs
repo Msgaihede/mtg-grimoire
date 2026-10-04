@@ -1554,4 +1554,280 @@ mod tests {
         ));
         hit.assert();
     }
+
+    // ---- the same refresh on a host that keeps no files -------------------------------
+    //
+    // `platform::host::emulate_page` makes the test's thread a browser's Worker: one thread,
+    // no files, and the response headers a cross-origin `fetch` hides hidden. The state is
+    // the browser's too — one connection.
+
+    /// The descriptor a page is served: the `etag` header a desktop would store is sent, and
+    /// must not be read.
+    fn page_descriptor<'a>(
+        server: &'a httpmock::MockServer,
+        updated_at: &str,
+        compressed_size: u64,
+    ) -> httpmock::Mock<'a> {
+        use httpmock::prelude::*;
+        let updated_at = updated_at.to_owned();
+        server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/oracle_tags");
+            then.status(200)
+                .header("etag", "W/\"t1\"")
+                .json_body(serde_json::json!({
+                    "object": "bulk_data",
+                    "type": "oracle_tags",
+                    "updated_at": updated_at,
+                    "jsonl_download_uri": server.url("/oracle-tags.jsonl.gz"),
+                    "compressed_size": compressed_size
+                }));
+        })
+    }
+
+    fn oracle_staging_tables(state: &State) -> i64 {
+        state
+            .lock_db()
+            .query_row(
+                "SELECT count(*) FROM corpus.sqlite_master
+                  WHERE type = 'table' AND name LIKE 'oracle\\_%\\_staging' ESCAPE '\\'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    }
+
+    /// **A tag refresh with nowhere to put a file**: the body goes from the request into
+    /// [`crate::tags::StreamTags`] a chunk at a time, the phases are the file-backed run's,
+    /// and nothing is written but the database. Then the run after it, decided from the
+    /// descriptor's `updated_at` because a page sends no `If-None-Match` and reads no `ETag`.
+    #[tokio::test]
+    async fn a_refresh_with_no_files_streams_into_the_sink_and_the_next_finds_the_same_file() {
+        let _serial = ORACLE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        let body = gz_bytes(&[
+            &tag("p1", "tutor", &[], &[]),
+            &tag("a1", "tutor-battle", &["p1"], &["oid-1"]),
+        ]);
+        let server = MockServer::start_async().await;
+        // Two headers the streamed refresh never sends. `If-None-Match` a page may not send:
+        // it costs a pre-flight the bulk hosts refuse. `Range` it may — a simple one is
+        // safelisted — but it cannot read the `Content-Range` that would verify a resume, so
+        // it asks for the whole file. Either going out fails the run here.
+        let conditional = server.mock(|when, then| {
+            when.method(GET)
+                .path("/bulk-data/oracle_tags")
+                .header_exists("if-none-match");
+            then.status(500);
+        });
+        let ranged = server.mock(|when, then| {
+            when.method(GET)
+                .path("/oracle-tags.jsonl.gz")
+                .header_exists("range");
+            then.status(500);
+        });
+        let file = server.mock(|when, then| {
+            when.method(GET).path("/oracle-tags.jsonl.gz");
+            then.status(200).body(body.clone());
+        });
+        page_descriptor(&server, "2026-08-14T21:00:00.000+00:00", body.len() as u64);
+
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("tags-page-first", &server.base_url());
+
+        let mut said: Vec<(String, u64, u64)> = Vec::new();
+        let first = refresh(&ORACLE, &state, false, &mut |phase, done, total| {
+            said.push((phase.to_owned(), done, total))
+        })
+        .await
+        .unwrap();
+
+        let mut phases: Vec<&str> = said.iter().map(|(p, _, _)| p.as_str()).collect();
+        phases.dedup();
+        assert_eq!(phases, ["checking", "downloading", "ingesting", "done"]);
+        let size = body.len() as u64;
+        assert!(
+            said.contains(&("downloading".to_owned(), 0, size))
+                && said.contains(&("downloading".to_owned(), size, size)),
+            "bytes against the listing's size, from nothing to all of it: {said:?}"
+        );
+        assert_eq!(first.tag_count, Some(2));
+        assert_eq!(first.tagging_count, Some(1));
+        assert_eq!(
+            first.updated_at.as_deref(),
+            Some("2026-08-14T21:00:00.000+00:00")
+        );
+        assert_eq!(
+            slugs_for(&state.db, "oid-1"),
+            vec!["tutor".to_owned(), "tutor-battle".to_owned()]
+        );
+        let stored_etag: Option<String> = state
+            .lock_db()
+            .query_row("SELECT etag FROM oracle_tag_meta", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            stored_etag, None,
+            "a page cannot read an ETag, so none is stored"
+        );
+        assert_eq!(oracle_staging_tables(&state), 0);
+        assert!(
+            !dir.join("tmp").exists(),
+            "no folder was made, because no file was written"
+        );
+        file.assert_calls(1);
+
+        // Again, forced past the throttle, with an ETag put where a desktop keeps one: a page
+        // must not replay it, and the same `updated_at` is what says there is nothing to fetch.
+        state
+            .lock_db()
+            .execute("UPDATE oracle_tag_meta SET etag = 'W/\"t1\"'", [])
+            .unwrap();
+        let mut again: Vec<String> = Vec::new();
+        let second = refresh(&ORACLE, &state, true, &mut |phase, _, _| {
+            again.push(phase.to_owned())
+        })
+        .await
+        .unwrap();
+        assert_eq!(again, ["checking", "done"]);
+        file.assert_calls(1);
+        conditional.assert_calls(0);
+        ranged.assert_calls(0);
+        assert_eq!(second.ingested_at, first.ingested_at);
+        assert_eq!(second.tag_count, Some(2));
+        assert!(!dir.join("tmp").exists());
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A tag file shorter than the listing promised is refused before the swap**: the
+    /// taxonomy already stored stays, nothing is left staged, the failure is in `error_log`
+    /// and the dataset rests rather than being asked for again at the next launch.
+    #[tokio::test]
+    async fn a_short_tag_file_with_no_files_is_refused_and_keeps_the_previous_tags() {
+        let _serial = ORACLE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        let good = gz_bytes(&[&tag("a1", "ramp", &[], &["oid-1"])]);
+        let newer = gz_bytes(&[&tag("a2", "removal", &[], &["oid-1"])]);
+        let server = MockServer::start_async().await;
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) =
+            crate::state::fixtures::single("tags-page-short", &server.base_url());
+
+        let mut file = server.mock(|when, then| {
+            when.method(GET).path("/oracle-tags.jsonl.gz");
+            then.status(200).body(good.clone());
+        });
+        let mut listing =
+            page_descriptor(&server, "2026-08-14T21:00:00.000+00:00", good.len() as u64);
+        refresh(&ORACLE, &state, false, &mut |_, _, _| {})
+            .await
+            .unwrap();
+        assert_eq!(slugs_for(&state.db, "oid-1"), vec!["ramp".to_owned()]);
+
+        // The file rotates, and what arrives is one byte short of what its listing says.
+        file.delete();
+        listing.delete();
+        server.mock(|when, then| {
+            when.method(GET).path("/oracle-tags.jsonl.gz");
+            then.status(200).body(newer.clone());
+        });
+        page_descriptor(
+            &server,
+            "2026-08-15T21:00:00.000+00:00",
+            newer.len() as u64 + 1,
+        );
+        let mut phases: Vec<String> = Vec::new();
+        let err = refresh(&ORACLE, &state, true, &mut |phase, _, _| {
+            phases.push(phase.to_owned())
+        })
+        .await
+        .unwrap_err();
+        assert_eq!(
+            err,
+            format!(
+                "downloaded {} bytes, expected {}",
+                newer.len(),
+                newer.len() + 1
+            )
+        );
+        assert_eq!(phases.last().map(String::as_str), Some("error"));
+        assert!(!phases.iter().any(|p| p == "ingesting"), "{phases:?}");
+        assert_eq!(
+            slugs_for(&state.db, "oid-1"),
+            vec!["ramp".to_owned()],
+            "the previous taxonomy is exactly where it was"
+        );
+        assert_eq!(
+            oracle_staging_tables(&state),
+            0,
+            "and nothing is left staged"
+        );
+        {
+            let conn = state.lock_db();
+            let logged: (String, String) = conn
+                .query_row(
+                    "SELECT operation, kind FROM error_log WHERE operation = 'oracle_tags'",
+                    [],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap();
+            assert_eq!(logged, ("oracle_tags".into(), "parse".into()));
+            assert!(
+                crate::feed::backoff::resting(&conn, "oracle_tags", crate::tags::now_from(&conn)),
+                "a body that disagreed with its listing rests the launch refresh"
+            );
+        }
+        assert!(
+            !crate::tags::status_of(&ORACLE, &state).refreshing,
+            "the claim is given back"
+        );
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// **A tag file that stops arriving ends the refresh after the stall bound**, gives the
+    /// claim back and leaves nothing staged.
+    #[tokio::test]
+    async fn a_tag_file_that_stops_arriving_with_no_files_gives_the_claim_back() {
+        let _serial = ORACLE_REFRESHES.lock().await;
+        use httpmock::prelude::*;
+        let body = gz_bytes(&[&tag("a1", "ramp", &[], &["oid-1"])]);
+        let quiet = crate::feed::quiet_host::start(body[..body.len() / 2].to_vec(), body.len());
+        let server = MockServer::start_async().await;
+        server.mock(|when, then| {
+            when.method(GET).path("/bulk-data/oracle_tags");
+            then.status(200).json_body(serde_json::json!({
+                "updated_at": "2026-08-14T21:00:00.000+00:00",
+                "jsonl_download_uri": format!("{quiet}/oracle-tags.jsonl.gz"),
+                "compressed_size": body.len() as u64
+            }));
+        });
+        let _page = crate::platform::host::emulate_page();
+        let (state, _heard, dir) = crate::state::fixtures::single_with(
+            "tags-page-stalled",
+            crate::scryfall::Client::new(server.base_url())
+                .with_stall(std::time::Duration::from_millis(300)),
+        );
+
+        let err = refresh(&ORACLE, &state, false, &mut |_, _, _| {})
+            .await
+            .unwrap_err();
+        assert!(err.contains("stalled"), "{err}");
+        assert_eq!(oracle_staging_tables(&state), 0);
+        assert!(!crate::tags::status_of(&ORACLE, &state).refreshing);
+        let kind: String = state
+            .lock_db()
+            .query_row(
+                "SELECT kind FROM error_log WHERE operation = 'oracle_tags'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(kind, "timeout");
+
+        drop(state);
+        let _ = std::fs::remove_dir_all(dir);
+    }
 }

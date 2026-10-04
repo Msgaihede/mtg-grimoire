@@ -52,7 +52,13 @@ export type ToWorker =
 
 /** Worker → page. */
 export type FromWorker =
-  | { kind: "opened"; opened: Opening }
+  /**
+   * The open's outcome, and **`existed`: whether this browser's OPFS already held the database's
+   * folder before the engine opened it** — `null` where the Worker could not ask. Asked ahead of
+   * the open, because opening is what creates the folder; it is how the page tells a database
+   * the browser cleared from one that was never there (`storage.ts`'s `noteOpened`).
+   */
+  | { kind: "opened"; opened: Opening; existed: boolean | null }
   /** An answer, **matched by `id` and never by arrival**: a slow search is overtaken by a fast one. */
   | { kind: "ok"; id: number; result: unknown }
   | { kind: "err"; id: number; message: string }

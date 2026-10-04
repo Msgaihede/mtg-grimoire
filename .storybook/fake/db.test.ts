@@ -13432,6 +13432,8 @@ describe("the whole command table", () => {
     // start-up pass collect a feed nobody has ever fetched.
     expect(status.every((s) => s.fetchedAt === null && s.rowCount === null)).toBe(true);
     expect(status.every((s) => s.stale && !s.refreshing)).toBe(true);
+    // The fake is a host that can ask every feed; the one that cannot is a browser.
+    expect(status.every((s) => s.reachable)).toBe(true);
   });
 
   /**

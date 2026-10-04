@@ -1,20 +1,19 @@
 /**
- * The only place this app names the clipboard.
+ * The only place a page names the clipboard.
  *
- * `tauri-plugin-clipboard-manager` rather than `navigator.clipboard`, deliberately. The web
- * API *should* work — `http://tauri.localhost` is a subdomain of localhost and therefore a
- * secure context — but nothing in this app had ever proved it, and the failure mode would be
- * the packaged exe only: green in dev, green in Storybook, green in jsdom, silent in the
- * shipped window. The plugin costs one narrow permission (`clipboard-manager:allow-write-text`,
- * and not the read) and removes the class of surprise entirely.
+ * **Whose clipboard is the host's to answer** (`@/lib/core`, the light-app spec §3.5): Tauri's
+ * clipboard plugin on the desktop — `core/tauri.ts` has why it is the plugin and not
+ * `navigator.clipboard` there — and `navigator.clipboard` in a browser and on the light app's
+ * Android host, which has no such plugin. Both faces of the light app copy through here, so a
+ * copy is refused in one sentence wherever it is refused.
  *
  * One function because one direction: nothing in this app reads the clipboard, which is why
  * `allow-read-text` is not granted.
  *
  * Nothing is copied until the reader presses the menu item — this module never calls itself.
  */
-import { writeText } from "@tauri-apps/plugin-clipboard-manager";
+import { host } from "@/lib/core";
 
 export async function copyText(text: string): Promise<void> {
-  await writeText(text);
+  await host.copyText(text);
 }

@@ -247,6 +247,22 @@ impl Elements {
         self.peak
     }
 
+    /// Whether the array was opened and **never closed** — the stream ended, or has so far
+    /// only got, somewhere inside it.
+    ///
+    /// **What a caller asks once its stream has ended**, because every element the framer
+    /// handed over before that point was a whole one: a body cut off after the second row of
+    /// a hundred thousand frames two perfectly good rows and no error. Where the body is a
+    /// real gzip file the decoder's trailer catches a cut; where the host has already
+    /// decompressed it — a browser's `fetch` over `Content-Encoding: gzip` — nothing else
+    /// does, and a caller that did not ask would store the prefix as though it were the file.
+    ///
+    /// `false` for a stream with no array in it at all: that is a document with nothing to
+    /// frame, which its caller already refuses as empty.
+    pub fn cut_short(&self) -> bool {
+        self.entered && !self.done
+    }
+
     /// Feed decoded bytes; `f` is called once per complete top-level element of the array.
     ///
     /// Errors with [`Overlong`] once the buffer passes [`MAX_ELEMENT_BYTES`] without an
