@@ -32,6 +32,8 @@ import appWorkerLock from "../app-worker/package-lock.json?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
 import ciYml from "../.github/workflows/ci.yml?raw";
 import syncSmoke from "./web-sync-smoke.mjs?raw";
+import syncHarness from "./web-smoke/sync-harness.mjs?raw";
+import syncPull from "./web-sync-pull.mjs?raw";
 
 const WORKFLOWS = import.meta.glob("/.github/workflows/*.yml", {
   query: "?raw",
@@ -610,14 +612,28 @@ describe("deploys, across every workflow", () => {
     expect(steps[install + 1]).not.toMatch(/^ {8}env:/m);
     expect(secretRefs(code(jobsOf(ciYml).web))).toEqual([]);
 
-    // Every wrangler subcommand the script spawns, as the argv it writes: the word after the
-    // script's own path, or after the `d1()` helper's fixed `d1 execute`.
-    const starts = [...syncSmoke.matchAll(/\[\s*script,\s*"([a-z0-9]+)",\s*"([^"]+)"/g)];
+    // Every wrangler subcommand the run spawns, as the argv it writes: the word after the
+    // script's own path, or after the `d1()` helper's fixed `d1 execute`. **Three files are the
+    // run since step 6.5**: the relay is started by `web-smoke/sync-harness.mjs`, for the walk
+    // and for `web-sync-pull.mjs` — the measurement of a large pull, which no job runs and
+    // which is held to the same two commands all the same. So the spawns are counted across all
+    // three, and found in the harness alone.
+    const spawned = /\[\s*script,\s*"([a-z0-9]+)",\s*"([^"]+)"/g;
+    const starts = [...`${syncSmoke}\n${syncHarness}\n${syncPull}`.matchAll(spawned)];
     expect(starts.map((m) => `${m[1]} ${m[2]}`).sort()).toEqual(["d1 execute", "dev --local"]);
-    expect(syncSmoke).toMatch(/\[\s*script,\s*"d1",\s*"execute",\s*"[\w-]+",\s*"--local",/);
-    // And none of the words that reach Cloudflare is an argument anywhere in it.
+    expect([...syncHarness.matchAll(spawned)]).toHaveLength(2);
+    expect(syncHarness).toMatch(/\[\s*script,\s*"d1",\s*"execute",\s*"[\w-]+",\s*"--local",/);
+    // Neither run starts a process of its own but one: the measurement asks the system's
+    // process table what a tab and workerd weigh.
+    const processes = (source) =>
+      [...source.matchAll(/\bspawn(?:Sync)?\(\s*([^,\s]+)/g)].map((m) => m[1]);
+    expect(processes(syncSmoke)).toEqual([]);
+    expect(processes(syncPull)).toEqual(['"powershell.exe"']);
+    // And none of the words that reach Cloudflare is an argument anywhere in them.
     const reaching = /["'`](?:deploy|publish|rollback|versions|secret|tail|login|--remote)["'`]/;
-    expect(syncSmoke).not.toMatch(reaching);
+    for (const [name, source] of Object.entries({ syncSmoke, syncHarness, syncPull })) {
+      expect(source, name).not.toMatch(reaching);
+    }
   });
 
   it("names neither of the other two Workers, and no Cloudflare secret anywhere else", () => {

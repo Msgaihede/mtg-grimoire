@@ -40,8 +40,11 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   real name and under the shipped policy; `-- --measure` adds a minute's profile of the idle
   loop, twice. It runs `app-worker`'s pinned wrangler (`npm ci --ignore-scripts --prefix
   app-worker` first), or the `wrangler.js` that `WRANGLER` names.
-  **`verify` runs none of them** — CI's `web` job
-  does. See [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-web/CLAUDE.md).
+  **`npm run web:sync-pull -- --ops <n>`** is a measurement on that harness, not a check: what
+  one unpaged `pull` of `n` ops costs the engine's Worker (`--live` and `--join` are the two
+  neighbouring cases; [light-app.md](../reference/light-app.md) §10.5). Nothing runs it — a
+  minute at a thousand ops, far longer at fifty thousand.
+  **`verify` runs none of them** — CI's `web` job runs the two smokes. See [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-web/CLAUDE.md).
 - `npm run web:deploy-guard` — may the web app be deployed from this tree, between releases?
   Compares `USER_SCHEMA_VERSION` here with the last release tag's (`git show`), in one sentence:
   exit 0 equal, 1 different, 2 could not tell. It also asks `gh` whether that release is

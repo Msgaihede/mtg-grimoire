@@ -4329,6 +4329,21 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   can resolve, skipped when it cannot*, above). A held cursor also makes this hazard easier to
   reach, because the held page is re-sent on every trip and grows with everything the group writes
   until the hold ends.
+  **Measured 2026-10-04, in a browser against the relay's own code under workerd — and still not
+  built** ([light-app.md](light-app.md) §10.5, `npm run web:sync-pull`). The estimates above were
+  low on both sides. A 50 000-op import was a **44.6 MB** response (33.6 MB on the wire) for ops
+  of 890 B sealed; the relay isolate's JS heap peaked at **143–157 MB** answering it, 224–249 MB
+  when the same rows went out as a joining device's baseline, and local workerd refused none of
+  it; the pulling engine's linear memory went from 21 to **570 MB** — twelve times the response
+  at every size measured — and it answered no command for the **29 s** the page took to apply,
+  the whole of `client::pull`'s one stretch. At 10 000 ops: 8.9 MB, 5 s, 131 MB. Being live does
+  not avoid it — 250 `head` frames became three pulls, the largest 26–28 MB. The largest answer
+  there can be is the group's quota, 128 MiB of sealed text, about 150 000 such ops. And the
+  browser's whole-request deadline (120 s) is a floor on the link: a pull that misses it is
+  abandoned with the cursor where it stood and asked for again from its first byte. That section
+  also has the design a `LIMIT` would take — pages in `seq` order, a held page falling back to
+  today's request — and the two reads in `group.ts` (`compactNow`, and a pull's own-row filter)
+  that load every `sealed` and would meet the isolate's limit without any pull at all.
 - ~~**A deferred op is dropped, not held.**~~ **Built 2026-09-27**, in the release that carries
   user schema v52 — *Held while it can resolve, skipped when it cannot* above. A newer sender's
   change is held until this device upgrades, a parent that may still arrive for a bounded wait, and

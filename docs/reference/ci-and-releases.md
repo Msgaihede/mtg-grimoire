@@ -105,7 +105,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **Four single files and one folder sit above the tree that would otherwise take them**,
     each because that tree's arm does not set `web`: `scripts/build-wasm.mjs`,
     `scripts/web-smoke.mjs`, `scripts/web-sync-smoke.mjs` (step 6.3) and — since step 5.2 —
-    `scripts/web-smoke/*`, which holds `harness.mjs`, the module both runs are written in, and
+    `scripts/web-smoke/*`, which holds `harness.mjs`, the module both runs are written in,
+    `sync-harness.mjs`, the relay and the pairing the sync runs share (step 6.5; its measurement,
+    `scripts/web-sync-pull.mjs`, is run by no job and stays under `scripts/*`), and
     the fixtures the smoke
     answers the engine with, above `scripts/*` (which would lint a broken build script and
     never run it; a fixture changed is a first run changed, and nothing but `web` runs it), and
