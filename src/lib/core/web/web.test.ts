@@ -27,6 +27,7 @@ import {
   CLEARED_TITLE,
   HELD_KEY,
   PERSIST_KEY,
+  SITE_DATA_WARNING,
   type KeyStore,
 } from "./storage";
 
@@ -730,17 +731,36 @@ describe("storage cleared under the app", () => {
     // What happened, what is being rebuilt by itself, and what is not coming back — in that
     // order, and each for a reader rather than as a code.
     expect(answer?.title).toBe("Your browser cleared MTG Grimoire's saved data");
-    expect(answer?.lines).toHaveLength(3);
+    expect(answer?.lines).toHaveLength(4);
     expect(answer?.lines[0]).toMatch(/Browsers can remove what a site has stored/);
     expect(answer?.lines[1]).toBe("The card data downloads again by itself.");
     expect(answer?.lines[2]).toMatch(/collection, wishlist and decks/);
     expect(answer?.lines[2]).toMatch(/nothing to restore it from/);
     expect(answer?.lines[2]).toMatch(/import those files again/);
+    // And, as an *if*: a paired browser's old entry still holds a place in its group.
+    expect(answer?.lines[3]).toMatch(/^If this browser was paired/);
+    expect(answer?.lines[3]).toMatch(/Remove the old entry in Settings, under Sync/);
     // And on the console, where a bug report can carry it — with what the open made of it.
     expect(warned).toHaveBeenCalledWith(`${CLEARED_LINE} — a new, empty one was created`);
     expect(CLEARED_LINE).toBe(
       "MTG Grimoire: this browser cleared the app's storage since the database was last " +
         "opened here",
+    );
+  });
+
+  /**
+   * **The half said beforehand** — `storage_group_warning`, which the Sync panel draws under its
+   * roster for a device in a group. This host answers it on every launch, in its own words:
+   * the sentence does not turn on what the browser said about keeping its storage (a reader who
+   * clears the site's data clears it whatever was promised about eviction), and whether there is
+   * a group to warn about is the page's half. The desktop and the Android host refuse the name.
+   */
+  it("tells a page what clearing its site data costs a paired browser, on every launch", async () => {
+    const { store } = fakeStore(HELD);
+    await expect(load(store, true).call("storage_group_warning")).resolves.toBe(SITE_DATA_WARNING);
+    // A first run answers the same: a browser's storage is lent from the day it is first used.
+    await expect(load(fakeStore().store, false).call("storage_group_warning")).resolves.toBe(
+      SITE_DATA_WARNING,
     );
   });
 

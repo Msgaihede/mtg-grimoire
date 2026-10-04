@@ -2,7 +2,7 @@ import { useState, type JSX } from "react";
 import { Eraser, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { BUTTON } from "./controls";
+import { PANEL_BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import type { LocalCache } from "./useDataReset";
 
@@ -56,7 +56,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
           onClick={() => setAsking("images")}
           disabled={cache.clear.pending}
           aria-busy={cache.clear.pending || undefined}
-          className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+          className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
         >
           <Eraser className="size-4" aria-hidden="true" />
           Clear cache
@@ -76,7 +76,7 @@ export function CachePanel({ cache }: { cache: LocalCache }): JSX.Element {
           onClick={() => setAsking("combos")}
           disabled={cache.combos.pending}
           aria-busy={cache.combos.pending || undefined}
-          className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+          className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
         >
           {/* Not `Eraser`, which is the row above: the two are the same box in the same colour at
               the same end of the same kind of sentence, so the glyph is the whole of what tells

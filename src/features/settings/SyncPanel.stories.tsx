@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { emitFake } from "../../../.storybook/fake/event";
+import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
 import { SyncPanel } from "./SyncPanel";
 
 const meta = {
@@ -40,8 +41,11 @@ const meta = {
           "them 224 characters, one of them the hard phone→PC direction — are gone, and this " +
           "panel learns both by polling instead of by waiting on a paste. **There is no " +
           "cryptography in the workbench and these stories do not pretend there is.** The fake " +
-          "derives the six digits from the code with a plain hash and draws a QR-shaped " +
-          "picture rather than a readable code — see `FakePairing` in `.storybook/fake/db.ts`. " +
+          "derives the six digits from the code with a plain hash — see `FakePairing` in " +
+          "`.storybook/fake/db.ts`. **The QR code is a real one, of a code with no key in " +
+          "it**: the 53-module symbol the app draws an invite as (`.storybook/fake/qr.ts`), so " +
+          "a phone held up to a story reads the invite's address, and " +
+          "`scripts/pairing-scan-smoke.mjs` points a headless browser's camera at it. " +
           "What is real is everything a panel is drawn against: the invite carried by hand, " +
           "the one number both readers compare, the poll that tells this panel where the " +
           "ceremony has got to, the store that keeps a removed device the status command does " +
@@ -311,6 +315,12 @@ export const Paired: Story = {
     const group = pill.parentElement as HTMLElement;
     await expect(within(group).getByText("Desk")).toBeInTheDocument();
     await expect(within(group).queryByRole("button")).not.toBeInTheDocument();
+
+    // A desktop keeps its database in a folder that is its own, so nothing here is said about
+    // a browser's site data — `PairedInABrowser` is the host that is told. The membership half
+    // has answered by this point, which is as long as the host's own answer takes.
+    await expect(await canvas.findByText(/not connected/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/site data/i)).not.toBeInTheDocument();
   },
 };
 
@@ -434,6 +444,129 @@ export const LeavingSaysWhatItCosts: Story = {
     // `NotPaired` asserts from the start.
     await expect(canvas.queryByRole("button", { name: "Leave group" })).not.toBeInTheDocument();
     await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+  },
+};
+
+/* -------------------------------------------------------------- a browser's storage ----- */
+
+/**
+ * **A paired browser, and the one thing about it a desktop has no word for.**
+ *
+ * The web app keeps its database in storage the browser lends it, and the browser's own *clear
+ * site data* takes it back — the device identity and its keys with everything else. The app
+ * then opens as a new device, and the old one is still on every other device's roster, holding
+ * one of the group's five places until somebody there removes it (the light-app spec §7:
+ * *"Clearing site data mints a new device and spends a slot. The panel says so before a reader
+ * presses anything that would"*).
+ *
+ * **No press in this app does that**, so there is no dialog for the sentence to live in. It
+ * stands under the roster instead, for as long as this device is in a group, with both ways out
+ * in the order they cost least: leave here first, or remove the old entry from another device
+ * afterwards.
+ *
+ * **The sentence is the host's, not the panel's.** The `lentStorage` fault is what makes this
+ * story a browser: the host answers `storage_group_warning` with the web host's own words
+ * (`src/lib/core/web/storage.ts`), a name a desktop and the Android host refuse — and the panel
+ * draws whatever sentence it is handed, knowing nothing of what kind of host said it. Every other
+ * story in this file is a desktop, and `Paired` asserts the warning's absence there.
+ *
+ * It goes all the way down: the press it names first is pressed, and the warning leaves with the
+ * group it was about.
+ */
+export const PairedInABrowser: Story = {
+  parameters: { fake: { seed: "paired", fault: "lentStorage" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const page = within(canvasElement.ownerDocument.body);
+
+    // The web host's sentence, word for word, from where that host keeps it.
+    const warning = await canvas.findByText(SITE_DATA_WARNING);
+    await expect(warning).toHaveTextContent(/clearing this browser's site data/i);
+    await expect(warning).toHaveTextContent(/still counts toward the group's five/i);
+    await expect(warning).toHaveTextContent(/leave the group here first/i);
+    // A standing paragraph and not an alert: nothing has gone wrong.
+    await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
+
+    // Under the roster it is about, above the press it names.
+    const roster = canvas.getByRole("list");
+    const leave = canvas.getByRole("button", { name: "Leave group" });
+    await expect(
+      roster.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    await expect(
+      warning.compareDocumentPosition(leave) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await userEvent.click(leave);
+    await userEvent.click(await page.findByRole("button", { name: "Leave the group" }));
+
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/site data/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * A browser that has paired nothing — **and is told nothing about its storage.**
+ *
+ * The warning is about a place in a group, and this device has none to lose. Drawn here it would
+ * teach a reader who has not paired that there is something to worry about, which is
+ * `NotConnected`'s argument about the lapse reassurance one half down.
+ */
+export const NotPairedInABrowser: Story = {
+  parameters: { fake: { fault: "lentStorage" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
+    // The membership half has answered by now, so the host's answer has had as long to land.
+    await expect(await canvas.findByText(/not connected/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/site data/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **The offer in a phone's width** — the light app's phone face draws this same panel, and it
+ * was first driven there on 2026-10-04.
+ *
+ * Two things were wrong and neither showed in the Settings column. The QR code was a fixed
+ * 288px square that refused to shrink, in a step with 268px inside it at a 360px window: it
+ * stood 20px past its own frame. And the typed code grew from nothing beside it with no floor,
+ * so at 412px the picture left it 20px and it ran two characters a line for 1 228px. Now the
+ * picture is as wide as its step up to 288, and the code takes the line under it wherever less
+ * than 8rem is left beside.
+ *
+ * The frame is 320px — the panel's width on a 352px phone, 8px inside the 360 the measurements
+ * were taken at, and a width the app already ships a class for (a one-off 328 would have put a
+ * utility in the built stylesheet for this story alone). **jsdom lays nothing out**, so what
+ * this play can hold is the classes that make the fold; `controls.test.ts` compiles them, the
+ * measurements are a browser's, and `npm run mobile:scan-smoke` takes them again against the
+ * light app.
+ */
+export const OfferInAPhonesWidth: Story = {
+  decorators: [
+    (Story) => (
+      <div className="w-80">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
+    const qr = await canvas.findByTestId("pairing-qr");
+    // The real symbol: 53 modules and the four of quiet zone either side.
+    await expect(qr).toHaveAttribute("viewBox", "0 0 61 61");
+    // As wide as its step and no wider, and square by its own ratio.
+    await expect(qr.classList.contains("max-w-full")).toBe(true);
+    await expect(qr.classList.contains("aspect-square")).toBe(true);
+    // The one surface that does not follow the theme: a camera reads dark on white.
+    await expect(qr.classList.contains("bg-white")).toBe(true);
+
+    const code = qr.nextElementSibling as HTMLElement;
+    await expect(code.textContent).toMatch(/^([0-9A-Z]{5}-){20}[0-9A-Z]{5}$/);
+    // A floor of its own, so a wrapping row has something to break before.
+    await expect(code.classList.contains("min-w-32")).toBe(true);
   },
 };
 /* -------------------------------------------------------------- the membership ---------- */

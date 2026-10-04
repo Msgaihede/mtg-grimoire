@@ -4,7 +4,7 @@ import { GrimoireMark } from "@/components/GrimoireMark";
 import type { ReleaseHistory } from "@/lib/useReleaseHistory";
 import { formatBytes, formatChecked, type Update } from "@/lib/useUpdate";
 import { cn } from "@/lib/utils";
-import { BUTTON } from "./controls";
+import { PANEL_BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import { ReleaseNotes } from "./ReleaseNotes";
 import { VersionHistory } from "./VersionHistory";
@@ -132,7 +132,7 @@ export function UpdatePanel({
             onClick={update.check}
             disabled={busy}
             aria-busy={busy || undefined}
-            className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+            className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
           >
             <RefreshCw className="size-4" aria-hidden="true" />
             Check now
@@ -169,7 +169,7 @@ export function UpdatePanel({
               <button
                 type="button"
                 onClick={update.openReleasePage}
-                className={cn(BUTTON, "border-border text-dim hover:bg-bg hover:text-text")}
+                className={cn(PANEL_BUTTON, "border-border text-dim hover:bg-bg hover:text-text")}
               >
                 <ExternalLink className="size-4" aria-hidden="true" />
                 View on GitHub
@@ -237,7 +237,7 @@ function PrimaryAction({ update, windows }: { update: Update; windows: number })
       <button
         type="button"
         onClick={update.openReleasePage}
-        className={cn(BUTTON, gold)}
+        className={cn(PANEL_BUTTON, gold)}
       >
         <ExternalLink className="size-4" aria-hidden="true" />
         Open the release page
@@ -253,7 +253,7 @@ function PrimaryAction({ update, windows }: { update: Update; windows: number })
           disabled={busy}
           aria-busy={busy || undefined}
           aria-describedby={windows > 1 ? hintId : undefined}
-          className={cn(BUTTON, gold)}
+          className={cn(PANEL_BUTTON, gold)}
         >
           <CircleArrowUp className="size-4" aria-hidden="true" />
           Restart to finish
@@ -278,7 +278,7 @@ function PrimaryAction({ update, windows }: { update: Update; windows: number })
       onClick={update.download}
       disabled={busy}
       aria-busy={busy || undefined}
-      className={cn(BUTTON, gold)}
+      className={cn(PANEL_BUTTON, gold)}
     >
       <Download className="size-4" aria-hidden="true" />
       {busy

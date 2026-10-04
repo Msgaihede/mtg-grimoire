@@ -7,7 +7,7 @@ vi.mock("@tauri-apps/api/window", () => import("../../.storybook/fake/window"));
 
 import { emitFake } from "../../.storybook/fake/event";
 import type { CommandTable } from "../../.storybook/fake/scope";
-import type { SearchResponse, SyncProgressEvent, SyncStatus } from "@/lib/ipc";
+import type { RelayOutcome, SearchResponse, SyncProgressEvent, SyncStatus } from "@/lib/ipc";
 import { PhoneFace } from "./PhoneApp";
 import { installLayout, renderPhone } from "./testing";
 
@@ -97,5 +97,82 @@ describe("the phone face over a first card sync", () => {
     expect(await screen.findByText(/No card data yet/, undefined, SETTLE)).toBeVisible();
     expect(screen.queryByText("No cards match.")).toBeNull();
     expect(screen.queryByRole("progressbar")).toBeNull();
+  });
+});
+
+/** One round trip with the reader's other devices, as `sync:applied` carries it. */
+const trip = (over: Partial<RelayOutcome>): RelayOutcome => ({
+  pushed: 0,
+  pulled: 0,
+  unreadable: 0,
+  applied: 0,
+  resurrected: 0,
+  cyclesBroken: 0,
+  skipped: 0,
+  deferred: 0,
+  heldNewer: 0,
+  dropped: 0,
+  moot: 0,
+  changed: false,
+  baselineOps: 0,
+  baselineHistory: 0,
+  ...over,
+});
+
+const applied = (over: Partial<RelayOutcome>) =>
+  act(() => emitFake<RelayOutcome>("sync:applied", trip(over)));
+
+/**
+ * **A sync that applied refreshes the phone face** — phase 6, step 6.4. The desktop's shell mounts
+ * `useDeviceSyncInvalidation`; this face has no such shell, and until it mounted the listener
+ * itself a change another device made sat in the database under a wall still drawing the rows as
+ * they were.
+ *
+ * The page is the wishlist with **Settings closed**: the listener is the face's, not the Sync
+ * panel's. What "another device's change" is here is the fake's own `wishlist_clear`, called on
+ * the world's table and not through the page — a write this face did not make and so settles no
+ * query for, which is exactly what a pulled op is.
+ */
+describe("the phone face over a device sync", () => {
+  const solRing = () => screen.queryByRole("button", { name: "Sol Ring, any printing" });
+
+  async function wishlistOverAWorld() {
+    let table: CommandTable = {};
+    renderPhone(<PhoneFace />, {
+      path: "/wishlist",
+      commands: (own) => {
+        table = own;
+        return {};
+      },
+    });
+    await screen.findByRole("button", { name: "Sol Ring, any printing" }, SETTLE);
+    return { pulled: () => (table.wishlist_clear as () => number)() };
+  }
+
+  it("refetches the list on screen when a trip changed rows here", async () => {
+    const world = await wishlistOverAWorld();
+
+    world.pulled();
+    // Nothing has told the page: its answer is fresh for `query.ts`'s half minute.
+    expect(solRing()).not.toBeNull();
+
+    applied({ pulled: 13, applied: 13, changed: true });
+
+    await waitFor(() => expect(solRing()).toBeNull(), SETTLE);
+  });
+
+  it("leaves the lists alone for a trip that only pushed", async () => {
+    const world = await wishlistOverAWorld();
+    world.pulled();
+
+    applied({ pushed: 4, changed: false });
+    // Long enough for a refetch to have landed, had one been asked for: the one above does
+    // inside this.
+    await new Promise((settled) => setTimeout(settled, 300));
+    expect(solRing()).not.toBeNull();
+
+    // And the same listener still refreshes on the trip that did change something.
+    applied({ pulled: 1, applied: 1, changed: true });
+    await waitFor(() => expect(solRing()).toBeNull(), SETTLE);
   });
 });

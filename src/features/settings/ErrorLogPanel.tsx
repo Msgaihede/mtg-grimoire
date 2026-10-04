@@ -4,7 +4,7 @@ import type { ErrorEntry, ErrorKind, ErrorSource } from "@/lib/ipc";
 import { ago } from "@/lib/relativeTime";
 import type { ErrorLog } from "@/lib/useErrorLog";
 import { cn } from "@/lib/utils";
-import { BUTTON } from "./controls";
+import { PANEL_BUTTON } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /**
@@ -115,7 +115,7 @@ export function ErrorLogPanel({ log }: { log: ErrorLog }) {
           onClick={clear}
           disabled={clearing || entries.length === 0}
           aria-busy={clearing || undefined}
-          className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+          className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
         >
           <Trash2 className="size-4" aria-hidden="true" />
           Clear

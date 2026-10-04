@@ -23,7 +23,7 @@ Full reference, measurements, and design history: [`docs/reference/storybook.md`
 - **The fake sits under `src/lib/ipc.ts`, not in place of it**:
   - `fake/aliases.ts` aliases four modules (`@tauri-apps/api/core`, `@tauri-apps/api/event`, `@tauri-apps/api/window`, and `@/lib/images`) to `.storybook/fake/`.
   - Because `src/lib/ipc.ts` is the hand-written TypeScript mirror of Rust structs, placing the fake beneath it ensures every story exercises the mirror and catches type drift.
-  - The same four aliases are consumed by the light app's dev mode (`npm run mobile:dev` via `vite.mobile.config.ts`), which boots the `starter` world before mounting React.
+  - The same four aliases are consumed by the light app's dev mode (`npm run mobile:dev` via `vite.mobile.config.ts`), which boots one world before mounting React: `starter` by default, or the `?seed=` / `?fault=` named in the address (`mobile/fakeBoot.ts`).
 - **Single window model**:
   - A story simulates a single window. `window_new` answers but opens nothing; `window_count` always returns 1.
   - Multi-window states are simulated using explicit faults (e.g., `scannerElsewhere` for active hardware leases), never second window instances.
@@ -47,6 +47,7 @@ Full reference, measurements, and design history: [`docs/reference/storybook.md`
   - Taxonomies: `oracleTagsMissing`, `oracleTagsFetchError`, `artTagsMissing`, `artTagsFetchError`.
   - Hardware & Locks: `scannerElsewhere` (scanner lease held by another window), `scannerMissing`.
   - Supporter States: `patreonDeclined` (grace window), `patreonLapsed` (revoked entitlement), `patreonGroupEntitled` (secondary device entitled via group).
+  - Host: `lentStorage` (the story is a browser: the host answers `storage_group_warning` with the web host's sentence). The one fault that adds a command — put over the world's table in `world.ts`, never in `allHandlers`, which parity holds to `desktop.rs`.
 - **Data fixtures**:
   - **Cards & Tokens**: Corpus includes Agadeem's Awakening as the sole `{X}` mana card for mana-curve stories, plus token printings mapped by `TOKEN_ORACLE` and `TOKEN_PRINTING`.
   - **Combos & Taxonomies**: Oracle tags answer one entry per requested ID in request order with deduplication. Combo fixtures in `db.ts` support pagination tests via "Show more".
