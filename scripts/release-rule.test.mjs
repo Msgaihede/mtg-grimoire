@@ -31,6 +31,7 @@ import appWorkerPackage from "../app-worker/package.json?raw";
 import appWorkerLock from "../app-worker/package-lock.json?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
 import ciYml from "../.github/workflows/ci.yml?raw";
+import syncSmoke from "./web-sync-smoke.mjs?raw";
 
 const WORKFLOWS = import.meta.glob("/.github/workflows/*.yml", {
   query: "?raw",
@@ -542,6 +543,13 @@ describe("deploys, across every workflow", () => {
     const wrangler = lines.filter(({ line }) => /\bwrangler\b/.test(line));
     expect(wrangler).toEqual([
       {
+        // Not a run of it: the name of the `web` job's step that *installs* the same lockfile,
+        // for the sync smoke (phase 6, step 6.3). No workflow line there starts wrangler; the
+        // script does, and the test below holds what it may ask of it.
+        path: "/.github/workflows/ci.yml",
+        line: "      - name: Install wrangler from app-worker's lockfile",
+      },
+      {
         path: "/.github/workflows/release.yml",
         // `--no-install`: what the lockfile's install put there, or a failure. Never a
         // version typed here, which `npx` would resolve — with everything under it — on the day.
@@ -587,8 +595,40 @@ describe("deploys, across every workflow", () => {
     expect(lock.packages["node_modules/@cloudflare/workerd-linux-64"]).toBeDefined();
   });
 
+  // **The other place wrangler is installed, and why it is not a deploy** (phase 6, step 6.3):
+  // CI's `web` job runs `scripts/web-sync-smoke.mjs`, which starts the *relay's* code under
+  // workerd on the runner and pairs two browsers through it. The same lockfile, the same
+  // `--ignore-scripts`, no secret — and a script that may ask wrangler for two things, both
+  // `--local`. A third subcommand there, or one of these without the flag, is a workflow that
+  // can reach the account.
+  it("installs wrangler in CI for a run that is local, start to finish", () => {
+    const steps = stepsOf(jobsOf(ciYml).web);
+    const install = steps.findIndex((s) => /\bwrangler\b/.test(s));
+    expect(steps[install]).toMatch(/^ {8}run: npm ci --ignore-scripts --prefix app-worker$/m);
+    expect(steps[install]).not.toMatch(/^ {8}env:/m);
+    expect(steps[install + 1]).toMatch(/^ {8}run: npm run web:sync-smoke$/m);
+    expect(steps[install + 1]).not.toMatch(/^ {8}env:/m);
+    expect(secretRefs(code(jobsOf(ciYml).web))).toEqual([]);
+
+    // Every wrangler subcommand the script spawns, as the argv it writes: the word after the
+    // script's own path, or after the `d1()` helper's fixed `d1 execute`.
+    const starts = [...syncSmoke.matchAll(/\[\s*script,\s*"([a-z0-9]+)",\s*"([^"]+)"/g)];
+    expect(starts.map((m) => `${m[1]} ${m[2]}`).sort()).toEqual(["d1 execute", "dev --local"]);
+    expect(syncSmoke).toMatch(/\[\s*script,\s*"d1",\s*"execute",\s*"[\w-]+",\s*"--local",/);
+    // And none of the words that reach Cloudflare is an argument anywhere in it.
+    const reaching = /["'`](?:deploy|publish|rollback|versions|secret|tail|login|--remote)["'`]/;
+    expect(syncSmoke).not.toMatch(reaching);
+  });
+
   it("names neither of the other two Workers, and no Cloudflare secret anywhere else", () => {
-    expect(lines.filter(({ line }) => /\b(?:relay|share-worker)\b/.test(line))).toEqual([]);
+    // One line names the relay, and it deploys nothing: the sync smoke's step in `ci.yml`,
+    // which runs the relay's code on the runner — the test above has what that run may do.
+    expect(lines.filter(({ line }) => /\b(?:relay|share-worker)\b/.test(line))).toEqual([
+      {
+        path: "/.github/workflows/ci.yml",
+        line: "      - name: Pair two browsers through the local relay",
+      },
+    ]);
     const cloudflare = lines.filter(({ line }) => /CLOUDFLARE_|ANDROID_KEY/.test(line));
     // `ci.yml` names the Android variables for the throwaway key it mints itself — never a secret.
     expect([...new Set(cloudflare.map(({ path }) => path))].sort()).toEqual([
