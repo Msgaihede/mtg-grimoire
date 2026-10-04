@@ -30,6 +30,66 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.41.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.40.0...v0.41.0) (2026-10-04)
+
+
+### Features
+
+* **ci:** the light app's first run, measured on an emulator (phase 4, step 4.5) ([2abf2d7](https://github.com/Msgaihede/mtg-grimoire/commit/2abf2d7a8430d1791b9b4c03956c50ec27f4455f))
+* **ci:** the light app's first run, measured on an emulator (phase 4, step 4.5) ([f5bccf8](https://github.com/Msgaihede/mtg-grimoire/commit/f5bccf87095a26460adadd13378753f931868a5f))
+* **core:** the command table covers the light app (phase 4, step 4.2) ([f8b4693](https://github.com/Msgaihede/mtg-grimoire/commit/f8b469330456f57af4dacf846ea2c6fea7f65f34))
+* **core:** the command table covers the light app (phase 4, step 4.2) ([94258b5](https://github.com/Msgaihede/mtg-grimoire/commit/94258b55cdf214ad12e7ecfd258f72bba1f1e7d9))
+* **decks:** split the deck read, covers, findings, bracket and note bodies out of their welds ([c374603](https://github.com/Msgaihede/mtg-grimoire/commit/c374603324a2523b77d11f5c03729c25ffe930ca))
+* **light:** collection and wishlist writes on the phone face, and the card sheet's adds ([8dd80f3](https://github.com/Msgaihede/mtg-grimoire/commit/8dd80f3a184ad0a7116f5bf6040ae750759e9694))
+* **light:** create a deck on the phone face ([0f64808](https://github.com/Msgaihede/mtg-grimoire/commit/0f6480817000a2dc835cec2e748d10b3d793b803))
+* **light:** create a deck on the phone face ([5f5c489](https://github.com/Msgaihede/mtg-grimoire/commit/5f5c48930d19c3b40dd63f3ad26717477bb5243d))
+* **light:** deck writes on the phone face ([1775b6a](https://github.com/Msgaihede/mtg-grimoire/commit/1775b6a78fa231f1ff1c39e47b5e6d2ca53948c3))
+* **light:** filter the collection's cabinet, and end its wall on Try again ([d186ebd](https://github.com/Msgaihede/mtg-grimoire/commit/d186ebd171a52744fc13561bce2f37bbbcf9d66d))
+* **light:** filter the wishlist's cabinet, and end its wall on Try again ([67fee4f](https://github.com/Msgaihede/mtg-grimoire/commit/67fee4ffe6ca5cfe45e59b911df772b4959c89b4))
+* **light:** import and export on the phone face ([2ac1a53](https://github.com/Msgaihede/mtg-grimoire/commit/2ac1a53235af968f074c3eb1580c0d4f12e1cde0))
+* **light:** no way into a view the light edition does not draw, and Ctrl+Shift+N left alone ([c48b8b5](https://github.com/Msgaihede/mtg-grimoire/commit/c48b8b5241f2949ded221831697ce585864043ef))
+* **light:** phase 3, step 3.1 — the phone search's filters sheet and the card sheet ([0f25aeb](https://github.com/Msgaihede/mtg-grimoire/commit/0f25aeb45d966b54d62ad4eea94a1efec5fb674d))
+* **light:** phase 3, step 3.2 — the collection as a cabinet on the phone face ([3f154ec](https://github.com/Msgaihede/mtg-grimoire/commit/3f154ec6b7f17cf2ead599879eff11d369538171))
+* **light:** phase 3, step 3.3 — the wishlist as a cabinet on the phone face ([d384fa8](https://github.com/Msgaihede/mtg-grimoire/commit/d384fa8f9bfd214bf065dd1adfd5a189144821b1))
+* **light:** phase 3, step 3.4 — the deck gallery and the one-column deck page ([4fbfe3d](https://github.com/Msgaihede/mtg-grimoire/commit/4fbfe3d77ff1666d2694d4dafa202a2768beed24))
+* **light:** phase 3, step 3.5a — deck writes on the phone face ([f3dbb31](https://github.com/Msgaihede/mtg-grimoire/commit/f3dbb31a8b48aae1a3e86e7b93db276e4f488bf4))
+* **light:** phase 3, step 3.5b — collection and wishlist writes, and the card sheet's adds ([31759fe](https://github.com/Msgaihede/mtg-grimoire/commit/31759fe2a42619c63549799a97a3d0df3d330d63))
+* **light:** phase 3, step 3.6 — import and export on the phone face ([fa03971](https://github.com/Msgaihede/mtg-grimoire/commit/fa03971a8546579b795f8500bd416b152531abef))
+* **light:** phase 3, step 3.7 — light Settings, on both faces ([cee8e7e](https://github.com/Msgaihede/mtg-grimoire/commit/cee8e7e8556c9fc81a90c4802ce186442840e7cf))
+* **light:** phase 3, step 3.8 — phase 1's leftovers, the shell, the fences and two measurements ([b1f416f](https://github.com/Msgaihede/mtg-grimoire/commit/b1f416f7c0aa2ffcd342feb11b3106f5244b05ec))
+* **light:** Settings on the phone face — the light groups, each opening its panels ([8538cf3](https://github.com/Msgaihede/mtg-grimoire/commit/8538cf356d7d9448cc5aa45cd7ffb1ae819f5e09))
+* **light:** stories for phone UI — Storybook's globs reach mobile/ ([c3b23e4](https://github.com/Msgaihede/mtg-grimoire/commit/c3b23e4eb1bd63d33edddd0c419300cec2860299))
+* **light:** the Android host — core_call, the image protocol and a CI APK (phase 4, step 4.1) ([71a0f1e](https://github.com/Msgaihede/mtg-grimoire/commit/71a0f1eb50bf69533c84c34320c444a2303c8dc7))
+* **light:** the Android host — core_call, the image protocol and a CI APK (phase 4, step 4.1) ([85f7e07](https://github.com/Msgaihede/mtg-grimoire/commit/85f7e07ef2a52d1ea4072108f3eddb90d622557a))
+* **light:** the Android host's seams — back, insets, files and links (phase 4, step 4.3) ([c2773c3](https://github.com/Msgaihede/mtg-grimoire/commit/c2773c3959bb675dd01c9c75812786cc6c1a6db0))
+* **light:** the Android host's seams — back, insets, files and links (phase 4, step 4.3) ([e84c7a1](https://github.com/Msgaihede/mtg-grimoire/commit/e84c7a1060774ffbc3927f25614ce5c98dc384ee))
+* **light:** the collection as headed shelves on the phone face ([5958042](https://github.com/Msgaihede/mtg-grimoire/commit/5958042f5bca19d9d9d104a4d1a1cb04e64f0428))
+* **light:** the collection's import and export, in its figures band ([2128487](https://github.com/Msgaihede/mtg-grimoire/commit/21284876ac1c6587894b07c857e97b12e273c8c7))
+* **light:** the deck gallery with covers and folders, and a deck as one column ([404acde](https://github.com/Msgaihede/mtg-grimoire/commit/404acdefcd72c433122ff273ae5361ad0821d79f))
+* **light:** the mobile-data prompt — launch downloads wait on a metered link (phase 4, step 4.4) ([4d0ccad](https://github.com/Msgaihede/mtg-grimoire/commit/4d0ccad94796e8ed9abe2def0d6cbb5bff66bfaa))
+* **light:** the mobile-data prompt — launch downloads wait on a metered link (phase 4, step 4.4) ([3f55167](https://github.com/Msgaihede/mtg-grimoire/commit/3f55167815348ec7479e7cd3cce161cd14c4071f))
+* **light:** the phone card sheet — printings, legality, oracle tags and combos ([fa752df](https://github.com/Msgaihede/mtg-grimoire/commit/fa752df3d7021bf02ca0da65b1102930e8efcb01))
+* **light:** the phone search's filters sheet, stated filters and a retry line ([918d8c3](https://github.com/Msgaihede/mtg-grimoire/commit/918d8c3dab542de77c1773b6f39313ff9ec64f0c))
+* **light:** the phone shell's bars bleed past a cutout, and a rail from 600px ([2b65e33](https://github.com/Msgaihede/mtg-grimoire/commit/2b65e33a7000034d8ab33a052a191ab095138036))
+* **light:** the wishlist as headed shelves on the phone face ([053439b](https://github.com/Msgaihede/mtg-grimoire/commit/053439b0f1fc1a4f9d588f1ebd3ab891d9a5e69f))
+* **settings:** the edition names its Settings panels, and the desktop page draws only those ([af732ff](https://github.com/Msgaihede/mtg-grimoire/commit/af732ffd09c1cf0324af536f85ff0515cf43f3a4))
+* **web:** the engine opens its database in a browser ([84ff410](https://github.com/Msgaihede/mtg-grimoire/commit/84ff41058bdb44bd159473bd86346db59409cfcb))
+* **web:** the engine opens its database in a browser (phase 5, step 5.1) ([3195ab6](https://github.com/Msgaihede/mtg-grimoire/commit/3195ab65ded181eeb0480ea05d9c1e496bb5c0ea))
+
+
+### Bug Fixes
+
+* **android:** leave the app without the FORTIFY abort ([a502307](https://github.com/Msgaihede/mtg-grimoire/commit/a5023079ac1d43ffb5bd4890ed35b9bea5e03b3f))
+* **android:** leave the app without the FORTIFY abort ([c26b4da](https://github.com/Msgaihede/mtg-grimoire/commit/c26b4daa528d4f27ad409a85d01facba2227c281))
+* **card:** start the card modal's flanks at 1062px, not 900 ([517e438](https://github.com/Msgaihede/mtg-grimoire/commit/517e43871bb3273860db18fe082da94715bf9a2c))
+* **card:** start the card modal's flanks at 1062px, not 900 ([d6d48e5](https://github.com/Msgaihede/mtg-grimoire/commit/d6d48e57ab4a16ec290720eaf7e0a343523bfef3))
+* **light:** Gradle calls the Tauri CLI from mobile/, where it finds the light host ([5cf78e5](https://github.com/Msgaihede/mtg-grimoire/commit/5cf78e5313746a5cbece90281c779522b9fcafa3))
+* **light:** history across the 1024px floor, and the adapter refuses a non-edition view ([fce70b1](https://github.com/Msgaihede/mtg-grimoire/commit/fce70b14202bb983a7c75c933e7f7c7daedb5f12))
+* **light:** refresh the phone face after the first card sync, and show its progress ([140a625](https://github.com/Msgaihede/mtg-grimoire/commit/140a62581438fa88a7c93da7ae7599c9a0ab306f))
+* **light:** refresh the phone face after the first card sync, and show its progress ([4482b0b](https://github.com/Msgaihede/mtg-grimoire/commit/4482b0bcbdcbc1b139960ede1de360cc8576bf12))
+* **light:** three wording fixes from the first phone run ([8498c70](https://github.com/Msgaihede/mtg-grimoire/commit/8498c7059a9bff9303300252e1da2175e32f73cd))
+* **light:** three wording fixes from the first phone run, and its record ([0c40079](https://github.com/Msgaihede/mtg-grimoire/commit/0c4007928487710c0e46e3a976314ad60a8d9891))
+
 ## [0.40.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.39.0...v0.40.0) (2026-10-03)
 
 

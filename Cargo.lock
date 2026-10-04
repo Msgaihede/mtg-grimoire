@@ -1738,7 +1738,7 @@ dependencies = [
 
 [[package]]
 name = "grimoire-core"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "base64 0.22.1",
  "bytes",
@@ -1767,7 +1767,7 @@ dependencies = [
 
 [[package]]
 name = "grimoire-light"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "base64 0.22.1",
  "grimoire-core",
@@ -1784,7 +1784,7 @@ dependencies = [
 
 [[package]]
 name = "grimoire-web"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "console_error_panic_hook",
  "futures-util",
@@ -2841,7 +2841,7 @@ dependencies = [
 
 [[package]]
 name = "mtg-grimoire"
-version = "0.40.0"
+version = "0.41.0"
 dependencies = [
  "card-scanner",
  "flate2",
