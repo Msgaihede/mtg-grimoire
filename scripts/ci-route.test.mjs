@@ -183,7 +183,8 @@ describe("the arms", () => {
     ["crates/grimoire-web/CLAUDE.md", F, F, F, F, F, F, F],
     [".vscode/settings.json", F, F, F, F, F, F, F],
     [".gitignore", F, F, F, F, F, F, F],
-    [".release-please-manifest.json", F, F, F, F, F, F, F],
+    // Read by `release-rule.test.mjs` since step 6.6: the deploy guard finds the last tag in it.
+    [".release-please-manifest.json", T, F, F, F, F, F, F],
     // Read by a Rust test since the engine's manifest began carrying the app's version.
     ["release-please-config.json", T, T, F, F, F, F, F],
     ["scripts/x.ps1", F, F, F, T, F, F, F],
@@ -233,6 +234,11 @@ describe("the arms", () => {
     ["scripts/build-wasm.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke/default-cards.jsonl", T, F, F, F, F, F, T],
+    // The release's signing script, which `android` proves on a throwaway key; and the two
+    // deploy scripts no job in this gate runs.
+    ["scripts/android-sign.sh", T, T, F, F, F, T, F],
+    ["scripts/web-deploy-guard.mjs", T, F, F, F, F, F, F],
+    ["scripts/web-deploy-probe.mjs", T, F, F, F, F, F, F],
     // The web host: a workspace member `rust` tests, and the crate `web` compiles for a browser.
     // Not `core` — the engine does not depend on a host.
     ["crates/grimoire-web/src/lib.rs", T, T, F, F, F, F, T],
@@ -331,6 +337,18 @@ describe("the arms", () => {
     expect(at(file)).toBeGreaterThan(-1);
     expect(at(file)).toBeLessThan(at(tree));
     expect(ARMS[at(tree)].jobs).not.toContain("web");
+  });
+
+  // The same shape for the one script `android` runs: below `scripts/*` it would be linted and
+  // its only run before a release skipped. Held to the workflow, so the arm cannot outlive the
+  // step it is for.
+  it("puts the signing script above `scripts/*`, and `android` runs it", () => {
+    const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));
+    expect(at("scripts/android-sign.sh")).toBeGreaterThan(-1);
+    expect(at("scripts/android-sign.sh")).toBeLessThan(at("scripts/*"));
+    expect(ARMS[at("scripts/*")].jobs).not.toContain("android");
+    const android = ciYml.slice(ciYml.indexOf("\n  android:"), ciYml.indexOf("\n  web:"));
+    expect(android).toMatch(/^\s+bash scripts\/android-sign\.sh /m);
   });
 
   // `core` compiles the engine for two foreign targets and runs nothing. Its native compile and

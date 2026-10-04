@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import manifest from "./src-tauri/gen/android/app/src/main/AndroidManifest.xml?raw";
 import filePaths from "./src-tauri/gen/android/app/src/main/res/xml/file_paths.xml?raw";
 import appGradle from "./src-tauri/gen/android/app/build.gradle.kts?raw";
+import androidIgnore from "./src-tauri/gen/android/.gitignore?raw";
 import mainActivity from "./src-tauri/gen/android/app/src/main/java/com/mtggrimoire/app/MainActivity.kt?raw";
 import themes from "./src-tauri/gen/android/app/src/main/res/values/themes.xml?raw";
 import nightThemes from "./src-tauri/gen/android/app/src/main/res/values-night/themes.xml?raw";
@@ -60,9 +61,40 @@ describe("the Android project's hand edits", () => {
     expect(JSON.parse(packageJson).scripts["tauri:light"]).toBe("cd mobile && tauri");
   });
 
-  it("signs a release build with the debug key, until signing is decided", () => {
+  it("signs a release build with the debug key, and knows no other", () => {
+    // The release key is `release.yml`'s `android-sign` job's, which re-signs what this project
+    // built (`scripts/android-sign.sh`) and runs no build. A signing config here would put the
+    // keystore and its passwords on disk beside every npm script, cargo build script and Gradle
+    // plugin a build runs.
     const release = appGradle.slice(appGradle.indexOf('getByName("release")'));
     expect(release).toMatch(/signingConfig = signingConfigs\.getByName\("debug"\)/);
+    const code = appGradle
+      .split("\n")
+      .filter((line) => !line.trim().startsWith("//"))
+      .join("\n");
+    expect(code).not.toMatch(/signingConfigs\s*\{|storeFile|storePassword|keyPassword|keyAlias/);
+    expect(code).not.toMatch(/keystore/i);
+  });
+
+  it("ignores a keystore, should one ever be put beside the project", () => {
+    for (const name of ["keystore.properties", "key.properties", "*.jks", "*.keystore"]) {
+      expect(androidIgnore.split(/\r?\n/), name).toContain(name);
+    }
+  });
+
+  it("holds no keystore and no signing properties", () => {
+    // Keys only — nothing is loaded. A file a `.gitignore` hides is found too, on purpose: a
+    // key in this tree is one `git add -f` from a public repository.
+    const keys = Object.keys(
+      import.meta.glob([
+        "/mobile/**/*.{jks,keystore,p12,pfx}",
+        "/mobile/**/{keystore,key,signing}.properties",
+        "/*.{jks,keystore,p12,pfx}",
+        "!**/node_modules/**",
+        "!**/build/**",
+      ]),
+    );
+    expect(keys).toEqual([]);
   });
 });
 

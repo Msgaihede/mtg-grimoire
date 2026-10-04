@@ -78,6 +78,7 @@ Navigation grammar is standardized in `routes.ts`: views, decks, `?folder=<id>` 
 - `gen/android/` configuration is pinned and validated by `host.test.ts` (backup disabled, camera optional, `cache/exports/` FileProvider).
 - Scoped capabilities in `capabilities/light.json`: `core:default`, `opener:allow-open-url`, and `opener:allow-default-urls`.
 - Metered network check: Launches hold heavy card downloads until user confirms or unmetered Wi-Fi is available.
+- Ships from the release tag, with the desktop and the web app: `release.yml` builds the APK as CI does (debug-signed), and a job that holds the release key and builds nothing re-signs it (`scripts/android-sign.sh`). The Gradle project reads no keystore — never add a signing config or a `keystore.properties` to `gen/android` (`host.test.ts`; [ci-and-releases.md](../docs/reference/ci-and-releases.md), "The release rule").
 
 ### Web Worker Host (`crates/grimoire-web`)
 - Runs `grimoire-core` in WebAssembly inside a dedicated Web Worker using OPFS storage; see [`crates/grimoire-web/CLAUDE.md`](../crates/grimoire-web/CLAUDE.md).

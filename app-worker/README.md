@@ -27,8 +27,9 @@ deploy's own record, with what it has not proved.
 ## Why it is not a route on either of the other two
 
 **Blast radius**, the reason `share-worker/` gives for itself. Sync is a paid feature people
-depend on, every deploy here is done by hand by one person, and a deploy of a *page* happens far
-more often than a deploy of the relay. One Worker carrying both makes a bad build of the app a
+depend on, the relay's deploys are done by hand by one person, and a deploy of a *page* happens
+far more often than a deploy of the relay — at every release, by a job, since 2026-10-04
+(*Deploying*). One Worker carrying both makes a bad build of the app a
 sync outage.
 
 And unlike those two it shares nothing: **no D1, no R2, no KV, no Durable Object, no `vars`, and
@@ -353,9 +354,34 @@ app; Safari; a phone's first run with a clock on it.
 
 ## Deploying
 
+**Two ways, and one rule over both: the web app is never ahead of the last release.** Sync
+stamps every op with the sender's user schema, and a desktop on the last release *holds* an op
+stamped newer until it updates — so a web app deployed from a `main` that has moved the schema
+sends every paired desktop ops with no update to install. One core means one schema per commit,
+and the three hosts ship from one tag ([ci-and-releases.md](../docs/reference/ci-and-releases.md),
+*The release rule*).
+
+- **At a release, a job deploys it** (decided by the owner, 2026-10-04). `release.yml`'s `web`
+  job builds the bundle at the tag and opens it in a browser — steps 1 to 4 below, as CI's
+  `web` job runs them — and `web-deploy` then runs **`npx --yes wrangler@4.146.0 deploy`** from
+  this directory with a token from the repository's secrets, and asks the real address three
+  things: the document answers 200, its policy is the built `_headers` line, and the document
+  is the bundle's (`scripts/web-deploy-probe.mjs` — probe 1 below, and the document check
+  beside the table). It runs after the desktop builds and the APK and before the release is
+  published. **It is the only job in this repository that deploys anything, and this is the
+  only Worker it deploys.** Without `CLOUDFLARE_API_TOKEN` and `CLOUDFLARE_ACCOUNT_ID` it
+  deploys nothing and says so in the run's summary — and then this address serves the previous
+  deploy until somebody follows the steps below from the tag. ⚠️ **The job does not do step 5,
+  asks the relay nothing, and runs three of step 0's questions, not its twenty probes**: a release whose
+  web build needs new relay behaviour needs **the relay deployed first, by hand, before the
+  release PR is merged**, and the full table is still somebody's to run after a release that
+  changed `_headers`, `wrangler.jsonc` or the script. **No release has run it yet.**
+- **Between releases, by hand** — the rest of this section. Step 6 of *The steps, in order* is
+  the rule's guard for this way: `npm run web:deploy-guard`.
+
 ⚠️ **No agent runs `wrangler deploy`, or any wrangler command that reaches Cloudflare.** That is
 the repo owner's, as it is for the other two Workers. `wrangler` is not a dependency of this
-repository; `npx` fetches it. **The 2026-10-04 deploy was run by an agent because Markus asked
+repository; `npx` fetches it — the job's too, at an exact version. **The 2026-10-04 deploy was run by an agent because Markus asked
 for it in chat**, as he did for the relay's on 2026-10-01 — and **the ask is per deploy**: it
 lifted this rule for that one deploy and left it standing for the next. The second deploy that
 day, and the rollback and roll-forward after it, were asked for again — he approved a marker
@@ -506,7 +532,18 @@ from yet is a header on no request. So:
    against the edge's 2,139,023 — so the local figure is not the size a reader downloads.
    `--local` reaches nothing, which is what the rule above turns on; if it asks to log in, it is
    not in local mode: stop.
-6. **Before the first deploy, look at the zone** — *Before the first deploy*, below.
+6. **`npm run web:deploy-guard`, from the repository root — and stop if it does not exit 0.**
+   It reads `USER_SCHEMA_VERSION` in this tree and at the last release's tag and says which it
+   found in one sentence. **Exit 1 is the answer that means *wait for a release*:** *"This
+   tree's user schema is 60, the last release (v0.40.0) is 59: a web app deployed from here
+   would send paired desktops ops they must hold until a release exists."* The remedy is to
+   release — merging the release PR deploys this Worker from the tag — or to deploy from the
+   tag's checkout instead of `main`'s. Exit 2 is *could not tell* (the tag is not fetched:
+   `git fetch --tags`), and is not a pass. It needs no build and reaches nothing, so it can be
+   run first; it is here because here is the last moment it can stop a deploy. **Run on
+   2026-10-04**: 59 on both sides — `main` had not moved the schema since v0.40.0.
+   (The first deploy's own step here was *look at the zone* — *Before the first deploy*, below
+   — which is done.)
 7. **`npx wrangler deploy`**, from `app-worker/` — `--dry-run` first, which uploads nothing. Read
    what it prints: the files it read and uploaded, the binding, the custom domain it attached and
    the version id. ⚠️ **It does not say how many `_headers` rules it parsed.** This step told its

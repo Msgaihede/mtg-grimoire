@@ -477,9 +477,14 @@ jobs:
   #
   # **A release build, signed with the runner's debug key** (`gen/android/app/build.gradle.kts`,
   # by hand): installable and the size a shipped APK would be, but every runner mints its own
-  # key, so one run's APK does not upgrade over another's. Signing and distribution are decided
-  # after a real phone has run it. **arm64 only**, because that is every phone this app is for
-  # and each further ABI is another release compile of the whole engine.
+  # key, so one run's APK does not upgrade over another's. **The APK a release attaches is this
+  # same build, re-signed with the release key** (step 6.6, 2026-10-04): `release.yml`'s `android`
+  # job is this job's steps, and its `android-sign` job — which holds the key and builds nothing —
+  # runs `scripts/android-sign.sh` over the result. No secret is here, and none is needed: the
+  # step after the report runs that script on a key minted and deleted on the spot, so the
+  # signing a release depends on is proved by every pull request that can have changed the APK.
+  # **arm64 only**, because that is every phone this app is for and each further ABI is another
+  # release compile of the whole engine.
   #
   # **Nothing here runs the APK.** Installing it, the cold start and the first corpus ingest are
   # a device's or an emulator's to measure. The artifact is kept 14 days.
@@ -550,6 +555,31 @@ jobs:
             echo "| \`libgrimoire_light_lib.so\`, uncompressed | ${so:-?} | $(awk "BEGIN {printf \"%.1f\", ${so:-0} / 1048576}") |"
           } >> "$GITHUB_STEP_SUMMARY"
           mkdir -p apk-out && cp "$apk" apk-out/mtg-grimoire-light-arm64.apk
+
+      # **The release's signing, on a key nobody keeps.** `release.yml`'s `android-sign` job runs
+      # this script with the release keystore, and a release is the wrong place to find out that
+      # `apksigner` words its answer differently or that re-signing moved a library off its page
+      # boundary. So it runs here first: a keystore minted with a random password in the runner's
+      # temp folder, the APK above re-signed with it, the script's own checks — one signer, that
+      # certificate, the alignment Gradle gave — and both files deleted. **Not a secret and not
+      # the artifact**: what is uploaded below is still the debug-signed build.
+      - name: Prove the release signing on a throwaway key
+        shell: bash
+        run: |
+          set -euo pipefail
+          ANDROID_KEYSTORE_PASSWORD=$(openssl rand -hex 16)
+          export ANDROID_KEYSTORE_PASSWORD
+          export ANDROID_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
+          export ANDROID_KEY_ALIAS=throwaway
+          export ANDROID_KEYSTORE="$RUNNER_TEMP/throwaway.keystore"
+          # The version the APK must carry, and with it the versionCode Tauri derives from it.
+          ANDROID_EXPECT_VERSION=$(node -p "require('./mobile/src-tauri/tauri.conf.json').version")
+          export ANDROID_EXPECT_VERSION
+          trap 'rm -f "$ANDROID_KEYSTORE" "$RUNNER_TEMP/throwaway-signed.apk"' EXIT
+          "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$ANDROID_KEYSTORE" \
+            -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" \
+            -keyalg RSA -keysize 2048 -validity 1 -dname "CN=throwaway"
+          bash scripts/android-sign.sh apk-out/mtg-grimoire-light-arm64.apk "$RUNNER_TEMP/throwaway-signed.apk"
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

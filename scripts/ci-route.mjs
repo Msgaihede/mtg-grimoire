@@ -147,19 +147,18 @@ export const ARMS = [
   // arm**, where this file sat until a test read it.
   { match: ["release-please-config.json"], jobs: RUST_SIDE },
 
+  // release-please's manifest: the last version it released. `scripts/release-rule.test.mjs`
+  // holds it to every other version in the tree (step 6.6) — it is where
+  // `scripts/web-deploy-guard.mjs` learns which tag to compare with, so a manifest that
+  // disagreed with `package.json` would be a guard looking at the wrong release. **Above the
+  // prose arm**, where this file sat until a test read it.
+  { match: [".release-please-manifest.json"], jobs: ["frontend"] },
+
   // Affects no job. Nothing here is compiled, linted or tested: `eslint .` never sees a `.md`,
-  // no test on either side reads one (`ci-route.test.mjs` holds that to the census), and
-  // release-please's manifest is read by `release.yml` rather than by this gate. **Keep this
-  // list small — it is the only arm that can wrongly skip work.**
+  // and no test on either side reads one (`ci-route.test.mjs` holds that to the census). **Keep
+  // this list small — it is the only arm that can wrongly skip work.**
   {
-    match: [
-      "docs/*",
-      "*.md",
-      ".vscode/*",
-      ".gitignore",
-      ".gitattributes",
-      ".release-please-manifest.json",
-    ],
+    match: ["docs/*", "*.md", ".vscode/*", ".gitignore", ".gitattributes"],
     jobs: [],
   },
 
@@ -280,8 +279,17 @@ export const ARMS = [
     match: ["scripts/build-wasm.mjs", "scripts/web-smoke.mjs", "scripts/web-smoke/*"],
     jobs: ["frontend", "web"],
   },
+  // The script that signs a release's APK (step 6.6). `release.yml`'s `android-sign` job runs it
+  // with the release key, and **`android` runs it here first, on a throwaway key** — the only
+  // run of it a pull request gets, so a change to it that is not routed there is first run by a
+  // release. `rust` because every arm that sets `android` sets `rust`; `frontend` as for the
+  // rest of `scripts/`. **Above `scripts/*`**, for the web scripts' reason.
+  { match: ["scripts/android-sign.sh"], jobs: ["frontend", "rust", "android"] },
   // `scripts/` because `eslint .` lints it — its ignore list does not name it — and because
-  // `vitest` collects `scripts/**/*.test.mjs`.
+  // `vitest` collects `scripts/**/*.test.mjs`. The deploy guard and the post-deploy probe
+  // (`web-deploy-guard.mjs`, `web-deploy-probe.mjs`) are here: no job in this gate runs either —
+  // the first is run by hand before a deploy, the second by `release.yml` after one — and their
+  // tests are `frontend`'s.
   { match: ["scripts/*"], jobs: ["frontend"] },
 
   // **The web app's hosting** (phase 5, step 5.5): `app-worker/`, the third Cloudflare Worker —
@@ -296,7 +304,8 @@ export const ARMS = [
   // **Not `rust`, and the census says so**: no Rust source reads a file here — unlike
   // `share-worker/`, whose `wrangler.jsonc` one does, which is why that tree still has no arm.
   // The crossing runs the other way (`hosting.test.ts` reads `crates/grimoire-core`), and the
-  // engine's arm already sets `frontend`. No job deploys it.
+  // engine's arm already sets `frontend`. No job in this gate deploys it; `release.yml`'s
+  // `web-deploy` does, at a tag, and nothing else may (step 6.6).
   { match: ["app-worker/*"], jobs: ["frontend", "web"] },
 
   // **The light app's web host** (phase 5, step 5.1): `grimoire-web`, a workspace member, so

@@ -56,7 +56,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `ipc.test.ts` reads as text and whose `scripts/*.mjs` `eslint .` lints) **and `core` since
   2026-10-03**, when the engine took `card-scanner` as a dependency, **with
   `crates/grimoire-core/**` above it → `frontend`, `rust` and `core`** (2026-10-02);
-  prose and editor/release bookkeeping → neither; and **anything unrecognised → every**
+  prose and editor bookkeeping → neither (`.release-please-manifest.json` sat there until
+  2026-10-04, when `scripts/release-rule.test.mjs` began reading it: `frontend` now);
+  `scripts/android-sign.sh` → `frontend`, `rust` and `android`, which runs it (below);
+  and **anything unrecognised → every**
   build job, `storybook`, `core` and — since 2026-10-04 — `web` included.
   That last arm is the fail-safe that makes the lists safe to be wrong in the cheap
   direction — a new root config file or a new top-level directory gets full CI until someone
@@ -224,12 +227,16 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **Workflow-level `permissions: {}`** in `release.yml` and `scanner-bundle.yml`, with each job
     naming its own (`ci.yml` stays `contents: read`, which grants nothing to write).
     `release-please` keeps `contents`/`issues`/`pull-requests: write`; `build` and `publish` get
-    `contents: write` alone.
+    `contents: write` alone — and since 2026-10-04 so does `android-sign`, which uploads the APK,
+    while `android`, `web` and `web-deploy` get `contents: read`: a deploy to Cloudflare needs
+    nothing of GitHub's.
   - **`scripts/actions-pinned.test.mjs` is the fence**: it globs every workflow and composite
     action and fails on a `uses:` that is neither local nor a SHA with a version comment, a
     checkout without `persist-credentials: false`, a write grant above `jobs:`, a Dependabot
     config that stops watching either directory. (It also fenced the update-signing secret to one
-    step of a `sign` job until that job was removed on 2026-09-29, below.) Comments are stripped
+    step of a `sign` job until that job was removed on 2026-09-29, below; **since 2026-10-04
+    `scripts/release-rule.test.mjs` fences the two jobs that hold a secret now** — *The release
+    rule*, below.) Comments are stripped
     before any of it is read, since these files explain themselves in prose that names both.
 - **A push to `main` gets a concurrency group of its own; PR runs still cancel each other.**
   Routing on a push diffs from `github.event.before`, so a cancelled `main` run's commits were
@@ -340,7 +347,14 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the image's `ANDROID_NDK_LATEST_HOME`, and the light bundle built by the host's
   `beforeBuildCommand`. It writes the APK's size and the `.so`'s to the step summary and uploads
   the APK (`actions/upload-artifact`, 14 days). **A release build signed with the runner's debug
-  key** — installable, but one run's APK does not upgrade over another's. Its routing is the
+  key** — installable, but one run's APK does not upgrade over another's. **Since 2026-10-04 it
+  then proves the release's signing on a key nobody keeps**: a keystore minted by `keytool` with
+  a random password in the runner's temp folder, `scripts/android-sign.sh` run over the APK with
+  it — the script `release.yml`'s `android-sign` job runs with the release key (*The release
+  rule*, below) — and both files deleted. What is uploaded is still the debug-signed build, and
+  the job still holds no secret. **`scripts/android-sign.sh` routes here** (`frontend`, `rust`,
+  `android`, above `scripts/*`), because this step is the only run of it a pull request gets.
+  Its routing is the
   host's tree (`mobile/src-tauri/*`), the workspace's root files, the toolchain pin and — since
   2026-10-04 — `vite.mobile.config.ts` (above) — **not
   the fail-safe and not `crates/grimoire-core/*`**: an unrecognised path cannot be an input to
@@ -454,8 +468,188 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   §8.5 has what each figure means and what an emulator cannot stand in for.
 - **`.github/workflows/release.yml` is one workflow on purpose.** A release created with
   `GITHUB_TOKEN` does not trigger `on: release` in another workflow — GitHub's recursion
-  guard — so release-please, the build matrix and the publish step are jobs in one file,
+  guard — so release-please, the three hosts' builds and the publish step are jobs in one file,
   chained on `release_created`.
+- **The release rule: the three hosts ship from one tag** (light app phase 6, step 6.6,
+  decided by the owner on 2026-10-04). One core means one user schema per commit. Sync stamps
+  every op with the sender's `USER_SCHEMA_VERSION` (`sync_engine/wire.rs`, `stamp`), and a
+  device on an older build **holds** an op stamped newer — *"A device in your group runs a
+  newer version of MTG Grimoire. Update this device to receive its changes."* — with no bound
+  ([sync.md](sync.md)). A desktop and a phone update from a release; the web app updates from a
+  deploy. So a host that ships ahead of the others strands them: a web app deployed from a
+  `main` one schema rung past the last release leaves every paired desktop holding ops with no
+  update to install. Until this step release-please bumped all four crates and both
+  `tauri.conf.json`s from one tag and **the tag built only the desktop**: the APK was a 14-day
+  CI artifact under a runner's debug key, and the web app was deployed by hand from whatever
+  `main` was. Now `release.yml` is seven jobs, every one after the first gated on
+  `release_created` and on nothing looser — no `always()`, no `continue-on-error`, so a job
+  runs only when every job it needs succeeded:
+
+  ```
+  release-please ─┬─ build (windows, linux) ─────────────┬─ web-deploy ── publish
+                  ├─ android ── android-sign ────────────┤
+                  └─ web ────────────────────────────────┘
+  ```
+
+  | Job | Needs | Holds a secret | What it does |
+  | --- | --- | --- | --- |
+  | `build` | `release-please` | no | The desktop matrix, unchanged |
+  | `android` | `release-please` | no | `ci.yml`'s `android` job, step for step: the arm64 APK at the tag, **debug-signed**, handed on as the artifact `android-apk-debug-signed` (14 days) |
+  | `android-sign` | `release-please`, `android` | the four `ANDROID_*` | Re-signs that APK with the release key (`scripts/android-sign.sh`) and attaches `mtg-grimoire-<version>-android-arm64.apk` to the draft |
+  | `web` | `release-please` | no | `ci.yml`'s `web` job less its lint and size report: clang, the wasm target, the lockfile's `wasm-bindgen` CLI, `web:wasm`, `web:build`, `web:smoke`; `dist-web/` handed on as the artifact `web-bundle` (14 days) |
+  | `web-deploy` | `release-please`, `build`, `android-sign`, `web` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | `npx --yes wrangler@4.146.0 deploy` from `app-worker/`, then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
+  | `publish` | `release-please`, `build`, `android-sign`, `web-deploy` | no | Flips the draft to published |
+
+  - **A secret sits in a job that builds nothing.** This is the rule the removed `sign` job
+    left behind (below), kept: a build leg runs every npm lifecycle script, every cargo build
+    script and every Gradle plugin, and any of them can read a file or an environment. So
+    `android-sign` and `web-deploy` run no `npm ci`, no cargo and no Gradle — a checkout, an
+    artifact download, and one tool each. **That is why the APK is re-signed rather than signed
+    by Gradle**, which is what Tauri's signing guide describes (a `keystore.properties` Gradle
+    reads): Gradle signs inside the build, so the keystore and its passwords would be on disk
+    beside all of that. The Gradle project is unchanged and knows no key — `mobile/host.test.ts`
+    fails a signing config, a `keystore.properties` or a keystore anywhere under `mobile/`.
+    **For the deploy token the blast radius is wider than its job**: unless it was scoped down
+    (*What only the owner can do*), a token that can deploy this Worker can deploy over the
+    relay on the same account.
+  - **`scripts/android-sign.sh` refuses to hand back an APK it cannot vouch for.** It signs with
+    the SDK's `apksigner` (the newest `build-tools` on the runner), then asks `apksigner` who
+    signed the output and compares that certificate's SHA-256 with the keystore's own, taken
+    another way (`keytool -exportcert` through `sha256sum`): one signer, and that one. It
+    refuses an output that lost the alignment Gradle gave the input (`zipalign -c -p 4`, and
+    `-P 16` where the tool knows it), and — with `ANDROID_EXPECT_VERSION` set, as both callers
+    set it — an APK whose `versionName` is not the version or whose `versionCode` is not Tauri's
+    arithmetic on it (`aapt2 dump badging`). On any refusal it deletes the output. The passwords
+    reach `apksigner` and `keytool` as `env:NAME`, never on a command line.
+  - **Without its secrets a job attaches or deploys nothing, says so in the run's summary, and
+    ends green** — so a release is not blocked on a key the owner has not made yet. The first
+    step of each asks (`secrets.*` cannot be read in a job's `if:`), and every later step is
+    gated on its answer. **It never attaches the debug-signed build.** **Some of a job's
+    secrets and not all is a failure**, naming the ones missing: that is a mistake in the
+    settings, and a skip would hide it. With no token the summary also says what is left:
+    the address serves the previous deploy until somebody deploys the tag by hand.
+  - **`android` and `web` run whether or not the secrets exist.** A tag the APK cannot be built
+    from, or whose web build fails its first run in a browser, is a release that would ship two
+    hosts and not the third — a red run, not a skip.
+  - **`publish` waits for all three, and `web-deploy` goes last.** A failure anywhere leaves
+    the release a draft. The deploy is live the moment `wrangler` returns and the release is a
+    draft until `publish`, so the deploy waits for the desktop builds and the APK: nothing but
+    its own probe and the flip of the draft can fail after it.
+    ⚠️ **That window is not empty.** If the probe fails, or `publish` does, the web app is
+    deployed and the release is a draft — the state the rule exists to prevent, for as long as
+    nobody looks. The summary names the question that failed. Then either the page is fine and
+    the job is re-run (*Re-run failed jobs* deploys the same bundle again and asks again, and
+    `publish` follows), or it is not, and `npx wrangler rollback` from `app-worker/` puts the
+    previous version back ([`app-worker/README.md`](../../app-worker/README.md), *Rolling back*).
+  - **The probe asks three things of `GET /`**, up to six times ten seconds apart: it answers
+    200; its `Content-Security-Policy` is the built `_headers` line byte for byte (the runbook's
+    probe 1, read with `app-worker/src/headers.ts`); and the document is the bundle's
+    `index.html` byte for byte — the one that says *this* build is being served, since the
+    first two pass on yesterday's deploy whenever the policy did not move.
+  - **This is the only job that deploys anything, and it deploys one Worker.** The relay holds
+    secrets and a D1 with real entitlements, the share Worker a D1 and R2 of its own, and their
+    deploys stay by hand. `wrangler` is pinned to the exact version the runbook's deploys were
+    made with, through `npx` — it is still not a dependency of this repository. The account id
+    is a secret: it is in no file here.
+  - **The order with the relay is the owner's to keep.** The web app asks the relay from a
+    page, and the relay answers only an origin and a protocol it knows. **A release whose web
+    build needs new relay behaviour needs the relay deployed first, by hand, before the release
+    PR is merged** — merging is what deploys the web app, and the job asks the relay nothing.
+  - **`scripts/release-rule.test.mjs` is the fence**: the seven jobs and what each needs; that
+    no job's `if:` is looser than `release_created`; that the `ANDROID_*` secrets are named in
+    `android-sign` alone and the `CLOUDFLARE_*` ones in `web-deploy` alone, each reaching the
+    step that asks and one step that uses them; that neither job runs npm, cargo, Tauri or
+    Gradle; that every step after the asking one is gated on its answer; that **`wrangler`
+    appears once in all the workflows**, at an exact version, from `app-worker/`, and no
+    workflow names the relay or the share Worker; that no 32-hex account id is in the file; and
+    that the two build legs run the commands `ci.yml` runs.
+  - **The Android `versionCode` rises with every release.** Nothing types it: with no
+    `bundle.android.versionCode` in `mobile/src-tauri/tauri.conf.json`, the Tauri CLI computes
+    `major × 1,000,000 + minor × 1,000 + patch` from that file's `version` and writes it to the
+    generated, uncommitted `gen/android/app/tauri.properties`, which `build.gradle.kts` reads —
+    so `0.40.0` is `40000` and `0.41.0` is `41000`. release-please bumps that `version`, so
+    every release is a higher code, and Android installs an update only over a lower one. The
+    arithmetic keeps its order while the minor and the patch stay under 1000; the test holds
+    that, and that nobody adds an explicit code or `autoIncrementVersionCode` (which counts in
+    a file that is not committed, so every runner would start from one).
+  - **Between releases, `npm run web:deploy-guard`** (`scripts/web-deploy-guard.mjs`) is the
+    same rule for a deploy by hand: it reads `USER_SCHEMA_VERSION` in the working tree and at
+    the last release's tag (`v` + `.release-please-manifest.json`'s version, through `git show`)
+    and exits 1 when they differ — *"This tree's user schema is 60, the last release (v0.40.0)
+    is 59: a web app deployed from here would send paired desktops ops they must hold until a
+    release exists."* — 0 when they are equal, and **2 when it could not read either side**,
+    which is never a pass. The runbook runs it before `wrangler deploy`. **Run on 2026-10-04**
+    against this branch and against `origin/main` at `ea0aa88e`: both 59, as v0.40.0 is, so a
+    web deploy from `main` that day strands nobody; against a tag that does not exist and one
+    that predates the file's path it exited 2 with git's own words.
+  - **What is proven, and what the first release will be the first run of.** Driven locally
+    (Git Bash and Node 24 on Windows, 2026-10-04): the guard, against the real tag; the probe,
+    against a local server answering as the host should, once a request late, and in six ways
+    it should not (another policy, none, yesterday's document, a rewritten one, a redirect, no
+    answer); both
+    *is there a secret* steps, extracted from the workflow's own YAML, with none, all, some and
+    empty variables; `android-sign.sh`, with the real `keytool` on a throwaway key and
+    **`apksigner`, `zipalign` and `aapt2` stubbed** — this machine has no Android SDK — through
+    every refusal. **On the pull request**: `ci.yml`'s `android` job runs the signing script
+    with the real SDK tools. **Not until a release**: the artifact hand-off between jobs,
+    `gh release upload` of the APK, `wrangler deploy` under an API token and without
+    `node_modules` (the Worker's script imports one file of this repository and no package),
+    the probe against the real address, and a signed APK installing over the last one on a
+    phone.
+- **What only the owner can do.** No agent makes a key, sets a secret or creates a token.
+  Until these are done every release ends green with a summary saying what it did not ship.
+  PowerShell, **in a folder outside the repository** that is backed up:
+
+  ```powershell
+  # 1. The release key. keytool asks for a password twice and for a name; a PKCS12 keystore
+  #    (the default) has one password for the store and the key.
+  keytool -genkeypair -v -keystore mtg-grimoire-release.keystore -storetype PKCS12 -keyalg RSA -keysize 2048 -validity 10000 -alias mtg-grimoire
+
+  # 2. Its certificate's SHA-256, to compare with the "Signed APK" table of the first release run.
+  keytool -list -v -keystore mtg-grimoire-release.keystore -alias mtg-grimoire
+
+  # 3. The keystore as base64, into the secret; then the other three. The two password
+  #    prompts take the same password; `gh` reads each from a hidden prompt, so neither is
+  #    in the shell's history.
+  [Convert]::ToBase64String([IO.File]::ReadAllBytes("$PWD\mtg-grimoire-release.keystore")) | gh secret set ANDROID_KEYSTORE_BASE64 --repo Msgaihede/mtg-grimoire
+  gh secret set ANDROID_KEYSTORE_PASSWORD --repo Msgaihede/mtg-grimoire
+  gh secret set ANDROID_KEY_PASSWORD --repo Msgaihede/mtg-grimoire
+  gh secret set ANDROID_KEY_ALIAS --repo Msgaihede/mtg-grimoire --body mtg-grimoire
+
+  # 4. The Cloudflare token and the account id (below), each pasted at a hidden prompt.
+  gh secret set CLOUDFLARE_API_TOKEN --repo Msgaihede/mtg-grimoire
+  gh secret set CLOUDFLARE_ACCOUNT_ID --repo Msgaihede/mtg-grimoire
+  ```
+
+  - ⚠️ **Back the keystore and its password up, somewhere that is not this repository and not
+    only this machine.** GitHub never gives a secret back. A lost key cannot be replaced: an
+    APK signed with a new one does not install over the old, so **every phone must uninstall**
+    — which wipes `user.db` and the device's paired identity, and spends a slot in the group
+    when it pairs again. The root `.gitignore` ignores `*.jks`, `*.keystore`, `*.p12` and
+    `keystore.properties` for the day one is made in here anyway.
+  - **The first release-signed APK does not install over a debug-signed one.** The owner's
+    phone, and anything else running a CI artifact, needs one uninstall — the last.
+  - **The Cloudflare API token.** Dashboard → *Manage Account* → *Account API Tokens* →
+    *Create Token* → a custom token, limited to this one account. `wrangler deploy` here
+    uploads one existing Worker's script and static assets and re-states its Custom Domain, so
+    by Cloudflare's own table (`developers.cloudflare.com/workers/authorization/workers/`, read
+    2026-10-04) it needs: **the Workers *Editor* role on the Worker `mtg-grimoire-app`** — where
+    the form offers a single Worker as the scope, choose that and not the account — and
+    **Zone → Workers Routes → Write (Edit) on the zone `mtg-grimoire.app`**, which the same
+    page asks for whenever a deploy touches a Route or a Custom Domain (Custom Domains have no
+    per-Worker role yet). If the form has no per-Worker scope, the older equivalent is
+    **Account → Workers Scripts → Edit**, and that token **can deploy over the relay and the
+    share Worker**. Nothing else: no KV, R2, D1, Pages, DNS, account settings or user details.
+    ⚠️ **Do not use the *Edit Cloudflare Workers* template as it stands** — it grants all of
+    those on every zone. **Not verified**: no deploy has been made with such a token; wrangler
+    may warn that it cannot read the user's email, which is the *User Details* permission this
+    leaves out and is not an error. If the first run fails on a permission, its log names it.
+  - **`CLOUDFLARE_ACCOUNT_ID`** is the 32-hex id on the dashboard's Workers overview, and what
+    `npx wrangler whoami` prints.
+  - **A release cut before a secret existed is not repaired by adding it.** Its web app is
+    deployed by hand from the tag (the runbook). Its APK could be attached by re-running
+    `android-sign` in that run while the 14-day artifact lasts — its dependants re-run with
+    it — which nobody has tried; otherwise the next release carries one.
 - **Versions are never typed by hand.** release-please reads the `feat:`/`fix:`/`!` prefixes
   and keeps a `chore(main): release X.Y.Z` PR open that bumps every version file and writes
   `CHANGELOG.md`. Merging it tags, builds and publishes. **Which files is
@@ -475,7 +669,17 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   desktop and the engine alone, because the `User-Agent` is built from the engine's version.
   The web host's manifest is held to the core's by a test of its own —
   `the_host_wears_the_cores_version`, in `crates/grimoire-web/src/host.rs` — which reads the two
-  manifests and not the config; nothing holds the Android host's.
+  manifests and not the config; the Android host's `tauri.conf.json` and manifest are held to the
+  desktop's by `mobile/host.test.ts` (*ships from the desktop's tag, at the desktop's version* —
+  this sentence said *nothing holds the Android host's* until 2026-10-04, though that test
+  already did).
+  **And since 2026-10-04 one test holds all of it at once** — `scripts/release-rule.test.mjs`:
+  every member the root `Cargo.toml` lists has its manifest and its own `Cargo.lock` selector in
+  the config, both Tauri hosts have their `tauri.conf.json` there, the config names nothing
+  else, and every one of those versions — with `package.json`'s, `package-lock.json`'s and
+  `.release-please-manifest.json`'s — is the same string in the tree. A fifth member fails it
+  until it has its pair. (`.release-please-manifest.json` left the router's prose arm for an arm
+  of its own, `frontend`, the day that test read it.)
   `bump-minor-pre-major` is on, so while on `0.x` a `feat!:` bumps the **minor**; reaching
   1.0 is a deliberate `Release-As: 1.0.0` footer, never something a stray `!` does.
 - **The `Cargo.lock` selector must read `@.name.value`, never `@.name`.** release-please
@@ -508,7 +712,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   v0.34.0 draft must never be published. **If it comes back, the job's one structural rule still
   holds**: the secret goes in a job of its own, never a build leg, because a build leg runs
   tauri-action, rust-cache and every npm and cargo build script, any of which can read a secret
-  in the same job.
+  in the same job. **Update signing has not come back; the rule has been used twice since**
+  (2026-10-04): `android-sign` and `web-deploy` are each a job of their own for it — *The
+  release rule*, above. And what happened to v0.34.0 is why those two **skip and say so**
+  when their secrets are not set, where `sign` failed: a release held up by a key nobody had
+  made was one day's lesson already.
 - **release-please needs "Allow GitHub Actions to create and approve pull requests"**
   (`can_approve_pull_request_reviews: true`). It is one toggle covering both verbs, and with
   it off the run fails at the very last step — after parsing every commit, resolving the
@@ -532,7 +740,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `mtg-grimoire.exe` — `productName` does **not** rename the binary in Tauri v2, it
   only names the bundles, so the exe is the lowercase **Cargo package name** — which runs
   from any folder and keeps `data/` beside itself, the behaviour no Program Files install
-  can reach), plus `.deb` and `.AppImage`. The bundler
+  can reach), plus `.deb` and `.AppImage` — and, once the signing secrets exist,
+  **`mtg-grimoire-<version>-android-arm64.apk`**, the light app (*The release rule*, above; no
+  release has carried one yet). The bundler
   names files from `productName` **with its spaces**, but GitHub rewrites spaces to dots on
   upload — measured on v0.2.0, which published as
   `MTG.Collection.Tracker_0.2.0_x64-setup.exe`. Under `MTG Grimoire` that same rule gives

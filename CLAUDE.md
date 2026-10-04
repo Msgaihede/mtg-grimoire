@@ -97,7 +97,7 @@ Worktree and deployment workflows are managed by skills in `.claude/skills/`:
 - **Narrowest permissions**: When declaring Tauri plugin permissions, always request the narrowest required capability, never `:default`.
 - **`data/` is strictly local**: Never commit SQLite databases or test artifacts in `data/`. When seeding fixtures in tests, seed only user tables, never `cards` or `sync_meta`.
 - **Worker secrets are never committed**: Secrets (`PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`, `RELAY_HMAC_KEY`) belong solely in Cloudflare Secret storage, never in repository files or `.dev.vars`.
-- **Deployments require explicit instruction**: No agent or CI job may deploy Workers without explicit instruction from the user.
+- **Deployments require explicit instruction**: No agent may deploy a Worker without explicit instruction from the user, and exactly one CI job deploys one: `release.yml`'s `web-deploy` puts the web app (`app-worker/`) on its origin at a release tag (the owner's decision, 2026-10-04 — the three hosts ship from one tag). The relay and the share Worker are deployed by no job; nothing else deploys without his ask.
 - **Domain vocabulary precision**: Strictly distinguish between Scryfall tags, user deck labels, card keyword abilities, and note types. Refer to [`docs/agent/DOMAIN_VOCABULARY.md`](docs/agent/DOMAIN_VOCABULARY.md).
 - **Live UI verification**: Drive real WebView2 windows over CDP (`scripts/cdp.mjs`) when verifying UI changes; tests alone cannot detect webview-specific rendering glitches.
 
