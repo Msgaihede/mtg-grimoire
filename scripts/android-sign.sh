@@ -77,23 +77,56 @@ tools=$(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d | sort 
 [ -n "$tools" ] || die "no build-tools under $ANDROID_HOME"
 apksigner="$tools/apksigner"
 zipalign="$tools/zipalign"
+aapt2="$tools/aapt2"
 [ -x "$apksigner" ] || die "no apksigner in $tools"
 [ -x "$zipalign" ] || die "no zipalign in $tools"
 keytool=keytool
 if [ -n "${JAVA_HOME:-}" ] && [ -x "$JAVA_HOME/bin/keytool" ]; then keytool="$JAVA_HOME/bin/keytool"; fi
 command -v "$keytool" > /dev/null || die "no keytool on PATH or under JAVA_HOME"
 
-# Every signer's certificate digest, one to a line, lower-case hex.
-signers() {
-  "$apksigner" verify --print-certs "$1" \
-    | sed -n 's/^Signer #[0-9]* certificate SHA-256 digest: //p' \
-    | tr 'A-F' 'a-f'
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
+
+# **Which tools, said before anything is asked of them.** The first run of this script against a
+# real SDK refused an APK and printed nothing of what `apksigner` had said, which made the
+# refusal undiagnosable from the run. So: the build-tools there are, the one chosen, each tool's
+# own version, and — below — every tool's raw answer beside what was read out of it. Nothing
+# here is secret: versions, certificate digests and an APK's manifest line are all public.
+say() { echo "android-sign: $*" >&2; }
+# `quote <file>`: a tool's own words, indented, on stderr.
+quote() { sed 's/^/    | /' "$1" >&2; }
+say "build-tools installed: $(find "$ANDROID_HOME/build-tools" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' | sort -V | tr '\n' ' ')— using $(basename "$tools")"
+say "apksigner: $apksigner, version $("$apksigner" --version 2>&1 | head -1) (on PATH: $(command -v apksigner || echo none))"
+say "java, which apksigner runs on: $(java -version 2>&1 | head -1) (JAVA_HOME=${JAVA_HOME:-unset})"
+say "aapt2: $("$aapt2" version 2>&1 | head -1)"
+
+# `verify_certs <apk> <name>`: asks `apksigner` who signed an APK, keeps its whole answer —
+# stdout and stderr, in $work/<name>.txt — prints it, and returns its exit status. A verify
+# that only warns exits 0, with the warnings among the lines.
+verify_certs() {
+  local status=0
+  "$apksigner" verify --print-certs "$1" > "$work/$2.txt" 2>&1 || status=$?
+  say "\`apksigner verify --print-certs $1\` exited $status and said:"
+  quote "$work/$2.txt"
+  return "$status"
+}
+
+# `digests <name>`: every signer's certificate SHA-256 in that answer, lower-case, each once.
+#
+# **Matched on what every form of the line shares**, from `ApkSignerTool.java`'s
+# `printCertificate(cert, name, …)`, which prints `<name> certificate SHA-256 digest: <hex>`.
+# The name is `Signer #1` for an APK verified by v1, v2 or v3; and for one verified by v3.1 —
+# a rotated key — it is `Signer (minSdkVersion=33, maxSdkVersion=2147483647)`, once for each
+# v3.1 signer and once for each v3 one, with ` (dev release=true)` inside the brackets for a
+# rotation aimed at a development release. `Source Stamp Signer` is a third name and not a
+# signer of the APK: it is the store's stamp, and is left out.
+digests() {
+  sed -n '/^Source Stamp Signer/d; s/^.* certificate SHA-256 digest: *\([0-9A-Fa-f]\{64\}\)[[:space:]]*$/\1/p' \
+    "$work/$1.txt" | tr 'A-F' 'a-f' | sort -u
 }
 
 # The keystore's certificate, as bytes, hashed here — so the comparison below is between two
 # tools' answers and not one tool's answer with itself.
-work=$(mktemp -d)
-trap 'rm -rf "$work"' EXIT
 # `keytool` says why it failed on stdout — a wrong password, an alias that is not there — so its
 # first line is kept for the refusal. It never prints the password it was given.
 "$keytool" -exportcert -keystore "$ANDROID_KEYSTORE" -storepass:env ANDROID_KEYSTORE_PASSWORD \
@@ -125,18 +158,29 @@ if [ -n "${ANDROID_SIGNER_PIN:-}" ]; then
     || die "the keystore's certificate is $key, and $ANDROID_SIGNER_PIN says every release is signed by $pin"
 fi
 
-# The input must be an APK this parse can read a signer from. If `apksigner` ever words its
-# answer differently, this is where it shows — before anything is signed, not as a false alarm
-# after.
-before=$(signers "$IN") || die "apksigner could not verify $IN"
-[ -n "$before" ] || die "apksigner named no signer for $IN — is it signed at all?"
+# **Who signed the input is a note, not a condition.** The build signs it with a debug key, and
+# this script would sign an unsigned APK just as well: nothing below depends on the answer. (It
+# was a condition until the first real run, where it refused the runner's own build before
+# signing anything.) What it is good for is the summary's "signer before", and for showing, in
+# the same log, how this `apksigner` words an answer before the one that matters.
+before="none read"
+if verify_certs "$IN" in; then
+  if [ -n "$(digests in)" ]; then before=$(digests in | paste -sd ' '); fi
+else
+  before="none: apksigner does not verify it"
+fi
+say "the input's signer: $before"
 
-aligned() { "$zipalign" -c -p 4 "$1" > /dev/null 2>&1; }
-aligned_16k() { "$zipalign" -c -P 16 4 "$1" > /dev/null 2>&1; }
+# `zipalign -c` answers with its exit status; its words are kept for a refusal.
+# `aligned <apk> <name>`: stored entries on 4-byte boundaries and libraries on 4 KB pages.
+# `aligned_16k`: libraries on 16 KB pages — a flag older build-tools do not know, which reads
+# here as "no", and so never as a loss.
+aligned() { "$zipalign" -c -v -p 4 "$1" > "$work/$2.4k.txt" 2>&1; }
+aligned_16k() { "$zipalign" -c -v -P 16 4 "$1" > "$work/$2.16k.txt" 2>&1; }
 in_aligned=no
 in_aligned_16k=no
-if aligned "$IN"; then in_aligned=yes; fi
-if aligned_16k "$IN"; then in_aligned_16k=yes; fi
+if aligned "$IN" in; then in_aligned=yes; fi
+if aligned_16k "$IN" in; then in_aligned_16k=yes; fi
 
 "$apksigner" sign \
   --ks "$ANDROID_KEYSTORE" \
@@ -144,18 +188,42 @@ if aligned_16k "$IN"; then in_aligned_16k=yes; fi
   --ks-pass env:ANDROID_KEYSTORE_PASSWORD \
   --key-pass env:ANDROID_KEY_PASSWORD \
   --out "$OUT" \
-  "$IN" || die "apksigner could not sign $IN"
+  "$IN" > "$work/sign.txt" 2>&1 || {
+  say "\`apksigner sign\` failed and said:"
+  quote "$work/sign.txt"
+  die "apksigner could not sign $IN"
+}
+quote "$work/sign.txt"
+[ -s "$OUT" ] || die "apksigner reported success and wrote no APK at $OUT"
 # The v4 signature, a file beside the APK that only an incremental `adb install` reads.
 rm -f "$OUT.idsig"
 
-after=$(signers "$OUT") || die "apksigner could not verify the APK it just signed"
-[ "$(grep -c . <<< "$after")" = 1 ] || die "the signed APK names $(grep -c . <<< "$after") signers, not one"
+# **The condition: one signer, and the keystore's.** `verify_certs` has printed the tool's own
+# words above whichever line refuses.
+verify_certs "$OUT" out || die "apksigner does not verify the APK it just signed (its answer is above)"
+after=$(digests out)
+count=$(grep -c . <<< "$after" || true)
+[ "$count" != 0 ] \
+  || die "no signer's certificate could be read from apksigner's answer about the signed APK (above): it is worded in a way this script does not know"
+# More than one distinct certificate is a rotated key (v3.1's lineage) or two signers, and
+# neither is anything this script made: the keystore holds one key.
+[ "$count" = 1 ] || die "the signed APK names $count different signer certificates, not one: $(paste -sd ' ' <<< "$after")"
 [ "$after" = "$key" ] || die "the signed APK's certificate is $after, and the keystore's is $key"
 
 out_aligned=no
 out_aligned_16k=no
-if aligned "$OUT"; then out_aligned=yes; fi
-if aligned_16k "$OUT"; then out_aligned_16k=yes; fi
+if aligned "$OUT" out; then out_aligned=yes; fi
+if aligned_16k "$OUT" out; then out_aligned_16k=yes; fi
+say "aligned, 4 KB / 16 KB: in $in_aligned / $in_aligned_16k, out $out_aligned / $out_aligned_16k"
+# zipalign's last lines for a check that said no — on the input too, where "no" to the 16 KB
+# question may only be a `zipalign` that does not know `-P`.
+for check in in.4k in.16k out.4k out.16k; do
+  if ! grep -q 'Verification succesful\|Verification successful' "$work/$check.txt"; then
+    say "zipalign's answer for $check (last lines):"
+    tail -4 "$work/$check.txt" > "$work/tail.txt"
+    quote "$work/tail.txt"
+  fi
+done
 if [ "$in_aligned" = yes ] && [ "$out_aligned" != yes ]; then
   die "re-signing lost the 4 KB alignment Gradle gave the APK"
 fi
@@ -166,12 +234,22 @@ fi
 # What Android compares when it decides whether this APK may replace an installed one: the
 # `versionCode` must be higher. Tauri derives it from `tauri.conf.json`'s version — major ×
 # 1,000,000 + minor × 1,000 + patch — and with ANDROID_EXPECT_VERSION set this holds the APK to
-# that version and that arithmetic, read back out of the APK itself.
-badging=$("$tools/aapt2" dump badging "$OUT" 2> /dev/null | head -1) || true
-version_code=$(sed -n "s/.* versionCode='\([0-9]*\)'.*/\1/p" <<< "$badging")
-version_name=$(sed -n "s/.* versionName='\([^']*\)'.*/\1/p" <<< "$badging")
+# that version and that arithmetic, read back out of the APK itself: `aapt2 dump badging`'s
+# `package: name='…' versionCode='…' versionName='…' …` line, wherever in its answer it is.
+badging_status=0
+"$aapt2" dump badging "$OUT" > "$work/badging.txt" 2> "$work/badging.err" || badging_status=$?
+badging=$(grep -m1 '^package:' "$work/badging.txt" || true)
+version_code=$(sed -n "s/.*[[:space:]]versionCode='\([0-9]*\)'.*/\1/p" <<< "$badging")
+version_name=$(sed -n "s/.*[[:space:]]versionName='\([^']*\)'.*/\1/p" <<< "$badging")
+say "\`aapt2 dump badging\` exited $badging_status; its package line: ${badging:-(none)}"
+if [ -z "$version_code" ] || [ -z "$version_name" ]; then
+  say "no versionCode and versionName could be read from it. Its first lines, then its errors:"
+  head -5 "$work/badging.txt" > "$work/head.txt"
+  quote "$work/head.txt"
+  quote "$work/badging.err"
+fi
 if [ -n "${ANDROID_EXPECT_VERSION:-}" ]; then
-  [ -n "$version_code" ] || die "aapt2 could not read the APK's versionCode"
+  [ -n "$version_code" ] || die "aapt2 could not read the APK's versionCode (its answer is above)"
   # A plain x.y.z or nothing: a pre-release (`0.41.0-rc.1`) has no place in Tauri's arithmetic,
   # and shell arithmetic on its pieces would compute something and call it a versionCode.
   [[ "$ANDROID_EXPECT_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$ ]] \
@@ -192,7 +270,7 @@ fi
   echo "| file | \`$(basename "$OUT")\`, $(stat -c %s "$OUT") bytes |"
   echo "| versionName / versionCode | ${version_name:-?} / ${version_code:-?} |"
   echo "| signer's certificate, SHA-256 | \`$after\` |"
-  echo "| signer before (the build's debug key) | \`$(head -1 <<< "$before")\` |"
+  echo "| signer before | \`$before\` |"
   echo "| aligned, 4 KB / 16 KB — in | $in_aligned / $in_aligned_16k |"
   echo "| aligned, 4 KB / 16 KB — out | $out_aligned / $out_aligned_16k |"
   echo "| build-tools | \`$(basename "$tools")\` |"
