@@ -67,7 +67,8 @@
 #
 # Vite names every file under `assets/` by a hash of its bytes, and the engine's two files sit in
 # a directory named by a hash of theirs (`src/lib/core/web/assets.ts`, `buildIdOf`). A changed
-# byte is a new address, so nothing at an old address is ever stale.
+# byte is a new address, so nothing at an old address is ever stale — with one exception, which
+# has a rule of its own below.
 /assets/*
   ! Cache-Control
   Cache-Control: public, max-age=31536000, immutable
@@ -75,6 +76,29 @@
 /wasm/*
   ! Cache-Control
   Cache-Control: public, max-age=31536000, immutable
+
+# --- The one hashed file that is NOT kept: the engine's Worker ----------------------------------
+#
+# `assets/worker-<hash>.js` is content-addressed like its neighbours, and its BYTES are as
+# immutable as theirs. Its POLICY is not: a dedicated Worker runs under the
+# Content-Security-Policy on its own script's response (the block at the top of this file), and
+# that policy is this file's, not the chunk's. A deploy that changes only `_headers` — a host
+# added to `connect-src` because Scryfall moved its bulk files, the relay in phase 6 — renames
+# nothing. Kept for a year, the chunk would never be asked for again, and a returning reader's
+# engine would go on running under the policy of the day they first came (measured, Chrome 154:
+# the script was not requested at all, and the old `connect-src` held).
+#
+# So it is revalidated: a few kilobytes, answered with a 304 — and a 304 carries these headers,
+# which is what replaces the policy the cache holds (measured the same way: a 304 WITH the new
+# policy took effect; one without it did not. Cloudflare attaches `_headers` to every asset
+# response, the 304 included — `handleRequest` in workers-sdk's asset-worker).
+#
+# The name is Vite's, from `src/lib/core/web/worker.ts`; `hosting.test.ts` reads the line that
+# constructs the Worker and fails if the file is ever called something this rule does not match.
+# After `/assets/*`, because rules apply in the file's order and the last word wins.
+/assets/worker-*
+  ! Cache-Control
+  Cache-Control: no-cache
 
 # --- The service worker's script ----------------------------------------------------------------
 #

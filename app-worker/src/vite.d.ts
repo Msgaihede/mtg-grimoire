@@ -10,9 +10,12 @@ declare module "*?raw" {
 }
 
 interface ImportMeta {
-  /** Every file a pattern matches, as text, by its path from the repository root. */
+  /**
+   * Every file a pattern matches, as text, by its path from the repository root. `exhaustive`
+   * is what makes a pattern match a name that starts with a dot.
+   */
   glob(
     pattern: string | string[],
-    options: { query: "?raw"; import: "default"; eager: true },
+    options: { query: "?raw"; import: "default"; eager: true; exhaustive?: true },
   ): Record<string, string>;
 }

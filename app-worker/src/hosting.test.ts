@@ -9,15 +9,33 @@ import feedRs from "../../crates/grimoire-core/src/marketplace_feed.rs?raw";
 import scryfallRs from "../../crates/grimoire-core/src/scryfall.rs?raw";
 import oracleTagsRs from "../../crates/grimoire-core/src/tags/oracle.rs?raw";
 import entitlementRs from "../../crates/grimoire-core/src/sync_engine/entitlement.rs?raw";
+import webCoreTs from "../../src/lib/core/web/index.ts?raw";
 import { headersFor, parseHeaders } from "./headers";
 
 /**
  * **The fence between the hosting policy and the engine it hosts.** Nothing compiles the two
  * together: `_headers` is a text file Cloudflare reads at deploy, and the hosts the engine asks
- * are constants in Rust. A feed that moved, or a new one, would build green on both sides and
- * fail in a reader's browser as a download that never starts — with the reason in a console
- * nobody has open. So this reads both as text, as `src/lib/ipc.test.ts` reads the Rust it
- * mirrors, and goes red on the day they part.
+ * are in Rust. A feed that moved, or a new one, would build green on both sides and fail in a
+ * reader's browser as a download that never starts — with the reason in a console nobody has
+ * open. So this reads both as text, as `src/lib/ipc.test.ts` reads the Rust it mirrors.
+ *
+ * **What it holds, exactly, in two halves:**
+ *
+ * - *A host that moved.* The engine's addresses are read by name — `SCRYFALL_API`, `IMAGE_HOST`,
+ *   `FEED_URL` and Card Kingdom's `url()` — and `connect-src` is held set-equal to their hosts
+ *   and the bulk files'. Change one in the Rust and this is red.
+ * - *A host that is new.* A census of every `https://` literal in the code the three crates
+ *   **ship** — above each file's test modules, comments out — each of which has to be a host in
+ *   `connect-src` or on a short list of hosts no browser's engine asks, with the reason. A sixth
+ *   feed written in a file this test has never heard of is red.
+ *
+ * **And what it cannot.** An address that is not a literal: one built from parts, read from a
+ * setting — or **sent by a server**, which is the case that exists. The card sync and both Tagger
+ * feeds download whatever `jsonl_download_uri` Scryfall's descriptor names; no shipped line says
+ * `data.scryfall.io`. That host is read here from the descriptors transcribed into two test
+ * modules, which pins the policy to what Scryfall sent on the day they were written and to
+ * nothing since. If Scryfall moves its bulk files, this stays green and a browser's first run
+ * fails.
  *
  * **Addresses are asked of `headersFor`, never matched against the file's text**: what an
  * address is *sent* is the sum of every rule that matches it, and two rules that each look right
@@ -26,10 +44,23 @@ import { headersFor, parseHeaders } from "./headers";
 
 const rules = parseHeaders(headersText);
 
+/**
+ * The engine's Worker, as Vite names its chunk: the stem of the file the page constructs it
+ * from, a hyphen, a hash. Read from the line that constructs it, so a file renamed out from
+ * under `_headers`'s rule for it is a failure here rather than a Worker kept for a year.
+ */
+const WORKER_STEM = (() => {
+  const found = /new Worker\(new URL\("\.\/([\w.-]+)\.ts", import\.meta\.url\)/.exec(webCoreTs)?.[1];
+  if (found === undefined) {
+    throw new Error("src/lib/core/web/index.ts no longer constructs the Worker where this reads it.");
+  }
+  return found;
+})();
+
 /** The addresses a deploy serves, one of each kind. The hashes are made up; the shapes are not. */
 const DOCUMENT = ["/", "/index.html", "/decks/12", "/collection"];
-const WORKER_CHUNK = "/assets/worker-D3adB33f.js";
-const HASHED = ["/assets/index-B1x9QkZp.js", "/assets/index-C7hVtR2a.css", WORKER_CHUNK];
+const WORKER_CHUNK = `/assets/${WORKER_STEM}-BjbUO-kj.js`;
+const HASHED = ["/assets/index-B1x9QkZp.js", "/assets/index-C7hVtR2a.css", "/assets/web-di51RyQX.js"];
 const ENGINE = [
   "/wasm/0123456789abcdef/grimoire_web.js",
   "/wasm/0123456789abcdef/grimoire_web_bg.wasm",
@@ -42,7 +73,7 @@ const UNHASHED = [
   "/icons/maskable-512.png",
 ];
 const SERVICE_WORKER = "/sw.js";
-const EVERY = [...DOCUMENT, ...HASHED, ...ENGINE, ...UNHASHED, SERVICE_WORKER];
+const EVERY = [...DOCUMENT, ...HASHED, WORKER_CHUNK, ...ENGINE, ...UNHASHED, SERVICE_WORKER];
 
 /** A policy as its directives: `script-src 'self' x` → `{ "script-src": ["'self'", "x"] }`. */
 function directives(policy: string): Record<string, string[]> {
@@ -97,21 +128,141 @@ const CARD_KINGDOM = feedUrl("CardKingdom");
 const MANA_POOL = feedUrl("ManaPool");
 
 /**
- * Where the bulk files are. **Not a constant of the engine's**: the card sync and both tagger
- * feeds download whatever `jsonl_download_uri` Scryfall's descriptor names. What the tree has is
- * the descriptor as it was transcribed into the Scryfall client's and the tagger's tests, so
- * that is what is read — every one of them, from both files.
+ * Where the bulk files are. **Not a constant of the engine's, and not in its shipped code at
+ * all**: the card sync and both Tagger feeds download whatever `jsonl_download_uri` Scryfall's
+ * descriptor names. What the tree has is the descriptor as it was transcribed into two test
+ * modules — the Scryfall client's and the oracle tags'; `tags/art.rs` transcribes none — so
+ * that is what is read. A fixture, not a fact about today: see the header.
  */
-const BULK_FILES = [scryfallRs, oracleTagsRs].flatMap((source) =>
-  [...source.matchAll(/"jsonl_download_uri":\s*"(https:\/\/[^"]+)"/g)].map((m) => m[1]),
-);
+const descriptors = (source: string): string[] =>
+  [...source.matchAll(/"jsonl_download_uri":\s*"(https:\/\/[^"]+)"/g)].map((m) => m[1]);
+const BULK_FILES = [...descriptors(scryfallRs), ...descriptors(oracleTagsRs)];
 
 const origin = (url: string): string => new URL(url).origin;
 
+/** A crate's sources by repository path, as text. `src/bin/` is a tool's, not the library's. */
+const RUST: Record<string, string> = import.meta.glob(
+  [
+    "/crates/grimoire-core/src/**/*.rs",
+    "/crates/grimoire-web/src/**/*.rs",
+    "/crates/card-scanner/src/**/*.rs",
+    "!/crates/card-scanner/src/bin/**",
+  ],
+  { query: "?raw", import: "default", eager: true },
+);
+
+/**
+ * The files a parent declares behind a test gate — `#[cfg(test)] mod tests;` and the `testing`
+ * feature's `scratch` — and everything under them. Derived, as `platform::fence` derives them.
+ */
+const TEST_ONLY_FILES = (() => {
+  const gate = /^\s*#\[cfg\((?:test|any\(test, feature = "testing"\))\)\]\s*$/;
+  const declared = /^\s*(?:pub(?:\([a-z]+\))? )?mod (\w+);/;
+  const out: string[] = [];
+  for (const [path, text] of Object.entries(RUST)) {
+    const lines = text.split(/\r?\n/);
+    const dir = path.slice(0, path.lastIndexOf("/"));
+    const stem = path.slice(path.lastIndexOf("/") + 1, -".rs".length);
+    const base = ["mod", "lib", "main"].includes(stem) ? dir : `${dir}/${stem}`;
+    lines.forEach((line, at) => {
+      const name = gate.test(line) ? declared.exec(lines[at + 1] ?? "")?.[1] : undefined;
+      if (name !== undefined) out.push(`${base}/${name}.rs`, `${base}/${name}/`);
+    });
+  }
+  return out;
+})();
+
+/**
+ * What one file ships, by the crate's own rule (`crates/grimoire-core/CLAUDE.md`, and the cut
+ * `scripts/coverage-rust.mjs` makes): everything above its first column-0 `#[cfg(test)]` **that
+ * gates a module**. A gate over one item higher up is not the cut. Comment lines are dropped —
+ * a `///` naming a documentation page is prose, not an address anything asks.
+ */
+function shipped(path: string, text: string): string[] {
+  if (TEST_ONLY_FILES.some((t) => (t.endsWith("/") ? path.startsWith(t) : path === t))) return [];
+  const lines = text.split(/\r?\n/);
+  const opensModule = (line: string | undefined): boolean =>
+    /^(pub(\([a-z]+\))? )?mod \w/.test(line ?? "");
+  const cut = lines.findIndex((l, at) => l.startsWith("#[cfg(test)]") && opensModule(lines[at + 1]));
+  return (cut === -1 ? lines : lines.slice(0, cut)).filter((l) => !l.trimStart().startsWith("//"));
+}
+
+/** Every `https://` host written in shipped code, and the files that write it. */
+const SHIPPED_HOSTS = (() => {
+  const hosts = new Map<string, string[]>();
+  for (const [path, text] of Object.entries(RUST)) {
+    for (const line of shipped(path, text)) {
+      for (const [, host] of line.matchAll(/https:\/\/([A-Za-z0-9.-]*[A-Za-z0-9])/g)) {
+        hosts.set(host, [...(hosts.get(host) ?? []), path]);
+      }
+    }
+  }
+  return hosts;
+})();
+
+/**
+ * Hosts the shipped code names that a browser's engine never *asks*, and why each is not owed a
+ * place in `connect-src`. **Short on purpose, and every entry has to still be in the code**: a
+ * host with no line here and no place in the policy fails the census below.
+ */
+const NOT_ASKED_FROM_A_BROWSER: Record<string, string> = {
+  "manapool.com":
+    "it sends no Access-Control-Allow-Origin, and the engine refuses the feed on a host that cannot reach it before any request (step 5.2)",
+  "mtg-grimoire-relay.denmark-east.workers.dev":
+    "sync in a browser is phase 6, which moves this entry into the policy with the relay's CORS allow-list",
+  "www.patreon.com":
+    "the authorize address the engine builds for the page to open in a new tab — a navigation, which connect-src does not govern",
+  "github.com": "the repository's address inside the User-Agent's text, not an address anything asks",
+  "fonts.googleapis.com": "card-scanner's debug page, HTML a native debug server serves",
+  "fonts.gstatic.com": "card-scanner's debug page, as above",
+};
+
+describe("the census: every https:// host in the engine's shipped code", () => {
+  it("reads the three crates, and cuts each file where its tests begin", () => {
+    // Guards the census itself: one that read nothing, or read the test modules too, would
+    // pass or fail the test below for the wrong reason.
+    expect(Object.keys(RUST)).toContain("/crates/grimoire-core/src/launch.rs");
+    expect(Object.keys(RUST)).toContain("/crates/grimoire-web/src/host.rs");
+    expect(Object.keys(RUST).filter((path) => path.includes("/src/bin/"))).toEqual([]);
+    expect([...SHIPPED_HOSTS.keys()]).toContain(new URL(SCRYFALL_API).host);
+    // In `image_uri.rs`'s tests and nowhere above them: the cut is being made.
+    expect(imageUriRs).toContain("https://errors.scryfall.com/");
+    expect([...SHIPPED_HOSTS.keys()]).not.toContain("errors.scryfall.com");
+    // A whole file behind a test gate, with an address in it.
+    expect(TEST_ONLY_FILES).toContain("/crates/grimoire-core/src/sync/run_tests.rs");
+  });
+
+  it("finds each one in connect-src, or on the list of hosts a browser's engine never asks", () => {
+    const unplaced = [...SHIPPED_HOSTS]
+      .filter(([host]) => !csp["connect-src"].includes(`https://${host}`))
+      .filter(([host]) => !(host in NOT_ASKED_FROM_A_BROWSER))
+      .map(([host, files]) => `${host} — ${[...new Set(files)].join(", ")}`);
+    // A host here is one the engine may ask from a browser that the policy will refuse. Add it
+    // to `_headers`, or to the list above with the reason no browser's engine reaches it.
+    expect(unplaced).toEqual([]);
+  });
+
+  it("keeps that list to hosts the code still names, and out of the policy", () => {
+    const listed = Object.keys(NOT_ASKED_FROM_A_BROWSER);
+    expect(listed.filter((host) => !SHIPPED_HOSTS.has(host))).toEqual([]);
+    expect(listed.filter((host) => csp["connect-src"].includes(`https://${host}`))).toEqual([]);
+  });
+
+  it("does not find the bulk files' host, which no shipped line names", () => {
+    // The half of `connect-src` this census cannot hold: the address arrives in Scryfall's
+    // descriptor. Written as a test so the limit is stated where it would otherwise be assumed
+    // away — if this ever fails, the host has become a literal and the header above is out of
+    // date in the good direction.
+    for (const url of BULK_FILES) expect(SHIPPED_HOSTS.has(new URL(url).host)).toBe(false);
+  });
+});
+
 describe("connect-src, against the hosts the engine asks", () => {
-  it("reads a bulk-file address out of both descriptors", () => {
-    // Guards the pattern: a census that matched nothing would pass the test below.
-    expect(BULK_FILES.length).toBeGreaterThanOrEqual(2);
+  it("reads a bulk-file address out of each descriptor that transcribes one", () => {
+    // Guards the pattern, file by file: a file that matched nothing would otherwise be carried
+    // by the other.
+    expect(descriptors(scryfallRs).length).toBeGreaterThanOrEqual(1);
+    expect(descriptors(oracleTagsRs).length).toBeGreaterThanOrEqual(1);
   });
 
   it.each([
@@ -124,9 +275,11 @@ describe("connect-src, against the hosts the engine asks", () => {
     expect(csp["connect-src"]).toContain(origin(url));
   });
 
-  it("allows nothing else", () => {
-    // Set equality, so a host added to the policy with no constant behind it is red too: an
-    // entry nobody asks is an entry nobody will remember to take out.
+  it("allows nothing but those", () => {
+    // Set equality against the addresses read by name above, so a host added to the policy with
+    // nothing behind it is red: an entry nobody asks is one nobody will remember to take out.
+    // **This is the half that sees a host leave or move, not one arrive** — a new feed is the
+    // census's to catch, and its host then has to be named here too before this passes.
     const asked = [SCRYFALL_API, IMAGE_HOST, COMBO_FEED, CARD_KINGDOM, ...BULK_FILES].map(origin);
     expect([...csp["connect-src"]].sort()).toEqual(["'self'", ...new Set(asked)].sort());
   });
@@ -257,6 +410,28 @@ describe("caching", () => {
       expect(rule?.unset, path).toEqual(["cache-control"]);
     }
   });
+
+  it("revalidates the engine's Worker, the one hashed file whose policy can change under it", () => {
+    // A dedicated Worker runs under the policy on its own script's response. That policy is
+    // `_headers`', and a deploy that changes only `_headers` renames no chunk — so kept for a
+    // year, the script is never asked for again and a returning reader's engine keeps the
+    // `connect-src` of the day they first came (measured, Chrome 154: not requested at all).
+    // Revalidated, it is a 304 carrying the new policy, which takes effect (measured likewise).
+    expect(cache(WORKER_CHUNK)).toBe("no-cache");
+    const own = rules.find((rule) => rule.path === `/assets/${WORKER_STEM}-*`);
+    expect(own?.unset).toEqual(["cache-control"]);
+    expect(own?.set).toEqual([["cache-control", "no-cache"]]);
+    // And it still carries the policy it is revalidated for.
+    expect(policyAt(WORKER_CHUNK)).toBe(policyAt("/"));
+  });
+
+  it("gives up the year for that one file and for nothing beside it", () => {
+    expect(cache(`/assets/${WORKER_STEM}s-B1x9QkZp.js`)).toBe(YEAR);
+    expect(cache(`/assets/web${WORKER_STEM}-B1x9QkZp.js`)).toBe(YEAR);
+    // The engine's glue and module are loaded *by* the Worker and carry no policy of their own
+    // that anything runs under.
+    for (const path of ENGINE) expect(cache(path)).toBe(YEAR);
+  });
 });
 
 /** `wrangler.jsonc` as a value: comments out, trailing commas out. Strings are stepped over. */
@@ -324,17 +499,44 @@ describe("wrangler.jsonc", () => {
 });
 
 describe("what must not be in this directory, or in any build but the web's", () => {
-  const files = import.meta.glob(["/app-worker/**/*", "/tsconfig.app-worker.json"], {
-    query: "?raw",
-    import: "default",
-    eager: true,
-  });
+  /**
+   * Every file in the directory, **dotfiles among them**: without `exhaustive` a glob import
+   * skips any name that starts with a dot, and a sweep for `.dev.vars` that cannot see a dotfile
+   * is an assertion that cannot fail — which is what this was for one commit.
+   *
+   * `.wrangler/` is left out by name: it is wrangler's local state, megabytes of it once the
+   * owner has run `wrangler dev`, and none of it can be committed. **That, not this test, is the
+   * fence for both**: the root `.gitignore` ignores `.dev.vars`, `.dev.vars.*` and `.wrangler/`
+   * everywhere, and CI's checkout never has either. What this adds is on the machine that has
+   * them — a `.dev.vars` here is red before anybody reaches for `git add -f`.
+   */
+  const files = import.meta.glob(
+    [
+      "/app-worker/**/*",
+      "/tsconfig.app-worker.json",
+      "!/app-worker/.wrangler/**",
+      "!/app-worker/node_modules/**",
+    ],
+    { query: "?raw", import: "default", eager: true, exhaustive: true },
+  );
 
   it("sweeps every file here", () => {
     const names = Object.keys(files);
     for (const wanted of ["wrangler.jsonc", "_headers", "README.md", "src/index.ts"]) {
       expect(names).toContain(`/app-worker/${wanted}`);
     }
+  });
+
+  it("can see a dotfile at all", () => {
+    // The option the sweep leans on, shown on a dotfile that is always there. If a Vite upgrade
+    // changes what `exhaustive` means, this is what says so.
+    const dotfile = import.meta.glob("/.nvmr*", {
+      query: "?raw",
+      import: "default",
+      eager: true,
+      exhaustive: true,
+    });
+    expect(Object.keys(dotfile)).toEqual(["/.nvmrc"]);
   });
 
   it("holds no account id, and nothing shaped like one", () => {
@@ -356,7 +558,8 @@ describe("what must not be in this directory, or in any build but the web's", ()
       !PROSE.includes(name) && SECRETS.some((secret) => text.includes(secret)) ? [name] : [],
     );
     expect(found).toEqual([]);
-    expect(Object.keys(files).filter((name) => /\.dev\.vars|\.env/.test(name))).toEqual([]);
+    // Wrangler's two homes for a local secret. This Worker has none to keep in either.
+    expect(Object.keys(files).filter((name) => /\/\.(dev\.vars|env)[^/]*$/.test(name))).toEqual([]);
   });
 
   it("keeps `_headers` out of both public directories, which builds copy whole", () => {

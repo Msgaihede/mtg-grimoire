@@ -79,7 +79,13 @@ describe("a file that is not there", () => {
   });
 
   // A path with no extension under a tree of files: `isNavigation` alone would call it a place.
-  it.each(["/assets/chunk", "/wasm/0123456789abcdef/grimoire_web", "/mtgimg/display/abc/0"])(
+  it.each([
+    "/assets/chunk",
+    "/wasm/0123456789abcdef/grimoire_web",
+    "/mtgimg/display/abc/0",
+    // Parsed by the host and never served — and so a miss with no extension.
+    "/_headers",
+  ])(
     "is a 404 to a caller that accepts a page, under a tree that holds none: %s",
     async (path) => {
       const { env, asked } = hosting();

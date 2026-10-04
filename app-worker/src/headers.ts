@@ -22,6 +22,20 @@
  * thrown error rather than a rule quietly ignored: a rule the preview skipped and the host
  * applied is exactly the disagreement this module exists to remove.
  *
+ * **And two things Cloudflare accepts in silence are refused here**, read off its own parser and
+ * matcher (`cloudflare/workers-sdk`, `packages/workers-shared`, at `f025bbfd`, 2026-10-03):
+ *
+ * - **the same path twice.** The parsed rules are stored by path, so of two rules for one path
+ *   the host keeps the *last* and drops the first — where reading the file top to bottom
+ *   suggests both apply;
+ * - **a rule with nothing under it**, which the host drops with a warning in the deploy's
+ *   output. A path line whose headers were all mistyped away is a rule that is not there.
+ *
+ * Either would be a file this reader and the host read differently, so neither parses.
+ * (`attachCustomHeaders` in that source is also where every statement above about order,
+ * joining and detaching was checked: each matching rule in the file's order, its detaches
+ * first, and a header this file has already set is *appended* to rather than replaced.)
+ *
  * **Plain TypeScript with nothing but erasable types**, on purpose: Node strips those natively,
  * so a `.mjs` under `scripts/` can import this file as it stands.
  */
@@ -43,6 +57,13 @@ export interface HeaderRule {
 export function parseHeaders(text: string): HeaderRule[] {
   const rules: HeaderRule[] = [];
   let rule: HeaderRule | undefined;
+  /** The line the rule being read began on, for the refusal of one that turns out empty. */
+  let began = 0;
+  const closeRule = (): void => {
+    if (rule !== undefined && rule.set.length === 0 && rule.unset.length === 0) {
+      throw new Error(`_headers line ${began}: \`${rule.path}\` has no headers under it`);
+    }
+  };
   text.split(/\r?\n/).forEach((raw, index) => {
     const refuse = (why: string): never => {
       throw new Error(`_headers line ${index + 1}: ${why}`);
@@ -56,7 +77,12 @@ export function parseHeaders(text: string): HeaderRule[] {
     if (line.startsWith("/")) {
       if (line.split("*").length > 2) refuse("a path may hold one splat");
       if (/:[A-Za-z]/.test(line)) refuse("placeholders are not modelled here");
+      if (rules.some((earlier) => earlier.path === line)) {
+        refuse(`a second rule for \`${line}\` — the host keeps only the last`);
+      }
+      closeRule();
       rule = { path: line, unset: [], set: [] };
+      began = index + 1;
       rules.push(rule);
       if (rules.length > MAX_RULES) refuse(`more than ${MAX_RULES} rules`);
       return;
@@ -75,6 +101,7 @@ export function parseHeaders(text: string): HeaderRule[] {
     if (/\s/.test(name) || value === "") return refuse("expected `Name: value`");
     rule.set.push([name, value]);
   });
+  closeRule();
   return rules;
 }
 

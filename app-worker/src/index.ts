@@ -58,8 +58,13 @@ const REFUSAL = {
 /**
  * Where nothing is a page: the bundle's hashed files, the engine's, and the card pictures the
  * service worker answers (step 5.3). A miss under any of them is a 404 to every caller.
+ *
+ * **And `/_headers`**, which is not a tree but is never a place either: Cloudflare parses that
+ * file and does not serve it, so its address is a miss, has no extension, and would otherwise be
+ * answered with the document to a caller that accepts one. The preview answers it with a 404;
+ * so does this.
  */
-const NOT_A_PLACE = ["/assets/", "/wasm/", "/mtgimg/"];
+const NOT_A_PLACE = ["/assets/", "/wasm/", "/mtgimg/", "/_headers"];
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {

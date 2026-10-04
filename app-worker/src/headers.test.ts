@@ -93,12 +93,47 @@ describe("what it refuses rather than skips", () => {
     ["a header before any path", "A: 1", /before any path/],
     ["a line that is not a pair", "/*\n  just words", /Name: value/],
     ["a header with no value", "/*\n  A:", /Name: value/],
+    // Cloudflare stores rules by path: of two for one path it keeps the last and says nothing.
+    ["the same path twice", "/a\n  A: 1\n/b\n  B: 2\n/a\n  C: 3", /second rule for `\/a`/],
+    // …and drops a rule with nothing under it, with a warning in a deploy's output.
+    ["a rule with nothing under it", "/a\n/b\n  B: 2", /`\/a` has no headers/],
+    ["a last rule with nothing under it", "/a\n  A: 1\n/b\n# only a comment", /`\/b` has no headers/],
   ])("%s", (_what, text, why) => {
     expect(() => parseHeaders(text)).toThrow(why);
   });
 
   it("names the line", () => {
     expect(() => parseHeaders("# one\n/*\n  A: 1\n  oops")).toThrow(/line 4/);
+    // An empty rule is named by the line it began on, not the line that ended it.
+    expect(() => parseHeaders("/a\n  A: 1\n/empty\n\n/c\n  C: 1")).toThrow(/line 3/);
+  });
+
+  it("takes a rule that only detaches", () => {
+    // Cloudflare's own example, `/*.jpg` with one `! Content-Security-Policy`, is not empty.
+    expect(parseHeaders("/*.jpg\n  ! Content-Security-Policy")).toEqual([
+      { path: "/*.jpg", unset: ["content-security-policy"], set: [] },
+    ]);
+  });
+
+  it("applies three rules to one address in the file's order", () => {
+    // The shape `_headers` leans on for the engine's Worker: a default, a tree, one file in it.
+    const rules = parseHeaders(
+      [
+        "/*",
+        "  Cache-Control: no-cache",
+        "/assets/*",
+        "  ! Cache-Control",
+        "  Cache-Control: public, max-age=31536000, immutable",
+        "/assets/worker-*",
+        "  ! Cache-Control",
+        "  Cache-Control: no-cache",
+      ].join("\n"),
+    );
+
+    expect(headersFor(rules, "/assets/worker-BjbUO-kj.js")).toEqual({ "cache-control": "no-cache" });
+    expect(headersFor(rules, "/assets/index-B1x9QkZp.js")).toEqual({
+      "cache-control": "public, max-age=31536000, immutable",
+    });
   });
 
   it("holds Cloudflare's two limits", () => {

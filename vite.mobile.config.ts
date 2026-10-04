@@ -275,6 +275,11 @@ export default defineConfig(({ mode, command, isPreview }) => {
   const engineBuild = building ? buildIdOf(engine) : "dev";
 
   return mergeConfig(base, {
+    // **`webHosting()` stays first among the `web` plugins.** A preview middleware answers in the
+    // order its plugin is listed, and this one only *sets headers and passes on*: listed after a
+    // plugin that answers — `web:engine`'s rewrite of a navigation, or a service worker's
+    // middleware for `/sw.js` — that answer would leave without the policy, and the one local
+    // server that enforces it would have a hole exactly where a worker's script is served.
     plugins: [
       lightEntry(),
       ...(web ? [webHosting(), webEngine(engineBuild, engine, building)] : []),
