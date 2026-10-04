@@ -9,8 +9,10 @@ CI builds, which a phone first ran on 2026-10-04 (§8.6) — and **phase 5 is bu
 step 5.1 (2026-10-04) the engine is a WASM module in a dedicated Worker, and it opens its
 database in a browser's OPFS and answers commands there, and **since step 5.2 (the same day) it
 builds its corpus there** — the launch's downloads streamed into their sinks, run once against
-the real hosts (§9.2). **It draws no card picture in a browser yet**; there is no service
-worker, nothing is hosted, and there is no sync on a light install.
+the real hosts (§9.2) — and **since step 5.4 the clipboard, a link out and the desktop face's
+file dialogs are a browser's own there, and the manifest is finished** (§9.4). **It draws no
+card picture in a browser yet**; there is no service worker, nothing is hosted, and there is no
+sync on a light install.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
@@ -254,20 +256,28 @@ purpose; the phase that owns the surface owns the fix.
 
 ### Phase 5 — the web host
 
-**Steps 5.1 and 5.2 (§9.1, §9.2) closed none of these four**, and each has a step that owns it
-in [the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md): the first is
-5.3's, the other three 5.4's. What each step itself left open is at its own foot — §9.1's, and
-§9.2's *Found and left*.
+**Steps 5.1 and 5.2 (§9.1, §9.2) closed none of these four; step 5.4 (§9.4) closed the last
+three**, and the first is 5.3's in
+[the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md). What each step
+itself left open is at its own foot — §9.1's, §9.2's *Found and left*, §9.4's *Not measured*.
 
 - `FaceBoundary` catches a face that throws — a lazy chunk that never arrives included — and
   offers a reload. What it does not do is recover: a deploy that renamed the chunks needs the
   service worker's update story, which is this phase's.
-- A refused history **push** is swallowed like a refused replace, but costs more than a stale
+- ~~A refused history **push** is swallowed like a refused replace, but costs more than a stale
   URL — the entry is never made. `back()`'s latch has one release, a `popstate`; a
-  `history.back()` the browser drops leaves ✕ and Escape inert until the next one.
-- `public/light.webmanifest` is copied into every build's output, the desktop's and the share
-  viewer's included, because `public/` is shared. It is inert there.
-- The manifest's and the page's `#0e0f13` is two levels off `--color-bg`'s real sRGB value.
+  `history.back()` the browser drops leaves ✕ and Escape inert until the next one.~~ **Closed
+  2026-10-04 (§9.4)**: the phone router holds a place the browser would not write, `back()`
+  waits a bounded time for its Back and then renames the entry, and the desktop adapter makes a
+  refused push late, on its next write. Each is held by a test with the refusal simulated —
+  thrown and dropped — and by nothing a real browser was made to do.
+- ~~`public/light.webmanifest` is copied into every build's output, the desktop's and the share
+  viewer's included, because `public/` is shared. It is inert there.~~ **Closed 2026-10-04
+  (§9.4)**: the manifest, its icons and a copy of the favicon are in `mobile/public/`, the
+  light builds' own public directory.
+- ~~The manifest's and the page's `#0e0f13` is two levels off `--color-bg`'s real sRGB
+  value.~~ **Closed 2026-10-04 (§9.4)**: `#0C0D12` in the manifest, the page's `theme-color`
+  and Android's window ground, held equal by `mobile/host.test.ts`.
 
 ### The fences
 
@@ -1986,8 +1996,11 @@ about ten to a screen, and opens the card sheet; a rule break is red with a warn
   list, which a phone draws without the cards' edit controls.
 - **Links in deck notes and to-do lists** are a plain `<a target="_blank" rel="noopener
   noreferrer">` on the phone, because nothing below `@/lib/core` opens a URL yet; on a Tauri light
-  host that is for phases 4 and 5's seams to settle. A to-do box on the phone is drawn and cannot
-  be pressed, and says `Done:` or `To do:`.
+  host that is for phases 4 and 5's seams to settle. (**They are still plain links, and that is
+  now the choice rather than the stand-in**: since step 5.4 `@/lib/core` does open a URL — §9.4 —
+  and a link a reader can long-press needs no host to open it; phase 4's guard hands it to the
+  system browser on Android.) A to-do box on the phone is drawn and cannot be pressed, and says
+  `Done:` or `To do:`.
 - **Not on the phone yet**: Compare, the theory-match ticks on the Actual list, the deck's
   description, and the stats band beyond the mana curve (the band carries write buttons).
 
@@ -2256,6 +2269,9 @@ decoded; a `Blob` handed to an `<a download>` and its URL released a task later;
 `navigator.clipboard.writeText`, which rejects where the browser offers none rather than claiming
 a copy. It is not in `src/lib/`, because the desktop cannot share it — its whole rule (issue #545)
 is that no file handle reaches the page. When phases 4 and 5 seam it, this module is what moves.
+(**It moved on 2026-10-04, step 5.4 — §9.4**: the read, the decode and the download are
+`src/lib/core/browserFiles.ts`, which the web host's own file commands read too, and the copy is
+`@/lib/clipboard`'s on both faces, refused in the same sentence.)
 
 - **The decode follows `import.rs`'s order** — a UTF-8 mark, a UTF-16 mark, valid UTF-8, then
   Windows-1252 — and refuses a file over the megabyte in that file's own sentence before reading a
@@ -2321,7 +2337,9 @@ reason. `SettingsPage` is the edition's second reader, as spec §3.1 grants; `na
 - **`SyncPanel` was welded** through `@/lib/externalLinks` (the plugin-opener, for *Connect
   Patreon*). It is now `SyncPanelBody`, which takes `openLink`, and a one-line `SyncPanel` that
   hands it `openExternal`; the phone face hands it a `window.open` until the host seam for opening
-  a link exists (phases 4 and 5).
+  a link exists (phases 4 and 5). (**It exists since step 5.4 — §9.4**: `openExternal` is the
+  host's, and the phone's Settings draws `SyncPanel` itself. The body keeps the prop for its
+  suite.)
 - **Driven in Chromium over the fake** (`mobile:dev`, which this record puts on port 5176 — the
   config's port for that script was 5175 then and is now, so the pass named another by hand or
   the figure is a slip; **since 2026-10-04 port 5176 is `web:dev`'s**): every group opened at 360 wide
@@ -2658,14 +2676,17 @@ the app does not ship. So `MainActivity` pads `android.R.id.content` by `systemB
 `env()` insets read 0, and a search box is never under the keyboard. Both bars draw light icons
 (`SystemBarStyle.dark`), and the window behind them is `#0e0f13`, the web manifest's
 `background_color` — so the bars, the launch and the page's ground agree, two levels off
-`--color-bg` exactly as the manifest already is (§5, phase 5's).
+`--color-bg` exactly as the manifest already is (§5, phase 5's). (**`#0C0D12` since step 5.4 —
+§9.4**: the token's own sRGB value, in the manifest, the page's `theme-color` and `colors.xml`
+alike. No device has drawn the new ground.)
 
 **Files.**
 
 - **Picking needed no seam.** wry's `RustWebChromeClient.onShowFileChooser` answers an
   `<input type="file">` with the system picker and hands the page a `File` over the chosen
   `content://` document, which the page reads as it reads any other. `phone/transfer/browserFiles.ts`
-  keeps the read and the decode. **One catch, found in review**: both that chooser and the dialog
+  keeps the read and the decode (`src/lib/core/browserFiles.ts` since step 5.4). **One catch,
+  found in review**: both that chooser and the dialog
   plugin turn each extension into a MIME type through `MimeTypeMap` and drop the ones it does not
   know, so `.dec` and `.dek` were greyed out. `DECKLIST_ACCEPT` now carries
   `application/octet-stream` — what the system picker calls a file of an unknown extension — and
@@ -2699,7 +2720,11 @@ run time, since `tauri android dev` may serve from the machine's address. **The 
 a tablet past 1024px — opens its links through `@tauri-apps/plugin-opener` from the page, so the
 capability grants the desktop's exact pair, `opener:allow-open-url` and `opener:allow-default-urls`.
 **What this does not do** is give the phone card sheet its `Open on …` rows — those are still not
-drawn; with the guard in place they can be plain links.
+drawn; with the guard in place they can be plain links. (**Drawn since step 5.4, as plain
+links — §9.4.** The plugin is no longer imported by `externalLinks.ts`: `src/lib/core/tauri.ts`
+names it, `src/lib/core/index.ts` picks it as this host's way out, and a press on either face
+that has to compute its address first — *Connect Patreon* — goes through it. The clipboard on
+this host is the WebView's own, since the host registers no clipboard plugin.)
 
 **Measured, 2026-10-03, on Linux**: clippy clean on the three crates with the plugins in;
 `cargo test -p grimoire-light` adds the guard's four tests and the file module's two; the lockfile
@@ -3284,8 +3309,8 @@ What follows for the engine in a browser:
   figure worth comparing with round one's. (**§9.2 has one run of each.**)
 - **Card images.** The page still asks the `mtgimg` origins, which a browser cannot reach
   (step 5.3).
-- **Clipboard, links and files on the desktop face** in a browser (step 5.4), **a service
-  worker** (5.3) and **hosting** (5.5).
+- **Clipboard, links and files on the desktop face** in a browser (step 5.4 — **built and
+  driven 2026-10-04, §9.4**), **a service worker** (5.3) and **hosting** (5.5).
 - **CI's `web` job has not run.** Its first run is this step's pull request, and its sizes are
   that run's summary — a Linux Chrome's, not the one above.
   - **It has since, on this step's pull request** (#805, merged 2026-10-04): the job's first
@@ -3350,9 +3375,9 @@ and eight things that claimed more than they did — each closed in the same cha
   at most weekly, while the answer is no** rather than once.
 - **5.3 — the service worker.** The shell precached, card images from Cache Storage on the
   app's own origin, the update flow, and a face whose chunk a deploy renamed recovering.
-- **5.4 — the browser's seams and the manifest.** Clipboard and open-a-link below
-  `@/lib/core`, file open and save on the desktop face, the phone card sheet's `Open on …`
-  rows, the manifest finished and moved out of `public/`, and phase 1's two history leftovers.
+- ~~**5.4 — the browser's seams and the manifest.**~~ **Built 2026-10-04 — §9.4**, with one
+  thing built differently from the plan's line as it stood: the Android host opens a link
+  through Tauri's opener, which its capability grants, rather than through the WebView.
 - **5.5 — hosting, and the phase's own run.** The Cloudflare Worker with static assets at
   `mtg-grimoire.app`, its runbook, the module's size taken up with timings, and the built app
   driven end to end against round one's figures.
@@ -3655,3 +3680,224 @@ same change and each with a mutation run against its test:
 - **The dead-engine screen, and a real trap.**
 - **A real eviction.**
 - **The pool's `delete_db` in a browser**: the native tests stand a closure in for it.
+
+### 9.4 Step 5.4 — the browser's seams and the manifest (2026-10-04)
+
+What a face still asked a Tauri window for, answered below `@/lib/core`; the web manifest
+finished and moved to where only the light builds copy it; and phase 1's two history leftovers
+(§5). Numbered for its step: 5.3 was still in flight when this was written, so there is no
+§9.3 above it yet. The rules that came out of it are in [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
+
+**What was built — the clipboard and a link out.**
+
+- **A second seam beside `Core`: `Host`** (`src/lib/core/types.ts`) — `copyText` and `openUrl`,
+  the spec's §3.5 third row. Not two more methods on `Core`: a `Core` is the command boundary,
+  which can be deferred, refused or wrapped whole, and neither of these reaches a backend.
+  **`src/lib/core/index.ts` chooses `host` where it chooses `core`, by the same two questions**:
+
+  | Build, or window | Chosen by | Copy | Open a link |
+  | --- | --- | --- | --- |
+  | The web build | `import.meta.env.MODE === "web"` | `navigator.clipboard.writeText` | `window.open(url, "_blank")`, the opener cut at once |
+  | The Android host | the mark it sets, `__GRIMOIRE_CORE__` | `navigator.clipboard.writeText` | Tauri's opener plugin |
+  | The desktop, `mobile:tauri`, the fake | everything else | Tauri's clipboard plugin | Tauri's opener plugin |
+
+- **`@/lib/clipboard`'s `copyText` and `@/lib/externalLinks`' `openExternal` keep their
+  signatures**, so no call site changed and every suite that mocks either module still does.
+  The two plugins are imported in `src/lib/core/tauri.ts` and nowhere else — the one door
+  `fence.test.ts` lets the phone face through — so the URL builders beside `openExternal` are
+  importable by that face.
+- **One sentence for a copy with no clipboard, on both faces**: `this browser offers no
+  clipboard here.`, the tail of whatever the caller frames. The phone's own `copyToClipboard` is
+  deleted and its export sheet copies through `@/lib/clipboard`. No `execCommand` fallback.
+- **A link is opened without the `noopener` feature, and the opener is cut on the next line.**
+  The feature makes `window.open` answer `null` whether or not a tab opened, and `null` is the
+  only thing that says a pop-up blocker refused one — which is what the Sync panel's *Connect
+  Patreon* meets, opening after a round trip to the engine. A refusal is a rejection the panel
+  reports: `The link could not be opened. This browser may be blocking new tabs.`
+- **The Android host opens through Tauri's opener, which is not what this step's brief said.**
+  The brief had neither plugin granted to that page. The opener is: `capabilities/light.json`
+  holds the desktop's exact pair and `mobile/host.test.ts` holds the list. It is also the
+  answer that needs nothing from the WebView — a `window.open` there navigates the app's own
+  window, and only the host's guard turns that back into a hand-off. The clipboard *is* the
+  WebView's own, because the host registers no clipboard plugin; until this step the desktop
+  face on a tablet asked for one that was not there (read off `mobile/src-tauri/src/lib.rs`,
+  not driven).
+- **`dist-web/` carries neither plugin, and this step's first build of it carried both.** The
+  first `tableHost` read
+  `browserHost.copyText` and `tauriHost.openUrl` at the top of its module, and a member read
+  there is something a bundler must assume has an effect: the object stayed in the web build,
+  and both plugins' calls with it. Written as two functions that call, it and they fall out.
+  The desktop's `dist/` and the APK's `dist-mobile/` carry both, as they always did.
+
+**What was built — files on the desktop face in a browser.**
+
+- **The web host answers `export_save_file` and `import_pick_file` on the page**
+  (`src/lib/core/web/files.ts`'s `answeringFiles`), in the desktop commands' own result shapes
+  — `boolean` and `ImportFile | null`, a refusal a bare string — so
+  `src/features/transfer/files.ts`, both dialogs and `ipc.ts` are untouched. The engine's table
+  has neither: a Worker has no document. It is a wrapper round the Worker's `Core`, composed at
+  the dynamic import in `src/lib/core/index.ts`, so `web/index.ts` did not change.
+- **Two sets of page commands, each with its own answerer.** `web/index.ts` answers the gate
+  and step 5.2's three storage commands; this answers the two files in front of it and sends
+  everything else on. A test builds the pair as a build does and holds that the Worker is asked
+  to open and nothing else for the first five, and is never sent a file command.
+- **What a save reports, per host:**
+
+  | Host | The desktop face's `export_save_file` | The phone face's `saveText` |
+  | --- | --- | --- |
+  | Desktop | `true` written, `false` cancelled | — |
+  | Android | `true`, `false` | `"saved"`, `"cancelled"` |
+  | Web | `true`: *handed to the browser* | `"handed"`, drawn as `Downloading <name>.` |
+
+  The web's `true` is honest only because of what its one reader draws: `ExportDialog` says
+  nothing after a save on any host and never reads the boolean. Its button still says
+  `Save as…`, and a browser may not ask where.
+- **The pick is a hidden `<input type="file">`, pressed for the reader**, with the phone
+  picker's accept list. `change` answers the file and the input's own `cancel` answers `null`,
+  as the desktop's cancelled dialog does. **A second ask answers the first with `null`**,
+  because a browser that fires neither event would otherwise leave the caller waiting; there
+  is no guess from a focus change, which can land before a slow `change` and drop the file.
+- **The megabyte and the four readings are shared, not copied**:
+  `mobile/phone/transfer/browserFiles.ts` moved to `src/lib/core/browserFiles.ts` — a leaf, so
+  `files.ts` and the web host both import it without a cycle — and took `downloadText` with
+  it. The phone's import sheet keeps an input of its own on every host and reads through the
+  same module.
+
+**What was built — the phone card sheet's `Open on` rows.**
+
+- **`mobile/phone/card/OpenOn.tsx`**: Scryfall, EDHREC and the selected marketplace, the
+  desktop's ladder in the desktop's order, **as `<a target="_blank" rel="noopener noreferrer">`**
+  — which a browser opens in a tab, and phase 4's guard hands to the system browser on Android.
+  The implementer's pick, to be redirected in review: at the foot of the sheet, under Combos;
+  the heading reads `Open on`, a row's visible text is the site, and its accessible name is the
+  whole phrase.
+- **The addresses are the desktop's own.** `openMarketplace.ts` grew `marketplaceUrlForCard` —
+  the press's whole decision with the lookup taken out — and `openMarketplaceForCard` now calls
+  it, so the link and the press cannot disagree. A link always names a printing
+  ([external-links.md](external-links.md)): the sheet names no finish, so the printing answers
+  for itself.
+- **One read the desktop does not make until the press.** An `href` has to exist before it is
+  pressed, so the sheet asks `card_tcgplayer_ids` as it opens, and only while the marketplace
+  is TCGplayer. Until it answers, and if it is refused, the row is the name search.
+- **The phone's Settings draws `SyncPanel`**, the desktop's own, and its hand-written
+  `window.open` is gone. The Spellbook link under Combos is still not drawn.
+
+**What was built — the manifest.**
+
+- **`mobile/public/light.webmanifest`**: an `id`, `start_url` and `scope` of `/`,
+  `display: standalone`, both names, and both colours `#0C0D12` — `oklch(0.16 0.01 270)`
+  converted by hand, and the value this Chrome rasterised the token to. The page's
+  `theme-color` and Android's `colors.xml` took the same value, and `mobile/host.test.ts` holds
+  the three equal.
+- **Raster icons at 192 and 512 in two drawings**: the transparent mark, for the reason the
+  desktop's icon is the mark ([`logos/README.md`](../../logos/README.md)), and a **maskable**
+  one on the ground to every edge. One purpose to a file.
+- **`node scripts/light-icons.mjs` made them**, from `logos/svg/mtg-grimoire-mark.svg` alone:
+  it derives the maskable drawing rather than reading a third SVG, renders each size in
+  headless Chromium over the DevTools protocol — no image library is a dependency — and
+  **measures the furthest painted pixel**, failing a mark that leaves the safe zone. At
+  `scale(0.70)` the mark reaches **37.5%** of the width from the centre, against 40%.
+- **`mobile/public/` is the light builds' own public directory** (`vite.mobile.config.ts`'s
+  `publicDir`), so the manifest and its icons reach `dist-mobile/`, `dist-web/` and both dev
+  servers and nothing else. The favicon is a second copy of the mark there, held equal to the
+  master by a test.
+- **No install button, and nothing asks a `display-mode` question**: a browser's own install UI
+  is the install.
+
+**What was built — history.**
+
+- **The phone router holds a place the browser would not write.** `navigate` writes, then
+  reads the address: one browser throws on a rationed call and another drops it without a
+  word, and the only thing both leave is an address that did not move. The place is then kept
+  in memory, the listeners are told and the page draws it; history is one entry short until
+  the next write the browser takes, or the next Back. **Not a fallback to a replace**: the
+  ration is one counter for both verbs, and a replace that was taken would rename the entry
+  beneath — the page under an open card — and break `PUSHED`'s promise. Leaving a held place
+  is forgetting it, unless the browser's own entry is a pushed card over the same page.
+- **`back()` waits `BACK_WAIT_MS`, 500 ms, for its Back.** Its one release was the `popstate`.
+  When the wait is up and the reader is still where they pressed, the entry is renamed, as a
+  linked card's is — which leaves the page as two entries, the cost a rename has there.
+- **The desktop adapter owes a push the browser refused**, and makes its next write as that
+  push whatever kind it would have been, marked `OVERLAID` if it carries a card.
+
+**Measured and driven, 2026-10-04.** Windows 11, headless Chrome 154.0.8037.95, a fresh
+profile for each pass, on the tree with step 5.2 merged in. Every host but `localhost` was
+unresolvable (`--host-resolver-rules`), so nothing below is over a corpus.
+
+- **The built app, through `vite preview` on port 4196**, at inner 360 × 800 and 1280 × 800:
+  `Page.getAppManifest` answered the manifest with **no errors**, `Page.getInstallabilityErrors`
+  answered **none**, and the four PNGs came back `image/png` and decoded at their declared
+  sizes. **Not on 4176**: another worktree's preview held that port, the first pass read *its*
+  manifest without saying so, and every pass here was moved to a port of its own.
+- **What each output holds beside `assets/`**: `dist/` — `index.html` and the mark;
+  `dist-share/` — the mark; `dist-mobile/` and `dist-web/` — the document, the manifest, the
+  mark and the four icons, `dist-web/` with the engine under `wasm/<build id>/` as well.
+- **The web app over the real engine, a dev server in the `web` mode on port 5196.** The
+  database opened on a rollback journal. `copyText` put its text on the clipboard, read back
+  with `readText`. `openExternal` outside a user activation was refused in the sentence above;
+  inside one it opened a tab whose `window.opener` read `null`. `ipc.exportSaveFile` with a
+  path for a name answered `true` and downloaded `Burn.txt` holding the text it was given.
+- **The desktop face, 1280 wide.** *Export deck*: Copy drew `Copied.` and replaced what the
+  clipboard held; Save as… downloaded `Burn.txt` and drew no alert. *Import cards*: Choose
+  file… opened a chooser on the hidden input; a Windows-1252 file arrived in the box as
+  `1 Séance` under the dialog's own notice about that reading, and the input was gone
+  afterwards; a file one byte over the megabyte drew `Couldn't read a decklist from a file —
+  That file is over 1 MB. …`. *Connect Patreon* opened Patreon's authorize address in a new
+  tab.
+- **The phone face, 360 wide.** The export sheet's Copy drew `Copied.`, its Save file drew
+  `Downloading Burn.txt.`, and *Connect Patreon* opened the same address.
+- **Two limits on that pass.** The deck was empty — nothing can be added with no corpus — so
+  both dialog saves were empty files and the text was proven by the direct call. And **the
+  desktop face's presses were scripted clicks inside a user activation, not pointer presses**:
+  with no host to download from, that face sits under its full-window first-run screen, which
+  takes the pointer. The dialogs are a rung beneath it and were found by their content.
+- **The card sheet over the fake** (`mobile:dev`'s config on port 5215), 360 wide: three rows,
+  44px each, nothing scrolling sideways; for Agadeem's Awakening, ZNR 90, the Scryfall
+  permalink, EDHREC's router by name and
+  `https://www.tcgplayer.com/product/222163?Printing=Normal`; each found by its computed
+  accessible name; a press opened the Scryfall address in a new tab with no opener, and the
+  app's own tab did not move.
+- **The smoke run passed on the merged tree** (`npm run web:smoke`), with no request to a
+  host without a fixture. The manifest and the icons are requests to the app's own origin,
+  which that run lets through — and which it does not ask for: nothing in CI opens the
+  manifest in a browser.
+
+**Measured, 2026-10-04: what Chrome delivers for the light edition's chords.** The same
+Chrome, over the fake, two tabs in one window, keys sent with `Input.dispatchKeyEvent`, and
+each tab's `visibilityState` as the witness for a tab switch.
+
+- **`Ctrl+1` to `Ctrl+9` reach the page first**, every one a trusted `keydown`.
+- **Where the page prevents the default, the tab switcher does not run**: `Ctrl+4` moved the
+  app to `/decks` and its tab stayed visible. On the desktop face the light edition takes 2,
+  4, 5, 6 and 7.
+- **Where it does not, the tab switcher runs**: `Ctrl+9` hid the app's tab and showed the last
+  one, and `Ctrl+1` hid it for the first, the tab the browser opened itself with. That is 1, 3, 8 and 9 on the desktop face, and every
+  digit on the phone face, which binds none.
+- **`F1`** reached the page, which leaves it alone, and Chrome opened a tab of its own.
+  **`Ctrl+Shift+N` never reached the page**: no `keydown` arrived and new browser targets
+  appeared — the chord's private window, read from that and not seen.
+- **So the guess `mobile/CLAUDE.md` carried from phase 3 is wrong for Chrome**, and it now says
+  what was seen: the digits are not the tab switcher's *before* the page sees them. That the
+  browser acted on these keys at all — the tab switch, the private window — is what makes the
+  order Chrome's own and not an artefact of injecting past it. Nothing was built from it: the
+  chords the edition leaves inert still switch tabs, and whether to take them is a decision
+  for whoever owns the web host's keys.
+
+**Not measured.**
+
+- **A real keyboard in a window with a tab strip.** The keys were injected over the DevTools
+  protocol into a headless browser. Nor Firefox, Safari, an installed standalone window —
+  which has no tabs to switch — or a hardware keyboard on Android.
+- **Anything on an Android device**: the desktop face's copy through the WebView's clipboard,
+  *Connect Patreon* on the phone face through the opener plugin rather than `window.open`, the
+  sheet's `_blank` rows reaching the navigation guard, and the window's new ground.
+- **`mobile:tauri`**, where the phone face's copy now goes through the desktop's clipboard
+  plugin. It takes the `app` lock and was not run.
+- **Any browser but Chromium on Windows.** In particular a stricter browser's rule for
+  `window.open` after an `await`, which is *Connect Patreon*'s shape and the TCGplayer press's
+  on the desktop face; and a real cancelled picker, which only jsdom has been made to report.
+- **A browser rationing its History API.** All three history fixes are held by tests in which
+  the refusal is simulated, thrown and dropped. No browser was driven to its limit.
+- **An install.** No installability errors is Chrome's reading of the manifest; no prompt was
+  accepted, no icon was drawn by a launcher, and no `apple-touch-icon` was added.
+- **The desktop face's dialogs by pointer over a corpus**, for the reason above.

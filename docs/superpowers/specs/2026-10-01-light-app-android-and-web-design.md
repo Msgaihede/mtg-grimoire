@@ -641,6 +641,20 @@ host answers grew `reload`, the web host sends it for a second tab, and the ligh
 screen draws a link to where the reader already is — the one control that works even if
 whatever broke took the scripts with it — which is also what `FaceBoundary` draws.
 
+**Built 2026-10-04 (step 5.4) for the second and third rows, with one cell built differently
+from the table.** The third row is a second seam beside `Core`: `Host` — `copyText` and
+`openUrl` — chosen in `src/lib/core/index.ts` where the `Core` is and by the same two
+questions, with `@/lib/clipboard` and `@/lib/externalLinks` as its two callers on both faces.
+**Android's cell is not "the two plugins"**: that host registers no clipboard plugin, so it
+copies through the WebView's own `navigator.clipboard`, and it opens a link through Tauri's
+opener, which its capability grants the page. The web's cell is as written, the opener cut
+after the tab opens rather than by the `noopener` feature, so a tab the browser refused is a
+rejection a page can report. The second row's last column is built for the desktop face too:
+the web host answers the desktop's `export_save_file` and `import_pick_file` **on the page**,
+in front of the Worker, in those commands' own result shapes, so the dialogs that ask did not
+change — and a save answers that the file was handed to the browser, which is all a browser can
+know. [light-app.md](../../reference/light-app.md) §9.4 is the record.
+
 ---
 
 ## 4. Features

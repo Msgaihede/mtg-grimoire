@@ -132,9 +132,17 @@ edition is **inert** — the digits do not move between editions.
   whatever owns the window — in a browser, its own private-window chord.
 - **`F1` is left to the browser on purpose.** The map's only mount is the caption row, which this
   edition does not draw, and mounting it elsewhere is not worth it yet: its catalogue lists chords
-  the edition makes inert, and in a browser tab the digit chords it would teach are, in most
-  browsers, the tab switcher's before the page sees them (not measured here). The light edition's
-  keyboard story is the web host's (phase 5).
+  the edition makes inert.
+- **In Chrome the page sees `Ctrl+1…9` first, and the tab switcher runs only for the ones it
+  leaves alone** (measured 2026-10-04, step 5.4, light-app.md §9.4 — this said the digits were
+  the tab switcher's *before* the page saw them, which was a guess). The chords the edition
+  takes on the desktop face — 2, 4, 5, 6, 7 — move the app and switch no tab; the inert ones —
+  1, 3, 8, 9 — and every digit on the phone face, which binds none, switch tabs. `F1` reaches
+  the page, which leaves it alone, and Chrome opens a tab of its own; `Ctrl+Shift+N` never
+  reaches the page. **What that does not
+  establish**: the keys were injected over the DevTools protocol into headless Chrome 154, so
+  not a real keyboard in a window with a tab strip, not Firefox or Safari, and not an installed
+  window, which has no tabs. No key map was built on it.
 
 ## What the phone face may import
 

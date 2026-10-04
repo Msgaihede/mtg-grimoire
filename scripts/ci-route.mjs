@@ -215,12 +215,15 @@ export const ARMS = [
   // The light app's pages and entry: a React tree like `src/`, which `tsc`, `eslint`, `vitest`
   // and Storybook's story glob all read. Until this arm it fell to the fail-safe and ran the
   // whole Rust matrix and `core` for a change to a phone sheet. **And `web`** (phase 5), whose
-  // page this is: `mobile/index.html` is the document `dist-web/` is built from.
+  // page this is: `mobile/index.html` is the document `dist-web/` is built from, and
+  // `mobile/public/` — the web manifest, its icons, the favicon — is copied into it as it stands.
   { match: ["mobile/*"], jobs: PAGE_SIDE },
   // Frontend. What `npm run build` (`tsc && vite build`), `eslint .` and `vitest run` read — and
   // `storybook`, which builds every `*.stories.tsx` under `src/` and serves `public/` as its
   // static directory. **And `web`**: the light entry imports its components, its transports and
-  // its Worker from `src/`, and every Vite build here copies `public/` into its output.
+  // its Worker from `src/`. `public/` itself has reached no `dist-web/` since step 5.4 — the
+  // light builds' public directory is `mobile/public/` — so `web` runs for it with nothing to
+  // notice, which is the side to be wrong on: only a wrong skip costs anything.
   { match: ["src/*", "public/*"], jobs: PAGE_SIDE },
   // The desktop's document, at the root. **Not `web`**, whose document is `mobile/index.html`:
   // the light config names that one as its only input, so this file reaches no `dist-web/`.
