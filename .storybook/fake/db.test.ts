@@ -15,6 +15,7 @@ import {
   CLOCK_BASE,
   COMBO_CARD_NAMES,
   ORACLE_TAGGED_NAMES,
+  RELAY_BASE,
   SUPPORTING_SINCE,
   TOKEN_ORACLE,
   TOKEN_PRINTING,
@@ -12747,7 +12748,7 @@ describe("the pairing ceremony's poll", () => {
    */
   it("reads the code out of the URL a QR carries, and answers what the typed form answers", () => {
     const offerCode = writeHandlers(seed("starter")).sync_pairing_begin().code;
-    const url = `https://mtg-grimoire-relay.denmark-east.workers.dev/pair#${offerCode.replace(/-/g, "")}`;
+    const url = `${RELAY_BASE}/pair#${offerCode.replace(/-/g, "")}`;
 
     const typed = writeHandlers(seed("starter")).sync_pairing_accept({ code: offerCode });
     const scanned = writeHandlers(seed("starter")).sync_pairing_accept({ code: url });
@@ -12756,7 +12757,7 @@ describe("the pairing ceremony's poll", () => {
     // An address with no code after it is still half a paste, in the crate's words.
     expect(() =>
       writeHandlers(seed("starter")).sync_pairing_accept({
-        code: "https://mtg-grimoire-relay.denmark-east.workers.dev/pair#",
+        code: `${RELAY_BASE}/pair#`,
       }),
     ).toThrow(/105 characters/);
   });

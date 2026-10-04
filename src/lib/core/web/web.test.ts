@@ -27,6 +27,7 @@ import {
   CLEARED_TITLE,
   HELD_KEY,
   PERSIST_KEY,
+  SITE_DATA_WARNING,
   type KeyStore,
 } from "./storage";
 
@@ -744,6 +745,22 @@ describe("storage cleared under the app", () => {
     expect(CLEARED_LINE).toBe(
       "MTG Grimoire: this browser cleared the app's storage since the database was last " +
         "opened here",
+    );
+  });
+
+  /**
+   * **The half said beforehand** — `storage_group_warning`, which the Sync panel draws under its
+   * roster for a device in a group. This host answers it on every launch, in its own words:
+   * the sentence does not turn on what the browser said about keeping its storage (a reader who
+   * clears the site's data clears it whatever was promised about eviction), and whether there is
+   * a group to warn about is the page's half. The desktop and the Android host refuse the name.
+   */
+  it("tells a page what clearing its site data costs a paired browser, on every launch", async () => {
+    const { store } = fakeStore(HELD);
+    await expect(load(store, true).call("storage_group_warning")).resolves.toBe(SITE_DATA_WARNING);
+    // A first run answers the same: a browser's storage is lent from the day it is first used.
+    await expect(load(fakeStore().store, false).call("storage_group_warning")).resolves.toBe(
+      SITE_DATA_WARNING,
     );
   });
 

@@ -34,13 +34,7 @@
  *    {@link installWorld}.
  */
 import { QueryClient } from "@tanstack/react-query";
-import {
-  CLOCK_BASE,
-  allHandlers,
-  applySupporterFault,
-  errorLogSeed,
-  mirrorFailedPass,
-} from "./db";
+import { allHandlers, applySupporterFault, errorLogSeed, mirrorFailedPass } from "./db";
 import type { FakeDb, Fault } from "./db";
 import { installCorpus } from "./images";
 import {
@@ -56,7 +50,8 @@ import { seed } from "./seeds";
 import type { SeedName } from "./seeds";
 import { resetWindow } from "./window";
 import { resetBulkUndo } from "@/lib/bulkUndo";
-import { STORAGE_PERSISTENCE, type StoragePersistence } from "@/lib/core/hostStorage";
+import { STORAGE_GROUP_WARNING } from "@/lib/core/hostStorage";
+import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
 import { useAppStore } from "@/lib/store";
 
 /**
@@ -235,12 +230,13 @@ export function installWorld(
   applySupporterFault(db);
 
   const scope = createScope(allHandlers(db));
-  // The one fault that is about the *host*: a browser, which answers a name the desktop refuses.
-  // Over the world's table and not in `allHandlers`, which `parity.test.ts` holds to the commands
-  // `desktop.rs` registers — `db.ts` has the rest of why, at `lentStorage`.
+  // The one fault that is about the *host*: a browser, which answers a name the desktop refuses —
+  // and answers it in the web host's own words, read from where that host keeps them, so a story
+  // draws the sentence the web app draws. Over the world's table and not in `allHandlers`, which
+  // `parity.test.ts` holds to the commands `desktop.rs` registers — `db.ts` has the rest of why,
+  // at `lentStorage`.
   if (db.fault === "lentStorage") {
-    const asked: StoragePersistence = { askedAt: CLOCK_BASE * 1000, granted: false };
-    scope.commands = { ...scope.commands, [STORAGE_PERSISTENCE]: () => asked };
+    scope.commands = { ...scope.commands, [STORAGE_GROUP_WARNING]: () => SITE_DATA_WARNING };
   }
   activateScope(scope);
 

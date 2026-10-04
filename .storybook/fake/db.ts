@@ -1541,15 +1541,14 @@ export interface FakeUpdate {
  *
  * **`lentStorage`** is the one entry here that is about the *host* rather than about the
  * backend, and the only one that adds a command instead of changing an answer. A browser lends
- * a site its storage and can take it back, so the web app's host answers `storage_persistence`
- * (`src/lib/core/hostStorage.ts`) where the desktop and the Android host refuse the name — and
- * the Sync panel draws its note about cleared site data on a host that answers and on no other.
- * A story is a desktop by default: the fake has no such handler, and must not grow one, because
+ * a site its storage and can take it back, so the web app's host answers `storage_group_warning`
+ * (`src/lib/core/hostStorage.ts`) — one sentence, in its own words, for a device that is in a
+ * pairing group — where the desktop and the Android host refuse the name; and the Sync panel
+ * draws whatever sentence a host hands it and nothing on a host that refuses. A story is a
+ * desktop by default: the fake has no such handler, and must not grow one, because
  * `parity.test.ts` holds this table to the commands `desktop.rs` registers. So the fault is read
  * in `world.ts`, which puts the one handler over a world's table for the stories that ask to be
- * a browser. It answers the record of a browser that was asked and said no, which is the common
- * case and the one the note is for either way: a granted browser still honours a reader who
- * clears the site's data.
+ * a browser, answering the web host's own sentence from where that host keeps it.
  */
 export type Fault =
   | "busy"
@@ -24470,8 +24469,13 @@ function fakeSas(seedText: string): string {
   return String(fakeHash(seedText) % 1_000_000).padStart(6, "0");
 }
 
-/** `entitlement::RELAY_BASE`, verbatim — the address an invite's QR is drawn against. */
-const RELAY_BASE = "https://mtg-grimoire-relay.denmark-east.workers.dev";
+/**
+ * `entitlement::RELAY_BASE`, verbatim — the address an invite's QR is drawn against. A hand copy
+ * of a Rust constant, so `qr.test.ts` reads `entitlement.rs` as text and holds the two equal:
+ * without that, the relay moving would leave every story's QR code pointing at the old address
+ * with nothing red.
+ */
+export const RELAY_BASE = "https://mtg-grimoire-relay.denmark-east.workers.dev";
 
 /**
  * The invite as a QR code: **the real symbol of a fake invite** — `invite::qr_payload`'s URL

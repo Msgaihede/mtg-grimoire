@@ -6,7 +6,7 @@ import { ipc, ipcError, type MirrorStatus, type PassReport } from "@/lib/ipc";
 import { ago } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
-import { BUTTON, SWITCH, switchTone } from "./controls";
+import { PANEL_BUTTON, SWITCH, switchTone } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /** The mirror's whole state, under one root — three writes invalidate it and nothing else
@@ -248,7 +248,7 @@ export function BackupPanel(): JSX.Element {
               type="button"
               onClick={() => setRoot.mutate()}
               disabled={busy}
-              className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+              className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
             >
               <FolderOpen className="size-4" aria-hidden="true" />
               Change folder…
@@ -270,7 +270,7 @@ export function BackupPanel(): JSX.Element {
               }}
               disabled={busy}
               aria-busy={rebuild.isPending || undefined}
-              className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+              className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
             >
               <RefreshCw
                 aria-hidden="true"

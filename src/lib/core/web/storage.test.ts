@@ -13,6 +13,7 @@ import {
   readCleared,
   readPersistence,
   settlePersistence,
+  SITE_DATA_WARNING,
   type KeyStore,
 } from "./storage";
 
@@ -409,5 +410,22 @@ describe("what a reader is told", () => {
     expect(line).toMatch(/pair this browser again/);
     // Nothing that claims the pairing as a fact.
     expect(line).not.toMatch(/\byou were paired\b|\bwas removed from\b/i);
+  });
+
+  /**
+   * The same cost, said **before** anything is cleared, to a browser that is in a group — this
+   * host's answer to `storage_group_warning`, drawn by the Sync panel. The sentence lives here
+   * with the notice's lines because its words are a browser's; the panel has none of its own.
+   */
+  it("tells a paired browser what clearing its site data costs, and both ways out", () => {
+    // What clearing does, and what the old entry goes on costing.
+    expect(SITE_DATA_WARNING).toMatch(/^Clearing this browser's site data makes it a new device/);
+    expect(SITE_DATA_WARNING).toMatch(/still counts toward the group's five until it is removed/);
+    // Leave first, or remove the old entry from another device afterwards — in that order.
+    expect(SITE_DATA_WARNING).toMatch(
+      /Leave the group here first, or remove the old entry from another device afterwards\.$/,
+    );
+    // The app's voice: no code, no key, no API name.
+    expect(SITE_DATA_WARNING).not.toMatch(/OPFS|localStorage|persist|evict|quota|slot/i);
   });
 });

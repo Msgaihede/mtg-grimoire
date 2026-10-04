@@ -31,9 +31,10 @@ import { cn } from "@/lib/utils";
  * went with the storage included this install's device identity, so a browser that was paired
  * has come back as a new device and its old entry still holds one of its group's five places.
  * The host cannot know whether it was — the record that it was paired is the record that was
- * cleared — so its sentence says *if*, and says where the old entry is removed. The Sync panel
- * says the same thing beforehand, standing, on a host of this kind that is in a group
- * (`SITE_DATA_WARNING`): that is the half a reader can still act on by leaving the group first.
+ * cleared — so its sentence says *if*, and says where the old entry is removed. The same host
+ * says it beforehand too, by the same arrangement: the Sync panel asks `storage_group_warning`
+ * and draws the answer under its roster while this device is in a group — the half a reader can
+ * still act on, by leaving the group first.
  *
  * **Once per occurrence**: the host goes on answering until it is told the reader has read it,
  * across reloads — a reader who reloads because the app looks empty is still told why — and

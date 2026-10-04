@@ -872,8 +872,12 @@ restore-from-backup is exactly the thing that gets reused.
 ## The workbench
 
 `.storybook/fake/db.ts` answers all nine commands, and **there is no cryptography in it**. The six
-digits are derived from the code with a plain hash and the QR is a picture of the right shape
-rather than a readable code — the workbench has no X25519, no HKDF, no relay and no QR encoder.
+digits are derived from the code with a plain hash — the workbench has no X25519, no HKDF and no
+relay. **It does have a QR encoder, since 2026-10-04** (`.storybook/fake/qr.ts`, read back by `jsQR`
+in `qr.test.ts`): the QR is the real 53-module symbol of `…/pair#<code>` for a code with no key in
+it, where it used to be a 21×21 picture of the right shape. `sync_pairing_accept` takes that URL as
+`Invite::decode` does, so a story's code can be scanned (`npm run mobile:scan-smoke`), and the
+fake's copy of `RELAY_BASE` is held to the crate's by reading `entitlement.rs` as text.
 **What it models faithfully is what a panel is drawn against, and this changed shape on
 2026-08-31**: one number both readers compare, a poll that finds the other side's turn on its
 *second* ask rather than its first — there being no second world here for a story to answer from

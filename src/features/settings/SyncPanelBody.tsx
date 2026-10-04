@@ -3,7 +3,7 @@ import type { QueryKey } from "@tanstack/react-query";
 import { Heart, Link2, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type JSX } from "react";
 import { core } from "@/lib/core";
-import { storageIsLent } from "@/lib/core/hostStorage";
+import { STORAGE_GROUP_WARNING } from "@/lib/core/hostStorage";
 import { count, plural, verb } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
 import {
@@ -30,7 +30,7 @@ import { useDeviceSyncLive } from "@/lib/useDeviceSyncLive";
 import { nowSeconds } from "@/lib/useMarketplace";
 import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "./ConfirmDialog";
-import { BUTTON, TOUCH_FIELD } from "./controls";
+import { PANEL_BUTTON, TOUCH_CODE_ROOM, TOUCH_FIELD, TOUCH_FLOOR } from "./controls";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 import { QrCode } from "./QrCode";
 import { QrScanner } from "./QrScanner";
@@ -71,44 +71,43 @@ export const LEAVE_WARNING =
   "still list this one until they remove it.";
 
 /**
- * What a paired browser is told about its own storage — the light-app spec §7: *"Clearing site
- * data mints a new device and spends a slot. The panel says so before a reader presses anything
- * that would."*
- *
- * **The press it warns about is not in this app.** A device's identity and its keys are rows of
- * `user.db`, and no command the app has deletes them — every clear on the Settings page was read
- * for it on 2026-10-04 (`reset.rs` names the collection, the wishlist, the decks and the picture
- * cache, and nothing of `sync_identity` or `sync_group`; *Leave group* is the one press that
- * touches the group, and it is the cure). What does delete them is the browser's own *clear site
- * data*, on a host whose database is in storage the browser lends it. The app then opens on a
- * fresh identity, and the old one is still on every other device's roster, holding one of the
- * group's five places until somebody there removes it. Nothing on this side can say so
- * afterwards — the page that would have known it was paired is the page that was cleared — so it
- * is said here, standing, while there is still a group to leave.
- *
- * **Two sentences, because it stands on a phone.** It opened with a third — where the identity
- * is kept — and at a 360px window the three ran to seven lines of the panel for something most
- * readers never do. What is left is the consequence and the two presses; five lines there.
- *
- * **Both ways out, in the order they cost least.** Leaving first frees the place at once and
- * needs nothing from another device; removing the old entry afterwards is what is left to a
- * reader who has already cleared, and it is the press this panel's roster already has.
- *
- * Drawn only on a host that answers {@link storageIsLent}, and only in a group: a desktop or a
- * phone keeps its database in a folder that is its own, and a browser in no group has no place
- * to lose.
+ * What the host has to say to a paired device about its storage — the light-app spec §7:
+ * *"Clearing site data mints a new device and spends a slot. The panel says so before a reader
+ * presses anything that would."* Outside the `["sync"]` root on purpose: it is the host's
+ * sentence, which no round trip and no pairing changes, so nothing this panel invalidates should
+ * ask it again.
  */
-export const SITE_DATA_WARNING =
-  "Clearing this browser's site data makes it a new device, and the old entry still counts " +
-  "toward the group's five until it is removed. Leave the group here first, or remove the old " +
-  "entry from another device afterwards.";
+const STORAGE_WARNING_KEY: QueryKey = ["host", "storage", "group-warning"];
 
 /**
- * Whether the host keeps the database in storage that is lent to it. Outside the `["sync"]`
- * root on purpose: it is a fact about the host, which no round trip and no pairing changes, so
- * nothing this panel invalidates should ask it again.
+ * The host's answer to {@link STORAGE_GROUP_WARNING} as something to draw: a sentence, or
+ * nothing. A host that answers the name with anything else is not one to put words in the mouth
+ * of — `StorageNotice`'s `readable`, for its reason.
  */
-const LENT_STORAGE_KEY: QueryKey = ["host", "storage", "lent"];
+function sentence(answer: unknown): string | null {
+  return typeof answer === "string" && answer.trim() !== "" ? answer : null;
+}
+
+/**
+ * Ask the host, once, what it says to a device in a group about its storage.
+ *
+ * **The panel does not know what kind of host answered, and has no words of its own for this.**
+ * A browser lends its storage and can take it back, and with it this device's identity — so the
+ * web host answers a sentence about its site data (`src/lib/core/web/storage.ts`, where the
+ * wording and the argument for it live). A host with another way of losing its storage would
+ * answer its own. A host that owns its folder has no such command and refuses the name.
+ *
+ * **That refusal is deliberate, and it is silent.** The desktop app proper asks a command it
+ * does not register every time this panel is first drawn — one call per Settings visit, since
+ * the answer is kept for as long as the query is — and the Android host asks its table the same.
+ * Both answer a rejected promise and nothing else: an unknown name never reaches a handler, so
+ * nothing writes `error_log`, and the rejection is turned into `null` here, so nothing reaches a
+ * banner or the console. It is `hostStorage.ts`'s arrangement, the one `StorageNotice` and
+ * `DownloadsPrompt` already ask by: the refusal *is* how a page stays ignorant of where it runs,
+ * and asking is cheaper than a second way of knowing.
+ */
+const askStorageWarning = (): Promise<string | null> =>
+  core.call<unknown>(STORAGE_GROUP_WARNING).then(sentence, () => null);
 
 /**
  * What the panel says when a pairing attempt ran out of time.
@@ -192,9 +191,7 @@ function Paste({
             "w-full resize-y rounded-md border border-border bg-surface px-2 py-1.5",
             "font-mono text-xs leading-relaxed break-all",
             TOUCH_FIELD,
-            // Room for the whole code at a finger's type size: 105 characters and their hyphens
-            // are five lines in a 268px box, where the three rows above show two and a half.
-            "coarse:min-h-36",
+            TOUCH_CODE_ROOM,
             "focus:border-accent focus:outline-none",
           )}
         />
@@ -204,7 +201,7 @@ function Paste({
         aria-disabled={pending || empty}
         onClick={submit}
         className={cn(
-          BUTTON,
+          PANEL_BUTTON,
           "border-border hover:bg-bg",
           (pending || empty) && "cursor-not-allowed opacity-50 active:scale-100",
           FOCUS,
@@ -320,7 +317,7 @@ function DeviceRow({
             className={cn(
               "h-8 min-w-0 flex-1 rounded-md border border-border bg-bg px-2.5 text-sm",
               TOUCH_FIELD,
-              "coarse:min-h-[var(--target-min)]",
+              TOUCH_FLOOR,
               "focus:border-accent focus:outline-none",
             )}
           />
@@ -341,7 +338,7 @@ function DeviceRow({
         <button
           type="button"
           onClick={() => setEditing(device.name)}
-          className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
+          className={cn(PANEL_BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
         >
           Rename
         </button>
@@ -353,7 +350,7 @@ function DeviceRow({
             type="button"
             onClick={onRemove}
             aria-label={`Remove ${device.name}`}
-            className={cn(BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
+            className={cn(PANEL_BUTTON, "h-7 border-border px-2 text-xs hover:bg-bg")}
           >
             <X aria-hidden="true" className="size-3.5" />
             Remove
@@ -904,7 +901,7 @@ function SupporterSection({
                 type="button"
                 onClick={() => connect.mutate()}
                 disabled={connect.isPending}
-                className={cn(BUTTON, "border-accent text-accent hover:bg-bg")}
+                className={cn(PANEL_BUTTON, "border-accent text-accent hover:bg-bg")}
               >
                 <Heart aria-hidden="true" className="size-4" />
                 Connect Patreon
@@ -941,7 +938,7 @@ function SupporterSection({
                       // collector numbers already carry in this window.
                       "font-mono text-xs tracking-[0.1em] uppercase",
                       TOUCH_FIELD,
-                      "coarse:min-h-[var(--target-min)]",
+                      TOUCH_FLOOR,
                       "focus:border-accent focus:outline-none",
                     )}
                   />
@@ -953,7 +950,7 @@ function SupporterSection({
                     aria-disabled={code.trim() === "" || claim.isPending}
                     onClick={submit}
                     className={cn(
-                      BUTTON,
+                      PANEL_BUTTON,
                       "border-border hover:bg-bg",
                       code.trim() === "" && "cursor-not-allowed opacity-50 active:scale-100",
                       FOCUS,
@@ -1018,7 +1015,7 @@ function SupporterSection({
             onClick={() => sync.mutate()}
             disabled={syncing}
             aria-busy={syncing || undefined}
-            className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+            className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
           >
             <RefreshCw aria-hidden="true" className={cn("size-4", syncing && "animate-spin")} />
             Sync now
@@ -1132,15 +1129,13 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
   const status: PairingStatus | null = read.data ?? null;
 
   /**
-   * Asked of the host and of nothing else — the panel never learns *which* host it is on, only
-   * whether this one answered. `staleTime: Infinity` because the answer cannot change while the
-   * page lives. Unanswered and refused both read as `undefined`/`false`, and both draw nothing:
-   * a warning about a browser's storage over a host that has not said it is one would be a
-   * sentence about the wrong machine.
+   * The host's own sentence, or nothing — see {@link askStorageWarning}. `staleTime: Infinity`
+   * because the answer cannot change while the page lives. Unanswered and refused both read as
+   * nothing to draw.
    */
-  const lent = useQuery({
-    queryKey: LENT_STORAGE_KEY,
-    queryFn: () => storageIsLent(core),
+  const storageWarning = useQuery({
+    queryKey: STORAGE_WARNING_KEY,
+    queryFn: askStorageWarning,
     staleTime: Infinity,
   });
 
@@ -1422,11 +1417,14 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
             </ul>
           )}
 
-          {/* Under the roster it is about, and above the presses that act on it — *Leave group*
-              is the first of the two ways out it names, and is in the row below. A plain
-              paragraph and not a `PanelAlert`: nothing has gone wrong, and it stands for as long
-              as the group does rather than arriving. */}
-          {paired && lent.data === true && <p className="text-sm text-dim">{SITE_DATA_WARNING}</p>}
+          {/* What the host says about its storage, to a device in a group and to no other: the
+              host answers as if a paired device asked, and `paired` is this panel's half. Under
+              the roster it is about and above the row *Leave group* is in — the way out a host
+              that says anything here names first. A plain paragraph and not a `PanelAlert`:
+              nothing has gone wrong, and it stands for as long as the group does. */}
+          {paired && storageWarning.data != null && (
+            <p className="text-sm text-dim">{storageWarning.data}</p>
+          )}
 
           {flow.kind === "idle" && (
             <div className="flex flex-wrap gap-2">
@@ -1434,7 +1432,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                 type="button"
                 onClick={() => begin.mutate()}
                 disabled={begin.isPending}
-                className={cn(BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
+                className={cn(PANEL_BUTTON, "border-border hover:bg-bg disabled:hover:bg-transparent")}
               >
                 <Link2 aria-hidden="true" className="size-4" />
                 Pair a device
@@ -1446,7 +1444,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                   setEndedNote(null);
                   setFlow({ kind: "reading" });
                 }}
-                className={cn(BUTTON, "border-border hover:bg-bg")}
+                className={cn(PANEL_BUTTON, "border-border hover:bg-bg")}
               >
                 Enter a code from another device
               </button>
@@ -1457,7 +1455,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                   setEndedNote(null);
                   setFlow({ kind: "scanning" });
                 }}
-                className={cn(BUTTON, "border-border hover:bg-bg")}
+                className={cn(PANEL_BUTTON, "border-border hover:bg-bg")}
               >
                 Scan a code
               </button>
@@ -1477,7 +1475,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                 <button
                   type="button"
                   onClick={() => setLeaving(true)}
-                  className={cn(BUTTON, "border-border text-dim hover:bg-bg")}
+                  className={cn(PANEL_BUTTON, "border-border text-dim hover:bg-bg")}
                 >
                   <LogOut aria-hidden="true" className="size-4" />
                   Leave group
@@ -1571,7 +1569,7 @@ export function SyncPanelBody({ openLink }: { openLink: OpenLink }): JSX.Element
                     if (flow.sas !== null && !confirm.isPending) confirm.mutate();
                   }}
                   className={cn(
-                    BUTTON,
+                    PANEL_BUTTON,
                     "border-accent text-accent hover:bg-bg",
                     flow.sas === null && "cursor-not-allowed opacity-50 active:scale-100",
                     FOCUS,
@@ -1666,7 +1664,7 @@ function Cancel({ onCancel }: { onCancel: () => void }): JSX.Element {
     <button
       type="button"
       onClick={onCancel}
-      className={cn(BUTTON, "border-border text-dim hover:bg-bg")}
+      className={cn(PANEL_BUTTON, "border-border text-dim hover:bg-bg")}
     >
       Cancel
     </button>

@@ -1,8 +1,8 @@
 // The pairing scanner, driven with a camera: **one "device" shows an invite at a phone's width,
 // a second points a (fake) camera at that very drawing and joins**.
 //
-//   npm run mobile:dev                      # the light app over the Storybook fake, port 5175
-//   node scripts/pairing-scan-smoke.mjs     # or: … http://localhost:5185
+//   npm run mobile:dev                        # the light app over the Storybook fake, port 5175
+//   npm run mobile:scan-smoke                 # or: npm run mobile:scan-smoke -- http://localhost:5185
 //
 // `src/features/settings/QrScanner.tsx` says of itself that it has no vitest for its camera
 // loop — jsdom has neither `getUserMedia` nor canvas pixels — and that the frame loop and the
@@ -492,11 +492,28 @@ async function run() {
   say(`camera refused: "${sentence}" — then "${box.label}" (${box.font}), and the same digits ${typed}`);
 }
 
-const deadline = setTimeout(() => {
-  console.error(`pairing scan smoke: still running after ${DEADLINE_MS / 1000}s`);
-  process.exit(1);
+/**
+ * Stop everything this run started, newest first — once. Each step is taken off the list before
+ * it runs, so the deadline and the ordinary exit can both call this and neither repeats nor
+ * skips a step the other was in the middle of. A step that throws must not strand the ones
+ * behind it: what is left on the list is exactly the browsers still running.
+ */
+async function cleanUp() {
+  for (let step = undo.pop(); step !== undefined; step = undo.pop()) {
+    await Promise.resolve()
+      .then(step)
+      .catch(() => undefined);
+  }
+}
+
+// **The deadline cleans up too.** It called `process.exit` alone at first, and a run that hung —
+// a page that never answered, a browser that never listened — left three headless browsers and
+// their profile directories behind for whoever ran it. Not unreferenced: a hang is the case where
+// nothing else is keeping the process alive to be timed out.
+setTimeout(() => {
+  console.error(`pairing scan smoke: FAILED — still running after ${DEADLINE_MS / 1000}s`);
+  void cleanUp().finally(() => process.exit(1));
 }, DEADLINE_MS);
-deadline.unref();
 
 let code = 0;
 try {
@@ -506,6 +523,8 @@ try {
   code = 1;
   console.error(`pairing scan smoke: FAILED — ${error.message}`);
 } finally {
-  for (const step of undo.reverse()) await step();
+  await cleanUp();
 }
+// An exit and not a return: the deadline's timer is still pending and would hold a finished run
+// open for the rest of its two minutes.
 process.exit(code);

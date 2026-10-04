@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type JSX } from "react";
 import jsQR from "jsqr";
 import { FOCUS } from "@/lib/focus";
 import { cn } from "@/lib/utils";
-import { BUTTON, TOUCH_FIELD } from "./controls";
+import { PANEL_BUTTON, TOUCH_CODE_ROOM, TOUCH_FIELD } from "./controls";
 
 /**
  * Camera to decoded string — the in-app reader for the other half of pairing's QR code.
@@ -206,7 +206,7 @@ export function QrScanner({
             stopRef.current();
             onCancel();
           }}
-          className={cn(BUTTON, "border-border text-dim hover:bg-bg")}
+          className={cn(PANEL_BUTTON, "border-border text-dim hover:bg-bg")}
         >
           Cancel
         </button>
@@ -293,7 +293,7 @@ function ManualEntry({ onSubmit }: { onSubmit: (text: string) => void }): JSX.El
             "font-mono text-xs leading-relaxed break-all",
             // `SyncPanelBody`'s `Paste`, to the class: 16px under a finger, and room for the code.
             TOUCH_FIELD,
-            "coarse:min-h-36",
+            TOUCH_CODE_ROOM,
             "focus:border-accent focus:outline-none",
           )}
         />
@@ -303,7 +303,7 @@ function ManualEntry({ onSubmit }: { onSubmit: (text: string) => void }): JSX.El
         aria-disabled={empty}
         onClick={submit}
         className={cn(
-          BUTTON,
+          PANEL_BUTTON,
           "border-border hover:bg-bg",
           empty && "cursor-not-allowed opacity-50 active:scale-100",
           FOCUS,

@@ -38,7 +38,7 @@ The Android app and the Web app share identical client-side code; the phone face
   - File saving/picking: `@/lib/core/files` handles Android native file dialogs and browser file downloads/pickers without leaking OS-specific paths.
   - Clipboard & links: `@/lib/clipboard` (`copyText`) and `@/lib/externalLinks` (`openExternal`). Controls leaving the app prefer semantic `<a target="_blank">` links where supported.
   - Insets and gestures: Handled transparently by the host shell (Android paddings/cutouts or CSS `env(safe-area-inset-*)`).
-  - Storage the host does not own: `@/lib/core/hostStorage`. A component asks (`storageIsLent(core)`, `storage_cleared`) and draws only if the host answered; a host that owns its folder refuses the name. The Sync panel's note about cleared site data and `StorageNotice` are both drawn this way.
+  - Storage the host does not own: `@/lib/core/hostStorage`. A component asks a name (`storage_cleared`, `storage_group_warning`) and draws **the host's own sentences** only if the host answered; a host that owns its folder refuses the name, silently. Never infer the kind of host from an answer, and never word the host's sentence on the page. `StorageNotice` and the Sync panel's warning about cleared site data are both drawn this way.
 - **The face mounts its own listeners**: the phone face has no `AppShell`, so `phone/cardData.ts` (`useCardDataWatch`) mounts the card sync, the feeds, and `sync:applied` (`useDeviceSyncInvalidation(client)`) once for the face. A listener the desktop shell mounts is one this face must mount too, or its lists go stale.
 
 ---
@@ -106,7 +106,7 @@ Run tests only at the end of a feature (not after each change):
 
 Driving a shared panel at a phone's width (no lock needed, `mobile:dev` only):
 - `http://localhost:5175/settings?seed=paired&fault=lentStorage` — `?seed=` and `?fault=` are a story's `parameters.fake`, read once by `fakeBoot.ts`.
-- `node scripts/pairing-scan-smoke.mjs` — headless Chromium with a fake camera fed the Sync panel's own QR code at 360px: the drawing decodes, the scanner calls `sync_pairing_accept`, a refused camera lands on typing. The camera *grant* (Android's prompt, a browser's) is a real device's to show.
+- `npm run mobile:scan-smoke` (`scripts/pairing-scan-smoke.mjs`; another origin after `--`) — headless Chromium with a fake camera fed the Sync panel's own QR code at 360px: the drawing decodes, the scanner calls `sync_pairing_accept`, a refused camera lands on typing. The camera *grant* (Android's prompt, a browser's) is a real device's to show.
 - Measure under a touch pointer (`Emulation.setTouchEmulationEnabled`): the shared panels take their 44px floor from `coarse:`, which a mouse-driven window never matches.
 
 Test requirements:

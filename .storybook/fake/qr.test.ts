@@ -7,7 +7,8 @@
  */
 import jsQR from "jsqr";
 import { describe, expect, it } from "vitest";
-import { allHandlers, makeDb } from "./db";
+import entitlementRs from "../../crates/grimoire-core/src/sync_engine/entitlement.rs?raw";
+import { RELAY_BASE, allHandlers, makeDb } from "./db";
 import { QR_CAPACITY_BYTES, qrMatrix } from "./qr";
 import type { PairingOffer, QrMatrix } from "@/lib/ipc";
 
@@ -31,10 +32,23 @@ function decode(matrix: QrMatrix, scale = 4): string | null {
 }
 
 /** A pairing invite as the QR carries it: the relay's `/pair` page, the code in the fragment. */
-const INVITE =
-  "https://mtg-grimoire-relay.denmark-east.workers.dev/pair#" +
-  "0123456789ABCDEFGHJKMNPQRSTVWXYZ".repeat(3) +
-  "012345678";
+const INVITE = `${RELAY_BASE}/pair#${"0123456789ABCDEFGHJKMNPQRSTVWXYZ".repeat(3)}012345678`;
+
+describe("the relay address an invite is drawn against", () => {
+  /**
+   * **`RELAY_BASE` is a hand copy of a Rust constant, and this is what holds the two equal.**
+   * The fake cannot import `entitlement::RELAY_BASE`, so it spells the address again — and the
+   * day the relay moves, every story's QR code would go on pointing at the old one, and the
+   * 162-byte, 53-module figures below would be about an invite the app no longer draws. Read as
+   * text, the way `parity.test.ts` reads `desktop.rs`: there is no other way across.
+   */
+  it("is the one the crate compiles in", () => {
+    const rust = /pub const RELAY_BASE: &str = "([^"]+)";/.exec(entitlementRs)?.[1];
+    // A regex that stopped matching would compare against `undefined` and say only "not equal".
+    expect(rust, "no `pub const RELAY_BASE` found in entitlement.rs").toBeDefined();
+    expect(RELAY_BASE).toBe(rust);
+  });
+});
 
 describe("the fake's QR encoder", () => {
   it("draws the invite as the 53-module symbol the crate measured for it", () => {
@@ -72,8 +86,6 @@ describe("the fake's QR encoder", () => {
     const read = decode(offer.qr);
     // The typed form's hyphens are not in the picture — twenty bytes that would buy a larger
     // symbol — and everything after the `#` is the code.
-    expect(read).toBe(
-      `https://mtg-grimoire-relay.denmark-east.workers.dev/pair#${offer.code.replace(/-/g, "")}`,
-    );
+    expect(read).toBe(`${RELAY_BASE}/pair#${offer.code.replace(/-/g, "")}`);
   });
 });

@@ -1,6 +1,11 @@
 import type { CacheCleared, StartupStatus } from "@/lib/ipc";
 import { STARTUP_CHANGED, STARTUP_COMMAND } from "../deferred";
-import { STORAGE_CLEARED, STORAGE_CLEARED_DISMISS, STORAGE_PERSISTENCE } from "../hostStorage";
+import {
+  STORAGE_CLEARED,
+  STORAGE_CLEARED_DISMISS,
+  STORAGE_GROUP_WARNING,
+  STORAGE_PERSISTENCE,
+} from "../hostStorage";
 import { HOST_UPDATE, HOST_UPDATE_APPLY, HOST_UPDATE_CHANGED } from "../hostUpdate";
 import type { CallArgs, CallOptions, Core } from "../types";
 import { answerAsk } from "./sw/bridge";
@@ -16,6 +21,7 @@ import {
 } from "./protocol";
 import {
   CLEARED_LINE,
+  SITE_DATA_WARNING,
   dismissCleared,
   forgiving,
   noteOpened,
@@ -389,6 +395,12 @@ export function createWebCore(
         // a fresh ask, which may be waiting on a reader. A host that never opened looked at
         // nothing: what an earlier launch recorded.
         return () => (persistence ?? Promise.resolve()).then(() => readPersistence(store));
+      case STORAGE_GROUP_WARNING:
+        // Always the sentence, whatever the browser said about keeping its storage: persistence
+        // is a promise about eviction, and a reader who clears the site's data clears it all
+        // the same. Whether there is a group to warn about is the page's half — the panel
+        // draws this only for a device that is in one.
+        return () => SITE_DATA_WARNING;
       case HOST_UPDATE:
         return () => (updates?.waiting() ? UPDATE_READY : null);
       case HOST_UPDATE_APPLY:

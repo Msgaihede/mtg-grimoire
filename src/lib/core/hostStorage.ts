@@ -5,7 +5,7 @@
  *
  * A desktop and a phone keep their databases in a folder that is theirs. A browser lends its
  * storage and may take it back: it can clear what a site has kept while the page that kept it is
- * still installed and still opens. So the web host answers these three, **on the page, without
+ * still installed and still opens. So the web host answers these four, **on the page, without
  * reaching the engine** — as it answers `startup_status` (`./web/index.ts`) — and no other host
  * answers them at all: the desktop's IPC and the engine's command table both refuse a name they
  * do not have, in words.
@@ -15,7 +15,6 @@
  * `light_downloads`' arrangement (`mobile/DownloadsPrompt.tsx`), and the reason this file is
  * plain names and shapes with no host in it — it is read by the page and by the web host alike.
  */
-import type { Core } from "./types";
 
 /**
  * Asks whether the host found its storage cleared. Answers {@link StorageCleared}, or `null`
@@ -38,30 +37,32 @@ export const STORAGE_CLEARED_DISMISS = "storage_cleared_dismiss";
 export const STORAGE_PERSISTENCE = "storage_persistence";
 
 /**
- * Whether the reader's database is kept in storage that is **lent** to this host — storage
- * somebody other than the app can clear while the app still opens.
+ * Asks what the host has to say, **to a device that is in a pairing group**, about the storage
+ * its identity is kept in. Answers one sentence **in the host's own words** — as
+ * {@link StorageCleared} is — or `null` when it has nothing to say. Takes nothing.
  *
- * **Answered by whether the host answers {@link STORAGE_PERSISTENCE} at all**, and not by what it
- * says: a browser that granted persistence, one that refused and one with no way to ask (the
- * `null`) are all the same kind of host, because a reader who clears a site's data clears it
- * whatever the browser promised about evicting it. A host that owns its folder refuses the name,
- * which is this file's whole arrangement, and that refusal is the `false`.
+ * What goes with a host's storage is the device's identity and its keys, which are rows of the
+ * database. A host whose storage can be cleared from outside the app then opens as a new device,
+ * and the old one is still on every other device's roster, counted against the group's five,
+ * until one of them removes it (the light-app spec §7: "Clearing site data mints a new device and
+ * spends a slot. The panel says so before a reader presses anything that would"). {@link
+ * STORAGE_CLEARED} speaks *after* the storage has gone; this is the half that can still be acted
+ * on, and the Sync panel draws its answer under the roster while there is a group to leave.
  *
- * It is the one question here with a second reader. `mobile/StorageNotice.tsx` speaks *after*
- * the storage has gone; the Sync panel asks this *before*, because what goes with a paired
- * browser's storage is its place in the group — a device identity the reader's other devices go
- * on counting until one of them removes it (the light-app spec §7: "Clearing site data mints a
- * new device and spends a slot. The panel says so before a reader presses anything that would").
+ * **A name of its own, and the answer is the sentence** — not a yes the page words for itself.
+ * For one commit the panel asked {@link STORAGE_PERSISTENCE} and read *any* answer as "this is a
+ * browser", then drew a sentence about "this browser's site data" that lived in the panel. That
+ * name allows `null` from "a host with no way to ask", so the day another host answered it — the
+ * Android table, say — a phone would have been told about a browser. Here the kind of host is
+ * never inferred: the web host answers its wording (`./web/storage.ts`, beside the cleared
+ * notice's lines), a host with a different way of losing its storage answers its own, and a host
+ * that owns its folder refuses the name. The page knows a sentence, or nothing.
  *
- * Takes the `Core` to ask rather than importing one: this file is plain names and shapes with no
- * host in it, and stays that way.
+ * **Whether the device is in a group is the page's half**, because it is the engine's fact and
+ * the page already has it: the host answers as if asked by a paired device, and the panel draws
+ * the answer only while that is true.
  */
-export function storageIsLent(core: Pick<Core, "call">): Promise<boolean> {
-  return core.call<StoragePersistence | null>(STORAGE_PERSISTENCE).then(
-    () => true,
-    () => false,
-  );
-}
+export const STORAGE_GROUP_WARNING = "storage_group_warning";
 
 /**
  * One occurrence of the host's storage having been cleared under the app, **in the host's own

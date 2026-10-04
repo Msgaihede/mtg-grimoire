@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { emitFake } from "../../../.storybook/fake/event";
+import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
 import { SyncPanel } from "./SyncPanel";
 
 const meta = {
@@ -463,11 +464,13 @@ export const LeavingSaysWhatItCosts: Story = {
  * in the order they cost least: leave here first, or remove the old entry from another device
  * afterwards.
  *
- * The `lentStorage` fault is what makes this story a browser: the host answers
- * `storage_persistence`, which a desktop and the Android host refuse by name. Every other story
- * in this file is a desktop, and `Paired` asserts the note's absence there.
+ * **The sentence is the host's, not the panel's.** The `lentStorage` fault is what makes this
+ * story a browser: the host answers `storage_group_warning` with the web host's own words
+ * (`src/lib/core/web/storage.ts`), a name a desktop and the Android host refuse — and the panel
+ * draws whatever sentence it is handed, knowing nothing of what kind of host said it. Every other
+ * story in this file is a desktop, and `Paired` asserts the warning's absence there.
  *
- * It goes all the way down: the press it names first is pressed, and the note leaves with the
+ * It goes all the way down: the press it names first is pressed, and the warning leaves with the
  * group it was about.
  */
 export const PairedInABrowser: Story = {
@@ -476,22 +479,22 @@ export const PairedInABrowser: Story = {
     const canvas = within(canvasElement);
     const page = within(canvasElement.ownerDocument.body);
 
-    const note = await canvas.findByText(/clearing this browser's site data/i);
-    await expect(note).toHaveTextContent(/makes it a new device/i);
-    await expect(note).toHaveTextContent(/still counts toward the group's five/i);
-    await expect(note).toHaveTextContent(/leave the group here first/i);
-    await expect(note).toHaveTextContent(/remove the old entry from another device afterwards/i);
-    // A standing note and not an alert: nothing has gone wrong.
+    // The web host's sentence, word for word, from where that host keeps it.
+    const warning = await canvas.findByText(SITE_DATA_WARNING);
+    await expect(warning).toHaveTextContent(/clearing this browser's site data/i);
+    await expect(warning).toHaveTextContent(/still counts toward the group's five/i);
+    await expect(warning).toHaveTextContent(/leave the group here first/i);
+    // A standing paragraph and not an alert: nothing has gone wrong.
     await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
 
     // Under the roster it is about, above the press it names.
     const roster = canvas.getByRole("list");
     const leave = canvas.getByRole("button", { name: "Leave group" });
     await expect(
-      roster.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING,
+      roster.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
     await expect(
-      note.compareDocumentPosition(leave) & Node.DOCUMENT_POSITION_FOLLOWING,
+      warning.compareDocumentPosition(leave) & Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
 
     await userEvent.click(leave);
@@ -505,7 +508,7 @@ export const PairedInABrowser: Story = {
 /**
  * A browser that has paired nothing — **and is told nothing about its storage.**
  *
- * The note is about a place in a group, and this device has none to lose. Drawn here it would
+ * The warning is about a place in a group, and this device has none to lose. Drawn here it would
  * teach a reader who has not paired that there is something to worry about, which is
  * `NotConnected`'s argument about the lapse reassurance one half down.
  */
@@ -532,14 +535,17 @@ export const NotPairedInABrowser: Story = {
  * picture is as wide as its step up to 288, and the code takes the line under it wherever less
  * than 8rem is left beside.
  *
- * The frame is 328px, which is the panel's width on a 360px phone. **jsdom lays nothing out**,
- * so what this play can hold is the two classes that make the fold; the measurements are a
- * browser's, and `scripts/pairing-scan-smoke.mjs` takes them again against the light app.
+ * The frame is 320px — the panel's width on a 352px phone, 8px inside the 360 the measurements
+ * were taken at, and a width the app already ships a class for (a one-off 328 would have put a
+ * utility in the built stylesheet for this story alone). **jsdom lays nothing out**, so what
+ * this play can hold is the classes that make the fold; `controls.test.ts` compiles them, the
+ * measurements are a browser's, and `npm run mobile:scan-smoke` takes them again against the
+ * light app.
  */
 export const OfferInAPhonesWidth: Story = {
   decorators: [
     (Story) => (
-      <div className="w-82">
+      <div className="w-80">
         <Story />
       </div>
     ),
