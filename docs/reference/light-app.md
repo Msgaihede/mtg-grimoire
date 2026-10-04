@@ -2899,6 +2899,26 @@ a push. Every command it calls was already on the core's table. Held by `decks.t
 fake; **not yet driven on a phone**, so a deck write through `core_call` on a device is still
 unproven.
 
+**Fixed since — the phone face hears the card sync and the feeds (2).** Nothing on the phone face
+listened for the sync's end: `PhoneFace` and `Shell` mounted none of the desktop shell's listeners
+and drew `<ManaLine sync={null} />`, so the wall's `["cards","search",…]` query kept the empty
+answer it got over the empty database — after its 30 s `staleTime` a query refetches only on a
+remount, a focus or a reconnect, which a WebView rarely sees. (The card sheet looked right because
+it mounts fresh queries each time it opens.) `PhoneFace` now mounts the desktop's own listeners
+once — `phone/cardData.ts`'s `useCardDataWatch`: `useSync`, `useSyncProgress`,
+`useSyncInvalidation`, the three feed hooks and `useMarketplace` — plus one trigger the desktop
+lacks: when the polled `sync_status` count leaves zero, it invalidates `SYNC_INVALIDATED`, for a
+`done` event Tauri delivered before the page was listening. `useSyncInvalidation` takes an
+optional query client (the module's by default, so the desktop is unchanged), which is what lets a
+`renderPhone` test see the refresh. The header's mana line carries the loudest running job (the
+card sync, the price feed, Oracle Tags, the combos) as a progress bar named after its phase, and an
+empty card search draws `phone/search/NoCards.tsx`: *No cards match.* only over a database with
+cards; over an empty one, *Setting up your card database* with the phase and its count while a
+sync runs, or *No card data yet* (with the last error, if any) when none does — a *Not now* on a
+metered link, or a failed first download. A deck's Add cards shares the same results, so it says
+the same. `cardData.test.tsx` holds the in-flight text, the refill on a `done` event, the refill on
+the count leaving zero with no event, and the empty seed's sentence. **Not yet driven on a phone.**
+
 **Method notes.** This phone's logcat ring buffers are 256 KiB and had turned over by the end, so
 the record is a `logcat` streamed from before the first launch. The phone's clock ran 9.69 s ahead
 of the PC's (measured); every time above is the phone's. The one manual step was turning the phone
