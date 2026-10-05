@@ -9,7 +9,7 @@ import {
   type ReactNode,
 } from "react";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { ArrowDown, ArrowUp, FolderInput, Lock, LockOpen, Trash2 } from "lucide-react";
+import { ArrowDown, ArrowUp, Download, FolderInput, Lock, LockOpen, Trash2 } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dialog } from "@/components/Dialog";
 import { UndoNotice } from "@/components/UndoNotice";
@@ -47,7 +47,7 @@ import { collectionDestination } from "@/features/transfer/import/destinations/C
 import { ImportExportPair } from "@/features/transfer/ImportExportPair";
 import { ImportDialog } from "@/features/transfer/import/ImportDialog";
 import { CONDITION_LABEL, CONDITIONS, MENU_CONDITION } from "@/lib/conditions";
-import { plural } from "@/lib/counts";
+import { count, plural } from "@/lib/counts";
 import type { FolderDrag, FolderEdge } from "@/lib/folderDrag";
 import { reorderedLevel } from "@/lib/folderOrder";
 import { FINISH_LABEL, finishLabel, isFinish, type Finish } from "@/lib/finish";
@@ -674,7 +674,26 @@ export function CollectionPage() {
    * collection on every filter keystroke nobody asked to export.
    */
   const [exporting, setExporting] = useState(false);
-  const exportScope = useExportScope("collection", collection.filters, exporting);
+  const [exportFolder, setExportFolder] = useState<CollectionFolder | null>(null);
+  const collectionExportScope = useExportScope(
+    "collection",
+    collection.filters,
+    exporting && exportFolder === null,
+  );
+  // A folder-options press names a whole drawer, independently of the wall's filters and
+  // collapsed shelves. Keep its sweep separate so a previous "everything" choice cannot
+  // turn this export into the whole collection. Shelves also include locked descendants.
+  const folderExportScope = useExportScope(
+    "collection",
+    {
+      shelves: exportFolder
+        ? [exportFolder.id, ...folderDescendants(folders.folders, exportFolder.id)]
+        : [],
+      marketplace: collection.filters.marketplace,
+    },
+    exporting && exportFolder !== null,
+  );
+  const exportScope = exportFolder === null ? collectionExportScope : folderExportScope;
 
   /** The import dialog. One destination, so no radio group is drawn — a choice between one
    *  thing is not a choice. */
@@ -1604,6 +1623,16 @@ export function CollectionPage() {
           !effectivelyLocked &&
           [...folderDescendants(folders.folders, folder.id)].some((id) => lockedIds.has(id));
         return [
+          {
+            kind: "action",
+            id: "export",
+            label: "Export…",
+            Icon: Download,
+            onSelect: () => {
+              setExportFolder(folder);
+              setExporting(true);
+            },
+          },
           {
             kind: "action",
             id: "move",
@@ -2883,7 +2912,10 @@ export function CollectionPage() {
             <ShareFolderMenu target={shareTarget} />
             <ImportExportPair
               onImport={() => setImporting(true)}
-              onExport={() => setExporting(true)}
+              onExport={() => {
+                setExportFolder(null);
+                setExporting(true);
+              }}
               importLabel="Import cards"
               exportLabel="Export collection"
             />
@@ -3599,14 +3631,20 @@ export function CollectionPage() {
           fade out instead of the whole thing vanishing the instant `exporting` flips back. */}
       <ExportDialog
         open={exporting}
-        subject="your collection"
+        subject={exportFolder?.name ?? "your collection"}
         surface="collection"
         cards={exportScope.cards}
-        suggestedFileName="collection"
-        onDismiss={() => setExporting(false)}
+        suggestedFileName={exportFolder?.name ?? "collection"}
+        onDismiss={() => {
+          setExporting(false);
+          if (exportFolder !== null) openerRef.current?.focus();
+        }}
         onClose={() => setExporting(false)}
         scope={{
-          label: scopeLabel(exportScope.total, exportScope.everything, exportFiling),
+          label: exportFolder
+            ? `${count(exportScope.total)} ${exportScope.total === 1 ? "entry" : "entries"} in ${exportFolder.name}, including subfolders`
+            : scopeLabel(exportScope.total, exportScope.everything, exportFiling),
+          showEverything: exportFolder === null,
           everythingLabel: everythingLabel(exportFiling),
           loading: exportScope.loading,
           everything: exportScope.everything,

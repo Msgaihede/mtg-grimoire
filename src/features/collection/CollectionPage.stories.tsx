@@ -1090,3 +1090,24 @@ export const Overlaid: Story = {
     await expect(canvas.getByRole("searchbox", { name: "Search your collection" })).toBeInTheDocument();
   },
 };
+
+/** Folder options export the drawer even while its shelves are collapsed. */
+export const ExportFolder: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await waitFor(() => headingNamed(canvas, "Binder"), SETTLED);
+    await press(canvas, "Collapse all");
+    await userEvent.click(
+      within(headingNamed(canvas, "Binder")).getByRole("button", { name: "Manage Binder" }),
+    );
+    const body = within(canvasElement.ownerDocument.body);
+    await userEvent.click(await body.findByRole("menuitem", { name: "Export…" }));
+    const dialog = within(await body.findByRole("dialog", { name: 'Export "Binder"' }));
+    await expect(dialog.queryByRole("checkbox", { name: /Export everything/ })).toBeNull();
+    await waitFor(() =>
+      expect(dialog.getByRole("button", { name: "Copy" })).not.toHaveAttribute("aria-disabled"),
+    );
+    await userEvent.click(dialog.getByRole("button", { name: /Show decklist/ }));
+    await expect(dialog.getByText(/including subfolders/)).toBeInTheDocument();
+  },
+};
