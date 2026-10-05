@@ -21,7 +21,11 @@ import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from
 import type { ScannerDecision, ScannerOptions, ScannerTrayRow } from "./types";
 import { useCamera, useCameraDevices } from "./useCamera";
 import { useScanLoop } from "./useScanLoop";
-import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS, useScannerElsewhere } from "./useScannerElsewhere";
+import {
+  SCANNER_ELSEWHERE_KEY,
+  SCANNER_ELSEWHERE_POLL_MS,
+  useScannerElsewhere,
+} from "./useScannerElsewhere";
 import { useScannerPrefs } from "./useScannerPrefs";
 import { useTray } from "./useTray";
 import { useWindowParked } from "./useWindowParked";
@@ -40,7 +44,8 @@ const FLASH_MS = 1200;
  * Why the filters cannot be used: the scanner narrows by set and date through its labels, and a
  * bundle with no `corpus.db` beside it has none.
  */
-const FILTERS_NEED_NAMES = "Filters need the card database. corpus.db wasn't found next to the scanner bundle.";
+const FILTERS_NEED_NAMES =
+  "Filters need the card database. corpus.db wasn't found next to the scanner bundle.";
 
 /** Is `id` a drawer the reader made? `null` — the root — always is. */
 function isUserFolder(folders: readonly CollectionFolder[], id: number | null): boolean {
@@ -309,10 +314,9 @@ function LiveScanner() {
 
   const onReset = () => {
     setResetError(null);
-    // The two halves of Reset: the crate drops the tracker's evidence, and the page drops the
-    // reads it is holding on top of it. Local first — it cannot fail and must not wait.
-    loop.clearReads();
-    ipc.scannerReset().catch((e: unknown) => setResetError(ipcError(e)));
+    // The pump clears locally first, then drains the old frame before resetting the crate.
+    // Calling the command directly can let an outstanding frame restore discarded evidence.
+    loop.reset().catch((e: unknown) => setResetError(ipcError(e)));
   };
 
   /**
@@ -436,7 +440,8 @@ function LiveScanner() {
   // a second, and a line saying the scanner has no hashes for that second is a false alarm on
   // every first open. The line waits for the answer instead.
   const hasBundle = statusData === null || statusData.bundle.loaded;
-  const filtersDisabled = statusData !== null && statusData.labels === 0 ? FILTERS_NEED_NAMES : null;
+  const filtersDisabled =
+    statusData !== null && statusData.labels === 0 ? FILTERS_NEED_NAMES : null;
   const assetNotes = [bundleSentence(statusData), modelsSentence(statusData)].filter(
     (sentence): sentence is string => sentence !== null,
   );
@@ -624,8 +629,8 @@ function LiveScanner() {
         }}
         onClose={() => setClearing(null)}
       >
-        {plural(clearCopies, "scanned copy", "scanned copies")} will leave the tray without being added
-        to your collection. Cards you scan while this is open stay.
+        {plural(clearCopies, "scanned copy", "scanned copies")} will leave the tray without being
+        added to your collection. Cards you scan while this is open stay.
       </ConfirmDialog>
     </>
   );
