@@ -280,6 +280,71 @@ afterEach(() => {
 });
 
 describe("ScannerPage", () => {
+  it("pauses recognition with the camera and tray still available, and resumes only when asked", async () => {
+    const restore = shimVideo();
+    const stop = vi.fn();
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({ getTracks: () => [{ stop }] } as unknown as MediaStream),
+    );
+    mediaDevices(getUserMedia);
+    paced();
+    vi.mocked(ipc.scannerTray).mockResolvedValue([...TRAY_ROWS]);
+    const user = userEvent.setup();
+    try {
+      mount();
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      expect(stop).not.toHaveBeenCalled();
+      expect(
+        screen.getByText("Scanning stopped. Press Start scanning to resume."),
+      ).toBeInTheDocument();
+      expect(tray()).toHaveTextContent(TRAY_ROWS[0].name);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const sent = vi.mocked(ipc.scannerFrame).mock.calls.length;
+      act(() => parkedStore.set({ paused: true, released: false }));
+      act(() => parkedStore.set({ paused: false, released: false }));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+      expect(ipc.scannerFrame).toHaveBeenCalledTimes(sent);
+      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+      await waitFor(() =>
+        expect(vi.mocked(ipc.scannerFrame).mock.calls.length).toBeGreaterThan(sent),
+      );
+      expect(tray()).toHaveTextContent(TRAY_ROWS[0].name);
+    } finally {
+      restore();
+    }
+  });
+
+  it("can stop recognition while a camera request is pending without cancelling the preview", async () => {
+    const restore = shimVideo();
+    let opened!: (stream: MediaStream) => void;
+    const stop = vi.fn();
+    const getUserMedia = vi.fn(
+      () =>
+        new Promise<MediaStream>((resolve) => {
+          opened = resolve;
+        }),
+    );
+    mediaDevices(getUserMedia);
+    const user = userEvent.setup();
+    paced();
+    try {
+      mount();
+      await waitFor(() => expect(getUserMedia).toHaveBeenCalledTimes(1));
+      await user.click(screen.getByRole("button", { name: "Stop scanning" }));
+      await act(async () => opened({ getTracks: () => [{ stop }] } as unknown as MediaStream));
+      expect(stop).not.toHaveBeenCalled();
+      expect(ipc.scannerFrame).not.toHaveBeenCalled();
+      await user.click(screen.getByRole("button", { name: "Start scanning" }));
+      await waitFor(() => expect(ipc.scannerFrame).toHaveBeenCalled());
+      expect(getUserMedia).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+
   it("shows the refused camera's sentence in place of the video, and the missing bundle under it", async () => {
     refused();
     mount();

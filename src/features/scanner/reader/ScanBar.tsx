@@ -1,5 +1,5 @@
 import { useId, type ReactNode } from "react";
-import { Bug, Check, ChevronDown } from "lucide-react";
+import { Bug, Check, ChevronDown, Play, Square } from "lucide-react";
 import { AnchoredPopup } from "@/components/AnchoredPopup";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
 import type { DropdownOption } from "@/components/Dropdown/types";
@@ -19,6 +19,8 @@ import { filterSummary } from "./readerText";
 import { DETECT, FINISH_PREF_LABEL } from "./trayFinish";
 
 export interface ScanBarProps {
+  scanning: boolean;
+  onScanning: (scanning: boolean) => void;
   mode: ScanMode;
   onMode: (m: ScanMode) => void;
   filters: ScanFilters;
@@ -96,6 +98,8 @@ const CONDITION_OPTIONS: readonly DropdownOption[] = CONDITIONS.map((c) => ({
  * cannot wrap puts a horizontal scrollbar across the whole view.
  */
 export function ScanBar({
+  scanning,
+  onScanning,
   mode,
   onMode,
   filters,
@@ -126,6 +130,18 @@ export function ScanBar({
 
   return (
     <div className="flex flex-wrap items-center gap-2">
+      <button
+        type="button"
+        onClick={() => onScanning(!scanning)}
+        className={cn(FILTER_CONTROL, "inline-flex items-center gap-1.5 px-2.5", FOCUS)}
+      >
+        {scanning ? (
+          <Square className="size-3.5" aria-hidden="true" />
+        ) : (
+          <Play className="size-3.5" aria-hidden="true" />
+        )}
+        {scanning ? "Stop scanning" : "Start scanning"}
+      </button>
       <ModeSwitch mode={mode} onMode={onMode} />
 
       <BarPopover

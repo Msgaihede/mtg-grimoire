@@ -199,17 +199,53 @@ describe("useScanLoop", () => {
     expect(scannerFrame).toHaveBeenCalledTimes(sent);
   });
 
+  it.each(["plain", "paired"] as const)(
+    "sends nothing when the camera stops during a pending %s grab",
+    async (kind) => {
+      const first = deferred<ScannerVerdict>();
+      scannerFrame.mockReturnValue(first.promise);
+      const frame = deferred<Uint8Array | null>();
+      const pair = deferred<GrabbedPair | null>();
+      const grabFrame = vi.fn(() => (kind === "plain" ? frame.promise : Promise.resolve(BYTES)));
+      const grabPair = vi.fn(() => pair.promise);
+      const videoRef = { current: readyVideo() };
+      const { rerender } = renderHook(
+        ({ live }: { live: boolean }) =>
+          useScanLoop({ videoRef, live, ...KNOBS, detailWaitMs: 0, grabFrame, grabPair }),
+        { initialProps: { live: true } },
+      );
+      await tick();
+      if (kind === "paired") {
+        await act(async () => first.resolve({ ...VERDICTS.voting, wants_detail: true }));
+        expect(grabPair).toHaveBeenCalledTimes(1);
+      } else {
+        expect(grabFrame).toHaveBeenCalledTimes(1);
+      }
+      const sent = kind === "paired" ? 1 : 0;
+      expect(scannerFrame).toHaveBeenCalledTimes(sent);
+
+      rerender({ live: false });
+      await act(async () => {
+        frame.resolve(BYTES);
+        pair.resolve({ frame: PAIR_FRAME, detail: PAIR_DETAIL });
+      });
+      await tick(100);
+      expect(scannerFrame).toHaveBeenCalledTimes(sent);
+    },
+  );
+
   it("keeps the one-in-flight guarantee across a restart", async () => {
     // The `while` loop's own `await` serialises a single run. What it cannot do is stop a
     // *second* loop putting a request on the wire beside an outstanding one — which is what
     // toggling `live` off and on does, and why the flag is a ref rather than a loop-local.
     const first = deferred<ScannerVerdict>();
-    scannerFrame.mockReturnValueOnce(first.promise).mockReturnValue(deferred<ScannerVerdict>().promise);
+    scannerFrame
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValue(deferred<ScannerVerdict>().promise);
     const videoRef = { current: readyVideo() };
     const grabFrame = vi.fn(async () => BYTES);
     const { rerender } = renderHook(
-      ({ live }: { live: boolean }) =>
-        useScanLoop({ videoRef, live, ...KNOBS, grabFrame }),
+      ({ live }: { live: boolean }) => useScanLoop({ videoRef, live, ...KNOBS, grabFrame }),
       { initialProps: { live: true } },
     );
     await tick();

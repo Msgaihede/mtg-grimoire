@@ -339,6 +339,9 @@ export function useScanLoop({
           await sleep(IDLE_MS);
           continue;
         }
+        // JPEG encoding can finish after the camera stops or restarts. That old pump must
+        // not submit its frame to the session now owned by the new stream.
+        if (stopped) return;
         if (bytes === null) {
           await sleep(IDLE_MS);
           continue;

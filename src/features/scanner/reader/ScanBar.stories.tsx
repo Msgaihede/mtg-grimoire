@@ -26,6 +26,7 @@ const CAMERAS: readonly CameraDevice[] = [
  * waits for it.
  */
 function Held(args: ScanBarProps) {
+  const [scanning, setScanning] = useState(args.scanning);
   const [mode, setMode] = useState<ScanMode>(args.mode);
   const [filters, setFilters] = useState<ScanFilters>(args.filters);
   const [finish, setFinish] = useState<ScannerFinishPref>(args.finish);
@@ -35,6 +36,11 @@ function Held(args: ScanBarProps) {
   return (
     <ScanBar
       {...args}
+      scanning={scanning}
+      onScanning={(on) => {
+        setScanning(on);
+        args.onScanning(on);
+      }}
       mode={mode}
       onMode={(m) => {
         setMode(m);
@@ -75,6 +81,8 @@ const meta = {
   tags: ["autodocs"],
   render: (args) => <Held {...args} />,
   args: {
+    scanning: true,
+    onScanning: fn(),
     mode: "fast",
     onMode: fn(),
     filters: { sets: [], released_from: null, released_to: null },
@@ -117,6 +125,15 @@ export const Default: Story = {
     await expect(
       canvas.getByRole("button", { name: "Defaults: Detect finish · Condition not set" }),
     ).toBeInTheDocument();
+  },
+};
+
+export const StartAndStop: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await userEvent.click(canvas.getByRole("button", { name: "Stop scanning" }));
+    await userEvent.click(canvas.getByRole("button", { name: "Start scanning" }));
+    await expect(canvas.getByRole("button", { name: "Stop scanning" })).toBeInTheDocument();
   },
 };
 

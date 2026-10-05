@@ -30,6 +30,8 @@ const CAMERAS: readonly CameraDevice[] = [
 
 function props(over: Partial<ScanBarProps> = {}): ScanBarProps {
   return {
+    scanning: true,
+    onScanning: vi.fn(),
     mode: "fast",
     onMode: vi.fn(),
     filters: { sets: [], released_from: null, released_to: null },
