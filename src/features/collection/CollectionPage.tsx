@@ -183,7 +183,7 @@ const ROOT_TARGET = 0;
  * about the rows the menu reached, and nothing else on the page remembers which those were.
  */
 type Panel =
-  | { kind: "newFolder"; parentId: number | null }
+  | { kind: "newFolder"; parentId: number | null; originShelfId?: number }
   | { kind: "renameFolder"; folderId: number }
   | { kind: "moveFolder"; folderId: number }
   | { kind: "deleteFolder"; folderId: number }
@@ -1318,11 +1318,13 @@ export function CollectionPage() {
   /**
    * The Add folder a naming field was opened from, when that is a **heading's** — the one whose
    * caret has to be handed back by request (`useHeadingCaret`). The path row's makes a folder *at*
-   * the level, its parent is the level itself, and its button is never scrolled away.
+   * the level, its parent is the level itself, and its button is never scrolled away. Not sorted
+   * also creates at the root, so its origin shelf id is kept separately from the null parent.
    */
   const headingAddedIn =
-    panel?.kind === "newFolder" && panel.parentId !== null && panel.parentId !== folderId
-      ? panel.parentId
+    panel?.kind === "newFolder"
+      ? (panel.originShelfId ??
+        (panel.parentId !== null && panel.parentId !== folderId ? panel.parentId : null))
       : null;
 
   // Focus first, then close: the opener is still mounted at this point, and an element that
@@ -1465,7 +1467,7 @@ export function CollectionPage() {
   // whole hook result a dependency.
   const { shelves: builtShelves, setFold, folds: storedFolds } = collection;
   const openNewFolder = useCallback(
-    (parentId: number | null) => {
+    (parentId: number | null, originShelfId?: number) => {
       folders.create.reset();
       const parent =
         parentId === null
@@ -1474,7 +1476,7 @@ export function CollectionPage() {
       if (parent !== undefined && parent.collapsed) {
         setFold(parent.id, foldChange(parent, false));
       }
-      open({ kind: "newFolder", parentId }, focusedElement());
+      open({ kind: "newFolder", parentId, originShelfId }, focusedElement());
     },
     [folders.create, builtShelves, setFold, open],
   );
@@ -2642,8 +2644,10 @@ export function CollectionPage() {
    * One shelf's heading, wired (spec §3.2, §3.8, §6). **The reader's own folder is the only kind
    * that gets anything a press could be refused for** — Add folder, Rename, the ⋯, a folder drop
    * and a drag — because the backend refuses every one of them for a deck group and `Recently
-   * removed` in words, and a folder being named is not a folder yet. Not sorted and the reader's
-   * folders take a card; the app's own shelves take nothing (`canFile` would refuse them anyway,
+   * removed` in words, and a folder being named is not a folder yet. Not sorted also offers Add
+   * folder at the root (issue #778), using `null` as its parent, never its synthetic shelf id.
+   * Not sorted and the reader's folders take a card; the app's own shelves take nothing
+   * (`canFile` would refuse them anyway,
    * and a heading that armed for a drop it always refuses is a promise the next press breaks).
    */
   const headingFor = useCallback(
@@ -2678,7 +2682,13 @@ export function CollectionPage() {
           // `toggle` writes nothing behind it either way.
           foldPaused={filtering ? FOLD_PAUSED_REASON : undefined}
           onOpen={collection.openFolder}
-          onAddFolder={mine ? () => openNewFolder(mine.id) : undefined}
+          onAddFolder={
+            mine
+              ? () => openNewFolder(mine.id)
+              : shelf.kind === "unfiled"
+                ? () => openNewFolder(null, shelf.id)
+                : undefined
+          }
           onRename={mine ? () => openRename(mine.id) : undefined}
           renaming={renaming}
           menu={mine ? folderRowMenu(mine) : undefined}

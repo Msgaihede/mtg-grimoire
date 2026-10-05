@@ -4179,6 +4179,30 @@ describe("the collection's shelves", () => {
  * chevrons and the path row's two buttons, and suspended (never rewritten) by a filter.
  */
 describe("the wall at the root", () => {
+  /** Issue #778: the root title folds loose cards without navigating to a folder. */
+  it("folds Not sorted from its title and restores its cards on the next press", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(within(heading("Not sorted")).getByRole("button", { name: "Not sorted" }));
+
+    await waitFor(() => expect(setShelfFolds).toHaveBeenCalledWith("collection", { "0": true }));
+    await waitFor(() => expect(screen.queryByText("Lightning Bolt")).toBeNull());
+    expect(
+      within(heading("Not sorted")).getByRole("button", { name: "Not sorted" }),
+    ).toHaveAttribute("aria-expanded", "false");
+    expect(standingIn()).toBeNull();
+
+    await user.click(within(heading("Not sorted")).getByRole("button", { name: "Not sorted" }));
+
+    await waitFor(() =>
+      expect(setShelfFolds).toHaveBeenLastCalledWith("collection", { "0": null }),
+    );
+    expect(await screen.findByText("Lightning Bolt")).toBeInTheDocument();
+    expect(standingIn()).toBeNull();
+  });
+
   /**
    * **The page this design exists to fix** (spec §1): a reader who files everything saw the
    * figures band, the breadcrumb and an empty wall. Now the root's wall is every shelf, so both
@@ -4373,7 +4397,7 @@ describe("the wall at the root", () => {
  * whose name is the field, last among its siblings, over an empty shelf.
  */
 describe("Add folder", () => {
-  it("is on the path row and on the heading of every folder the reader made, and nowhere else", async () => {
+  it("is on the path row, Not sorted and every folder the reader made", async () => {
     collectionFolderList.mockResolvedValue([BINDER, FOILS]);
     wrap(<CollectionPage />);
     await findHeading("Foils");
@@ -4381,8 +4405,46 @@ describe("Add folder", () => {
     expect(pathRowAddFolder()).toBeInTheDocument();
     expect(addIn("Trade binder")).toBeInTheDocument();
     expect(addIn("Foils")).toBeInTheDocument();
-    // Not sorted is not a folder: its only control is its chevron.
-    expect(within(heading("Not sorted")).getAllByRole("button")).toHaveLength(1);
+    expect(addIn("Not sorted")).toBeInTheDocument();
+    expect(renameOf("Not sorted")).toBeNull();
+    expect(manageOf("Not sorted")).toBeNull();
+    expect(
+      within(heading("Not sorted")).queryByRole("button", { name: "Open Not sorted" }),
+    ).toBeNull();
+  });
+
+  /** Not sorted represents the root: its sentinel shelf id must never become a folder parent. */
+  it("creates at the root from Not sorted and returns focus to its Add folder", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Foils");
+
+    await user.click(addIn("Not sorted")!);
+    const field = await screen.findByRole("textbox", { name: "Folder name" });
+    const draft = field.closest<HTMLElement>(`[${SHELF_HEADING_ATTR}]`)!;
+    expect(follows(heading("Foils"), draft)).toBe(true);
+    await user.type(field, "Sealed{Enter}");
+
+    await waitFor(() => expect(collectionFolderCreate).toHaveBeenCalledWith(null, "Sealed"));
+    expect(collectionFolderCreate).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(addIn("Not sorted")).toHaveFocus());
+    expect(standingIn()).toBeNull();
+  });
+
+  it("cancels creation from Not sorted without writing and returns focus to its Add folder", async () => {
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await screen.findByText("Lightning Bolt");
+
+    await user.click(addIn("Not sorted")!);
+    await screen.findByRole("textbox", { name: "Folder name" });
+    await user.click(screen.getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => expect(screen.queryByRole("textbox", { name: "Folder name" })).toBeNull());
+    await waitFor(() => expect(addIn("Not sorted")).toHaveFocus());
+    expect(collectionFolderCreate).not.toHaveBeenCalled();
+    expect(standingIn()).toBeNull();
   });
 
   /** `create_folder` refuses the holding area as a parent (`FOLDER_NOT_YOURS`), so neither door is drawn there. */

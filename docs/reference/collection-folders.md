@@ -2083,8 +2083,11 @@ headless one, which has no chevron to reopen it with (`foldAll` in
 `collectionShelfModel.ts`). **A reader's-folder heading carries Add folder, Rename and `⋯`;
 a deck group or `Recently removed` heading carries its chevron, its title, its figures and its
 `→` and nothing a press could be refused for**, because every folder write refuses those two kinds in words
-(`headingFor` in `CollectionPage.tsx`). Not sorted has a chevron and plain text. Add folder
-draws a heading whose name is the naming field, last among its siblings, under the id
+(`headingFor` in `CollectionPage.tsx`). **Not sorted keeps its root role and offers a chevron,
+a clickable name to fold its cards, and Add folder at the collection root** (issue #778,
+2026-10-05). Its Add folder uses a `null` parent, never the synthetic shelf id `0`, and
+returns focus to that heading after creating or cancelling. Rename, Move, Lock, Delete and
+Open remain stored-folder operations. Add folder draws a heading whose name is the naming field, last among its siblings, under the id
 `NEW_FOLDER_SHELF` (`-1`, `collectionShelfModel.ts`), which never reaches the wire. The field is
 `FolderNameField` at `size="heading"`: a 36px frame inside the 40px row, with ✓ and ✕ on the
 row's centre line.

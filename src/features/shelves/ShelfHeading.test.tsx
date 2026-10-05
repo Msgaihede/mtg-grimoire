@@ -347,8 +347,9 @@ describe("ShelfHeading", () => {
     }
   });
 
-  /** Not sorted is not a folder: plain words, its chevron and nothing else (spec §3.2). */
-  it("draws Not sorted as plain words with a chevron and nothing else", () => {
+  /** Issue #778: the root gets folding and Add folder, but no stored-folder operations. */
+  it("offers folding and Add folder on Not sorted, without folder management or drag", async () => {
+    const user = userEvent.setup();
     const dragRef = vi.fn();
     mount({
       shelf: shelfOf({ id: 0, name: "Not sorted", kind: "unfiled" }),
@@ -358,11 +359,65 @@ describe("ShelfHeading", () => {
       dragRef,
     });
 
-    expect(screen.getAllByRole("button")).toHaveLength(1);
-    expect(screen.getByRole("button")).toHaveAccessibleName("Collapse Not sorted");
+    expect(screen.getAllByRole("button")).toHaveLength(3);
+    expect(screen.getByRole("button", { name: "Collapse Not sorted" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
     expect(screen.getByRole("heading", { level: 3 })).toHaveAccessibleName("Not sorted");
+    await user.click(screen.getByRole("button", { name: "Add folder in Not sorted" }));
+    expect(onAddFolder).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: /^Rename/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Manage/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: /^Open/ })).toBeNull();
+    expect(onOpen).not.toHaveBeenCalled();
+    fireEvent.contextMenu(row());
+    expect(MENU.onContextMenu).not.toHaveBeenCalled();
     expect(row()).not.toHaveAttribute("tabindex");
     expect(dragRef).not.toHaveBeenCalled();
+  });
+
+  it("folds Not sorted from its name by pointer and keyboard", async () => {
+    const user = userEvent.setup();
+    const unfiled = shelfOf({ id: 0, name: "Not sorted", kind: "unfiled" });
+    const view = mount({ shelf: unfiled });
+
+    const title = screen.getByRole("button", { name: "Not sorted" });
+    expect(title).toHaveAttribute("aria-expanded", "true");
+    await user.click(title);
+    expect(onToggle).toHaveBeenCalledTimes(1);
+
+    view.show({ shelf: { ...unfiled, collapsed: true } });
+    expect(title).toHaveAttribute("aria-expanded", "false");
+    title.focus();
+    await user.keyboard("{Enter}");
+    await user.keyboard(" ");
+    expect(onToggle).toHaveBeenCalledTimes(3);
+    expect(onOpen).not.toHaveBeenCalled();
+  });
+
+  it("pauses Not sorted's title under a filter while keeping Add folder available", async () => {
+    const user = userEvent.setup();
+    mount({
+      shelf: shelfOf({ id: 0, name: "Not sorted", kind: "unfiled" }),
+      onAddFolder,
+      foldPaused: FOLD_PAUSED_REASON,
+    });
+
+    const title = screen.getByRole("button", { name: "Not sorted" });
+    expect(title).toHaveAttribute("aria-disabled", "true");
+    expect(title).not.toHaveAttribute("disabled");
+    expect(title).toHaveAccessibleDescription(FOLD_PAUSED_REASON);
+    await user.click(title);
+    title.focus();
+    await user.keyboard("{Enter}");
+    await user.keyboard(" ");
+    expect(onToggle).not.toHaveBeenCalled();
+
+    const add = screen.getByRole("button", { name: "Add folder in Not sorted" });
+    expect(add).not.toHaveAttribute("aria-disabled");
+    await user.click(add);
+    expect(onAddFolder).toHaveBeenCalledTimes(1);
   });
 
   /** `CollectionFolderCard`'s three doors: the `⋯`'s click, the menu key on the focusable name, and
