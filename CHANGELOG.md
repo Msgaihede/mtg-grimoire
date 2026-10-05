@@ -30,6 +30,26 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.42.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.41.0...v0.42.0) (2026-10-05)
+
+
+### Features
+
+* **collection:** export folders from their options ([ecbc55a](https://github.com/Msgaihede/mtg-grimoire/commit/ecbc55a4c807e03c9df0900b6be1e57d6fa430c9))
+* **collection:** export folders from their options ([5726f19](https://github.com/Msgaihede/mtg-grimoire/commit/5726f19b705835e639bf8fd5943842f13ecb0580))
+* **scanner:** create decks from reviewed scans ([04b5706](https://github.com/Msgaihede/mtg-grimoire/commit/04b570600d90f1eb3a9feae94308585508db2c06))
+* **scanner:** create decks from scanned cards ([d47fe68](https://github.com/Msgaihede/mtg-grimoire/commit/d47fe68a2c835b58c328df771f7ab3a9b79dcace))
+
+
+### Bug Fixes
+
+* **decks:** allow folder creation with hidden sidebar ([5c54b80](https://github.com/Msgaihede/mtg-grimoire/commit/5c54b80bcc3ea1f532b5ab1531d2bacb7482a5d8))
+* **decks:** allow folder creation with hidden sidebar ([b69ff23](https://github.com/Msgaihede/mtg-grimoire/commit/b69ff23958b32879decba8f66d0ea15ee466c799))
+* **scanner:** discard pending evidence on reset ([a5ab834](https://github.com/Msgaihede/mtg-grimoire/commit/a5ab834b188e335f510fb5d894ad5b814022d08b))
+* **scanner:** fully discard evidence on reset ([e599214](https://github.com/Msgaihede/mtg-grimoire/commit/e5992148c6781aec9dfe9e305d76d885c2c00b08))
+* **scanner:** preserve scans without oracle IDs ([8839345](https://github.com/Msgaihede/mtg-grimoire/commit/88393452bd4bb1799d9c65c4b268cafff39d4ce6))
+* **scanner:** preserve scans without oracle IDs ([dae584a](https://github.com/Msgaihede/mtg-grimoire/commit/dae584a311ce2250bb8d452730301efc53d5f585))
+
 ## [0.41.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.40.0...v0.41.0) (2026-10-05)
 
 
