@@ -64,6 +64,7 @@ export interface TrayPanelProps {
   folderId: number | null;
   onFolder: (id: number | null) => void;
   onCommit: () => void;
+  onCreateDeck?: (opener: HTMLElement) => void;
   committing: boolean;
   commitError: string | null;
   onMorePrintings: (row: ScannerTrayRow) => void;
@@ -249,6 +250,7 @@ export function TrayPanel({
   folderId,
   onFolder,
   onCommit,
+  onCreateDeck,
   committing,
   commitError,
   onMorePrintings,
@@ -337,7 +339,9 @@ export function TrayPanel({
           </span>
         </h3>
         <div className="ml-auto flex items-center gap-3">
-          {waiting > 0 && <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>}
+          {waiting > 0 && (
+            <span className="text-xs text-accent">{plural(waiting, "card")} to pick</span>
+          )}
           {/* Hidden rather than greyed when nothing is waiting, like *More printings…* for a card
               with no oracle id: a control that can do nothing is one a reader keeps trying. Gold,
               because it walks the questions gold already marks — the dashed waiting tile and the
@@ -457,6 +461,29 @@ export function TrayPanel({
           from the destination it files into. Below the cap the row is what it always was — the
           picker fills, and wraps above the button when the two no longer fit side by side. */}
       <footer className="flex flex-wrap items-end gap-2 border-t border-border p-3">
+        {onCreateDeck && (
+          <button
+            type="button"
+            aria-disabled={refusal !== null || needsFinish > 0 || committing || undefined}
+            onClick={(e) => {
+              if (refusal !== null || needsFinish > 0 || committing) return;
+              onCreateDeck(e.currentTarget);
+            }}
+            {...tip(
+              committing
+                ? null
+                : (refusal ?? (needsFinish > 0 ? "Choose a finish for every card first" : null)),
+            )}
+            className={cn(
+              "inline-flex h-9 items-center rounded-md border border-border px-3 text-sm hover:border-accent hover:text-accent",
+              PRESS,
+              FOCUS,
+              "aria-disabled:cursor-not-allowed aria-disabled:opacity-45 aria-disabled:active:scale-100",
+            )}
+          >
+            Create deck…
+          </button>
+        )}
         <FolderPicker folderId={folderId} onFolder={onFolder} />
         <button
           type="button"
@@ -479,7 +506,10 @@ export function TrayPanel({
           )}
         >
           {committing && (
-            <LoaderCircle className="size-3.5 animate-spin motion-reduce:animate-none" aria-hidden="true" />
+            <LoaderCircle
+              className="size-3.5 animate-spin motion-reduce:animate-none"
+              aria-hidden="true"
+            />
           )}
           {/* One label in both states: the name a reader pressed is the name the pending control
               keeps, and `aria-busy` is what says the write is under way. */}
@@ -522,7 +552,13 @@ function TrayPrice({
 }) {
   if (price === undefined) return null;
   return (
-    <span className={cn("shrink-0 font-mono tabular-nums", price === null ? "text-dim" : "text-text", className)}>
+    <span
+      className={cn(
+        "shrink-0 font-mono tabular-nums",
+        price === null ? "text-dim" : "text-text",
+        className,
+      )}
+    >
       {price === null ? (
         <>
           <span aria-hidden="true">—</span>
@@ -922,7 +958,9 @@ function TrayTile({
       {(printing !== "" || price !== undefined) && (
         <div className="flex min-w-0 items-baseline gap-2">
           {printing !== "" && (
-            <span className="min-w-0 truncate font-mono text-[11px] leading-4 text-dim">{printing}</span>
+            <span className="min-w-0 truncate font-mono text-[11px] leading-4 text-dim">
+              {printing}
+            </span>
           )}
           <TrayPrice price={price} money={money} className="ml-auto text-[11px] leading-4" />
         </div>
@@ -1035,11 +1073,22 @@ function ChoiceCard({ choice, onPick }: { choice: ScannerTrayChoice; onPick: () 
  * press at its right end — 24px, a size down from the row's, because it shares a line with 13px
  * type rather than with a stepper.
  */
-function TileName({ name, label, onRemove }: { name: string; label: string; onRemove: () => void }) {
+function TileName({
+  name,
+  label,
+  onRemove,
+}: {
+  name: string;
+  label: string;
+  onRemove: () => void;
+}) {
   const tip = useTooltip();
   return (
     <div className="mt-2 flex min-w-0 items-center gap-1">
-      <span {...tip(name, { whenClipped: true })} className="min-w-0 flex-1 truncate text-[13px] leading-5">
+      <span
+        {...tip(name, { whenClipped: true })}
+        className="min-w-0 flex-1 truncate text-[13px] leading-5"
+      >
         {name}
       </span>
       <button

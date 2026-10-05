@@ -2,6 +2,8 @@ import { useEffect, useMemo, useRef, useState, type JSX } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
+import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
+import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
 import { plural } from "@/lib/counts";
 import type { CollectionFolder, CollectionImportItem } from "@/lib/ipc";
 import { ipc, ipcError } from "@/lib/ipc";
@@ -28,6 +30,7 @@ import {
 } from "./useScannerElsewhere";
 import { useScannerPrefs } from "./useScannerPrefs";
 import { useTray } from "./useTray";
+import { useScannedDeck } from "./useScannedDeck";
 import { useWindowParked } from "./useWindowParked";
 import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
@@ -140,6 +143,10 @@ function LiveScanner() {
   // the real names.
   const cameras = useCameraDevices(camera.kind === "live" ? camera.deviceId : null);
   const tray = useTray();
+  const [deckRows, setDeckRows] = useState<ScannerTrayRow[] | null>(null);
+  const deckOpener = useRef<HTMLElement | null>(null);
+  const scannedDeck = useScannedDeck(deckRows ?? []);
+  const newDeckFormat = useNewDeckFormat();
   const folderList = useCollectionFolderList();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   // The developer sliders. `mode` rides the same header but is the reader's, so it is taken from
@@ -578,6 +585,11 @@ function LiveScanner() {
                 folderId={folderId}
                 onFolder={(id) => update({ folderId: id })}
                 onCommit={onCommit}
+                onCreateDeck={(opener) => {
+                  deckOpener.current = opener;
+                  scannedDeck.reset();
+                  setDeckRows([...tray.latest()]);
+                }}
                 committing={committing}
                 commitError={commitError}
                 onMorePrintings={onMorePrintings}
@@ -632,6 +644,25 @@ function LiveScanner() {
         {plural(clearCopies, "scanned copy", "scanned copies")} will leave the tray without being
         added to your collection. Cards you scan while this is open stay.
       </ConfirmDialog>
+      <CreateDeckDialog
+        open={deckRows !== null}
+        create={scannedDeck}
+        defaultFormatKey={newDeckFormat}
+        intro={`${totalCopies(deckRows ?? [])} scanned copies will be filed into automatic categories. The scans stay in the tray so you can also add them to your collection.`}
+        onCreated={(deck) => {
+          setDeckRows(null);
+          useAppStore.getState().setActiveView("decks");
+          useAppStore.getState().setOpenDeckId(deck.id);
+        }}
+        onDismiss={() => {
+          if (scannedDeck.isPending) return;
+          setDeckRows(null);
+          deckOpener.current?.focus();
+        }}
+        onClose={() => {
+          if (!scannedDeck.isPending) setDeckRows(null);
+        }}
+      />
     </>
   );
 }

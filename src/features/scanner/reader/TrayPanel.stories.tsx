@@ -54,7 +54,12 @@ const THIRD_WIDTH = "36rem";
  * ambiguous decision, through the reducer — rather than written out, so the story cannot draw a
  * waiting row the scanner could never produce.
  */
-const waiting = rowFromDecision(VERDICTS.exactAmbiguous.decision!, { finish: "nonfoil" }, 1_757_900_000_000, "waiting");
+const waiting = rowFromDecision(
+  VERDICTS.exactAmbiguous.decision!,
+  { finish: "nonfoil" },
+  1_757_900_000_000,
+  "waiting",
+);
 
 const meta = {
   title: "Scanner/Reader/Tray",
@@ -67,6 +72,7 @@ const meta = {
     folderId: null,
     onFolder: fn(),
     onCommit: fn(),
+    onCreateDeck: fn(),
     committing: false,
     commitError: null,
     onMorePrintings: fn(),
@@ -85,7 +91,10 @@ const meta = {
     // never show. A width rather than a class, so a story can name any width without a Tailwind
     // class having to exist for it.
     (Story, { parameters }) => (
-      <div className="flex h-[36rem] flex-col p-2" style={{ width: parameters.trayWidth as string }}>
+      <div
+        className="flex h-[36rem] flex-col p-2"
+        style={{ width: parameters.trayWidth as string }}
+      >
         <Story />
       </div>
     ),
@@ -129,7 +138,10 @@ export const Rows: Story = {
  * and this row is the same decision, so keeping both would put one question on screen twice.
  */
 export const NeedsPick: Story = {
-  args: { rows: [waiting, ...TRAY_ROWS.filter((row) => row.choices.length === 0)], flashKey: "waiting" },
+  args: {
+    rows: [waiting, ...TRAY_ROWS.filter((row) => row.choices.length === 0)],
+    flashKey: "waiting",
+  },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Pick a printing")).toBeInTheDocument();
@@ -152,9 +164,9 @@ export const NeedsFinish: Story = {
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByRole("button", { name: "Finish of Lightning Bolt — STA 105" })).toHaveTextContent(
-      "Unknown",
-    );
+    await expect(
+      canvas.getByRole("button", { name: "Finish of Lightning Bolt — STA 105" }),
+    ).toHaveTextContent("Unknown");
     await expect(
       canvas.getByRole("button", { name: "Add 5 to collection · 1 needs a finish" }),
     ).not.toHaveAttribute("aria-disabled");
@@ -188,7 +200,9 @@ export const NextDecision: Story = {
     const printings = canvas.getByRole("group", { name: `Printings of ${waiting.name}` });
     await expect(within(printings).getAllByRole("button")[0]).toHaveFocus();
     await userEvent.click(next);
-    await expect(canvas.getByRole("button", { name: "Finish of Lightning Bolt — STA 105" })).toHaveFocus();
+    await expect(
+      canvas.getByRole("button", { name: "Finish of Lightning Bolt — STA 105" }),
+    ).toHaveFocus();
   },
 };
 
@@ -209,7 +223,9 @@ export const Committing: Story = {
  * sentence sits above the footer it came from, and the rows it is about stay pressable.
  */
 export const CommitRefused: Story = {
-  args: { commitError: "Could not add to your collection — the database is busy. Try again in a moment." },
+  args: {
+    commitError: "Could not add to your collection — the database is busy. Try again in a moment.",
+  },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByRole("alert")).toHaveTextContent(
@@ -229,11 +245,16 @@ export const Grid: Story = {
   parameters: { trayWidth: THIRD_WIDTH },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
+    await expect(canvas.getByRole("button", { name: "Grid" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await expect(
       canvas.getByRole("button", { name: "More printings of Urza's Saga — MH2 259" }),
     ).toBeInTheDocument();
-    await expect(canvas.getByRole("group", { name: "Printings of Lightning Bolt" })).toBeInTheDocument();
+    await expect(
+      canvas.getByRole("group", { name: "Printings of Lightning Bolt" }),
+    ).toBeInTheDocument();
   },
 };
 
@@ -259,7 +280,10 @@ export const GridEmpty: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(canvas.getByText("Cards you scan appear here.")).toBeInTheDocument();
-    await expect(canvas.getByRole("button", { name: "Grid" })).toHaveAttribute("aria-pressed", "true");
+    await expect(canvas.getByRole("button", { name: "Grid" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await expect(canvas.getByRole("button", { name: "Add 0 to collection" })).toHaveAttribute(
       "aria-disabled",
       "true",
@@ -278,7 +302,10 @@ export const SwitchToList: Story = {
     const canvas = within(canvasElement);
     await userEvent.click(canvas.getByRole("button", { name: "List" }));
     await expect(args.onLayout).toHaveBeenCalledWith("list");
-    await expect(canvas.getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+    await expect(canvas.getByRole("button", { name: "List" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await expect(
       canvas.getByRole("button", { name: "More printings of Urza's Saga — MH2 259" }),
     ).toBeInTheDocument();

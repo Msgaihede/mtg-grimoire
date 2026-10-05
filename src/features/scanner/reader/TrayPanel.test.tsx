@@ -13,7 +13,15 @@ import { pickOption } from "@/test-dropdown";
  */
 const collectionFolderList = vi.hoisted(() =>
   vi.fn().mockResolvedValue([
-    { id: 7, parentId: null, name: "Rares", kind: "user", deckId: null, sortOrder: 1, locked: false },
+    {
+      id: 7,
+      parentId: null,
+      name: "Rares",
+      kind: "user",
+      deckId: null,
+      sortOrder: 1,
+      locked: false,
+    },
     { id: 8, parentId: null, name: "Burn", kind: "deck", deckId: 3, sortOrder: 2, locked: false },
   ]),
 );
@@ -104,6 +112,34 @@ function wrap(ui: ReactElement) {
 }
 
 describe("TrayPanel", () => {
+  it("opens deck creation with the button as its focus return target", async () => {
+    const onCreateDeck = vi.fn();
+    wrap(<TrayPanel {...props({ onCreateDeck })} />);
+    const button = screen.getByRole("button", { name: "Create deck…" });
+    await userEvent.click(button);
+    expect(onCreateDeck).toHaveBeenCalledWith(button);
+  });
+
+  it.each(["empty", "printing", "finish", "committing"])(
+    "refuses deck creation while %s needs attention",
+    async (state) => {
+      const onCreateDeck = vi.fn();
+      const rows =
+        state === "empty"
+          ? []
+          : state === "printing"
+            ? [rowFromDecision(ambiguous, { finish: "nonfoil" }, 1, "waiting")]
+            : state === "finish"
+              ? [{ ...base, finish: "unknown" as const }]
+              : [base];
+      wrap(<TrayPanel {...props({ rows, onCreateDeck, committing: state === "committing" })} />);
+      const button = screen.getByRole("button", { name: "Create deck…" });
+      expect(button).toHaveAttribute("aria-disabled", "true");
+      await userEvent.click(button);
+      expect(onCreateDeck).not.toHaveBeenCalled();
+    },
+  );
+
   it("draws the rows newest first, each with its name and printing", () => {
     wrap(<TrayPanel {...props()} />);
     const tray = screen.getByRole("region", { name: "Scanned cards" });
@@ -133,7 +169,9 @@ describe("TrayPanel", () => {
     const user = userEvent.setup();
     const onRows = vi.fn();
     wrap(<TrayPanel {...props({ onRows })} />);
-    await user.click(screen.getByRole("button", { name: "Increase Quantity of Storm of Saruman — LTR 72" }));
+    await user.click(
+      screen.getByRole("button", { name: "Increase Quantity of Storm of Saruman — LTR 72" }),
+    );
     expect(onRows).toHaveBeenCalledTimes(1);
     const next = edit(onRows, [newer, older]);
     expect(next.find((r) => r.key === "newer")?.quantity).toBe(2);
@@ -350,16 +388,26 @@ describe("TrayPanel", () => {
   });
 
   it("announces a refused commit as an alert", () => {
-    wrap(<TrayPanel {...props({ commitError: "The database is busy — try again in a moment." })} />);
-    expect(screen.getByRole("alert")).toHaveTextContent("The database is busy — try again in a moment.");
+    wrap(
+      <TrayPanel {...props({ commitError: "The database is busy — try again in a moment." })} />,
+    );
+    expect(screen.getByRole("alert")).toHaveTextContent(
+      "The database is busy — try again in a moment.",
+    );
   });
 
   it("offers more printings only for a card with an oracle id", async () => {
     const user = userEvent.setup();
     const onMorePrintings = vi.fn();
     const orphan: ScannerTrayRow = { ...older, oracleId: null };
-    wrap(<TrayPanel {...props({ rows: [{ ...newer, oracleId: "o-storm" }, orphan], onMorePrintings })} />);
-    await user.click(screen.getByRole("button", { name: "More printings of Storm of Saruman — LTR 72" }));
+    wrap(
+      <TrayPanel
+        {...props({ rows: [{ ...newer, oracleId: "o-storm" }, orphan], onMorePrintings })}
+      />,
+    );
+    await user.click(
+      screen.getByRole("button", { name: "More printings of Storm of Saruman — LTR 72" }),
+    );
     expect(onMorePrintings).toHaveBeenCalledWith(expect.objectContaining({ key: "newer" }));
     expect(
       screen.queryByRole("button", { name: "More printings of Honored Hierarch — ORI 17" }),
@@ -428,13 +476,23 @@ describe("TrayPanel", () => {
     const user = userEvent.setup();
     const onRows = vi.fn();
     wrap(<TrayPanel {...props({ onRows })} />);
-    const justScanned: ScannerTrayRow = { ...base, key: "just-scanned", name: "Lightning Bolt", addedAt: 3 };
+    const justScanned: ScannerTrayRow = {
+      ...base,
+      key: "just-scanned",
+      name: "Lightning Bolt",
+      addedAt: 3,
+    };
 
     await user.click(screen.getByRole("button", { name: "Remove Honored Hierarch — ORI 17" }));
-    expect(edit(onRows, [justScanned, newer, older]).map((r) => r.key)).toEqual(["just-scanned", "newer"]);
+    expect(edit(onRows, [justScanned, newer, older]).map((r) => r.key)).toEqual([
+      "just-scanned",
+      "newer",
+    ]);
 
     onRows.mockClear();
-    await user.click(screen.getByRole("button", { name: "Increase Quantity of Storm of Saruman — LTR 72" }));
+    await user.click(
+      screen.getByRole("button", { name: "Increase Quantity of Storm of Saruman — LTR 72" }),
+    );
     expect(edit(onRows, [justScanned, newer, older]).map((r) => [r.key, r.quantity])).toEqual([
       ["just-scanned", 1],
       ["newer", 2],
@@ -474,7 +532,9 @@ describe("TrayPanel's prices", () => {
   it("quotes each row's own finish once, and asks for every printing in one read", async () => {
     printingPrices.mockResolvedValueOnce(quoted);
     wrap(<TrayPanel {...props({ rows: [storm, hierarch, { ...storm, key: "again" }] })} />);
-    const items = within(screen.getByRole("region", { name: "Scanned cards" })).getAllByRole("listitem");
+    const items = within(screen.getByRole("region", { name: "Scanned cards" })).getAllByRole(
+      "listitem",
+    );
     // The foil row reads its foil figure, never the cheaper nonfoil one.
     expect(await within(items[0]).findByText("$3.50")).toBeInTheDocument();
     expect(printingPrices).toHaveBeenLastCalledWith(["hierarch", "storm"], "tcgplayer");
@@ -539,7 +599,9 @@ describe("TrayPanel's grid", () => {
     const user = userEvent.setup();
     const onMorePrintings = vi.fn();
     wrap(<TrayPanel {...grid({ onMorePrintings })} />);
-    await user.click(screen.getByRole("button", { name: "More printings of Honored Hierarch — ORI 17" }));
+    await user.click(
+      screen.getByRole("button", { name: "More printings of Honored Hierarch — ORI 17" }),
+    );
     expect(onMorePrintings).toHaveBeenCalledTimes(1);
     expect(onMorePrintings).toHaveBeenCalledWith(expect.objectContaining({ key: "older" }));
   });
@@ -548,12 +610,16 @@ describe("TrayPanel's grid", () => {
     const orphan: ScannerTrayRow = { ...older, oracleId: null };
     wrap(<TrayPanel {...grid({ rows: [newer, orphan] })} />);
     const items = tiles();
-    expect(within(items[1]).queryByRole("button", { name: /^More printings of/ })).not.toBeInTheDocument();
+    expect(
+      within(items[1]).queryByRole("button", { name: /^More printings of/ }),
+    ).not.toBeInTheDocument();
     expect(
       within(items[1]).getByRole("button", { name: "Remove Honored Hierarch — ORI 17" }),
     ).toBeInTheDocument();
     expect(
-      within(items[1]).getByRole("button", { name: "Increase Quantity of Honored Hierarch — ORI 17" }),
+      within(items[1]).getByRole("button", {
+        name: "Increase Quantity of Honored Hierarch — ORI 17",
+      }),
     ).toBeInTheDocument();
   });
 
@@ -590,7 +656,10 @@ describe("TrayPanel's grid", () => {
     const onLayout = vi.fn();
     wrap(<TrayPanel {...props({ onLayout })} />);
     const toggle = screen.getByRole("group", { name: "Tray layout" });
-    expect(within(toggle).getByRole("button", { name: "List" })).toHaveAttribute("aria-pressed", "true");
+    expect(within(toggle).getByRole("button", { name: "List" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     await user.click(within(toggle).getByRole("button", { name: "Grid" }));
     expect(onLayout).toHaveBeenCalledWith("grid");
   });
@@ -613,9 +682,16 @@ describe("TrayPanel's grid", () => {
     const user = userEvent.setup();
     const onRows = vi.fn();
     wrap(<TrayPanel {...grid({ onRows })} />);
-    const justScanned: ScannerTrayRow = { ...base, key: "just-scanned", name: "Lightning Bolt", addedAt: 3 };
+    const justScanned: ScannerTrayRow = {
+      ...base,
+      key: "just-scanned",
+      name: "Lightning Bolt",
+      addedAt: 3,
+    };
 
-    await user.click(screen.getByRole("button", { name: "Increase Quantity of Storm of Saruman — LTR 72" }));
+    await user.click(
+      screen.getByRole("button", { name: "Increase Quantity of Storm of Saruman — LTR 72" }),
+    );
     expect(edit(onRows, [justScanned, newer, older]).map((r) => [r.key, r.quantity])).toEqual([
       ["just-scanned", 1],
       ["newer", 2],
@@ -632,7 +708,10 @@ describe("TrayPanel's grid", () => {
 
     onRows.mockClear();
     await user.click(screen.getByRole("button", { name: "Remove Honored Hierarch — ORI 17" }));
-    expect(edit(onRows, [justScanned, newer, older]).map((r) => r.key)).toEqual(["just-scanned", "newer"]);
+    expect(edit(onRows, [justScanned, newer, older]).map((r) => r.key)).toEqual([
+      "just-scanned",
+      "newer",
+    ]);
   });
 
   it("asks for a pick on a waiting tile — its candidates the whole question — and a press settles it", async () => {
@@ -646,9 +725,13 @@ describe("TrayPanel's grid", () => {
     const tile = choices.closest("li")!;
     expect(within(tile).getByText("Pick a printing")).toBeInTheDocument();
     // Nothing on a waiting tile acts on a card it might not be.
-    expect(within(tile).queryByRole("button", { name: /^Increase Quantity of/ })).not.toBeInTheDocument();
+    expect(
+      within(tile).queryByRole("button", { name: /^Increase Quantity of/ }),
+    ).not.toBeInTheDocument();
     expect(within(tile).queryByRole("button", { name: /^Finish of/ })).not.toBeInTheDocument();
-    expect(within(tile).queryByRole("button", { name: /^More printings of/ })).not.toBeInTheDocument();
+    expect(
+      within(tile).queryByRole("button", { name: /^More printings of/ }),
+    ).not.toBeInTheDocument();
 
     const choice = waiting.choices[1];
     await user.click(
@@ -670,7 +753,9 @@ describe("TrayPanel's grid", () => {
     const next = screen.getByRole("button", { name: NEXT_DECISION_LABEL });
     await user.click(next);
     expect(document.activeElement).toBe(
-      within(screen.getByRole("group", { name: `Printings of ${waiting.name}` })).getAllByRole("button")[0],
+      within(screen.getByRole("group", { name: `Printings of ${waiting.name}` })).getAllByRole(
+        "button",
+      )[0],
     );
     await user.click(next);
     expect(document.activeElement).toBe(

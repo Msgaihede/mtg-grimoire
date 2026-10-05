@@ -4,7 +4,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionFolder, ScannerPrefs, ScannerVerdict } from "@/lib/ipc";
 import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
-import { DEFAULT_SCANNER_PREFS, MARKS, NEEDS_A_FINISH_ROW, STATUS, TRAY_ROWS, VERDICTS } from "./fixtures";
+import {
+  DEFAULT_SCANNER_PREFS,
+  MARKS,
+  NEEDS_A_FINISH_ROW,
+  STATUS,
+  TRAY_ROWS,
+  VERDICTS,
+} from "./fixtures";
 
 vi.mock("@/lib/ipc", async (orig) => {
   const real = await orig<typeof import("@/lib/ipc")>();
@@ -51,6 +58,9 @@ vi.mock("@/lib/ipc", async (orig) => {
         undoId: null,
       })),
       collectionFolderList: vi.fn(async () => []),
+      deckLastFormat: vi.fn(async () => null),
+      formatSpecs: vi.fn(async () => []),
+      deckFolderList: vi.fn(async () => []),
     },
   };
 });
@@ -244,7 +254,14 @@ const BINDER: CollectionFolder = {
   locked: false,
   syncUid: "f7",
 };
-const DECK_GROUP: CollectionFolder = { ...BINDER, id: 9, name: "Burn", kind: "deck", deckId: 4, syncUid: "f9" };
+const DECK_GROUP: CollectionFolder = {
+  ...BINDER,
+  id: 9,
+  name: "Burn",
+  kind: "deck",
+  deckId: 4,
+  syncUid: "f9",
+};
 
 const COMMANDS = [
   ipc.scannerStatus,
@@ -280,6 +297,26 @@ afterEach(() => {
 });
 
 describe("ScannerPage", () => {
+  it("opens the full deck settings dialog and keeps the tray on cancellation", async () => {
+    refused();
+    const rows = TRAY_ROWS.filter((row) => row.choices.length === 0);
+    vi.mocked(ipc.scannerTray).mockResolvedValue(rows);
+    mount();
+    await screen.findByText("Urza's Saga");
+    const opener = screen.getByRole("button", { name: "Create deck…" });
+    await userEvent.click(opener);
+    const dialog = await screen.findByRole("dialog", { name: "New deck" });
+    expect(within(dialog).getByText(/scans stay in the tray/)).toBeInTheDocument();
+    expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeInTheDocument();
+    await userEvent.keyboard("{Escape}");
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "New deck" })).not.toBeInTheDocument(),
+    );
+    expect(opener).toHaveFocus();
+    expect(screen.getByText("Urza's Saga")).toBeInTheDocument();
+    expect(ipc.scannerTrayCommit).not.toHaveBeenCalled();
+  });
+
   it("pauses recognition with the camera and tray still available, and resumes only when asked", async () => {
     const restore = shimVideo();
     const stop = vi.fn();
@@ -449,7 +486,10 @@ describe("ScannerPage", () => {
     expect(await screen.findByRole("region", { name: "Match" })).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Tiers" })).toBeInTheDocument();
     await waitFor(() =>
-      expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({ ...DEFAULT_SCANNER_PREFS, developer: true }),
+      expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({
+        ...DEFAULT_SCANNER_PREFS,
+        developer: true,
+      }),
     );
 
     await user.click(screen.getByRole("switch", { name: "Developer" }));
@@ -477,7 +517,9 @@ describe("ScannerPage", () => {
     vi.mocked(ipc.scannerReset).mockRejectedValueOnce("the scanner state is poisoned");
     const { container } = mount();
     await userEvent.click(await screen.findByRole("button", { name: "Reset evidence" }));
-    await waitFor(() => expect(strip(container)).toHaveTextContent("the scanner state is poisoned"));
+    await waitFor(() =>
+      expect(strip(container)).toHaveTextContent("the scanner state is poisoned"),
+    );
   });
 
   it("files a capture under the five fields the sidecar has, read off the last verdict", async () => {
@@ -531,14 +573,22 @@ describe("ScannerPage", () => {
       const rows = within(tray()).getAllByRole("listitem");
       expect(rows).toHaveLength(1);
       expect(within(rows[0]).getByText("Storm of Saruman")).toBeInTheDocument();
-      expect(within(tray()).getByRole("button", { name: "Add 1 to collection" })).toBeInTheDocument();
+      expect(
+        within(tray()).getByRole("button", { name: "Add 1 to collection" }),
+      ).toBeInTheDocument();
       // The strip names the card that was filed and says it was added.
-      expect(statusLine()).toHaveTextContent("Matched Storm of Saruman LTR 72 Added · swap in the next card");
+      expect(statusLine()).toHaveTextContent(
+        "Matched Storm of Saruman LTR 72 Added · swap in the next card",
+      );
       // …and the store gets the tray once the quiet window has passed.
       await waitFor(() => expect(ipc.setScannerTray).toHaveBeenCalled(), { timeout: 2000 });
       const [written] = vi.mocked(ipc.setScannerTray).mock.lastCall ?? [];
       expect(written).toHaveLength(1);
-      expect(written?.[0]).toMatchObject({ cardId: "storm-of-saruman-ltr-72", quantity: 1, finish: "nonfoil" });
+      expect(written?.[0]).toMatchObject({
+        cardId: "storm-of-saruman-ltr-72",
+        quantity: 1,
+        finish: "nonfoil",
+      });
     } finally {
       restore();
     }
@@ -581,7 +631,9 @@ describe("ScannerPage", () => {
       mount();
       await waitFor(() => expect(getUserMedia).toHaveBeenCalled());
       expect(getUserMedia).toHaveBeenCalledTimes(1);
-      expect(getUserMedia.mock.calls[0]).toMatchObject([{ video: { deviceId: { exact: "brio" } } }]);
+      expect(getUserMedia.mock.calls[0]).toMatchObject([
+        { video: { deviceId: { exact: "brio" } } },
+      ]);
     } finally {
       restore();
     }
@@ -591,13 +643,15 @@ describe("ScannerPage", () => {
     refused();
     const user = userEvent.setup();
     mount();
-    const layouts = await within(await screen.findByRole("region", { name: "Scanned cards" })).findByRole(
-      "group",
-      { name: "Tray layout" },
-    );
+    const layouts = await within(
+      await screen.findByRole("region", { name: "Scanned cards" }),
+    ).findByRole("group", { name: "Tray layout" });
     await user.click(within(layouts).getByRole("button", { name: "List" }));
     await waitFor(() =>
-      expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({ ...DEFAULT_SCANNER_PREFS, trayLayout: "list" }),
+      expect(ipc.setScannerPrefs).toHaveBeenLastCalledWith({
+        ...DEFAULT_SCANNER_PREFS,
+        trayLayout: "list",
+      }),
     );
   });
 
@@ -668,7 +722,9 @@ describe("ScannerPage", () => {
     ]);
     await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
     expect(within(tray()).getByText("Lightning Bolt")).toBeInTheDocument();
-    const add = within(tray()).getByRole("button", { name: "Add 0 to collection · 1 needs a finish" });
+    const add = within(tray()).getByRole("button", {
+      name: "Add 0 to collection · 1 needs a finish",
+    });
     expect(add).toHaveAttribute("aria-disabled", "true");
     // Refused on the press as well as drawn refused — the handler asks the same question.
     await user.click(add);
@@ -741,7 +797,9 @@ describe("ScannerPage", () => {
       expect(vi.mocked(ipc.scannerTrayCommit).mock.calls[0]?.[2]).toEqual([]);
 
       land(VERDICTS.decided);
-      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length + 1));
+      await waitFor(() =>
+        expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length + 1),
+      );
       answer();
 
       await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
@@ -776,7 +834,13 @@ describe("ScannerPage", () => {
       decision: {
         printing: saga.cardId,
         oracle_id: saga.oracleId,
-        label: { name: saga.name, set: saga.setCode, number: saga.collectorNumber, lang: "en", released: "2021-06-18" },
+        label: {
+          name: saga.name,
+          set: saga.setCode,
+          number: saga.collectorNumber,
+          lang: "en",
+          released: "2021-06-18",
+        },
         outcome: "resolved",
         choices: [],
         replaces_previous: false,
@@ -818,13 +882,17 @@ describe("ScannerPage", () => {
       land(sagaAgain);
       // A bump, not a second row: one line, four copies, the same key.
       await waitFor(() =>
-        expect(within(tray()).getByRole("button", { name: "Add 4 to collection" })).toBeInTheDocument(),
+        expect(
+          within(tray()).getByRole("button", { name: "Add 4 to collection" }),
+        ).toBeInTheDocument(),
       );
       expect(within(tray()).getAllByRole("listitem")).toHaveLength(1);
       answer();
 
       await waitFor(() =>
-        expect(within(tray()).getByRole("button", { name: "Add 1 to collection" })).toBeInTheDocument(),
+        expect(
+          within(tray()).getByRole("button", { name: "Add 1 to collection" }),
+        ).toBeInTheDocument(),
       );
       expect(within(tray()).getAllByRole("listitem")).toHaveLength(1);
       await waitFor(
@@ -884,7 +952,9 @@ describe("ScannerPage", () => {
     const clear = await within(tray()).findByRole("button", { name: "Clear all…" });
     await user.click(clear);
     const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
-    expect(dialog).toHaveTextContent("5 scanned copies will leave the tray without being added to your collection.");
+    expect(dialog).toHaveTextContent(
+      "5 scanned copies will leave the tray without being added to your collection.",
+    );
     const scope = container.querySelector(".\\@container\\/scan");
     expect(scope).not.toBeNull();
     expect(scope?.contains(dialog)).toBe(false);
@@ -943,7 +1013,9 @@ describe("ScannerPage", () => {
       const dialog = await screen.findByRole("dialog", { name: "Clear the tray" });
 
       land(VERDICTS.decided);
-      await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length + 1));
+      await waitFor(() =>
+        expect(within(tray()).getAllByRole("listitem")).toHaveLength(rows.length + 1),
+      );
       await user.click(within(dialog).getByRole("button", { name: "Clear tray" }));
 
       await waitFor(() => expect(within(tray()).getAllByRole("listitem")).toHaveLength(1));
@@ -963,7 +1035,10 @@ describe("ScannerPage", () => {
     mount();
 
     await waitFor(() =>
-      expect(ipc.setScannerPrefs).toHaveBeenCalledWith({ ...DEFAULT_SCANNER_PREFS, folderId: null }),
+      expect(ipc.setScannerPrefs).toHaveBeenCalledWith({
+        ...DEFAULT_SCANNER_PREFS,
+        folderId: null,
+      }),
     );
     await user.click(await within(tray()).findByRole("button", { name: "Add 5 to collection" }));
     await waitFor(() => expect(ipc.scannerTrayCommit).toHaveBeenCalledTimes(1));
@@ -1063,9 +1138,7 @@ describe("ScannerPage in a minimized window", () => {
   it("pauses the pump on the minimize, keeping the camera and the lease through the grace", async () => {
     const restore = shimVideo();
     const stop = vi.fn();
-    mediaDevices(() =>
-      Promise.resolve({ getTracks: () => [{ stop }] } as unknown as MediaStream),
-    );
+    mediaDevices(() => Promise.resolve({ getTracks: () => [{ stop }] } as unknown as MediaStream));
     paced();
     try {
       mount();

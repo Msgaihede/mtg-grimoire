@@ -108,6 +108,8 @@ const CASUAL_ONLY: readonly FormatOption[] = [{ key: DEFAULT_FORMAT, name: "Casu
 const trimmedOrAbsent = (text: string): string | undefined => text.trim() || undefined;
 
 export interface CreateDeckDialogProps {
+  /** A source-specific explanation, shown before the settings. */
+  intro?: string;
   /**
    * `useDecks().create`, owned by the gallery and handed down.
    *
@@ -226,6 +228,7 @@ export interface CreateDeckDialogProps {
  * same reason `DecksPage`'s own rung excludes this panel: one layer, one rung.
  */
 export function CreateDeckDialog({
+  intro,
   create,
   defaultFormatKey,
   defaultFolderId = null,
@@ -247,6 +250,7 @@ export function CreateDeckDialog({
       onDismiss={onDismiss}
       onClose={onClose}
     >
+      {intro && <p className="px-5 pt-4 text-sm text-dim">{intro}</p>}
       <CreateDeckBody
         create={create}
         defaultFormatKey={defaultFormatKey}

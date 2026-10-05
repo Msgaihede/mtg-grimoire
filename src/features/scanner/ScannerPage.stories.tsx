@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
-import { expect, within } from "storybook/test";
+import { expect, userEvent, within } from "storybook/test";
 import { ipc } from "@/lib/ipc";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "./fixtures";
 import { ScannerPage } from "./ScannerPage";
@@ -111,9 +111,9 @@ export const AssetsMissing: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
     await expect(await canvas.findByText(/No reference bundle\. Put/)).toBeInTheDocument();
-    await expect(
-      await canvas.findByRole("status", { name: "Scanner status" }),
-    ).toHaveTextContent("Card hashes aren't loaded");
+    await expect(await canvas.findByRole("status", { name: "Scanner status" })).toHaveTextContent(
+      "Card hashes aren't loaded",
+    );
   },
 };
 
@@ -139,6 +139,20 @@ export const WithTray: Story = {
       "aria-disabled",
       "true",
     );
+  },
+};
+
+/** The scanner uses the same settings dialog as the gallery, before any deck write. */
+export const CreateDeckFromTray: Story = {
+  render: () => <Written tray={TRAY_ROWS.filter((row) => row.choices.length === 0)} />,
+  parameters: { docs: { story: { inline: false, height: "800px" } } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("Urza's Saga");
+    await userEvent.click(canvas.getByRole("button", { name: "Create deck…" }));
+    const dialog = await canvas.findByRole("dialog", { name: "New deck" });
+    await expect(within(dialog).getByText(/scans stay in the tray/)).toBeVisible();
+    await expect(within(dialog).getByRole("textbox", { name: "Name" })).toBeVisible();
   },
 };
 
