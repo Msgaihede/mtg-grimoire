@@ -20,6 +20,9 @@ const meta = {
     docs: {
       description: {
         component:
+          "Complete ZIP export and restore, followed by the automatic text mirror. ZIP restore " +
+          "replaces current data after a native confirmation; the workbench refuses its native " +
+          "picker because it has no filesystem.\n\n" +
           "The plain-text mirror: a write-only copy of your decks, collection and wishlist " +
           "on disk, in all seven export formats, for the day the app will not start.\n\n" +
           "**This panel reaches the backend itself**, where its five neighbours take their " +

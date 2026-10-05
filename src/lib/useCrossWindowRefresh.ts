@@ -14,4 +14,7 @@ import { queryClient } from "@/lib/query";
  */
 export function useCrossWindowRefresh(): void {
   useEffect(() => ipc.onDbChanged((e) => refreshForTables(queryClient, e.tables)), []);
+  // Restore also replaces preferences held outside React Query. Every window must hydrate
+  // afresh so an old editor cannot keep writing against the replaced collection.
+  useEffect(() => ipc.onArchiveRestored(() => window.location.reload()), []);
 }

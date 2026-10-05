@@ -79,6 +79,8 @@ rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 # spelling it was given on a case-folding FAT stick or CIFS share. Already in `Cargo.lock` at this
 # version through `walkdir`, so the lockfile gains one edge and no package.
 same-file = "1.0.6"
+# Write a full backup beside its destination and replace it only after ZIP completion.
+tempfile = "3"
 # The card scanner. A plain path dependency on a standalone package — it is deliberately excluded
 # from the workspace this package is a member of (the root `Cargo.toml` says why), so its three
 # tools keep building into `crates/card-scanner/target/`. `corpus` is the join back to
@@ -179,7 +181,6 @@ httpmock = "0.8"
 # `test-util` is a paused clock: `pairing`'s departure test lets ten of a press's five-second
 # bounds go by without spending them.
 tokio = { version = "1", features = ["macros", "rt", "test-util"] }
-tempfile = "3"
 
 # **The seventeen `[profile.dev.package.*]` overrides that make a dev scanner usable are in the
 # workspace root's `Cargo.toml`, not here.** Cargo reads `[profile.*]` from the build root only,

@@ -56,6 +56,8 @@ pub mod activity;
 /// **The `app_meta` key–value store.** One table and two functions, which view-state modules
 /// across the app keep a setting in.
 pub mod app_meta;
+/// Portable user-data snapshots, independent of the archive container a host writes.
+pub mod archive;
 pub mod bulk_undo;
 pub mod card;
 /// **One Scryfall card object as the `cards` row it becomes**, and `raw`'s gzip.

@@ -77,6 +77,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     // Multi-window's one listener, `useCrossWindowRefresh` — mounted beside the two above and
     // mocked for their reason. Nothing emits it here: a test is one window.
     onDbChanged: vi.fn().mockReturnValue(() => {}),
+    onArchiveRestored: vi.fn().mockReturnValue(() => {}),
     onSyncLive: vi.fn().mockReturnValue(() => {}),
     syncLiveState: vi.fn().mockResolvedValue("off"),
     // The honest never-ingested row: every field null, so nothing in this file's cards is

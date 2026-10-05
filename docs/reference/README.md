@@ -10,6 +10,7 @@ or a number to compare a new measurement against.
 
 | Doc | Holds | Governed by |
 | --- | --- | --- |
+| [full-data-archives.md](full-data-archives.md) | Complete ZIP backups, transactional restore, schema compatibility, and automatic backups before updates | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [data-and-sync.md](data-and-sync.md) | Data dir, sync timings, the schema ladder, every search-performance measurement | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [scryfall.md](scryfall.md) | Rate limits, the penalty, bulk data, `error_log`, pre-warm keys | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |
 | [the price-feed research](../superpowers/research/2026-08-12-card-kingdom-mana-pool-price-feeds.md) | Both feeds measured live — sizes, key collisions, the NM-vs-cheapest trap | [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) |

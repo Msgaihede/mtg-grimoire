@@ -178,7 +178,7 @@ export const PANELS: Record<PanelId, PanelMeta> = {
   backup: {
     title: "Backup",
     group: "storage",
-    keywords: "mirror text files export rebuild dropbox onedrive copy",
+    keywords: "mirror text files export import restore zip archive rebuild dropbox onedrive copy",
   },
   /**
    * **The combo words are here because this is the only combo surface left, and only the words

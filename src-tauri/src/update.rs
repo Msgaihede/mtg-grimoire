@@ -1042,10 +1042,20 @@ fn extract_portable_exe(archive: &Path, dest: &Path) -> Result<(), String> {
 ///
 /// The exit is scheduled rather than immediate: a command that tears its own webview down
 /// inline never delivers its answer, and the caller needs to know this did not fail.
-pub fn apply(updater: &Arc<Updater>, app: &tauri::AppHandle) -> Result<(), String> {
+pub fn apply(
+    state: &AppState,
+    updater: &Arc<Updater>,
+    app: &tauri::AppHandle,
+) -> Result<(), String> {
     let staged = crate::sync::lock_plain(&updater.staged)
         .clone()
         .ok_or_else(|| "there is no downloaded update to install.".to_owned())?;
+
+    // Finish and fsync a complete user backup before the executable changes or an installer
+    // can terminate us. A disk failure must leave the current version running.
+    let conn = crate::sync::lock_db(state);
+    crate::archive::automatic_backup(&conn, &state.data_dir, "before-update")
+        .map_err(|e| format!("The update was not installed because its backup failed: {e}"))?;
 
     match staged.kind {
         InstallKind::Portable => swap_and_relaunch(&updater.exe, &staged.path)?,
@@ -1071,6 +1081,8 @@ pub fn apply(updater: &Arc<Updater>, app: &tauri::AppHandle) -> Result<(), Strin
             return Err("this kind of install cannot be updated from inside the app.".into())
         }
     }
+
+    drop(conn);
 
     eprintln!("updating to {} and restarting", staged.version);
     let app = app.clone();

@@ -10851,6 +10851,13 @@ export const ipc = {
    * can reject, because the IPC boundary itself can.
    */
   mirrorStatus: () => invoke<MirrorStatus>("mirror_status"),
+  /** Native save picker and a complete ZIP snapshot. False means the picker was cancelled. */
+  archiveExport: (): Promise<boolean> => invoke<boolean>("archive_export"),
+  /** Native open picker and destructive confirmation, then complete replacement. False means
+   *  either dialog was cancelled; true requires all frontend state to be reloaded. */
+  archiveImport: (): Promise<boolean> => invoke<boolean>("archive_import"),
+  /** A restore replaces row identities and settings; every open window must reload its state. */
+  onArchiveRestored: (cb: () => void): Unlisten => core.listen<void>("archive:restored", cb),
   /** Switch the mirror on or off. Takes effect without a restart — the pass thread consults the
    *  setting on every tick rather than reading it once at startup. Answers `BUSY` if a sync
    *  holds the write connection, like every other write here. */

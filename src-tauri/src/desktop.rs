@@ -14,8 +14,8 @@
 // move a move: not one path below changed.
 use crate::sync::AppState;
 use crate::{
-    activity, camera, card, collection, collection_alloc, collection_folders, combos, db, deck,
-    deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
+    activity, archive, camera, card, collection, collection_alloc, collection_folders, combos, db,
+    deck, deck_audit, deck_completion, deck_meta, deck_missing, deck_notes, deck_pull, deck_query,
     deck_quick_add, deck_theory, deck_todos, deck_tokens, deck_undo, deckpane, decksort, errors,
     export, home, images, import, index, listview, markcolors, marketplace, marketplace_feed,
     mirror, nav, new_printings, paths, price_history, recent_cards, reset, scanner, schema,
@@ -115,10 +115,15 @@ async fn update_download(
 /// Install what was staged, and leave. The window closes moments after this answers.
 #[tauri::command]
 async fn update_apply(
+    state: tauri::State<'_, Arc<AppState>>,
     updater: tauri::State<'_, Arc<update::Updater>>,
     app: tauri::AppHandle,
 ) -> Result<(), String> {
-    update::apply(updater.inner(), &app)
+    let state = state.inner().clone();
+    let updater = updater.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || update::apply(&state, &updater, &app))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// The error log, newest first.
@@ -689,6 +694,8 @@ pub fn run() {
             update_check,
             update_download,
             update_apply,
+            archive::archive_export,
+            archive::archive_import,
             update_open_release_page,
             // The plain-text mirror. Four commands for the folder: the Backup panel's read,
             // the two settings, and the button that rewrites it now.

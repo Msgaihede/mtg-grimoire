@@ -1,5 +1,8 @@
 # The plain-text mirror
 
+For restorable ZIP backups of user data and preferences, see [full-data-archives.md](full-data-archives.md).
+The mirror described here remains the readable, continuously updated text projection.
+
 `src-tauri/src/mirror/` and `src-tauri/src/transfer/`, shipped 2026-08-25. The design is
 [2026-08-25-text-backed-cards-design.md](../superpowers/specs/2026-08-25-text-backed-cards-design.md);
 this page is the record of what shipped, with the reason at each site. Every figure keeps the date
