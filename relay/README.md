@@ -33,8 +33,11 @@ live Worker (2026-09-28), and **401** once `"device":"deadbeef"` is added. ⚠�
 it was not deployed until that day**, on a `{"group":…,"auth":…}` probe the group door refuses as
 `malformed token request` — its `auth` was not 64 hex — before it reads `device` at all. **The
 pairing rendezvous is live too**: `GET /p/{32 hex}/offer` answers a JSON `nothing there`, not the
-router's plain-text `not found`. **The last deploy was 2026-10-04 at 17:22:12 UTC, from `main`
-at `ea0aa88e`**, and carried the browser's half, below. **The one before it was 2026-10-01 at
+router's plain-text `not found`. **The last deploy was 2026-10-05 at 02:21:29 UTC, from `main`
+at `117827d2`**, version `8139d6e7-c5db-48fc-afc6-cd438a815d7f`, and carried three things:
+the removal's close, the paged pull and issue #752's claim gate — the paragraph after the
+browser's half, below. **The one before it was 2026-10-04 at 17:22:12 UTC, from `main` at
+`ea0aa88e`**, and carried the browser's half. **The one before that was 2026-10-01 at
 22:09 UTC, from `claude/relay-rate-limits` at `7f6d6f50`**, and carried the rate limits below; the one before that,
 the same day from `main` at `2b845048`, carried issue #548's `dev` claim — `token.ts` and
 `claim.ts`, no migration, and nothing a probe without a credential can see. Deploying this tree is `npx wrangler deploy` from here, and it
@@ -65,14 +68,29 @@ without it. **Probed 2026-10-04 at 15:49 and 17:21 UTC, before: 405**, with the 
 `authorization, content-type`, the method `POST` and a max-age of 86400 — and still 405, with no
 `access-control-` line, for `example.com`. The runbook's step 0 has all three pairs, both
 columns. **What no probe has seen is a browser's socket**: the 101's sub-protocol and the pong
-were settled under local workerd, and nothing in production has opened a socket from a page.
+were settled under local workerd. In production the owner paired the deployed web app with a
+desktop on 2026-10-05 and synced between them — "it works" — which is his sentence and not a
+reading of a socket.
 ⚠️ **The web app must be deployed after this and never before** — which is now the order they
 are in: a page asking a relay that answers no pre-flight fails every request, and what its
 engine sees is a network error with no status to act on.
 
-**What is written and not deployed is the removal's close** — a rotation's roster closing the
-sockets of the devices it leaves out, with 4002 (light app step 6.3b; further down, and the
-runbook's ninth half).
+**The removal's close, the paged pull and issue #752's claim gate are deployed, and nothing
+without a credential can see any of them.** Deployed 2026-10-05 at 02:21:29 UTC from `main` at
+`117827d2`, version `8139d6e7-c5db-48fc-afc6-cd438a815d7f`, by an agent at the owner's
+standing ask for the light app's phase 6; wrangler 4.146.0, `--dry-run` first (85.29 KiB); no
+migration, no secret, no var changed. Three things: a rotation's roster closing the sockets of
+the devices it leaves out, with 4002 (step 6.3b; further down, and the runbook's ninth half);
+a page of a pull, the unpaged answer streamed and compaction by length (step 6.5b; "A pull, a
+page at a time" below, and the runbook's tenth); and `/claim` requiring current auth when the
+group has key rows (issue #752, PR #827 — another session's work, which the owner chose to
+ship with this deploy). The runbook's twelve step-0 probes answered the same twenty-five
+seconds before it and three seconds after, and the same as after the deploy before it.
+**Before it went out, the unpaged pull was asked of real workerd as a released desktop asks
+it** (`wrangler dev --local`, no `limit`, no `Origin`; a 31.6 MB answer in 869 ms, the
+same bytes as the pages joined — the runbook's item 14 has it). **Not confirmed since**: that
+a released desktop still syncs through the streamed answer in production, and that a removed
+device is told there.
 
 ## What it cannot do
 
@@ -724,7 +742,7 @@ app-worker`) — the one tool that deploys anything here — and of it only `d1 
 and `dev --local`.
 
 **A removed device is told: a rotation's roster closes its socket** (light app step 6.3b,
-2026-10-04 — written, and waiting on a deploy; `docs/reference/hosted-relay-deploy.md`'s ninth
+2026-10-04 — deployed 2026-10-05 at 02:21 UTC; `docs/reference/hosted-relay-deploy.md`'s ninth
 half). `group.ts`'s `roster` closes, with **`4002`** (`log.ts`'s `CLOSE_REMOVED`), every open
 socket whose device the adopted manifest does not name (`removedSockets`), which a client reads
 as *removed*: a backoff, then the round trip a reconnect starts with, on which `/keys` answers a

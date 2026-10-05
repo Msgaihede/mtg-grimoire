@@ -64,7 +64,7 @@ each step is [light-app.md](../../reference/light-app.md) §10.
 
 ## Steps — one PR each
 
-- [ ] **6.1 — the relay answers a page, and the engine asks it.** `relay/`: `cors.ts` — the
+- [x] **6.1 — the relay answers a page, and the engine asks it** (#818, merged 2026-10-04). `relay/`: `cors.ts` — the
   allow-list, the pre-flight ahead of every limiter, D1 read and Durable Object, and the header on
   every answer to an allowed origin, refusals included; `/ws` taking its bearer from the
   sub-protocol, refusing a foreign `Origin`, selecting `grimoire.live.v1`, and answering `ping`
@@ -72,27 +72,70 @@ each step is [light-app.md](../../reference/light-app.md) §10.
   turned round: on a page the same commands do ask. `connect-src` names the relay and the test
   that held its absence becomes a row of the test that holds what is allowed. The runbook's
   step 0 gains a probe for each, marked not yet run.
-- [ ] **6.2 — the live socket is the core's, and Android runs it.** `platform::socket`, native
+  ([light-app.md](../../reference/light-app.md) §10.1 is the record.)
+- [x] **6.2 — the live socket is the core's, and Android runs it** (#819, merged 2026-10-04). `platform::socket`, native
   arm; `sync_engine::live` in the core, emitting `sync:live` and `sync:applied` through the event
   sink; `sync_live_state` in the command table; the desktop keeping only its exit push; the
   Android host registering the write wake and starting the loop after its startup settles.
-- [ ] **6.3 — the browser's socket.** `platform::socket`'s browser arm — a `WebSocket` in the
+  ([light-app.md](../../reference/light-app.md) §10.2 is the record.)
+- [x] **6.3 — the browser's socket** (#823, merged 2026-10-04). `platform::socket`'s browser arm — a `WebSocket` in the
   engine's Worker, the bearer in the sub-protocol, `ping` every 45 s; the web host starting the
   loop; whatever the hosting policy needs for `wss://`, measured in a browser first; a local relay
   — the relay's own `fetch` and `Group` under Node — and a smoke check that pairs two browser
   profiles through it and sees a write on one arrive on the other without a press.
-- [ ] **6.4 — pairing on the phone face.** The panel measured at 360, 412 and 800 wide and fixed
+  ([light-app.md](../../reference/light-app.md) §10.3 is the record.)
+- [x] **6.3b — a device that left lets go of its socket** (#825, merged 2026-10-05). **A step
+  the phase grew**, found by 6.3's own run: the loop asked about its group only between
+  sockets, so a device that left, was removed or changed group went on holding the one it had.
+  The loop lets go of a socket whose group its device is no longer in, and a rotation's roster
+  closes the sockets of the devices it leaves out, with a close code of its own, 4002.
+  ([light-app.md](../../reference/light-app.md) §10.3b is the record.)
+- [x] **6.4 — pairing on the phone face** (#820, merged 2026-10-04). The panel measured at 360, 412 and 800 wide and fixed
   where it overflows; the scanner driven with a fake camera; `sync:applied` heard on the phone
   face; the note that clearing site data mints a new device and spends a slot, in the panel and
   in every confirm that would destroy the identity.
-- [ ] **6.5 — an unpaged `pull` in a Worker, measured.** A large import pushed by one device and
+  ([light-app.md](../../reference/light-app.md) §10.4 is the record.)
+- [x] **6.5 — an unpaged `pull` in a Worker, measured** (#824, merged 2026-10-05). A large import pushed by one device and
   pulled by a browser through the local relay: the response's size, the Worker's peak memory, the
   time the engine is deaf to the page. Paging is built only if the figures ask for it.
-- [ ] **6.6 — the release rule.** What ships from a tag, for all three hosts, and what holds a
+  **They asked for it** — 44.6 MB in one answer, the engine deaf for 29 s, 570 MB of linear
+  memory. ([light-app.md](../../reference/light-app.md) §10.5 is the record.)
+- [x] **6.5b — the pull is paged** (#829, merged 2026-10-05). **The second step the phase
+  grew**: 6.5's figures asked for paging, and the owner decided to build it in this phase
+  rather than leave it to the next. The relay answers a page, and streams the unpaged answer
+  every released build still asks for; the engine fetches a catch-up in pages, classifies it,
+  and applies it a page at a time.
+  ([light-app.md](../../reference/light-app.md) §10.5b is the record.)
+- [x] **6.6 — the release rule** (#821, merged 2026-10-04). What ships from a tag, for all three hosts, and what holds a
   group's devices to one schema version.
+  ([light-app.md](../../reference/light-app.md) §10.6 is the record.)
+
+**Phase 6 is complete (2026-10-05)**: eight pull requests, and two deploys of each Worker
+([light-app.md](../../reference/light-app.md) §10.7).
+
+## Built differently from this plan
+
+- **The browser got a smoke of its own, with the relay under workerd.** Step 6.3 planned a local
+  relay that was "the relay's own `fetch` and `Group` under Node". What was built is
+  `npm run web:sync-smoke`: the relay's code under `wrangler dev --local` — the runtime it is
+  deployed on, with a local D1 and the group's own Durable Object — and two browser profiles that claim,
+  pair and sync through it.
+- **Paging was built, and its client classifies first.** Step 6.5 said paging is built only if
+  the figures ask; they did, and step 6.5b built it. The client fetches the whole catch-up and
+  looks into it before applying anything, because a page edge would lose rows from the
+  baseline of an emitter older than v0.40.0 — such a catch-up is evaluated as the one answer it
+  used to be.
+- **Two deploys of each Worker, where the table planned one relay deploy.** The first pair
+  (2026-10-04) carried step 6.1's relay and step 6.3's engine; the second (2026-10-05) carried
+  6.3b and 6.5b on both.
 
 ## What only Markus can close
 
+- ~~**Production pairing**~~ — **done, by his word**: on 2026-10-05 he paired the deployed web
+  app with a desktop and synced between them — "it works".
+- **The release rule's owner list**: the `release` environment restricted to `main`, the
+  keystore and its committed fingerprint, the environment's values
+  ([ci-and-releases.md](../../reference/ci-and-releases.md), *What only the owner can do*).
 - **A real phone**: the camera grant in the Android WebView, a scan of a desktop's QR, a socket
   that survives the app going to the background and coming back.
 - **A second real browser**: Safari and Firefox open the socket with a sub-protocol too, and
