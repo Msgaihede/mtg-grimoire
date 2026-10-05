@@ -522,11 +522,24 @@ Android build sends an `Origin` or a sub-protocol, and none ever needs to.
    stale row was accepted by `authIsRecent` — so the one device that should have stopped was the
    one that kept working. **That is the state Markus's own pair reached.** Fixed on this branch:
    both of `seedGroup`'s statements now refuse an epoch behind the group — and, since, one ahead of
-   it or a foreign auth at its own epoch — the claim still succeeds and still mints a grant, and the key registration is left where
-   it already correctly pointed. **All of it is live since 2026-09-28** — the refusals of an epoch
-   ahead and of a foreign auth arrived with the refresh-secret change — so the press no longer has
-   to be aimed. Until then the advice here was to press Connect on a device that had just synced
-   successfully, not on the one that had been failing.
+   it or a foreign auth at its own epoch — while a behind claim still minted a grant and left the
+   key registration where it already correctly pointed. **Those seed guards are live since
+   2026-09-28** — the refusals of an epoch ahead and of a foreign auth arrived with the
+   refresh-secret change. They protected the registered keys, but a removed device could still
+   re-claim with stale auth to obtain a fresh grant.
+
+   **Issue #752 closes that path in the relay source, awaiting deployment** (2026-10-05).
+   `/claim` now requires `authIsCurrent` if the target group has key rows, and answers a stale
+   claim with a plain **401** before consuming its code or changing its binding, refresh secret,
+   device roll or keys. A legitimate device behind a rotation must catch up through `/keys`
+   and then retry Connect; an initially stale claim leaves its code valid until ordinary expiry. A
+   removed device cannot recover the new key. A group with no key rows still accepts its initial
+   seed, so the original migration repair above remains available. The binding write checks that
+   the authenticated epoch and auth are unchanged; existing-group tokens are stamped before the
+   auth check so a concurrent removal cannot obtain a post-removal token. A rotation overtaking
+   the initial check may consume the code before the write refuses the claim. This source fix
+   does not mean
+   the hosted relay already enforces the gate.
 
    **Measured 2026-08-30**, on the real pair and on the first press of the pass: a paid-up,
    paired device at epoch 2, `entitled: true`, `status: "active"` — and `sync_now` answering

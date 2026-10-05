@@ -15,7 +15,8 @@ import {
 } from "./claim";
 import { fakeEnv, fakeEnvOver, fakeTables, type Tables } from "./fakeD1";
 import { recordRotation, seedGroup } from "./groupauth";
-import { verify } from "./token";
+import { handleKeys, handleRotate } from "./rotate";
+import { TOKEN_TTL_MS, verify } from "./token";
 import type { Env } from "./index";
 
 /**
@@ -978,6 +979,144 @@ describe("/claim — the group key's two body fields", () => {
   });
 });
 
+describe("/claim — current group auth (#752)", () => {
+  it.each(["before", "after"])(
+    "a removal %s the binding write cannot restore access",
+    async (when) => {
+      const clock = vi.spyOn(Date, "now").mockReturnValue(NOW);
+      const { tables, env } = harness({ groups: ["g1"] });
+      await seedGroup(env, "g1", 0, AUTH_ONE);
+      clock.mockReturnValue(NOW + 100);
+      withCode(tables);
+      const prepare = env.DB.prepare.bind(env.DB);
+      let overtaken = false;
+      vi.spyOn(env.DB, "prepare").mockImplementation((sql) => {
+        const statement = prepare(sql);
+        if (sql.includes("SET group_id = ?")) {
+          const bind = statement.bind.bind(statement);
+          vi.spyOn(statement, "bind").mockImplementation((...params) => {
+            const bound = bind(...params);
+            const run = bound.run.bind(bound);
+            vi.spyOn(bound, "run").mockImplementationOnce(async () => {
+              async function remove() {
+                overtaken = true;
+                // Same millisecond as authentication: the token must still predate this removal.
+                const rotation = await handleRotate(
+                  new Request("https://relay.example/g/g1/rotate", {
+                    method: "POST",
+                    headers: { authorization: `Bearer ${AUTH_ONE}` },
+                    body: JSON.stringify({ epoch: 1, auth: AUTH_TWO, keys: { desk: "blob" } }),
+                  }),
+                  env,
+                  "g1",
+                );
+                expect(rotation.status).toBe(200);
+                clock.mockReturnValue(NOW + 200);
+              }
+              if (when === "before") await remove();
+              const result = await run();
+              if (when === "after") await remove();
+              return result;
+            });
+            return bound;
+          });
+        }
+        return statement;
+      });
+
+      const { status, body } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+      expect(overtaken).toBe(true);
+      if (when === "before") {
+        expect(status).toBe(401);
+        expect(body.access).toBeUndefined();
+      } else {
+        expect(status).toBe(200);
+        const claims = await verify(body.access!, HMAC, Date.now());
+        expect(claims!.exp - TOKEN_TTL_MS).toBeLessThan(NOW + 100);
+      }
+      // A claim that won the write was then retired by removal; one that lost cannot replace it.
+      expect(tables.entitlements[0].refresh_secret).not.toBe(body.refresh);
+      expect(tables.entitlements[0].group_auth).toBe(AUTH_TWO);
+    },
+  );
+
+  it.each([
+    { epoch: 0, auth: AUTH_ONE },
+    { epoch: 1, auth: AUTH_ONE },
+    { epoch: 2, auth: AUTH_ONE },
+  ])(
+    "refuses a removed device with %j without spending its code or changing state",
+    async (claim) => {
+      const { tables, env, dropped } = harness({ groups: ["g1"] });
+      await seedGroup(env, "g1", 0, AUTH_ONE);
+      seat(tables, "g1", "desk");
+      seat(tables, "g1", DEVICE);
+      tables.entitlements[0].refresh_device = DEVICE;
+      // The old auth remains in history: authIsRecent would admit exactly this removed device.
+      expect(await recordRotation(env, "g1", 1, AUTH_TWO, { desk: "blob" })).toBe(true);
+      withCode(tables);
+      const before = structuredClone(tables);
+
+      const { status, body } = await answer(
+        await handleClaim(post("/claim", { ...WELL_FORMED, ...claim }), env),
+      );
+
+      expect(status).toBe(401);
+      expect(body).toEqual({ error: "unauthorized" });
+      expect(tables).toEqual(before);
+      expect(dropped).toEqual([]);
+      const url = new URL(`https://relay.example/g/g1/keys?device=${DEVICE}`);
+      const keys = await handleKeys(
+        new Request(url, { headers: { authorization: `Bearer ${AUTH_ONE}` } }),
+        url,
+        env,
+        "g1",
+      );
+      expect(keys.status).toBe(200);
+      expect(await keys.json()).toMatchObject({ epoch: 1, blob: null });
+    },
+  );
+
+  it("lets a retained device retry the same code after catching up", async () => {
+    const { tables, env } = harness({ groups: ["g1"] });
+    await seedGroup(env, "g1", 0, AUTH_ONE);
+    expect(await recordRotation(env, "g1", 1, AUTH_TWO, { [DEVICE]: "blob" })).toBe(true);
+    withCode(tables);
+
+    expect((await answer(await handleClaim(post("/claim", WELL_FORMED), env))).status).toBe(401);
+    const url = new URL(`https://relay.example/g/g1/keys?device=${DEVICE}`);
+    const keys = await handleKeys(
+      new Request(url, { headers: { authorization: `Bearer ${AUTH_ONE}` } }),
+      url,
+      env,
+      "g1",
+    );
+    expect(keys.status).toBe(200);
+    expect(await keys.json()).toMatchObject({ epoch: 1, blob: "blob" });
+    // Retry with the auth derived from the key delivered in that blob.
+    const { status, body } = await answer(
+      await handleClaim(post("/claim", { ...WELL_FORMED, epoch: 1, auth: AUTH_TWO }), env),
+    );
+    expect(status).toBe(200);
+    expect(await verify(body.access!, HMAC, Date.now())).toMatchObject({ grp: "g1", dev: DEVICE });
+    expect(tables.claim_codes).toHaveLength(0);
+    expect(JSON.parse(String(tables.group_keys[1].keys))).toEqual({ [DEVICE]: "blob" });
+  });
+
+  it("refuses stale auth on a target group before tearing down the payer's old group", async () => {
+    const { tables, env, dropped } = harness({ groups: ["old", "g1"] });
+    await seedGroup(env, "old", 0, AUTH_ONE);
+    await seedGroup(env, "g1", 0, AUTH_TWO);
+    withCode(tables);
+    const before = structuredClone(tables);
+
+    const { status } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+    expect(status).toBe(401);
+    expect(tables).toEqual(before);
+    expect(dropped).toEqual([]);
+  });
+});
+
 /**
  * The write a claim makes that nothing else can make, and the ordering that keeps it honest.
  *
@@ -1025,7 +1164,9 @@ describe("/claim — registering the group's relay key", () => {
     tables.entitlements[0].refresh_secret = null;
     await seedGroup(env, "g1", 4, AUTH_TWO);
 
-    const { status } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+    const { status } = await answer(
+      await handleClaim(post("/claim", { ...WELL_FORMED, epoch: 4, auth: AUTH_TWO }), env),
+    );
 
     expect(status).toBe(409);
     expect(tables.group_keys).toHaveLength(1);
@@ -1160,9 +1301,12 @@ describe("/claim — the binding moves rather than being refused", () => {
     // *caught up* finds — and the only one in which `INSERT OR IGNORE` has a conflict to ignore,
     // since `group_keys` is keyed on `(group_id, epoch)`.
     keyed(tables, "g1", 0);
+    tables.entitlements[0].group_auth = AUTH_TWO;
     seat(tables, "g1", "desk");
 
-    const { status } = await answer(await handleClaim(post("/claim", WELL_FORMED), env));
+    const { status } = await answer(
+      await handleClaim(post("/claim", { ...WELL_FORMED, auth: AUTH_TWO }), env),
+    );
 
     expect(status).toBe(200);
     expect(tables.group_keys).toHaveLength(1);

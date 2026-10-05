@@ -3,6 +3,7 @@ import {
   admitDevice,
   authIsCurrent,
   forgetGroup,
+  groupEpoch,
   MAX_GROUP_DEVICES,
   roomFor,
   seedGroup,
@@ -401,8 +402,9 @@ async function grantFor(
   device: string,
   status: Status,
   createdAtMs: number,
+  issuedAtMs = Date.now(),
 ): Promise<GroupGrant> {
-  const exp = Date.now() + TOKEN_TTL_MS;
+  const exp = issuedAtMs + TOKEN_TTL_MS;
   const access = await mint(
     // `dev` is read by the share Worker alone — see `Claims`. Every door has already checked it
     // with `deviceIn` and admitted it to the roll, so it is the device the grant is really for.
@@ -710,6 +712,21 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   const device = deviceIn(body);
   if (device === null) return json({ error: "that is not a device id" }, 400);
 
+  // Patreon proves entitlement, not membership of an existing sync group (#752). A removed
+  // device still knows a recent auth and may still be signed in as the payer; minting it a
+  // fresh token would bypass the share Worker's pre-rotation token check. Refuse before
+  // spending the code or replacing any binding/secret. A retained device first catches up
+  // through /keys, whose manifest distinguishes it from a removed device, then retries.
+  // No key rows means a first claim (or the pre-group_keys repair), so seeding remains allowed.
+  const keyedEpoch = await groupEpoch(env, group);
+  // Anchor an existing group's token before checking its auth, including a rotation in the
+  // same millisecond. If removal overtakes a successful binding write, the share gate must
+  // see a pre-rotation token. First seeding still stamps after its new empty manifest.
+  const authenticatedAt = Date.now() - 1;
+  if (keyedEpoch !== null && !(await authIsCurrent(env, group, auth))) {
+    return json({ error: "unauthorized" }, 401);
+  }
+
   const now = Date.now();
 
   // **`DELETE … RETURNING`, in one statement, is what makes the code single-use.** D1 has no
@@ -772,6 +789,10 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // row already moved, changes nothing and is refused instead of overwriting the first's work.
   // Spelled `(group_id IS NULL OR group_id = ?)` because SQL's `=` is never true against a NULL,
   // and a first claim is exactly the case where `previous` is one.
+  // The target epoch/auth are a second CAS: a removal between the initial auth check and
+  // this write must not let the removed device replace the secret that removal just retired.
+  // -1 represents no key rows, so a first seed that raced this request also fails closed.
+  // The auth comparison here fences a write; the initial credential check remains constant-time.
   //
   // **A fresh secret on every claim, and the device it was handed to beside it** (the group-wide
   // design's §4: reconnecting mints a fresh secret). This read `row.refresh_secret ??
@@ -790,9 +811,24 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
     bound = await env.DB.prepare(
       `UPDATE entitlements
           SET group_id = ?, refresh_secret = ?, refresh_device = ?, status = ?, checked_at = ?
-        WHERE subject = ? AND (group_id IS NULL OR group_id = ?)`,
+        WHERE subject = ? AND (group_id IS NULL OR group_id = ?)
+          AND coalesce((SELECT max(epoch) FROM group_keys WHERE group_id = ?), -1) = ?
+          AND (? = -1 OR (SELECT count(*) FROM entitlements WHERE group_id = ? AND group_auth = ?) > 0)`,
     )
-      .bind(group, refresh, device, status, now, row.subject, previous)
+      .bind(
+        group,
+        refresh,
+        device,
+        status,
+        now,
+        row.subject,
+        previous,
+        group,
+        keyedEpoch ?? -1,
+        keyedEpoch ?? -1,
+        group,
+        auth,
+      )
       .run();
   } catch {
     // `entitlements_group` is unique, so this is another *subject* holding that group id — a
@@ -803,6 +839,12 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
     return json({ error: "that sync group is bound to another membership" }, 409);
   }
   if (bound.meta.changes === 0) {
+    if (
+      (await groupEpoch(env, group)) !== keyedEpoch ||
+      (keyedEpoch !== null && !(await authIsCurrent(env, group, auth)))
+    ) {
+      return json({ error: "unauthorized" }, 401);
+    }
     return json({ error: "that membership is already bound to another sync group" }, 409);
   }
 
@@ -836,7 +878,15 @@ export async function handleClaim(request: Request, env: Env): Promise<Response>
   // serde failure in `sync_engine::entitlement` that no test on either side can see.
   const grant: Grant = {
     refresh,
-    ...(await grantFor(env, row.subject, group, device, status, row.created_at)),
+    ...(await grantFor(
+      env,
+      row.subject,
+      group,
+      device,
+      status,
+      row.created_at,
+      keyedEpoch === null ? Date.now() : authenticatedAt,
+    )),
   };
   return json(grant);
 }

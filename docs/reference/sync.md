@@ -3128,7 +3128,9 @@ door, where a removed device's secret would otherwise go on minting tokens for t
 with no recorded holder — every row claimed before the column existed — is retired by the next
 accepted rotation. `/claim` is held to the same epoch rule from the other side: a group that has
 key rows is seeded only at its own epoch and only with the auth already registered there, so a
-claim can neither skip it ahead nor swap in an auth of its own.
+claim can neither skip it ahead nor swap in an auth of its own. **Issue #752 adds a current-auth
+gate before a claim can mint a grant at all**; the gate is described below and awaits a relay
+deployment.
 
 **A device that only ever uses the group door is now told of a lapse** — a gap older than all of
 this, fixed with issue #546. The relay answered a lapsed membership on the group door with the
@@ -3384,10 +3386,27 @@ red. Ahead is refused for `/rotate`'s reason (a row at `max + 1` with an empty m
 removal notice to every device), and a foreign auth at the group's own epoch is refused because
 it would make the claimer's auth current. `entitlement::claim` sends the device's own current
 epoch and the auth it derives there, so a caught-up device's re-claim changes nothing and loses
-nothing. A group with no rows at all still takes any epoch. Behind, the claim still succeeds and still mints a grant, because it is a legitimate press by
-a paying reader; it simply leaves the key registration where it already correctly pointed. **This
-is reachable through the ordinary repair rather than by contrivance**, and
-[hosted-relay-deploy.md](hosted-relay-deploy.md) step 2 is where that matters.
+nothing. A group with no rows at all still takes any epoch.
+
+**That seed guard protected the keys but still let a removed device mint a grant — issue #752.**
+A device behind the current epoch could press Connect with its old auth, leave the keys untouched,
+and receive a fresh refresh secret and token. The share gate accepts a token minted after a
+rotation because the relay's current-auth door is supposed to be the only way to obtain it; a
+stale claim broke that assumption and restored the removed device's publishing access.
+
+**The relay source now requires `authIsCurrent` for a target group with key rows** (2026-10-05).
+A stale claim returns a plain **401** before consuming its claim code or changing the entitlement
+binding, refresh secret, device roll or key rows. Wrong auth is refused, while `seedGroup` still
+prevents writing future epoch rows; a group with no key rows keeps the initial seed behavior.
+A legitimate device behind a rotation must catch up through `/keys` and then retry Connect with
+its current epoch and auth; a removed device receives no blob for itself and cannot satisfy the
+gate. An initially stale claim leaves its code available for that retry until ordinary expiry.
+**A removal racing the claim is fenced too:** the binding write checks that the authenticated
+epoch and auth are unchanged, and an existing group's token is stamped before the auth check,
+so a removal after a successful write still makes the share gate treat it as a pre-removal token.
+If the rotation overtakes the initial check, the code may already have been consumed when the
+binding write refuses the claim. **This source fix awaits a relay deployment**; it is
+not a claim that the hosted relay already enforces the gate.
 
 ### A re-claim moves the binding, because leaving would otherwise strand the payer
 
