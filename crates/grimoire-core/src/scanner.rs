@@ -1140,6 +1140,24 @@ mod tests {
         );
     }
 
+    /// Recognition and filing are separate: a tray can keep miscellaneous cards without
+    /// an Oracle identity, and a failed Add must not discard the scan (#742).
+    #[test]
+    fn a_scan_without_an_oracle_survives_storage_and_a_refused_add() {
+        let conn = pair_with_a_card();
+        let mut row = tray_row("art", 1);
+        row.card_id = "unknown-art-printing".into();
+        row.oracle_id = None;
+        row.name = "Art card".into();
+        row.choices.clear();
+        store_tray(&conn, &[row.clone()]).unwrap();
+        assert_eq!(stored_tray(&conn), vec![row.clone()]);
+
+        assert!(tray_commit(&conn, &[import_line(&row.card_id, 1)], None, &[]).is_err());
+        assert_eq!(copies(&conn), 0);
+        assert_eq!(stored_tray(&conn), vec![row]);
+    }
+
     #[test]
     fn a_refused_tray_commit_leaves_the_collection_and_the_stored_tray_as_they_were() {
         let conn = pair_with_a_card();

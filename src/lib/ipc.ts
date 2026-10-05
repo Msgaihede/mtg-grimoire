@@ -7765,7 +7765,8 @@ export interface ScannerDecision {
   choices: ScannerChoice[];
   /**
    * A second opinion on the card the previous decision named, not a second copy of it: the same
-   * oracle card, with the quad lock trusted throughout — a switch to Exact to pin the printing, or
+   * oracle card (or the same printing when neither has an Oracle ID), with the quad lock trusted
+   * throughout — a switch to Exact to pin the printing, or
    * a filter change, with one card on the mat. The tray **replaces** its newest row rather than
    * adding one. `false` after the card left the frame, so a second copy still adds.
    */

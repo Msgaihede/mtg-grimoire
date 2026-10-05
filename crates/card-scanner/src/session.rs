@@ -399,7 +399,8 @@ pub struct DecisionView {
     /// **This decision is a second opinion on the card the last one named, not a second copy of
     /// it** — so the page replaces that row rather than adding one.
     ///
-    /// True when the previous decision named the same oracle card and the quad lock has stayed
+    /// True when the previous decision named the same oracle card (or the same printing when
+    /// no oracle id exists) and the quad lock has stayed
     /// trusted ever since: the reader switched Fast to Exact to pin the printing, or changed a
     /// filter, with one physical card on the mat throughout. A stretch break — the card taken
     /// away, or the lock lost — forgets the previous decision, so the same card presented again
@@ -828,7 +829,8 @@ pub struct Session {
     /// The stretch has broken since the last resolve, so `attempted` and `last_resolution`
     /// clear as soon as no resolve's freeze is holding. See [`Session::record_decision`].
     rearm_pending: bool,
-    /// The oracle card the last emitted decision named, held only while the quad lock has stayed
+    /// The last decision's oracle id, or printing id when it has no oracle, held while the lock
+    /// has stayed
     /// trusted since — what [`DecisionView::replaces_previous`] is asked against. Cleared by a
     /// stretch break and by [`Session::reset`]; **kept** through a mode switch and a filter
     /// change, which is the whole point of it.
@@ -888,7 +890,7 @@ pub struct Session {
 /// [`Session::replaces_previous`].
 struct LaidOver {
     card: watch::Remembered,
-    oracle: Option<String>,
+    identity: Option<String>,
     printing: Option<String>,
 }
 
@@ -1094,11 +1096,11 @@ impl Session {
         let first_votes = std::mem::take(&mut self.stacked);
         let first: Vec<StoredView> =
             self.burst.drain(self.burst.len().saturating_sub(first_votes.len())..).collect();
-        let (oracle, printing) = (self.previous_card.take(), self.previous_printing.take());
+        let (identity, printing) = (self.previous_card.take(), self.previous_printing.take());
         let unanswered = self.laid_over.take();
         self.forget_card();
         self.laid_over =
-            unanswered.or_else(|| card.map(|card| LaidOver { card, oracle, printing }));
+            unanswered.or_else(|| card.map(|card| LaidOver { card, identity, printing }));
         // This frame, and the ones before it that anything was kept of — their views in Exact,
         // their votes in either mode. A burst guard still waits for a full burst in Exact.
         let kept = first.len().max(first_votes.len()) as u32;
@@ -1376,12 +1378,14 @@ impl Session {
                     .anchor()
                     .is_some_and(|now| laid.card.distance_to(&now.upright) < watch::CHANGED_BITS);
                 if looks_back || laid.printing.as_deref() == Some(d.printing.as_str()) {
-                    self.previous_card = laid.oracle;
+                    self.previous_card = laid.identity;
                 }
             }
-            let replaces =
-                d.oracle_id.is_some() && self.previous_card.as_deref() == d.oracle_id.as_deref();
-            self.previous_card = d.oracle_id.clone();
+            // Tokens and art cards may have no oracle id. Their printing is still a stable
+            // identity for a second opinion; keep the absent oracle absent in the public view.
+            let identity = d.oracle_id.as_deref().unwrap_or(&d.printing);
+            let replaces = self.previous_card.as_deref() == Some(identity);
+            self.previous_card = Some(identity.to_owned());
             self.previous_printing = Some(d.printing.clone());
             self.standing = (self.decision_seq, replaces);
         }
@@ -3831,6 +3835,10 @@ mod tests {
     /// the only printing of its own oracle card, both in `hob`. Unlike `labelled()`, whose
     /// gradients sit a couple of bits apart, each decides on the votes alone in Fast.
     fn two_far_cards() -> (Reference, RgbImage, RgbImage) {
+        two_far_cards_with_oracles(true)
+    }
+
+    fn two_far_cards_with_oracles(with_oracles: bool) -> (Reference, RgbImage, RgbImage) {
         use crate::hash::{hash_rgb, HashKind};
         use crate::index::{BundleBuilder, Section};
         let card = card_image(3);
@@ -3850,7 +3858,7 @@ mod tests {
                 lang: "en".into(),
                 released: "2025-01-01".into(),
             };
-            r.add_label(id(n), Some(id(oracle)), None, label);
+            r.add_label(id(n), with_oracles.then_some(id(oracle)), None, label);
         }
         (r, card, negative)
     }
@@ -3865,6 +3873,60 @@ mod tests {
             }
         }
         panic!("the premise: forty locked frames never decided the card");
+    }
+
+    #[test]
+    fn a_printing_without_an_oracle_replaces_its_second_opinion_but_not_another_copy() {
+        let (r, card, negative) = two_far_cards_with_oracles(false);
+        let mut s = inline(r);
+        let first = until_decided(&mut s, &card).decision.expect("Fast decision");
+        assert_eq!(first.printing, format_uuid(&id(3)));
+        assert_eq!(first.oracle_id, None, "a printing id must not pretend to be an oracle");
+        assert!(!first.replaces_previous);
+
+        s.set_mode(ScanMode::Exact);
+        let exact = until_decided(&mut s, &card).decision.expect("Exact decision");
+        assert_eq!(exact.oracle_id, None);
+        assert!(exact.replaces_previous, "the same token was added twice on a mode switch");
+        assert!(exact.choices.iter().all(|choice| choice.oracle_id.is_none()));
+
+        s.set_filters(sets(&["hob"])).expect("the token's set exists");
+        let filtered = until_decided(&mut s, &card).decision.expect("filtered decision");
+        assert_eq!(filtered.oracle_id, None);
+        assert!(filtered.replaces_previous, "the same token was added twice on a filter change");
+
+        let other = until_decided(&mut s, &negative).decision.expect("other printing");
+        assert_eq!(other.printing, format_uuid(&id(4)));
+        assert_eq!(other.oracle_id, None);
+        assert!(!other.replaces_previous, "two missing oracle ids are not the same card");
+
+        for _ in 0..10 {
+            lost_frame(&mut s);
+        }
+        let returned = until_decided(&mut s, &negative).decision.expect("another copy");
+        assert_eq!(returned.printing, other.printing);
+        assert_eq!(returned.oracle_id, None);
+        assert!(!returned.replaces_previous, "a token presented after removal is a new copy");
+    }
+
+    #[test]
+    fn a_hand_lifting_from_a_printing_without_an_oracle_does_not_add_a_second_copy() {
+        for mode in [ScanMode::Fast, ScanMode::Exact] {
+            let (r, card, _) = two_far_cards_with_oracles(false);
+            let mut s = inline(r);
+            s.mode = mode;
+            let first = until_decided(&mut s, &card).decision.expect("first decision");
+            assert_eq!(first.oracle_id, None);
+            let rest = if mode == ScanMode::Exact { EXACT_AT_REST } else { FAST_AT_REST };
+            for _ in 0..rest {
+                locked_frame(&mut s, &checker());
+            }
+            assert!(!s.tracker.last_committed(), "the hand must cause a change ({mode:?})");
+            let again = until_decided(&mut s, &card).decision.expect("returned token");
+            assert_eq!(again.printing, first.printing);
+            assert_eq!(again.oracle_id, None);
+            assert!(again.replaces_previous, "the returned token added a second copy ({mode:?})");
+        }
     }
 
     #[test]
