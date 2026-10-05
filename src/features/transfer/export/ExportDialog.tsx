@@ -162,6 +162,9 @@ export interface ExportDialogProps {
     /** "1,204 cards matching your filters" — already pluralised by the caller
      *  (`scope.ts`'s `scopeLabel`). */
     label: string;
+    /** A folder-options export stays inside the selected folder. It still needs the sweep's
+     *  loading/error guards, but must not offer to widen that scope to the whole collection. */
+    showEverything?: boolean;
     /**
      * The escape-hatch checkbox's words — "Export everything, ignoring the filters", and on a
      * surface where filing narrows the sweep too, "…the filters and folders".
@@ -359,15 +362,17 @@ function Body({
               )}
             </>
           )}
-          <label className="flex items-center gap-2">
-            <input
-              type="checkbox"
-              checked={scope.everything}
-              onChange={(e) => scope.onEverything(e.target.checked)}
-              className={cn("size-4 accent-accent", FOCUS)}
-            />
-            {scope.everythingLabel}
-          </label>
+          {scope.showEverything !== false && (
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={scope.everything}
+                onChange={(e) => scope.onEverything(e.target.checked)}
+                className={cn("size-4 accent-accent", FOCUS)}
+              />
+              {scope.everythingLabel}
+            </label>
+          )}
         </div>
       )}
 

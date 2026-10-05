@@ -897,6 +897,13 @@ which armed the buttons over nothing. With an error the count line gives way to 
 sentence and a Retry; with an error **or** a sweep still running, Copy and Save as… are
 `aria-disabled` and inert, and now look it.
 
+Collection folder options offer **Export…** (issue #779). This opens the same collection export
+dialog with the folder's name and sweeps that folder plus every descendant through `shelves`,
+including collapsed and locked folders. It ignores the page's search and filter chips, preserves
+the selected marketplace, and never offers the whole-collection toggle. Its separate sweep keeps
+a previous collection export's "everything" choice from widening the folder export; loading,
+failure, Retry, Copy and Save as… retain the existing dialog's guards.
+
 **Archidekt's pile names are rewritten on the way out**, because the format has no way to say `,`
 `{` `}` `[` `]` inside a bracket: `,` → `;`, `{`/`[` → `<`, `}`/`]` → `>`, in the heading and the
 bracket alike. Angle brackets rather than parentheses because a heading ending `(x)` matches the

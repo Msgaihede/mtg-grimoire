@@ -4572,6 +4572,199 @@ describe("Add folder", () => {
   });
 });
 
+describe("exporting a folder from its heading", () => {
+  it.each(["Manage", "right-click"] as const)(
+    "exports the chosen folder and its descendants through %s, ignoring the page filters",
+    async (entryPoint) => {
+      collectionFolderList.mockResolvedValue([BINDER, FOILS, SEALED]);
+      getMarketplace.mockResolvedValue("cardmarket");
+      // More than one sweep page, including a child-folder copy on the last page. The wall
+      // loads just one matching foil, so exporting its loaded rows cannot satisfy this case.
+      const rows = Array.from({ length: 501 }, (_, index) => ({
+        ...BOLT,
+        id: index + 100,
+        cardId: `folder-card-${index}`,
+        name: `Binder card ${index + 1}`,
+        finish: "nonfoil" as const,
+        folderId: index === 500 ? FOILS.id : BINDER.id,
+        folderName: index === 500 ? FOILS.name : BINDER.name,
+      }));
+      collectionList.mockImplementation(async (query: CollectionQuery) =>
+        query.limit === 500 && query.shelves?.length === 2 && query.shelves[0] === BINDER.id
+          ? page(rows.slice(query.offset, query.offset + query.limit), rows.length)
+          : page([{ ...BOLT, finish: "foil", folderId: BINDER.id, folderName: BINDER.name }]),
+      );
+      const user = userEvent.setup();
+      wrap(<CollectionPage />);
+      await findHeading("Trade binder");
+      await waitFor(() => expect(lastQuery().marketplace).toBe("cardmarket"));
+      await openTray(user);
+      await user.click(screen.getByRole("button", { name: "Foil" }));
+      await waitFor(() => expect(lastQuery().finishes).toEqual(["foil"]));
+      // The filter starts a fresh wall read. Wait for the matching foil's folder heading
+      // before opening its menu; the sweep must still export the nonfoil rows as well.
+      await findHeading("Trade binder");
+
+      if (entryPoint === "Manage") await shelfMenu(user, "Trade binder");
+      else rightClick(heading("Trade binder"));
+      await user.click(await screen.findByRole("menuitem", { name: "Export…" }));
+
+      const dialog = await screen.findByRole("dialog", { name: 'Export "Trade binder"' });
+      expect(standingIn()).toBeNull();
+      expect(within(dialog).queryByRole("checkbox", { name: /Export everything/ })).toBeNull();
+      await within(dialog).findByRole("button", { name: "Show decklist (502 lines)" });
+      const requests = collectionList.mock.calls
+        .map(([query]) => query as CollectionQuery)
+        .filter((query) => query.limit === 500);
+      expect(requests).toEqual([
+        { shelves: [BINDER.id, FOILS.id], marketplace: "cardmarket", limit: 500, offset: 0 },
+        { shelves: [BINDER.id, FOILS.id], marketplace: "cardmarket", limit: 500, offset: 500 },
+      ]);
+      await user.click(within(dialog).getByRole("button", { name: /Show decklist/ }));
+      const text = dialog.querySelector("pre")!.textContent;
+      expect(text).toContain("Binder card 1,");
+      expect(text).toContain("Binder card 501,");
+      expect(text).not.toContain("Lightning Bolt");
+    },
+  );
+
+  it("keeps a header Export everything choice separate from folder export and later header exports", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS, SEALED]);
+    const nested = {
+      ...BOLT,
+      id: 8,
+      cardId: "nested-card",
+      name: "Nested copy",
+      folderId: FOILS.id,
+      folderName: FOILS.name,
+    };
+    collectionList.mockImplementation(async (query: CollectionQuery) =>
+      page(query.shelves?.[0] === BINDER.id ? [nested] : [BOLT, nested]),
+    );
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    await user.click(screen.getByRole("button", { name: "Export collection" }));
+    const headerDialog = await screen.findByRole("dialog", { name: /Export/ });
+    await user.click(
+      within(headerDialog).getByRole("checkbox", {
+        name: "Export everything, ignoring the filters",
+      }),
+    );
+    await within(headerDialog).findByRole("button", { name: "Show decklist (3 lines)" });
+    await waitFor(() =>
+      expect(collectionList).toHaveBeenCalledWith({
+        marketplace: "tcgplayer",
+        limit: 500,
+        offset: 0,
+      }),
+    );
+    await user.click(within(headerDialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    collectionList.mockClear();
+
+    await shelfMenu(user, "Trade binder");
+    await user.click(screen.getByRole("menuitem", { name: "Export…" }));
+    const folderDialog = await screen.findByRole("dialog", { name: 'Export "Trade binder"' });
+    await within(folderDialog).findByRole("button", { name: "Show decklist (2 lines)" });
+    expect(within(folderDialog).queryByRole("checkbox", { name: /Export everything/ })).toBeNull();
+    expect(collectionList).toHaveBeenCalledWith({
+      shelves: [BINDER.id, FOILS.id],
+      marketplace: "tcgplayer",
+      limit: 500,
+      offset: 0,
+    });
+    await user.click(within(folderDialog).getByRole("button", { name: /Show decklist/ }));
+    expect(folderDialog.querySelector("pre")!.textContent).toContain("Nested copy");
+    expect(folderDialog.querySelector("pre")!.textContent).not.toContain("Lightning Bolt");
+    await user.click(within(folderDialog).getByRole("button", { name: "Close" }));
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+
+    await user.click(screen.getByRole("button", { name: "Export collection" }));
+    const laterHeaderDialog = await screen.findByRole("dialog", { name: /Export/ });
+    expect(
+      within(laterHeaderDialog).getByRole("checkbox", {
+        name: "Export everything, ignoring the filters",
+      }),
+    ).toBeChecked();
+    await within(laterHeaderDialog).findByRole("button", { name: "Show decklist (3 lines)" });
+    await user.click(within(laterHeaderDialog).getByRole("button", { name: /Show decklist/ }));
+    expect(laterHeaderDialog.querySelector("pre")!.textContent).toContain("Lightning Bolt");
+    expect(laterHeaderDialog.querySelector("pre")!.textContent).toContain("Nested copy");
+  });
+
+  it("guards a failed folder export and retries the same folder scope", async () => {
+    collectionFolderList.mockResolvedValue([BINDER, FOILS]);
+    let refuse = true;
+    collectionList.mockImplementation(async (query: CollectionQuery) => {
+      if (query.limit === 500 && query.shelves?.[0] === BINDER.id) {
+        if (refuse) throw "The database is busy.";
+        return page([{ ...BOLT, folderId: FOILS.id, folderName: FOILS.name }]);
+      }
+      return page([BOLT]);
+    });
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    await shelfMenu(user, "Trade binder");
+    await user.click(screen.getByRole("menuitem", { name: "Export…" }));
+    const dialog = await screen.findByRole("dialog", { name: 'Export "Trade binder"' });
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+      "Couldn't load the cards to export — The database is busy.",
+    );
+    expect(within(dialog).getByRole("button", { name: "Copy" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect(within(dialog).getByRole("button", { name: "Save as…" })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+
+    refuse = false;
+    const before = sweepCallsAt("tcgplayer");
+    await user.click(within(dialog).getByRole("button", { name: "Retry" }));
+    await waitFor(() => expect(sweepCallsAt("tcgplayer")).toBeGreaterThan(before));
+    await waitFor(() => expect(within(dialog).queryByRole("alert")).toBeNull());
+    expect(lastQuery()).toEqual({
+      shelves: [BINDER.id, FOILS.id],
+      marketplace: "tcgplayer",
+      limit: 500,
+      offset: 0,
+    });
+    expect(within(dialog).getByRole("button", { name: "Copy" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  it("offers export for an empty locked folder without unlocking it", async () => {
+    collectionFolderList.mockResolvedValue([{ ...BINDER, locked: true }]);
+    collectionList.mockResolvedValue(page([]));
+    const user = userEvent.setup();
+    wrap(<CollectionPage />);
+    await findHeading("Trade binder");
+    await shelfMenu(user, "Trade binder");
+    expect(screen.getByRole("menuitem", { name: "Export…" })).not.toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    await user.click(screen.getByRole("menuitem", { name: "Export…" }));
+
+    const dialog = await screen.findByRole("dialog", { name: 'Export "Trade binder"' });
+    await within(dialog).findByRole("button", { name: "Show decklist (0 lines)" });
+    await waitFor(() =>
+      expect(collectionList).toHaveBeenCalledWith({
+        shelves: [BINDER.id],
+        marketplace: "tcgplayer",
+        limit: 500,
+        offset: 0,
+      }),
+    );
+    expect(collectionFolderSetLocked).not.toHaveBeenCalled();
+  });
+});
+
 describe("renaming a folder on its heading", () => {
   /** The field is drawn on the pressed heading, its figures stay beside it (spec §3.8), and every
    *  other heading keeps its title and its Rename. */
