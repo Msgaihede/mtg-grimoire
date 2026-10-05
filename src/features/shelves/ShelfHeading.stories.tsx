@@ -202,13 +202,21 @@ export const Locked: Story = {
 /** App-owned: no Add folder, no Rename, no drag — whatever the page passes. */
 export const DeckGroup: Story = {
   args: {
-    shelf: shelfOf({ id: 40, name: "Modern Goodstuff", kind: "deck", group: "decks", collapsed: true }),
+    shelf: shelfOf({
+      id: 40,
+      name: "Modern Goodstuff",
+      kind: "deck",
+      group: "decks",
+      collapsed: true,
+    }),
     stat: "60 cards · $412.50",
     withMenu: false,
   },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getByRole("heading", { level: 4 })).toHaveAccessibleName("Modern Goodstuff");
+    await expect(canvas.getByRole("heading", { level: 4 })).toHaveAccessibleName(
+      "Modern Goodstuff",
+    );
     await expect(canvas.queryByRole("button", { name: /^Add folder/ })).toBeNull();
     await expect(canvas.queryByRole("button", { name: /^Rename/ })).toBeNull();
   },
@@ -224,15 +232,21 @@ export const ManagedFolder: Story = {
   },
 };
 
-/** Not a folder: plain words and its chevron, nothing else. */
+/** Root shelf: its name folds, and Add folder creates at the collection root (issue #778). */
 export const NotSorted: Story = {
   args: {
     shelf: shelfOf({ id: 0, name: "Not sorted", kind: "unfiled" }),
     stat: "7 cards · $9.82",
   },
-  play: async ({ canvasElement }) => {
+  play: async ({ args, canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(canvas.getAllByRole("button")).toHaveLength(1);
+    await userEvent.click(canvas.getByRole("button", { name: "Not sorted" }));
+    await expect(args.onToggle).toHaveBeenCalledTimes(1);
+    await userEvent.click(canvas.getByRole("button", { name: "Add folder in Not sorted" }));
+    await expect(args.onAddFolder).toHaveBeenCalledTimes(1);
+    await expect(canvas.queryByRole("button", { name: "Manage Not sorted" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Rename Not sorted" })).toBeNull();
+    await expect(canvas.queryByRole("button", { name: "Open Not sorted" })).toBeNull();
     await expect(canvas.getByRole("heading", { level: 3 })).toHaveAccessibleName("Not sorted");
   },
 };

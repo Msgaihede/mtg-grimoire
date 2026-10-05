@@ -2159,14 +2159,17 @@ describe("the shelves", () => {
   });
 
   /** Decision 3: cards in no folder come first, under Not sorted — which is not a folder, so its
-   *  title is plain text and it has no buttons but its chevron (spec §3.2). */
-  it("draws Not sorted first, as a heading with nothing on it but its chevron", async () => {
+   *  title folds alongside its chevron, with no stored-folder operations (issue #778). */
+  it("draws Not sorted first with a folding title and no folder management", async () => {
     wrap(<WishlistPage />);
     const loose = await findHeading(0);
 
     expect(follows(loose, heading(ORDERED.id))).toBe(true);
     expect(chevronOf(0, "Not sorted")).toHaveAttribute("aria-expanded", "true");
-    expect(within(loose).queryByRole("button", { name: "Not sorted" })).toBeNull();
+    expect(within(loose).getByRole("button", { name: "Not sorted" })).toHaveAttribute(
+      "aria-expanded",
+      "true",
+    );
     expect(within(loose).queryByRole("button", { name: /^Add folder/ })).toBeNull();
     expect(within(loose).queryByRole("button", { name: /^Rename/ })).toBeNull();
     expect(

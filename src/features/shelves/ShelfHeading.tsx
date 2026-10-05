@@ -22,9 +22,10 @@
  * that heading carries. **The lead segments still open their ancestors** — they are a path, not
  * this shelf, and each is underlined on hover as a link, where the name is not.
  *
- * **One thing it enforces whatever it is handed**: Add folder, Rename and the drag source exist only
- * on a reader's own folder (`kind === "folder"`), and Not sorted has no menu. A deck group with a
- * Rename button is a control that writes into a deck.
+ * **One thing it enforces whatever it is handed**: Rename and the drag source exist only
+ * on a reader's own folder (`kind === "folder"`). Add folder also serves the unfiled root,
+ * whose name folds like every folder's (issue #778). Not sorted has no menu. A deck group
+ * with a Rename button is a control that writes into a deck.
  *
  * **Indentation and rails are the grid's job, not this row's.** It fills the width its parent gives
  * it, so the page's row wrapper indents it by `shelf.indent`.
@@ -85,7 +86,7 @@ export interface ShelfHeadingProps {
   onToggle: () => void;
   /** The Open button at the row's right end, and every lead segment. */
   onOpen: (folderId: number) => void;
-  /** Absent ⇒ no Add folder button. Ignored on anything but a reader's own folder. */
+  /** Absent ⇒ no Add folder button. Accepted on reader folders and the unfiled root. */
   onAddFolder?: () => void;
   /** Absent ⇒ no Rename button. Ignored on anything but a reader's own folder. */
   onRename?: () => void;
@@ -210,7 +211,7 @@ export function ShelfHeading({
   const toggle = foldRefused ? undefined : onToggle;
   const own = shelf.kind === "folder";
   const unfiled = shelf.kind === "unfiled";
-  const addFolder = own ? onAddFolder : undefined;
+  const addFolder = own || unfiled ? onAddFolder : undefined;
   const rename = own ? onRename : undefined;
   const manage = unfiled ? undefined : menu;
   const dragSource = own ? dragRef : undefined;
@@ -340,8 +341,6 @@ export function ShelfHeading({
               onCancel={renaming.onCancel}
             />
           </div>
-        ) : unfiled ? (
-          <span className="min-w-0 truncate">{shelf.name}</span>
         ) : (
           <button
             ref={caretHome === "title" ? caretReturn : undefined}
