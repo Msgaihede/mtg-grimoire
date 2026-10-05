@@ -10,6 +10,8 @@ describe("useCrossWindowRefresh", () => {
   it("turns another window's write into this window's invalidation, and unsubscribes", () => {
     let hear: ((e: DbChanged) => void) | undefined;
     const off = vi.fn();
+    const offRestore = vi.fn();
+    vi.spyOn(ipc, "onArchiveRestored").mockReturnValue(offRestore);
     vi.spyOn(ipc, "onDbChanged").mockImplementation((cb) => {
       hear = cb;
       return off;
@@ -19,11 +21,11 @@ describe("useCrossWindowRefresh", () => {
     const { unmount } = renderHook(() => useCrossWindowRefresh());
     hear?.({ tables: ["wishlist_entries"] });
 
-    expect(invalidate).toHaveBeenCalledWith(
-      expect.objectContaining({ queryKey: ["wishlist"] }),
-      { cancelRefetch: false },
-    );
+    expect(invalidate).toHaveBeenCalledWith(expect.objectContaining({ queryKey: ["wishlist"] }), {
+      cancelRefetch: false,
+    });
     unmount();
     expect(off).toHaveBeenCalledTimes(1);
+    expect(offRestore).toHaveBeenCalledTimes(1);
   });
 });

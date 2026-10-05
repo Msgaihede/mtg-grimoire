@@ -34,6 +34,14 @@ use grimoire_core::commands::TABLE;
 /// Commands that name this host — a window, its updater, its file dialogs, its mirror, its
 /// launch — and never join the table, each with the reason.
 const DESKTOP_ONLY: &[(&str, &str)] = &[
+    (
+        "archive_export",
+        "Rust-owned native save dialog for a full local ZIP archive",
+    ),
+    (
+        "archive_import",
+        "Rust-owned native picker and destructive restore confirmation",
+    ),
     ("window_new", "a second window is this host's"),
     ("window_count", "how many windows this host has open"),
     ("update_status", "the portable updater swaps this exe"),

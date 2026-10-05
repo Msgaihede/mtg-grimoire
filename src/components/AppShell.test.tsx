@@ -87,6 +87,7 @@ vi.mock("@/lib/ipc", async (importOriginal) => ({
     onCombosProgress,
     onSyncApplied,
     onDbChanged,
+    onArchiveRestored: vi.fn().mockReturnValue(() => {}),
     windowNew,
     onSyncLive,
     syncLiveState,

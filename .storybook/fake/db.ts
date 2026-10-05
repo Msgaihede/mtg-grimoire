@@ -11647,6 +11647,15 @@ export function readHandlers(db: FakeDb) {
       throw refuse(NO_FILE_PICKER);
     },
 
+    // Archive pickers cannot be opened by the workbench. Like import_pick_file, fail before
+    // reaching the database rather than pretending a ZIP was written or restored.
+    archive_export: (): boolean => {
+      throw refuse(NO_FILE_PICKER);
+    },
+    archive_import: (): boolean => {
+      throw refuse(NO_FILE_PICKER);
+    },
+
     /**
      * `collection_import_preview` — what {@link writeHandlers}' `collection_import_commit`
      * **would** answer for the same three arguments, with nothing written (issue #555). The

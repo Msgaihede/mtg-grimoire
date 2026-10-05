@@ -22,6 +22,7 @@ pub use grimoire_core::app_meta;
 /// **Which pages are this app's own, and the navigation guard that keeps every window on them.**
 /// One origin set, read by the guard and by [`camera`], so the two cannot disagree.
 pub mod app_origin;
+pub mod archive;
 /// **Taking back one bulk collection or wishlist write** (issue #555) — the before/after images of
 /// exactly the rows it changed, held in memory for the session and put back only while nothing
 /// has touched them since.

@@ -7,6 +7,7 @@ import { ago } from "@/lib/relativeTime";
 import { cn } from "@/lib/utils";
 import { writeFailure } from "@/lib/writes";
 import { PANEL_BUTTON, SWITCH, switchTone } from "./controls";
+import { FullBackupPanel } from "./FullBackupPanel";
 import { PanelAlert, SettingsSection } from "./panelChrome";
 
 /** The mirror's whole state, under one root — three writes invalidate it and nothing else
@@ -197,6 +198,8 @@ export function BackupPanel(): JSX.Element {
 
   return (
     <SettingsSection id="backup" title="Backup">
+      <FullBackupPanel />
+      <h3 className="border-t border-border pt-4 text-sm font-medium">Automatic text files</h3>
       <p className="text-sm text-dim">
         Saves your decks, collection and wishlist as text files. These are for backup only and
         can&rsquo;t be imported back.

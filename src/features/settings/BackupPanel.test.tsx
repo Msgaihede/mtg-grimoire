@@ -382,15 +382,17 @@ describe("BackupPanel", () => {
     expect(screen.getByText(ROOT)).toBeInTheDocument();
   });
 
-  /** A read that would not answer leaves no controls to press, so the panel says that instead
-   *  of drawing a switch with no value behind it. */
-  it("draws no controls while it has no answer", async () => {
+  /** Mirror controls need a value, while the independent ZIP operations remain available. */
+  it("hides mirror controls while its read has no answer", async () => {
     mirrorStatus.mockRejectedValue("The card database is busy.");
     render(<BackupPanel />, { wrapper: LiveWorld });
 
     expect(await within(panel()).findByRole("alert")).toHaveTextContent("busy");
     expect(within(panel()).queryByRole("switch")).not.toBeInTheDocument();
-    expect(within(panel()).queryByRole("button")).not.toBeInTheDocument();
+    expect(within(panel()).queryByRole("button", { name: /change folder/i })).not.toBeInTheDocument();
+    expect(within(panel()).queryByRole("button", { name: /rebuild now/i })).not.toBeInTheDocument();
+    expect(within(panel()).getByRole("button", { name: "Export ZIP…" })).toBeEnabled();
+    expect(within(panel()).getByRole("button", { name: "Import ZIP…" })).toBeEnabled();
   });
 });
 

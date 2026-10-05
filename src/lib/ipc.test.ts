@@ -3785,6 +3785,14 @@ describe("ipc argument names match the Rust command signatures", () => {
     expect(status.lastRunAt).toBeNull();
   });
 
+  it("keeps archive paths and confirmation in the host and preserves cancellation", async () => {
+    invoke.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    expect(await ipc.archiveExport()).toBe(true);
+    expect(invoke).toHaveBeenCalledWith("archive_export");
+    expect(await ipc.archiveImport()).toBe(false);
+    expect(invoke).toHaveBeenLastCalledWith("archive_import");
+  });
+
   it("sends the mirror switch under `enabled`", async () => {
     invoke.mockResolvedValue(undefined);
     await ipc.mirrorSetEnabled(false);
