@@ -161,6 +161,42 @@ pub const PULL_HOLD: &str = "pull_hold";
 /// accepting `+2` after advertising it gets a refused removal rather than a quiet downgrade.
 pub const RELAY_REMOVAL_STEP: &str = "relay_removal_step";
 
+/// The most rows a pull asks the relay for in one page.
+///
+/// **It is a ceiling on rows and not what sizes a page.** The relay holds every page to a budget
+/// of sealed characters of its own, whatever a client names (`relay/src/log.ts`,
+/// `PULL_PAGE_CHARS`, half a mebibyte) — that budget is what keeps a page to about a quarter of
+/// a second of apply in which a browser's engine answers nothing, 79 s on a 40 kbit/s link
+/// against the 120 s a request is given, and a megabyte of the relay's own heap; its doc has
+/// the three measurements (`docs/reference/light-app.md` §10.5). A full envelope is 200 ops and
+/// some 90–180 thousand characters, so the budget is met at two to five of those and this
+/// number never is.
+///
+/// What it bounds is the other end: a log of single edits, a few hundred characters an
+/// envelope, where a budget's worth would be over a thousand rows. Each row is an envelope to
+/// open and a group to fold, and 256 of them still covers an ordinary catch-up in a request or
+/// three — a device a fortnight behind at fifty edits a day has 700 rows waiting.
+///
+/// **The same on every host**: a desktop applies a page in a tenth of what a browser takes and
+/// would not notice a page ten times the size, but two sizes would be two schedules of arrival
+/// to test, and the request a desktop saves is not worth one.
+pub const PULL_PAGE_ROWS: usize = 256;
+
+/// Set when a page of a pull wrote to the synced tables and the trip had not ended yet; taken
+/// by the trip that next ends well, which says [`RelayOutcome::changed`] for it.
+///
+/// **Why it exists.** A screen is refreshed by `sync:applied`, which is sent for a trip that
+/// ended `Ok` and changed something. A pull that applies a page at a time can apply three and
+/// stop at the fourth — the database failing, or the trip's future dropped at the turn between
+/// two pages: that trip answers `Err` or nothing, announces nothing, and the next one — which
+/// finds those three pages already applied — has changed nothing itself. Without this the rows
+/// would be in the database and on no screen until something else moved. (The same was already
+/// true of a trip whose *ack* failed after its pull had applied.)
+///
+/// A flag and not a count: what a refresh needs to know is whether, not how much. It is not
+/// among the keys a change of group forgets, and need not be: a stray one costs one refresh.
+pub(crate) const UNANNOUNCED: &str = "pull_unannounced";
+
 /// A waiting hold is released once it has been seen on this many pulls...
 const WAITING_PULLS: i64 = 3;
 /// ...spanning at least this many seconds. A parent its sender owed — a first contact pushes a
@@ -347,6 +383,13 @@ pub struct RelayOutcome {
     /// the one synced table with no ceiling, growing with what the reader has *done* rather than
     /// with what they own. Spec §7 and §13.
     pub baseline_history: usize,
+    /// How many pages this trip's pull asked the relay for ([`Pulled::pages`]): one for an
+    /// ordinary sync, and for a relay that does not page.
+    pub pull_pages: usize,
+    /// Whether the pull evaluated everything it fetched as one answer, because a baseline from
+    /// a build before v0.40.0 was in it ([`Pulled::whole`]). No face reads it; it is what says,
+    /// in a measurement or a bug report, that a catch-up was not applied a page at a time.
+    pub pull_whole: bool,
 }
 
 impl RelayOutcome {
@@ -366,12 +409,19 @@ impl RelayOutcome {
     }
 }
 
-/// What the relay answers a pull with.
+/// What the relay answers a pull with: a page.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct PullPage {
     envelopes: Vec<Envelope>,
+    /// Where the next page starts — the last row of this one — or, on the last page, the head of
+    /// the whole log.
     cursor: i64,
+    /// Whether rows of another device lie past this page. **Absent is `false`, and that is the
+    /// old relay**: one deployed before step 6.5b ignores `limit`, answers everything, and says
+    /// nothing of `more` — which reads here as one page that is the last, exactly what it is.
+    #[serde(default)]
+    more: bool,
 }
 
 /// What the relay answers a push with.
@@ -655,9 +705,20 @@ fn build_http() -> http::Client {
 /// bounds above already end a request that stops answering
 /// ([`crate::platform::http::Client::deadline`]).
 ///
-/// **Two minutes, and nobody has measured a browser against it.** A pull is unpaged and can
-/// answer tens of megabytes after a large import; the web host's phase measures what a page
-/// costs a Worker, and this is the number it starts from.
+/// **Two minutes, measured in a browser on 2026-10-04, and it covers the body** (`docs/reference/
+/// light-app.md` §10.5): the deadline is `fetch`'s abort, which is still armed while a response
+/// is being read. On a link paced to 40 kbit/s a pull of 0.89 MB — a thousand ops, unpaged —
+/// was abandoned at exactly 120.0 s with 0.8 MB of it read; the cursor had not moved, and the
+/// next trip asked for the same answer from its first byte. Unpaged, that made the deadline a
+/// floor on the link that rose with the log: 0.45 Mbit/s for 10 000 ops, 2.2 for 50 000.
+///
+/// **Since the pull is paged it is a floor on a page**, which the relay holds to half a mebibyte
+/// of sealed text — 393 KB on the wire, 79 s at 40 kbit/s (`relay/src/log.ts`,
+/// `PULL_PAGE_CHARS`) — whatever the log's size. The one answer that can still miss it is a
+/// single row at the relay's cap, which needs 75 kbit/s. A push is one envelope and was always
+/// inside it. **What a missed deadline costs is the catch-up's fetching, not a page's**: a pull
+/// fetches to the head of the log before it applies anything ([`pull`]), so the pages that had
+/// landed are asked for again by the next trip.
 const REQUEST_DEADLINE: Duration = Duration::from_secs(120);
 
 /// Classify a transport failure, so the four call sites agree about what it was.
@@ -1958,6 +2019,12 @@ pub struct Pulled {
     /// Whether the conversions that run behind a pull that read everything wrote a row — which no
     /// count in `report` says. [`RelayOutcome::changed`].
     pub converted: bool,
+    /// How many pages the relay was asked for — one from a relay that does not page, and one
+    /// for a pull with nothing to bring.
+    pub pages: usize,
+    /// Whether everything fetched was evaluated as one answer, because an older build's
+    /// baseline was in it ([`pull`]'s doc). False is a page at a time.
+    pub whole: bool,
 }
 
 /// The sentence a clock hold records: which device, and roughly how far ahead of this one it is.
@@ -2069,6 +2136,101 @@ fn clock_sentence(conn: &Connection, device: &str, ahead_ms: i64) -> String {
 ///
 /// **Every envelope recorded is recorded once per hold**, not once per pull: a held page comes back
 /// on every trip, and [`Hold::noted`] is what a later pull behind the same hold asks first.
+///
+/// # A pull is pages, since step 6.5b
+///
+/// The relay used to answer everything after the cursor in one response, and everything above
+/// was done to it in one stretch. Measured in a browser on 2026-10-04 (`docs/reference/
+/// light-app.md` §10.5): a 50 000-op answer was 44.6 MB, took the engine's linear memory from 21
+/// to 570 MB for the life of the tab, and held the one thread it has for 29 s, in which no
+/// command of the page's was answered. So the pull asks for [`PULL_PAGE_ROWS`] rows at a time
+/// and the relay answers a page inside a budget of its own, with `more` saying whether another
+/// follows. A pull is three things, in this order:
+///
+/// 1. **Fetch.** Every page to the head of the log, each kept as it arrived — sealed — beside
+///    its cursor. Nothing is applied and the cursor does not move, so a request that fails, or
+///    a tab that closes, anywhere in here loses nothing but the fetching.
+/// 2. **Classify**, as each page arrives ([`an_older_baseline_is_in`]): is a baseline from a
+///    build before claims carried references anywhere in what was fetched?
+/// 3. **Evaluate, one of two ways, chosen once for the whole catch-up** — *a page at a time*
+///    when there is none, *as one answer* when there is.
+///
+/// # A page at a time
+///
+/// **Each page is the stretch the whole answer used to be**: opened, applied, and — when
+/// nothing in it is held — its cursor written, with a turn given to the host before the next
+/// (`platform::timer::yield_to_host`), which is where a page's commands are answered on a host with one
+/// thread. A tab closed after the third page of ten resumes at the fourth; one closed between a
+/// page's commit and its cursor is handed that page again, where `sync_peers` skips every op it
+/// applied and the emission ledger every claim.
+///
+/// **What a paged catch-up equals is what a device that was live the whole time would have
+/// pulled, not what one unpaged pull produced.** A page is the rows the relay had stored up to
+/// some `seq`, which is exactly what a pull made at that moment was always answered — so no
+/// page is an arrival the engine could not already be handed. But `apply` decides some things
+/// over what it is handed at once, and one unpaged answer handed it everything: a child and the
+/// parent it names; a row's `gone` decision and the op that reverses it; a put a baseline's
+/// claim covers, and the claim; two other devices' ops on one row. Split across a page edge
+/// they are decided as they are when two pushes land a second apart with a pull between — which
+/// for a child and its parent means a wait, and that is what the carry below is for.
+/// `client::tests::paged` holds each of those, split at the edge, against the database the
+/// unpaged answer builds.
+///
+/// **Only the last page decides.** A hold is a statement about everything after the cursor:
+/// that an op there cannot apply *yet*. A page that is not the last cannot say that — what
+/// would let the op apply may be in the next one. So before the last page:
+///
+/// * **A page with nothing held advances.** Its cursor is written and the next is read. A hold
+///   an earlier trip left is not touched: it may be on a block further up the log, and whether
+///   it still stands is the last page's to say.
+/// * **A page with something held decides nothing** — *the carry*. No hold is written and no
+///   wait released; the cursor stays; and its envelopes are put together with the next page's,
+///   sorted by the group's clock as one answer covering both would have been, and evaluated
+///   again as one. What the first reading applied is skipped by the second, and what it held is
+///   tried again beside whatever the next page brought. If that advances, the carry is dropped
+///   and paging goes on from there.
+/// * **Only the evaluation of the last page may write a hold, release a wait, or run the
+///   conversions that follow a pull which read everything**, and only a pull that got there
+///   answers `Ok` — which is what lets [`round_trip`] go on to emit a baseline. A partial view
+///   is never treated as the whole.
+///
+/// A carry is not evaluated at every page: opening an envelope is most of the work, so it is
+/// evaluated again when its pages have doubled — at two, four, eight — and at the last page.
+/// That reads the very next page, where a parent pushed a moment after its child usually is,
+/// and keeps a trip's whole work inside three times the unpaged pull's.
+///
+/// # As one answer: an older build's baseline
+///
+/// **A paged pull must never lose a row that one unpaged answer delivered, on any mix of
+/// builds** — and a page at a time, it would. A baseline from a build before claims carried
+/// references — every release from v0.18.0 to v0.39 — is claims judged by their sender's
+/// watermark like any op, stamped with their rows' `updated_at` in table order: stamps that do
+/// not rise with the log. One answer is sorted by stamp before it is applied and nothing is
+/// skipped. Applied in pieces, a chunk lifts the watermark past rows a later chunk holds below
+/// it — and so does that build's own ordinary op, pushed a moment ahead of its baseline as
+/// every trip pushes — and those rows are skipped as seen, for good. A new device joining a
+/// group with one desktop on such a build is exactly that log.
+///
+/// So when such a chunk is anywhere in the catch-up, **all of it is evaluated as one answer**:
+/// every page's envelopes sorted together, one evaluation, one move of the cursor — the unpaged
+/// pull exactly, at the unpaged pull's cost in memory and in one long stretch. It is chosen for
+/// the whole catch-up and before anything is applied, because by the time a page shows the
+/// chunk an earlier page would already have moved the watermark. [`Pulled::whole`] says which
+/// way a pull went.
+///
+/// **What stays as it was**: a device that is *live* while such a build pushes its chunks, and
+/// pulls between two of them, loses the rows it always lost (`docs/reference/sync.md`, "a
+/// baseline pulled in two halves"). That is not this pull's and is not changed by it.
+///
+/// # What a pull holds
+///
+/// The sealed text of one catch-up until it is evaluated — bounded by the relay's quota for a
+/// group, 128 MiB — and each page's is let go as that page is read. `docs/reference/
+/// light-app.md` §10.5b has what that measures.
+///
+/// **`/keys` is asked at most once a trip**, when anything fetched is from an epoch ahead of
+/// the one in hand. **One ack, at the end** — and behind a pull that stopped part of the way
+/// through its pages, for what the earlier ones took ([`round_trip`]).
 pub async fn pull(
     db: &impl Store,
     base: &str,
@@ -2090,8 +2252,246 @@ pub async fn pull(
     let Some((device, group, cursor, recorded)) = stood else {
         return Ok(Pulled::default());
     };
+
+    // **Fetch, and classify each page as it arrives.** Nothing below this loop has run when a
+    // request fails: the pages already fetched are dropped with the trip, and the next one
+    // asks from the same cursor.
+    let mut fetched: std::collections::VecDeque<Fetched> = Default::default();
+    let mut whole = false;
+    let mut since = cursor;
+    loop {
+        let page = fetch_page(db, base, token, &group, &device, since).await?;
+        // A relay that says `more` and hands back the cursor it was asked from would be asked
+        // the same question for ever.
+        let last = !page.more || page.cursor <= since;
+        since = page.cursor;
+        if !whole {
+            whole = db.with(|conn| an_older_baseline_is_in(conn, &group, &page.envelopes))?;
+        }
+        fetched.push_back(Fetched {
+            envelopes: page.envelopes,
+            cursor: page.cursor,
+        });
+        if last {
+            break;
+        }
+    }
+    let head = since;
+
+    let mut trip = Trip {
+        relay: relay_epoch,
+        asked: None,
+        noted: recorded,
+    };
+    // The relay's epoch as this trip knows it, and whether this trip has asked `/keys` itself —
+    // `Some(true)` for an answer, `Some(false)` for an ask that failed. **Once per trip, and
+    // ahead of every evaluation rather than at the envelope that calls for it**: it is the one
+    // request the reading of a page makes, and asked here everything below is stretches and
+    // turns. Which envelopes hold and which are stepped over comes out the same — the answer
+    // only ever raises the epoch in hand, and an envelope at or below the old one was held
+    // either way.
+    let ahead = |envelope: &Envelope| {
+        envelope.epoch > group.epoch && relay_epoch.is_none_or(|r| envelope.epoch > r)
+    };
+    if fetched.iter().flat_map(|page| &page.envelopes).any(ahead) {
+        let fresh = fetch_key_page(db, base, &device, &group).await;
+        trip.asked = Some(fresh.is_ok());
+        if let Ok(fresh) = fresh {
+            trip.relay = Some(trip.relay.map_or(fresh.epoch, |r| r.max(fresh.epoch)));
+        }
+    }
+
+    let mut total = Pulled {
+        pages: fetched.len(),
+        whole,
+        ..Pulled::default()
+    };
+
+    if whole {
+        // **As one answer** — the unpaged pull, exactly: the relay sorts an answer by the
+        // group's clock, and its pages put end to end are not in that order.
+        let mut envelopes: Vec<Envelope> = fetched.drain(..).flat_map(|p| p.envelopes).collect();
+        envelopes.sort_by(in_the_groups_order);
+        let step =
+            db.with(|conn| evaluate(conn, &device, &group, &envelopes, head, true, &mut trip))?;
+        total.take(&step, true);
+        return Ok(total);
+    }
+
+    // **A page at a time.** The envelopes of the pages a hold kept from advancing; how many
+    // pages have been read since the cursor last moved; and how many of them there were when
+    // they were last evaluated ([`pull`]'s doc, *the carry*).
+    let mut carry: Vec<Envelope> = Vec::new();
+    let mut pages = 0usize;
+    let mut read_at = 0usize;
+    while let Some(page) = fetched.pop_front() {
+        let last = fetched.is_empty();
+        let mut envelopes = std::mem::take(&mut carry);
+        let carried = !envelopes.is_empty();
+        envelopes.extend(page.envelopes);
+        pages += 1;
+        if carried {
+            envelopes.sort_by(in_the_groups_order);
+        }
+        // **A carry is evaluated again when its pages have doubled, and at the last page** —
+        // never page by page. Evaluating opens every envelope it is handed, so a hold that
+        // lasts across a long log would otherwise open the first page once per page behind
+        // it. Doubling keeps the whole trip's work within three times what the one unpaged
+        // pull it replaces did, and always looks at the very next page, which is where a
+        // child's parent usually is.
+        if !last && carried && pages < read_at.saturating_mul(2) {
+            carry = envelopes;
+            continue;
+        }
+
+        let step = db.with(|conn| {
+            evaluate(
+                conn,
+                &device,
+                &group,
+                &envelopes,
+                page.cursor,
+                last,
+                &mut trip,
+            )
+        })?;
+        total.take(&step, last);
+        if last {
+            break;
+        }
+        if step.advanced {
+            pages = 0;
+            read_at = 0;
+        } else {
+            read_at = pages;
+            carry = envelopes;
+        }
+        // **The turn between two pages**: nothing is held here — no connection, no lock but
+        // the sync lane — and on a host with one thread this is where the page's own commands
+        // are answered. Every page, because a page is already about as long as a command
+        // should wait.
+        crate::platform::timer::yield_to_host().await;
+    }
+    Ok(total)
+}
+
+/// One page of a pull, as it was fetched: sealed, and the relay's cursor for it.
+struct Fetched {
+    envelopes: Vec<Envelope>,
+    cursor: i64,
+}
+
+/// The order the relay answers in, and so the order two pages are put into when they are read
+/// as one answer.
+fn in_the_groups_order(a: &Envelope, b: &Envelope) -> std::cmp::Ordering {
+    (a.hlc_ms, a.hlc_ctr, &a.device).cmp(&(b.hlc_ms, b.hlc_ctr, &b.device))
+}
+
+/// **Whether a baseline chunk from a build before claims carried references is among
+/// `envelopes`** — an op with a horizon and no reference.
+///
+/// Exact, by what each generation puts on the wire. Every build that has emitted a baseline has
+/// put the horizon on the first op of every chunk, since the commit that built baselines
+/// (`94265442`, v0.18.0), and on nothing else. Since the claim design of 2026-10-03 (v0.40.0)
+/// every op of a baseline also carries its emission — `baseline::number` numbers them all
+/// before the horizon rides on — and nothing but a baseline's op carries either. So *a horizon
+/// with no emission* is a chunk of v0.18–v0.39's and of nobody else's; `client::tests::paged`
+/// holds both halves to real fixtures. Both generations stamp the same user schema, which is
+/// why no cheaper tell exists.
+///
+/// **This opens what it looks at and lets the plaintext go**; the evaluation opens it again.
+/// Keeping the opened ops instead would hold a catch-up's every op in memory at once, which is
+/// the cost paging exists to end, to save a decryption and a parse that `docs/reference/
+/// light-app.md` §10.5b measures. An envelope that does not open here — an epoch whose key is
+/// not in hand, a batch only a newer build can read — is not one this can see into. It is the
+/// evaluation's to hold or record, and one held for its key is classified by the trip that
+/// can open it: until then nothing of it is applied, a page at a time or otherwise.
+fn an_older_baseline_is_in(
+    conn: &Connection,
+    group: &Group,
+    envelopes: &[Envelope],
+) -> Result<bool, String> {
+    for envelope in envelopes {
+        if envelope.epoch > group.epoch {
+            continue;
+        }
+        let held = if envelope.epoch < group.epoch {
+            identity::group_at(conn, group, envelope.epoch).map_err(|e| e.to_string())?
+        } else {
+            None
+        };
+        if let Ok(batch) = wire::open_batch(held.as_ref().unwrap_or(group), envelope) {
+            if batch
+                .iter()
+                .any(|op| op.horizon.is_some() && op.emission.is_none())
+            {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+/// What a trip's pages share: the relay's epoch as it is known, whether `/keys` has been asked
+/// since the trip began, and the envelopes already recorded in `error_log` — by an earlier trip
+/// behind the same hold ([`Hold::noted`]) or by an earlier evaluation of this one, so a carried
+/// page that is read twice is written down once.
+struct Trip {
+    relay: Option<i64>,
+    asked: Option<bool>,
+    noted: Vec<(String, i64, i64)>,
+}
+
+/// What one evaluation of a page — or of a carry and the page behind it — did.
+struct Step {
+    unreadable: usize,
+    report: ApplyReport,
+    converted: bool,
+    /// Whether [`PULL_CURSOR`] moved to the page's cursor.
+    advanced: bool,
+}
+
+impl Pulled {
+    /// Add one evaluation's outcome to the trip's.
+    ///
+    /// **What an evaluation *did* is always counted; what it merely *met* is counted once**, by
+    /// the evaluation that ends its window — the one that advanced the cursor, or the last. An
+    /// op applied, a row resurrected, a cycle broken and a group mooted or dropped each happen
+    /// once: `sync_peers` and the ledger keep a carried page's second reading from doing them
+    /// again. An envelope that would not open, an op skipped as seen and an op held are met
+    /// again every time a carried page is read, so counting them per reading would say three
+    /// unreadable envelopes for one, and "held" for an op the next page released.
+    fn take(&mut self, step: &Step, last: bool) {
+        let did = &step.report;
+        self.report.applied += did.applied;
+        self.report.resurrected += did.resurrected;
+        self.report.cycles_broken += did.cycles_broken;
+        self.report.moot += did.moot;
+        self.report.dropped += did.dropped;
+        if step.advanced || last {
+            self.unreadable += step.unreadable;
+            self.report.skipped += did.skipped;
+            self.report.deferred += did.deferred;
+            self.report.held_newer += did.held_newer;
+            self.report.held_waiting += did.held_waiting;
+        }
+        self.converted |= step.converted;
+    }
+}
+
+/// Ask the relay for the page after `since`. Every failure is recorded under `pull` and answered
+/// as the sentence that was recorded; a 401 ends the membership ([`lapsed_in`]) and records
+/// nothing.
+async fn fetch_page(
+    db: &impl Store,
+    base: &str,
+    token: &str,
+    group: &Group,
+    device: &str,
+    since: i64,
+) -> Result<PullPage, String> {
     let url = format!(
-        "{base}/g/{}/pull?since={cursor}&device={device}",
+        "{base}/g/{}/pull?since={since}&device={device}&limit={PULL_PAGE_ROWS}",
         group.group_id
     );
     let response = match http()
@@ -2122,330 +2522,369 @@ pub async fn pull(
             return Err(e.to_string());
         }
     };
-    let page: PullPage = match serde_json::from_str(&text) {
-        Ok(p) => p,
+    match serde_json::from_str(&text) {
+        Ok(page) => Ok(page),
         Err(e) => {
             say(db, "pull", Kind::Parse, &e.to_string(), Some(&url));
-            return Err(e.to_string());
+            Err(e.to_string())
         }
-    };
+    }
+}
 
-    // The relay's epoch as this pull knows it, and whether this pull has asked `/keys` itself —
-    // `Some(true)` for an answer, `Some(false)` for an ask that failed. **Once per pull, and
-    // ahead of the page rather than at the envelope that calls for it**: it is the one request
-    // the page's reading makes, and asked here everything below is a single stretch. Which
-    // envelopes hold and which are stepped over comes out the same — the answer only ever raises
-    // the epoch in hand, and an envelope at or below the old one was held either way.
-    let mut relay = relay_epoch;
-    let mut asked: Option<bool> = None;
-    let ahead = |envelope: &Envelope| {
-        envelope.epoch > group.epoch && relay.is_none_or(|r| envelope.epoch > r)
-    };
-    if page.envelopes.iter().any(ahead) {
-        let fresh = fetch_key_page(db, base, &device, &group).await;
-        asked = Some(fresh.is_ok());
-        if let Ok(fresh) = fresh {
-            relay = Some(relay.map_or(fresh.epoch, |r| r.max(fresh.epoch)));
+/// **One stretch**: `envelopes` are opened, measured against this device's clock and watermarks
+/// and applied, and the cursor is moved to `cursor` or left — against one state of the database.
+///
+/// `last` is whether the relay said nothing lies past these envelopes. **Everything that needs
+/// the whole of what the group has said is done only then** ([`pull`]'s doc, *Only the last page
+/// decides*): writing a hold, releasing a wait, and the conversions that follow a pull which
+/// read everything. Before it, an evaluation that would hold changes nothing but what it could
+/// apply, and says so by not advancing.
+fn evaluate(
+    conn: &Connection,
+    device: &str,
+    group: &Group,
+    envelopes: &[Envelope],
+    cursor: i64,
+    last: bool,
+    trip: &mut Trip,
+) -> Result<Step, String> {
+    let relay = trip.relay;
+    let asked = trip.asked;
+    let mut opened: Vec<(&Envelope, Vec<Op>)> = Vec::new();
+    let mut unreadable = 0usize;
+    // The unreadable envelopes this pull steps over — every one that neither holds behind a
+    // rotation nor is a batch only a newer build can read. Each is an op this device will
+    // never apply, which is a gap (design 2026-10-03 §7).
+    let mut stepped_over = 0usize;
+    let mut behind = false;
+    // Sender → the stamp of its earliest batch in this page that only a newer build can read.
+    let mut unparsed: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
+    // What this pull met, beside what an earlier one behind the same hold already recorded.
+    let mut met: Vec<(String, i64, i64)> = Vec::new();
+    for envelope in envelopes {
+        // Whether this envelope, if it does not open, is kept for a later pull rather than
+        // stepped over.
+        let mut kept = false;
+        let failure = if envelope.epoch > group.epoch {
+            if relay.is_some_and(|r| envelope.epoch <= r) || asked != Some(true) {
+                behind = true;
+                kept = true;
+                BEHIND_A_ROTATION.to_owned()
+            } else {
+                NO_SUCH_ROTATION.to_owned()
+            }
+        } else {
+            let held = if envelope.epoch < group.epoch {
+                identity::group_at(conn, group, envelope.epoch).map_err(|e| e.to_string())?
+            } else {
+                None
+            };
+            match wire::open_batch(held.as_ref().unwrap_or(group), envelope) {
+                Ok(batch) => {
+                    opened.push((envelope, batch));
+                    continue;
+                }
+                Err(e) => {
+                    // Opened, so a member of the group sealed it, and an op in it says a newer
+                    // build did. See the doc above; `Malformed` falls through and is stepped over.
+                    if let WireError::Newer(_) = e {
+                        kept = true;
+                        unparsed
+                            .entry(envelope.device.as_str())
+                            .and_modify(|first| *first = (*first).min(at_of(envelope)))
+                            .or_insert(at_of(envelope));
+                    }
+                    e.to_string()
+                }
+            }
+        };
+        unreadable += 1;
+        if !kept {
+            stepped_over += 1;
+        }
+        let (ms, ctr) = at_of(envelope);
+        let this = (envelope.device.clone(), ms, ctr);
+        if !trip.noted.contains(&this) {
+            let detail = if envelope.epoch > group.epoch {
+                format!(
+                    "{} at epoch {}; this device is at {}, the relay at {}",
+                    envelope.device,
+                    envelope.epoch,
+                    group.epoch,
+                    relay.map_or("an epoch it did not say".to_owned(), |r| r.to_string())
+                )
+            } else {
+                envelope.device.clone()
+            };
+            note(conn, "pull", Kind::Parse, &failure, Some(&detail));
+            trip.noted.push(this.clone());
+        }
+        met.push(this);
+    }
+    let unread_newer = !unparsed.is_empty();
+
+    // Sender → the stamp of its earliest batch carrying an op stamped too far ahead of this
+    // device's clock that `apply` would not skip, and the furthest such stamp, which is what the
+    // sentence says.
+    let wall = wall_ms(conn)?;
+    let applied = watermarks(conn)?;
+    let mut ahead: std::collections::BTreeMap<&str, ((i64, i64), i64)> = Default::default();
+    for (envelope, batch) in opened.iter().map(|(e, b)| (*e, b)) {
+        let Some(furthest) = batch
+            .iter()
+            .filter(|op| {
+                op.at.device != device
+                    && applied
+                        .get(&op.at.device)
+                        .is_none_or(|seen| (op.at.ms, op.at.ctr) > *seen)
+            })
+            .map(|op| op.at.ms)
+            .filter(|&ms| hlc::too_far_ahead(ms, wall))
+            .max()
+        else {
+            continue;
+        };
+        let at = at_of(envelope);
+        ahead
+            .entry(envelope.device.as_str())
+            .and_modify(|(first, most)| {
+                *first = (*first).min(at);
+                *most = (*most).max(furthest);
+            })
+            .or_insert((at, furthest));
+    }
+    for (sender, (first, furthest)) in &ahead {
+        let this = ((*sender).to_owned(), first.0, first.1);
+        if !trip.noted.contains(&this) {
+            note(
+                conn,
+                "pull",
+                Kind::Other,
+                &clock_sentence(conn, sender, furthest - wall),
+                Some(sender),
+            );
+            trip.noted.push(this.clone());
+        }
+        met.push(this);
+    }
+
+    // Sender → the stamp of its earliest batch in the page: where a clock hold's block sits, since
+    // it holds every batch of its sender.
+    let mut earliest: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
+    for (envelope, _) in &opened {
+        earliest
+            .entry(envelope.device.as_str())
+            .and_modify(|first| *first = (*first).min(at_of(envelope)))
+            .or_insert(at_of(envelope));
+    }
+
+    // **A sender's batches stamped at or after one only a newer build can read wait with the
+    // cursor**, or they would carry its watermark past the held ops, which the re-delivery would
+    // then skip as seen — by stamp, not page position, so earlier ones are safe. **A sender held
+    // for its clock waits whole** (the doc above says why by device). A `Malformed` batch holds
+    // nothing and keeps nothing back: it is stepped over.
+    //
+    // **What is held back is no longer taken out of the page** (design 2026-10-03 §5): it goes
+    // to `apply` as held, never applied, and holds the group of each of its rows that carries a
+    // claim — and no other — so a claim that contains one of its puts cannot land ahead of it.
+    // **Each opened batch goes to exactly one of the two lists**, and that is load-bearing: an
+    // op passed both as `ops` and as `held_back` is grouped twice.
+    let mut ops: Vec<Op> = Vec::new();
+    let mut held_back: Vec<Op> = Vec::new();
+    let mut held_behind = 0usize;
+    let mut held_clock = 0usize;
+    for (envelope, mut batch) in opened {
+        let at = at_of(envelope);
+        let sender = envelope.device.as_str();
+        if unparsed.get(sender).is_some_and(|first| at >= *first) {
+            held_behind += batch.len();
+            held_back.append(&mut batch);
+        } else if ahead.contains_key(sender) {
+            held_clock += batch.len();
+            held_back.append(&mut batch);
+        } else {
+            ops.append(&mut batch);
         }
     }
 
-    // **From here to the end is one stretch**: the page is opened, measured against this
-    // device's clock and watermarks, applied, and the cursor moved or held — against one state
-    // of the database, with the conversions that follow an advancing pull behind it.
-    db.with(|conn| {
-        let mut opened: Vec<(&Envelope, Vec<Op>)> = Vec::new();
-        let mut unreadable = 0usize;
-        // The unreadable envelopes this pull steps over — every one that neither holds behind a
-        // rotation nor is a batch only a newer build can read. Each is an op this device will
-        // never apply, which is a gap (design 2026-10-03 §7).
-        let mut stepped_over = 0usize;
-        let mut behind = false;
-        // Sender → the stamp of its earliest batch in this page that only a newer build can read.
-        let mut unparsed: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
-        // What this pull met, beside what an earlier one behind the same hold already recorded.
-        let mut met: Vec<(String, i64, i64)> = Vec::new();
-        for envelope in &page.envelopes {
-            // Whether this envelope, if it does not open, is kept for a later pull rather than
-            // stepped over.
-            let mut kept = false;
-            let failure = if envelope.epoch > group.epoch {
-                if relay.is_some_and(|r| envelope.epoch <= r) || asked != Some(true) {
-                    behind = true;
-                    kept = true;
-                    BEHIND_A_ROTATION.to_owned()
-                } else {
-                    NO_SUCH_ROTATION.to_owned()
-                }
-            } else {
-                let held = if envelope.epoch < group.epoch {
-                    identity::group_at(conn, &group, envelope.epoch).map_err(|e| e.to_string())?
-                } else {
-                    None
-                };
-                match wire::open_batch(held.as_ref().unwrap_or(&group), envelope) {
-                    Ok(batch) => {
-                        opened.push((envelope, batch));
-                        continue;
-                    }
-                    Err(e) => {
-                        // Opened, so a member of the group sealed it, and an op in it says a newer
-                        // build did. See the doc above; `Malformed` falls through and is stepped over.
-                        if let WireError::Newer(_) = e {
-                            kept = true;
-                            unparsed
-                                .entry(envelope.device.as_str())
-                                .and_modify(|first| *first = (*first).min(at_of(envelope)))
-                                .or_insert(at_of(envelope));
-                        }
-                        e.to_string()
-                    }
-                }
-            };
-            unreadable += 1;
-            if !kept {
-                stepped_over += 1;
-            }
-            let (ms, ctr) = at_of(envelope);
-            let this = (envelope.device.clone(), ms, ctr);
-            if !recorded.contains(&this) {
-                let detail = if envelope.epoch > group.epoch {
-                    format!(
-                        "{} at epoch {}; this device is at {}, the relay at {}",
-                        envelope.device,
-                        envelope.epoch,
-                        group.epoch,
-                        relay.map_or("an epoch it did not say".to_owned(), |r| r.to_string())
-                    )
-                } else {
-                    envelope.device.clone()
-                };
-                note(conn, "pull", Kind::Parse, &failure, Some(&detail));
-            }
-            met.push(this);
-        }
-        let unread_newer = !unparsed.is_empty();
+    let (mut report, mut blocks) = apply::apply_page(conn, &ops, &held_back, apply::Waiting::Hold)?;
+    // Held behind a newer build's batch, which is what `held_newer` counts — and a block of the
+    // hold's, at the first such batch, unless `apply` holds its sender earlier still. A sender held
+    // for its clock is deferred and a block the same way, at its earliest batch, and counted in no
+    // class of `apply`'s.
+    report.held_newer += held_behind;
+    // The held-back ops only — `apply` counts none of them, whatever its group became. A fresh
+    // op `apply` holds with them — another op in a held-back op's group, such as an earlier one
+    // of the same sender on that row, or collateral behind its block — is counted in no class
+    // only where its group's class is `HeldBack`; where another op's block makes the group
+    // `Newer` or `Waiting`, `apply` counts its fresh ops in `held_newer` or `held_waiting`, and
+    // they reach `deferred` there. **The cursor decision below is
+    // unaffected**: `held_back` is non-empty only when `held_clock > 0` or `unread_newer` (a
+    // `held_behind` op sits behind a batch `unparsed` names), and either one holds the page
+    // as `"clock"` or `"newer"` before `held_waiting` is ever asked.
+    report.deferred += held_behind + held_clock;
+    if stepped_over > 0 {
+        // An envelope stepped over is an op this device will never apply (design §7).
+        emission::open_gap(conn).map_err(|e| e.to_string())?;
+    }
 
-        // Sender → the stamp of its earliest batch carrying an op stamped too far ahead of this
-        // device's clock that `apply` would not skip, and the furthest such stamp, which is what the
-        // sentence says.
-        let wall = wall_ms(conn)?;
-        let applied = watermarks(conn)?;
-        let mut ahead: std::collections::BTreeMap<&str, ((i64, i64), i64)> = Default::default();
-        for (envelope, batch) in opened.iter().map(|(e, b)| (*e, b)) {
-            let Some(furthest) = batch
-                .iter()
-                .filter(|op| {
-                    op.at.device != device
-                        && applied
-                            .get(&op.at.device)
-                            .is_none_or(|seen| (op.at.ms, op.at.ctr) > *seen)
-                })
-                .map(|op| op.at.ms)
-                .filter(|&ms| hlc::too_far_ahead(ms, wall))
-                .max()
-            else {
-                continue;
-            };
-            let at = at_of(envelope);
-            ahead
-                .entry(envelope.device.as_str())
-                .and_modify(|(first, most)| {
-                    *first = (*first).min(at);
-                    *most = (*most).max(furthest);
-                })
-                .or_insert((at, furthest));
+    // **Before the last page, the only question is whether anything here is held.** Nothing is:
+    // the cursor moves to this page's and the trip goes on to the next page. Something is:
+    // *nothing is decided*. No hold is written, no wait is released and the cursor stays, and
+    // the caller carries these envelopes into the next page's evaluation ([`pull`]'s doc).
+    //
+    // **Either way the stored hold is not touched — not written, not counted, and not cleared.**
+    // A hold an earlier trip wrote may be on a block further up the log than this page, and
+    // clearing it here would start that block's three pulls and ten minutes over; the last
+    // evaluation reads it, drops the blocks that have resolved and counts on for the rest, as
+    // one answer's evaluation always did.
+    if !last {
+        let clean = !behind
+            && !unread_newer
+            && report.held_newer == 0
+            && held_clock == 0
+            && report.held_waiting == 0;
+        if clean {
+            set_state(conn, PULL_CURSOR, &cursor.to_string()).map_err(|e| e.to_string())?;
         }
-        for (sender, (first, furthest)) in &ahead {
-            let this = ((*sender).to_owned(), first.0, first.1);
-            if !recorded.contains(&this) {
-                note(
-                    conn,
-                    "pull",
-                    Kind::Other,
-                    &clock_sentence(conn, sender, furthest - wall),
-                    Some(sender),
-                );
-            }
-            met.push(this);
+        if changed_by(&report) {
+            // What this page wrote is announced by the trip that ends well, this one or a
+            // later ([`UNANNOUNCED`]).
+            set_state(conn, UNANNOUNCED, "1").map_err(|e| e.to_string())?;
         }
-
-        // Sender → the stamp of its earliest batch in the page: where a clock hold's block sits, since
-        // it holds every batch of its sender.
-        let mut earliest: std::collections::BTreeMap<&str, (i64, i64)> = Default::default();
-        for (envelope, _) in &opened {
-            earliest
-                .entry(envelope.device.as_str())
-                .and_modify(|first| *first = (*first).min(at_of(envelope)))
-                .or_insert(at_of(envelope));
-        }
-
-        // **A sender's batches stamped at or after one only a newer build can read wait with the
-        // cursor**, or they would carry its watermark past the held ops, which the re-delivery would
-        // then skip as seen — by stamp, not page position, so earlier ones are safe. **A sender held
-        // for its clock waits whole** (the doc above says why by device). A `Malformed` batch holds
-        // nothing and keeps nothing back: it is stepped over.
-        //
-        // **What is held back is no longer taken out of the page** (design 2026-10-03 §5): it goes
-        // to `apply` as held, never applied, and holds the group of each of its rows that carries a
-        // claim — and no other — so a claim that contains one of its puts cannot land ahead of it.
-        // **Each opened batch goes to exactly one of the two lists**, and that is load-bearing: an
-        // op passed both as `ops` and as `held_back` is grouped twice.
-        let mut ops: Vec<Op> = Vec::new();
-        let mut held_back: Vec<Op> = Vec::new();
-        let mut held_behind = 0usize;
-        let mut held_clock = 0usize;
-        for (envelope, mut batch) in opened {
-            let at = at_of(envelope);
-            let sender = envelope.device.as_str();
-            if unparsed.get(sender).is_some_and(|first| at >= *first) {
-                held_behind += batch.len();
-                held_back.append(&mut batch);
-            } else if ahead.contains_key(sender) {
-                held_clock += batch.len();
-                held_back.append(&mut batch);
-            } else {
-                ops.append(&mut batch);
-            }
-        }
-
-        let (mut report, mut blocks) =
-            apply::apply_page(conn, &ops, &held_back, apply::Waiting::Hold)?;
-        // Held behind a newer build's batch, which is what `held_newer` counts — and a block of the
-        // hold's, at the first such batch, unless `apply` holds its sender earlier still. A sender held
-        // for its clock is deferred and a block the same way, at its earliest batch, and counted in no
-        // class of `apply`'s.
-        report.held_newer += held_behind;
-        // The held-back ops only — `apply` counts none of them, whatever its group became. A fresh
-        // op `apply` holds with them — another op in a held-back op's group, such as an earlier one
-        // of the same sender on that row, or collateral behind its block — is counted in no class
-        // only where its group's class is `HeldBack`; where another op's block makes the group
-        // `Newer` or `Waiting`, `apply` counts its fresh ops in `held_newer` or `held_waiting`, and
-        // they reach `deferred` there. **The cursor decision below is
-        // unaffected**: `held_back` is non-empty only when `held_clock > 0` or `unread_newer` (a
-        // `held_behind` op sits behind a batch `unparsed` names), and either one holds the page
-        // as `"clock"` or `"newer"` before `held_waiting` is ever asked.
-        report.deferred += held_behind + held_clock;
-        if stepped_over > 0 {
-            // An envelope stepped over is an op this device will never apply (design §7).
-            emission::open_gap(conn).map_err(|e| e.to_string())?;
-        }
-        let firsts = unparsed.iter().map(|(device, at)| (*device, *at)).chain(
-            ahead
-                .keys()
-                .filter_map(|device| earliest.get(device).map(|at| (*device, *at))),
-        );
-        for (device, at) in firsts {
-            blocks
-                .entry(device.to_owned())
-                .and_modify(|first| *first = (*first).min(at))
-                .or_insert(at);
-        }
-        // **The cursor moves to the page head only when nothing here can still apply** — the relay
-        // answers only rows above it, and `apply` keeps no copy of what it held, so stepping past a
-        // held op loses it and every later op of its device in this page for good. Holding is what
-        // makes the relay hand the page back, and `sync_peers` is what makes that re-delivery safe:
-        // what applied is skipped and what was held applies once, when it can. The ack follows the
-        // cursor, so the relay keeps the held rows. Spec 2026-09-27 §3.3, in order — **the kind a
-        // hold records is the one that will outlast the others**, since that is the one the panel has
-        // to explain:
-        //
-        // 1. `behind` a key rotation the relay has reached — held, as it always was; the next trip's
-        //    `check_keys` brings the key, so it records no kind at all.
-        // 2. A newer schema's held group, or a batch that opened, did not parse and says a newer
-        //    build sealed it — held, with no bound, until this device updates. Nothing but the reader
-        //    resolves it, so it names the hold over a clock or a wait beside it.
-        // 3. A batch stamped more than `hlc::MAX_AHEAD_MS` ahead of this device's clock — held until
-        //    the clock comes within the bound, which time does on its own. Over a wait, because a wait
-        //    is bounded shorter still: its count simply starts once the clock hold has cleared.
-        // 4. A group waiting on a parent — held until [`WAITING_PULLS`] pulls spanning
-        //    [`WAITING_SECS`] have found the same blocks ([`Hold::blocks`]), then released: the page
-        //    is applied once more with [`apply::Waiting::Release`], which drops and records the group
-        //    and applies what sat behind it, and the cursor moves.
-        // 5. Otherwise — every group applied, skipped, moot or dropped — the cursor moves and any
-        //    hold is cleared.
-        let advance = if behind {
-            false
-        } else if report.held_newer > 0 || unread_newer {
-            note_hold(conn, "newer", blocks, met)?;
-            false
-        } else if held_clock > 0 {
-            note_hold(conn, "clock", blocks, met)?;
-            false
-        } else if report.held_waiting > 0 {
-            let hold = note_hold(conn, "waiting", blocks, met.clone())?;
-            if hold.pulls >= WAITING_PULLS && now_secs(conn)? - hold.since >= WAITING_SECS {
-                let (released, still) =
-                    apply::apply_page(conn, &ops, &held_back, apply::Waiting::Release)?;
-                // What the first pass applied or consumed is below its watermark now and skipped
-                // here, so these add without counting anything twice.
-                report.applied += released.applied;
-                report.resurrected += released.resurrected;
-                report.cycles_broken += released.cycles_broken;
-                report.moot += released.moot;
-                report.dropped += released.dropped;
-                report.held_waiting = released.held_waiting;
-                report.held_newer = released.held_newer;
-                report.deferred = released.deferred;
-                // **A release can uncover a newer group.** Collateral takes its block's class, so
-                // a device that pushed a waiting child from an older build and then a newer
-                // build's op behind it reports the newer op as waiting until the release attempts
-                // it — and a release that then advanced would lose it.
-                if released.held_newer > 0 {
-                    note_hold(conn, "newer", still, met)?;
-                    false
-                } else {
-                    clear_hold(conn)?;
-                    true
-                }
-            } else {
-                false
-            }
-        } else {
-            clear_hold(conn)?;
-            true
-        };
-        let mut converted = false;
-        if advance {
-            set_state(conn, PULL_CURSOR, &page.cursor.to_string()).map_err(|e| e.to_string())?;
-            // **Both conversions below are captured, so whatever they write is a new `sync_ops`
-            // row** — which is how [`RelayOutcome::changed`] hears about it: neither counts in `apply`'s
-            // report, and only one answers a count at all.
-            let before = last_op(conn)?;
-            // **User schema v52's art picks convert here on a paired device, and only behind a pull
-            // that read everything.** A conversion before this device has heard its group can insert
-            // an entry a peer already derived and has edited since, under a later stamp, and revert
-            // the edit on every device — `deck_tokens::convert_legacy_picks_at_launch` has the
-            // scenario. So the launch pass leaves a paired device's picks alone until this has run
-            // once, and this runs behind every pull after, which converts a v51 peer's pick on the
-            // pull that brings it. **Not behind a held pull**, whatever held it: an envelope held at
-            // an epoch, or a group held for a newer schema or a parent, may be exactly the peer's
-            // entries and clears the gate waits for. **Captured**, because `apply` has returned and
-            // `capture::suppressed` with it; and logged rather than returned, because the pull
-            // itself has landed and a pick left owing is retried behind the next one.
-            if let Err(e) = crate::deck_tokens::convert_legacy_picks_after_pull(conn) {
-                eprintln!(
-                    "the decks' pre-v52 token art picks could not be converted after a pull: \
-                 {e}\nThey are tried again behind the next pull."
-                );
-            }
-            // **User schema v53's net, behind the same pulls and for the same reasons**: a v52
-            // peer's theory card arrives filed in a live pile, and this refiles it into the plan's
-            // pile of that name, captured, on the pull that brings it
-            // (`deck_meta::refile_stray_theory_cards`).
-            if let Err(e) = crate::deck_meta::refile_stray_theory_cards_after_pull(conn) {
-                eprintln!(
-                    "the plans' cards filed in the actual list's categories could not be refiled \
-                 after a pull: {e}\nThey are tried again behind the next pull."
-                );
-            }
-            converted = last_op(conn)? != before;
-        }
-        Ok(Pulled {
+        return Ok(Step {
             unreadable,
             report,
-            converted,
-        })
+            converted: false,
+            advanced: clean,
+        });
+    }
+
+    let firsts = unparsed.iter().map(|(device, at)| (*device, *at)).chain(
+        ahead
+            .keys()
+            .filter_map(|device| earliest.get(device).map(|at| (*device, *at))),
+    );
+    for (device, at) in firsts {
+        blocks
+            .entry(device.to_owned())
+            .and_modify(|first| *first = (*first).min(at))
+            .or_insert(at);
+    }
+    // **The cursor moves to the page head only when nothing here can still apply** — the relay
+    // answers only rows above it, and `apply` keeps no copy of what it held, so stepping past a
+    // held op loses it and every later op of its device in this page for good. Holding is what
+    // makes the relay hand the page back, and `sync_peers` is what makes that re-delivery safe:
+    // what applied is skipped and what was held applies once, when it can. The ack follows the
+    // cursor, so the relay keeps the held rows. Spec 2026-09-27 §3.3, in order — **the kind a
+    // hold records is the one that will outlast the others**, since that is the one the panel has
+    // to explain:
+    //
+    // 1. `behind` a key rotation the relay has reached — held, as it always was; the next trip's
+    //    `check_keys` brings the key, so it records no kind at all.
+    // 2. A newer schema's held group, or a batch that opened, did not parse and says a newer
+    //    build sealed it — held, with no bound, until this device updates. Nothing but the reader
+    //    resolves it, so it names the hold over a clock or a wait beside it.
+    // 3. A batch stamped more than `hlc::MAX_AHEAD_MS` ahead of this device's clock — held until
+    //    the clock comes within the bound, which time does on its own. Over a wait, because a wait
+    //    is bounded shorter still: its count simply starts once the clock hold has cleared.
+    // 4. A group waiting on a parent — held until [`WAITING_PULLS`] pulls spanning
+    //    [`WAITING_SECS`] have found the same blocks ([`Hold::blocks`]), then released: the page
+    //    is applied once more with [`apply::Waiting::Release`], which drops and records the group
+    //    and applies what sat behind it, and the cursor moves.
+    // 5. Otherwise — every group applied, skipped, moot or dropped — the cursor moves and any
+    //    hold is cleared.
+    let advance = if behind {
+        false
+    } else if report.held_newer > 0 || unread_newer {
+        note_hold(conn, "newer", blocks, met)?;
+        false
+    } else if held_clock > 0 {
+        note_hold(conn, "clock", blocks, met)?;
+        false
+    } else if report.held_waiting > 0 {
+        let hold = note_hold(conn, "waiting", blocks, met.clone())?;
+        if hold.pulls >= WAITING_PULLS && now_secs(conn)? - hold.since >= WAITING_SECS {
+            let (released, still) =
+                apply::apply_page(conn, &ops, &held_back, apply::Waiting::Release)?;
+            // What the first pass applied or consumed is below its watermark now and skipped
+            // here, so these add without counting anything twice.
+            report.applied += released.applied;
+            report.resurrected += released.resurrected;
+            report.cycles_broken += released.cycles_broken;
+            report.moot += released.moot;
+            report.dropped += released.dropped;
+            report.held_waiting = released.held_waiting;
+            report.held_newer = released.held_newer;
+            report.deferred = released.deferred;
+            // **A release can uncover a newer group.** Collateral takes its block's class, so
+            // a device that pushed a waiting child from an older build and then a newer
+            // build's op behind it reports the newer op as waiting until the release attempts
+            // it — and a release that then advanced would lose it.
+            if released.held_newer > 0 {
+                note_hold(conn, "newer", still, met)?;
+                false
+            } else {
+                clear_hold(conn)?;
+                true
+            }
+        } else {
+            false
+        }
+    } else {
+        clear_hold(conn)?;
+        true
+    };
+    let mut converted = false;
+    if advance {
+        set_state(conn, PULL_CURSOR, &cursor.to_string()).map_err(|e| e.to_string())?;
+        // **Both conversions below are captured, so whatever they write is a new `sync_ops`
+        // row** — which is how [`RelayOutcome::changed`] hears about it: neither counts in `apply`'s
+        // report, and only one answers a count at all.
+        let before = last_op(conn)?;
+        // **User schema v52's art picks convert here on a paired device, and only behind a pull
+        // that read everything.** A conversion before this device has heard its group can insert
+        // an entry a peer already derived and has edited since, under a later stamp, and revert
+        // the edit on every device — `deck_tokens::convert_legacy_picks_at_launch` has the
+        // scenario. So the launch pass leaves a paired device's picks alone until this has run
+        // once, and this runs behind every pull after, which converts a v51 peer's pick on the
+        // pull that brings it. **Not behind a held pull**, whatever held it: an envelope held at
+        // an epoch, or a group held for a newer schema or a parent, may be exactly the peer's
+        // entries and clears the gate waits for. **And not behind a page that is not the last**
+        // (step 6.5b): a page is not everything, and the entry a peer derived may be in the next
+        // one. **Captured**, because `apply` has returned and `capture::suppressed` with it; and
+        // logged rather than returned, because the pull itself has landed and a pick left owing
+        // is retried behind the next one.
+        if let Err(e) = crate::deck_tokens::convert_legacy_picks_after_pull(conn) {
+            eprintln!(
+                "the decks' pre-v52 token art picks could not be converted after a pull: \
+                 {e}\nThey are tried again behind the next pull."
+            );
+        }
+        // **User schema v53's net, behind the same pulls and for the same reasons**: a v52
+        // peer's theory card arrives filed in a live pile, and this refiles it into the plan's
+        // pile of that name, captured, on the pull that brings it
+        // (`deck_meta::refile_stray_theory_cards`).
+        if let Err(e) = crate::deck_meta::refile_stray_theory_cards_after_pull(conn) {
+            eprintln!(
+                "the plans' cards filed in the actual list's categories could not be refiled \
+                 after a pull: {e}\nThey are tried again behind the next pull."
+            );
+        }
+        converted = last_op(conn)? != before;
+    }
+    Ok(Step {
+        unreadable,
+        report,
+        converted,
+        advanced: advance,
     })
+}
+
+/// Whether an evaluation wrote to the synced tables — [`RelayOutcome::changed`]'s own test, of
+/// one report.
+fn changed_by(report: &ApplyReport) -> bool {
+    report.applied > 0 || report.moot > 0 || report.resurrected > 0 || report.cycles_broken > 0
 }
 
 /// The newest `sync_ops` row's `seq`, or 0 for none.
@@ -2889,8 +3328,28 @@ async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutc
     // that never happened. A rotation published since — `publish_join` above, or one adopted by
     // the push — moved this device's own epoch with it, and an envelope at or below that is not
     // ahead at all; one above it makes the pull ask again.
-    let pulled = pull(db, &base, &token, keys.relay_epoch).await?;
+    //
+    // **A pull that fails part of the way through its pages acks what it took.** Every request
+    // of a pull is made before anything is applied, so a failed request has moved nothing. But
+    // the applying is a page at a time, each clean page moving the cursor, and one that fails
+    // there — the database, not the network — ends the trip with pages already consumed. A
+    // trip that ended there *without* acking would leave the relay's floor under them. So the
+    // cursor is read either side of the pull, and when it moved, the ack is made before the
+    // error is answered. Best effort: the pull's error is the trip's, and an ack that fails too
+    // is recorded as its own.
+    let stood = db.with(|conn| Ok(get_state(conn, PULL_CURSOR)))?;
+    let pulled = match pull(db, &base, &token, keys.relay_epoch).await {
+        Ok(pulled) => pulled,
+        Err(e) => {
+            if db.with(|conn| Ok(get_state(conn, PULL_CURSOR)))? != stood {
+                let _ = ack(db, &base, &token).await;
+            }
+            return Err(e);
+        }
+    };
     outcome.unreadable = pulled.unreadable;
+    outcome.pull_pages = pulled.pages;
+    outcome.pull_whole = pulled.whole;
     // **What this trip applied, and nothing it was handed again.** A held cursor re-delivers the
     // same page on every trip, and what this trip applied is part of `changed`, which fires
     // `sync:applied` — counting the ops skipped or held again would refresh every screen on every
@@ -2907,8 +3366,16 @@ async fn round_trip(db: &impl Store, baselines: bool) -> Result<Option<RelayOutc
         outcome.baseline_history = history;
     }
     ack(db, &base, &token).await?;
-    db.with(|conn| {
-        set_state(conn, LAST_SYNC_AT, &now_secs(conn)?.to_string()).map_err(|e| e.to_string())
+    // The trip ended well, so it speaks for every page that wrote and was never announced —
+    // its own earlier pages, and those of a trip that failed after them ([`UNANNOUNCED`]).
+    outcome.changed |= db.with(|conn| {
+        set_state(conn, LAST_SYNC_AT, &now_secs(conn)?.to_string()).map_err(|e| e.to_string())?;
+        let owed = get_state(conn, UNANNOUNCED).is_some();
+        if owed {
+            conn.execute("DELETE FROM sync_state WHERE key = ?1", [UNANNOUNCED])
+                .map_err(|e| e.to_string())?;
+        }
+        Ok(owed)
     })?;
     Ok(Some(outcome))
 }

@@ -256,6 +256,9 @@ const OUTCOME: RelayOutcome = {
   // counts are zero and the panel must say nothing at all about a first exchange.
   baselineOps: 0,
   baselineHistory: 0,
+  // One page, read a page at a time: every trip but a large catch-up.
+  pullPages: 1,
+  pullWhole: false,
 };
 
 /** A 21×21 matrix with a third of its modules dark — enough for the drawing test to count. */

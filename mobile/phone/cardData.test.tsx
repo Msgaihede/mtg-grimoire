@@ -116,6 +116,8 @@ const trip = (over: Partial<RelayOutcome>): RelayOutcome => ({
   changed: false,
   baselineOps: 0,
   baselineHistory: 0,
+  pullPages: 1,
+  pullWhole: false,
   ...over,
 });
 

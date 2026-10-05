@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fakeEnvOver, fakeTables } from "./fakeD1";
+import { CLIENT, fakeState, SERVER, stubWorkerd } from "./fakeState";
 import { Group } from "./group";
 import worker, { type Env } from "./index";
 import { deviceTag } from "./log";
@@ -317,71 +318,7 @@ describe("selectedProtocol", () => {
 // The Durable Object's half, with workerd's globals stood in for
 // ---------------------------------------------------------------------------------------
 
-/**
- * Just enough of a `DurableObjectState` for `Group`'s constructor and its `ws()`.
- *
- * **The SQL is scenery here and is deliberately not a fake of SQLite**: every `exec` answers one
- * row that satisfies both things the constructor asks — `PRAGMA table_info(acks)` finds a
- * `heard_at`, `SELECT 1 FROM log_size` finds a row — so no migration branch runs. Nothing below
- * asserts on a row. What is recorded is what this file is about: the auto-response the constructor
- * registers and the socket `ws()` accepts.
- */
-function fakeState() {
-  const autoResponses: unknown[] = [];
-  const accepted: { socket: unknown; tags: string[] }[] = [];
-  const state = {
-    id: { name: "g1" },
-    storage: { sql: { exec: () => ({ toArray: () => [{ name: "heard_at" }] }) } },
-    setWebSocketAutoResponse: (pair: unknown) => autoResponses.push(pair),
-    acceptWebSocket: (socket: unknown, tags: string[]) => accepted.push({ socket, tags }),
-  };
-  return { state: state as unknown as DurableObjectState, autoResponses, accepted };
-}
-
-const CLIENT = { end: "client" };
-const SERVER = { end: "server" };
-
-/**
- * workerd's three globals, as far as `group.ts` uses them.
- *
- * `Response` is the awkward one: Node's refuses `status: 101` with a `RangeError`, so a real `ws()`
- * cannot return under vitest at all. The stand-in is Node's own `Response` for every other status
- * and, for a 101, the same class built as a 200 and then told its status — so `headers` is a real
- * `Headers` and what `ws()` passed as `init.headers` is read back the way a client would read it.
- */
-function stubWorkerd(): void {
-  const NodeResponse = Response;
-  class UpgradeResponse extends NodeResponse {
-    constructor(body?: BodyInit | null, init?: ResponseInit) {
-      if (init?.status !== 101) {
-        super(body, init);
-        return;
-      }
-      super(null, { headers: init.headers });
-      Object.defineProperties(this, {
-        status: { value: 101 },
-        webSocket: { value: init.webSocket ?? null },
-      });
-    }
-  }
-  vi.stubGlobal("Response", UpgradeResponse);
-  vi.stubGlobal(
-    "WebSocketPair",
-    class {
-      0 = CLIENT;
-      1 = SERVER;
-    },
-  );
-  vi.stubGlobal(
-    "WebSocketRequestResponsePair",
-    class {
-      constructor(
-        readonly request: string,
-        readonly response: string,
-      ) {}
-    },
-  );
-}
+// The stand-in state and the three globals are `fakeState.ts`'s, shared with `group.test.ts`.
 
 describe("Group, over a stand-in for workerd", () => {
   afterEach(() => {

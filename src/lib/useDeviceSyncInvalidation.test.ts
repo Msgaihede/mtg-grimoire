@@ -33,6 +33,8 @@ const outcome = (over: Partial<RelayOutcome> = {}): RelayOutcome => ({
   changed: true,
   baselineOps: 0,
   baselineHistory: 0,
+  pullPages: 1,
+  pullWhole: false,
   ...over,
 });
 

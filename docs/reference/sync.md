@@ -2785,8 +2785,9 @@ earlier still.
 **What the relay pays for a hold.** A held cursor is a held ack — `ack` sends `PULL_CURSOR`, and
 sends nothing at all when it has not moved since the last one — so the group's compaction floor
 stays at this device's last ack for the length of the hold, and every pull downloads everything
-above the cursor again: the held page and whatever the group has written since, one body that only
-grows while `pull` has no page size (*What is still owed*). **For a newer hold that is until the
+above the cursor again: the held page and whatever the group has written since — a page at a time
+since step 6.5b, and held whole by the client until it has evaluated the last (*Only the last
+page decides*, below), so a hold still costs the device everything above its cursor on every trip. **For a newer hold that is until the
 reader updates**, which the Sync panel asks them to do; **for a waiting one, at least three pulls
 and ten minutes**, whichever comes later. The ops `apply` already wrote are skipped against their
 watermarks on every re-delivery and are not counted again: `RelayOutcome.pulled` counts newly
@@ -2806,11 +2807,125 @@ everything, which is the gate's own reason (*A paired device converts behind a p
 it neither converts nor sets `token_picks_ready`
 (`no_legacy_pick_conversion_runs_behind_a_held_pull`).
 
-⚠️ **A future page limit must page to the end before a hold is evaluated.** `pull` has none today,
+~~⚠️ **A future page limit must page to the end before a hold is evaluated.** `pull` has none today,
 and one is planned (*What is still owed*). A limit that answered a page at a time, with the client
 holding its cursor on the first, would ask for that same page for ever and never reach the one that
 resolves it — the baseline carrying a waiting child's parent, or merely the page after a held one.
-The cursor-carrying loop the limit needs must walk to the head, and only then may a hold be decided.
+The cursor-carrying loop the limit needs must walk to the head, and only then may a hold be decided.~~
+**Built 2026-10-04, as the light app's step 6.5b, and that obligation is its central rule** — the
+paragraphs from here to the clock hold. [light-app.md](light-app.md) §10.5 has the figures that
+asked for it and §10.5b what it measures now.
+
+**A pull fetches, classifies, and then evaluates one of two ways.** `client::pull` asks
+`…/pull?since=&device=&limit=256` (`PULL_PAGE_ROWS`, a ceiling on rows); the relay answers whole
+rows in `seq` order inside a budget of sealed text it enforces itself — half a mebibyte,
+`PULL_PAGE_CHARS`, two full envelopes — with `more` saying whether a row of another device lies
+past the page. **Every page to the head of the log is fetched first**, each kept as it arrived,
+sealed, beside its cursor; nothing is applied and `PULL_CURSOR` does not move, so a request that
+fails anywhere in a pull loses the fetching and nothing else
+(`a_pull_whose_fetching_fails_has_applied_nothing_and_moved_nothing`). Each page is **classified**
+as it arrives — opened, looked into, its plaintext let go: is a baseline from a build before
+claims carried references in it (*An older build's baseline is one answer*, below)? Then the
+whole catch-up is evaluated **a page at a time** when there is none, and **as one answer** when
+there is. `RelayOutcome.pullPages` and `pullWhole` say which; no face reads them. An answer with
+no `more` is the last page, which is every relay deployed before this
+(`an_old_relays_answer_is_one_page_and_the_last`).
+
+**A page at a time, each page is the stretch the whole answer used to be.** Everything rules 1–3
+above describe is done to a page: opened, measured against the clock and the watermarks, applied
+in `apply_page`'s one transaction. **A page with nothing held writes `PULL_CURSOR` in that same
+stretch**, and a turn is given to the host before the next (`platform::timer::yield_to_host`),
+which is where a host with one thread answers its page. A pull cut short after the third page of
+ten resumes at the fourth (`a_pull_cut_short_after_a_page_resumes_at_the_next`), and a page
+handed over twice — cut between its commit and its cursor — applies nothing twice: the watermarks
+skip its ops and the emission ledger its claims
+(`a_page_handed_over_twice_applies_nothing_twice`).
+
+**Only the last page decides.** A hold says an op cannot apply *yet*, about everything past the
+cursor, and a page that is not the last cannot say that. So a page that is not the last and would
+hold **writes no hold, releases no wait and leaves the cursor**: its envelopes are *carried*, put
+together with the next page's, sorted by the group's clock as one answer covering both would have
+been, and evaluated again as one — what the first reading applied is skipped by the second. If
+that advances, the carry is dropped and paging goes on from there
+(`a_carry_the_next_page_resolves_is_dropped_there`). **Only the evaluation of the last page may
+call `note_hold`, release a wait, run the conversions behind a pull that read everything, or
+answer `Ok` — which is what lets `round_trip` begin a baseline.** And a page that is not the last
+**never touches the stored hold, not even to clear it**: the hold may be on a block further up
+the log, and clearing it behind a clean page would start that block's three pulls and ten minutes
+over (`a_wait_is_counted_on_across_a_page_that_applied_clean`). The tests that fail when any of
+that moves: `a_wait_is_never_released_on_a_page_that_is_not_the_last` (a wait one pull from its
+release, whose parent is on the next page),
+`a_hold_to_the_end_of_the_log_is_written_once_by_the_last_page`,
+`the_conversions_behind_a_pull_wait_for_the_last_page`, and
+`a_pull_that_fails_between_two_pages_acks_what_it_took_and_emits_nothing`. **There is no fallback
+to an unpaged request, ever.** A carry is read again when its pages have doubled and at the last
+page, which keeps a trip's work inside three times the unpaged pull's.
+
+**An older build's baseline is one answer** — because a paged pull must never lose a row that
+one unpaged answer delivered, on any mix of builds, and a page at a time it would. A baseline
+from v0.18.0–v0.39 is claims with no references (*A claim names its emission*, above): judged by
+their sender's watermark like any op, and stamped with their rows' `updated_at` in table order,
+which does not rise with the log. One answer is sorted by stamp before it is applied. In pieces,
+whatever applies first lifts the watermark past what comes later below it — a later chunk's
+rows, or the whole baseline behind that build's own ordinary op, pushed a moment ahead of it as
+every trip pushes — and those rows are skipped as seen for good. That second shape is **any
+join** against such a build: a new device pulls the log from nought. So when a chunk with **a
+horizon and no reference** is anywhere in what was fetched, all of it is evaluated as one
+answer — every page's envelopes sorted together, one `apply_page`, one move of the cursor: the
+unpaged pull exactly, at its cost, for that catch-up only. It is decided for the whole catch-up
+before any of it is applied, because by the time a page shows the chunk, the page before it has
+moved the watermark. The tell is exact — every build has put the horizon on the first op of
+every chunk since baselines were built, on nothing else, and since v0.40.0 a reference on every
+op of one; both generations stamp schema 59 — and held to what each really writes
+(`only_a_horizon_with_no_reference_is_an_older_builds_baseline`). Against the unpaged database:
+`an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged` and
+`an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answer`. ⚠️ **A device that
+is live while such a build pushes still loses those rows**, as it always has — each of those
+tests pins it in its last assertion — and that is *What is still owed*'s, not this pull's.
+
+**With no such baseline in it, a paged catch-up equals what an always-live device's sequence of
+pulls produces, not what one unpaged pull produced.** A page is the rows the relay held up to
+some `seq`, which is what a pull made at that moment was always answered, so no page is an
+arrival the engine could not already meet. But `apply` decides some things over what it is handed
+at once, and the unpaged answer handed a device that was behind everything at once. Each of
+those, split across a page edge, is tested three ways — one unpaged answer, one row a page, and
+one pull after each row was stored — and compared (`client/tests/paged.rs`, `three_ways`):
+
+| Split across the edge | Paged against a live device's pulls | Against one unpaged pull |
+| --- | --- | --- |
+| A child and the parent it names | the same | **the same** — the live device holds `waiting` for a pull, the paged one carries; rows, cursor and hold end alike |
+| A covered put and its claim, the put first | the same | **the same**, two copies. The put is always first: a baseline is never begun while anything is pending, so whatever a horizon covers has the lower `seq` |
+| …the claim first — an order no log can hold | the same, **four** copies | two. Pinned as a premise (`the_other_order_is_not_one_a_log_can_hold`): a relay answering out of `seq` order, or a baseline begun beside a pending op, would make it real, live as paged |
+| A baseline with references, in two chunks | the same | **the same** |
+| A sender held for its clock, its earlier batch a page before | the same | **the same once the clock catches up**; while it is held the earlier batch has applied, where one answer holds the sender whole |
+| A `gone` decision and the op that reverses it | the same | ⚠️ **different** — below |
+
+⚠️ **The one that differs is a convergence defect in `apply`, and paging neither causes nor hides
+it.** This device deleted a binder; another, not having heard, files a copy into it and, in a
+later push, renames it — later than the delete, so add-wins brings the binder back. *One answer
+carrying both*: the rename ranks first, the binder is back, the copy is filed into it. *The
+copy's push alone, then the rename's*: the copy names a parent that is gone and nothing handed
+over can bring it back; a binder's key is `SET NULL`, so the copy is written at the root and
+nothing is held; then the rename brings the binder back, empty. The sender keeps the copy in the
+binder — its rename beats the delete there too. **The two devices end differently and nothing
+either will send says so**: the move to the root was `apply`'s own write, behind
+`capture::suppressed`. A live device that pulls between those two pushes ends exactly so today,
+on the code as it stood before this step; what paging changes is that a device catching up can
+now meet it too, when a page edge falls between the two pushes.
+`a_gone_decision_and_its_reversal_across_a_page_edge_end_as_a_live_devices_pulls_do` holds paged
+to live, and its last assertion holds the difference itself, so whoever closes it meets the test.
+It is in *What is still owed*.
+
+**`/keys` is asked at most once a trip**, when anything fetched is above the epoch in hand.
+**One ack, at the end — and behind a pull that stopped part of the way through its pages**, for
+what the earlier pages took: `round_trip` reads `PULL_CURSOR` before the pull and acks if it
+moved, then answers the error. Every request of a pull precedes its applying, so that is a
+database's failure and not the network's. And because `sync:applied` is sent — **once a trip, as
+before** — for a trip that ended `Ok`, one that applied three pages and then failed leaves
+`sync_state.pull_unannounced`, which the next trip to end well takes and answers `changed` for,
+or those rows would be in the database and on no screen. Between the first page and that one
+event, the rows of the earlier pages are in the database: a list refetched for another reason
+shows them, which is right.
 
 **A third hold, `clock`, since issue #546 (2026-09-28).** A batch carrying any op above its
 sender's `sync_peers` watermark and stamped more than `hlc::MAX_AHEAD_MS` — one day — past this
@@ -3052,7 +3167,8 @@ wire and against that cap; base64 is four thirds and URL-safe.
 | | | | |
 | --- | --- | --- | --- |
 | `POST {relay}/g/{group}/push` | one `Envelope` | 200 with the stored cursor; refused with a `code` — see below | **bearer** |
-| `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` | **bearer** |
+| `GET {relay}/g/{group}/pull?since={cursor}&device={id}&limit={rows}` | | 200 with `{ envelopes, cursor, more }` — a page; 400 `bad limit` | **bearer** |
+| `GET {relay}/g/{group}/pull?since={cursor}&device={id}` | | 200 with `{ envelopes, cursor }` — everything, streamed; what every build before step 6.5b sends | **bearer** |
 | `POST {relay}/g/{group}/ack` | `{ device, cursor }` | 204 — what compaction reads; a departed device's is not stored | **bearer** |
 | `POST {relay}/g/{group}/rotate` | `{ epoch, auth, keys }` | 200 with the epoch, for one past the group's (a join) or two past it (a removal or a departure); 409 behind or equal; 422 further | the group's current auth, and nothing else |
 | `GET {relay}/g/{group}/keys?device={id}[&epoch={n}]` | | 200 with `{ epoch, blob, devices, removalStep }` — with `epoch`, that epoch's manifest, or 404 `no_such_epoch` | any auth this group has used within eight epochs |
@@ -3833,10 +3949,16 @@ in three places:
 - **`push` sends the outbox as it stood when it read it.** A write behind that read is a row
   with a higher `seq`: neither sent nor stamped by this trip, and carried by the next — which the
   write's own commit has already asked for.
-- **`pull` is one stretch from the page to the cursor**: the envelopes opened, measured against
-  the clock and the watermarks, applied, the hold decided, the cursor moved, the conversions
-  behind an advancing pull. Its one request inside the page — `/keys`, for an envelope above the
-  epoch in hand — is asked ahead of the page instead, once, on the same condition.
+- **`pull` is one stretch from a page to its cursor**: the envelopes opened, measured against
+  the clock and the watermarks, applied, the cursor moved — and, on the last page only, the hold
+  decided and the conversions behind an advancing pull. Its requests all come first — every
+  page, and then `/keys` once, when an envelope is above the epoch in hand — with a short
+  stretch behind each page to look into it. **Since step 6.5b there is a turn between two
+  pages** (`platform::timer::yield_to_host`), and what can land there is what can land between
+  any two stretches: a read
+  (`a_page_command_is_answered_between_two_pages_of_a_pull`, on one connection and one thread)
+  or the reader's own write, which the next page is applied beside as a live device's next pull
+  would be (`a_write_between_two_pages_is_kept_and_counted_once`).
 - **A baseline's rows, its clock and its horizon are one stretch, and none is begun while
   anything at all is pending.** The second half was found by the test, not by the design, and
   was first "an op written since the trip read its outbox" (`emit_baselines`' `through`); it was
@@ -3948,7 +4070,7 @@ verb, headers and body:
 
 | What | Was | Is |
 | --- | --- | --- |
-| A relay request | `reqwest`, directly | `platform::http`: natively the same connect and read bounds; in a browser a whole-request `deadline` — **120 s** for the client (whose pull is unpaged), **30 s** for the entitlement — because `fetch` has no other bound and a request that never ended would be a Leave that never ran |
+| A relay request | `reqwest`, directly | `platform::http`: natively the same connect and read bounds; in a browser a whole-request `deadline` — **120 s** for the client (whose pull was unpaged when this was chosen; since step 6.5b it bounds a page of half a mebibyte), **30 s** for the entitlement — because `fetch` has no other bound and a request that never ended would be a Leave that never ran |
 | The pending offer | `AppState.pairing`, a `tokio::sync::Mutex` | `State.pairing`, a `platform::sync::Shared` — the same lock, on every host |
 | A device's default name | `COMPUTERNAME` / `HOSTNAME` read in `identity` | `platform::device::name()`; `None` in a browser, where `mint_name` falls back to its word — `platform::device::kind()` since 2026-10-04: `Desktop`, `Android` or `Browser` |
 | The relay clients' per-call test client | `cfg(test)` | `cfg(any(test, feature = "testing"))`, because the desktop's sync tests link the core with `testing` on, and a dependency's `cfg(test)` is off |
@@ -4420,8 +4542,50 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   from the Rust process rather than the page, so the CSP decision this bullet expected never had
   to be taken. There never was a poll for it to replace either — the record's own confusion about
   that is history now, folded into the section above rather than repeated here.
-- **`pull` has no page size, and the doorbell is what turns that from a latent hazard into a
-  routine path** (spec §8). `group.ts`'s `pull` returns every envelope past the cursor in one
+- ~~**`pull` has no page size**~~ — **built 2026-10-04 as the light app's step 6.5b, on both
+  sides; the relay's half is written and not deployed.** *A pull fetches, classifies, and then
+  evaluates one of two ways* (above) is the client's rule and
+  [relay/README.md](../../relay/README.md)'s "A pull, a page at a time" the relay's.
+  [light-app.md](light-app.md) §10.5b has it measured again a page at a time, beside the
+  unpaged figures — the 50 000-op catch-up that held a browser's engine for 29 s and left it
+  at 570 MB is 125 pages, a command asked during it waits a page's apply, about a fifth of a
+  second, and linear memory ends at 69.5 MB; the one-answer evaluation was not measured in a
+  browser. **What it leaves owed** is the next three bullets — each its own, none of
+  them made by paging — and what this one said until then is kept under them.
+- ⚠️ **A device that is live while a build older than v0.40.0 pushes a baseline loses rows —
+  "a baseline pulled in two halves" and "a sparse op pulled ahead of its baseline", for every
+  emitter that sends no references.** *A claim names its emission* closed both for the builds
+  that send them (2026-10-03, v0.40.0); a claim with no reference is still judged by its
+  sender's watermark, so a peer that hears the doorbell and pulls between that sender's
+  ordinary op and its baseline, or between two of its chunks, skips as seen every row stamped
+  below what it has already applied. Step 6.5b keeps a device that is *catching up* out of it,
+  by reading such a catch-up as one answer; it changes nothing for a device that is live, and
+  nothing could from the pull alone. The fixtures, each with the live device a row short in
+  its last assertion (`client/tests/paged.rs`):
+  `an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged` and
+  `an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answer`. It ends when
+  no device in a group is older than v0.40.0; closing it for a new receiver of an old emitter
+  means judging a reference-less claim by something other than the watermark, which is
+  `apply`'s.
+- ⚠️ **A copy filed into a binder that was deleted here, whose binder a later push brings back,
+  stays at the root — and the sender keeps it in the binder.** Found by step 6.5b's
+  split-across-a-page-edge tests and not made by paging: `apply` writes the copy at the root
+  when its parent is `gone` and nothing in the answer reverses that (`SET NULL`, behind
+  `capture::suppressed`, so no op says it happened), and never revisits it when a later answer
+  resurrects the binder. One answer carrying both pushes files it correctly, because the
+  binder's op ranks first. A live device pulling between the two pushes ends wrong today; a
+  device catching up now can too, when a page edge falls between them.
+  `a_gone_decision_and_its_reversal_across_a_page_edge_end_as_a_live_devices_pulls_do`
+  (`client/tests/paged.rs`) pins the difference in its last assertion. The fix is `apply`'s —
+  re-file what a `gone` decision moved when its parent comes back — with its own tests.
+- **A catch-up's pages are fetched again from the first when a request of it fails.** A pull
+  applies nothing until it has fetched to the head of the log, because how it applies is
+  decided over all of it; so a link that drops the fortieth page of a hundred has, at the
+  next trip, a hundred to fetch. Each page is still inside the deadline on its own, which the
+  unpaged answer was not; keeping what was fetched across trips needs somewhere to keep it.
+- **What `pull` cost before it was paged, as this bullet recorded it** (spec §8): **`pull` had
+  no page size, and the doorbell is what turned that from a latent hazard into a routine
+  path.** `group.ts`'s `pull` returns every envelope past the cursor in one
   response and `client.rs:917`'s `response.text()` has no cap, so a peer offline through a
   50 000-row import pulls 250 envelopes in one body — **~46.6 MB**, held as row strings plus the
   `JSON.stringify` copy at **~95 MB inside a 128 MB isolate shared with every other group's**
@@ -4459,8 +4623,8 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   with the cursor where it stood and asked for again from its first byte. That section has the
   design as a reviewer corrected it — pages in `seq` order under a budget the relay enforces,
   a page that would hold carried into the next rather than decided, the unpaged answer kept
-  byte for byte for every released desktop but streamed, and compaction by length — which is
-  being built as step 6.5b.
+  byte for byte for every released desktop but streamed, and compaction by length — which
+  was built as step 6.5b.
 - ~~**A deferred op is dropped, not held.**~~ **Built 2026-09-27**, in the release that carries
   user schema v52 — *Held while it can resolve, skipped when it cannot* above. A newer sender's
   change is held until this device upgrades, a parent that may still arrive for a bounded wait, and

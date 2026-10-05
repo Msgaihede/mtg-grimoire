@@ -5733,7 +5733,7 @@ here.
   **answered in part — counted in the relay's own log under workerd** (§10.5): 250 pushes to
   one address stood behind no pre-flight, the address having been asked about minutes before;
   seven live pulls stood behind six, and eight on a join behind five. A paged pull pays one a
-  page. **Two things are still not shown**: that a pre-flight reaches no Durable Object is
+  page — counted in §10.5b: 25 pages behind 25, 125 behind 125. **Two things are still not shown**: that a pre-flight reaches no Durable Object is
   the code's word (`index.ts`), which nothing local counts; and how long a browser keeps the
   answer — the relay says a day, Chromium honours two hours of it — was not waited for.
 
@@ -6514,10 +6514,10 @@ hold rules, not a `breathe()`, and the desktop would run it too. Paging gets the
 between pages — the request for the next page is the await — and leaves a page's apply the
 one stretch it is.
 
-**The design after review — being built as step 6.5b (§10.5b).** The design this section first
+**The design after review — built as step 6.5b (§10.5b).** The design this section first
 carried was read by an independent reviewer, who found the measurement sound and three things
 in the design wrong. What follows is the corrected one; where it differs from the first, it
-says so.
+says so. §10.5b is what was built from it, the two things it added, and the figures again.
 
 - **The relay, with `limit`**: `GET /g/{group}/pull?since=&device=&limit=<rows>` answers at
   most that many **whole rows** after `since`, in `seq` order, the caller's own rows left out
@@ -6606,21 +6606,326 @@ says so.
   an isolate past 128 MB does to the request that took it there, to the group's socket and to
   the other groups on that isolate, and what a Durable Object's 30 s of CPU makes of a full
   log, are unmeasured. The heap figures here are V8's as it left them, garbage included.
-- **A phone's memory.** Chrome on a desktop grew a Worker to 570 MB without complaint. No phone
+- ~~**A phone's memory.** Chrome on a desktop grew a Worker to 570 MB without complaint. No phone
   browser has been handed any of it, and a tab killed mid-apply has not been watched coming
-  back — by the code it pulls the same page again, the cursor having stood still.
+  back — by the code it pulls the same page again, the cursor having stood still.~~ **answered
+  in part — the 570 MB is gone** (§10.5b): the same catch-up, paged, leaves linear memory at
+  69.5 MB, and a pull cut short while it applies resumes at the page it had reached
+  (`a_pull_cut_short_after_a_page_resumes_at_the_next`, natively). No phone browser has run
+  either.
 - **Safari and Firefox**: neither has run the engine at all.
-- **A real link.** The deadline was met on a paced loopback socket; a phone's radio dropping a
-  45 MB body part-way was not staged, and nothing resumes one.
+- ~~**A real link.** The deadline was met on a paced loopback socket; a phone's radio dropping a
+  45 MB body part-way was not staged, and nothing resumes one.~~ **answered in part — there
+  is no 45 MB body** (§10.5b): a page is 0.27 MB on the wire and inside the deadline on its
+  own. What a dropped one costs is still the catch-up's fetching — a pull applies nothing until
+  it has fetched to the head, so the pages that had landed are asked for again — and a phone's
+  radio has still dropped nothing.
 - **A group at its quota stays there.** The 99 400 ops left on the importing device are offered
-  on every trip and refused on every trip, each refusal a read of the whole log by the relay;
-  the thirty-day tail keeps an acked import that long. What a reader is told, beyond one
-  `error_log` row, was not looked at.
+  on every trip and refused on every trip, ~~each refusal a read of the whole log by the
+  relay~~ (**since §10.5b a read of each row's length and of no body** — written, not
+  deployed); the thirty-day tail keeps an acked import that long. What a reader is told,
+  beyond one `error_log` row, was not looked at.
 - **Ops unlike these.** One shape of op, 890 B sealed: a deck's, a note's and a delete's cost
   were not taken, and nor was a page that holds — a newer build's batch, a clock, a waiting
-  parent — where the page comes back whole on every trip.
+  parent — where the page comes back whole on every trip. (§10.5b tests what a paged pull
+  decides behind a newer hold and a waiting one — a clock hold across pages has no test of its
+  own — and what a hold to the head of the log costs is still not measured.)
 - **A reader is told nothing while it happens**: no face says a sync is applying. Paging
   shortens the wait; it does not say so either.
+
+### 10.5b Step 6.5b — the pull is paged (2026-10-04)
+
+§10.5's figures asked for paging and the owner said to build it in this phase. It is built on
+both sides: the relay answers a page; the engine fetches a catch-up in pages, looks into it,
+and applies it a page at a time — or, when a baseline from a build older than v0.40.0 is in
+it, as the one answer it used to be.
+**Written and not deployed** — the relay's half is the runbook's tenth
+([hosted-relay-deploy.md](hosted-relay-deploy.md)), and until it is out a build that pages is
+answered by the live relay as it always was: one answer, read as the last page.
+
+**The relay** (`relay/src/group.ts`, `log.ts`; the Worker in front of the object is untouched):
+
+- **With `limit`, a page.** `GET /g/{group}/pull?since=&device=&limit=<rows>`: whole rows after
+  `since` in `seq` order, the caller's own left out by the query, inside a budget of sealed
+  characters the object enforces whatever `limit` says — `PULL_PAGE_CHARS`, half a mebibyte —
+  which always admits one row, since one row may be 1.5 M characters. The sizes are read first
+  (`length(sealed)`), a row at a time and no further than the first that does not fit, then
+  the bodies of exactly the rows that fit. `limit` is capped at 1 024 and a malformed one is a
+  `400`.
+- **`{ envelopes, cursor, more }`.** `more` is an `EXISTS` for another device's row past the
+  page, no body read. `cursor` is the page's last row while `more` is true and otherwise the
+  head of the whole log, **past the caller's own trailing rows** — a cursor that stopped short
+  of them would pin the compaction floor under them, and loop a client that goes on "while the
+  cursor advanced".
+- **Without `limit`: today's answer byte for byte, never capped, and streamed.** The caller's
+  own rows are left out in SQL with the head read on its own; the order is asked of SQLite
+  over the stamps alone; and each row is read and written as the stream is pulled from, where
+  it was every row in an array and then one string. `withCors` already passed a body through
+  unread. The one visible difference is a stream's: no `Content-Length`.
+- **`compactNow` reads `length(sealed)` and no body** — behind every ack that moves a cursor,
+  and before a push is refused for the quota.
+- **Tested over SQLite.** `Group` was tested over a stand-in state in `ticket.test.ts`; that
+  stand-in moved to `relay/src/fakeState.ts` and grew a `storage.sql` backed by Node's own
+  `node:sqlite`, which counts the `sealed` characters each statement read — so "a compaction
+  reads no body" and "a page never reads a row that is not in it" are numbers.
+  `group.test.ts`, twenty-one tests: the page's edges, an all-own tail's cursor, the budget
+  admitting one oversized row, `more` exact at the boundary, the unpaged bytes against the old
+  implementation over a fixture log, a push landing mid-stream. **Two existing relay test
+  files were edited, and no assertion in either**: `ticket.test.ts`, whose helpers moved, and
+  step 6.3b's day-old `group.test.ts`, whose nine roster tests had a stand-in of their own
+  that answered SQL by what a statement said — they run over the shared one now, on SQLite,
+  reading `written()` where they read `written`. The other thirteen files are as they were.
+
+**The engine** (`crates/grimoire-core/src/sync_engine/client.rs`; `apply.rs` is untouched). A
+pull is three things, in this order:
+
+- **Fetch.** Every page to the head of the log (`limit=256`, `PULL_PAGE_ROWS`; the relay's
+  budget sizes it), each kept as it arrived — sealed — beside its cursor. Nothing is applied
+  and the cursor does not move: a request that fails, or a tab that closes, anywhere in here
+  loses the fetching and nothing else, and the next trip asks from the same cursor
+  (`a_pull_whose_fetching_fails_has_applied_nothing_and_moved_nothing`).
+- **Classify**, as each page arrives: is a baseline from a build before v0.40.0 anywhere in
+  the catch-up? The page is opened, looked into and its plaintext let go.
+- **Evaluate, one of two ways, chosen once for the whole catch-up** — a page at a time when
+  there is none, as one answer when there is. `RelayOutcome` says which, in two new fields
+  no face reads: `pullPages` and `pullWhole`.
+
+**A page at a time** — every emitter sends references:
+
+- **Each page is the one stretch the whole answer was**: opened, measured and applied in
+  `apply_page`'s one transaction, **`PULL_CURSOR` written in that stretch when nothing in it
+  is held**, and then a turn given to the host (`platform::timer::yield_to_host`) before the
+  next. That turn is where a one-thread host answers its page
+  (`a_page_command_is_answered_between_two_pages_of_a_pull`, on one connection and one thread)
+  and where the reader's own write lands (`a_write_between_two_pages_is_kept_and_counted_once`).
+  A pull cut short after page three resumes at page four
+  (`a_pull_cut_short_after_a_page_resumes_at_the_next`).
+- **Only the last page decides.** A page that is not the last and would hold writes no hold,
+  releases nothing and leaves the cursor: its envelopes are **carried**, put together with the
+  next page's, sorted by the group's clock and evaluated again as one. On an advance the carry
+  is dropped. Only the evaluation of the last page may call `note_hold`, release a wait, run
+  the conversions behind a pull that read everything, or answer `Ok` — which is what lets
+  `round_trip` begin a baseline. **A page that is not the last never touches the stored hold**,
+  not even to clear it: a first cut cleared it behind a clean page and so started a wait
+  further up the log over (`a_wait_is_counted_on_across_a_page_that_applied_clean`). **There
+  is no fallback to an unpaged request.**
+- **The carry's bound is the catch-up**, which is already in hand. It is read again when its
+  pages have doubled (two, four, eight) and at the last page, so a trip's work stays inside
+  three times the unpaged pull's; a first cut weighed it in characters, and a parent's page a
+  few bytes smaller than its child's then waited for the end of the log
+  (`a_carry_the_next_page_resolves_is_dropped_there`).
+
+**As one answer** — an older build's baseline is in it. Every page's envelopes sorted together,
+one evaluation, one move of the cursor: **the unpaged pull exactly**, at its cost in memory and
+in one long stretch, for that catch-up only. Why, and why it is decided before anything is
+applied, is the next heading.
+
+**Either way**: `/keys` once a trip; one ack at the end — and behind a pull that stopped part
+of the way through its pages, which only the database can make it do, for what the earlier
+pages took; and `sync:applied` **once a trip**, as before. A trip that applied pages and then
+failed leaves `sync_state.pull_unannounced`, which the next trip to end well takes and answers
+`changed` for — without it those rows are in the database and on no screen
+(`a_pull_that_fails_between_two_pages_acks_what_it_took_and_emits_nothing`). An answer with no
+`more` is the last page, which is every relay deployed today; all 98 of the client's earlier
+tests ran over this pull unedited, their mocks answering the old shape.
+
+**The page's size is two constants, and the relay's is the one that sizes it.**
+`PULL_PAGE_CHARS` = 512 KiB: two full envelopes of these ops, 0.36 MB decoded and 0.27 on the
+wire; 79 s on a 40 kbit/s link against the 120 s a request is given; a megabyte of the
+relay's heap. `PULL_PAGE_ROWS` = 256 on the client is a ceiling for a log of single edits,
+where a budget's worth would be over a thousand envelopes in one stretch. **The same on every
+host**: a desktop would not notice pages ten times the size, and two sizes would be two
+schedules of arrival to test. `REQUEST_DEADLINE`'s comment says what it bounds now — a page —
+with §10.5's measurement of the one it replaced.
+
+**A paged pull must never lose a row that one unpaged answer delivered, on any mix of builds
+— and as first built, it did.** The design said a paged catch-up equals what an always-live
+device's pulls produce. It does; and against a build older than v0.40.0 an always-live
+device's pulls **lose rows**. Such a build's baseline is claims with no references, judged by
+their sender's watermark like any op and stamped with their rows' `updated_at` in table
+order — stamps that do not rise with the log. One answer is sorted by stamp before it is
+applied. In pieces, whatever is applied first lifts the watermark past what comes later with
+a lower stamp, and that is skipped as seen, for good: [sync.md](sync.md)'s "a baseline pulled
+in two halves" and "a sparse op pulled ahead of its baseline", which claim references ended
+on 2026-10-03 for the builds that send them, one day before this step. Two fixtures, each run
+three ways (`client/tests/paged.rs`):
+
+| An older build's… | One unpaged answer | A page at a time | A live device, a pull after each push |
+| --- | --- | --- | --- |
+| baseline in two chunks, the first carrying the later stamp | both rows | **one row** | one row |
+| own `+1`, a page ahead of its baseline — **any join** | both rows | **one row** | one row |
+
+The second is not an edge: a device joining a group pulls the log from nought, and a log
+holds an older build's ordinary ops ahead of the baseline it re-emits at every pairing. A
+guard on the page — "do not evaluate a page that shows such a chunk" — catches the first and
+not the second: by the time a page shows the chunk, the page before has moved the watermark.
+So the catch-up is **classified whole, before any of it is applied**, which is why a pull
+fetches first.
+
+**What says "an older build's baseline" is a horizon with no reference**, and it is exact:
+every build that has emitted a baseline has put the horizon on the first op of every chunk
+(since `94265442`, v0.18.0) and on nothing else; since v0.40.0 every op of a baseline carries
+its emission as well; and both generations stamp the same user schema, 59, so nothing
+cheaper tells them apart. `only_a_horizon_with_no_reference_is_an_older_builds_baseline`
+holds it to what a current build really writes — a copy, a binder, a filing, a rename, a
+delete, a deck, and a baseline with references, whole and a chunk an op — because the failure
+on that side is silent: every catch-up read as one answer, paging off, and nothing lost to
+say so. `a_baseline_in_two_chunks_across_a_page_edge_ends_as_the_unpaged_pull_ends` holds a
+current baseline to `pullWhole: false`.
+
+**What changes on the desktop, then: a catch-up with no older build's baseline in it equals
+what an always-live device's sequence of pulls produces, not what one unpaged pull produced;
+one with such a baseline equals the unpaged pull, being it.** A page is the rows the relay
+held up to some `seq` — what a pull made at that moment was always answered — so no page is
+an arrival the engine could not already meet. But `apply` decides some things over what it
+is handed at once. Each, split across a page edge and run the same three ways:
+
+| Split across the edge | Paged against live | Paged against unpaged |
+| --- | --- | --- |
+| A child and the parent it names | equal | **equal** — the live device holds `waiting` for one pull, the paged one carries; rows, cursor and hold end alike |
+| A covered put and its claim | equal | **equal**, two copies — with the put first, the only order a log can hold: a baseline is never begun while anything is pending, so what a horizon covers has the lower `seq` |
+| … the claim first | equal — **four** copies | two. Not reachable; pinned as a premise by `the_other_order_is_not_one_a_log_can_hold` |
+| A baseline with references, in two chunks | equal | **equal** |
+| A sender held for its clock, its earlier batch a page before | equal | **equal once the clock catches up**; while it is held, the earlier batch has applied where one answer held the sender whole |
+| A `gone` decision and the op that reverses it | equal | ⚠️ **different** |
+
+⚠️ **The last row is a convergence defect in `apply` that paging did not make and does not
+hide.** The fixture
+(`a_gone_decision_and_its_reversal_across_a_page_edge_end_as_a_live_devices_pulls_do`): this
+device deleted a binder; another, not having heard, files a copy into it, and in a later push
+renames it — later than the delete, so add-wins brings the binder back. One answer carrying
+both: the rename ranks first, the binder is back, the copy is in it. The copy's push alone,
+then the rename's: the copy names a parent that is gone and nothing handed over can bring it
+back, a binder's key is `SET NULL`, so the copy is written **at the root** and nothing is held;
+the rename then brings the binder back, **empty**. The sender keeps the copy in the binder.
+The two devices differ and nothing either will send says so — the move to the root is
+`apply`'s own write, behind `capture::suppressed`. **A live device pulling between those two
+pushes ends exactly so today**, on the code before this step; paging lets a device that is
+catching up meet it too, when a page edge falls between the two pushes. The test holds paged
+to live and, in its last assertion, the difference itself.
+
+**Measured again, a page at a time** — `npm run web:sync-pull`, the same harness and machine
+as §10.5, the engine at 6 869 005 B, on 2026-10-05. **Every figure below is of the pull as
+committed** (fetch, classify, then a page at a time, against the relay that measures a page's
+sizes a row at a time; the engine committed is 6 861 693 B — the one measured still carried a
+switch for staging an older build's baseline, compiled out and never used, and removed with
+the measurement it was for): one run a cell, taken 03:04–03:18 local with the CPU reading 6–19 %
+before it, except the 50 000-row join, which read 44 %. Fourteen more runs, taken 02:24–03:04
+with the CPU at 19–100 % for other agents' work — ten of them against the relay before it
+measured a page's sizes a row at a time — are in no cell: a device left behind came out the
+same to a tenth of a megabyte in every one of them, a live or joining one within eight
+megabytes as its trips fell differently, and the times up to twice as long. Beside §10.5's
+figures for the unpaged pull:
+
+*One device left behind, then let through:*
+
+| | 10 000 ops, unpaged | paged | 50 000 ops, unpaged | paged |
+| --- | --- | --- | --- | --- |
+| Pulls, and the pre-flights in front of them | 1 | 25, behind 25 | 1 | 125, behind 125 |
+| The largest answer, decoded | 8.9 MB | 0.36 MB | 44.6 MB | 0.36 MB |
+| The fetching, first request to the last page's last byte | 0.23–0.26 s | 0.64 s | 1.1–1.4 s | 3.3 s |
+| **Longest wait of a `search_cards`**, asked before the page was told | **4.76–5.21 s** | **0.19 s** (median 73 ms) | **28.7–29.7 s** | **0.23 s** (median 85 ms) |
+| … asked after it, behind the page's own refresh | not read apart | 0.26 s | not read apart | 1.18 s |
+| `sync:applied`, from the first request | 5.18–5.73 s | 5.35 s | 30.1–31.0 s | 27.6 s |
+| **Linear memory**, before → after | 20.7 → **131.5 MB** | 20.8 → **33.6 MB** | 21.0 → **569.9 MB** | 21.0 → **69.5 MB** |
+| The tab's process, after | 337–340 MB | 240 MB | 803–944 MB | 329 MB |
+| **The relay isolate's JS heap, for the pull** | 1.0 → 18.9 MB, one request | 1.0 → 5.4 MB over 25, nothing collected between | 1.0 → **90.2 MB** | 1.0 → **11.8 MB** over 125 |
+| … for the ack behind it, a compaction | 1.0 → 10.0 MB | + 0.1 MB | 1.0 → 45.7 MB | + 0.1 MB |
+| … for the importing device's own pull and ack | 5.0 → 18.4 MB | + 0.1 MB | 17.8 → 61.9 MB | + 0.2 MB |
+| The two collections, row for row | equal | equal | equal | equal |
+
+*The same import heard live, and a device paired into a collection that size:*
+
+| | 10 000, unpaged | paged | 50 000, unpaged | paged |
+| --- | --- | --- | --- | --- |
+| Live: trips that pulled, and their pages | 2 pulls | 2 trips — 20 and 6 pages | 3 pulls | 3 trips — 20, 68 and 37 pages |
+| Live: longest wait of a `search_cards`, the page's own refreshes included | 2.5–3.0 s | 0.25 s | 14.9–15.8 s | 1.12 s |
+| Live: linear memory | 20.7 → 80.0–84.8 MB | 20.8 → 33.8 MB | 21 → 346–371 MB | 21.0 → 52.8 MB |
+| Live: rows equal, after the importer's outbox emptied | 5.0–5.3 s | 6.2 s | 17.4–19.9 s | **28.7 s** |
+| Join: trips that pulled, and their pages | 2 pulls | 2 trips — 16 and 9 pages | 3–5 pulls | 3 trips — 1, 25 and 99 pages |
+| Join: longest wait, joining device | 3.4–4.7 s | 0.19 s | 13.3–16.3 s | 0.38 s |
+| Join: linear memory, joining device | 20.4 → 120–133 MB | 20.4 → 31.1 MB | 20.6 → 335–357 MB | 20.6 → 67.7 MB |
+| Join: rows equal, after *Codes match* | 7.4–9.2 s | 7.7 s | 33.5–36.3 s | 35.9 s (CPU at 44 %) |
+
+- **The engine answers within a page.** What a search waited behind the unpaged pull for half
+  a minute it waits a fifth of a second for — one page's apply — and the median is under a
+  tenth. The longest wait left is not the pull's: it is asked after `sync:applied`, behind the
+  page's own refresh — the wall asking again over fifty thousand rows.
+- **Linear memory is the catch-up's sealed text and what the rows cost the database**, not
+  twelve times the answer: 12.8 MB for a catch-up of 8.9 MB, 48.5 MB for one of 44.6 MB.
+  **Fetching first costs about eleven megabytes of that at 50 000**: the first cut of this
+  step applied each page as it arrived and ended at 58.1–58.2 MB there (32.5–32.6 MB at
+  10 000), two runs a size earlier that night — and lost rows to an older build's baseline,
+  which is why it was not kept.
+- **Looking into a page costs seven to eleven milliseconds** — the gap between a page's last
+  byte and the engine's next request, which is the answer parsed and its envelopes opened —
+  against about two hundred to apply it. That is the "open twice" the classification costs,
+  and why the opened ops are not kept instead: they are the memory paging exists to give back.
+- **On the relay, a pull is a page.** 125 requests left 10.8 MB of garbage between them where
+  one request held 89 MB; the compaction behind the ack, and the importing device's own pull,
+  no longer show. The unpaged answer, streamed — measured with an engine that sends no `limit`,
+  before the client paged — took the heap from 1.0 to 20.4 MB at 50 000 and to 10.9 MB at
+  10 000, where it took it to 90.2 and 18.9.
+- **Being live now costs time at the large end**: 28.7 s to converge on a 50 000-op import
+  where three unpaged pulls took 17.4–19.9 s, and 6.2 s against 5.0–5.3 s at 10 000. One run
+  a size; where the extra goes was not taken apart. Nothing is added for a device left behind
+  (27.6 s against 30.1–31.0 s, 5.35 s against 5.18–5.73 s).
+
+**Found on the way:**
+
+- **The design as handed over lost rows against every released build but one**, and the
+  split-across-an-edge tests it asked for are what found it — the heading above. v0.40.0 was a
+  day old.
+- **The `gone` reversal**, and the premise beside it: a claim stored ahead of the put it
+  covers would double a row, on a live device as on a paged one. Neither is new; both are now
+  tests.
+- **A page's sizes were read 128 pages ahead.** `limit` is a ceiling in rows — 256 from the
+  app — and SQLite loads a row's text to say how long it is, so asking every candidate's
+  `length(sealed)` at once had each request measure 45 MB of log to answer 0.36 MB: 30–90 ms a
+  page under workerd, and the fetching of 125 pages 9–20 s. Read a row at a time, and no
+  further than the first that does not fit, it is 6 ms a page and 3.3 s
+  (`measures no further into the log than the page goes`).
+- **A browser pre-flights every page.** A pull's address carries its cursor, so each of the 25
+  and each of the 125 stood behind an `OPTIONS` of its own — a Worker invocation, answered
+  before the object. §10.1 said "a paged pull pays one a page"; it does.
+- **Two first cuts of the carry were wrong**, and a test holds each now: weighed in
+  characters, a parent's page a few bytes smaller than its child's waited for the end of the
+  log; and a clean page that cleared the stored hold started a wait further up the log over.
+
+**Open after this step:**
+
+- **The one-answer evaluation was not measured in a browser.** No current build can put a
+  baseline without references on a relay's log, so the harness has no way to stage one. By
+  the code it is the unpaged evaluation over the same envelopes — §10.5's stretch and §10.5's
+  memory — with the catch-up's sealed text held beside it; that is a reading of the code and
+  not a figure. Its results are tested against the unpaged database natively; its cost is not.
+- **The relay's half is not deployed**, and nothing has asked a deployed object for a page.
+  There is no credential-free tell for it: `GET /g/abc/pull?limit=1` answers the gate's `401`
+  before and after. The runbook's item 14 has the two tells a device's own token gives.
+- **A device that is live while a build older than v0.40.0 pushes its baseline still loses
+  rows**, as it always has; [sync.md](sync.md)'s *What is still owed* has it as its own entry,
+  with the fixtures. It ends when no device in a group is older than v0.40.0.
+- **The `gone` reversal is not fixed.** It needs `apply` to revisit a `SET NULL` it made when
+  the parent comes back — its own entry there too.
+- **A catch-up's pages are fetched again from the first when one request of it fails**, since
+  nothing is applied until the last has arrived. Each page is inside the deadline on its own,
+  which the unpaged answer was not; a link that drops one page in a hundred pays the hundred
+  again.
+- **A catch-up is many requests.** 125 pulls and, from a browser, 125 pre-flights where there
+  was one of each: Worker invocations and Durable Object requests on a metered plan, once per
+  device per large import. Moving `since` out of the address would let one pre-flight stand
+  for all of them; not done.
+- **A hold to the head of the log still costs the whole log, every trip.** Behind a newer
+  build's batch the client fetches everything above its cursor and carries it all — the
+  unpaged pull's memory and its one long stretch at the end, until the reader updates. Tested
+  for what it decides (`a_hold_to_the_end_of_the_log_is_written_once_by_the_last_page`), not
+  measured for what it costs.
+- **Nothing is drawn until the last page.** `sync:applied` is one telling a trip; the rows of
+  the earlier pages are in the database for the half-minute a 50 000-op catch-up still takes.
+  A list refetched for another reason in that time shows them, which is right; nothing
+  refetches because of them. And still no face says a sync is under way.
+- **Unchanged from §10.5**: production's limits, a phone's memory, Safari and Firefox, a real
+  link — none was measured here either. Every time above is this machine's.
 
 ### 10.6 Step 6.6 — the release rule: the three hosts ship from one tag (2026-10-04)
 
@@ -6712,7 +7017,9 @@ it; the signing script with the real `keytool` and the SDK's three tools stubbed
 Two, in the order the runbooks hold them to — the relay first, and the web app only once the
 relay answered a page — and both run by an agent under the owner's standing ask for this phase
 (*"you should deploy the changes we need, when we need them"*). Neither carries step 6.3b: the
-relay's ninth half and a client that reads 4002 are written and wait.
+relay's ninth half and a client that reads 4002 are written and wait. Nor step 6.5b: the tenth
+half — a page of a pull, the streamed answer, compaction by length — and an engine that pages
+wait behind it, relay first.
 
 **The relay, at 17:22:12 UTC** — step 6.1's half, the browser's: CORS and the socket ticket.
 From `main` at `ea0aa88e` (#818), version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, wrangler
@@ -6764,10 +7071,16 @@ socket**, from a device in no group. And the Sync panel, 4.6 s in: *Browser — 
 is off. Nothing leaves this device until you connect a membership.* — the sentence that said
 this build could not sync is gone. Nothing was pressed that asks the relay.
 
-**What only the owner's membership can show**, and nothing has:
+**What only the owner's membership can show.** One sentence of it has been said: **on
+2026-10-05 the owner paired the deployed web app (`https://mtg-grimoire.app`, version
+`befbcbd9`) with a desktop and synced between them, and said "it works"** — production's
+first browser sync. That is the owner's sentence and not a measurement: nobody read how long
+the socket stayed live, saw a `pong`, or read what a tab's keepalive is billed. So, still
+shown by nothing but that sentence, or by nothing at all:
 
-- a browser claiming or pairing against the deployed relay;
+- a browser claiming or pairing against the deployed relay — **done, by the owner's word**;
 - a browser's socket in production — the 101's sub-protocol reaching a page and the text `ping`
   answered `pong` were settled under local workerd (§10.3), not there;
-- a write on one device drawn on another through the deployed relay, with nothing pressed;
+- a write on one device drawn on another through the deployed relay, with nothing pressed —
+  "synced between them" is what was said; whether anything was pressed was not;
 - what a keepalive is billed, which is the runbook's one-hour check.

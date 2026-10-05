@@ -371,7 +371,8 @@ per group, addressed by `idFromName(group)`.
 | Request | Body | Answer |
 | --- | --- | --- |
 | `POST /g/{group}/push` | one `Envelope` | `200 {"cursor": <seq>}` — the stored row's seq; the refusals are below |
-| `GET /g/{group}/pull?since={cursor}&device={id}` | — | `200 {"envelopes": [...], "cursor": <head>}` — and the device counts as heard, at most once a day |
+| `GET /g/{group}/pull?since={cursor}&device={id}` | — | `200 {"envelopes": [...], "cursor": <head>}` — everything after the cursor, streamed; and the device counts as heard, at most once a day. Every build released before paging asks this |
+| `GET /g/{group}/pull?since={cursor}&device={id}&limit={rows}` | — | `200 {"envelopes": [...], "cursor": <n>, "more": <bool>}` — one page; a `limit` that is not a whole number of at least one is `400 {"error": "bad limit"}`. "A pull, a page at a time" below |
 | `POST /g/{group}/ack` | `{"device": id, "cursor": n}` | `204` — and compaction runs; a departed device's ack is answered and not stored |
 | `GET /g/{group}/ws?device={id}` | — | `101` — a hibernatable socket; see the last section. The bearer may be a sub-protocol, and a foreign `Origin` is a `403` — "The browser" below |
 
@@ -537,7 +538,59 @@ write into somebody else's log.
 **The cursor a pull hands back is the head of the whole log, not of the returned slice.** The
 slice has the puller's own rows filtered out of it, and a cursor taken from the slice would sit
 below them, so the device would re-ask for its own rows on every pull for as long as they survived
-compaction.
+compaction. (On a page that is not the last it is that page's last row; the last page's is the
+head — the next section.)
+
+### A pull, a page at a time
+
+**`pull` has two answers, and which one a request gets is whether it names a `limit`** (light app
+phase 6, step 6.5b; `group.ts`'s `pull`, `log.ts`'s `PULL_PAGE_CHARS`). Measured before it was
+built ([light-app.md](../docs/reference/light-app.md) §10.5): the one-response answer to a
+50 000-row import was 44.6 MB, held a browser's engine for 29 s and its tab at 570 MB, and cost
+this isolate twice the log in JS heap — with a compaction costing it once more on every ack.
+
+- **With `limit`: a page.** At most that many rows after `since`, **in `seq` order**, the
+  caller's own left out *by the query*; whole rows only, inside a budget of sealed characters
+  the relay enforces whatever `limit` says — `PULL_PAGE_CHARS`, half a mebibyte — which always
+  admits one row, because one row may be larger than the budget. `limit` is capped at
+  `PULL_LIMIT_MAX`. Within the page the envelopes are in the group's order, as in any answer.
+  The sizes are read before the bodies, so the isolate holds the page and never a row that will
+  not be in it — **and a row at a time, no further than the first that does not fit**: SQLite
+  loads a row's text to measure it, and `limit` is a ceiling in rows (256 from the app), so
+  asking every candidate's length at once had each page of a large catch-up measuring over a
+  hundred times what it answered.
+- **`more`** is whether a row *of another device* lies past the page — an `EXISTS`, no body read.
+  **`cursor`** is the page's last row while `more` is true, and the head of the whole log when
+  it is not: past the caller's own trailing rows, which no page will ever carry. A cursor that
+  stopped at the last row answered would leave a device that pushed after it pulled acking
+  below its own rows for good — the compaction floor pinned under them.
+- **Why `seq` order**: a page is then exactly what a device that pulled when the head stood at
+  its last row was handed. The app's half — a cursor per page, and a page that would hold
+  carried into the next rather than decided — is `sync_engine::client::pull`'s doc.
+- **Without `limit`: everything, as it always was, byte for byte — and never capped.** A client
+  that sends none is a build released before paging: it decides its holds, its conversions and
+  its baselines on whatever one answer hands it and asks for nothing more afterwards, so a cap
+  on that request would strand it. What changed is what answering it costs here: the caller's
+  own rows are filtered in the query, with the head read on its own; and the answer is
+  **streamed** — the order asked of SQLite over the rows' stamps, each row then read and
+  written as the stream is pulled from — where it used to be every row in an array and one
+  string twice the log's size. `group.test.ts` holds the streamed bytes to the old
+  implementation's over a fixture log. The one visible difference is a stream's: no
+  `Content-Length`.
+- **A compaction reads each row's length and never its body** (`compactNow`): what survives is
+  decided by where a row stands, who sent it and when, and the size written back is a sum of
+  lengths. It read every row whole, on every ack that moved a cursor.
+
+Measured over the same 50 000-row log, the relay's JS heap by request, before → after this
+step: an unpaged pull 89 → 19 MB, the importing device's own pull and ack 44 → 0.1 MB, a
+compaction 45 → 0.1 MB; and the same log pulled in pages, 125 requests with nothing collected
+between them, 11 MB.
+
+**`Group` is tested over SQLite now** (`fakeState.ts`, `group.test.ts`): every rule above is a
+clause — a window by `seq`, a filter on the sender, an `EXISTS`, an `ORDER BY` — and a stand-in
+that recognised statements by shape would answer the same whatever they said. Node's own
+`node:sqlite` is behind the stand-in's `storage.sql`, and it keeps how many `sealed` characters
+each statement read, so "a compaction reads no body" is a number a test holds.
 
 ### Who the log waits for
 
@@ -791,11 +844,16 @@ what is left in the Durable Object and the handlers is SQL and routing — where
 log rather than a reader's data quietly disappearing. `rotate.test.ts` and `admit.test.ts` drive
 `worker.fetch` itself, because where those routes and refusals stand relative to the gate is half
 of what they are; the object there is a recorder, never workerd. `cors.test.ts` and
-`ticket.test.ts` do the same for the browser's half. **`ticket.test.ts` is the one suite that
-constructs the real `Group`**, over a stand-in state and with three of workerd's globals stubbed:
-Node's `Response` refuses a status of 101, so without the stub `ws()` cannot return under vitest
-at all. It proves which header `ws()` puts on its 101 and that the constructor registers the
-auto-response — not that workerd honours either.
+`ticket.test.ts` do the same for the browser's half. **Two suites construct the real `Group`,
+over one stand-in state** — `src/fakeState.ts`; import it, never write a second — with three of
+workerd's globals stubbed: Node's `Response` refuses a status of 101, so without the stub `ws()`
+cannot return under vitest at all. `ticket.test.ts` proves which header `ws()` puts on its 101
+and that the constructor registers the auto-response — not that workerd honours either — over
+SQL that is scenery. `group.test.ts` asks the stand-in for **SQLite itself** behind
+`storage.sql` (Node's `node:sqlite`) and the sockets it hands over: a rotation's roster and whom
+it closes (step 6.3b), and a pull's pages, the streamed answer and a compaction's reads (step
+6.5b), each decided by a statement that really runs. (The roster tests had a stand-in of their
+own for a day, answering SQL by what a statement said; one stand-in is the rule.)
 
 Two things a deploy verifies that no test here can, and both fail loudly on the first request to
 an object rather than quietly:

@@ -6230,3 +6230,14 @@ async fn a_baseline_the_relay_defers_leaves_its_marker_unset_and_the_trip_still_
     assert_eq!(get_state(&a, LAST_ACKED).as_deref(), Some("7"));
     assert_eq!(baselined_at(&a, "dev-b"), None);
 }
+
+// ---------------------------------------------------------------------------------------
+// The pull, a page at a time — step 6.5b. A file of its own: `tests/paged.rs`.
+//
+// The gate is said again although this file is already behind one: `platform::fence` finds the
+// files that are test code throughout by reading each one's parent for a gated `mod`, and a
+// module it cannot see declared so is swept as code that ships.
+// ---------------------------------------------------------------------------------------
+
+#[cfg(test)]
+mod paged;
