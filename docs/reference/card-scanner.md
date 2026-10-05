@@ -2300,7 +2300,7 @@ the whole frame either way.
 props of their own for that reason: `session::OCR_EVERY` runs the readers on one eligible frame
 in four and stops once the tracker has committed, so `verdict.ocr` and `verdict.collector` are
 `null` on most frames. `useScanLoop` keeps the last non-null of each — cleared when the camera
-starts or stops, and by the `clearReads()` the Reset press calls beside `scanner_reset` — which
+starts or stops, and by the `clearReads()` inside the pump's `reset()` — which
 is `live.html`'s own `lastOcr`. Read straight off the verdict, the Readouts panel says
 `(nothing read)` three frames in four about a tier that read the card correctly.
 
@@ -3147,12 +3147,21 @@ being encoded when Stop is pressed is discarded, and an in-flight answer cannot 
 **_Reset evidence_ sits at the bar's end, for every reader** (issue #740). It was a press in the
 Developer column's Match panel only, so a reader whose scanner had settled on the wrong card had no
 way to make it start over short of taking the card out of frame. It is the same press — the page's
-`onReset`, `clearReads()` then `scanner_reset`, a refusal said in the strip under the video — and
+`onReset`, the pump's `reset()`, a refusal said in the strip under the video — and
 the panel's copy went with the move, so a Developer reader never meets two buttons by one name. It
 is outside the live region: a press is not news, and a button inside *Scanner status* would be read
 out with every change of the line.
 The asset sentences sit under the camera, so a missing bundle is still said with the Developer
 panels off.
+
+**Reset is a boundary for outstanding frames too** (issue #781, 2026-10-05). The pump clears its
+verdict, title, collector line and resolution immediately, invalidates any unfinished grab or
+frame answer, and pauses new requests. It drains the outstanding frame before calling
+`scanner_reset`: the host's blocking tasks can acquire the session mutex in either order, so
+invoking Reset beside a frame was not enough to keep that frame from restoring old evidence.
+Scanning resumes when Reset settles; a rejection still reaches the page's error strip. Repeated
+presses share the pending reset. The tray stays intact, and the decision gap is cleared so the
+next card can be added immediately.
 
 **A card that lands is laid over the bottom of the camera for 2.2 s** (`reader/AddedToast.tsx`,
 `LANDED_HOLD_MS`): the Scryfall image of what was filed, a tick drawn on a green badge, the name,
