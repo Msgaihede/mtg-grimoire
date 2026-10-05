@@ -21,11 +21,15 @@ the real hosts** (§9.6). **It is deployed at `https://mtg-grimoire.app` since 2
 (§9.7) — the deploy is the owner's, and each one that day was run by an agent at his ask; one
 headless Chrome on Windows has driven the web host, and the owner has used it in Firefox and
 on a phone and said so in a sentence each. **Sync on a light install is phase 6, built a step at
-a time in §10**: since step 6.1 a browser install asks the relay as any host does and the
-relay's source answers a page — **both deployed on 2026-10-04 (§10.7)**: the relay answers the
-web app's pre-flight, and the deployed web app draws the Sync panel and its pairing where it
-used to say in a sentence that it could not sync. A browser against the deployed relay has
-still not paired or opened a socket: that needs the owner's membership.
+a time in §10 — and complete since 2026-10-05**: a light install is another device in the
+group, pairing by the same invite and keeping in step over the live socket, on both hosts —
+the loop is the core's, the Android host and the web host each run it — with a pull that is
+paged and a socket that is let go of when its device leaves or is removed. **Both Workers are
+deployed with all of it**, the relay and then the web app, twice each (§10.7), and **the owner
+has paired a browser with a desktop in production and synced between them** (2026-10-05; his
+sentence, not a measurement). What has still not been seen: sync on a phone — the camera's
+grant, a real lens on a real code, a socket across the app going to the background; in
+Safari; and in Firefox. §10 closes with what is open and whose it is.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
@@ -5625,8 +5629,8 @@ the Worker touches either.**
 
 A light install is another device in the group: the same invite, the same six digits, one of the
 membership's five slots, and the same socket (spec §7).
-[The plan](../superpowers/plans/2026-10-04-light-app-phase-6.md) has the six steps, one pull
-request each.
+[The plan](../superpowers/plans/2026-10-04-light-app-phase-6.md) has the six steps it began
+with and the two it grew, 6.3b and 6.5b — one pull request each.
 
 **Decided before anything was built** (the plan's table), by Markus on 2026-10-04:
 
@@ -5714,8 +5718,8 @@ here.
   `Access-Control-Allow-Origin`; the first request from a page is the deploy's own probe.~~
   **answered — a browser has, of the relay's own code under workerd** (§10.3): headless Chrome
   154 claimed, minted a token, paired, pushed, pulled and acked from a page, every pre-flight a
-  `204` and no request failed. The *deployed* relay has still been asked by no browser holding a
-  membership.
+  `204` and no request failed. The *deployed* relay had still been asked by no browser holding a
+  membership — until the owner's, on 2026-10-05, by his word (§10.7).
 - ~~**Whether workerd carries the 101's `Sec-WebSocket-Protocol` to a browser.** The types say the
   response may carry headers and no test can open a real socket; step 6.3's local relay settles
   it before a deploy has to.~~ **answered — it does** (§10.3): both of Chrome's sockets read
@@ -5949,9 +5953,11 @@ is this step's own pull request.
 
 **Open after this step:**
 
-- **Production.** A real browser against the deployed relay needs a real membership — the
+- ~~**Production.** A real browser against the deployed relay needs a real membership — the
   owner's — and the web app's deploy, which carries the `wss://` source and the new engine
-  together. Until then the live site's engine opens no socket.
+  together. Until then the live site's engine opens no socket.~~ **answered — by the owner's
+  word** (§10.7): on 2026-10-05 he paired the deployed web app with a desktop and synced
+  between them. Nobody read the socket itself there.
 - **Safari and Firefox.** Each opens a socket with sub-protocols and applies `connect-src` to
   it; neither has been driven, and neither has run any browser arm of the engine.
 - **What a keepalive is billed.** The local relay answers `ping` with `pong`; whether the
@@ -5963,7 +5969,7 @@ is this step's own pull request.
   or a loop that asked about its group while connected, would each end it. Neither is built.~~
   **answered — both are built, in step 6.3b (§10.3b)**: the loop lets go of a socket whose
   group its device is no longer in, and a rotation's roster closes the sockets of the devices it
-  leaves out. The relay's half waits on a deploy.
+  leaves out. The relay's half was deployed on 2026-10-05 (§10.7).
 - ~~**The sync smoke on a runner**: Linux, wrangler installed without its lifecycle scripts, a
   runner's clock under every wait. The pull request's own `web` job is the first.~~ **answered —
   it ran green there**: pull request #823's `web` job, on `ubuntu-24.04`, merged 2026-10-04.
@@ -6025,7 +6031,8 @@ socket was built. Fixed as one thing, on both sides.
   on a runtime whose order is known; **a browser's task order is not specified**, and no
   browser run has staged it.
 
-**The relay** (`relay/src/group.ts`, `log.ts`; **not deployed**): a rotation's roster closes,
+**The relay** (`relay/src/group.ts`, `log.ts`; **not deployed** when this was written —
+**deployed 2026-10-05 at 02:21:29 UTC**, §10.7): a rotation's roster closes,
 with **4002**, every open socket whose device the adopted manifest does not name, and marks a
 device it knows only by its socket departed with the rest; it compacts first, and a close that
 throws costs nothing else. `drop` still closes a whole group with 4001. The client's next act
@@ -6117,9 +6124,12 @@ longer in proportion.
 
 **Open after this step:**
 
-- **The relay's half is not deployed.** Until it is, a removed device learns at its own next
+- ~~**The relay's half is not deployed.** Until it is, a removed device learns at its own next
   round trip, as before — and then lets go of its socket, which is new. The runbook's ninth half
-  has what each side does with the other's old build, and the one look that says it is live.
+  has what each side does with the other's old build, and the one look that says it is live.~~
+  **answered — deployed 2026-10-05 at 02:21:29 UTC, and the client that reads 4002 in the web
+  app eight minutes later** (§10.7). The one look has not been taken: nobody has watched the
+  deployed relay tell a removed device.
 - **A released desktop against the new relay** reads the 4002 its own *Leave group* earns as a
   plain close: a second or two of `offline`, then `off`, and a row (*the relay closed the
   socket*) only if its socket was under a minute old. Read off the released loop's code
@@ -6218,9 +6228,10 @@ where the old entry is removed.
   refusal; a browser's on the installed web app; iOS Safari at all.
 - **No real lens has read the code off a real screen**, and the decode loop — `jsQR` over the
   camera's whole frame, every animation frame — has not been timed on a phone.
-- **A browser pairing end to end against the deployed relay.** The relay half was deployed on
+- ~~**A browser pairing end to end against the deployed relay.** The relay half was deployed on
   2026-10-04 at 17:22 UTC and `connect-src` names it on `main`; what it waits on now is the web
-  app's deploy and step 6.3.
+  app's deploy and step 6.3.~~ **answered — by the owner's word** (§10.7): he paired the
+  deployed web app with a desktop on 2026-10-05. Which face he paired on is not recorded.
 - **Whether 16px type stops the zoom on the owner's browsers**, and the on-screen keyboard over
   the code box and the typed word's box.
 - **A browser that really clears its site data**: whether `localStorage` outlives OPFS there is
@@ -6622,8 +6633,8 @@ says so. §10.5b is what was built from it, the two things it added, and the fig
   radio has still dropped nothing.
 - **A group at its quota stays there.** The 99 400 ops left on the importing device are offered
   on every trip and refused on every trip, ~~each refusal a read of the whole log by the
-  relay~~ (**since §10.5b a read of each row's length and of no body** — written, not
-  deployed); the thirty-day tail keeps an acked import that long. What a reader is told,
+  relay~~ (**since §10.5b a read of each row's length and of no body** — deployed
+  2026-10-05, §10.7); the thirty-day tail keeps an acked import that long. What a reader is told,
   beyond one `error_log` row, was not looked at.
 - **Ops unlike these.** One shape of op, 890 B sealed: a deck's, a note's and a delete's cost
   were not taken, and nor was a page that holds — a newer build's batch, a clock, a waiting
@@ -6639,8 +6650,9 @@ says so. §10.5b is what was built from it, the two things it added, and the fig
 both sides: the relay answers a page; the engine fetches a catch-up in pages, looks into it,
 and applies it a page at a time — or, when a baseline from a build older than v0.40.0 is in
 it, as the one answer it used to be.
-**Written and not deployed** — the relay's half is the runbook's tenth
-([hosted-relay-deploy.md](hosted-relay-deploy.md)), and until it is out a build that pages is
+**Written and not deployed** (**Deployed 2026-10-05: the relay's half at 02:21:29 UTC and the
+engine that pages at 02:29:39 — §10.7.**) — the relay's half is the runbook's tenth
+([hosted-relay-deploy.md](hosted-relay-deploy.md)), and until it was out a build that paged was
 answered by the live relay as it always was: one answer, read as the last page.
 
 **The relay** (`relay/src/group.ts`, `log.ts`; the Worker in front of the object is untouched):
@@ -6726,7 +6738,7 @@ pages took; and `sync:applied` **once a trip**, as before. A trip that applied p
 failed leaves `sync_state.pull_unannounced`, which the next trip to end well takes and answers
 `changed` for — without it those rows are in the database and on no screen
 (`a_pull_that_fails_between_two_pages_acks_what_it_took_and_emits_nothing`). An answer with no
-`more` is the last page, which is every relay deployed today; all 98 of the client's earlier
+`more` is the last page, which was every relay deployed when this was written; all 98 of the client's earlier
 tests ran over this pull unedited, their mocks answering the old shape.
 
 **The page's size is two constants, and the relay's is the one that sizes it.**
@@ -6892,16 +6904,55 @@ figures for the unpaged pull:
   characters, a parent's page a few bytes smaller than its child's waited for the end of the
   log; and a clean page that cleared the stored hold started a wait further up the log over.
 
+**Reviewed, independently and read-only (2026-10-05): "ship after fixes", and no blocker.**
+Its first should-fix was its condition for the relay's deploy: the streamed answer — the one
+every released build is given — had its bytes held to the old implementation's only by
+`group.test.ts`, over a stand-in state, and under workerd had been read by Chrome from a page
+with nothing comparing them. **Answered before that deploy, under real workerd** (2026-10-05:
+`wrangler dev --local` on the paging branch at `4fe47f3c`, a local D1 made from
+`relay/schema.sql`, tokens minted with a throwaway key). The request is the one a released
+desktop makes — `GET /g/{group}/pull?since=0&device=…` with a bearer, no `limit`, no
+`Origin` — over two logs, each interleaved between two devices with the tail the caller's
+own: 40 rows of 20 000 characters, and 120 rows of 400 000.
+
+- `200`, `application/json`, no `Content-Length`; the caller's own rows absent; the rows in
+  the group's order; `cursor` equal to the log's head.
+- **The same bytes when asked twice**, and the same with the app's `Origin`, which adds the
+  allow-origin header.
+- **Equal to the `limit=7` pages joined** — 4 pages and 79 — with the cursors equal.
+- The 31.6 MB answer took **869 ms**; an ack after it answered `204`.
+
+The rest of what the review found is in the list below, each marked as its.
+
 **Open after this step:**
 
+- **The fetching has no bound** (the review's). Fetching all of a catch-up first puts no cap on
+  it — not in pages, not in bytes, not in time — and a trip has no timeout of its own. A log at
+  its quota is 128 MiB held sealed before the first row is applied; an interrupted fetch starts
+  again from page one (below); and the sync lane is held for up to pages × 120 s, with a
+  departure waiting on it. **No safe bound was found**: any window applied early can lift an
+  older emitter's watermark ahead of its baseline, which is the loss fetching first exists to
+  prevent.
+- **A stale hold can be displayed** (the review's): clean pages advance past a block that has
+  resolved without clearing the stored hold.
+- **Four gaps in the tests** (the review's). The older-emitter fixtures are a current build's
+  output with `emission` stripped, not a sealed golden from v0.39. Nothing covers a compaction
+  mid-stream or between two pages — and the relay's own comment on it was wrong for a device
+  that holds no floor, corrected since (`group.ts`'s `pullWhole`): such a caller's listed rows
+  can go behind another device's ack, which is the answer a pull a moment later would have
+  had. Byte parity is held with ASCII device ids only. And the ack-after-error test fails at
+  `watermarks()` on an empty last page, never inside an apply.
 - **The one-answer evaluation was not measured in a browser.** No current build can put a
   baseline without references on a relay's log, so the harness has no way to stage one. By
   the code it is the unpaged evaluation over the same envelopes — §10.5's stretch and §10.5's
   memory — with the catch-up's sealed text held beside it; that is a reading of the code and
   not a figure. Its results are tested against the unpaged database natively; its cost is not.
-- **The relay's half is not deployed**, and nothing has asked a deployed object for a page.
+- ~~**The relay's half is not deployed**, and nothing has asked a deployed object for a page.~~
+  **answered in part — deployed 2026-10-05 at 02:21:29 UTC** (§10.7), and the web app that
+  pages eight minutes later. **Nothing has been seen asking a deployed object for a page.**
   There is no credential-free tell for it: `GET /g/abc/pull?limit=1` answers the gate's `401`
-  before and after. The runbook's item 14 has the two tells a device's own token gives.
+  before and after. The runbook's item 14 has the two tells a device's own token gives, and
+  neither has been read.
 - **A device that is live while a build older than v0.40.0 pushes its baseline still loses
   rows**, as it always has; [sync.md](sync.md)'s *What is still owed* has it as its own entry,
   with the fixtures. It ends when no device in a group is older than v0.40.0.
@@ -6919,7 +6970,9 @@ figures for the unpaged pull:
   build's batch the client fetches everything above its cursor and carries it all — the
   unpaged pull's memory and its one long stretch at the end, until the reader updates. Tested
   for what it decides (`a_hold_to_the_end_of_the_log_is_written_once_by_the_last_page`), not
-  measured for what it costs.
+  measured for what it costs. **The review reads it wider**: the carry has no bound under a
+  `newer`, a `clock` or a `behind` hold alike — the unpaged cost, on every trip while the
+  hold stands.
 - **Nothing is drawn until the last page.** `sync:applied` is one telling a trip; the rows of
   the earlier pages are in the database for the half-minute a 50 000-op catch-up still takes.
   A list refetched for another reason in that time shows them, which is right; nothing
@@ -7012,14 +7065,15 @@ it; the signing script with the real `keytool` and the SDK's three tools stubbed
   the first release-signed APK does not install over it. The commands are in
   [ci-and-releases.md](ci-and-releases.md), *What only the owner can do*.
 
-### 10.7 The deploys (2026-10-04)
+### 10.7 The deploys (2026-10-04 and 2026-10-05)
 
-Two, in the order the runbooks hold them to — the relay first, and the web app only once the
-relay answered a page — and both run by an agent under the owner's standing ask for this phase
-(*"you should deploy the changes we need, when we need them"*). Neither carries step 6.3b: the
-relay's ninth half and a client that reads 4002 are written and wait. Nor step 6.5b: the tenth
-half — a page of a pull, the streamed answer, compaction by length — and an engine that pages
-wait behind it, relay first.
+Two pairs, each in the order the runbooks hold them to — the relay first, and the web app only
+once the relay answered a page — and all four run by an agent under the owner's standing ask
+for this phase (*"you should deploy the changes we need, when we need them"*). **The first
+pair, on 2026-10-04**, carries neither step 6.3b — the relay's ninth half and a client that
+reads 4002 — nor step 6.5b: the tenth half — a page of a pull, the streamed answer, compaction
+by length — and an engine that pages. **The second pair, on 2026-10-05, carries both**, and
+follows the first below.
 
 **The relay, at 17:22:12 UTC** — step 6.1's half, the browser's: CORS and the socket ticket.
 From `main` at `ea0aa88e` (#818), version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, wrangler
@@ -7071,10 +7125,63 @@ socket**, from a device in no group. And the Sync panel, 4.6 s in: *Browser — 
 is off. Nothing leaves this device until you connect a membership.* — the sentence that said
 this build could not sync is gone. Nothing was pressed that asks the relay.
 
+**The second pair, on 2026-10-05 — steps 6.3b and 6.5b, on both Workers.**
+
+**Before it, the unpaged pull was asked of real workerd as a released desktop asks it** — the
+review's condition for this deploy, since every released build is answered by the streamed
+path and its bytes had been compared only over a stand-in. Two logs, `200` with no
+`Content-Length`, the same bytes asked twice and the same as the `limit=7` pages joined, a
+31.6 MB answer in 869 ms: §10.5b has every line.
+
+**The relay, at 02:21:29 UTC.** From `main` at `117827d2`, version
+`8139d6e7-c5db-48fc-afc6-cd438a815d7f`, wrangler 4.146.0 from `app-worker`'s lockfile,
+`--dry-run` first (85.29 KiB); no migration, no secret, no var changed. It carries three
+things:
+
+- **issue #752's fix**, from PR #827: `/claim` requires current auth when the group has key
+  rows. Another session's work, not this phase's — `main` held it, and the owner chose to
+  ship it with this deploy;
+- **step 6.3b's roster close with 4002** — the runbook's ninth half;
+- **step 6.5b's paged pull, streamed unpaged answer and compaction by length** — the tenth.
+
+Step 0's twelve probes were asked at 02:21:04 UTC, before, and at 02:21:32, after. **Identical,
+and identical to the first deploy's after-column**: `400 malformed token request`, `401`,
+`400 that is not a device id`, `401 unauthorized`, `404 nothing there`, `400 that is not an
+epoch`; (a) `204` with the allow-origin line, and `405` for its control; (b) `401` with the
+line, and `401` without; (c) `403 origin not allowed`, and `401`. **None of the three changes
+has a credential-free tell**: the probes say the Worker is whole after the deploy, and what
+says the three are in it is the tree that was deployed.
+
+**The web app, at 02:29:39 UTC.** From `main` at `117827d2` — so it carries 6.3b and 6.5b,
+and beside them #828's backup archive and #830's *Not sorted* controls, two other sessions'
+work that `main` held — version `685ae2ad-2309-4824-b707-6a39c159053e`, engine build id
+`a3947b5c7a3ba658` (the module 6 862 338 B), `index-ByCbemTm.js`, `worker-DfcE0hqp.js`. The
+runbook's steps in order: `npm ci`; `web:wasm`; `web:build`; `web:smoke` passed in 20.9 s;
+`web:sync-smoke` — below; `web:deploy-guard` exit 0 (59 on both sides, v0.40.0); `wrangler
+dev --local` with probes 1–11 and 14–19 answering as the table says (the module's brotli
+2 025 348 B locally); `deploy --dry-run` (48 files read); the deploy (12 files uploaded, 31
+already there).
+
+⚠️ **The sync smoke's first run failed in teardown, not in the walk**: `EBUSY … unlink
+…\grimoire-web-smoke-…\first_party_sets.db-journal` — a temp profile Chrome had not let go
+of — and the walk's own lines were not printed. **The second run passed all twelve lines in
+63.3 s.** A walk that passed must not report FAILED for a file Windows still holds:
+`scripts/web-smoke/harness.mjs` now tries the removal for longer, and names a directory it
+has to leave behind in one line without failing the run.
+
+**All twenty probes at 02:29:46 UTC, against the real address**, each as the first deploy's:
+the policy byte for byte the built one on every response that carries it, the 304 included;
+both relay sources named; the document equal to the built one; **the module 2 178 693 bytes as
+brotli**; probe 20 `204`.
+
+**One look in a real browser, at 02:30 UTC** — a throwaway headless Chrome. No policy
+violation. No error of the app's. No request to the relay and no socket, from a device in no
+group. The Sync panel as before.
+
 **What only the owner's membership can show.** One sentence of it has been said: **on
 2026-10-05 the owner paired the deployed web app (`https://mtg-grimoire.app`, version
 `befbcbd9`) with a desktop and synced between them, and said "it works"** — production's
-first browser sync. That is the owner's sentence and not a measurement: nobody read how long
+first browser sync, on the first pair's web app, before the second went out. That is the owner's sentence and not a measurement: nobody read how long
 the socket stayed live, saw a `pong`, or read what a tab's keepalive is billed. So, still
 shown by nothing but that sentence, or by nothing at all:
 
@@ -7083,4 +7190,47 @@ shown by nothing but that sentence, or by nothing at all:
   answered `pong` were settled under local workerd (§10.3), not there;
 - a write on one device drawn on another through the deployed relay, with nothing pressed —
   "synced between them" is what was said; whether anything was pressed was not;
-- what a keepalive is billed, which is the runbook's one-hour check.
+- what a keepalive is billed, which is the runbook's one-hour check;
+- **that a released desktop still syncs through the streamed answer in production — confirmed
+  by nobody since the second relay deploy.** Every released build's pull is that path now. The
+  owner was asked on 2026-10-05, and this stays open until he, or anyone with a membership and
+  a released build, says so;
+- a removed device told by the deployed relay, and a pull answered by it in pages — live by
+  the tree that was deployed, and seen by nobody.
+
+**Phase 6 is complete (2026-10-05).** Eight pull requests — #818 (6.1), #819 (6.2), #823 (6.3),
+#825 (6.3b), #820 (6.4), #824 (6.5), #829 (6.5b) and #821 (6.6) — and two deploys of each
+Worker. A light install is another device in the group on either host, over the live socket,
+and its pull is paged. What is open, and whose, drawn from the lists above and adding nothing
+to them:
+
+- **The owner's, on GitHub** (§10.6): the release rule's list — restrict the `release`
+  environment to `main` before anything is put in it, make the keystore and back it up, commit
+  its fingerprint, set the five values, uninstall the debug-signed app once
+  ([ci-and-releases.md](ci-and-releases.md), *What only the owner can do*). And the first
+  release, which is the first run of those jobs.
+- **The owner's, in production** (§10.7, and the runbook's items 13 and 14): a released
+  desktop through the streamed answer; a removed device told; a browser's socket read, and
+  what its keepalive is billed.
+- **A real phone's** (§10.2, §10.3, §10.4): the camera's grant and a real lens on a real code;
+  whether a backgrounded app, or a frozen tab, keeps its socket and what it does coming back.
+- **Safari's and Firefox's** (§10.3, §10.5): neither has been driven — no socket watched, no pull
+  measured.
+- **The paged pull's** (§10.5b): the fetching has no bound; the carry has none under a hold; a
+  stale hold can be displayed; the four test gaps; the one-answer evaluation measured in no
+  browser; a catch-up's many requests and pre-flights; nothing drawn until the last page.
+- **Production's limits** (§10.5): no pull of any size has been measured against the deployed
+  relay, and a group at its quota stays there.
+- **Smaller, and anyone's** (§10.3b, §10.4): a Sync panel left open on a removed device keeps
+  its old roster; no desktop has been driven through step 6.3b; the Android host answers no
+  `storage_group_warning`; the scan smoke runs only by hand; and no face says a sync is under
+  way.
+
+**Two defects older than this phase, which step 6.5b surfaced and nothing here fixed** — each
+under *What is still owed* in [sync.md](sync.md), with its fixture in
+`crates/grimoire-core/src/sync_engine/client/tests/paged.rs`:
+
+- **an older emitter's baseline arriving in two separate pushes** leaves a live receiver
+  missing rows;
+- **a copy filed into a binder that was deleted on the receiver**, whose sender later brings
+  the binder back, is kept on one device and not the other.

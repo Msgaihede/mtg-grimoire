@@ -107,9 +107,11 @@ nothing: until a page asks, no request carries an `Origin` and the new code is n
 `app-worker/README.md` is that deploy's runbook; "The order" below says the same thing where the
 order is decided.
 
-**A ninth half — a removed device is told (light app phase 6, step 6.3b) — is written and NOT
-deployed.** Written 2026-10-04. What the next deploy carries, beside anything above that is still
-waiting:
+**A ninth half — a removed device is told (light app phase 6, step 6.3b) — is deployed.**
+Written 2026-10-04; **deployed 2026-10-05 at 02:21:29 UTC from `main` at `117827d2`, version
+`8139d6e7-c5db-48fc-afc6-cd438a815d7f`**, in one deploy with the tenth half and issue #752's
+claim gate — step 6 has that run. (This paragraph said *written and NOT deployed* until then.)
+What it carried:
 
 - **A rotation's roster closes the sockets of the devices it leaves out**, with **`4002`** — a
   code of its own (`log.ts`'s `CLOSE_REMOVED`). `group.ts`'s `roster` asks `removedSockets`
@@ -135,7 +137,8 @@ reached only by the Worker, from inside an accepted `/rotate`.
 roster closes sockets. With a membership it is one look: pair two devices, remove one from the
 other, and **watch the removed one's Sync panel without touching it** — within about five
 seconds it reads *not paired yet* (after a moment of *Not connected to the relay*). Left reading
-its old roster until *Sync now* is pressed, the relay answering is the old one.
+its old roster until *Sync now* is pressed, the relay answering is the old one. **Nobody has
+taken that look at the deployed relay**: it is known to be live from the tree that was deployed.
 
 **Each side with the other's old build**, cell by cell. *Released* is v0.40.0's loop
 (`src-tauri/src/sync_engine/live.rs` at `daa70e12`), read, not driven: 4001 is `Removed` — a row
@@ -163,12 +166,13 @@ has.** A client built from the step's first commit (`c3bd78ee`, pushed and never
 A deploy disconnects every live socket once, as every deploy does. It is step 6 and nothing else,
 with step 0's probes before and after.
 
-**A tenth half — the paged pull, light app step 6.5b (issue #761) — is written and NOT deployed.**
+**A tenth half — the paged pull, light app step 6.5b (issue #761) — is deployed.**
 Written 2026-10-05, all of it in the group's Durable Object (`group.ts`, `log.ts`); the Worker in
-front of it, the gate, D1 and `wrangler.jsonc` are untouched. **It rides the same deploy as the
-ninth half when both are waiting** — both are the object's, and neither is in the other's
+front of it, the gate, D1 and `wrangler.jsonc` are untouched. **Deployed the same day at
+02:21:29 UTC, from `main` at `117827d2`** (#829), version `8139d6e7`. **It rode the same deploy
+as the ninth half** — both are the object's, and neither is in the other's
 functions (`roster` and `notify` there; `pull`, `ack`'s compaction and the quota's here). What
-the next deploy carries, beside the ninth's:
+that deploy carried, beside the ninth's:
 
 - **A page**: `GET /g/{group}/pull?since=&device=&limit=<rows>` answers whole rows in `seq`
   order, the caller's own left out by the query, inside a budget of sealed text the object
@@ -189,13 +193,35 @@ isolate's JS heap to 19, the importing device's own pull and ack from 44 MB to 0
 compaction from 45 MB to 0.1, and the paged pull's 125 requests left 11 MB between them with
 nothing collected.
 
-**It ships relay first, and neither side waits for the other.** A build that pages, against the
-relay that is live today, sends a `limit` that relay ignores and reads an answer with no `more`
-as the last page — the unpaged pull exactly, with what it costs
+**It shipped relay first, and neither side waited for the other.** A build that pages, against
+the relay that was live until this deploy, sends a `limit` that relay ignores and reads an
+answer with no `more` as the last page — the unpaged pull exactly, with what it costs
 (`an_old_relays_answer_is_one_page_and_the_last`). A released build against this relay sends no
 `limit` and is answered the same bytes (`group.test.ts` holds them to the old implementation's
-for a fixture log). So nothing breaks in either order; relay first is the order because until
-it is out, the web app's pull is the one §10.5 measured.
+for a fixture log). So nothing breaks in either order; relay first was the order because until
+it was out, the web app's pull was the one §10.5 measured. The web app that pages followed
+eight minutes later (02:29:39 UTC, `app-worker/README.md`).
+
+**The streamed answer was asked of real workerd, as a released desktop asks it, before it went
+out — the review's condition for the deploy.** Its bytes had been held to the old
+implementation's only by `group.test.ts`, over a stand-in state and Node's `Response`; under
+workerd it had been read by Chrome, from a page, and its bytes compared with nothing. On
+2026-10-05, `wrangler dev --local` on the paging branch at `4fe47f3c`, a local
+D1 made from `relay/schema.sql`, tokens minted with a throwaway key, and **the request a
+released desktop makes**: `GET /g/{group}/pull?since=0&device=…` with a bearer, no `limit` and
+no `Origin`. Two logs, each interleaved between two devices with the tail the caller's own:
+40 rows of 20 000 characters, and 120 rows of 400 000.
+
+- `200`, `application/json`, **no `Content-Length`**.
+- The caller's own rows absent; the rows in the group's order; `cursor` equal to the log's head.
+- **The same bytes when asked twice**, and the same bytes with the app's `Origin` — which adds
+  the allow-origin header and changes nothing else.
+- **Equal to the `limit=7` pages joined** — 4 pages of the first log, 79 of the second — and
+  the cursors equal.
+- The 31.6 MB answer took **869 ms**. An ack after it: `204`.
+
+That is workerd's own `ReadableStream` and its own SQLite, on one machine; it is not a released
+desktop's `reqwest` reading it, which item 14 still asks for.
 
 ⚠️ **There is no credential-free tell, and the obvious probe is not one.**
 `curl -si "$H/g/abc/pull?limit=1"` answers the bearer gate's `401` before the deploy and after
@@ -203,10 +229,12 @@ it: the gate stands in the Worker, ahead of the object, and this half changes no
 of the object. Like the refresh-secret change and the `dev` claim it is known to be live from
 the tree that was deployed. **With a device's own token there are two**, read from a paired
 device's network panel or with its bearer in hand: a pull that names a `limit` is answered a
-body carrying `"more"`, where today's relay answers `envelopes` and `cursor` alone; and
-`…/pull?since=0&device=<id>&limit=0` answers `400` `{"error":"bad limit"}`, where today's
-answers `200`. Step 0's probes, all of them, are answered as before and after — run them, as
-for every deploy; they say the Worker is whole, not that this half is in it.
+body carrying `"more"`, where the relay before it answered `envelopes` and `cursor` alone; and
+`…/pull?since=0&device=<id>&limit=0` answers `400` `{"error":"bad limit"}`, where that one
+answered `200`. **Neither has been read off the deployed relay.** Step 0's probes, all of them,
+are answered as before and after — run them, as for every deploy; they say the Worker is whole,
+not that this half is in it. **They were run, at 02:21:04 and 02:21:32 UTC, and said so** —
+step 0 has the sentence.
 
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
 [2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
@@ -218,7 +246,7 @@ is the only wrangler command an agent may run unasked — it runs workerd locall
 and needs no login. Everything below is Markus's, or an agent's at his ask: he asked for the
 seventh half's on 2026-10-01, and **for the light app's phase 6 he asked once for the whole
 phase** (2026-10-04: "you should deploy the changes we need, when we need them") — which covers
-the eighth half's deploy and nothing after that phase. Whoever runs it follows every step.
+the eighth half's deploy, the ninth and tenth's on 2026-10-05, and nothing after that phase. Whoever runs it follows every step.
 
 ---
 
@@ -235,15 +263,20 @@ the eighth half's deploy and nothing after that phase. Whoever runs it follows e
 | Issue #546's **half** | **deployed 2026-09-28 at 19:57 UTC, and no public route path gives it away.** The tell is a query parameter: `/g/{group}/keys?device=…&epoch=x` with any well-formed bearer answers **400 `that is not an epoch`** from this tree — `handleKeys` checks the epoch's shape before the credential's value — and **401** from a Worker that ignores `epoch`. **Probed 2026-10-01: 400.** ⚠️ **This row said "not deployed" until then**, with a probe read off the code and never run. From inside a group the same fact is a `/keys` 200 that carries `removalStep: 2`. |
 | Issue #548's **`dev` claim** | **deployed 2026-10-01**, from `main` at `2b845048`. No probe without a credential can see it. |
 | The **rate limits** | **deployed 2026-10-01 at 22:09 UTC.** `settings` on the script lists `RL_CLAIM`, `RL_MINT` and `RL_READ` as `ratelimit` bindings, and a 400-request flood at `/claim` drew 347 `429`s. No small probe can see them — sixteen requests against a limit of ten drew none. Step 8 has the measurement. |
-| The **browser's half** — CORS, the socket ticket, the auto-response | **not deployed.** `OPTIONS /token` with `Origin: https://mtg-grimoire.app` and `Access-Control-Request-Method: POST` answered **405** on 2026-10-04 at 15:49 UTC, where this tree answers **204**; the same request from `https://example.com` answered 405 too, which it does on both sides of the deploy. An upgrade to `/g/abc/ws` from `Origin: https://example.com` answered **401**, where this tree answers **403**. Step 0's last three pairs are the probes. |
+| The **browser's half** — CORS, the socket ticket, the auto-response | **deployed 2026-10-04 at 17:22 UTC.** `OPTIONS /token` with `Origin: https://mtg-grimoire.app` and `Access-Control-Request-Method: POST` answered **405** on 2026-10-04 at 15:49 UTC, where this tree answers **204** — and **204** at 23:09 UTC, after it; the same request from `https://example.com` answered 405 too, which it does on both sides of the deploy. An upgrade to `/g/abc/ws` from `Origin: https://example.com` answered **401** before and **403** after. Step 0's last three pairs are the probes. ⚠️ **This row said "not deployed" until 2026-10-05**, through the deploy that made it false and the one after — the eighth half's own paragraph above had the deploy; this row and the sentence under the table did not. |
+| The **removal's close** (4002), the **paged pull** and issue #752's **claim gate** | **deployed 2026-10-05 at 02:21:29 UTC**, from `main` at `117827d2`, version `8139d6e7-c5db-48fc-afc6-cd438a815d7f`. No probe without a credential can see any of the three: step 0's twelve answered the same before and after. |
 | The D1 database | **exists.** `wrangler.jsonc`'s `database_id` is a real uuid, and has been since before this branch. It holds live entitlement rows, so step 2's `ALTER TABLE`s run against real data. `sqlite_master` listed `entitlements`, `claim_codes`, `group_keys`, `group_devices` and `pairing_rendezvous` on 2026-09-28, beside D1's own `_cf_KV`. **On 2026-10-01** `entitlements` carried fourteen columns, `refresh_device` and `reconciled_at` among them, with both CHECKs of item 5 in its stored SQL and the `entitlements_reconcile` index beside it — and the share Worker's `shares` table was added that day. |
 | The Patreon OAuth app | **the client exists.** `PATREON_CLIENT_ID` is real in `entitlement.rs` since `a0eb0c6` (2026-08-30) and was verified live: `GET /oauth2/authorize` with it and `/oauth/patreon/callback` answered 302 to Patreon's login, preserving both parameters, which an unregistered id or an unregistered redirect does not do. **`wrangler.jsonc`'s `vars` carry the relay's own copy of it and `PATREON_CAMPAIGN_ID`**, both real, the client id byte for byte equal to the Rust constant. |
 
 A device pointed at that host today reaches a relay that speaks the whole membership flow, the
-whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-10-04,
-one thing in `relay/` is undeployed — the browser's half, the table's last row — and the host
-still runs the 2026-10-01 22:09 UTC deploy, `claude/relay-rate-limits` at `7f6d6f50`.** Until that
-day this sentence read "nothing in `relay/` is undeployed". It is the sentence on
+whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-10-05,
+nothing `relay/` does is undeployed: the host runs `main` at `117827d2`, deployed that day at
+02:21:29 UTC** — and the one change to `relay/` since is a doc comment in `group.ts`, corrected
+in the commit that wrote this, and no code. ⚠️ On 2026-10-04 this sentence named the browser's
+half as the one thing undeployed and the host as still running the 2026-10-01 22:09 UTC deploy —
+and **it went on saying so after that half went out at 17:22 UTC the same day**, through one
+more deploy, until it was read again on 2026-10-05. Before 2026-10-04
+it read "nothing in `relay/` is undeployed". It is the sentence on
 this page most certain to rot, because the next branch that touches `relay/` makes it false
 without editing it — the last two that did each left it wrong, once in each direction, and the
 two since each edited it in the change that made it false. Step 0
@@ -412,6 +445,11 @@ the streamed answer and compaction by length are what every existing device is s
    a device id"}`, `401 {"error":"unauthorized"}`, `404 {"error":"nothing there"}`, `400
    {"error":"that is not an epoch"}`.
 
+   **All twelve were asked again on 2026-10-05, at 02:21:04 UTC before the deploy of 02:21:29
+   (the ninth and tenth halves and issue #752's gate) and at 02:21:32 after it, and answered
+   both times as the after-column and the line above** — none of those three changes has a tell
+   a probe without a credential can see.
+
    - **405 on both of (a) is how "not deployed yet" reads**: a Worker without this half has never
      heard of either origin and gives each the router's method refusal. **204 on the first with
      405 on the second** is the half deployed *and* its list holding. **204 on both** would be a
@@ -579,7 +617,9 @@ the streamed answer and compaction by length are what every existing device is s
    refresh-secret change. They protected the registered keys, but a removed device could still
    re-claim with stale auth to obtain a fresh grant.
 
-   **Issue #752 closes that path in the relay source, awaiting deployment** (2026-10-05).
+   **Issue #752 closes that path** (PR #827, 2026-10-05), **and it is deployed: that day at
+   02:21:29 UTC, from `main` at `117827d2`**, with the ninth and tenth halves — the owner chose
+   to ship it with that deploy.
    `/claim` now requires `authIsCurrent` if the target group has key rows, and answers a stale
    claim with a plain **401** before consuming its code or changing its binding, refresh secret,
    device roll or keys. A legitimate device behind a rotation must catch up through `/keys`
@@ -588,9 +628,10 @@ the streamed answer and compaction by length are what every existing device is s
    seed, so the original migration repair above remains available. The binding write checks that
    the authenticated epoch and auth are unchanged; existing-group tokens are stamped before the
    auth check so a concurrent removal cannot obtain a post-removal token. A rotation overtaking
-   the initial check may consume the code before the write refuses the claim. This source fix
-   does not mean
-   the hosted relay already enforces the gate.
+   the initial check may consume the code before the write refuses the claim. **That the hosted
+   relay enforces the gate is known from the tree that was deployed, and from nothing else**:
+   step 0's probes answer the same on both sides of it, and nobody has presented a stale claim
+   to the deployed relay. (This paragraph said *awaiting deployment* until that deploy.)
 
    **Measured 2026-08-30**, on the real pair and on the first press of the pass: a paid-up,
    paired device at epoch 2, `entitled: true`, `status: "active"` — and `sync_now` answering
@@ -614,14 +655,22 @@ the streamed answer and compaction by length are what every existing device is s
    ```
 5. **Register the webhook** for `members:pledge:create`, `members:pledge:update`,
    `members:pledge:delete` and `members:update`, pointing at `/webhook/patreon`.
-6. **`npx wrangler deploy`.** **Last run 2026-10-04 at 17:22:12 UTC, from `main` at `ea0aa88e`
-   (#818)** — version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, wrangler 4.146.0, `--dry-run`
-   first — **with the browser's half**, the eighth, and step 0's three `Origin` pairs before and
-   after it: they answer `204`, `401` with the header, and `403`, which is what the web app's own
-   deploy waited on. Before it: 2026-10-01 at 22:09 UTC from `claude/relay-rate-limits` at
-   `7f6d6f50` with step 8's rate limits, after 19:17 UTC the same day from `main` at `2b845048`,
-   and twice on 2026-09-28, at `1512ea68` and then with issue #546's half. **The next run carries
-   the ninth half** — a removed device is told, at the top of this page. Both bullets below are
+6. **`npx wrangler deploy`.** **Last run 2026-10-05 at 02:21:29 UTC, from `main` at
+   `117827d2`** — version `8139d6e7-c5db-48fc-afc6-cd438a815d7f`, wrangler 4.146.0 from
+   `app-worker`'s lockfile, `--dry-run` first (85.29 KiB); no migration, no secret, no var
+   changed — **with three things**: the ninth half, step 6.3b's roster closing with 4002; the
+   tenth, step 6.5b's paged pull, streamed unpaged answer and compaction by length; and issue
+   #752's claim gate from PR #827, another session's work that the owner chose to ship with
+   this deploy. Step 0's twelve probes at 02:21:04 UTC, before, and at 02:21:32, after:
+   identical, and identical to the after-column of the deploy before — **none of the three has
+   a credential-free tell**, so what says they are live is the tree that was deployed. Before
+   it: 2026-10-04 at 17:22:12 UTC, from `main` at `ea0aa88e` (#818) — version
+   `75f903b6-94c3-431c-bf83-3ce36ed5d9e8` — **with the browser's half**, the eighth, and step
+   0's three `Origin` pairs before and after it: they answer `204`, `401` with the header, and
+   `403`, which is what the web app's own deploy waited on. Before that: 2026-10-01 at 22:09
+   UTC from `claude/relay-rate-limits` at `7f6d6f50` with step 8's rate limits, after 19:17 UTC
+   the same day from `main` at `2b845048`, and twice on 2026-09-28, at `1512ea68` and then with
+   issue #546's half. **No half waits on a next run.** Both bullets below are
    still open. Then, for the refresh-secret change:
    - **Press Connect Patreon once on the paying device.** Not required, but it records which
      device holds the secret, so the group's next rotation keeps it rather than retiring it as
@@ -943,8 +992,8 @@ two profiles of headless Chrome 154 reaching it by its real name):
 | --- | --- | --- |
 | The 101's `Sec-WebSocket-Protocol` reaches a browser | **yes** — both sockets read `grimoire.live.v1` and stayed open | not seen: it needs a real membership in a real browser, which is the owner's |
 | The text `ping` is answered `pong` | **yes** — every `ping` either device sent, the second 45 s after the first | not seen |
-| A page's requests pass CORS, refusals included | **yes** — a claim, a token, a pairing, pushes, pulls and acks, with no failed request | step 0's probes, from outside: **answered 2026-10-04 at 23:09 UTC** — `204` with the allow-origin line, `401` with it, `403` to a foreign origin. No page has asked yet |
-| The page's policy lets the socket through | only with the relay's `wss://` source in `connect-src` — `https://` alone is refused by Chrome | the web app's next deploy carries it |
+| A page's requests pass CORS, refusals included | **yes** — a claim, a token, a pairing, pushes, pulls and acks, with no failed request | step 0's probes, from outside: **answered 2026-10-04 at 23:09 UTC** — `204` with the allow-origin line, `401` with it, `403` to a foreign origin. A page has asked since, by the owner's sentence below and no other reading |
+| The page's policy lets the socket through | only with the relay's `wss://` source in `connect-src` — `https://` alone is refused by Chrome | **in production's policy** since the web app's deploy of 2026-10-04 at 23:19 UTC (`app-worker/README.md`, probe 19) |
 | What a keepalive is billed | nothing a local run can say | the one-hour check below |
 | The token in Workers Logs | nothing a local run can say | **decided, not measured**: accepted by the owner on 2026-10-04, `invocation_logs` stays on |
 | Safari, Firefox, a phone's browser | not driven | not driven |
@@ -1003,7 +1052,8 @@ two profiles of headless Chrome 154 reaching it by its real name):
   trip — its own write, a *Sync now*, or the next push by anybody left. If that is wanted
   sooner it is a change to `group.ts`'s `roster` — close the departed devices' sockets — and a
   deploy of its own.~~ **Written, in step 6.3b — the ninth half, at the top of this page — and
-  waiting on that deploy.**
+  deployed 2026-10-05 at 02:21 UTC.** Nobody has watched the deployed relay tell a removed
+  device.
 - **A pre-flight's cache, and a pull's lack of one.** A browser files a pre-flight under the whole
   URL, so `/pull?since=…` is asked about again whenever the cursor has moved. Count the `OPTIONS`
   in the page's network panel across a few edits: one in front of most pulls is the design, and
@@ -1011,7 +1061,7 @@ two profiles of headless Chrome 154 reaching it by its real name):
 
 ### 14. The paged pull — a streamed body no released desktop has read, and a catch-up that is many requests
 
-Added 2026-10-05; **not deployed**. `relay/src/group.test.ts` runs the real `Group` over Node's
+Added 2026-10-05; **deployed that day at 02:21:29 UTC**. `relay/src/group.test.ts` runs the real `Group` over Node's
 SQLite behind the stand-in state `ticket.test.ts` already used, and `npm run web:sync-smoke` and
 `web:sync-pull` run the same code under workerd against Chrome. What neither reached:
 
@@ -1021,7 +1071,12 @@ SQLite behind the stand-in state `ticket.test.ts` already used, and `npm run web
   `reqwest` on a build that expects one buffered JSON body, and what changed for it is the
   framing: no `Content-Length`. **Straight after the deploy, edit a card on one released desktop
   and watch a second pick it up**, then leave one desktop closed across a few dozen edits and
-  open it: its one pull is the streamed path.
+  open it: its one pull is the streamed path. **Asked of real workerd before the deploy, as a
+  released desktop asks it** — no `limit`, no `Origin`, a 31.6 MB answer in 869 ms, the same
+  bytes twice and the same as the pages joined; the tenth half, at the top of this page, has
+  every line. ⚠️ **Not confirmed by anyone since the deploy: that a released desktop still
+  syncs through the streamed answer in production.** The owner was asked on 2026-10-05; this
+  bullet is open until he, or anyone with a membership and a released build, says so.
 - **What a catch-up costs in requests.** Unpaged, a device a 45 MB log behind made one pull.
   Paged it makes about 125, each a Worker invocation and a Durable Object request, and from a
   browser each behind a pre-flight of its own — a pull's address carries its cursor — which is
@@ -1046,10 +1101,10 @@ SQLite behind the stand-in state `ticket.test.ts` already used, and `npm run web
 
 ## Known limitations, written down rather than discovered
 
-- **What follows is the relay that is deployed; the tenth half ends it, and is not deployed.**
-  With it a paged pull holds a page, an unpaged one is streamed (19 MB of heap for a 45 MB log
-  where it was 89), and compaction reads lengths (0.1 MB where it was 45) — item 14, and
-  [light-app.md](light-app.md) §10.5b. Until that deploy:
+- **What follows was the relay that was deployed until 2026-10-05 at 02:21 UTC; the tenth half
+  ended it.** With it a paged pull holds a page, an unpaged one is streamed (19 MB of heap for a
+  45 MB log where it was 89), and compaction reads lengths (0.1 MB where it was 45) — item 14,
+  and [light-app.md](light-app.md) §10.5b. What it replaced, kept as the record of why:
 - **A group's whole log goes through the isolate's memory, on three routes.** `pull` reads every
   row past the cursor and serialises them into one answer; `ack`, whenever it moves a cursor,
   runs `compactNow`, which reads every row with its `sealed`; and a push refused for the quota

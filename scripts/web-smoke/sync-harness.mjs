@@ -14,7 +14,6 @@
 import { spawn, spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readdirSync, readFileSync, rmSync } from "node:fs";
-import { rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -24,6 +23,7 @@ import {
   atExit,
   browse,
   buttonSaying,
+  discard,
   fail,
   fixtures,
   openPage,
@@ -146,7 +146,8 @@ export async function startRelay(pageOrigin) {
       .map((entry) => join(scratch, entry)),
   ];
   undo.push(async () => {
-    for (const path of mine()) await rm(path, { recursive: true, force: true, maxRetries: 10 });
+    // Each on its own, and none of them the run's verdict: one that will not go is named.
+    for (const path of mine()) await discard(path);
   });
   // And on the way out by any other road ({@link atExit}): the same, without waiting. Best
   // effort — workerd may still be letting go of a file, and a directory left behind is ignored

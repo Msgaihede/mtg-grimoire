@@ -101,8 +101,10 @@ key distribution are all live. This sentence briefly said `/rotate` and `/keys` 
 routes still missing; that was true for part of one day. **The device roll and the pairing
 rendezvous are deployed too**, which this file denied until 2026-09-28 on a probe that could not
 fail — [the runbook](../reference/hosted-relay-deploy.md)'s step 0 has one that can. **The last
-deploy was 2026-10-04 at 17:22 UTC** (the browser's half, below); **the one before it, on
-2026-10-01 at 22:09 UTC**, carried rate limits on the five routes a caller reaches
+deploy was 2026-10-05 at 02:21:29 UTC, from `main` at `117827d2`** (version
+`8139d6e7-c5db-48fc-afc6-cd438a815d7f`; three things, at the end of this paragraph); **the one
+before it, 2026-10-04 at 17:22 UTC**, carried the browser's half, below; **and the one before
+that, on 2026-10-01 at 22:09 UTC**, carried rate limits on the five routes a caller reaches
 with no token — in the Worker, because `workers.dev` has no zone for a rule, so they spare the D1
 read and not the request, and they bound a flood rather than metering a trickle. The deploy before
 it, the same day from `main` at `2b845048`, carried issue #548's `dev` claim on the tokens the
@@ -114,14 +116,21 @@ and a native client never did** — an allow-list of origins a page may ask from
 `relay/src/cors.ts`), the pre-flight answered ahead of every limiter and every Durable Object, and
 `/ws` taking its bearer from the socket's sub-protocol, which is the only place a browser can put
 one (`relay/src/ticket.ts`). A request with no `Origin` is answered byte for byte as before, so no
-released build notices. **Deployed 2026-10-04 at 17:22:12 UTC, from `main` at `ea0aa88e` (#818)
-— the last deploy — and verified**: version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, by an agent at
+released build notices. **Deployed 2026-10-04 at 17:22:12 UTC, from `main` at `ea0aa88e` (#818),
+and verified**: version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, by an agent at
 the owner's standing ask for this phase. Asked before it, the relay answered an `OPTIONS` from the
 web app's origin 405; asked at 23:09:03 UTC, **204 with `Access-Control-Allow-Origin:
 https://mtg-grimoire.app`**, a 401 a page can read, and 403 to a foreign origin's socket — the
-runbook's step 0 has every answer. No browser has opened a socket in production yet. **Written
-and not deployed since**: a rotation's roster closing the removed devices' sockets with 4002
-(light app step 6.3b; the runbook's ninth half). **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
+runbook's step 0 has every answer. **A browser has synced in production since, by the owner's
+word** (2026-10-05, `docs/reference/light-app.md` §10.7); nobody has read its socket there.
+**The deploy of 2026-10-05 at 02:21:29 UTC carried three things, by an agent under the same
+standing ask**: a rotation's roster closing the removed devices' sockets with 4002 (light app
+step 6.3b; the runbook's ninth half), the paged pull with the unpaged answer streamed and
+compaction by length (step 6.5b; the tenth), and issue #752's gate — `/claim` requires current
+auth when the group has key rows (PR #827). No migration, no secret, no var changed. Step 0's
+twelve probes answered the same before and after it: **none of the three has a tell a probe
+without a credential can see**, and nobody has yet said that a released desktop still syncs
+through the streamed answer in production. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
 real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
 
 ## Entitlements, removal and leaving
@@ -193,15 +202,18 @@ second source is derived from `RELAY_BASE` by the rule the engine dials by, and 
 holds it to that one. **A build that asks the relay from a page is deployed since 2026-10-04 at
 23:19:22 UTC** — after the relay's half, which went out at 17:22 UTC and answered its
 pre-flight `204` at 23:09 and 23:18: the web app's deploy carried the engine that asks and the
-`wss://` source together, and its policy names the relay (probe 19: `1`). ⚠️ **No browser has
-paired, or opened a socket, in production** — that needs the owner's membership
-(`docs/reference/light-app.md` §10.7). **An address a server sends is not**
+`wss://` source together, and its policy names the relay (probe 19: `1`). **A browser has paired and synced
+in production, by the owner's word** — on 2026-10-05, with a desktop: his sentence, not a
+measurement (`docs/reference/light-app.md` §10.7). **An address a server sends is not**
 — Scryfall's bulk-file host is in no line of ours, so if that moves every suite stays green and
-a browser's first run fails. **The last deploy was 2026-10-04 at 23:19:22 UTC, from `main` at
-`2bbd4446`** (through #824), version `befbcbd9-be3d-45f5-8150-4af8ff5337c9`, engine build id
-`d6f5dc2a123a220e` — the fourth that day, with all twenty of its runbook's probes asked of the
-real address thirteen seconds later — so **production is that commit and not `main`** once
-`main` moves past it: step 6.3's engine, and not yet 6.3b's. This
+a browser's first run fails. **The last deploy was 2026-10-05 at 02:29:39 UTC, from `main` at
+`117827d2`** (through #829, and #828 and #830 beside it), version
+`685ae2ad-2309-4824-b707-6a39c159053e`, engine build id `a3947b5c7a3ba658` — the fifth, eight
+minutes after the relay's, with all twenty of its runbook's probes asked of the real address
+seven seconds later — so **production is that commit and not `main`** once `main` moves past
+it: the engine of steps 6.3b and 6.5b, one that lets go of a socket it has no group for and
+pulls in pages. The one before it was 2026-10-04 at 23:19:22 UTC, from `2bbd4446`, version
+`befbcbd9` — the build the owner paired. This
 paragraph said *not deployed* until that day. No agent may deploy it unasked: each of
 those was run by an agent because Markus asked for it, and **the ask is per deploy** — except
 that for the light app's phase 6 he asked once for the phase's deploys, the relay's and this

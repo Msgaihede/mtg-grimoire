@@ -406,10 +406,21 @@ export class Group implements DurableObject {
    * change is what a stream changes: the answer carries no `Content-Length`.
    *
    * **The head is read first and bounds the rest**, so a push that lands while the answer is
-   * still being written is not in it and is not stepped over by its cursor either. A row the
-   * list named that has gone by the time it is read is left out; nothing deletes one above a
-   * device's own ack but a drop or that device's departure, after either of which the answer
-   * is nobody's to read.
+   * still being written is not in it and is not stepped over by its cursor either.
+   *
+   * **A row the list named that has gone by the time it is read is left out, and a compaction
+   * can take one.** The stream is pulled from between other requests, and another device's ack
+   * runs `compactNow` among them. For a caller that holds the floor — it has an ack row, and
+   * asks from its ack or above — nothing it was listed is below the floor, so only a drop or its
+   * own departure deletes one, after either of which the answer is nobody's to read. **A caller
+   * the relay has never heard from holds no floor**: with no ack row and no row of its own,
+   * `log.ts`'s `compact` does not count it — a device replaying from zero, as a join is. Nor
+   * does a floor cover a caller asking from below its own ack. Rows either was listed can go
+   * mid-stream, behind another device's ack. Only a row both below the floor and older than the
+   * thirty-day tail qualifies, and the answer is then the one a pull made a moment later would
+   * have had — so it is no loss the compaction had not already decided, and nothing new.
+   * **The same holds between two pages of a paged pull** ([`pullPage`]): a page is read in one
+   * turn of the object, and a compaction can fall between two of them.
    */
   private pullWhole(cursor: number, device: string, group: string): Response {
     const head = this.head(cursor);

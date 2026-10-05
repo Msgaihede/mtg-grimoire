@@ -5,11 +5,13 @@ build — `dist-web/`, the page and the engine compiled to WASM — at **`https:
 the origin root. It is static assets, one file of response headers, and a script of a few lines.
 
 **It is deployed there since 2026-10-04** — first at 12:47 UTC, from `main` at `d8c3779b`, with
-every probe of step 0 asked of the real address a minute later. **The last deploy was 23:19:22
-UTC the same day, from `main` at `2bbd4446`** (through #824) — the fourth build, and the first
-whose engine asks the relay from a page and whose policy lets it: step 6.3's engine and the
-`wss://` source, and not yet step 6.3b or 6.5b — so production is `main`'s code as of that
-commit. Before it: 13:43 UTC from `e1e76f78`, the third build and the first to rename chunks;
+every probe of step 0 asked of the real address a minute later. **The last deploy was 2026-10-05 at
+02:29:39 UTC, from `main` at `117827d2`** (through #829) — the fifth build: the engine of
+steps 6.3b and 6.5b, which lets go of a socket it has no group for and pulls in pages, eight
+minutes after the relay that answers a page — so production is `main`'s code as of that
+commit. Before it: 23:19:22 UTC on 2026-10-04 from `2bbd4446` (through #824), the fourth build
+and the first whose engine asks the relay from a page and whose policy lets it — step 6.3's
+engine and the `wss://` source; 13:43 UTC from `e1e76f78`, the third build and the first to rename chunks;
 and between the first and that, a build from `4929cc6e` went
 out at 13:27 and was rolled back at 13:28 and forward again at 13:30, to see a rollback work.
 This paragraph said *nothing is deployed there* until that day. **Ask the host before you
@@ -425,7 +427,8 @@ ahead and run the deploy"*. Nothing else was run. **For the light app's phase 6 
 for the phase** (2026-10-04: *"you should deploy the changes we need, when we need them"*): the
 relay's deploy and this Worker's, as that phase's steps need them, and nothing after it. **The
 deploy of 23:19 UTC that day was run under that standing ask** — after the relay's, at 17:22,
-and only once probe 20 had answered `204` with the allow-origin line. The steps below bind
+and only once probe 20 had answered `204` with the allow-origin line — **and so was the one of
+2026-10-05 at 02:29 UTC**, after the relay's at 02:21. The steps below bind
 whoever runs them.
 
 ### Step 0 — ask the host, never a document
@@ -440,8 +443,8 @@ nothing at the address to ask.) **It is that minute's answer and no later one's.
 before believing this file or its opposite, and after every deploy, and write the answers in here
 with the date.
 
-**Production has moved three times since the column was written, and the probes were asked again
-each time.** The third is what production serves, and is the last bullet.
+**Production has moved four times since the column was written, and the probes were asked again
+each time.** The fourth is what production serves, and is the last bullet.
 
 - **Version `f724bbc1-9853-4978-9ffe-8b3c0af6c339`**, `main` at `4929cc6e`, the same engine
   build. Probes 1–11 and 14–18 were asked of it after the roll forward, and each answered as
@@ -455,7 +458,8 @@ each time.** The third is what production serves, and is the last bullet.
   a `404`; probe 13 still `200` over plain `http` — five minutes before the setting behind it
   was turned on.
 - **Version `befbcbd9-be3d-45f5-8150-4af8ff5337c9`, deployed at 23:19:22 UTC from `main` at
-  `2bbd4446` — what production serves.** Engine build id `d6f5dc2a123a220e`, `index-B-KQBiDj.js`,
+  `2bbd4446` — what production served until 02:29 UTC on 2026-10-05**, and the build the owner
+  paired with a desktop that day. Engine build id `d6f5dc2a123a220e`, `index-B-KQBiDj.js`,
   `worker-WDxbzWW_.js`; by an agent under the phase's standing ask, with the wrangler this
   directory's lockfile pins (4.146.0, `npm ci --ignore-scripts --prefix app-worker`). The steps
   in order: `npm ci`; `web:wasm` (6 836 569 B); `web:build`; `web:smoke` passed in 19.0 s;
@@ -490,7 +494,36 @@ each time.** The third is what production serves, and is the last bullet.
   yet.*, *Pair a device*, *Enter a code from another device*, *Not connected.*, *Connect
   Patreon*, *Sync is off. Nothing leaves this device until you connect a membership.* — the
   refusal sentence is gone. Nothing was pressed that asks the relay. **Not seen: a browser
-  pairing, or opening a socket, in production** — that needs the owner's membership.
+  pairing, or opening a socket, in production** — that needs the owner's membership. (**Since
+  said, of this version, by the owner on 2026-10-05**: he paired it with a desktop and synced
+  between them — "it works". His sentence, not a measurement.)
+- **Version `685ae2ad-2309-4824-b707-6a39c159053e`, deployed on 2026-10-05 at 02:29:39 UTC
+  from `main` at `117827d2` — what production serves.** It carries step 6.3b's engine and
+  step 6.5b's, which pulls in pages, and beside them two other sessions' work that `main` held:
+  #828's backup archive and #830's *Not sorted* controls. Engine build id `a3947b5c7a3ba658`
+  (the module 6 862 338 B), `index-ByCbemTm.js`, `worker-DfcE0hqp.js`; by an agent under the
+  phase's standing ask, eight minutes after the relay's own deploy (02:21:29 UTC — the relay
+  that answers a page), with the wrangler this directory's lockfile pins. The steps in order:
+  `npm ci`; `web:wasm`; `web:build`; `web:smoke` passed in 20.9 s; `web:sync-smoke` —
+  ⚠️ **the first run failed in teardown**, `EBUSY … unlink
+  …\grimoire-web-smoke-…\first_party_sets.db-journal`, a temp profile Chrome had not let go
+  of, with the walk's own lines not printed; **the second run passed all twelve lines in
+  63.3 s** (the harness has since stopped failing a run over a profile it cannot remove:
+  `scripts/web-smoke/harness.mjs`'s `discard`); `web:deploy-guard` exit 0 (59 on both
+  sides, v0.40.0); `wrangler dev --local` with probes 1–11 and 14–19 each answering as the
+  table says (the module's brotli transfer 2 025 348 B locally); `deploy --dry-run` (48 files
+  read); the deploy (12 files uploaded, 31 already there).
+
+  **All twenty at 02:29:46 UTC, against the real address**, each as the previous deploy's
+  bullet has it: the policy equal byte for byte to the built one on every response that
+  carries it, the 304 included; both relay sources named (probe 19); the document equal to
+  the built one; **the module 2 178 693 bytes as brotli** (it is 6 862 338); probe 20 `204`.
+
+  **One look in a real browser, at 02:30 UTC** — a throwaway headless Chrome: no policy
+  violation, no error of the app's, no request to the relay and no socket from a device in
+  no group, and the Sync panel as before. Nothing was pressed that asks the relay. **Not seen
+  since this deploy: anybody's sync** — a browser on this build pulling a page from the
+  deployed relay, or a released desktop reading its streamed answer; the owner was asked.
 
 ```
 A=https://mtg-grimoire.app
@@ -545,8 +578,8 @@ relay's sources since the deploy of 23:19 UTC on 2026-10-04**: this directory's 
 `https://mtg-grimoire-relay.denmark-east.workers.dev` and its `wss://` twin in `connect-src`,
 and so does production's. (Until that deploy the tree was ahead of the host by those sources,
 and this paragraph said so.) The dated *Answered* cells of probes 1–18 are from builds without
-them and stay true of those builds; the bullet above has all twenty as the present build
-answers. Probes 19 and 20 came with the relay's sources. Each was asked first at 15:59 UTC of
+them and stay true of those builds; the bullets above have all twenty as the build of 23:19
+answered and as the present one does. Probes 19 and 20 came with the relay's sources. Each was asked first at 15:59 UTC of
 hosts that should *not* pass yet, and neither did — so both can fail — **and each has now been
 asked of a host that should pass, and did**: 20 of the relay at 23:09 and 23:18, 19 of this
 Worker at 23:19:35.

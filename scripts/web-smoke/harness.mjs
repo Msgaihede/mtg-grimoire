@@ -91,6 +91,27 @@ export function fail(message) {
 }
 
 /**
+ * Remove a directory the run made for itself — a browser's profile, a relay's state — and
+ * **never fail the run over it**. Nothing a run asserts is in there: by the time it is removed
+ * the walk has passed or failed already.
+ *
+ * Windows lets go of a profile's files some time after the browser that held them has gone, and
+ * `rm` then answers `EBUSY`, `EPERM` or `ENOTEMPTY`. Five tries were not always enough: a sync
+ * smoke's run reported FAILED on `EBUSY … unlink …\first_party_sets.db-journal` in its teardown
+ * (2026-10-05). So it is tried for longer — ten times, 200 ms apart and backing off — and a
+ * directory that still will not go is named in one line and left: the operating system's temp
+ * directory is where it is, and a run that is told about it has not failed.
+ */
+export async function discard(dir) {
+  try {
+    await rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (error) {
+    const why = error instanceof Error ? (error.code ?? error.message) : String(error);
+    console.error(`${run.name}: left behind ${dir} — it could not be removed (${why})`);
+  }
+}
+
+/**
  * The exit code for a run a signal ended: 128 + the signal's number, as a shell reports it.
  * Never 0 — a run that was interrupted has not passed.
  */
@@ -881,9 +902,10 @@ async function browse(origin, routes, own = {}) {
     closed = true;
     socket?.close();
     stop();
-    // The browser lets go of its profile a moment after it is told to stop.
+    // The browser lets go of its profile a moment after it is told to stop — and sometimes a
+    // good deal later, which must not turn a walk that passed into one that failed.
     await pause(500);
-    await rm(profile, { recursive: true, force: true, maxRetries: 5 });
+    await discard(profile);
   };
   undo.push(close);
   const { address, kill, pid } = await launch(profile, own.args);

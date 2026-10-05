@@ -3245,8 +3245,8 @@ with no recorded holder — every row claimed before the column existed — is r
 accepted rotation. `/claim` is held to the same epoch rule from the other side: a group that has
 key rows is seeded only at its own epoch and only with the auth already registered there, so a
 claim can neither skip it ahead nor swap in an auth of its own. **Issue #752 adds a current-auth
-gate before a claim can mint a grant at all**; the gate is described below and awaits a relay
-deployment.
+gate before a claim can mint a grant at all**; the gate is described below, and was deployed on
+2026-10-05 at 02:21 UTC ([hosted-relay-deploy.md](hosted-relay-deploy.md), step 6).
 
 **A device that only ever uses the group door is now told of a lapse** — a gap older than all of
 this, fixed with issue #546. The relay answered a lapsed membership on the group door with the
@@ -3521,8 +3521,10 @@ gate. An initially stale claim leaves its code available for that retry until or
 epoch and auth are unchanged, and an existing group's token is stamped before the auth check,
 so a removal after a successful write still makes the share gate treat it as a pre-removal token.
 If the rotation overtakes the initial check, the code may already have been consumed when the
-binding write refuses the claim. **This source fix awaits a relay deployment**; it is
-not a claim that the hosted relay already enforces the gate.
+binding write refuses the claim. **The fix was deployed on 2026-10-05 at 02:21:29 UTC, from
+`main` at `117827d2`** ([hosted-relay-deploy.md](hosted-relay-deploy.md), step 6). That the
+hosted relay enforces the gate is known from the tree that was deployed: no probe without a
+credential shows it, and nobody has presented a stale claim there.
 
 ### A re-claim moves the binding, because leaving would otherwise strand the payer
 
@@ -4275,7 +4277,7 @@ on the write connection costs the loop one more read, of `sync_group`; (7) a rou
 token is refused behind a rotation adopts it and asks once more, where the trip failed.
 
 **The relay's half** — a rotation's roster closes the sockets of the devices it leaves out — is
-`relay/README.md`'s, and is not deployed. The two ship in either order;
+`relay/README.md`'s, and was deployed on 2026-10-05 at 02:21 UTC. The two ship in either order;
 [hosted-relay-deploy.md](hosted-relay-deploy.md)'s ninth half has what each side does with the
 other's old build.
 
@@ -4543,7 +4545,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   to be taken. There never was a poll for it to replace either — the record's own confusion about
   that is history now, folded into the section above rather than repeated here.
 - ~~**`pull` has no page size**~~ — **built 2026-10-04 as the light app's step 6.5b, on both
-  sides; the relay's half is written and not deployed.** *A pull fetches, classifies, and then
+  sides; the relay's half was deployed on 2026-10-05 at 02:21 UTC.** *A pull fetches, classifies, and then
   evaluates one of two ways* (above) is the client's rule and
   [relay/README.md](../../relay/README.md)'s "A pull, a page at a time" the relay's.
   [light-app.md](light-app.md) §10.5b has it measured again a page at a time, beside the

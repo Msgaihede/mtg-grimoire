@@ -77,8 +77,9 @@ group with no key rows keeps the first-claim seed behavior. The binding write al
 the authenticated epoch and auth are unchanged, and an existing group's token is stamped before
 the auth check, so a removal overtaking the claim cannot yield a post-removal token. A rotation
 that wins after the initial check can consume the code before the claim is refused.
-**This requires a relay deployment; the source fix alone does not close the path on the hosted
-relay.**
+**It needed a relay deployment, and has had one: 2026-10-05 at 02:21:29 UTC, from `main` at
+`117827d2`** (PR #827; `docs/reference/hosted-relay-deploy.md`, step 6). Nothing without a
+credential shows the gate, and nobody has presented a stale claim to the hosted relay.
 
 **The two public routes are the whole of the entitlement asymmetry.** Publishing needs a token,
 which needs a membership; viewing needs the link and nothing else, which is what issue #360 asked
