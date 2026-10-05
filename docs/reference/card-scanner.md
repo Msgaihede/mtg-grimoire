@@ -3484,3 +3484,21 @@ The spec's §11 measurements:
 | Frame rate on the fake 1280×960 stream | debug (dev-profile overrides), 2026-09-15 | **2.6–2.8 frames/s** |
 | The bundle workflow's first cold run, and a warm one | CI, `ubuntu-latest` | **Not possible before merge** — `workflow_dispatch` appears only once the file is on `main` |
 | Whether the updater's release lookup can ever return the `scanner-bundle-v3` prerelease | — | **No, by reading the code** — `update::parse_release_page` drops every `prerelease` before anything compares versions. Not verified live |
+
+## Creating a deck from the review tray
+
+The tray's **Create deck…** action opens the same full settings dialog as the Decks gallery
+(issue #737). It captures the reviewed rows at the press, so later scans do not change the list
+being created. Every row must have a chosen printing and a known finish; quantities, editions,
+and finishes travel into the new deck's Actual list. The reader can choose the name, format,
+game, cover, folder, description, and deck kind before writing.
+
+`useScannedDeck` reads the exact printings' type lines and their Oracle Tags, then applies
+`autoCategoryFor` to each row. Lands stay together and missing taxonomy falls back to card
+types. The existing deck import command writes the categories and cards in one transaction.
+If that import fails, the hook attempts to delete the newly created deck and reports the
+original refusal, following the decklist importer's cleanup rule.
+
+The scans stay in the tray after creation or cancellation. Creating a deck writes its list;
+the separate **Add to collection** action records physical ownership. The dialog explains
+this before creation, and a successful creation opens the deck editor.
