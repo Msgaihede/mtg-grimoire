@@ -4,7 +4,7 @@ name = "grimoire-light"
 # (`release-please-config.json`), because the three ship from one tag: one core means one schema
 # version (the light-app spec §7's release rule). Tauri reads `tauri.conf.json`'s copy for the
 # Android `versionName`; this one is what the crate says.
-version = "0.40.0"
+version = "0.41.0"
 description = "MTG Grimoire, light: the Android host over grimoire-core"
 authors = ["Markus Seerup"]
 license = "AGPL-3.0-or-later"
