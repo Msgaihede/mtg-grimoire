@@ -670,9 +670,9 @@ describe("POST /rotate — the refresh secret dies with its device's membership"
     // column up, so the phone cannot mint a token for the group either.
     expect(await secretOf(env, "g1")).toEqual({ refresh_secret: null, refresh_device: null });
 
-    // **Then the phone, still logged into Patreon, presses Connect again.** The claim is a
-    // legitimate press by the paying account and is answered — but the fresh secret it is handed
-    // opens no `/rotate`, so it cannot publish a manifest that names itself back into the group.
+    // **Then the phone, still logged into Patreon, presses Connect again.** Entitlement is not
+    // group membership (#752): stale auth must receive neither a new secret nor a token that
+    // would open the plaintext share routes after removal.
     await env.DB.prepare(`INSERT INTO claim_codes (code, subject, expires_at) VALUES (?, ?, ?)`)
       .bind("ABCDEFGHJKMN", "sub-0", Date.now() + 60_000)
       .run();
@@ -689,10 +689,11 @@ describe("POST /rotate — the refresh secret dies with its device's membership"
       }),
       env,
     );
-    expect(reclaimed.status).toBe(200);
-    const fresh = ((await reclaimed.json()) as { refresh: string }).refresh;
+    expect(reclaimed.status).toBe(401);
+    expect(await reclaimed.json()).toEqual({ error: "unauthorized" });
+    expect(await secretOf(env, "g1")).toEqual({ refresh_secret: null, refresh_device: null });
     const rejoin = await worker.fetch(
-      rotateRequest("g1", fresh, { epoch: 2, auth: hex64(0xbad), keys: { phone: "blob-phone" } }),
+      rotateRequest("g1", refresh, { epoch: 2, auth: hex64(0xbad), keys: { phone: "blob-phone" } }),
       env,
     );
     expect(rejoin.status).toBe(401);

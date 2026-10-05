@@ -68,10 +68,17 @@ request — traffic from at most five devices, never from a viewer.
 minted before a group's newest rotation is refused, and a device sees one day of
 *"would not accept this device's membership"* at most.
 
-⚠️ **What it does not close**: `/claim` still mints a grant for a group whose presented auth is
-behind (a "behind" re-claim is a legitimate press), so a removed device whose owner is still
-signed in to Patreon can press Connect and get a token minted *after* the rotation. That is a relay
-question about `/claim`, not about token lifetime, and is left for its own change.
+**Issue #752 closes the re-claim path in the relay source** (2026-10-05): `/claim` requires
+`authIsCurrent` whenever the target group already has key rows. A stale claim returns a plain
+**401** before consuming the claim code or changing the binding, refresh secret, device roll or
+key rows, so a removed device cannot press Connect to obtain a token minted *after* its removal.
+A legitimate device behind a rotation catches up through `/keys` and then retries Connect; a
+group with no key rows keeps the first-claim seed behavior. The binding write also checks that
+the authenticated epoch and auth are unchanged, and an existing group's token is stamped before
+the auth check, so a removal overtaking the claim cannot yield a post-removal token. A rotation
+that wins after the initial check can consume the code before the claim is refused.
+**This requires a relay deployment; the source fix alone does not close the path on the hosted
+relay.**
 
 **The two public routes are the whole of the entitlement asymmetry.** Publishing needs a token,
 which needs a membership; viewing needs the link and nothing else, which is what issue #360 asked

@@ -208,9 +208,10 @@ function parseManifest(text: string, group: string): Record<string, string> {
  * the one that happens to be behind, the repair breaks the devices that were fine.
  *
  * **So a group that has key rows is seeded only at the epoch it is standing on, and only with the
- * auth already registered there.** Behind, the claim still succeeds and still mints a grant — it
- * is a legitimate press by a paying reader — and simply leaves the group's key registration alone,
- * which is the state that was already correct.
+ * auth already registered there.** This helper leaves a behind claim's key registration alone;
+ * `/claim` now refuses stale auth before redeeming the code (#752). Patreon entitlement alone
+ * cannot distinguish a retained device behind a rotation from a removed device. The retained
+ * device must catch up through `/keys` before re-claiming.
  *
  * ⚠️ **Ahead is refused for `/rotate`'s reason.** A claim at `max + 1` with its own auth would
  * register a row there with an empty manifest, which every device reads as a higher epoch with no
@@ -340,11 +341,12 @@ export async function recordRotation(
 /**
  * The newest epoch this group has a key row for, or `null` for none.
  *
- * **For explaining a refusal and never for making one.** `recordRotation` decides in one
+ * **For `/rotate`, explaining a refusal and never making one.** `recordRotation` decides in one
  * statement; `/rotate` asks this only afterwards, to say whether a refused epoch was behind the
  * group or ahead of it. Deciding off this read would reopen the window that statement closes.
  * The manifest is deliberately not read — `currentManifest` throws on a corrupt one, and a
  * refusal's sentence is not worth a 500.
+ * `/claim` also asks whether any rows exist, to require current auth rather than first seeding.
  */
 export async function groupEpoch(env: Env, group: string): Promise<number | null> {
   const row = await env.DB.prepare(
@@ -402,8 +404,8 @@ export async function manifestAt(env: Env, group: string, epoch: number): Promis
 }
 
 /**
- * Is this the auth the group is standing on *right now*? The question `/token`'s group door and
- * `/rotate` ask, and the one a stale auth must fail.
+ * Is this the auth the group is standing on *right now*? The question `/token`'s group door,
+ * `/rotate` and `/claim` for an existing group ask, and the one a stale auth must fail.
  *
  * Looked up by `group_id`, which is a path segment rather than a secret, and then compared in
  * constant time. **`WHERE group_auth = ?` would be the same answer and the wrong query**: it is a
