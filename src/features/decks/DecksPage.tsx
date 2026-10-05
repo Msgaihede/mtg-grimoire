@@ -10,6 +10,7 @@ import {
 import { ArrowUp, ChevronDown, ChevronRight, LayoutGrid, Plus } from "lucide-react";
 import { AnimatePresence, motion } from "motion/react";
 import { Dropdown } from "@/components/Dropdown/Dropdown";
+import { FolderNameField } from "@/components/FolderNameField";
 import type { DropdownOption } from "@/components/Dropdown/types";
 import {
   FILTER_CONTROL,
@@ -1720,6 +1721,22 @@ export function DecksPage() {
               />
             </div>
           </div>
+
+          {/* The tree unmounts its fields while folded or short of room. Keep the gallery's
+              New folder action usable there too, without changing the saved sidebar preference. */}
+          {panel?.kind === "newFolder" && (collapsed || !roomy) && (
+            <div className="w-full max-w-sm">
+              <FolderNameField
+                mode="create"
+                size="heading"
+                label="New folder name"
+                submitLabel="Create folder"
+                pending={folders.create.isPending}
+                onSubmit={nameFolder}
+                onCancel={dismiss}
+              />
+            </div>
+          )}
 
           {/* **A row of its own, beneath the heading rather than inside it.**
 
