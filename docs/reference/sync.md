@@ -3671,7 +3671,7 @@ So a change crosses in about four and a half seconds where the backoff ladder's 
 cycle took a minute or two ([issue #751](https://github.com/Msgaihede/mtg-grimoire/issues/751)).
 A device's own push is not echoed to it, and a protocol ping is answered with a pong. **One
 write waited 27 s**, and it is the design rather than a fault: it was made while the first-run
-card ingest was inside its swap, `outbox_has_work` gave up on the write connection after its one
+card ingest was inside its swap, `outbox_has_work` (`after_a_commit` since step 6.3b) gave up on the write connection after its one
 second, and the swap's own commit rang the bell again — the trip could not have had the
 connection any sooner. The same pass held a managed wishlist's nameless **Tokens** folder
 (`parent_id` set, `sync_uid` NULL, made by the real `settle_deck`) through three pulls with no
@@ -4044,20 +4044,110 @@ survives the tab being frozen. `timer::interval` drops the beats a frozen Worker
 comes back to one tick and one ping, and a socket that died meanwhile is found by that ping's
 missing `pong` within two periods.
 
-⚠️ **Seen in that run, and true of every host: the loop asks whether the device is in a group
-only between sockets.** A device removed from the roster — or one that leaves — while its socket
-is up keeps the socket: the relay closes nothing on a rotation (4001 is for a group that is
-gone), the device learns it was removed at its next round trip — its own write, a *Sync now*, or
-the next push by a device still in the group, which still rings it — and after that trip has
-cleared `sync_group` the loop still holds the socket, still pings, and still reads `live` until
-the socket ends by itself or reaches its twelve hours. Nothing is synced over it: a ring there
-schedules a trip that finds no group and asks nobody. So the cost is a wrong state behind the
-panel and a keepalive nobody needs.
+#### A device that left, was removed or changed group lets go of its socket (step 6.3b)
+
+**The defect, on every host since the socket was built**: the loop asked whether its device was
+in a group *between* sockets and never while it held one, and a socket is its group's — the
+Durable Object it reaches is addressed by the group id. So a device that pressed *Leave group*
+kept the socket, reading `live`; and one that left and then joined another group went on
+listening to the group it had **left**, for as long as that socket lived — up to its twelve
+hours — while the group it was in rang on nobody. A device removed by another fared the same:
+the relay closed nothing, and the trip on which it learned it was removed cleared its group and
+left its socket up. Seen in step 6.3's walk; fixed here, in the loop and in the relay.
+
+**The loop's rules now** (`sync_engine::live`; every consequence is `schedule.rs`'s, with tests):
+
+- **A socket knows which group it was opened for**, and the loop looks at `sync_group` on the
+  commit that could have changed it — the write wake's arm, ahead of the outbox's question —
+  and again on every keepalive beat, as the backstop for a look that could not be taken. A
+  device in no group, or in another one, ends the socket as `Disconnect::Left`: **no backoff,
+  no `error_log` row, the attempt counter where it was**. The loop's top then says `off`, or
+  `connecting` for the group it is in now.
+- **The look is taken on the write connection, behind the writer.** The commit hook fires before
+  the commit is anybody else's to see, so the read connection, asked as the bell rings, still
+  answers the group that is being deleted — which would keep the socket, with no second commit
+  coming. `State::db`'s mutex is held by the writer until its commit is done, as the outbox's
+  question already relied on. On a host with one connection there is no other to be wrong on.
+  A look that cannot have the connection inside a second decides nothing (`Membership::Unknown`
+  keeps the socket) and is taken again at the next commit, and at the next ping.
+- **The relay's two closes are two codes, read apart** (`schedule::gone`). **4002** is a device
+  a rotation's manifest leaves out; **4001** is a group whose log was dropped — a membership
+  ended — and is the only one a released client has heard of.
+  - **4002 is read behind the sync lane.** A device that *leaves* publishes exactly such a
+    manifest, so its own press closes its own socket a moment before it clears the group
+    locally. The lane is held by that press to its last write, so a look taken on the lane sees
+    the group gone: `Left`, quiet. A device somebody else removed still thinks it is in the
+    group: `Removed` — a backoff, the row, and then the reconnect's first act, the round trip
+    on which it finds the manifest without it and clears its group.
+  - **4001 is `Dropped`: a backoff, an attempt spent, and no row — nothing is concluded from
+    it.** When it arrives the device is still in its group and its stored status still says
+    `active`, so asking the database whether this is a lapse answers no, and a row would be the
+    one the loop exists never to write: one per lapse per connected device. The close is not
+    recorded (`schedule::recorded`); the trip behind the backoff is what learns it is a lapse,
+    and that path writes none. (Read behind the lane too: a device already in no group is
+    `Left` under either code.)
+  - Any other code, one this build has never heard of included, is an ordinary close — which is
+    how a released client reads 4002, and what lets the relay add a code.
+- **Both of the write wake's questions are one taking of the write connection**
+  (`after_a_commit`): which group, and whether the outbox holds anything. Each waits up to a
+  second for it, and as two takings they made a batch ingest stand aside twice per commit.
+- **A dial with no group to dial for is not a failure.** That round trip is in front of every
+  dial, so a removed device reaches `credentials` with no group; it is `Left`, where it was a
+  failed socket — a second backoff, `offline` again and a second row.
+- **A dial has a deadline**, `CONNECT_SECS` (20 s: the relay's other clients' connect and read
+  bounds added). A relay that takes the connection and never answers the upgrade used to hold
+  the loop at `connecting`, with no trip, for as long as the stack underneath allowed — minutes,
+  in a browser. It is a failed socket now, in a sentence. **The deadline takes one last turn of
+  the host and looks once more before it gives up** (`timer::timeout_after_a_last_turn`): in a
+  browser the deadline's timer and the socket's `open` are both queued tasks, and behind a
+  stretch that held the engine's thread past twenty seconds — a first ingest does — both are
+  waiting when the thread comes back. Timer first, and an opened socket was dropped with a row
+  saying the relay never answered. A browser's task order is not specified; what is tested,
+  natively, is that the second look is taken.
+- **What the loop records** is asked as the Settings panel asks it: a lapse is the one failure
+  left out of `error_log`, and "lapsed" is `!commands::entitled && entitlement::membership_ended`.
+  It asked the second alone, which is also true of a healthy device that joined by pairing — no
+  refresh secret, and the `active` the group door answered — so such a device recorded **no
+  background failure at all**.
+- **A token refused across a rotation is asked again, once** (`client::token_across_a_rotation`,
+  in every round trip — the loop's, a press's, a join's). A trip's key check and its group door
+  are two requests, and a sibling's rotation can land between them: the door is then asked with
+  the auth of the epoch the check just confirmed and refused it bare. Pairing does exactly that
+  to a joiner — the confirming device seals at the current epoch and publishes the join's
+  rotation a moment later, while the joiner's first trip is running — and the walk met it three
+  runs in twenty-one. The refusal is taken to `/keys`, as `push` takes a `stale_epoch`: adopted
+  → the door again under the new key; removed → the trip ends quietly; the relay still on this
+  device's epoch → the refusal stands, as it did.
+
+**What a desktop does differently, each one**: (1) it lets go of its socket at once when it
+leaves its group, is removed, or changes group, and says `off` rather than going on reading
+`live`; (2) joined to another group, its socket is that group's within the loop's five-second
+read rather than after up to twelve hours; (3) a removed desktop, once the relay tells it, reads
+`offline` for one backoff and then `off`, with one row — *the relay says this device is no
+longer in its sync group* — on the relay's 4002, which no deployed relay sends yet; **and a
+4001, a dropped group, now writes no row** where it wrote *…this device's sync group no longer
+exists*: it backs off and the trip speaks; (4) a dial the relay never answers fails after twenty
+seconds; (5) **a desktop
+that joined by pairing starts recording its background relay failures** — its Errors panel was
+silently dropping every one — folded on the message as on every other device; (6) each commit
+on the write connection costs the loop one more read, of `sync_group`; (7) a round trip whose
+token is refused behind a rotation adopts it and asks once more, where the trip failed.
+
+**The relay's half** — a rotation's roster closes the sockets of the devices it leaves out — is
+`relay/README.md`'s, and is not deployed. The two ship in either order;
+[hosted-relay-deploy.md](hosted-relay-deploy.md)'s ninth half has what each side does with the
+other's old build.
+
+**Still true**: a Sync panel left open on a device that is then removed goes on showing its old
+roster until its own query is read again — the engine says `off` through `sync:live`, and
+nothing on the page re-reads the pairing for that. Nothing syncs meanwhile; the sentence is
+simply late.
 
 **What was run**: the loop's own tests, natively — a device in no group says `off` once over
 twelve idle polls and dials nothing until it is put in a group; a device in a group dials a
 loopback stand-in with its bearer in `Authorization`, says `connecting`, `live`, sends a protocol
-ping first, and on a 4001 close says `offline` and writes the `live` row; and on a state with one
+ping first, and on a 4002 close says `offline` and writes the `live` row (on a 4001, `offline`
+and no row, whichever door the device is entitled through); and on a state with one
 connection, on a thread standing in for a Worker (`platform::alone`), the loop takes no lock
 twice — once with no socket (the group read, a failed trip and its row, the token, the note) and
 once with one up and a `head` ahead of the cursor (the keepalive, the cursor read, the outbox
@@ -4665,7 +4755,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   deployed and two devices converged over it. See "The first end-to-end pass" above.
 - **The bulk-import cost.** 4.22× is measured and unaddressed; see above.
 - **A persistent push failure still retries every ~3 s while the socket is up.** The outbox gate
-  (`live::outbox_has_work`) improved this — before it, *every* commit rang the bell whether or
+  (`live::after_a_commit`, then `outbox_has_work`) improved this — before it, *every* commit rang the bell whether or
   not there was anything to push — but it did not close it: a failing trip leaves its op
   `pushed_at IS NULL`, so the next commit (the trip's own `error_log` row among them) finds a
   pending op, the gate answers `true`, and `schedule.rs`'s `WRITE_DEBOUNCE_MS` fires the next
@@ -4677,7 +4767,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   foreground gate it belonged to (`live::resume`, `live::pause`, `Disconnect::Paused` and the
   `sync_live_foreground` command), when the Android build was removed. `connect_once` fires
   `Wake::Reconnect` on every socket that comes up, which was always the catch-up.
-- **`WAKE_LOCK_WAIT`'s one-second timeout can drop a single wake.** `outbox_has_work` tries the
+- **`WAKE_LOCK_WAIT`'s one-second timeout can drop a single wake.** `after_a_commit` tries the
   write connection for one second and answers `false` on a miss rather than waiting longer or
   asking again on its own. If another writer holds `state.db` for longer than that with no
   further commit to ring the bell a second time, that wake is lost. Self-healing in every case

@@ -22,8 +22,10 @@ the real hosts** (§9.6). **It is deployed at `https://mtg-grimoire.app` since 2
 headless Chrome on Windows has driven the web host, and the owner has used it in Firefox and
 on a phone and said so in a sentence each. **Sync on a light install is phase 6, built a step at
 a time in §10**: since step 6.1 a browser install asks the relay as any host does and the
-relay's source answers a page — written and not yet deployed, so the deployed web app still
-says in a sentence that it cannot sync.
+relay's source answers a page — **both deployed on 2026-10-04 (§10.7)**: the relay answers the
+web app's pre-flight, and the deployed web app draws the Sync panel and its pairing where it
+used to say in a sentence that it could not sync. A browser against the deployed relay has
+still not paired or opened a socket: that needs the owner's membership.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
@@ -5656,7 +5658,8 @@ request each.
 ### 10.1 Step 6.1 — the relay answers a page, and the engine asks it (2026-10-04)
 
 Three things the code said move together, and did: the relay's CORS answers, the engine's
-refusal, and the policy's `connect-src`. **Written and not deployed** — asked at 15:49 and again
+refusal, and the policy's `connect-src`. **Written and not deployed** (**Deployed 2026-10-04 at
+17:22 UTC and verified at 23:09 — the runbook's step 0 has both columns.**) — asked at 15:49 and again
 at 15:59 UTC, the deployed relay answered an `OPTIONS /token` from `https://mtg-grimoire.app`
 with `405`, `Allow: POST` and no `access-control-*` line, and the live site's policy does not
 name the relay. The tree is ahead of both hosts until the deploys below.
@@ -5956,10 +5959,179 @@ is this step's own pull request.
 - **A phone's browser freezing the Worker.** `timer::interval` drops the beats a frozen Worker
   missed and the pong rule ends a socket that died meanwhile, by reasoning; no backgrounded tab
   has been watched coming back.
-- **The removed device's stale socket**, above: a relay that closed a departed device's socket,
-  or a loop that asked about its group while connected, would each end it. Neither is built.
-- **The sync smoke on a runner**: Linux, wrangler installed without its lifecycle scripts, a
-  runner's clock under every wait. The pull request's own `web` job is the first.
+- ~~**The removed device's stale socket**, above: a relay that closed a departed device's socket,
+  or a loop that asked about its group while connected, would each end it. Neither is built.~~
+  **answered — both are built, in step 6.3b (§10.3b)**: the loop lets go of a socket whose
+  group its device is no longer in, and a rotation's roster closes the sockets of the devices it
+  leaves out. The relay's half waits on a deploy.
+- ~~**The sync smoke on a runner**: Linux, wrangler installed without its lifecycle scripts, a
+  runner's clock under every wait. The pull request's own `web` job is the first.~~ **answered —
+  it ran green there**: pull request #823's `web` job, on `ubuntu-24.04`, merged 2026-10-04.
+
+### 10.3b Step 6.3b — a device that left lets go of its socket (2026-10-04)
+
+Step 6.3's walk found two things wrong that were not the browser's, and review found the second
+worse than it looked. **A socket is its group's** — the relay's object is addressed by the group
+id — **and the loop asked which group its device was in only between sockets.** So a device that
+pressed *Leave group* kept its socket and read `live`; one that left and then joined another
+group listened to the group it had **left**, for up to the socket's twelve hours, while the group
+it was in rang on nobody; and one that was removed was told nothing by the relay, and kept the
+socket even after the trip on which it learned. Every host, the desktop included, since the
+socket was built. Fixed as one thing, on both sides.
+
+**The loop** (`sync_engine::live`, every consequence in `schedule.rs`):
+
+- **It looks at its group on the commit that could have changed it** — the write wake, ahead of
+  the outbox's question — and on every keepalive beat. A device in no group, or in another, ends
+  the socket as `Disconnect::Left`: no backoff, no row, the attempt counter untouched; the loop
+  then says `off`, or dials for the group it is in now.
+- **The look is on the write connection, and two tests hold why**: with a commit hook held open
+  mid-commit, the read connection still answered the group being deleted — the look that would
+  have kept the socket — while a look on the write connection waited for the writer and
+  answered none; and **the loop itself**, rung by the real hook and driven with that commit
+  held, says `off` on the one ring its departure gave (asked of the read connection it never
+  does). The first runs on two connections and on one — and its one-connection arm is a second
+  native thread waiting on a mutex, which is the mutex's order and not a browser: on wasm the
+  look runs between two turns of the event loop, and a connection found taken answers "unknown"
+  at once, which keeps the socket until the next commit or ping.
+- **Both of the write wake's questions — which group, anything to push — are one taking of the
+  write connection**, where two made a batch ingest stand aside twice per commit.
+- **The relay's close for a removal is 4002, and it is read behind the sync lane**, because a
+  device's own departure is a manifest without it and the relay now closes its socket for
+  that: asked at once it is a removal — `offline`, a row — over something the reader just
+  chose. The press holds the lane to its last write, so behind it the group is gone and the
+  close is quiet.
+- **4001 is left to mean what it always has — a dropped group, a membership ended — and is now
+  never a row.** The step's first commit closed removed devices with 4001 too, and review
+  found two wrong rows in that: a *released* desktop reads 4001 as "the group no longer
+  exists", so its own *Leave group* would have logged one once this relay deployed; and at a
+  lapse the close arrives while the device is still in its group with a stored `active`, so the
+  loop — asking its database, which knows nothing yet — wrote a row for a lapse, one per
+  connected device. Now: 4002 → the removal path; 4001 → back off, write nothing, conclude
+  nothing, and let the trip behind the backoff speak. Tested on a device that pressed Connect
+  and on one that only paired.
+- **No group is not a failed dial.** A removed device clears its group on the trip in front of
+  its reconnect; reaching the dial with none is `Left`, where it was a second backoff and a
+  second row.
+- **A dial has a deadline** — twenty seconds, the relay's other clients' connect and read bounds
+  added. A relay that took the connection and never answered held the loop at `connecting`, with
+  no trip, for as long as the stack allowed; a browser allows minutes. **It takes one last turn
+  before it gives up**: in a browser the deadline and the socket's `open` are both queued
+  tasks, and behind a stretch that holds the thread past twenty seconds — this section's own
+  relaunch held it ten, and nineteen once, at 30 000 cards; a real first ingest is ~117 000 —
+  both are waiting when the thread comes back. Deadline first, and an opened socket was dropped
+  with a row saying the relay never answered. So at the deadline the dial yields once to the
+  host and polls the connect once more (`timer::timeout_after_a_last_turn`). Tested natively,
+  on a runtime whose order is known; **a browser's task order is not specified**, and no
+  browser run has staged it.
+
+**The relay** (`relay/src/group.ts`, `log.ts`; **not deployed**): a rotation's roster closes,
+with **4002**, every open socket whose device the adopted manifest does not name, and marks a
+device it knows only by its socket departed with the rest; it compacts first, and a close that
+throws costs nothing else. `drop` still closes a whole group with 4001. The client's next act
+after a 4002 is the round trip on which it finds itself off the manifest, so it cannot spin:
+removed → 4002 → one backoff → the trip → no group → `off`. `notifyTargets` is unchanged — a device a roster took
+out holds no socket to tell. No upgrade is refused on the `departed` mark: a lost roster post
+would then leave a re-paired device with no doorbell.
+
+**What the loop records.** A lapse is the one background failure kept out of `error_log`, and the
+loop asked `entitlement::membership_ended` for it — alone, which is also true of every healthy
+device that joined by pairing: no refresh secret, and the `active` the group door answered. Such
+a device recorded nothing: found here as a removed browser whose log stayed empty. It asks
+behind `commands::entitled` now, as that function's doc said and the Settings panel does. Tests
+on both kinds of device: a failed background trip and a fallen socket are each a row; a lapse —
+the relay's 401 on a sync route — is none, and neither is what follows it.
+
+**How a lapse is said in production, as far as the source says.** A device with no refresh
+secret learns of one from the group door's 401 carrying `membership_ended`. The relay deployed
+on 2026-10-04 is `main` at `ea0aa88e`; `relay/src/claim.ts` there defines that code and stamps
+it on that 401, and nothing under `relay/src` changed between that commit and this step's base.
+So the code is there to be answered. **Production itself has not been asked with a lapsed
+membership** — nobody has let one lapse to see.
+
+**A joiner's first trip met the join's rotation — found by the walk, three runs in twenty-one,
+and not asked for by this step.** The device that confirms a pairing seals the key at the
+group's epoch and publishes the join's rotation a moment later; the joiner's page runs a trip
+the moment it holds the key (20 ms after, here). A trip opens with `/keys` and then asks the
+group door for a token — two requests, and the rotation landed between them: the check answered
+the epoch the joiner held, the door was asked with that epoch's auth, and the relay, one
+rotation on, refused it. `POST /token 401`, the trip failed, and the device waited for its next
+one. It has always been there on every host; the old walk's timing never met it. **A trip now
+takes that refusal to `/keys`, as a push takes a `stale_epoch`** (`client::
+token_across_a_rotation`): a rotation adopted there is the reason and the door is asked again
+under the new key; a removal ends the trip quietly; a relay still on this device's epoch is a
+refusal that stands. One retry. The relay's 401 is right and still happens — the walk allows
+it in exactly that shape, once, and says so when it does.
+
+**What a desktop does differently:**
+
+1. It lets go of its socket the moment it leaves its group, is removed, or changes group, and
+   reads `off` — where it read `live` until the socket ended.
+2. Joined to another group, its socket is that group's within five seconds, not twelve hours.
+3. Removed, once a relay that sends 4002 tells it: `offline` for one backoff, then `off`, and
+   one row — *the relay says this device is no longer in its sync group*. **And a 4001 — a
+   dropped group — writes no row**, where it wrote *…this device's sync group no longer
+   exists*: `offline` for a backoff, and the trip behind it speaks. That one is live against
+   the relay deployed today.
+4. A dial the relay never answers fails after twenty seconds.
+5. **A desktop that joined by pairing starts showing background relay failures in its Errors
+   panel**, which it was silently dropping — folded on the message, as on every other device.
+6. Each commit on its write connection costs the loop one more read, of `sync_group` — in the
+   same taking of the connection as the outbox's, so no more waiting than before.
+7. A round trip whose token is refused because a rotation landed behind its key check adopts
+   the rotation and asks once more, where it failed and waited for the next trip.
+
+**The walk, extended** (`npm run web:sync-smoke`; three more steps, 41–54 s for the whole of it
+over some thirty runs on a machine other work was loading, and up to 72 s at its worst):
+
+| | |
+| --- | --- |
+| The phone face founds a group of its own, goes `live`, and presses *Leave group* | `off` **72–134 ms** after the press; never `offline`; its socket closed; nothing logged |
+| It then joins the desktop face's group | its socket is that group's address, not the one it left's — the regression test: with the old loop the second doorbell below never rings |
+| It relaunches, paired, into a first ingest of 30 000 cards | below |
+| The desktop face removes it from the roster | in no group **2.2–4.2 s** after the press (the backoff's two to four seconds, and a trip), **with nothing pressed on it**: it said `offline`, `connecting`, `off`, its socket closed, and its log holds one row, the removal's sentence — on a device that joined by pairing, which logged nothing before this step. (Step 6.3 pressed *Sync now* here, and said so.) |
+
+**A paired browser's relaunch — the one thing nothing covered.** A paired device's launch is two
+things on the engine's one connection and one thread: the launch's downloads, and the loop's
+first act — a round trip, then the socket. No earlier run put them together: a first run is in
+no group, and a relaunch inside a day downloads nothing. So the phone face pairs with its card
+file *held* — in a group, with no card — and is then reloaded with the file let go. **It does
+not deadlock and does not panic.** Every run alike, the quiet ones first and a loaded machine's
+in brackets:
+
+- the loop's launch trip asked the relay **3.2–3.7 s** after the reload, as the database
+  opened, and got as far as its pull (read off the device's own requests: the relay's log
+  cannot tell its `/keys` from the other device's);
+- then it was **deaf for as long as the ingest held the thread**: no ack and no dial until the
+  ingest's synchronous tail ended. The longest any read of the engine waited was **4.6–5.8 s**
+  (to 10 s, and 19 s once);
+- the socket was upgraded at **9.0–10.4 s** (to 15 s, and 26 s once), `live` was read some
+  30–300 ms later, and the ingest was done within 60 ms of that;
+- a wish made on the other device meanwhile was on its wishlist about 70 ms after that. Nothing
+  was lost: the launch trip's own pull and the reconnect's trip take whatever was missed.
+- No console error, no `error_log` row, no policy refusal.
+
+That silence is the ingest's shape, not the loop's — §9's figures for a page's own commands
+during an ingest are the same wait — and on a real first run of ~117 000 cards it will be
+longer in proportion.
+
+**Open after this step:**
+
+- **The relay's half is not deployed.** Until it is, a removed device learns at its own next
+  round trip, as before — and then lets go of its socket, which is new. The runbook's ninth half
+  has what each side does with the other's old build, and the one look that says it is live.
+- **A released desktop against the new relay** reads the 4002 its own *Leave group* earns as a
+  plain close: a second or two of `offline`, then `off`, and a row (*the relay closed the
+  socket*) only if its socket was under a minute old. Read off the released loop's code
+  (v0.40.0, `daa70e12`), not driven; the runbook's table has every cell.
+- **The dial's last turn in a browser**: no run has staged a deadline and an `open` queued
+  together, and the dial itself has no test of its own for it — the timer it calls has.
+- **A Sync panel left open on a removed device keeps its old roster** until its own query is
+  read again: the engine says `off` on `sync:live`, and nothing on the page re-reads the pairing
+  for that.
+- **No desktop has been driven through any of it**: the loop's tests are native and its walk is
+  two browsers.
+- **The relaunch on a real corpus, and on a phone's browser.**
 
 ### 10.4 Step 6.4 — pairing on the phone face (2026-10-04)
 
@@ -6534,3 +6706,68 @@ it; the signing script with the real `keytool` and the SDK's three tools stubbed
   Cloudflare ones in the environment; and uninstall the debug-signed app from his phone once —
   the first release-signed APK does not install over it. The commands are in
   [ci-and-releases.md](ci-and-releases.md), *What only the owner can do*.
+
+### 10.7 The deploys (2026-10-04)
+
+Two, in the order the runbooks hold them to — the relay first, and the web app only once the
+relay answered a page — and both run by an agent under the owner's standing ask for this phase
+(*"you should deploy the changes we need, when we need them"*). Neither carries step 6.3b: the
+relay's ninth half and a client that reads 4002 are written and wait.
+
+**The relay, at 17:22:12 UTC** — step 6.1's half, the browser's: CORS and the socket ticket.
+From `main` at `ea0aa88e` (#818), version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, wrangler
+4.146.0, `--dry-run` first; no migration, no secret touched. Step 0's twelve probes were asked
+at 17:21:24 UTC, before, and at **23:09:03 UTC, after** — five and three-quarter hours late: the
+permission classifier refused the probe script straight after the deploy, and the owner allowed
+it at 23:09.
+
+- The six bodiless probes answered the same before and after: `400 {"error":"malformed token
+  request"}`, `401`, `400 {"error":"that is not a device id"}`, `401 {"error":"unauthorized"}`,
+  `404 {"error":"nothing there"}`, `400 {"error":"that is not an epoch"}`.
+- **(a) the pre-flight, from the app**: before `405`, `Allow: POST`; **after `204`,
+  `Access-Control-Allow-Origin: https://mtg-grimoire.app`, `Vary: Origin`,
+  `access-control-allow-headers: authorization, content-type`, `access-control-allow-methods:
+  POST`, `access-control-max-age: 86400`**. Its control, from `example.com`: `405`, `Allow:
+  POST`, no `access-control-` line — before and after.
+- **(b) a refusal a page can read**: before `401`; **after `401` with
+  `Access-Control-Allow-Origin: https://mtg-grimoire.app` and `Vary: Origin`**. Control: `401`,
+  no such line.
+- **(c) the socket's origin check**, from `example.com`: before `401`; **after `403 origin not
+  allowed`**. Control, from the app: `401`, before and after.
+
+**The web app, at 23:19:22 UTC.** From `main` at `2bbd4446` (through #824 — step 6.3's engine
+and the `wss://` source; not 6.3b, not 6.5b), version `befbcbd9-be3d-45f5-8150-4af8ff5337c9`,
+engine build id `d6f5dc2a123a220e`, `index-B-KQBiDj.js`, `worker-WDxbzWW_.js`; the wrangler
+`app-worker`'s lockfile pins. The runbook's steps in order: `npm ci`; `web:wasm` (6 836 569 B);
+`web:build`; `web:smoke` passed in 19.0 s; `web:sync-smoke` passed in 37.9 s;
+`web:deploy-guard` exit 0 (59 on both sides, v0.40.0); `wrangler dev --local` with probes 1–11
+and 14–19 answering as the table says; `deploy --dry-run` (48 files read); the deploy (13 files
+uploaded, 30 already there). **Just before it, at 23:18:35 UTC**, production answered probe 1
+with the old policy, probe 19 `0`, and probe 20 — the relay's pre-flight — `204` with the
+allow-origin line: the answer that means *go*.
+
+**All twenty probes at 23:19:35 UTC, against the real address**, each as the runbook's table
+says: the document `200`, `text/html`, `no-cache`, with the policy equal byte for byte to
+`dist-web/_headers`; the module `application/wasm`, a year and immutable, **2 169 729 bytes on
+the wire** as brotli (it is 6 836 569); the 404s as plain text; plain `http` a `301`; the 304
+carrying the policy; **probe 19 `1`** — the policy names the relay, and its `wss://` twin is in
+the same line; **probe 20 `204`** with `Access-Control-Allow-Origin: https://mtg-grimoire.app`.
+The document served, to a plain `GET /` and to a navigation of `/decks/12`, is byte for byte
+`dist-web/index.html`. `app-worker/README.md` has every cell.
+
+**One look in a real browser, at 23:21 UTC** — headless Chrome on a throwaway profile at
+1280×800, `https://mtg-grimoire.app/settings`, for 17 s. No policy violation. No error of the
+app's: the one console error was Chrome's own new-tab page failing to resolve a Google host.
+The first run began (`api.scryfall.com`, `data.scryfall.io`). **No request to the relay and no
+socket**, from a device in no group. And the Sync panel, 4.6 s in: *Browser — not paired yet.*,
+*Pair a device*, *Enter a code from another device*, *Not connected.*, *Connect Patreon*, *Sync
+is off. Nothing leaves this device until you connect a membership.* — the sentence that said
+this build could not sync is gone. Nothing was pressed that asks the relay.
+
+**What only the owner's membership can show**, and nothing has:
+
+- a browser claiming or pairing against the deployed relay;
+- a browser's socket in production — the 101's sub-protocol reaching a page and the text `ping`
+  answered `pong` were settled under local workerd (§10.3), not there;
+- a write on one device drawn on another through the deployed relay, with nothing pressed;
+- what a keepalive is billed, which is the runbook's one-hour check.

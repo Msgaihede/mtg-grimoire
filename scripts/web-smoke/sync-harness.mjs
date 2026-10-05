@@ -18,12 +18,26 @@ import { rm } from "node:fs/promises";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { atExit, browse, buttonSaying, fail, fixtures, openPage, pause, undo } from "./harness.mjs";
+import {
+  ALERT,
+  CARDS_FILE,
+  atExit,
+  browse,
+  buttonSaying,
+  fail,
+  fixtures,
+  openPage,
+  pause,
+  undo,
+} from "./harness.mjs";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "../..");
 
 /** The claim code the local D1 is seeded with, as a reader would type it. */
 const CLAIM_CODE = "TEST-CARD-SYNC";
+/** A second membership's, for a group a device founds for itself — the walk's second device
+ *  founds one and leaves it. Seeded beside the first; a run that never types it never meets it. */
+export const OWN_CLAIM_CODE = "SECD-CARD-SYNC";
 
 // ---------------------------------------------------------------------------------------------
 // The relay, under workerd
@@ -165,12 +179,16 @@ export async function startRelay(pageOrigin) {
   // `schema.sql` is for a database that has never been migrated, which this one is.
   d1("--file", "relay/schema.sql");
   const now = Date.now();
+  // Two memberships, a claim code each: the group a run syncs through, and one a device can
+  // found for itself.
+  const member = (subject, code) =>
+    "INSERT INTO entitlements (subject, source, external_id, status, created_at, checked_at) " +
+    `VALUES ('${subject}', 'patreon', '${subject}-patron', 'active', ${now}, ${now}); ` +
+    "INSERT INTO claim_codes (code, subject, expires_at) " +
+    `VALUES ('${code.replaceAll("-", "")}', '${subject}', ${now + 10 * 60 * 1000});`;
   d1(
     "--command",
-    "INSERT INTO entitlements (subject, source, external_id, status, created_at, checked_at) " +
-      `VALUES ('smoke-subject', 'patreon', 'smoke-patron', 'active', ${now}, ${now}); ` +
-      "INSERT INTO claim_codes (code, subject, expires_at) " +
-      `VALUES ('${CLAIM_CODE.replaceAll("-", "")}', 'smoke-subject', ${now + 10 * 60 * 1000});`,
+    member("smoke-subject", CLAIM_CODE) + " " + member("smoke-other", OWN_CLAIM_CODE),
   );
 
   const port = await freePort();
@@ -278,9 +296,10 @@ const viewport = (browser, width, height) => (sessionId) =>
  * One device of the walk. `face` is which of the app's two it mounts, by the viewport alone, and
  * so which controls the walk presses on it.
  *
- * `own` is a measurement's: `cards`, a card file that is not the committed six, and `gate`,
- * what this device's requests to the relay wait on (`harness.mjs`'s `intercept`). The walk
- * hands neither.
+ * `own` is what one run wants of one device: `cards`, a card file that is not the committed six;
+ * `gate`, what this device's requests to the relay wait on (`harness.mjs`'s `intercept`) — the
+ * measurement's; and `holdCards`, the card file kept on its way from the first ask until
+ * `releaseCards` — the walk's, for the device it relaunches into a first ingest.
  */
 export async function device(name, face, origin, relay, chunk, own = {}) {
   const [width, height] = face === "desktop" ? [1280, 800] : [412, 915];
@@ -299,6 +318,9 @@ export async function device(name, face, origin, relay, chunk, own = {}) {
       socket: (url) => url.startsWith(`${relay.socket}/`),
     },
   );
+  // Before the page exists: a card file that is to be kept on its way is held from the first
+  // ask. `releaseCards` lets it — and every later ask for it — through.
+  const releaseCards = own.holdCards ? hosts.hold(CARDS_FILE) : () => undefined;
   const page = await openPage(
     browser,
     `${origin}/settings`,
@@ -357,8 +379,42 @@ export async function device(name, face, origin, relay, chunk, own = {}) {
     );
     await page.until(`${name}: the Sync panel drew`, `!!${buttonSaying("Pair a device")}`, 30_000);
   };
-  /** Search for `card`, open it, and press its *Add to wishlist*. Answers when the press landed. */
-  const wish = async (card) => {
+  /**
+   * Start this device again: the page reloaded, which is a new document, a new engine Worker
+   * and a launch — over the profile's own database, so a device that was paired still is.
+   * Answers once the new document's database is open; what the launch then does is the
+   * caller's to wait for.
+   */
+  const relaunch = async () => {
+    await page.evaluate("window.__smokeDocument = true");
+    await page.reload();
+    await page.until(
+      `${name}: the document after the relaunch opened its database`,
+      `window.__smokeDocument === undefined &&
+        import(${JSON.stringify(chunk)})
+          .then((m) => m.webCore.call("startup_status"))
+          .then((s) => s.state !== "loading")`,
+    );
+    const refused = await page.evaluate(ALERT);
+    if (refused) fail(`${name}: the relaunch did not open its database:\n${refused}`);
+    await page.evaluate(listenToSync(chunk));
+  };
+  /** Whether the socket this device made last has been closed, as its Worker reports it. */
+  const lastSocketClosed = () => {
+    const last = policy.sockets.at(-1);
+    return (
+      last !== undefined &&
+      events("Network.webSocketClosed").some(
+        (event) => event.sessionId === last.sessionId && event.params.requestId === last.requestId,
+      )
+    );
+  };
+  /**
+   * Search for `card`, open it, and press its *Add to wishlist* — or, with `any`, the phone
+   * face's *Any printing* beside it, which wishes for the card and not for one printing of it.
+   * Answers when the press landed.
+   */
+  const wish = async (card, any = false) => {
     await go("search");
     const box =
       face === "desktop"
@@ -378,7 +434,9 @@ export async function device(name, face, origin, relay, chunk, own = {}) {
     const add =
       face === "desktop"
         ? `document.querySelector('[role="dialog"] button[aria-label="Add to wishlist"]:enabled')`
-        : buttonSaying("Add to wishlist");
+        : any
+          ? `document.querySelector('button[aria-label="Add to wishlist, any printing"]')`
+          : buttonSaying("Add to wishlist");
     const wishes = async () =>
       (await engine("wishlist_summary", { marketplace: "tcgplayer" })).wishes;
     const before = await wishes();
@@ -425,6 +483,9 @@ export async function device(name, face, origin, relay, chunk, own = {}) {
     wish,
     closeCard,
     draws,
+    relaunch,
+    releaseCards,
+    lastSocketClosed,
     pid,
   };
 }
@@ -466,17 +527,24 @@ export async function seen(dev, what, expression, more = async () => "", withinM
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Claim the seeded membership on `first`, through the page's own claim-code field, and wait for
+ * Claim a seeded membership on `first`, through the page's own claim-code field, and wait for
  * its socket. Answers the group it founded and when it said `connecting` and `live`.
+ *
+ * `code` is the membership every run syncs through unless it says otherwise — the walk's second
+ * device claims {@link OWN_CLAIM_CODE}, for a group of its own to leave.
  */
-export async function claim(first) {
+export async function claim(first, code = CLAIM_CODE) {
   await first.openSync();
-  await first.page.press("the claim-code field", `document.querySelector("#patreon-claim")`);
-  await first.page.type(CLAIM_CODE);
+  await first.page.press(
+    `${first.name}: the claim-code field`,
+    `document.querySelector("#patreon-claim")`,
+  );
+  await first.page.type(code);
+  const said = (await first.told()).live.length;
   const claimed = Date.now();
-  await first.page.press("the claim's Connect", buttonSaying("Connect"));
+  await first.page.press(`${first.name}: the claim's Connect`, buttonSaying("Connect"));
   await first.page.until(
-    "the panel said the membership is connected",
+    `${first.name}: the panel said the membership is connected`,
     `/Supporting/.test(document.body.innerText)`,
     30_000,
   );
@@ -485,16 +553,13 @@ export async function claim(first) {
     "sync_pairing_status",
     (s) => s.groupId !== null,
   );
-  await first.engineUntil(
-    "the first device's socket came up",
-    "sync_live_state",
-    (s) => s === "live",
-  );
-  const firstLive = (await first.told()).live;
-  const dialled = firstLive.find((event) => event.state === "connecting");
-  const up = firstLive.find((event) => event.state === "live");
+  await first.engineUntil("its socket came up", "sync_live_state", (s) => s === "live");
+  // What it has said since the press: a device that claims twice in one run has said more.
+  const live = (await first.told()).live.slice(said);
+  const dialled = live.find((event) => event.state === "connecting");
+  const up = live.find((event) => event.state === "live");
   if (!dialled || !up)
-    fail(`the first device never said connecting and live: ${JSON.stringify(firstLive)}`);
+    fail(`${first.name} never said connecting and live: ${JSON.stringify(live)}`);
   return { founded, claimed, dialled, up };
 }
 
@@ -504,6 +569,9 @@ export async function claim(first) {
  * *Codes match* was pressed, and when the joining device said `connecting` and `live`.
  */
 export async function pair(first, second) {
+  // What the joining device has said before this: one that founded a group and left it has
+  // already said `connecting` and `live` once, and those are not this pairing's.
+  const saidBefore = (await second.told()).live.length;
   await first.openSync();
   await first.page.press("Pair a device", buttonSaying("Pair a device"));
   const code = await first.page.until(
@@ -537,7 +605,7 @@ export async function pair(first, second) {
     );
     await dev.engineUntil("the socket is live", "sync_live_state", (s) => s === "live");
   }
-  const secondLive = (await second.told()).live;
+  const secondLive = (await second.told()).live.slice(saidBefore);
   const joined = secondLive.find((event) => event.state === "connecting");
   const joinedUp = secondLive.find((event) => event.state === "live");
   return { code, offering, matched, joined, joinedUp };

@@ -45,6 +45,44 @@ pub async fn timeout<F: Future>(duration: Duration, future: F) -> Option<F::Outp
     imp::timeout(duration, future).await
 }
 
+/// [`timeout`], for a future whose answer arrives as **an event the host has queued** — a
+/// socket's `open` — and whose deadline can therefore pass while the answer is already waiting.
+///
+/// A deadline is a timer, and in a browser a timer is one more queued task. After a synchronous
+/// stretch longer than `duration` — a card ingest holds the engine's one thread for ten seconds
+/// and more — the timer's task and the event's are *both* queued when the thread comes back,
+/// and the order they run in is the host's. Timer first, and a plain [`timeout`] polls the
+/// future while its event has not been delivered, sees it pending, and gives up on something
+/// that had already happened: for a dial, an open socket dropped, with a row saying the relay
+/// never answered.
+///
+/// So when the deadline passes this takes **one turn of the host** ([`yield_to_host`]) and polls
+/// the future **once more** before giving up: whatever was queued beside the timer has then
+/// run. A future still pending after that turn really is unanswered.
+///
+/// ⚠️ **Task ordering in a browser is not specified, and this does not pretend it is.** One turn
+/// delivers what was queued *as a task* when the deadline ran — a `MessageChannel` message is
+/// queued behind it. An answer that needs two turns, or that arrives a millisecond later, is
+/// late by the deadline's own terms and is given up on, as it should be. The native test below
+/// stages the order with a runtime whose order *is* known; it shows the second poll happens, not
+/// what a browser does.
+pub async fn timeout_after_a_last_turn<F: Future>(
+    duration: Duration,
+    future: F,
+) -> Option<F::Output> {
+    use futures_util::future::{select, Either};
+    use futures_util::FutureExt as _;
+    let mut future = std::pin::pin!(future);
+    {
+        let deadline = std::pin::pin!(sleep(duration));
+        if let Either::Left((answered, _)) = select(future.as_mut(), deadline).await {
+            return Some(answered);
+        }
+    }
+    yield_to_host().await;
+    future.as_mut().now_or_never()
+}
+
 /// **A beat**: [`Interval::tick`] comes back at once the first time, and then once every
 /// `period`.
 ///
@@ -463,6 +501,70 @@ mod tests {
             tick.elapsed() >= Duration::from_millis(30),
             "{:?}",
             tick.elapsed()
+        );
+    }
+
+    /// A future whose answer is **queued on the host beside the deadline**: a task that runs at
+    /// the same instant the deadline does sets it, as a browser's queued `open` event would,
+    /// and the future is ready only once that task has had its turn.
+    fn answered_by_a_task_queued_at(when: Duration) -> impl Future<Output = ()> {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
+        let answered = Arc::new(AtomicBool::new(false));
+        let host = answered.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(when).await;
+            host.store(true, Ordering::SeqCst);
+        });
+        std::future::poll_fn(move |_| {
+            if answered.load(Ordering::SeqCst) {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        })
+    }
+
+    /// **A deadline that passes while the answer is queued behind it takes one turn and looks
+    /// again** — where a plain [`timeout`] gives up on something that had already happened.
+    ///
+    /// The control is the first assertion, and it is what the staging rests on: on this runtime
+    /// the task that timed out is polled before the task queued at the same instant, so a plain
+    /// timeout answers `None`. Were that order ever the other way the control fails and says
+    /// the staging has stopped staging — it is this runtime's order, known; **a browser's is
+    /// not specified**, and what this shows is that the second look is taken, not what a
+    /// browser does.
+    ///
+    /// **What makes it red**: giving up at the deadline without the turn, or without the poll
+    /// after it.
+    #[tokio::test(start_paused = true)]
+    async fn a_deadline_takes_one_last_turn_before_it_gives_up() {
+        let wait = Duration::from_secs(20);
+        assert_eq!(
+            timeout(wait, answered_by_a_task_queued_at(wait)).await,
+            None,
+            "the staging: the deadline is meant to run before the queued answer"
+        );
+
+        assert_eq!(
+            timeout_after_a_last_turn(wait, answered_by_a_task_queued_at(wait)).await,
+            Some(())
+        );
+        // An answer in time is an answer, and one that never comes is still given up on — a
+        // turn later, and no more than that.
+        assert_eq!(timeout_after_a_last_turn(wait, async { 7 }).await, Some(7));
+        assert_eq!(
+            timeout_after_a_last_turn(wait, std::future::pending::<()>()).await,
+            None
+        );
+        // One turn, not two: an answer queued behind a second turn is late.
+        assert_eq!(
+            timeout_after_a_last_turn(
+                wait,
+                answered_by_a_task_queued_at(wait + Duration::from_millis(1))
+            )
+            .await,
+            None
         );
     }
 

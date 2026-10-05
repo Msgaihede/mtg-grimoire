@@ -307,12 +307,77 @@ export interface Notifiable {
   open: boolean;
 }
 
+const DEVICE_TAG = "d:";
+
 /**
  * The one tag a socket carries. Namespaced because `acceptWebSocket` allows ten tags and a
  * future one — a group, a protocol version — must not be mistaken for a device id.
  */
 export function deviceTag(device: string): string {
-  return `d:${device}`;
+  return `${DEVICE_TAG}${device}`;
+}
+
+/**
+ * The device a socket's tag names — {@link deviceTag}, read back — or `undefined` for a socket
+ * with no tag, or one from a namespace this does not know.
+ */
+export function taggedDevice(tag: string | undefined): string | undefined {
+  return tag?.startsWith(DEVICE_TAG) === true ? tag.slice(DEVICE_TAG.length) : undefined;
+}
+
+/**
+ * The close every socket of a group is sent when the group's log is **dropped** — a membership
+ * ended (`group.ts`'s `drop`). In the private range, so a client can tell it from any
+ * transport-level close. It has meant this, and only this, in every build that has shipped.
+ */
+export const CLOSE_DROPPED = 4001;
+
+/**
+ * The close one device is sent when **a rotation's manifest no longer names it** — it was
+ * removed, or it left. A code of its own, and not {@link CLOSE_DROPPED}, because the two are read
+ * differently and neither reading survives the other's event:
+ *
+ * - **a released client reads 4001 as "the group no longer exists"**, with a row in its Errors
+ *   panel and seconds of *offline*. A device's own *Leave group* is a manifest without it, and the
+ *   relay cannot spare the leaver — `/rotate` authenticates with the group's shared auth and does
+ *   not know which device published — so reusing 4001 would have written that row on every
+ *   released desktop that left a group. 4002 is a code it has never heard of: a plain close.
+ * - **a lapse must write no row at all**, and a client that read 4001 as a removal would write
+ *   one for it, before any round trip had learned the membership ended.
+ *
+ * `sync_engine::live` reads 4002 as *removed* — a backoff, then the round trip on which the device
+ * finds itself off the manifest and clears its group — unless the device has itself just left.
+ */
+export const CLOSE_REMOVED = 4002;
+
+/**
+ * The sockets a roster closes: every open one whose device the adopted manifest does not name.
+ *
+ * **Until 2026-10-04 a rotation closed nothing.** The removed device's ack was deleted and its
+ * rows compacted, and its socket stayed up: it went on reading *live*, with a roster of a group
+ * it was no longer in, until its own next round trip — its next edit, or a press of Sync now —
+ * found the manifest without it. Nothing told it. Closing its socket is the telling: the client
+ * backs off, makes the round trip a reconnect always starts with, and learns there.
+ *
+ * **The manifest is the roster**, so "not named" is the same test the device itself applies to
+ * `/keys` — a socket this closes belongs to a device that would conclude the same on its next
+ * trip. It includes a device that *left*: its own departure is a manifest without it.
+ *
+ * **Which is why {@link notifyTargets} needs no rule about departed devices**: after this, a
+ * device a roster took out holds no socket to be told on. One that dials again inside its
+ * token's day would be accepted and rung — and a client only dials behind a round trip, which
+ * is where it clears the group it would have dialled for.
+ *
+ * **An untagged socket is left alone**, for `notifyTargets`' reason turned round: it cannot be
+ * proved to be a removed device's, and closing a member's socket costs a reconnect where leaving
+ * a stranger's open costs a frame that carries no data. A socket already closing is skipped.
+ */
+export function removedSockets<T extends Notifiable>(sockets: T[], named: string[]): T[] {
+  const kept = new Set(named);
+  return sockets.filter((socket) => {
+    const device = taggedDevice(socket.tag);
+    return socket.open && device !== undefined && !kept.has(device);
+  });
 }
 
 /**

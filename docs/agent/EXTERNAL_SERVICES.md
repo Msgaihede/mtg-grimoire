@@ -101,7 +101,8 @@ key distribution are all live. This sentence briefly said `/rotate` and `/keys` 
 routes still missing; that was true for part of one day. **The device roll and the pairing
 rendezvous are deployed too**, which this file denied until 2026-09-28 on a probe that could not
 fail — [the runbook](../reference/hosted-relay-deploy.md)'s step 0 has one that can. **The last
-deploy was 2026-10-01 at 22:09 UTC**, and carried rate limits on the five routes a caller reaches
+deploy was 2026-10-04 at 17:22 UTC** (the browser's half, below); **the one before it, on
+2026-10-01 at 22:09 UTC**, carried rate limits on the five routes a caller reaches
 with no token — in the Worker, because `workers.dev` has no zone for a rule, so they spare the D1
 read and not the request, and they bound a flood rather than metering a trickle. The deploy before
 it, the same day from `main` at `2b845048`, carried issue #548's `dev` claim on the tokens the
@@ -113,9 +114,14 @@ and a native client never did** — an allow-list of origins a page may ask from
 `relay/src/cors.ts`), the pre-flight answered ahead of every limiter and every Durable Object, and
 `/ws` taking its bearer from the socket's sub-protocol, which is the only place a browser can put
 one (`relay/src/ticket.ts`). A request with no `Origin` is answered byte for byte as before, so no
-released build notices. **Written and not deployed**: asked that day, the deployed relay answered
-an `OPTIONS` from the web app's origin 405, and the runbook's step 0 has the probes that say when
-that has changed. **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
+released build notices. **Deployed 2026-10-04 at 17:22:12 UTC, from `main` at `ea0aa88e` (#818)
+— the last deploy — and verified**: version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, by an agent at
+the owner's standing ask for this phase. Asked before it, the relay answered an `OPTIONS` from the
+web app's origin 405; asked at 23:09:03 UTC, **204 with `Access-Control-Allow-Origin:
+https://mtg-grimoire.app`**, a 401 a page can read, and 403 to a foreign origin's socket — the
+runbook's step 0 has every answer. No browser has opened a socket in production yet. **Written
+and not deployed since**: a rotation's roster closing the removed devices' sockets with 4002
+(light app step 6.3b; the runbook's ninth half). **`PATREON_CLIENT_ID` beside it was a placeholder until 2026-08-30 and holds the
 real id now**, public on the same terms and verified live against Patreon's authorize endpoint.
 
 ## Entitlements, removal and leaving
@@ -184,15 +190,19 @@ Chrome 154 on 2026-10-04, in a page and in a dedicated Worker alike, a `wss://` 
 the policy names only as `https://` is refused before anything is sent (*Connecting to 'wss://…'
 violates the following Content Security Policy directive*), as an `error` with no `close`. The
 second source is derived from `RELAY_BASE` by the rule the engine dials by, and the same test
-holds it to that one. ⚠️ **No build that asks the relay from a page is deployed** — the
-tree is ahead of the web host: the relay's half went out on 2026-10-04 at 17:22 UTC
-(`docs/reference/light-app.md` §10.4), and the web app's deploy, which carries the engine that
-asks and the `wss://` source together, has not been made. **An address a server sends is not**
+holds it to that one. **A build that asks the relay from a page is deployed since 2026-10-04 at
+23:19:22 UTC** — after the relay's half, which went out at 17:22 UTC and answered its
+pre-flight `204` at 23:09 and 23:18: the web app's deploy carried the engine that asks and the
+`wss://` source together, and its policy names the relay (probe 19: `1`). ⚠️ **No browser has
+paired, or opened a socket, in production** — that needs the owner's membership
+(`docs/reference/light-app.md` §10.7). **An address a server sends is not**
 — Scryfall's bulk-file host is in no line of ours, so if that moves every suite stays green and
-a browser's first run fails. **The last deploy was 2026-10-04 at 13:27 UTC, from `main` at
-`4929cc6e`** — the second that day, rolled back at 13:28 and forward again at 13:30 to see a
-rollback work, so **production is that commit and not `main`**, which has moved past it. This
-paragraph said *not deployed* until then. No agent may deploy it unasked: each of
+a browser's first run fails. **The last deploy was 2026-10-04 at 23:19:22 UTC, from `main` at
+`2bbd4446`** (through #824), version `befbcbd9-be3d-45f5-8150-4af8ff5337c9`, engine build id
+`d6f5dc2a123a220e` — the fourth that day, with all twenty of its runbook's probes asked of the
+real address thirteen seconds later — so **production is that commit and not `main`** once
+`main` moves past it: step 6.3's engine, and not yet 6.3b's. This
+paragraph said *not deployed* until that day. No agent may deploy it unasked: each of
 those was run by an agent because Markus asked for it, and **the ask is per deploy** — except
 that for the light app's phase 6 he asked once for the phase's deploys, the relay's and this
 Worker's (2026-10-04), and for nothing after it. **One job deploys it, and it is the only job
