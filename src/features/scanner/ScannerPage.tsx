@@ -119,6 +119,8 @@ function LiveScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const queryClient = useQueryClient();
   const { prefs, update, filterError, loaded } = useScannerPrefs();
+  // Session-only: a deliberate Stop survives minimize/restore, but a new visit starts as before.
+  const [scanning, setScanning] = useState(true);
   // **A minimized window stands down** (issue #556): the pump pauses at once, and the camera and
   // the heartbeat go after a grace, so the light goes out and the lease lapses for another window.
   // WebView2 reports a minimized page as visible, so the page could not see this on its own.
@@ -261,7 +263,7 @@ function LiveScanner() {
     // **Held until the prefs and the tray are in.** The first frame must go out in the stored
     // mode and under the stored filters, and a decision must land on the stored tray rather than
     // on an empty one the load then overwrites. And paused the moment the window is minimized.
-    live: camera.kind === "live" && loaded && tray.loaded && !parked.paused,
+    live: scanning && camera.kind === "live" && loaded && tray.loaded && !parked.paused,
     options: frameOptions,
     sendPx,
     detailWaitMs,
@@ -462,6 +464,8 @@ function LiveScanner() {
         <h2 className="sr-only">Scanner</h2>
 
         <ScanBar
+          scanning={scanning}
+          onScanning={setScanning}
           mode={prefs.mode}
           onMode={(mode) => update({ mode })}
           filters={prefs.filters}
@@ -491,7 +495,7 @@ function LiveScanner() {
                 scanner is leaning towards and how close it is: a reader holding a card watches the
                 bar fill, and a line under a tall camera is a line below where they are looking. */}
             <MatchStrip
-              verdict={loop.verdict}
+              verdict={scanning ? loop.verdict : null}
               mode={prefs.mode}
               lastAdded={lastAdded}
               hasBundle={hasBundle}
@@ -504,8 +508,13 @@ function LiveScanner() {
                 than 16:9, and a letterboxed feed there is a strip with black above and below. */}
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
               <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
-              <Overlay videoRef={videoRef} verdict={loop.verdict} />
-              <AddedToast card={landed} onDone={() => setLanded(null)} />
+              <Overlay videoRef={videoRef} verdict={scanning ? loop.verdict : null} />
+              <AddedToast card={scanning ? landed : null} onDone={() => setLanded(null)} />
+              {!scanning && (
+                <p role="status" className="absolute left-3 top-2 p-2 text-xs text-dim">
+                  Scanning stopped. Press Start scanning to resume.
+                </p>
+              )}
               {camera.kind === "error" && (
                 <p
                   role="alert"
@@ -519,8 +528,11 @@ function LiveScanner() {
                   grew and shrank with each one would be the loudest thing on the screen. Two lines
                   of room, held whether or not there is anything to put in it. At the top of the
                   picture, because the bottom is where a landed card is laid. */}
-              <p className="absolute left-3 top-2 min-h-[2.5em] text-xs text-dim" aria-live="polite">
-                {detectorSentence}
+              <p
+                className="absolute left-3 top-2 min-h-[2.5em] text-xs text-dim"
+                aria-live="polite"
+              >
+                {scanning ? detectorSentence : ""}
               </p>
             </div>
             {assetNotes.length > 0 && (
