@@ -133,12 +133,99 @@ export const MAX_CLOCK_AHEAD_MS = 24 * 60 * 60 * 1000;
  * decoration — it is what makes the order *total*, so two devices that stamped the same
  * millisecond and the same counter still sort the same way on every device in the group.
  */
-function compareHlc(a: Row, b: Row): number {
+function compareHlc(a: Stamped, b: Stamped): number {
   if (a.hlcMs !== b.hlcMs) return a.hlcMs - b.hlcMs;
   if (a.hlcCtr !== b.hlcCtr) return a.hlcCtr - b.hlcCtr;
   if (a.device < b.device) return -1;
   if (a.device > b.device) return 1;
   return 0;
+}
+
+/** What the group's ordering reads of a row: its sender's clock, and the sender. */
+export interface Stamped {
+  device: string;
+  hlcMs: number;
+  hlcCtr: number;
+}
+
+/**
+ * `rows` in the group's own order — a copy, the input untouched. **Stable**, so two rows the
+ * clock cannot tell apart keep the order they were handed in, which for rows read by `seq` is
+ * arrival order.
+ */
+export function inGroupOrder<R extends Stamped>(rows: R[]): R[] {
+  return [...rows].sort(compareHlc);
+}
+
+/**
+ * The most sealed characters one **page** of a pull carries: half a mebibyte.
+ *
+ * **Enforced here whatever `limit` a client names**, and that is the whole reason it is the
+ * relay's number: a page is bounded by what the relay will read into its isolate and what a
+ * browser can take inside its deadline, neither of which a client's row count knows. `limit`
+ * counts rows, and a row is anything from a single edit's few hundred characters to
+ * [`MAX_SEALED_CHARS`].
+ *
+ * **Sized by three measurements of 2026-10-04** (`docs/reference/light-app.md` §10.5):
+ *
+ * - *the pulling engine*: a full envelope of 200 ops is about 178 000 characters, 0.12 s of
+ *   apply in which a browser's engine answers no command, and 2.2 MB of linear memory that is
+ *   never given back. Half a mebibyte is two of them whole — a quarter of a second deaf, where
+ *   the unpaged answer to a 50 000-row import was twenty-nine seconds.
+ * - *the link*: a browser gives a request 120 s, body included, and sealed text goes over the
+ *   wire at about three quarters of its length — so a page of this size is 393 KB, 79 s at
+ *   40 kbit/s. Twice it would not fit.
+ * - *this isolate*: a pull costs the JS heap twice what it reads, so a megabyte a page, against
+ *   the 128 MB every group on the isolate shares.
+ *
+ * **It always admits one row**, because a row may be larger than the budget (an op too fat for a
+ * batch goes alone, up to `MAX_SEALED_CHARS`) and a page that could not carry it would be a log
+ * nobody can read past. At the cap that one page needs 75 kbit/s to land inside the deadline —
+ * less than the unpaged answer carrying it ever did.
+ */
+export const PULL_PAGE_CHARS = 512 * 1024;
+
+/**
+ * The most rows a page carries however small they are: a ceiling on `limit`, so a number a
+ * client made up cannot ask the object for more rows at once than a budget's worth of the
+ * smallest envelopes there are. A client that names more is answered with this many.
+ */
+export const PULL_LIMIT_MAX = 1024;
+
+/**
+ * `limit` as a pull names it: `null` for a request that names none — **an unpaged pull, which is
+ * every released desktop's and is answered whole** — the number of rows to answer at most for one
+ * that does, and `"bad"` for a value that is not a whole number of at least one.
+ *
+ * **Refused rather than read as "no limit"**: a client that sends `limit` is a pager, and
+ * answering it everything because its number did not parse would hand a browser the one answer
+ * paging exists to spare it.
+ */
+export function pageLimit(raw: string | null): number | null | "bad" {
+  if (raw === null) return null;
+  if (!/^\d{1,9}$/.test(raw)) return "bad";
+  const asked = Number(raw);
+  return asked < 1 ? "bad" : Math.min(asked, PULL_LIMIT_MAX);
+}
+
+/**
+ * How many of `sizes` — each row's sealed length, in `seq` order — one page takes: rows while the
+ * running total stays inside [`PULL_PAGE_CHARS`], **and always the first**, whatever its size.
+ * Whole rows only: a row that would cross the budget starts the next page.
+ *
+ * **It stops asking at the first size that does not fit**, and `sizes` may be anything that is
+ * iterated — which is how the object reads no further into its log than a page goes: SQLite
+ * has to load a row's text to say how long it is, so a size never asked for is a row never read.
+ */
+export function pageLength(sizes: Iterable<number>): number {
+  let total = 0;
+  let taken = 0;
+  for (const size of sizes) {
+    if (taken > 0 && total + size > PULL_PAGE_CHARS) break;
+    total += size;
+    taken += 1;
+  }
+  return taken;
 }
 
 /**
@@ -156,9 +243,16 @@ function compareHlc(a: Row, b: Row): number {
  * neither is a reason to send them.
  *
  * The input array is not mutated: `filter` copies before `sort` sorts.
+ *
+ * **The object no longer calls this** — since paging (step 6.5b) both halves of it are SQL in
+ * `group.ts`, so that the rows of the caller's own device are never read at all: the filter is
+ * `WHERE seq > ? AND device <> ?`, and the order is `ORDER BY hlc_ms, hlc_ctr, device, seq` for
+ * the unpaged answer and [`inGroupOrder`] for a page. It stays as the statement of what a pull
+ * answers, and as the implementation the unpaged answer is held to byte for byte
+ * (`group.test.ts`).
  */
 export function since(rows: Row[], cursor: number, exclude: string): Row[] {
-  return rows.filter((row) => row.seq > cursor && row.device !== exclude).sort(compareHlc);
+  return inGroupOrder(rows.filter((row) => row.seq > cursor && row.device !== exclude));
 }
 
 /**
@@ -170,9 +264,22 @@ export interface Ack {
   heardAt: number;
 }
 
+/**
+ * What a compaction reads of a row: where it stands, who sent it and when it was stored.
+ * **Never its `sealed`** — nothing a compaction decides depends on what a row carries, and the
+ * object hands in rows read without their bodies (`group.ts`'s `compactNow`): read whole, a
+ * compaction cost the isolate the entire log on every ack that moved a cursor (measured
+ * 2026-10-05: 45 MB of JS heap for a 45 MB log).
+ */
+export interface Stored {
+  seq: number;
+  device: string;
+  storedAt: number;
+}
+
 /** What a compaction pass decides: the rows to keep, and the devices whose ack to delete. */
-export interface Compaction {
-  keep: Row[];
+export interface Compaction<R extends Stored = Row> {
+  keep: R[];
   forget: string[];
 }
 
@@ -215,12 +322,12 @@ export interface Compaction {
  * keeps a sleeping device's inbox into one that deletes it, and the deletion is silent on both
  * ends.
  */
-export function compact(
-  rows: Row[],
+export function compact<R extends Stored>(
+  rows: R[],
   acks: Map<string, Ack>,
   departed: Set<string>,
   nowMs: number,
-): Compaction {
+): Compaction<R> {
   const heard = new Map<string, number>();
   for (const [device, ack] of acks) heard.set(device, ack.heardAt);
   for (const row of rows) {

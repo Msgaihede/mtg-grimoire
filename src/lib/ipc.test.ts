@@ -4073,6 +4073,8 @@ it("subscribes to sync:applied and hands the payload through unwrapped", async (
     changed: true,
     baselineOps: 0,
     baselineHistory: 0,
+    pullPages: 1,
+    pullWhole: false,
   };
 
   const stop = await ipc.onSyncApplied((o) => seen.push(o));

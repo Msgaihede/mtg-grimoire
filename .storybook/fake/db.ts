@@ -23633,6 +23633,8 @@ export function writeHandlers(db: FakeDb) {
             db.mutedTags.length
           : 0,
         baselineHistory: first ? db.deckAudit.length : 0,
+        pullPages: 1,
+        pullWhole: false,
       };
     },
 

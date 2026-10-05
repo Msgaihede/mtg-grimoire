@@ -1,5 +1,6 @@
 #!/usr/bin/env node
-// What an unpaged `pull` costs a browser: the light app's phase 6, step 6.5 — a measurement.
+// What a large `pull` costs a browser: the light app's phase 6, step 6.5 — a measurement. It was
+// taken of the unpaged pull, and asked for paging; since step 6.5b it measures the paged one.
 //
 //     npm run web:wasm && npm run web:build
 //     npm run web:sync-pull -- --ops 10000            a device left behind, then let through
@@ -11,8 +12,8 @@
 //     npm run web:sync-pull -- --ops 1000 --kbps 40   left behind, then let through a slow link
 //
 // **Not a check, and not CI's.** `web-sync-smoke.mjs` is the walk a pull request is held to; this
-// is the run that says what the relay's one-response `pull` costs the engine's Worker — one
-// thread, one linear memory — when the response is large. It takes half a minute at a thousand
+// is the run that says what catching up on a large log costs the engine's Worker — one thread,
+// one linear memory — and the relay's isolate. It takes half a minute at a thousand
 // ops and five at fifty thousand, so no job runs it. It still fails, by name, when the two
 // devices do not end up holding the same rows.
 //
@@ -38,7 +39,8 @@
 // **How a device is left behind.** Its requests to the relay are held where the harness pauses
 // every request (`intercept`'s `gate`): its socket stays up and rings, its loop starts a trip,
 // and that trip's first request waits, unanswered, as one on a stalled link would. Opening the
-// gate lets the trip through, and its `pull` is the whole of what was pushed meanwhile. The
+// gate lets the trip through, and its `pull` — every page of it, read as one from the first
+// request to the last page's last byte — is the whole of what was pushed meanwhile. The
 // Worker is alive and idle while it waits, which is what lets its memory be read before and a
 // command be asked of it throughout. `--live` holds nothing: the device takes the log as a
 // stream of `head` frames.
@@ -55,8 +57,9 @@
 // - the **tab's process** and **workerd's** — working set and its peak, from the operating
 //   system's process table. Windows only; elsewhere the figures read `n/a`.
 // - the **relay isolate's JS heap, by request** — `Runtime.getHeapUsage` over wrangler's
-//   inspector, fifty times a second, collected before each request that is read alone: the
-//   pushes, the importing device's own pull and ack, the measured pull, the ack after it.
+//   inspector, fifty times a second, collected before the pushes and before the measured pull,
+//   and read across each: the pushes, the importing device's own pull and ack, the measured
+//   pull over all of its pages, and the ack behind it from where the pull left the heap.
 // - the **requests** — the Worker's own `Network` events: when each was sent, when its headers
 //   and its last byte arrived, and how many bytes that was, decoded and on the wire; and the
 //   relay's own log for how many were asked, and how many pre-flights stood in front of them.
@@ -791,14 +794,36 @@ function probeLine(figures) {
 
 /** One pull, as its Worker saw it. `next` is when the Worker next asked the relay anything. */
 function pullLine(pull, next) {
+  // On a page of a few hundred kilobytes the two stamps can cross: the headers are stamped
+  // where the Worker hears of them and the last byte where the network finished, so on a busy
+  // machine "the last byte" can read as a little *before* the headers. Printed as it is read.
   const since = /[?&]since=(\d+)/.exec(pull.url)?.[1];
   return (
     `since=${since}: ${MB(pull.decoded)} MB (${MB(pull.wire)} on the wire), headers after ` +
     `${round(pull.answered - pull.sent)} ms, the last byte ${round(pull.finished - pull.answered)} ms ` +
     `later` +
-    (next ? `, read and applied in ${round(next - pull.finished)} ms` : "")
+    // A pull fetches every page before it applies any, so what lies between a page's last
+    // byte and the next request is the page parsed, opened and looked into — and, behind the
+    // last page, everything the pull then does with what it fetched.
+    (next ? `, the engine's next request ${round(next - pull.finished)} ms after that` : "")
   );
 }
+
+/**
+ * How a trip's pull was evaluated, as its `sync:applied` says (`RelayOutcome.pullPages`,
+ * `pullWhole`): a page at a time, or everything it fetched as one answer — which is what an
+ * older build's baseline anywhere in it asks for.
+ */
+const wayOf = (outcome) =>
+  `${outcome.pullPages} page${outcome.pullPages === 1 ? "" : "s"}, evaluated ` +
+  (outcome.pullWhole ? "as one answer" : "a page at a time");
+
+/** [`wayOf`] for each trip that pulled more than one page — the catch-ups. */
+const waysOf = (tellings) =>
+  tellings
+    .filter((told) => told.pullPages > 1 || told.pullWhole)
+    .map(wayOf)
+    .join("; ") || "no trip of more than one page";
 
 /**
  * What the relay answered since `from`, by route: counts, each route's own time, and **the
@@ -1122,11 +1147,15 @@ async function main() {
     await relayIsolate?.collect();
     const opened = Date.now();
     gate.open();
-    // The trip that was waiting goes through; one that had given up is asked for by hand.
+    // The trip that was waiting goes through; one that had given up is asked for by hand. It is
+    // over when the page is told `sync:applied` — one telling a trip, however many pages the
+    // pull was — or when a pull fails.
     const pullsSent = () => routed(watching.requests(), "GET", "pull");
-    const pullOf = () => pullsSent().find((r) => r.finished);
-    for (let waited = 0, asked = false; !pullOf(); waited += 100, await pause(100)) {
+    const failedPull = () => pullsSent().find((r) => r.failed !== null);
+    const toldOfIt = async () => (await second.told()).applied.length > told;
+    for (let waited = 0, asked = false; ; waited += 100, await pause(100)) {
       second.hosts.check();
+      if (failedPull() || (await toldOfIt())) break;
       if (waited > 20_000 && !asked && pullsSent().length === 0) {
         asked = true;
         await second.page.evaluate(
@@ -1135,41 +1164,33 @@ async function main() {
       }
       if (waited > PATIENCE_MS) fail(`${second.name} never pulled after its gate opened`);
     }
-    const ended = pullOf();
-    // The pull's own window closes a quarter of a second past its last byte; the heap is then
-    // collected a third time, while the engine is still applying, so that the ack which follows
-    // the apply — and the compaction it runs — is read on its own as well.
-    await pause(300);
-    relayCost.pull = costOf(relayIsolate, ended.sent, ended.finished);
-    await relayIsolate?.collect();
-    if (ended.failed !== null) {
+    const ended = failedPull();
+    if (ended) {
       // The pull did not arrive: on a slow link this is the engine's own deadline ending it.
       await pause(1_000);
       const read = await watching.stop();
       const log = await second.engine("error_log_list", { limit: 5 });
       const status = await second.engine("sync_relay_status");
+      const landed = routed(read.requests, "GET", "pull").filter(
+        (r) => r.failed === null && r.finished !== null,
+      );
       console.log(
         `ok  ${second.name}'s pull was given up on ${((ended.finished - ended.sent) / 1000).toFixed(1)} s ` +
           `after it was sent (${ended.failed}), with ${MB(ended.decoded)} MB of it read` +
           (KBPS > 0 ? ` over a link of ${KBPS} kbit/s` : "") +
+          `, ${landed.length} page${landed.length === 1 ? "" : "s"} having landed before it` +
           `; it holds ${(await summaryOf(second)).entries} rows, its sync reads ` +
           `${JSON.stringify(status)}, and its log says: ` +
           `${log.map((row) => row.message ?? JSON.stringify(row)).join(" | ") || "nothing"}\n` +
           `    its engine: ${memoryLine(read)}\n    its page: ${probeLine(read)}`,
       );
       console.log(
-        `RESULT ${JSON.stringify({ ...result, kbps: KBPS, abandoned: { ms: ended.finished - ended.sent, decoded: ended.decoded, why: ended.failed } })}`,
+        `RESULT ${JSON.stringify({ ...result, kbps: KBPS, abandoned: { ms: ended.finished - ended.sent, decoded: ended.decoded, why: ended.failed, landed: landed.length } })}`,
       );
       for (const dev of both) await dev.close();
       return;
     }
-    const applied = await seen(
-      second,
-      "its page was told sync:applied",
-      `window.__sync.applied.length > ${told}`,
-      async () => JSON.stringify(await second.engine("sync_relay_status")),
-      PATIENCE_MS,
-    );
+    const applied = Date.now();
     const drawn = await seen(
       second,
       "its collection page drew the rows",
@@ -1182,36 +1203,63 @@ async function main() {
     const read = await watching.stop();
     const have = await converged(stored);
     const requests = read.requests.filter((r) => r.method !== "OPTIONS");
-    const pulls = routed(requests, "GET", "pull");
-    const pull = pulls.find((r) => r.decoded === Math.max(...pulls.map((p) => p.decoded)));
-    const next = requests.find((r) => r.sent > pull.finished);
-    const ack = routed(requests, "POST", "ack").find((r) => r.sent > pull.finished);
+    // Every pull of the trip: one, from a relay or an engine that does not page.
+    const pulls = routed(requests, "GET", "pull").filter((r) => r.finished !== null);
+    const [opening, closing] = [pulls[0], pulls.at(-1)];
+    const largest = pulls.reduce((a, b) => (b.decoded > a.decoded ? b : a), opening);
+    const ack = routed(requests, "POST", "ack").find((r) => r.sent >= closing.finished);
+    // The pull's cost to the relay is read across all of its pages; the ack behind the last of
+    // them follows at once, so its window starts where the pull's left the heap.
+    relayCost.pull = costOf(relayIsolate, opening.sent, closing.finished);
     relayCost.ack = ack?.finished ? costOf(relayIsolate, ack.sent, ack.finished) : null;
+    const sum = (field) => pulls.reduce((total, r) => total + r[field], 0);
+    // The engine answers in the order it is asked, so a search asked before the page was told
+    // waited on the pull — a page's apply, the ack — and one asked after it waited behind the
+    // page's own refresh, which `sync:applied` sets off: the wall's queries over every row.
+    const waited = (from, to) => {
+      const took = read.waits
+        .filter(([asked, ms]) => asked >= from && asked < to && ms >= 0)
+        .map(([, ms]) => ms);
+      return { asked: took.length, median: median(took), worst: Math.max(0, ...took) };
+    };
+    const [paging, behindIt] = [
+      waited(opening.sent, outcome.at),
+      waited(outcome.at, Number.MAX_VALUE),
+    ];
     console.log(
       `ok  ${second.name}, held back and then let through, pulled ${outcome.pulled} ops in ` +
-        `${pulls.length} pull${pulls.length === 1 ? "" : "s"} and holds ${have.entries} rows, ` +
-        `the same as ${first.name} ${comparedAs(have)}` +
-        `\n    the pull — ${pullLine(pull, next?.sent)}\n` +
-        `    from the request: headers ${round(pull.answered - pull.sent)} ms, body ` +
-        `${round(pull.finished - pull.sent)} ms, applied and acking ` +
-        `${next ? round(next.sent - pull.sent) : "?"} ms, sync:applied ` +
-        `${round(outcome.at - pull.sent)} ms, the wall drawn ${round(drawn - pull.sent)} ms ` +
-        `(the gate opened ${round(pull.sent - opened)} ms before it)\n` +
+        `${pulls.length} pull${pulls.length === 1 ? "" : "s"} — ${MB(sum("decoded"))} MB in all ` +
+        `(${MB(sum("wire"))} on the wire), the largest ${MB(largest.decoded)} MB; ` +
+        `${wayOf(outcome)} — and holds ` +
+        `${have.entries} rows, the same as ${first.name} ${comparedAs(have)}` +
+        `\n    its largest pull — ${pullLine(largest, requests.find((r) => r.sent > largest.finished)?.sent)}\n` +
+        `    from the first request: the last pull's last byte ` +
+        `${round(closing.finished - opening.sent)} ms, applied and acking ` +
+        `${ack ? round(ack.sent - opening.sent) : "?"} ms, sync:applied ` +
+        `${round(outcome.at - opening.sent)} ms, the wall drawn ${round(drawn - opening.sent)} ms ` +
+        `(the gate opened ${round(opening.sent - opened)} ms before it)\n` +
         `    its engine: ${memoryLine(read)}\n    its page: ${probeLine(read)}\n` +
+        `    … of those, the ${paging.asked} asked from the first request until the page was ` +
+        `told: median ${paging.median.toFixed(1)} ms, longest ${round(paging.worst)} ms; the ` +
+        `${behindIt.asked} asked after it, behind the page's own refresh: longest ` +
+        `${round(behindIt.worst)} ms\n` +
         `    the relay answered: ${relayLine(relay, logged)}`,
     );
     Object.assign(result, {
       pull: {
+        waits: { paging, behindIt },
+        pages: outcome.pullPages,
+        whole: outcome.pullWhole,
         pulls: pulls.length,
         ops: outcome.pulled,
-        decoded: pull.decoded,
-        wire: pull.wire,
-        headersMs: pull.answered - pull.sent,
-        bodyMs: pull.finished - pull.sent,
-        applyMs: next ? next.sent - pull.finished : null,
-        appliedMs: outcome.at - pull.sent,
-        drawnMs: drawn - pull.sent,
-        seenMs: applied - pull.sent,
+        decoded: sum("decoded"),
+        wire: sum("wire"),
+        largest: largest.decoded,
+        lastByteMs: closing.finished - opening.sent,
+        ackMs: ack ? ack.sent - opening.sent : null,
+        appliedMs: outcome.at - opening.sent,
+        drawnMs: drawn - opening.sent,
+        seenMs: applied - opening.sent,
       },
       reader: { linear: read.linear, heap: read.heap, tab: read.tab, probe: read.probe },
     });
@@ -1234,7 +1282,8 @@ async function main() {
     console.log(
       `ok  ${second.name}, live throughout, heard ${heads} head frames and made ${pulls.length} ` +
         `pulls (${carrying.length} that carried anything, ${MB(pulls.reduce((sum, r) => sum + r.decoded, 0))} MB ` +
-        `in all), was told sync:applied ${tellings.length} times, and held ${have.entries} rows ` +
+        `in all), was told sync:applied ${tellings.length} times (${waysOf(tellings)}), and ` +
+        `held ${have.entries} rows ` +
         `within ${round(convergedAt - pushedAt)} ms of the importing device's outbox emptying — ` +
         `the same as ${first.name}, ${comparedAs(have)}\n` +
         `    its largest pull — ${pullLine(largest, requests.find((r) => r.sent > largest.finished)?.sent)}\n` +
@@ -1249,6 +1298,7 @@ async function main() {
         decoded: pulls.reduce((sum, r) => sum + r.decoded, 0),
         largest: largest.decoded,
         tellings: tellings.length,
+        ways: tellings.map((told) => [told.pullPages, told.pullWhole]),
       },
       reader: { linear: read.linear, heap: read.heap, tab: read.tab, probe: read.probe },
     });
@@ -1289,7 +1339,8 @@ async function main() {
         `\n    its engine: ${memoryLine(gave)}\n    its page: ${probeLine(gave)}\n` +
         `    ${second.name} made ${pulls.length} pulls (${carrying.length} that carried anything, ` +
         `${MB(pulls.reduce((sum, r) => sum + r.decoded, 0))} MB in all) and was told sync:applied ` +
-        `${tellings.length} times; its cursor is ${status.pullHeld === null ? "not held" : `held (${status.pullHeld})`} ` +
+        `${tellings.length} times (${waysOf(tellings)}); its cursor is ` +
+        `${status.pullHeld === null ? "not held" : `held (${status.pullHeld})`} ` +
         `and its log holds ${log.length} row${log.length === 1 ? "" : "s"}` +
         (log.length > 0 ? `, the first: ${JSON.stringify(log[0].message ?? log[0])}` : "") +
         `\n    its largest pull — ${pullLine(largest, requests.find((r) => r.sent > largest.finished)?.sent)}\n` +
@@ -1305,6 +1356,7 @@ async function main() {
         decoded: pulls.reduce((sum, r) => sum + r.decoded, 0),
         largest: largest.decoded,
         tellings: tellings.length,
+        ways: tellings.map((told) => [told.pullPages, told.pullWhole]),
         unreadable: log.length,
       },
       reader: { linear: read.linear, heap: read.heap, tab: read.tab, probe: read.probe },
@@ -1340,7 +1392,7 @@ async function main() {
         (!collected
           ? ""
           : relayIsolate.uncollected === null
-            ? " — collected before the pushes, the pull and the ack"
+            ? " — collected before the pushes and before the pull"
             : ` — NOT collected between them (${relayIsolate.uncollected}), so each figure ` +
               `carries what came before it`) +
         `:\n` +
@@ -1348,8 +1400,9 @@ async function main() {
         (collected
           ? `    the importing device's own pull and the ack behind it (a compaction): ` +
             `${costLine(relayCost.ownPullAndAck ?? null)}\n` +
-            `    the measured pull: ${costLine(relayCost.pull ?? null)}\n` +
-            `    the ack after it (a compaction): ${costLine(relayCost.ack ?? null)}\n`
+            `    the measured pull, every page of it: ${costLine(relayCost.pull ?? null)}\n` +
+            `    the ack after it (a compaction), from where the pull left the heap: ` +
+            `${costLine(relayCost.ack ?? null)}\n`
           : `    the largest pull, with the pushes beside it uncollected: ` +
             `${costLine(relayCost.pull ?? null)}\n`) +
         `    the whole run: ${MB(whole.first)} MB at first, at most ${MB(whole.used)} used / ` +

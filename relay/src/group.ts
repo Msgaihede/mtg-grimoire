@@ -7,14 +7,16 @@ import {
   deviceTag,
   HEARD_REFRESH_MS,
   headFrame,
+  inGroupOrder,
   notifyTargets,
   isNewerRoster,
+  pageLength,
+  pageLimit,
   parseRoster,
+  PULL_PAGE_CHARS,
   removedSockets,
-  since,
   taggedDevice,
   type Ack,
-  type Row,
 } from "./log";
 import { KEEPALIVE, selectedProtocol } from "./ticket";
 
@@ -50,14 +52,35 @@ export interface Envelope {
  * interface has no implicit index signature while a type alias does.
  */
 type LogRow = {
-  seq: number;
   device: string;
   epoch: number;
   hlc_ms: number;
   hlc_ctr: number;
   sealed: string;
-  stored_at: number;
 };
+
+/**
+ * A stored row as the envelope a pull answers it as — **the six fields in the order every
+ * answer has spelled them**, which is what `JSON.stringify` writes and what the unpaged
+ * answer's bytes are held to.
+ */
+function envelopeOf(group: string, row: LogRow): Envelope {
+  return {
+    group,
+    device: row.device,
+    epoch: row.epoch,
+    hlcMs: row.hlc_ms,
+    hlcCtr: row.hlc_ctr,
+    sealed: row.sealed,
+  };
+}
+
+/**
+ * About how many sealed characters the unpaged answer writes between two turns of its stream:
+ * a page's worth, so the most this isolate holds of a log it is streaming is what a page
+ * would hold.
+ */
+const STREAM_CHUNK_CHARS = PULL_PAGE_CHARS;
 
 /**
  * `heard_at` is nullable in the type because it is nullable in the column — `ALTER TABLE` cannot
@@ -194,8 +217,8 @@ export class Group implements DurableObject {
     //
     // The total costs a point read and a row written per push instead, and **its risk is drift**:
     // a path that deleted from `log` without adjusting it would leave it wrong for good. So
-    // compaction, which already reads every row in full, recomputes it exactly and writes it back
-    // — any drift lasts until the next ack that moves a cursor.
+    // compaction, which already visits every row and reads its length, recomputes it exactly and
+    // writes it back — any drift lasts until the next ack that moves a cursor.
     this.sql.exec(
       `CREATE TABLE IF NOT EXISTS log_size (
          id    INTEGER PRIMARY KEY CHECK (id = 1),
@@ -307,13 +330,28 @@ export class Group implements DurableObject {
     return json({ cursor: stored.seq });
   }
 
+  /**
+   * What the group has said since `since`, to `device` — whole, or a page of it.
+   *
+   * **Two answers, chosen by whether the request names a `limit`, and the difference is who is
+   * asking.** A request with none is every desktop and Android build released before step 6.5b:
+   * it decides its holds, its release, its conversions and its baselines on whatever one answer
+   * hands it and asks nothing more after it, so it is answered everything, as it always was
+   * ([`pullWhole`]) — **no cap is ever put on a request that asked for none**. A request with one
+   * is a pager, and is answered a page ([`pullPage`]).
+   *
+   * **Neither reads a row of the caller's own.** The filter used to be JavaScript over rows
+   * already read, body and all — so the device that had just pushed a 45 MB import put the
+   * whole of it through this isolate again on its own next pull, to have it dropped (measured
+   * 2026-10-05). It is `device <> ?` in the query now.
+   */
   private pull(url: URL, group: string): Response {
     const rawCursor = url.searchParams.get("since") ?? "0";
     const cursor = Number(rawCursor);
     const device = url.searchParams.get("device") ?? "";
     if (!Number.isFinite(cursor) || cursor < 0) return json({ error: "bad cursor" }, 400);
-
-    const rows = this.rowsSince(cursor);
+    const limit = pageLimit(url.searchParams.get("limit"));
+    if (limit === "bad") return json({ error: "bad limit" }, 400);
 
     // **A pull is the relay hearing from a device**, and a device whose cursor is held pulls on
     // every trip without ever acking — see `HEARD_REFRESH_MS` for why that has to count. The
@@ -329,22 +367,165 @@ export class Group implements DurableObject {
       );
     }
 
-    // **The cursor handed back is the head of the whole log, not of the returned slice.**
-    // The slice has the puller's own rows filtered out of it, and a cursor taken from the
-    // slice would sit below them — so the device would re-ask for its own rows on every pull,
-    // for as long as they survive compaction.
-    const head = rows.reduce((max, row) => Math.max(max, row.seq), cursor);
+    return limit === null
+      ? this.pullWhole(cursor, device, group)
+      : this.pullPage(cursor, device, group, limit);
+  }
+
+  /**
+   * The head of the whole log as a pull answers it: the highest `seq` there is, and never below
+   * the cursor it was asked from.
+   *
+   * **The whole log's, not the answered rows'.** The answer leaves the caller's own rows out, and
+   * a cursor taken from what is left would sit below them — so the device would be asked to read
+   * past its own rows on every pull for as long as they survived compaction, and its ack, which
+   * follows its cursor, would pin the compaction floor under them.
+   */
+  private head(cursor: number): number {
+    const newest = this.sql
+      .exec<{ seq: number }>(`SELECT coalesce(max(seq), 0) AS seq FROM log`)
+      .one().seq;
+    return Math.max(cursor, newest);
+  }
+
+  /**
+   * Everything after `cursor`, in the group's own order — **the answer every released build is
+   * written against, byte for byte, and streamed**.
+   *
+   * It was one string: every row read into an array, sorted, and serialised whole, which cost
+   * this isolate twice the log in JS heap (89 MB for a 45 MB log, measured 2026-10-05) — inside a
+   * 128 MB it shares with every other group. It cannot be capped, for the reason [`pull`] gives.
+   * So it is written out as it is read: the order is asked of SQLite over the rows' stamps, with
+   * no body read; each row is then read on its own, as the stream is pulled from, and written.
+   * What is in memory at once is the list of `seq`s and a chunk on its way out.
+   *
+   * **The same bytes.** `ORDER BY hlc_ms, hlc_ctr, device, seq` is `log.ts`'s `since`: the
+   * group's order, and — where the clock cannot tell two rows apart — the order they were read
+   * in, which was `seq`. The body is `JSON.stringify`'s spelling of `{ envelopes, cursor }`,
+   * piece by piece. `group.test.ts` holds the two to each other over a fixture log. What does
+   * change is what a stream changes: the answer carries no `Content-Length`.
+   *
+   * **The head is read first and bounds the rest**, so a push that lands while the answer is
+   * still being written is not in it and is not stepped over by its cursor either. A row the
+   * list named that has gone by the time it is read is left out; nothing deletes one above a
+   * device's own ack but a drop or that device's departure, after either of which the answer
+   * is nobody's to read.
+   */
+  private pullWhole(cursor: number, device: string, group: string): Response {
+    const head = this.head(cursor);
+    const order = this.sql
+      .exec<{ seq: number }>(
+        `SELECT seq FROM log
+          WHERE seq > ? AND seq <= ? AND device <> ?
+          ORDER BY hlc_ms, hlc_ctr, device, seq`,
+        cursor,
+        head,
+        device,
+      )
+      .toArray();
+
+    const encoder = new TextEncoder();
+    let next = 0;
+    let written = false;
+    const body = new ReadableStream<Uint8Array>({
+      start: (controller) => controller.enqueue(encoder.encode(`{"envelopes":[`)),
+      pull: (controller) => {
+        // A chunk at a time: rows until about a page's worth is written, then back to the
+        // runtime, which asks again when the reader has taken it.
+        const parts: string[] = [];
+        for (let chars = 0; next < order.length && chars < STREAM_CHUNK_CHARS; next += 1) {
+          const row = this.sql
+            .exec<LogRow>(
+              `SELECT device, epoch, hlc_ms, hlc_ctr, sealed FROM log WHERE seq = ?`,
+              order[next].seq,
+            )
+            .toArray()[0];
+          if (row === undefined) continue;
+          parts.push((written ? "," : "") + JSON.stringify(envelopeOf(group, row)));
+          written = true;
+          chars += row.sealed.length;
+        }
+        if (next >= order.length) parts.push(`],"cursor":${JSON.stringify(head)}}`);
+        controller.enqueue(encoder.encode(parts.join("")));
+        if (next >= order.length) controller.close();
+      },
+    });
+    return new Response(body, { status: 200, headers: { "content-type": "application/json" } });
+  }
+
+  /**
+   * One page: at most `limit` rows after `cursor` **in `seq` order**, whole, inside the relay's
+   * own budget of sealed characters ([`pageLength`]) — answered `{ envelopes, cursor, more }`.
+   *
+   * **`seq` order is what makes a page safe to act on**: it is exactly what a device that pulled
+   * when the log's head stood at the page's last row was handed. Within the page the envelopes
+   * are in the group's order, as they are in any answer.
+   *
+   * **The sizes are read before the bodies, and only as far as the page goes.** The first query
+   * asks each candidate row's length and no more, a row at a time; the budget decides how many
+   * the page takes and stops the asking at the first that does not fit; and the second reads
+   * exactly those — so what this isolate holds is the page, and never a row that will not be in
+   * it. *A row at a time*, because `limit` is a ceiling a client names in rows — 256 from the
+   * app — and SQLite loads a row's text to measure it: asked for all of them at once, every
+   * page of a large catch-up measured a hundred and twenty-eight times what it answered
+   * (measured 2026-10-05: 30–90 ms a page under workerd, where the page itself is two rows).
+   *
+   * **`more` is whether a row of another device lies past the page**, asked with `EXISTS`: no
+   * body is read to answer it, and the caller's own rows do not count — a page followed only by
+   * those is the last.
+   *
+   * **And the cursor follows from it.** While `more` is true it is the last row answered, and the
+   * next page starts after it. When it is false it is the head of the whole log ([`head`]): past
+   * the caller's own trailing rows, which no page will ever carry. Stopping at the last row
+   * answered there would leave a device that pushed after it pulled acking below its own rows
+   * for ever — the compaction floor pinned under them — and a client that goes on while its
+   * cursor moves would have nothing to stop on.
+   */
+  private pullPage(cursor: number, device: string, group: string, limit: number): Response {
+    const candidates = this.sql.exec<{ seq: number; chars: number }>(
+      `SELECT seq, length(sealed) AS chars FROM log
+        WHERE seq > ? AND device <> ?
+        ORDER BY seq LIMIT ?`,
+      cursor,
+      device,
+      limit,
+    );
+    // Each row's `seq`, kept as its size is asked for: `pageLength` stops at the first size
+    // that does not fit, and the cursor is read no further than that.
+    const seqs: number[] = [];
+    const sizes = (function* () {
+      for (const row of candidates) {
+        seqs.push(row.seq);
+        yield row.chars;
+      }
+    })();
+    const taken = pageLength(sizes);
+    if (taken === 0) return json({ envelopes: [], cursor: this.head(cursor), more: false });
+
+    const last = seqs[taken - 1];
+    const rows = this.sql
+      .exec<LogRow>(
+        `SELECT device, epoch, hlc_ms, hlc_ctr, sealed FROM log
+          WHERE seq > ? AND seq <= ? AND device <> ?
+          ORDER BY seq`,
+        cursor,
+        last,
+        device,
+      )
+      .toArray();
+    const more =
+      this.sql
+        .exec<{ more: number }>(
+          `SELECT EXISTS (SELECT 1 FROM log WHERE seq > ? AND device <> ?) AS more`,
+          last,
+          device,
+        )
+        .one().more === 1;
 
     return json({
-      envelopes: since(rows, cursor, device).map((row) => ({
-        group,
-        device: row.device,
-        epoch: row.epoch,
-        hlcMs: row.hlcMs,
-        hlcCtr: row.hlcCtr,
-        sealed: row.sealed,
-      })),
-      cursor: head,
+      envelopes: inGroupOrder(rows.map((row) => envelopeOf(group, row))),
+      cursor: more ? last : this.head(cursor),
+      more,
     });
   }
 
@@ -405,12 +586,27 @@ export class Group implements DurableObject {
    *
    * It also deletes the acks `compact` says to forget — a departed device's, or one unheard for
    * `ACK_TTL_MS` — and writes back the log's exact size, which is what keeps `log_size` honest
-   * (see the constructor). The rows were read in full to decide what to keep, so the size costs
-   * no read of its own.
+   * (see the constructor). Each row's length is read beside its place in the log, so the size
+   * costs no read of its own. It still visits every row — the floor is computed across every
+   * device, and a bounded read would compute it against a slice.
    */
   private compactNow(): void {
     const now = Date.now();
-    const rows = this.rows();
+    // **Each row's length, and never its body.** What survives is decided by where a row stands,
+    // who sent it and when it was stored, and the size written back below is a sum of lengths —
+    // none of which needs a `sealed` in this isolate. Read whole, as it was, this pass cost the
+    // JS heap the entire log on every ack that moved a cursor: 45 MB for a 45 MB log.
+    const rows = this.sql
+      .exec<{ seq: number; device: string; stored_at: number; chars: number }>(
+        `SELECT seq, device, stored_at, length(sealed) AS chars FROM log`,
+      )
+      .toArray()
+      .map((row) => ({
+        seq: row.seq,
+        device: row.device,
+        storedAt: row.stored_at,
+        chars: row.chars,
+      }));
     const acks = new Map<string, Ack>();
     for (const ack of this.sql.exec<AckRow>(`SELECT device, cursor, heard_at FROM acks`)) {
       acks.set(ack.device, { cursor: ack.cursor, heardAt: ack.heard_at ?? now });
@@ -427,7 +623,7 @@ export class Group implements DurableObject {
     }
     for (const device of forget) this.sql.exec(`DELETE FROM acks WHERE device = ?`, device);
 
-    const chars = keep.reduce((sum, row) => sum + row.sealed.length, 0);
+    const chars = keep.reduce((sum, row) => sum + row.chars, 0);
     this.sql.exec(`UPDATE log_size SET chars = ? WHERE id = 1`, chars);
   }
 
@@ -663,54 +859,5 @@ export class Group implements DurableObject {
       ws.close(CLOSE_DROPPED, "group dropped");
     }
     return new Response(null, { status: 204 });
-  }
-
-  private rows(): Row[] {
-    return this.toRows(
-      this.sql
-        .exec<LogRow>(`SELECT seq, device, epoch, hlc_ms, hlc_ctr, sealed, stored_at FROM log`)
-        .toArray(),
-    );
-  }
-
-  /**
-   * The rows a pull can possibly return: everything past the cursor.
-   *
-   * **`head` is still the head of the whole log**, which is what `pull`'s comment requires,
-   * and the arithmetic survives the filter: `reduce` seeds with `cursor`, and a row at or
-   * below the cursor could never have been the maximum of a set seeded that way. A device
-   * that is fully caught up sees an empty set and `head === cursor`, which is true.
-   *
-   * `compactNow` deliberately still calls `rows()` — its floor is computed across every device
-   * and a bounded read would compute it against a slice.
-   */
-  private rowsSince(cursor: number): Row[] {
-    return this.toRows(
-      this.sql
-        .exec<LogRow>(
-          `SELECT seq, device, epoch, hlc_ms, hlc_ctr, sealed, stored_at
-             FROM log WHERE seq > ?`,
-          cursor,
-        )
-        .toArray(),
-    );
-  }
-
-  /**
-   * The `LogRow` → `Row` shape shared by `rows()` and `rowsSince()` — same columns, different
-   * `WHERE`. Kept as one mapper so a `Row` field added or renamed has one call site instead of
-   * two silently drifting; the two *query* methods stay separate on purpose (see `rowsSince`'s
-   * comment on `compactNow`).
-   */
-  private toRows(raw: LogRow[]): Row[] {
-    return raw.map((row) => ({
-      seq: row.seq,
-      device: row.device,
-      epoch: row.epoch,
-      hlcMs: row.hlc_ms,
-      hlcCtr: row.hlc_ctr,
-      sealed: row.sealed,
-      storedAt: row.stored_at,
-    }));
   }
 }

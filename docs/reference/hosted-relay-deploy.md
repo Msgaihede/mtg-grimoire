@@ -163,6 +163,51 @@ has.** A client built from the step's first commit (`c3bd78ee`, pushed and never
 A deploy disconnects every live socket once, as every deploy does. It is step 6 and nothing else,
 with step 0's probes before and after.
 
+**A tenth half — the paged pull, light app step 6.5b (issue #761) — is written and NOT deployed.**
+Written 2026-10-05, all of it in the group's Durable Object (`group.ts`, `log.ts`); the Worker in
+front of it, the gate, D1 and `wrangler.jsonc` are untouched. **It rides the same deploy as the
+ninth half when both are waiting** — both are the object's, and neither is in the other's
+functions (`roster` and `notify` there; `pull`, `ack`'s compaction and the quota's here). What
+the next deploy carries, beside the ninth's:
+
+- **A page**: `GET /g/{group}/pull?since=&device=&limit=<rows>` answers whole rows in `seq`
+  order, the caller's own left out by the query, inside a budget of sealed text the object
+  enforces whatever `limit` says (`PULL_PAGE_CHARS`, half a mebibyte; `limit` itself is capped
+  at 1 024 rows) and which always admits one row. `{ envelopes, cursor, more }`; a `limit` that
+  is not a whole number from one up is a `400` `bad limit`.
+- **The answer without `limit`, streamed.** Every released desktop and Android build sends none
+  and is answered what it always was, **byte for byte and never capped** — but written row by
+  row into a `ReadableStream` in place of one string, with the caller's own rows left out in SQL
+  and never read.
+- **Compaction by length.** `compactNow` — behind every ack that moves a cursor, and before a
+  push is refused for the quota — reads each row's `length(sealed)` and no body.
+
+**No migration, no secret, no var, no new route path, and nothing for step 2.** The object's own
+tables are as they were. It is step 6 and nothing else. Measured locally, by request
+([light-app.md](light-app.md) §10.5b): on a 45 MB log the unpaged pull went from 89 MB of the
+isolate's JS heap to 19, the importing device's own pull and ack from 44 MB to 0.1, a
+compaction from 45 MB to 0.1, and the paged pull's 125 requests left 11 MB between them with
+nothing collected.
+
+**It ships relay first, and neither side waits for the other.** A build that pages, against the
+relay that is live today, sends a `limit` that relay ignores and reads an answer with no `more`
+as the last page — the unpaged pull exactly, with what it costs
+(`an_old_relays_answer_is_one_page_and_the_last`). A released build against this relay sends no
+`limit` and is answered the same bytes (`group.test.ts` holds them to the old implementation's
+for a fixture log). So nothing breaks in either order; relay first is the order because until
+it is out, the web app's pull is the one §10.5 measured.
+
+⚠️ **There is no credential-free tell, and the obvious probe is not one.**
+`curl -si "$H/g/abc/pull?limit=1"` answers the bearer gate's `401` before the deploy and after
+it: the gate stands in the Worker, ahead of the object, and this half changes nothing in front
+of the object. Like the refresh-secret change and the `dev` claim it is known to be live from
+the tree that was deployed. **With a device's own token there are two**, read from a paired
+device's network panel or with its bearer in hand: a pull that names a `limit` is answered a
+body carrying `"more"`, where today's relay answers `envelopes` and `cursor` alone; and
+`…/pull?since=0&device=<id>&limit=0` answers `400` `{"error":"bad limit"}`, where today's
+answers `200`. Step 0's probes, all of them, are answered as before and after — run them, as
+for every deploy; they say the Worker is whole, not that this half is in it.
+
 Designs: [2026-08-29-hosted-relay-and-patreon-design.md](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md),
 [2026-08-30-group-wide-membership-and-removal-design.md](../superpowers/specs/2026-08-30-group-wide-membership-and-removal-design.md),
 [2026-08-30-leave-group-and-device-caps-design.md](../superpowers/specs/2026-08-30-leave-group-and-device-caps-design.md)
@@ -266,6 +311,12 @@ a signed-in reader sees sync as unreachable, on a page that was deployed minutes
 is inert until a page asks: a native client sends no `Origin`, takes neither new step, and is
 answered by the same code path as today. **Neither side waits on an app release** — no desktop or
 Android build sends an `Origin` or a sub-protocol, and none ever needs to.
+
+**The paged pull ships in either order, and relay first is the one that buys anything.** A build
+that pages reads this relay's answer and the live one's alike — no `more` is the last page — and
+a build that does not is answered as it always was. Until the relay is out a paging build pulls
+unpaged, at §10.5's cost; until a paging build is out the relay's own half still lands, because
+the streamed answer and compaction by length are what every existing device is served.
 
 0. **Ask the host what is actually there, and branch on the answer rather than on this file.**
    Six `curl`s settle it in ten seconds and cost nothing:
@@ -885,6 +936,11 @@ two profiles of headless Chrome 154 reaching it by its real name):
 | The token in Workers Logs | nothing a local run can say | **decided, not measured**: accepted by the owner on 2026-10-04, `invocation_logs` stays on |
 | Safari, Firefox, a phone's browser | not driven | not driven |
 
+- **The owner's sentence, 2026-10-05: he paired the deployed web app
+  (`https://mtg-grimoire.app`, version `befbcbd9`) with a desktop and synced between them, and
+  said "it works"** — production's first browser sync. It is his sentence and not a
+  measurement: nobody read how long the socket stayed live, saw a `pong`, or read what a tab's
+  keepalive is billed, so every check below stays open as it is written.
 - ⚠️ **The 101's `Sec-WebSocket-Protocol`, through the Worker, to a browser.** `Group.ws()` puts
   `grimoire.live.v1` on its 101 when the request offered it, and the Worker hands that response
   back untouched. That workerd carries a header on a 101 out to the client is how every
@@ -940,10 +996,47 @@ two profiles of headless Chrome 154 reaching it by its real name):
   in the page's network panel across a few edits: one in front of most pulls is the design, and
   one in front of every push would mean `Access-Control-Max-Age` is not being honoured.
 
+### 14. The paged pull — a streamed body no released desktop has read, and a catch-up that is many requests
+
+Added 2026-10-05; **not deployed**. `relay/src/group.test.ts` runs the real `Group` over Node's
+SQLite behind the stand-in state `ticket.test.ts` already used, and `npm run web:sync-smoke` and
+`web:sync-pull` run the same code under workerd against Chrome. What neither reached:
+
+- **A released desktop reading the streamed answer.** The bytes are held equal to the old
+  implementation's by a test, and Chrome read them under workerd from a build that sent no
+  `limit` (2026-10-05, the sync smoke and a 50 000-op pull). But the client every reader has is
+  `reqwest` on a build that expects one buffered JSON body, and what changed for it is the
+  framing: no `Content-Length`. **Straight after the deploy, edit a card on one released desktop
+  and watch a second pick it up**, then leave one desktop closed across a few dozen edits and
+  open it: its one pull is the streamed path.
+- **What a catch-up costs in requests.** Unpaged, a device a 45 MB log behind made one pull.
+  Paged it makes about 125, each a Worker invocation and a Durable Object request, and from a
+  browser each behind a pre-flight of its own — a pull's address carries its cursor — which is
+  a Worker invocation and no object request. So the reader that §10.5 measured costs some 250
+  Worker requests and 125 object requests where it cost two and one, once, against a free
+  tier of 100 000 a day. Ordinary sync is unchanged: a pull that fits a page is one request,
+  as before. Step 7's alarm is still not built.
+- **The isolate's memory, for real.** Every figure in §10.5b is V8's under a workerd that
+  enforces no limit. That a page keeps an isolate under 128 MB with other groups on it is what
+  the figures say and not something production has been asked.
+- **CPU on the unpaged path.** The streamed answer reads a row a statement for the whole log,
+  inside one request; a Durable Object is given 30 s of CPU. Locally a 45 MB log was answered
+  whole, under a workerd that counts none. Nothing has been asked of a deployed object at that
+  size, paged or not.
+- **What a page is billed in rows read.** A page asks its candidates' sizes through a cursor it
+  stops iterating at the first row that does not fit — three rows for a page of two full
+  envelopes, where `limit` names 256 — and local workerd answered it so. That the deployed
+  runtime counts only the rows a cursor was stepped through is its documentation's word and
+  not a reading of the namespace's metrics.
+
 ---
 
 ## Known limitations, written down rather than discovered
 
+- **What follows is the relay that is deployed; the tenth half ends it, and is not deployed.**
+  With it a paged pull holds a page, an unpaged one is streamed (19 MB of heap for a 45 MB log
+  where it was 89), and compaction reads lengths (0.1 MB where it was 45) — item 14, and
+  [light-app.md](light-app.md) §10.5b. Until that deploy:
 - **A group's whole log goes through the isolate's memory, on three routes.** `pull` reads every
   row past the cursor and serialises them into one answer; `ack`, whenever it moves a cursor,
   runs `compactNow`, which reads every row with its `sealed`; and a push refused for the quota

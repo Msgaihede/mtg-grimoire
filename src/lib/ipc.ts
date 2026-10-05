@@ -6874,6 +6874,18 @@ export interface RelayOutcome {
    * large collection from a long one.
    */
   baselineHistory: number;
+  /**
+   * How many pages this trip's pull asked the relay for: one for an ordinary sync, and for a
+   * relay that does not page; one a half-mebibyte of log for a device catching up.
+   */
+  pullPages: number;
+  /**
+   * Whether the pull evaluated everything it fetched as one answer, because a baseline from a
+   * build before v0.40.0 was in it — the cost of the unpaged pull, for that catch-up only. No
+   * face reads it; it is what says, in a measurement or a bug report, which way a catch-up was
+   * applied.
+   */
+  pullWhole: boolean;
 }
 
 /**
