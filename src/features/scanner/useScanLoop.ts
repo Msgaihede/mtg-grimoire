@@ -43,13 +43,15 @@ export interface ScanLoop {
   /** One frame out of the video, for the capture button. `Infinity` means "do not downscale". */
   grab: (longEdge: number, quality: number) => Promise<Uint8Array | null>;
   /**
-   * Throw both kept reads away.
+   * Throw the current verdict and all kept reads away, ignoring unfinished frames.
    *
    * The Reset press's other half: `scanner_reset` drops the tracker's evidence in the crate,
-   * and the two latches above are evidence this side is holding. Leaving them would show a
+   * and the latches above are evidence this side is holding. Leaving them would show a
    * title the reader has just asked the scanner to forget.
    */
   clearReads: () => void;
+  /** Clear visible evidence, drain the old frame, then reset the session before scanning again. */
+  reset: () => Promise<void>;
 }
 
 /** How a frame becomes JPEG bytes. Injectable because jsdom has no canvas pixels to draw on. */
@@ -228,12 +230,6 @@ export function useScanLoop({
     setLastResolution(null);
   }
 
-  const clearReads = useCallback(() => {
-    setLastOcr(null);
-    setLastCollector(null);
-    setLastResolution(null);
-  }, []);
-
   // Latched in a layout effect for `QrScanner`'s reason: the ref has to be current before the
   // next tick of a loop that mounted once and must not restart, and `useEffect` alone is not
   // guaranteed to run before that.
@@ -287,6 +283,39 @@ export function useScanLoop({
    * pair" waited afresh every other frame, for as long as the grab kept failing.
    */
   const waitedRef = useRef(false);
+  const evidenceRef = useRef(0);
+  const pendingFrameRef = useRef<Promise<void> | null>(null);
+  const resetRef = useRef<Promise<void> | null>(null);
+
+  const clearReads = useCallback(() => {
+    // A grab or IPC answer already outstanding belongs to the evidence being discarded (#781).
+    // Clearing state alone lets that answer put the old card straight back on the screen.
+    evidenceRef.current += 1;
+    setVerdict(null);
+    setLastOcr(null);
+    setLastCollector(null);
+    setLastResolution(null);
+    wantsDetailRef.current = false;
+    waitedRef.current = false;
+    sinceDecisionRef.current = Infinity;
+  }, []);
+
+  const reset = useCallback(() => {
+    if (resetRef.current !== null) return resetRef.current;
+    clearReads();
+    // Pause synchronously, then drain before invoking: Tauri's blocking tasks need not take
+    // the session mutex in invocation order. An old frame must never run AFTER this reset.
+    const pending = Promise.resolve().then(async () => {
+      try {
+        await pendingFrameRef.current;
+        await ipc.scannerReset();
+      } finally {
+        resetRef.current = null;
+      }
+    });
+    resetRef.current = pending;
+    return pending;
+  }, [clearReads]);
 
   const grab = useCallback(
     async (longEdge: number, quality: number): Promise<Uint8Array | null> => {
@@ -311,7 +340,12 @@ export function useScanLoop({
       while (!stopped) {
         const video = videoRef.current;
         // `readyState < 2` is `HAVE_CURRENT_DATA` unmet — there is no frame to draw yet.
-        if (video === null || inFlightRef.current || video.readyState < 2) {
+        if (
+          video === null ||
+          inFlightRef.current ||
+          resetRef.current !== null ||
+          video.readyState < 2
+        ) {
           await sleep(IDLE_MS);
           continue;
         }
@@ -322,6 +356,7 @@ export function useScanLoop({
         // never updates again, and nothing anywhere saying why. Its own block rather than
         // the request's below, because a frame that never became bytes was never in flight.
         let bytes: Uint8Array | null;
+        const evidence = evidenceRef.current;
         let detail: Uint8Array | null = null;
         // Read and lowered in one step, before the grab can throw — see `wantsDetailRef`.
         const paired = wantsDetailRef.current;
@@ -335,19 +370,24 @@ export function useScanLoop({
             bytes = await grabRef.current(video, sendPxRef.current, PUMP_QUALITY);
           }
         } catch (e) {
-          if (!stopped) setError(ipcError(e));
+          if (!stopped && evidence === evidenceRef.current) setError(ipcError(e));
           await sleep(IDLE_MS);
           continue;
         }
         // JPEG encoding can finish after the camera stops or restarts. That old pump must
         // not submit its frame to the session now owned by the new stream.
         if (stopped) return;
+        if (evidence !== evidenceRef.current || resetRef.current !== null) continue;
         if (bytes === null) {
           await sleep(IDLE_MS);
           continue;
         }
 
         inFlightRef.current = true;
+        let drained!: () => void;
+        pendingFrameRef.current = new Promise<void>((resolve) => {
+          drained = resolve;
+        });
         // Whether this frame's answer earns the wait before the next grab — see `waitedRef`.
         let waits = false;
         const t0 = performance.now();
@@ -363,6 +403,7 @@ export function useScanLoop({
           trips.push(ms);
           if (trips.length > WINDOW) trips.shift();
           if (stopped) return;
+          if (evidence !== evidenceRef.current) continue;
           // `=== true` rather than the field itself: a far end that predates the field sends no
           // key, and `undefined` must mean "no" rather than whatever a truthiness test makes of it.
           const asks = answer.wants_detail === true;
@@ -403,9 +444,11 @@ export function useScanLoop({
           // The loop does not stop on a failure. A missing bundle rejects every frame the same
           // way, and a reader who fixes it mid-session should see the scanner recover on its
           // own rather than have to leave the page and come back.
-          if (!stopped) setError(ipcError(e));
+          if (!stopped && evidence === evidenceRef.current) setError(ipcError(e));
         } finally {
           inFlightRef.current = false;
+          pendingFrameRef.current = null;
+          drained();
         }
 
         // The wait before a paired grab — see the hook's own note. Here, at the tail of the
@@ -435,6 +478,7 @@ export function useScanLoop({
     error,
     grab,
     clearReads,
+    reset,
   };
 }
 
