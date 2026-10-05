@@ -1387,6 +1387,86 @@ mod tests {
         assert_eq!(r.printings_of(&id(4)), &[id(4)]);
     }
 
+    #[cfg(feature = "corpus")]
+    #[test]
+    fn corpus_miscellaneous_cards_resolve_without_oracle_or_illustration_ids() {
+        let rows = [
+            (1u8, "token", "Soldier", "tset", "1"),
+            (2, "emblem", "Chandra Emblem", "tset", "2"),
+            (3, "art_series", "Island // Island", "aset", "3"),
+            (4, "normal", "Championship Trophy", "mset", "4"),
+        ];
+        let corpus = rusqlite::Connection::open_in_memory().unwrap();
+        corpus
+            .execute_batch(
+                "CREATE TABLE cards (
+                id TEXT, illustration_id TEXT, name TEXT, set_code TEXT,
+                collector_number TEXT, lang TEXT, released_at TEXT, oracle_id TEXT,
+                finishes TEXT, layout TEXT, set_type TEXT
+            )",
+            )
+            .unwrap();
+        let mut bundle = BundleBuilder::new(HashKind::DHash, 256);
+        for (p, layout, name, set, number) in rows {
+            corpus
+                .execute(
+                    "INSERT INTO cards VALUES (?1, NULL, ?2, ?3, ?4, 'en', '2025-01-01',
+                    NULL, '[\"nonfoil\"]', ?5, ?6)",
+                    rusqlite::params![
+                        format_uuid(&id(p)),
+                        name,
+                        set,
+                        number,
+                        layout,
+                        if p == 4 { "memorabilia" } else { "token" }
+                    ],
+                )
+                .unwrap();
+            bundle.push(Section::Card, id(p), &hash_rgb(&img(p as u32), HashKind::DHash, 256));
+        }
+        let mut reference = Reference::new(bundle.finish(0));
+        assert_eq!(reference.load_labels(&corpus).unwrap(), rows.len());
+        for (p, _, name, set, number) in rows {
+            let filters = ScanFilters {
+                sets: vec![set.into()],
+                released_from: Some("2025-01-01".into()),
+                released_to: Some("2025-01-01".into()),
+            };
+            let mask = reference.mask_for(&filters);
+            assert!(mask.permits(&id(p)));
+            assert_eq!(reference.oracle_id_of(&id(p)), None);
+            assert_eq!(reference.printings_of(&id(p)), &[id(p)]);
+            assert_eq!(reference.label_for(&id(p)).unwrap().name, name);
+            let read = crate::ocr::normalize(name);
+            assert_eq!(reference.lookup_by_name_masked(&read, &mask), Some((id(p), 0)));
+            assert_eq!(
+                reference.lookup_collector_masked(&[(set.into(), number.into())], &mask),
+                Some(id(p))
+            );
+            let matched = reference.match_card(&img(p as u32), &img(99), 1, &mask);
+            assert_eq!(matched.candidates[0].id, format_uuid(&id(p)));
+            assert_eq!(matched.candidates[0].distance, 0);
+            assert_eq!(matched.candidates[0].label.as_ref().unwrap().name, name);
+
+            let excluded = reference.mask_for(&ScanFilters {
+                released_from: Some("2025-01-02".into()),
+                ..filters
+            });
+            assert!(!excluded.permits(&id(p)));
+            assert_eq!(reference.lookup_by_name_masked(&read, &excluded), None);
+            assert_eq!(
+                reference.lookup_collector_masked(&[(set.into(), number.into())], &excluded),
+                None
+            );
+            assert!(reference
+                .match_card(&img(p as u32), &img(99), 1, &excluded)
+                .candidates
+                .is_empty());
+        }
+        let art = reference.mask_for(&sets(&["aset"]));
+        assert_eq!(reference.lookup_by_name_masked("island", &art), Some((id(3), 0)));
+    }
+
     #[test]
     fn label_display_is_readable() {
         let l = Label {

@@ -60,7 +60,12 @@ describe("tray", () => {
 
     it("closes a waiting row's question when the second opinion pins one printing", () => {
       const waiting = addDecision([], ambiguous, { finish: "nonfoil" }, 1, "a").rows;
-      const pinned: ScannerDecision = { ...fastBolt, printing: ambiguous.choices[2].id, label: ambiguous.choices[2].label, replaces_previous: true };
+      const pinned: ScannerDecision = {
+        ...fastBolt,
+        printing: ambiguous.choices[2].id,
+        label: ambiguous.choices[2].label,
+        replaces_previous: true,
+      };
       const { rows, replaced } = addDecision(waiting, pinned, { finish: "nonfoil" }, 2, "b");
       expect(replaced).toBe(true);
       expect(rows).toHaveLength(1);
@@ -83,13 +88,46 @@ describe("tray", () => {
       expect(rows[1]).toEqual(lotus[0]);
     });
 
-    it("never replaces on a card with no oracle id, where sameness cannot be told", () => {
+    it("never replaces a different printing with no oracle id", () => {
       const nameless: ScannerDecision = { ...fastBolt, oracle_id: null };
       const first = addDecision([], nameless, { finish: "nonfoil" }, 1, "a").rows;
-      const other: ScannerDecision = { ...nameless, printing: ambiguous.choices[0].id, replaces_previous: true };
+      const other: ScannerDecision = {
+        ...nameless,
+        printing: ambiguous.choices[0].id,
+        replaces_previous: true,
+      };
       const { rows, replaced } = addDecision(first, other, { finish: "nonfoil" }, 2, "b");
       expect(replaced).toBe(false);
       expect(rows).toHaveLength(2);
+    });
+
+    it("replaces a second opinion of the same printing without an oracle id", () => {
+      const art: ScannerDecision = { ...fastBolt, oracle_id: null };
+      const first = setQuantity(
+        setFinish(addDecision([], art, { finish: "nonfoil" }, 1, "a").rows, "a", "foil"),
+        "a",
+        3,
+      );
+      const { rows, replaced, bumped } = addDecision(
+        first,
+        { ...art, replaces_previous: true },
+        { finish: "nonfoil" },
+        2,
+        "b",
+      );
+      expect(replaced).toBe(true);
+      expect(bumped).toBe(false);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ key: "a", quantity: 3, finish: "foil", oracleId: null });
+    });
+
+    it("counts a re-presented copy without an oracle id when it is not a second opinion", () => {
+      const token: ScannerDecision = { ...fastBolt, oracle_id: null };
+      const first = addDecision([], token, { finish: "nonfoil" }, 1, "a").rows;
+      const { rows, replaced, bumped } = addDecision(first, token, { finish: "nonfoil" }, 2, "b");
+      expect(replaced).toBe(false);
+      expect(bumped).toBe(true);
+      expect(rows[0]).toMatchObject({ key: "a", quantity: 2, oracleId: null });
     });
 
     it("adds a second printing of the same card when the session did not say it replaces", () => {
@@ -103,7 +141,13 @@ describe("tray", () => {
   it("adds a resolved decision as a new newest row with the default finish", () => {
     const { rows, bumped } = addDecision([], resolved, { finish: "foil" }, 1, "a");
     expect(bumped).toBe(false);
-    expect(rows[0]).toMatchObject({ key: "a", cardId: resolved.printing, quantity: 1, finish: "foil", choices: [] });
+    expect(rows[0]).toMatchObject({
+      key: "a",
+      cardId: resolved.printing,
+      quantity: 1,
+      finish: "foil",
+      choices: [],
+    });
   });
 
   it("bumps the newest row when the same printing is decided again", () => {
@@ -121,7 +165,11 @@ describe("tray", () => {
   });
 
   it("adds a new row rather than bumping one in a different finish", () => {
-    const foil = setFinish(addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows, "a", "foil");
+    const foil = setFinish(
+      addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows,
+      "a",
+      "foil",
+    );
     const { rows, bumped } = addDecision(foil, resolved, { finish: "nonfoil" }, 2, "b");
     expect(bumped).toBe(false);
     expect(rows.map((r) => [r.key, r.finish, r.quantity])).toEqual([
@@ -223,7 +271,9 @@ describe("tray", () => {
 
   it("builds import items and refuses while a row is unresolved", () => {
     const rows = addDecision([], resolved, { finish: "etched" }, 1, "a").rows;
-    expect(importItems(rows, "NM")).toEqual([{ cardId: resolved.printing, quantity: 1, finish: "etched", condition: "NM" }]);
+    expect(importItems(rows, "NM")).toEqual([
+      { cardId: resolved.printing, quantity: 1, finish: "etched", condition: "NM" },
+    ]);
     const mixed = addDecision(rows, ambiguous, { finish: "nonfoil" }, 2, "b").rows;
     expect(() => importItems(mixed, "NM")).toThrow();
   });
@@ -274,7 +324,9 @@ describe("tray", () => {
     expect(totalCopies(readyRows(rows)) + needsFinishCount(rows)).toBe(totalCopies(rows));
 
     const plan = commitPlan(rows, "NM");
-    expect(plan.items).toEqual([{ cardId: resolved.printing, quantity: 2, finish: "foil", condition: "NM" }]);
+    expect(plan.items).toEqual([
+      { cardId: resolved.printing, quantity: 2, finish: "foil", condition: "NM" },
+    ]);
     expect(plan.taken.map((r) => r.key)).toEqual(["a"]);
   });
 
@@ -298,7 +350,13 @@ describe("tray", () => {
   });
 
   it("counts copies and removes rows", () => {
-    const rows = addDecision(addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows, resolved, { finish: "nonfoil" }, 2, "b").rows;
+    const rows = addDecision(
+      addDecision([], resolved, { finish: "nonfoil" }, 1, "a").rows,
+      resolved,
+      { finish: "nonfoil" },
+      2,
+      "b",
+    ).rows;
     expect(totalCopies(rows)).toBe(2);
     expect(removeRow(rows, "a")).toHaveLength(0);
   });

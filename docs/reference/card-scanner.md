@@ -18,6 +18,16 @@ figures written into its module docs — are **release** figures, and the differ
 usual 8×: a debug build of the same server is 4× on the cheapest path and **40× on rectify**.
 Accuracy figures over the sample corpus are build-independent and are marked as such.
 
+**Scanning does not require collection eligibility (#742).** The bundle builder includes every
+Scryfall printing with an image, including tokens, emblems, art series and memorabilia; both
+faces are included when the images live on the faces. Corpus labels and set/date filters use
+the same unrestricted card vocabulary. A card without an Oracle ID uses its printing ID for
+internal matching identity, while the decision and stored tray keep the Oracle ID absent.
+Switching modes to read that same printing again replaces the existing tray row and preserves
+its quantity and chosen finish; removing and presenting it again still counts another copy.
+Recognition and the later Add are separate: storing a scan writes no collection entry, and a
+refused Add leaves the stored tray intact.
+
 **No accuracy figure here rests on more than eleven labelled photographs.** That is the single
 most important caveat in this document and it is repeated in §8, because three separate times
 a change has looked good on distance and turned out wrong on names. §10's synthetic evaluation
@@ -2725,8 +2735,9 @@ decides it again.
 (final review, decision 9). "Fast said Forest, switch to Exact to pin the printing" is one physical
 card, and both settings reset the tracker, so the session decides it again and `decision_seq` moves.
 `DecisionView::replaces_previous` says so: `true` when the previous decision named the same oracle
-card and the quad lock has stayed trusted ever since, and the same answer on every frame of that
-decision. The session remembers the last decision's oracle; **a stretch break forgets it** (the
+card (or the same printing when no Oracle ID exists, #742) and the quad lock has stayed trusted
+ever since, and the same answer on every frame of that decision. The session remembers that
+identity; **a stretch break forgets it** (the
 `count_stretch` untrusted arm — the card may have changed hands), and so does a Reset press, but a
 mode switch and a real filter change do not. That last half needed one change to what those two
 reset: **they keep the quad lock** (`Session::forget_card`, where `reset` is `forget_card` plus the
@@ -3035,7 +3046,8 @@ first provisionally; the camera keeps running while it waits, and *More printing
 all-printings dialog with a `pick` that hands the printing back.
 
 **A decision that `replaces_previous` replaces the newest row instead of adding one** — but only when
-that row is the same oracle card, both ids known. It keeps the row's key, quantity and finish (the
+that row is the same oracle card, both ids known, or the same printing when both Oracle IDs are
+absent (#742). It keeps the row's key, quantity and finish (the
 reader's own answers, and the flash's identity) and takes everything that says which printing — the
 id, the names, the set and number, and the choices — from the decision, so a waiting row the
 switch to Exact pinned closes its question. The session's flag alone is not enough: a newest row of

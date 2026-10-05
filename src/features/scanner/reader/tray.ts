@@ -108,8 +108,10 @@ export function rowFromDecision(
  * happened in the tray, and a surface keying a flash on that stamp replays it for the second copy.
  *
  * **A decision that `replaces_previous` is a second opinion, not a second copy, and it replaces
- * the newest row instead of adding one** — but only when that row is the same oracle card, both
- * ids known. "Fast said Forest, switch to Exact to pin the printing" is one card on the mat, and
+ * the newest row instead of adding one** — but only when that row is the same oracle card, or
+ * the same printing when neither has an oracle id. Tokens and art cards can have no oracle id;
+ * that must not turn a second opinion about the same printing into another copy (#742).
+ * "Fast said Forest, switch to Exact to pin the printing" is one card on the mat, and
  * adding would file it twice. The row keeps its key, quantity and finish — the reader's own
  * answers, and the flash's identity — and takes everything that says *which printing* from the
  * decision, its choices included. **An `unknown` finish is no answer to keep**, so a row still
@@ -129,9 +131,8 @@ export function addDecision(
   if (
     newest !== undefined &&
     d.replaces_previous &&
-    d.oracle_id !== null &&
-    newest.oracleId !== null &&
-    newest.oracleId === d.oracle_id
+    ((d.oracle_id !== null && newest.oracleId === d.oracle_id) ||
+      (d.oracle_id === null && newest.oracleId === null && newest.cardId === d.printing))
   ) {
     const fresh = rowFromDecision(d, defaults, now, newest.key);
     return {
@@ -161,7 +162,11 @@ export function addDecision(
       replaced: false,
     };
   }
-  return { rows: [rowFromDecision(d, defaults, now, key), ...rows], bumped: false, replaced: false };
+  return {
+    rows: [rowFromDecision(d, defaults, now, key), ...rows],
+    bumped: false,
+    replaced: false,
+  };
 }
 
 /** The one row a write is about, changed by `change`; every other row is the same object. */
@@ -212,7 +217,8 @@ export function setFinish(
  */
 function adopt(row: ScannerTrayRow, p: ScannerTrayChoice): ScannerTrayRow {
   const only = p.finishes?.length === 1 ? p.finishes[0] : undefined;
-  const settled = row.finish === UNKNOWN_FINISH && only !== undefined && isFinish(only) ? only : null;
+  const settled =
+    row.finish === UNKNOWN_FINISH && only !== undefined && isFinish(only) ? only : null;
   return {
     ...row,
     finish: settled ?? row.finish,

@@ -936,6 +936,72 @@ mod tests {
         assert_eq!(rows[0].3, None, "a card with no faces has no face images");
     }
 
+    #[test]
+    fn miscellaneous_layouts_with_images_are_jobs_from_both_sources() {
+        // Collection eligibility must not limit recognition. In particular, neither an
+        // oracle nor an illustration id is needed to hash a whole printing or its back.
+        let cards = serde_json::json!([
+            {"id":"00000000-0000-0000-0000-000000000001", "layout":"token",
+             "image_uris":{"thumb":"token"}},
+            {"id":"00000000-0000-0000-0000-000000000002", "layout":"double_faced_token",
+             "card_faces":[{"image_uris":{"thumb":"token-front"}},
+                           {"image_uris":{"thumb":"token-back"}}]},
+            {"id":"00000000-0000-0000-0000-000000000003", "layout":"emblem",
+             "image_uris":{"thumb":"emblem"}},
+            {"id":"00000000-0000-0000-0000-000000000004", "layout":"art_series",
+             "card_faces":[{}, {"image_uris":{"thumb":"art-back"}}]},
+            {"id":"00000000-0000-0000-0000-000000000005", "layout":"normal",
+             "set_type":"memorabilia", "image_uris":{"thumb":"memorabilia"}}
+        ]);
+        let bulk = rows_from_bulk(std::io::Cursor::new(cards.to_string().into_bytes()))
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        let corpus = Connection::open_in_memory().unwrap();
+        corpus
+            .execute_batch(
+                "CREATE TABLE cards (
+                id TEXT, illustration_id TEXT, image_uris TEXT, face_image_uris TEXT,
+                layout TEXT, set_type TEXT, oracle_id TEXT
+            )",
+            )
+            .unwrap();
+        for (row, card) in bulk.iter().zip(cards.as_array().unwrap()) {
+            corpus
+                .execute(
+                    "INSERT INTO cards VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
+                    rusqlite::params![
+                        row.0,
+                        row.1,
+                        row.2,
+                        row.3,
+                        card["layout"].as_str(),
+                        card["set_type"].as_str()
+                    ],
+                )
+                .unwrap();
+        }
+        let corpus_rows = rows_from_corpus(&corpus).unwrap();
+        assert_eq!(corpus_rows, bulk);
+        for rows in [bulk, corpus_rows] {
+            let jobs = collect_jobs(rows.into_iter().map(Ok::<_, ()>), SectionArg::Both).unwrap();
+            let actual: Vec<_> = jobs.iter().map(|j| (j.id, j.face, j.url.as_str())).collect();
+            let raw = |n| parse_uuid(&format!("00000000-0000-0000-0000-{n:012}")).unwrap();
+            assert_eq!(
+                actual,
+                [
+                    (raw(1), 0, "token"),
+                    (raw(2), 0, "token-front"),
+                    (raw(2), 1, "token-back"),
+                    (raw(3), 0, "emblem"),
+                    (raw(4), 1, "art-back"),
+                    (raw(5), 0, "memorabilia"),
+                ]
+            );
+            assert!(jobs.iter().all(|j| j.section == Section::Card));
+            assert_eq!(jobs[4].key(), "card#1", "a missing front preserves the back's index");
+        }
+    }
+
     /// Delver of Secrets, ISD 51, as the dev corpus holds it (2026-09-30): no top-level
     /// images, one set per face. The URLs are the corpus's own.
     const DELVER: &str = "11bf83bb-c95b-4b4f-9a56-ce7a1816307a";
