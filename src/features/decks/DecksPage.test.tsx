@@ -3809,6 +3809,112 @@ describe("DecksPage zoom", () => {
   });
 });
 
+describe("creating folders while the tree is folded", () => {
+  it("creates a root folder from the heading when the saved pane is collapsed", async () => {
+    withFolders();
+    deckFolderPane.mockResolvedValue({ width: 260, collapsed: true });
+    const cubes: DeckFolder = { id: 3, parentId: null, name: "Cubes", sortOrder: 1 };
+    deckFolderCreate.mockResolvedValue(cubes);
+
+    wrap(<DecksPage />);
+    await screen.findByRole("button", { name: "Expand folders" });
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+
+    const field = await screen.findByLabelText("New folder name");
+    expect(field).toHaveFocus();
+    expect(screen.getAllByLabelText("New folder name")).toHaveLength(1);
+    expect(
+      within(screen.getByRole("navigation", { name: "Folders" })).queryByLabelText(
+        "New folder name",
+      ),
+    ).toBeNull();
+    deckFolderList.mockResolvedValue([EDH, LEGENDS, cubes]);
+    await userEvent.keyboard("Cubes{Enter}");
+
+    await waitFor(() => expect(deckFolderCreate).toHaveBeenCalledWith(null, "Cubes"));
+    expect(await screen.findByRole("heading", { name: "Cubes" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand folders" })).toBeInTheDocument();
+  });
+
+  it("creates inside the open folder after the reader collapses the tree", async () => {
+    withFolders();
+    const ideas: DeckFolder = { id: 3, parentId: 1, name: "Ideas", sortOrder: 1 };
+    deckFolderCreate.mockResolvedValue(ideas);
+
+    wrap(<DecksPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Commander, 2 decks" }));
+    await userEvent.click(screen.getByRole("button", { name: "Collapse folders" }));
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+
+    expect(await screen.findByLabelText("New folder name")).toHaveFocus();
+    deckFolderList.mockResolvedValue([EDH, LEGENDS, ideas]);
+    await userEvent.keyboard("Ideas");
+    await userEvent.click(screen.getByRole("button", { name: "Create folder" }));
+
+    expect(deckFolderCreate).toHaveBeenCalledWith(1, "Ideas");
+    expect(await screen.findByRole("heading", { name: "Ideas" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Expand folders" })).toBeInTheDocument();
+  });
+
+  it("cancels the gallery field on Escape and returns focus without leaving the folder", async () => {
+    withFolders();
+    deckFolderPane.mockResolvedValue({ width: 260, collapsed: true });
+
+    wrap(<DecksPage />);
+    await screen.findByRole("button", { name: "Expand folders" });
+    await userEvent.click(screen.getByRole("button", { name: "Commander folder, 2 decks" }));
+    const opener = screen.getByRole("button", { name: "New folder" });
+    await userEvent.click(opener);
+    expect(await screen.findByLabelText("New folder name")).toHaveFocus();
+    await userEvent.keyboard("Discarded{Escape}");
+
+    expect(screen.queryByLabelText("New folder name")).not.toBeInTheDocument();
+    expect(deckFolderCreate).not.toHaveBeenCalled();
+    expect(screen.getByRole("heading", { name: "Commander" })).toBeInTheDocument();
+    await waitFor(() => expect(opener).toHaveFocus());
+  });
+
+  it("keeps the heading's new folder field in the tree while the tree is expanded", async () => {
+    withFolders();
+
+    wrap(<DecksPage />);
+    await tileFor("Burn");
+    await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+
+    const field = await screen.findByLabelText("New folder name");
+    expect(field).toHaveFocus();
+    expect(screen.getAllByLabelText("New folder name")).toHaveLength(1);
+    expect(
+      within(screen.getByRole("navigation", { name: "Folders" })).getByLabelText("New folder name"),
+    ).toBe(field);
+  });
+
+  it("offers a focused gallery field when a narrow desk automatically rails the tree", async () => {
+    // useDeskWidth reads the desk's clientWidth; jsdom otherwise reports an unmeasured zero.
+    const width = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(300);
+    try {
+      withFolders();
+      wrap(<DecksPage />);
+      await screen.findByRole("button", { name: "Expand folders" });
+      await userEvent.click(screen.getByRole("button", { name: "New folder" }));
+
+      const field = await screen.findByLabelText("New folder name");
+      expect(field).toHaveFocus();
+      expect(
+        within(screen.getByRole("navigation", { name: "Folders" })).queryByLabelText(
+          "New folder name",
+        ),
+      ).toBeNull();
+      await userEvent.keyboard("Narrow{Enter}");
+      await waitFor(() => expect(deckFolderCreate).toHaveBeenCalledWith(null, "Narrow"));
+      expect(setDeckFolderPane).not.toHaveBeenCalled();
+    } finally {
+      width.mockRestore();
+    }
+  });
+});
+
 /**
  * **The page's half of the folder tree's width**: the stored answers reaching the sidebar, the
  * two gestures reaching the command, and the cap coming off a measurement of the desk row rather
