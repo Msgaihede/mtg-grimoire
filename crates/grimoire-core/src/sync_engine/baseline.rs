@@ -16,7 +16,9 @@
 //!   whichever device happened to pair second would win every argument it should lose. It also
 //!   buys the three-device case its cheap exit — a device already up to date recognises almost
 //!   every op of somebody else's re-broadcast as older than its own watermark and does no
-//!   database work at all.
+//!   database work at all. (For a claim that names no emission, on a fresh install that has
+//!   heard from no device but its emitter, that is one indexed read since 2026-10-07, to learn
+//!   the row is held: `apply`'s `never_held`.)
 //! * **Rows are emitted parents-first**, in the order [`super::apply`] sorts by, which is read
 //!   from [`super::apply::order_of`] rather than respelled here. A baseline emitted in an order
 //!   that module disagrees with defers every child on the first pull — slow rather than wrong,

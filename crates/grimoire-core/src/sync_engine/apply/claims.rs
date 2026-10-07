@@ -319,7 +319,7 @@ pub(super) fn settle(
 }
 
 /// Whether this device holds the row under exactly this uid.
-fn row_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
+pub(super) fn row_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
     let Some(meta) = meta_of(table) else {
         return Ok(false);
     };
@@ -332,12 +332,12 @@ fn row_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
 }
 
 /// Whether this device merged the row into another one ([`emission::retire`]).
-fn retired(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
+pub(super) fn retired(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
     emission::retired(conn, table, uid).map_err(sql)
 }
 
 /// Whether this device's own op log names the row — it held it, and perhaps deleted it.
-fn named_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
+pub(super) fn named_here(conn: &Connection, table: &str, uid: &str) -> Result<bool, String> {
     conn.prepare_cached("SELECT EXISTS(SELECT 1 FROM sync_ops WHERE tbl = ?1 AND uid = ?2)")
         .and_then(|mut stmt| stmt.query_row([table, uid], |r| r.get(0)))
         .map_err(sql)

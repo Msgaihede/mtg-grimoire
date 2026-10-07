@@ -101,6 +101,17 @@ export interface Edition {
   /** The Settings panels drawn — Settings' entry list. `null` is every panel `nav.ts` holds, for
    *  `views`' reason: the full edition cannot fall behind a panel added to the page. */
   settings: readonly PanelId[] | null;
+  /**
+   * Whether this window can publish a share — the collection's **Share** and its publish
+   * dialog. Read by the shell, which answers `usePublishes` (`lib/reach.ts`) from it.
+   *
+   * **False in the light edition because no light host has the commands.** The five `share_*`
+   * commands are registered by the desktop host alone (`src-tauri/src/desktop.rs`); the table
+   * both light hosts dispatch through (`grimoire_core::commands`) has none of them, so a publish
+   * there could only ever answer *"There is no command named share_create on this host."*
+   * Opening somebody else's share is the other half, and `views` already leaves it out.
+   */
+  publishes: boolean;
 }
 
 export const FULL_EDITION: Edition = {
@@ -109,6 +120,7 @@ export const FULL_EDITION: Edition = {
   caption: true,
   startView: "home",
   settings: null,
+  publishes: true,
 };
 
 export const LIGHT_EDITION: Edition = {
@@ -117,6 +129,7 @@ export const LIGHT_EDITION: Edition = {
   caption: false,
   startView: LIGHT_START,
   settings: LIGHT_SETTINGS,
+  publishes: false,
 };
 
 export function editionHas(edition: Edition, view: ViewId): boolean {

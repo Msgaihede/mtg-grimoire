@@ -41,11 +41,12 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - **`storybook`**: Runs `npm run build-storybook`. Gates `.storybook/DesignSystem.mdx` and `preview.css`.
   - **`rust`**: Windows and Linux matrix. Writes a stub `dist/index.html` so `tauri-build` compiles on fresh checkouts.
     Runs `cargo fmt --check` (Linux only, with `-p` for each workspace member; never `--all`), `clippy --workspace --all-targets -D warnings`,
-    and `cargo test --workspace`. Also runs `crates/card-scanner` test suites (`--features cli` and `--features builder --bins`).
+    and `cargo test --workspace`. Also runs `crates/card-scanner` test suites (`--features cli`, `--features builder --bins`, and its frame bench's, `crates/card-scanner/bench`).
     Compiles shipping binaries without dev-dependencies (`cargo check -p mtg-grimoire -p grimoire-light`) and verifies no host enables the core's `testing` feature.
     `Swatinem/rust-cache` is configured with `workspaces: ". -> src-tauri/target"` to align with `.cargo/config.toml`.
   - **`core`**: Target compile gate on `ubuntu-24.04` (requires clang ≥ 18 for `sqlite-wasm-rs`) for `wasm32-unknown-unknown` and `aarch64-linux-android`.
     Sets `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` and the NDK `bin` path explicitly because cargo does not read `NDK_HOME`.
+    Each leg also `cargo check`s `crates/card-scanner/bench` — the scanner with its readers — for its target; nothing in this job runs.
   - **`android`**: Builds the light app on `ubuntu-24.04` via `npx tauri android build --apk --aab --target aarch64` with JDK 21 (debug-signed, no secret), holds it to its version (`scripts/android-release/check-version.sh`),
     then proves the release's signing by running `scripts/android-release/proof.sh` over the bundle: throwaway keys, one signing, five refusals.
   - **`web`**: Builds the WebAssembly host:

@@ -597,6 +597,7 @@ const present: ScannerStatus = {
   },
   labels: 117630,
   scans_dir: `${scannerDir}scans`,
+  unapplied_filters: null,
 };
 
 /**
@@ -610,6 +611,7 @@ const embedded: ScannerStatus = {
   recognition_model: { ...present.recognition_model, source: "embedded" },
   labels: 117630,
   scans_dir: `${scannerDir}scans`,
+  unapplied_filters: null,
 };
 
 const missing: ScannerStatus = {
@@ -630,6 +632,7 @@ const missing: ScannerStatus = {
   },
   labels: 0,
   scans_dir: `${scannerDir}scans`,
+  unapplied_filters: null,
 };
 
 const noModels: ScannerStatus = {
@@ -638,6 +641,7 @@ const noModels: ScannerStatus = {
   recognition_model: missing.recognition_model,
   labels: 117630,
   scans_dir: `${scannerDir}scans`,
+  unapplied_filters: null,
 };
 
 /**
@@ -669,6 +673,7 @@ const corrupt: ScannerStatus = {
   },
   labels: 0,
   scans_dir: `${scannerDir}scans`,
+  unapplied_filters: null,
 };
 
 /**

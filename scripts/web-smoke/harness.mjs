@@ -981,6 +981,9 @@ function grownCards(count) {
 }
 
 export { serve, browse, openPage, fixtures, fixtureCards, pictureAddress, coreChunk };
+// The browser alone, for a run that serves a page of its own and intercepts nothing — the card
+// scanner's frame bench (`scripts/scanner-bench.mjs`).
+export { launch, connect };
 export { grownCards, grownCardId };
 export { ALERT, buttonSaying };
 // The fixture hosts' addresses, for a run that holds one, waits for one or counts the asks.
