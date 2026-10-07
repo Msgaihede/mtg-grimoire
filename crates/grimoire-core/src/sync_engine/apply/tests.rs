@@ -5651,38 +5651,59 @@ fn a_higher_wish_edited_and_moved_onto_one_the_peer_has_not_sent_ends_as_one_wis
 
 /// **What rides with the edit is applied, and once**:
 /// [`a_count_riding_with_a_move_onto_the_peers_copy_is_counted_once`], for an edit. `a` adds two
-/// copies to `c`, writes a note on it and regrades it in one page; the `+2` and the note land on
-/// the one row the fold leaves.
+/// copies to `c`, writes a note on it and regrades it in one page. The `+2` is a delta and lands
+/// on the one row the fold leaves, whatever the clocks say.
+///
+/// **The note is a field, so it is last-writer-wins against both rows' histories** — and `u`'s
+/// insert said "no note" at its own stamp. Both orders are driven, by putting one device's clock
+/// an hour ahead: where `a`'s edit is the later the note lands, where `u`'s insert is the later
+/// it does not, and either way the two devices agree. Left to the wall clock, the two writes fall
+/// in one millisecond on a fast machine and the order is the device ids'.
 #[test]
 fn a_count_riding_with_an_edit_onto_the_peers_copy_is_counted_once() {
     for (c, u) in [(LOWER, HIGHER), (HIGHER, LOWER)] {
-        let (a, b) = (paired("dev-a"), paired("dev-b"));
-        let (mut ma, mut mb) = (0, 0);
-        a_copy_graded(&a, c, "NM", None, 1);
-        apply(&b, &since(&a, &mut ma)).unwrap();
-        let _ = since(&b, &mut mb);
-        a_copy_graded(&b, u, "LP", None, 2);
+        for edit_is_later in [true, false] {
+            let (a, b) = (paired("dev-a"), paired("dev-b"));
+            let (mut ma, mut mb) = (0, 0);
+            a_copy_graded(&a, c, "NM", None, 1);
+            apply(&b, &since(&a, &mut ma)).unwrap();
+            let _ = since(&b, &mut mb);
+            let ahead = if edit_is_later { &a } else { &b };
+            ahead
+                .execute("UPDATE sync_clock SET ms = ms + 3600000", [])
+                .unwrap();
+            a_copy_graded(&b, u, "LP", None, 2);
 
-        a.execute(
-            "UPDATE collection_entries SET quantity = quantity + 2, notes = 'played'
-              WHERE sync_uid = ?1",
-            [c],
-        )
-        .unwrap();
-        grade_copy(&a, c, "LP");
-
-        let rb = apply(&b, &since(&a, &mut ma)).unwrap();
-        assert_eq!(unwritten(rb), (0, 0), "c is {c}");
-        apply(&a, &since(&b, &mut mb)).unwrap();
-        for (who, conn) in [("a", &a), ("b", &b)] {
-            assert_eq!(qty(conn), (1, 5), "{who}, where c is {c}");
-            assert_eq!(uids_of_copies(conn), vec![Some(LOWER.to_owned())], "{who}");
-            assert_eq!(conditions(conn), ["LP"], "{who}");
-        }
-        let note: Option<String> = b
-            .query_row("SELECT notes FROM collection_entries", [], |r| r.get(0))
+            a.execute(
+                "UPDATE collection_entries SET quantity = quantity + 2, notes = 'played'
+                  WHERE sync_uid = ?1",
+                [c],
+            )
             .unwrap();
-        assert_eq!(note.as_deref(), Some("played"), "b, where c is {c}");
+            grade_copy(&a, c, "LP");
+
+            let said = format!("c is {c}, the edit is later: {edit_is_later}");
+            let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+            assert_eq!(unwritten(rb), (0, 0), "{said}");
+            apply(&a, &since(&b, &mut mb)).unwrap();
+            for (who, conn) in [("a", &a), ("b", &b)] {
+                assert_eq!(qty(conn), (1, 5), "{who}, where {said}");
+                assert_eq!(
+                    uids_of_copies(conn),
+                    vec![Some(LOWER.to_owned())],
+                    "{who}, where {said}"
+                );
+                assert_eq!(conditions(conn), ["LP"], "{who}, where {said}");
+                let note: Option<String> = conn
+                    .query_row("SELECT notes FROM collection_entries", [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(
+                    note.as_deref(),
+                    edit_is_later.then_some("played"),
+                    "{who}, where {said}"
+                );
+            }
+        }
     }
 }
 
