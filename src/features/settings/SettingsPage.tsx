@@ -7,6 +7,7 @@ import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
 import { LabelsPanel } from "@/features/settings/LabelsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
+import { PrivacyLink } from "@/features/settings/PrivacyLink";
 import { ReviewPanel } from "@/features/settings/ReviewPanel";
 import { SettingsNav } from "@/features/settings/SettingsNav";
 import { StartViewPanel } from "@/features/settings/StartViewPanel";
@@ -494,6 +495,11 @@ export function SettingsPage({ update }: { update: Update }) {
         {visible.length === 0 && (
           <p className="text-sm text-dim">No matching settings.</p>
         )}
+
+        {/* The foot of the pane on every edition: one policy covers every host. */}
+        <p>
+          <PrivacyLink />
+        </p>
       </div>
     </div>
   );

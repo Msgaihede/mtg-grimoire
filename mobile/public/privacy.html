@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Privacy policy — MTG Grimoire</title>
+    <meta name="description" content="What MTG Grimoire keeps on your device, what it asks other services for, and what its sync relay stores." />
+    <link rel="icon" type="image/svg+xml" href="/mtg-grimoire-mark.svg" />
+    <link rel="stylesheet" href="/privacy.css" />
+  </head>
+  <body>
+    <header>
+      <img src="/mtg-grimoire-mark.svg" alt="" />
+      <h1>MTG Grimoire privacy policy</h1>
+    </header>
+    <p class="dated">Effective 7 October 2026. This covers the MTG Grimoire apps for Android, for the web at mtg-grimoire.app, and for Windows and Linux.</p>
+
+    <p>MTG Grimoire is made by Markus Seerup. It is a tool for keeping track of a Magic: The Gathering collection. It has no accounts, shows no advertising, and contains no analytics, tracking or crash-reporting code.</p>
+
+    <h2>What stays on your device</h2>
+    <p>Everything you make in the app is stored on your own device, in the app's own storage (on a computer, a data folder that belongs to the app): your collection, decks, wishlist, notes, labels and settings. So are the card database, the card pictures the app has shown you, the card scanner's files if you downloaded them, and a log of errors the app ran into. The app does not send any of this to its maker.</p>
+    <p>On Android the app is excluded from Google's device backup, so your collection is not copied to your Google account. In a browser, the same data is kept in that browser's storage for mtg-grimoire.app.</p>
+
+    <h2>What the app asks other services for</h2>
+    <p>The app downloads card data, card pictures and prices from the services below, directly from your device, and every connection it makes is encrypted (HTTPS). Each of them sees your IP address and the request itself, as any website you visit does, and may log it under its own policy. The Android and desktop apps identify themselves as <code>MTGGrimoire</code> with their version number; in a browser, your browser identifies itself as it always does. None of these requests contains your collection, your decks or anything that identifies you to MTG Grimoire. Which pictures are asked for follows which cards you look at.</p>
+    <table class="hosts">
+      <thead>
+        <tr><th scope="col">Address</th><th scope="col">What is asked for</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>api.scryfall.com</td><td>Where the current card files are, the list of sets, and Scryfall's record of card ids that have changed</td></tr>
+        <tr><td>data.scryfall.io</td><td>The card database itself, and Scryfall's card tags</td></tr>
+        <tr><td>cards.scryfall.io</td><td>Card pictures, one at a time as they are shown</td></tr>
+        <tr><td>json.commanderspellbook.com</td><td>The list of card combos, downloaded when the app starts and checked again about once a week</td></tr>
+        <tr><td>api.cardkingdom.com</td><td>Card Kingdom's price list, if you choose it</td></tr>
+        <tr><td>manapool.com</td><td>Mana Pool's price list, if you choose it (Android and desktop only)</td></tr>
+        <tr><td>mtg-grimoire-relay.denmark-east.workers.dev</td><td>Sync between your devices, described below — only while you pair a device, and from then on</td></tr>
+        <tr><td>github.com</td><td>The card scanner's files, about 18 MB — only when you press the scanner's Download, and only in the Android app. GitHub hands the download on to its own file servers</td></tr>
+      </tbody>
+    </table>
+    <p>The desktop apps also ask GitHub (api.github.com) whether a newer version exists. The Android app and the web app do not, and the web app asks GitHub for nothing: its card scanner's files come from mtg-grimoire.app itself, when you press the scanner's Download.</p>
+
+    <h2>The camera</h2>
+    <p>The app asks for the camera the first time you use it to scan a pairing code or, where the app offers it, a card. Pictures from the camera are examined on your device and are never sent anywhere. They are not kept, except that the desktop app's card scanner has a control that saves a picture to a folder on your computer when you press it.</p>
+
+    <h2>Sync between your devices</h2>
+    <p>Sync is optional. If you pair two or more installs of MTG Grimoire, they exchange changes through a relay server that MTG Grimoire runs on Cloudflare.</p>
+    <p>Changes are encrypted on your device with a key that only your paired devices hold. The relay cannot read them, and neither can its maker. Beside each encrypted change the relay stores what it needs to deliver it:</p>
+    <ul>
+      <li>a random identifier for the device that sent it and one for your group of devices — neither is your name, your phone's name or an advertising identifier;</li>
+      <li>the time the change was made and the time it arrived;</li>
+      <li>for each device in the group, when the relay first and last heard from it;</li>
+      <li>your group's sync key, sealed so that only your devices can open it;</li>
+      <li>how far each device has read, a one-way check value for the group's key, and a list of the devices that have left the group.</li>
+    </ul>
+    <p>The relay's database does not store device names, e-mail addresses or IP addresses. Your IP address is used while a request is being answered, to limit how often one address may ask. Cloudflare, which hosts the relay, also keeps a log of each request to it, in MTG Grimoire's own Cloudflare account, for up to seven days: it holds the address that was asked for, which contains your group's identifier, and the request's headers, which include your IP address. When the relay runs into a fault it adds a line about the fault to the same log; a fault while a membership is being checked names that membership's Patreon user id. MTG Grimoire's maker can read that log and uses it only to find faults.</p>
+    <p>A change is deleted from the relay once every device in the group has received it and it is 30 days old, and a device the relay has not heard from in 90 days is dropped from its records; the relay does both the next time a device in the group syncs. A group whose devices have all stopped syncing keeps its last records until its membership ends — the stored changes are deleted then — or until you ask. The short-lived data used while two devices pair stops working after ten minutes and is removed by an hourly clean-up.</p>
+
+    <h2>If a Patreon membership is connected to your sync group</h2>
+    <p>The Android app cannot connect a Patreon membership. If one has been connected to your sync group from another install of MTG Grimoire, the relay asks Patreon whether it is active and stores: your Patreon user identifier, the membership's state, a token that lets the relay ask Patreon again later, which group of devices it covers, which device connected it, and when the record was made and last checked. It does not ask Patreon for your name, your e-mail address or what you pay. It does learn from Patreon when a payment has failed, because sync then continues for seven days. Patreon also notifies the relay when a membership changes; the relay reads the user identifier and the state from that notice and keeps nothing else. This record is kept after a membership ends, until you ask for it to be deleted.</p>
+
+    <h2>Sharing a collection</h2>
+    <p>The desktop app can publish a read-only snapshot of a collection folder to a link. A published snapshot is stored on Cloudflare, readable by anyone who has the link, and contains the title and name you typed, the names of the folder and its sub-folders, the cards and their values, and their condition and language if you chose to include them. It never contains purchase prices, acquisition dates or private notes. It stays until you withdraw it from the app, and its link stops working if the membership it was published under ends. After you withdraw it, a record that it existed stays, with the title and the name you typed. The Android app and the web app cannot publish.</p>
+
+    <h2>Removing your data</h2>
+    <ul>
+      <li>Everything on a phone is removed by uninstalling the app; in a browser, by clearing the site's data; on a computer, by deleting the app's data folder. Settings also has a reset.</li>
+      <li>A device leaves a sync group from Settings, under Sync; any device in the group can remove another. Removing a device stops it receiving anything new.</li>
+      <li>To have a group's records, a membership's record or a shared snapshot deleted from the relay, write to the address below and include the device identifier shown in Settings, under Sync — the line of letters and digits beneath this device's name. It is how the right records are found.</li>
+    </ul>
+
+    <h2>Children</h2>
+    <p>MTG Grimoire is not directed at children under 13 and does not knowingly collect personal information from anyone.</p>
+
+    <h2>Changes to this policy</h2>
+    <p>If this policy changes, the new text is published here with a new date.</p>
+
+    <h2>Contact</h2>
+    <p>Questions and deletion requests: <a href="mailto:markus@seerup.com">markus@seerup.com</a>. The app's source and its issue tracker are at <a href="https://github.com/Msgaihede/mtg-grimoire">github.com/Msgaihede/mtg-grimoire</a>.</p>
+
+    <p class="dated">MTG Grimoire is unofficial Fan Content permitted under the Fan Content Policy. Not approved/endorsed by Wizards. Portions of the materials used are property of Wizards of the Coast. ©Wizards of the Coast LLC. Card data and pictures are provided by Scryfall.</p>
+  </body>
+</html>

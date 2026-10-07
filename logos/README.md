@@ -46,6 +46,15 @@ that all of it — clasp and ribbon too — is inside the circle Android keeps w
 installed icon to the launcher's shape (80% of the width; the mark reaches **37.5%** from the
 centre against the 40% allowed, measured from the pixels on 2026-10-04).
 
+The same script renders the **Android launcher's** set from this mark
+(`mobile/src-tauri/gen/android/app/src/main/res/mipmap-*`): an adaptive icon whose foreground is
+the mark at scale 0.55 on a transparent 108dp layer, over the app's ground. A launcher keeps only a
+circle 66dp across — 30.6% of the width from the centre — and the script measures the foreground's
+furthest painted pixel against it (**29.5%**, measured from the pixels on 2026-10-07) and fails the
+render if it passes. It also writes the store's two graphics to `docs/play/`. `tauri android init`
+and `tauri icon` both overwrite the launcher's pictures with stock art; `mobile/host.test.ts` goes
+red when they do.
+
 **Made by `node scripts/light-icons.mjs`**, from `svg/mtg-grimoire-mark.svg` alone: it derives the
 maskable drawing from the mark rather than reading a third SVG, renders each size in headless
 Chromium over the DevTools protocol (no image library is a dependency of this repo), and fails if

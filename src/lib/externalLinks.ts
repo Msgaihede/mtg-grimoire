@@ -169,6 +169,13 @@ export function marketplaceSearchUrl(id: MarketplaceId, cardName: string): strin
   return SEARCH_URL[id](encodeURIComponent(cardName));
 }
 
+/**
+ * The privacy policy — one page for every host, served by the web app's own origin
+ * (`mobile/public/privacy.html`). Google Play requires the link on the store listing and in the
+ * app; `docs/play/README.md` holds the listing to this address.
+ */
+export const PRIVACY_URL = "https://mtg-grimoire.app/privacy";
+
 /** The one call that leaves the app. Made on selection and never before it. */
 export async function openExternal(url: string): Promise<void> {
   await host.openUrl(url);

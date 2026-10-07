@@ -10,7 +10,7 @@ import {
 } from "./shell";
 
 const ORIGIN = "https://mtg-grimoire.app";
-const PRECACHED = new Set(["/", "/light.webmanifest", "/assets/index-abc.js"]);
+const PRECACHED = new Set(["/", "/light.webmanifest", "/assets/index-abc.js", "/privacy.html"]);
 
 const get = (path: string, mode = "no-cors"): Routable => ({
   url: path.startsWith("http") ? path : `${ORIGIN}${path}`,
@@ -125,6 +125,33 @@ describe("which request is whose", () => {
     for (const path of ["/", "/search", "/decks/12", "/collection?card=abc", "/v1.2/notes"]) {
       expect(route(get(path, "navigate"))).toEqual({ kind: "navigation" });
     }
+  });
+
+  /**
+   * **A document of its own, at an address with no extension.** The host serves
+   * `privacy.html` at `/privacy`; a reader with the web app installed reaches that address
+   * through this worker, which answers every extensionless navigation with the app. So a place
+   * whose `.html` is in this build is that file — from the cache, offline too.
+   */
+  it("answers a place that is a page of the build's own with that page, not the app", () => {
+    expect(route(get("/privacy", "navigate"))).toEqual({ kind: "shell", key: "/privacy.html" });
+    // By its file name it was always the file.
+    expect(route(get("/privacy.html", "navigate"))).toEqual({ kind: "shell", key: "/privacy.html" });
+    // A query string is the address's, not the file's.
+    expect(route(get("/privacy?from=settings", "navigate"))).toEqual({
+      kind: "shell",
+      key: "/privacy.html",
+    });
+    // Only a navigation: a script that fetches the bare path is asking the network.
+    expect(route(get("/privacy", "cors"))).toEqual({ kind: "passthrough" });
+    // And only a page this build has. Every other place is still the app.
+    expect(route(get("/privacy/more", "navigate"))).toEqual({ kind: "navigation" });
+    expect(route(get("/terms", "navigate"))).toEqual({ kind: "navigation" });
+    // The root is the document, and `/.html` is nobody's — even with one in the precache, which
+    // is the only way the guard on `/` is ever asked.
+    expect(
+      routeFor(get("/", "navigate"), ORIGIN, new Set([...PRECACHED, "/.html"])),
+    ).toEqual({ kind: "navigation" });
   });
 
   it("answers the build's own files from the shell, by path", () => {

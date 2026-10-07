@@ -8260,3 +8260,40 @@ a group that already has it.
   with no membership wording; a host that refuses draws the membership half as before. Still
   owed: the real host under a page, a phone, and — the state no fake can stage — two devices
   paired in a group nobody has turned sync on for, then Settings → Errors and *Sync now*.
+
+## 13. Google Play — the icon, the policy and the listing (2026-10-07)
+
+- **The launcher's icon was Tauri's logo.** `tauri android init` writes it into every
+  `mipmap-*`, with Android's stock robot in `drawable*`, and nothing had replaced it — the app
+  ran on a phone under another project's mark from 2026-10-04. `scripts/light-icons.mjs` now
+  renders the launcher's set from `logos/svg/mtg-grimoire-mark.svg`: an adaptive icon
+  (`mipmap-anydpi-v26/ic_launcher.xml`) whose foreground is the mark at scale 0.55 on a
+  transparent 108dp layer over `@color/ground`, and the 48dp icon no phone this app installs on
+  draws. The script measures the foreground against the 66dp circle a launcher keeps whole and
+  fails the render past it (measured: 29.5% of the width from the centre, against a limit of
+  30.6%). The round PNGs and both stock vectors are deleted: the manifest names no
+  `roundIcon`. **Not seen on a phone yet** — the first internal-testing install is.
+- **The privacy policy is a document, not a route.** `mobile/public/privacy.html` and
+  `privacy.css`, copied to the root of every light build; no script, one stylesheet, so it
+  reads under the host's `style-src 'self'` and would read with the app broken. The host's
+  default `html_handling` serves it at `/privacy`; **a reader the service worker controls never
+  reaches the host**, and the worker answered every extensionless navigation with the app — so
+  `routeFor` answers a navigation to a place whose `.html` is precached with that file.
+  The smoke run opens `/privacy` in a controlled tab as its twelfth check of eighteen — **not
+  yet run**: this machine has no `clang` for the wasm build, so CI's `web` job is its first
+  run. The smoke's own server now answers `/privacy.html` with the host's redirect and `/privacy`
+  with the file, so that run also proves the worker's install over a redirect. What Cloudflare does with the
+  address was measured under `wrangler dev --local` (against
+  a stub `dist-web/`: `/privacy` answered 200 `text/html` with the policy's heading;
+  `/privacy.html` answered 307 to `/privacy`) and **has not been asked of the live address**,
+  which serves it only after the next release's deploy.
+- **A reader whose worker predates this build** reaches `/privacy.html` through the network,
+  is redirected to `/privacy`, and is answered the app by the old worker, and goes on being,
+  until the reader takes the update the app offers or closes every tab of the old
+  build. Nobody new to the site meets it.
+- **Its facts are the code's and its sentences are the owner's.** The page's table of hosts is
+  held to the web policy's `connect-src` by `mobile/host.test.ts`.
+- **Settings links to it on both faces** (`src/features/settings/PrivacyLink.tsx`), through
+  `openExternal`.
+- **`docs/play/`** holds the listing's text, the Console's answers and the two rendered
+  graphics. The screenshots are taken on a phone.

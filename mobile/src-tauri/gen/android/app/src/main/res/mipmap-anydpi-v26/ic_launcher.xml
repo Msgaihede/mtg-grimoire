@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WRITTEN BY scripts/light-icons.mjs — the launcher's icon on every phone this app installs on
+  (minSdk 26). The ground is the app's own (`values/colors.xml`); the mark is rendered from
+  `logos/svg/mtg-grimoire-mark.svg` inside the 66dp circle a launcher keeps whole.
+  `tauri android init` does not write this file and overwrites the pictures beside it:
+  `mobile/host.test.ts` holds both.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ground" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>

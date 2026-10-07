@@ -30,7 +30,10 @@ export function staleShells(names: readonly string[], build: string): string[] {
   return names.filter((name) => name.startsWith(SHELL_PREFIX) && name !== keep);
 }
 
-/** The key the document is cached under, and what every navigation is answered with. */
+/**
+ * The key the document is cached under, and what every navigation is answered with — bar a page
+ * of the build's own, such as the privacy policy (`routeFor`).
+ */
 export const DOCUMENT = "/";
 
 /** The worker's own file. At the origin's root, unhashed: its scope is its folder and below. */
@@ -87,9 +90,15 @@ export function shellBuildId(files: readonly { name: string; bytes: Uint8Array }
 export type Route =
   /** Not this worker's: no `respondWith` at all, and the request goes on as if there were none. */
   | { kind: "passthrough" }
-  /** A page: answered with the cached document, whatever place the path names. */
+  /**
+   * A page: answered with the cached document, whatever place the path names — bar a page of the
+   * build's own, such as the privacy policy, which is a `shell` route.
+   */
   | { kind: "navigation" }
-  /** One of this build's own files: cache first, by its path. */
+  /**
+   * One of this build's own files: cache first, by its path — or, for a page of the build's own
+   * such as the privacy policy, by the `.html` file its extensionless address names.
+   */
   | { kind: "shell"; key: string }
   /** A file of the card scanner's module: the scanner's cache first, and kept once fetched. */
   | { kind: "kept"; key: string }
@@ -123,6 +132,10 @@ export interface Routable {
  * and the network's own answer otherwise. A page that asks for a script and is handed HTML fails
  * on a MIME error instead of a missing file, and that is the failure an update must not meet.
  *
+ * **One navigation is not the app: a place whose `.html` this build precached.** It is a
+ * document of the build's own — the privacy policy — and is answered from the shell by that
+ * file's name.
+ *
  * **The card scanner's module is `kept`, not `shell`** — read before the `/wasm/` tree it lives
  * in. It is in no build's precache, so a shell cache never has it; it is fetched the first time
  * the scanner's Worker loads it and kept then, in a cache no deploy deletes, which is what lets
@@ -148,7 +161,16 @@ export function routeFor(request: Routable, origin: string, precached: ReadonlyS
   // A place has no extension in its last segment (`assets.ts`'s `isNavigation`, the rule the
   // preview and the host serve the document by); a file opened in a tab of its own is the file.
   const place = !path.slice(path.lastIndexOf("/") + 1).includes(".");
-  if (request.mode === "navigate" && place) return { kind: "navigation" };
+  if (request.mode === "navigate" && place) {
+    // **A page of the build's own, at an address with no extension** — the privacy policy,
+    // `privacy.html`, which the host serves at `/privacy`. Without this the reader who has the
+    // app installed would be the one reader who could not open it: this worker answers every
+    // extensionless navigation with the app. Asked of the precache and not of a list here, so
+    // the rule is the build's: a page that is in it is served, and nothing else changes.
+    const page = `${path}.html`;
+    if (path !== "/" && precached.has(page)) return { kind: "shell", key: page };
+    return { kind: "navigation" };
+  }
   if (isScannerModule(path)) return { kind: "kept", key: path };
   if (path.startsWith("/assets/") || path.startsWith("/wasm/") || precached.has(path)) {
     return { kind: "shell", key: path };
