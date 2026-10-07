@@ -497,13 +497,13 @@ jobs:
   # SDK, the NDK and JDK 21, so Markus chose CI as the place the APK is built (2026-10-03).
   #
   # **A release build, signed with the runner's debug key** (`gen/android/app/build.gradle.kts`,
-  # by hand): installable and the size a shipped APK would be, but every runner mints its own
-  # key, so one run's APK does not upgrade over another's. **The APK a release attaches is this
-  # same build, re-signed with the release key** (step 6.6, 2026-10-04): `release.yml`'s `android`
-  # job is this job's steps, and its `android-sign` job — which holds the key and builds nothing —
-  # runs `scripts/android-sign.sh` over the result. No secret is here, and none is needed: the
-  # step after the report runs that script on a key minted and deleted on the spot, so the
-  # signing a release depends on is proved by every pull request that can have changed the APK.
+  # by hand): installable and the size a shipped build would be, but every runner mints its own
+  # key, so one run's APK does not upgrade over another's. **What a release sends to Google Play
+  # is this same build's bundle, re-signed with the owner's upload key**: `release.yml`'s
+  # `android` job is this job's steps, and its `android-sign` job — which holds the key and
+  # builds nothing — runs `scripts/android-release/sign-bundle.sh` over the result. No secret is
+  # here, and none is needed: the signing a release depends on is proved, on throwaway keys, by
+  # every pull request that can have changed the bundle.
   # **arm64 only**, because that is every phone this app is for and each further ABI is another
   # release compile of the whole engine.
   #
@@ -553,10 +553,12 @@ jobs:
 
       # From `mobile/`, so the CLI finds `mobile/src-tauri/tauri.conf.json` — from the repository
       # root it finds the desktop's. `beforeBuildCommand` builds the light bundle into
-      # `dist-mobile/` first.
-      - name: Build the APK
+      # `dist-mobile/` first. **One command, two outputs**: the APK, which is what installs on
+      # a phone from this job's artifact, and the Android App Bundle, which is what Google Play
+      # takes and what a release signs. `release.yml`'s `android` job runs this same line.
+      - name: Build the APK and the bundle
         working-directory: mobile
-        run: npx tauri android build --apk --target aarch64 --ci
+        run: npx tauri android build --apk --aab --target aarch64 --ci
 
       - name: Report the APK
         shell: bash
@@ -568,7 +570,7 @@ jobs:
           so=$(unzip -l "$apk" | awk '/lib\/arm64-v8a\/.*\.so$/ {print $1}' | head -1)
           echo "APK: $apk — $bytes bytes"
           {
-            echo "### Light app APK (arm64, release, debug-signed)"
+            echo "### Light app, Android (arm64, release, debug-signed)"
             echo
             echo "| | bytes | MiB |"
             echo "| --- | ---: | ---: |"
@@ -577,67 +579,33 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
           mkdir -p apk-out && cp "$apk" apk-out/mtg-grimoire-light-arm64.apk
 
-      # **The release's signing, on a key nobody keeps.** `release.yml`'s `android-sign` job runs
-      # this script with the release keystore, and a release is the wrong place to find out that
-      # `apksigner` words its answer differently or that re-signing moved a library off its page
-      # boundary. So it runs here first: a keystore minted with a random password in the runner's
-      # temp folder, the APK above re-signed with it, the script's own checks — one signer, that
-      # certificate, the alignment Gradle gave — and every file deleted. **Not a secret and not
-      # the artifact**: what is uploaded below is still the debug-signed build.
-      #
-      # **And its two refusals, which a release must be able to rely on**: a keystore that is
-      # not the one the committed fingerprint names — the release's guard against a key made a
-      # second time — and a keystore whose certificate is an Android debug one. Each must exit
-      # non-zero and leave no APK behind, or this step fails.
-      - name: Prove the release signing on a throwaway key
+      # The bundle a release would sign, and the version it would carry to Play: Android installs
+      # an update only over a lower `versionCode`, and Play refuses a code it has seen.
+      - name: Report the bundle, and hold it to its version
         shell: bash
         run: |
           set -euo pipefail
-          ANDROID_KEYSTORE_PASSWORD=$(openssl rand -hex 16)
-          export ANDROID_KEYSTORE_PASSWORD
-          export ANDROID_KEY_PASSWORD="$ANDROID_KEYSTORE_PASSWORD"
-          export ANDROID_KEY_ALIAS=throwaway
-          export ANDROID_KEYSTORE="$RUNNER_TEMP/throwaway.keystore"
-          # The version the APK must carry, and with it the versionCode Tauri derives from it.
-          ANDROID_EXPECT_VERSION=$(node -p "require('./mobile/src-tauri/tauri.conf.json').version")
-          export ANDROID_EXPECT_VERSION
-          out="$RUNNER_TEMP/throwaway-signed.apk"
-          pin="$RUNNER_TEMP/throwaway-signer.sha256"
-          der="$RUNNER_TEMP/throwaway.der"
-          trap 'rm -f "$ANDROID_KEYSTORE" "$out" "$pin" "$der"' EXIT
-          mint() {
-            rm -f "$ANDROID_KEYSTORE"
-            "$JAVA_HOME/bin/keytool" -genkeypair -keystore "$ANDROID_KEYSTORE" \
-              -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" \
-              -keyalg RSA -keysize 2048 -validity 1 -dname "$1"
-          }
-          sign() {
-            bash scripts/android-sign.sh apk-out/mtg-grimoire-light-arm64.apk "$out"
-          }
+          VERSION=$(node -p "require('./mobile/src-tauri/tauri.conf.json').version")
+          bash scripts/android-release/check-version.sh "$VERSION"
+          aab=$(find mobile/src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' | head -1)
+          [ -n "$aab" ] || { echo "the build produced no bundle" >&2; exit 1; }
+          bytes=$(stat -c %s "$aab")
+          echo "bundle: $aab — $bytes bytes"
+          {
+            echo "| Android App Bundle (what Play takes) | $bytes | $(awk "BEGIN {printf \"%.1f\", $bytes / 1048576}") |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p aab-out && cp "$aab" aab-out/mtg-grimoire-light-arm64.aab
 
-          # The key, its fingerprint as the owner takes it, and the APK signed and held to both.
-          mint "CN=throwaway"
-          "$JAVA_HOME/bin/keytool" -exportcert -keystore "$ANDROID_KEYSTORE" \
-            -storepass:env ANDROID_KEYSTORE_PASSWORD -alias "$ANDROID_KEY_ALIAS" -file "$der"
-          sha256sum "$der" | cut -d' ' -f1 > "$pin"
-          ANDROID_SIGNER_PIN="$pin" sign
-          [ -s "$out" ] || { echo "the signing reported success and wrote no APK" >&2; exit 1; }
-
-          # Another key's fingerprint: refused, and the APK above is gone with the refusal.
-          printf '%064d\n' 0 > "$pin"
-          if ANDROID_SIGNER_PIN="$pin" sign; then
-            echo "signed with a key the fingerprint does not name" >&2
-            exit 1
-          fi
-          [ ! -e "$out" ] || { echo "a refused signing left an APK behind" >&2; exit 1; }
-
-          # A debug certificate: refused whether or not a fingerprint is asked for.
-          mint "CN=Android Debug,O=Android,C=US"
-          if sign; then
-            echo "signed with an Android debug certificate" >&2
-            exit 1
-          fi
-          [ ! -e "$out" ] || { echo "a refused signing left an APK behind" >&2; exit 1; }
+      # **The release's signing, on keys nobody keeps.** `release.yml`'s `android-sign` job runs
+      # `sign-bundle.sh` with the upload keystore, and a release is the wrong place to find out
+      # that `keytool` words its answer differently or that a refusal leaves a file behind. So
+      # the proof runs here first, over the bundle above: keys minted with a random password in
+      # a temporary folder, one signing held to its fingerprint, and five refusals — another
+      # key's fingerprint, a debug certificate (with no fingerprint, and with its own), an archive
+      # that is not a bundle, the same path as its input and its output — each required to exit
+      # non-zero and leave nothing. **Not a secret and not an artifact.**
+      - name: Prove the release signing on throwaway keys
+        run: bash scripts/android-release/proof.sh aab-out/mtg-grimoire-light-arm64.aab
 
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:

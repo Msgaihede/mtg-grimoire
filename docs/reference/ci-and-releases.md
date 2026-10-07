@@ -58,7 +58,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `crates/grimoire-core/**` above it → `frontend`, `rust` and `core`** (2026-10-02);
   prose and editor bookkeeping → neither (`.release-please-manifest.json` sat there until
   2026-10-04, when `scripts/release-rule.test.mjs` began reading it: `frontend` now);
-  `scripts/android-sign.sh` → `frontend`, `rust` and `android`, which runs it (below);
+  `scripts/android-sign.sh` → `frontend`, `rust` and `android`, which runs it (below; since
+  2026-10-07 it is `scripts/android-release/*`, and the script is gone);
   and **anything unrecognised → every**
   build job, `storybook`, `core` and — since 2026-10-04 — `web` included.
   That last arm is the fail-safe that makes the lists safe to be wrong in the cheap
@@ -235,8 +236,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **Workflow-level `permissions: {}`** in `release.yml` and `scanner-bundle.yml`, with each job
     naming its own (`ci.yml` stays `contents: read`, which grants nothing to write).
     `release-please` keeps `contents`/`issues`/`pull-requests: write`; `build` and `publish` get
-    `contents: write` alone — and since 2026-10-04 so does `android-sign`, which uploads the APK,
-    while `android`, `web` and `web-deploy` get `contents: read`: a deploy to Cloudflare needs
+    `contents: write` alone — and from 2026-10-04 to 2026-10-07 so did `android-sign`, which
+    uploaded the APK; since 2026-10-07 it uploads nothing to the release and gets
+    `contents: read`, with `android`, `web` and `web-deploy`: a deploy to Cloudflare needs
     nothing of GitHub's.
   - **`scripts/actions-pinned.test.mjs` is the fence**: it globs every workflow and composite
     action and fails on a `uses:` that is neither local nor a SHA with a version comment, a
@@ -370,8 +372,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   rule*, below) — and both files deleted. What is uploaded is still the debug-signed build, and
   the job still holds no secret. **It runs the script's two refusals as well**, and fails
   unless each exits non-zero and leaves no APK: the same key against a fingerprint file naming
-  another, and a keystore minted as `CN=Android Debug`. **`scripts/android-sign.sh` routes here** (`frontend`, `rust`,
-  `android`, above `scripts/*`), because this step is the only run of it a pull request gets.
+  another, and a keystore minted as `CN=Android Debug`. *(Until 2026-10-07: the bundle and
+  `scripts/android-release/proof.sh` replaced the APK and this script — see the first bullet
+  under the table in *The release rule*.)* **`scripts/android-sign.sh` routed here** until 2026-10-07 (`frontend`, `rust`,
+  `android`, above `scripts/*`), because this step was the only run of it a pull request got;
+  `scripts/android-release/*` has that place now.
   Its routing is the
   host's tree (`mobile/src-tauri/*`), the workspace's root files, the toolchain pin and — since
   2026-10-04 — `vite.mobile.config.ts` (above) — **not
@@ -525,12 +530,41 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   | Job | Needs | Holds a secret | What it does |
   | --- | --- | --- | --- |
   | `build` | `release-please` | no | The desktop matrix, unchanged |
-  | `android` | `release-please` | no | `ci.yml`'s `android` job, step for step: the arm64 APK at the tag, **debug-signed**, handed on as the artifact `android-apk-debug-signed` (14 days) |
-  | `android-sign` | `release-please`, `android` | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD` | Re-signs that APK with the release key (`scripts/android-sign.sh`), held to the committed fingerprint, and attaches `mtg-grimoire-<version>-android-arm64.apk` to the draft |
+  | `android` | `release-please` | no | `ci.yml`'s `android` job, step for step: the arm64 APK and bundle at the tag, **debug-signed**, held to the tag's version (`scripts/android-release/check-version.sh`); the bundle handed on as the artifact `android-aab-debug-signed` (14 days) |
+  | `android-sign` | `release-please`, `android` | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD` | Re-signs that bundle with the owner's upload key (`scripts/android-release/sign-bundle.sh`), held to the committed fingerprint, and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle` (30 days). Attaches nothing to the draft; `contents: read` |
   | `web` | `release-please` | no | `ci.yml`'s `web` job less its lint and size report: clang, the wasm target, the lockfile's `wasm-bindgen` CLI, `web:wasm`, `web:build`, `web:smoke`; `dist-web/` handed on as the artifact `web-bundle` (14 days) |
   | `web-deploy` | `release-please`, `build`, `android-sign`, `web` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` then `npx --no-install wrangler deploy` from `app-worker/`; then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
   | `publish` | `release-please`, `build`, `android-sign`, `web-deploy` | no | Flips the draft to published |
 
+  - **Since 2026-10-07 the Android host goes to Google Play, and only there** (the owner's
+    decision; `docs/superpowers/specs/2026-10-07-google-play-release-design.md`). What follows
+    in this section was written for an APK attached to the release and signed with
+    `apksigner`; four things changed and the rest stands. **A bundle, not an APK**: Play takes
+    an Android App Bundle, so the build runs `tauri android build --apk --aab` and the bundle
+    is what is signed. **`jarsigner`, not `apksigner`**: a bundle is signed as a JAR, and
+    `jarsigner` *adds* a signer beside the build's debug one — so
+    `scripts/android-release/StripSignature.java` takes the old signature off a copy first, and
+    `sign-bundle.sh` refuses a result that does not verify, that names more or fewer than one
+    signer, whose signer is not the keystore's, or whose entries are not the input's. It also
+    refuses an archive with no `BundleConfig.pb` (an APK handed over by mistake), a debug
+    certificate, and a keystore the pin does not name. **An upload key, not the signing key**:
+    Google holds the key Play signs installs with and can reset an upload key, so the pin is a
+    guard against the wrong keystore in the settings and no longer the last line before every
+    phone uninstalls. **And the release rule's sentence changed with it**: the tag still
+    *produces* all three hosts and `publish` still waits for `android-sign`, but the Android
+    one reaches phones when the owner has uploaded the bundle and Play has reviewed it — hours
+    to days behind the desktop and the web app, during which a phone holds a newer op exactly
+    as any older build does. The version is held in the build leg now
+    (`check-version.sh` reads the generated `tauri.properties`), because a bundle's manifest is
+    a protocol buffer only `bundletool` reads. **Measured while this was written** (JDK 25,
+    Git Bash, a fake bundle): the proof's one signing and five refusals; and that, with the
+    strip skipped, the proof fails — `jarsigner -verify` exits 1 on the doubly signed bundle
+    and `sign-bundle.sh` refuses it there. **A re-run of `android-sign` more than 14 days after
+    its release** finds no `android-aab-debug-signed` artifact and fails at the download;
+    within 14 days a re-run signs, provided the fingerprint was in that release's commit.
+    **Not until a pull request**: the same on JDK 21 against a real bundle. **Not until
+    a release**: the environment handing its values over, and Play Console accepting the
+    result.
   - **A secret sits in a job that builds nothing.** This is the rule the removed `sign` job
     left behind (below), kept: a build leg runs every npm lifecycle script, every cargo build
     script and every Gradle plugin, and any of them can read a file or an environment. So
@@ -558,8 +592,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `false` (`${{ secrets.X != '' }}`), never the value. Nothing sits in a job-level `env:`.
     The key reaches one step and the token one step. **The alias is a plain word in the
     workflow** (`mtg-grimoire`): it is no secret, and as one GitHub would mask every
-    `mtg-grimoire` in that job's log, the APK's own name among them.
-  - **`scripts/android-sign.sh` refuses to hand back an APK it cannot vouch for.** It signs with
+    `mtg-grimoire` in that job's log, the bundle's own name among them.
+  - *(Until 2026-10-07, for the APK.)* **`scripts/android-sign.sh` refuses to hand back an APK it cannot vouch for.** It signs with
     the SDK's `apksigner` (the newest `build-tools` on the runner), then asks `apksigner` who
     signed the output and compares that certificate's SHA-256 with the keystore's own, taken
     another way (`keytool -exportcert` through `sha256sum`): one signer, and that one. **It
@@ -574,7 +608,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     rather than computed with. On any refusal it deletes the output. The passwords reach
     `apksigner` and `keytool` as `env:NAME`, never on a command line, and the keystore is
     written under `umask 077` and removed when the step ends.
-  - **And it holds the key to the one every release has had.** "Signed by the keystore in the
+  - *(Until 2026-10-07, for the APK.)* **And it holds the key to the one every release has had.** "Signed by the keystore in the
     settings" is not "signed by the key the last release was": a keystore made a second time, or
     the wrong one pasted in, signs happily, and its APK installs over nothing — every phone
     uninstalls. The certificate's SHA-256 is public (it is in every APK), so it is committed:
@@ -598,7 +632,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     hosts and not the third — a red run, not a skip.
   - **`publish` waits for all three, and `web-deploy` goes last.** A failure anywhere leaves
     the release a draft. The deploy is live the moment `wrangler` returns and the release is a
-    draft until `publish`, so the deploy waits for the desktop builds and the APK: nothing but
+    draft until `publish`, so the deploy waits for the desktop builds and the bundle: nothing but
     its own probe and the flip of the draft can fail after it.
     ⚠️ **That window is not empty.** If the probe fails, or `publish` does, the web app is
     deployed and the release is a draft — the state the rule exists to prevent, for as long as
@@ -676,8 +710,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     and so is an honest spelling in a build leg — and that each job reads all of its list and
     no more; that no job names a secret or an `env:` above its steps; that `environment:
     release` is on those two jobs and no other; that **everything a secret-holding job can run
-    is on a list, to the letter** — `android-sign`: the signing script and `gh release
-    upload`; `web-deploy`: the `gh api` read, `npm ci --ignore-scripts`, `npx --no-install
+    is on a list, to the letter** — `android-sign`: the signing script and nothing else (it
+    uploads its artifact with an action, not a command); `web-deploy`: the `gh api` read, `npm ci --ignore-scripts`, `npx --no-install
     wrangler deploy`, the probe — so a second `npx`, a `node -e` or an `npm run` is a line not
     on it; that the asking step is handed flags and never values, and every step after it is
     gated on its answer; that the signing step is held to the fingerprint and `present=true` is
@@ -755,7 +789,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     **Not until a release**: the `release` environment handing its values to a job on `main`;
     the artifact hand-off between jobs; `gh release upload` of the APK; `npm ci
     --ignore-scripts` and `wrangler deploy` on Linux and under an API token; the probe against
-    the real address; and a signed APK installing over the last one on a phone.
+    the real address; and a signed APK installing over the last one on a phone. **As of 2026-10-07, not until a
+    release**: the environment handing its values to a job on `main`; the artifact hand-off
+    between jobs; `jarsigner` on the runner's JDK 21 against a real bundle under the release
+    key; and Play Console accepting the result.
 - **What only the owner can do.** No agent makes a key, sets a secret, creates a token or
   changes a setting of the repository. Until these are done every release ends green with a
   summary saying what it did not ship. PowerShell, **in a folder outside the repository** that
@@ -763,6 +800,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   None of these commands has been run by anybody; the two `gh api` calls are GitHub's
   documented REST shapes (*Create or update an environment*, *Create a deployment branch
   policy*).
+
+  **Step 0 comes before any value is set: on 2026-10-07 the `release` environment existed with no branch rule and no values (asked of the host), so anything put in it before step 0 is readable by a workflow on any branch.**
 
   ```powershell
   # 0. Once, BEFORE any value exists: the `release` environment, usable from `main` alone.
@@ -773,13 +812,17 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   #    Check it: this prints `main` and nothing else.
   gh api repos/Msgaihede/mtg-grimoire/environments/release/deployment-branch-policies --jq ".branch_policies[].name"
 
-  # 1. The release key. keytool asks for a password twice and for a name; a PKCS12 keystore
-  #    (the default) has one password for the store and the key. The alias must be this one:
-  #    the workflow names it.
+  # 1. The UPLOAD key — the key Play Console knows this account's uploads by. Google makes and
+  #    keeps the key Play signs installs with (Play App Signing); this one only proves a bundle
+  #    came from here. keytool asks for a password twice and for a name; a PKCS12 keystore (the
+  #    default) has one password for the store and the key. The alias must be this one: the
+  #    workflow names it.
   keytool -genkeypair -v -keystore mtg-grimoire-release.keystore -storetype PKCS12 -keyalg RSA -keysize 2048 -validity 10000 -alias mtg-grimoire
 
-  # 2. Its certificate's fingerprint, into the repository. No release attaches an APK until
-  #    this file is on `main`, and every release after is held to it.
+  # 2. Its certificate's fingerprint, into the repository. No release signs a bundle until this
+  #    file is on `main`, and every release after is held to it. It is the SHA-256 Play Console
+  #    shows under Test and release → App integrity → Upload key certificate, without the colons
+  #    and in lower case — compare them after the first upload.
   keytool -exportcert -keystore mtg-grimoire-release.keystore -alias mtg-grimoire -file mtg-grimoire-release.der
   $sha = (Get-FileHash mtg-grimoire-release.der -Algorithm SHA256).Hash.ToLower()
   [IO.File]::WriteAllText("D:\Code\mtg-grimoire\mobile\src-tauri\release-signer.sha256", "$sha`n")
@@ -806,16 +849,28 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     hold each of the two jobs for a click on every release, which for one maintainer buys a
     pause and not a second pair of eyes.
   - ⚠️ **Back the keystore and its password up, somewhere that is not this repository and not
-    only this machine.** GitHub never gives a secret back. A lost key cannot be replaced: an
-    APK signed with a new one does not install over the old, so **every phone must uninstall**
-    — which wipes `user.db` and the device's paired identity, and spends a slot in the group
-    when it pairs again. The root `.gitignore` ignores `*.jks`, `*.keystore`, `*.p12` and
-    `keystore.properties` for the day one is made in here anyway. **The fingerprint file is
-    the opposite: public, and meant to be committed.** It is what stops a second keystore —
-    made after a lost one, or by mistake — from shipping silently: the release run refuses it
-    by name, and replacing the file is then a decision somebody made in a pull request.
-  - **The first release-signed APK does not install over a debug-signed one.** The owner's
-    phone, and anything else running a CI artifact, needs one uninstall — the last.
+    only this machine.** GitHub never gives a secret back. **A lost upload key is an
+    inconvenience, not a catastrophe**: Play Console → *Test and release* → *App integrity* →
+    *App signing* → *Request upload key reset*, with a new key's certificate; Google takes
+    about two days, and no phone notices, because Play signs what phones install. Then the new
+    fingerprint goes into `release-signer.sha256` by pull request and the three values are set
+    again. The root `.gitignore` ignores `*.jks`, `*.keystore`, `*.p12`, `keystore.properties`
+    and `*.aab` for the day one is made in here anyway. **The fingerprint file is the opposite:
+    public, and meant to be committed.**
+  - **A Play install does not go over a CI artifact's debug-signed APK.** The owner's phone,
+    and anything else running one, needs one uninstall — which wipes `user.db` and its paired
+    identity — before the first install from Play. It is the last.
+  - **The artifact downloads from the run page as `play-upload-bundle.zip`**; Play wants the
+    `.aab` inside it.
+  - **What is typed at `keytool`'s name prompts is public.** The signing script prints the
+    certificate's `Owner:` line to a public run log, and it is in every bundle the key signs.
+  - **The Console side** — creating the app, Play App Signing with a Google-generated key, the
+    first upload registering the upload key — is in
+    `docs/superpowers/specs/2026-10-07-google-play-release-design.md` §7.
+  - **After every release, the bundle is uploaded by hand**: the run's summary names the
+    artifact (`play-upload-bundle`) and its versionCode. Play Console → *Test and release* →
+    the track → *Create new release* → upload → roll out. Until then phones stay a version
+    behind. (Uploading from this workflow is a later change, with its own design.)
   - **The Cloudflare API token.** Dashboard → *Manage Account* → *Account API Tokens* →
     *Create Token* → a custom token, limited to this one account. `wrangler deploy` here
     uploads one existing Worker's script and static assets and re-states its Custom Domain, so
@@ -834,7 +889,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **`CLOUDFLARE_ACCOUNT_ID`** is the 32-hex id on the dashboard's Workers overview, and what
     `npx --no-install wrangler whoami` prints from `app-worker/`.
   - **A release cut before a value existed is not repaired by adding it.** Its web app is
-    deployed by hand from the tag (the runbook). Its APK is the next release's: a re-run of
+    deployed by hand from the tag (the runbook). Its bundle is the next release's: a re-run of
     `android-sign` runs the commit it ran before, which holds no fingerprint.
 - **Versions are never typed by hand.** release-please reads the `feat:`/`fix:`/`!` prefixes
   and keeps a `chore(main): release X.Y.Z` PR open that bumps every version file and writes
@@ -926,9 +981,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `mtg-grimoire.exe` — `productName` does **not** rename the binary in Tauri v2, it
   only names the bundles, so the exe is the lowercase **Cargo package name** — which runs
   from any folder and keeps `data/` beside itself, the behaviour no Program Files install
-  can reach), plus `.deb` and `.AppImage` — and, once the signing secrets exist,
-  **`mtg-grimoire-<version>-android-arm64.apk`**, the light app (*The release rule*, above; no
-  release has carried one yet). The bundler
+  can reach), plus `.deb` and `.AppImage`. **Nothing Android is a release asset**: the light app's signed bundle is the workflow artifact `play-upload-bundle`, on its way to Google Play (*The release rule*, above). The bundler
   names files from `productName` **with its spaces**, but GitHub rewrites spaces to dots on
   upload — measured on v0.2.0, which published as
   `MTG.Collection.Tracker_0.2.0_x64-setup.exe`. Under `MTG Grimoire` that same rule gives

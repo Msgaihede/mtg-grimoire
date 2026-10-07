@@ -291,12 +291,13 @@ export const ARMS = [
     ],
     jobs: ["frontend", "web"],
   },
-  // The script that signs a release's APK (step 6.6). `release.yml`'s `android-sign` job runs it
-  // with the release key, and **`android` runs it here first, on a throwaway key** — the only
-  // run of it a pull request gets, so a change to it that is not routed there is first run by a
-  // release. `rust` because every arm that sets `android` sets `rust`; `frontend` as for the
-  // rest of `scripts/`. **Above `scripts/*`**, for the web scripts' reason.
-  { match: ["scripts/android-sign.sh"], jobs: ["frontend", "rust", "android"] },
+  // The Android release's scripts (`sign-bundle.sh`, `StripSignature.java`, `proof.sh`,
+  // `check-version.sh`). `release.yml`'s `android-sign` job signs a release's bundle with the
+  // upload key, and **`android` runs the same script here first, on throwaway keys** — the only
+  // run it gets before a release. `rust` because every arm that sets `android` sets `rust`;
+  // `frontend` because `mobile/host.test.ts` and `scripts/release-rule.test.mjs` read two of
+  // them as text. Above `scripts/*`, which would lint them and run nothing.
+  { match: ["scripts/android-release/*"], jobs: ["frontend", "rust", "android"] },
   // `scripts/` because `eslint .` lints it — its ignore list does not name it — and because
   // `vitest` collects `scripts/**/*.test.mjs`. The deploy guard and the post-deploy probe
   // (`web-deploy-guard.mjs`, `web-deploy-probe.mjs`) are here: no job in this gate runs either —
