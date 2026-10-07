@@ -74,12 +74,14 @@ ds-bundle/
 # Gradle read. The release key lives in GitHub's secrets and in the owner's own backup, and is
 # made **outside this folder** (docs/reference/ci-and-releases.md, "What only the owner can do");
 # these lines are for the day it is made here anyway. This repo is public, and a lost key is
-# every phone uninstalling — a leaked one is worse.
+# every phone uninstalling — a leaked one is worse. And a signed bundle, should the owner
+# download one into this folder on its way to Play Console.
 *.jks
 *.keystore
 *.p12
 *.pfx
 *.keystore.b64
+*.aab
 keystore.properties
 key.properties
 

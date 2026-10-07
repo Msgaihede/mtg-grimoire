@@ -35,6 +35,7 @@ import syncSmoke from "./web-sync-smoke.mjs?raw";
 import smokeHarness from "./web-smoke/harness.mjs?raw";
 import syncHarness from "./web-smoke/sync-harness.mjs?raw";
 import syncPull from "./web-sync-pull.mjs?raw";
+import signProof from "./android-release/proof.sh?raw";
 
 const WORKFLOWS = import.meta.glob("/.github/workflows/*.yml", {
   query: "?raw",
@@ -246,7 +247,7 @@ const secretRefs = (text) =>
  * word is in every path under `mobile/src-tauri/`.)
  */
 const RUNS_SOMETHING =
-  /\b(?:npx|npm|pnpm|yarn|bun|deno|node|cargo|rustc|gradle\w*|python\d*|pip\d*|curl|wget|bash|sh|pwsh|docker|gh|make)\b/;
+  /\b(?:npx|npm|pnpm|yarn|bun|deno|node|cargo|rustc|gradle\w*|python\d*|pip\d*|curl|wget|bash|sh|pwsh|docker|gh|make|java|jarsigner|keytool)\b/;
 const commandsOf = (job) =>
   job
     .split("\n")
@@ -265,13 +266,13 @@ const MAY_READ = {
   "release-please": ["GITHUB_TOKEN"],
   build: ["GITHUB_TOKEN"],
   android: [],
-  "android-sign": [...ANDROID_SECRETS, "GITHUB_TOKEN"],
+  "android-sign": [...ANDROID_SECRETS],
   web: [],
   "web-deploy": [...CLOUDFLARE_SECRETS, "GITHUB_TOKEN"],
   publish: ["GITHUB_TOKEN"],
 };
 const ON_A_RELEASE = "    if: needs.release-please.outputs.release_created == 'true'";
-/** The committed fingerprint of the certificate every release's APK is signed with. */
+/** The committed fingerprint of the upload certificate every release's bundle is signed with. */
 const SIGNER_PIN = "mobile/src-tauri/release-signer.sha256";
 
 describe("release.yml", () => {
@@ -373,11 +374,8 @@ describe("release.yml", () => {
   it.each([
     [
       "android-sign",
-      ["actions/checkout", "actions/download-artifact"],
-      [
-        'bash scripts/android-sign.sh apk-in/mtg-grimoire-light-arm64.apk "$apk"',
-        'gh release upload "${{ needs.release-please.outputs.tag_name }}" \\',
-      ],
+      ["actions/checkout", "actions/download-artifact", "actions/upload-artifact"],
+      ['bash scripts/android-release/sign-bundle.sh aab-in/mtg-grimoire-light-arm64.aab "$aab"'],
     ],
     [
       "web-deploy",
@@ -428,7 +426,7 @@ describe("release.yml", () => {
   });
 
   // "Signed by the keystore in the settings" is not "signed by the key the last release was".
-  it("attaches no APK without the committed fingerprint, and holds the key to it", () => {
+  it("signs no bundle without the committed fingerprint, and holds the key to it", () => {
     const [, ask, , sign] = stepsOf(jobs["android-sign"]);
     expect(ask).toContain(`PIN: ${SIGNER_PIN}`);
     // `present=true` is said in one place, and only with every value set and the file there.
@@ -444,27 +442,51 @@ describe("release.yml", () => {
     expect(sign.indexOf("umask 077")).toBeLessThan(sign.indexOf("base64 --decode"));
   });
 
-  it("attaches the APK the signing script wrote, under the release's name", () => {
+  it("hands the signed bundle to the owner as an artifact, and puts nothing on the release", () => {
     const sign = jobs["android-sign"];
-    expect(sign).toContain('apk="mtg-grimoire-$VERSION-android-arm64.apk"');
+    expect(sign).toContain('aab="mtg-grimoire-$VERSION-android.aab"');
     expect(sign).toMatch(
-      /bash scripts\/android-sign\.sh apk-in\/mtg-grimoire-light-arm64\.apk "\$apk"/,
+      /bash scripts\/android-release\/sign-bundle\.sh aab-in\/mtg-grimoire-light-arm64\.aab "\$aab"/,
     );
-    expect(sign).toMatch(/gh release upload [^\n]*\\\n\s+"\$SIGNED_APK" --clobber/);
     // The keystore is decoded outside the checkout and removed however the step ends.
     expect(sign).toContain('export ANDROID_KEYSTORE="$RUNNER_TEMP/release.keystore"');
     expect(sign).toContain(`trap 'rm -f "$ANDROID_KEYSTORE"' EXIT`);
-    // What it signs is what `android` built, and nothing else is ever uploaded to the release.
-    expect(jobs.android).toContain("name: android-apk-debug-signed");
-    expect(sign).toContain("name: android-apk-debug-signed");
+    // What it signs is what `android` built…
+    expect(jobs.android).toContain("name: android-aab-debug-signed");
+    expect(sign).toContain("name: android-aab-debug-signed");
+    // …under one file name on both sides: `android-sign` runs only at a release, so a rename
+    // in `android` alone would be found there and nowhere sooner.
+    expect(jobs.android).toContain('cp "$aab" aab-out/mtg-grimoire-light-arm64.aab');
+    expect(jobs.android).toContain("path: aab-out/mtg-grimoire-light-arm64.aab");
+    expect(sign).toContain("path: aab-in");
+    // …and what it signed leaves as an artifact, which the owner uploads to Play Console.
+    const upload = stepsOf(sign).at(-1);
+    expect(upload).toMatch(/^uses: actions\/upload-artifact@/);
+    expect(upload).toContain("name: play-upload-bundle");
+    expect(upload).toContain("path: ${{ env.SIGNED_AAB }}");
+    expect(upload).toContain("if-no-files-found: error");
+    // Retention is stated in the documents: thirty days for the bundle the owner uploads,
+    // fourteen for the debug-signed build a sign job re-runs from.
+    expect(upload).toContain("retention-days: 30");
+    expect(
+      stepsOf(jobs.android).find((s) => s.includes("name: android-aab-debug-signed")),
+    ).toContain("retention-days: 14");
+    // **Play is the only place an Android build is published.** Neither job touches the
+    // release, and the job that holds the key can write nothing to the repository.
     expect(jobs.android).not.toMatch(/gh release/);
+    expect(sign).not.toMatch(/gh release|GITHUB_TOKEN|GH_TOKEN/);
+    expect(sign).toMatch(/^ {4}permissions:\n {6}contents: read\n {4}steps:$/m);
+    expect(sign).not.toMatch(/contents: write/);
+    // The build also makes a debug-signed APK, as every pull request's does. No job names one.
+    expect(code(releaseYml)).not.toMatch(/\.apk\b/);
   });
 
-  it("builds the APK and the web app as `ci.yml` does", () => {
+  it("builds the Android app and the web app as `ci.yml` does", () => {
     // The two build legs are copies of jobs that run green on every pull request; a command
     // that differs is one no pull request has run.
     for (const command of [
-      "npx tauri android build --apk --target aarch64 --ci",
+      "npx tauri android build --apk --aab --target aarch64 --ci",
+      'bash scripts/android-release/check-version.sh "$VERSION"',
       "key: android-aarch64",
     ]) {
       expect(jobs.android, command).toContain(command);
@@ -481,8 +503,12 @@ describe("release.yml", () => {
       expect(jobs.web, command).toContain(command);
       expect(ciYml, command).toContain(command);
     }
-    // And the signing a release runs is the signing a pull request proved.
-    expect(ciYml).toMatch(/^\s+bash scripts\/android-sign\.sh /m);
+    // And the signing a release runs is the signing a pull request proved: `ci.yml` runs the
+    // proof over its own bundle, and the proof runs the script `android-sign` runs.
+    expect(ciYml).toMatch(
+      /^\s+run: bash scripts\/android-release\/proof\.sh aab-out\/mtg-grimoire-light-arm64\.aab$/m,
+    );
+    expect(signProof).toContain('bash "$HERE/sign-bundle.sh"');
   });
 
   it("deploys the bundle `web` built and opened in a browser, then asks the host", () => {
@@ -695,10 +721,10 @@ describe("deploys, across every workflow", () => {
         line: "      - name: Pair two browsers through the local relay",
       },
     ]);
-    const cloudflare = lines.filter(({ line }) => /CLOUDFLARE_|ANDROID_KEY/.test(line));
-    // `ci.yml` names the Android variables for the throwaway key it mints itself — never a secret.
-    expect([...new Set(cloudflare.map(({ path }) => path))].sort()).toEqual([
-      "/.github/workflows/ci.yml",
+    const held = lines.filter(({ line }) => /CLOUDFLARE_|ANDROID_KEY/.test(line));
+    // The throwaway key `ci.yml` proves the signing on is minted inside
+    // `scripts/android-release/proof.sh`, so no workflow but the release names either.
+    expect([...new Set(held.map(({ path }) => path))].sort()).toEqual([
       "/.github/workflows/release.yml",
     ]);
     expect(secretsOf(code(ciYml))).toEqual([]);
