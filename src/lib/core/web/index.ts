@@ -14,6 +14,7 @@ import { UPDATE_READY, watchUpdates, type UpdateWatch, type WorkerContainer } fr
 import { claimDatabase, retryDelay, type Claim, type LockManagerLike } from "./holder";
 import {
   callMessage,
+  LABELS_COMMAND,
   type FromWorker,
   type Opening,
   type Outgoing,
@@ -296,7 +297,7 @@ export function createWebCore(
     try {
       worker?.postMessage(message, transfer);
     } catch (error) {
-      if (message.kind !== "call") throw error;
+      if (message.kind === "open") throw error;
       pending.get(message.id)?.reject(error instanceof Error ? error.message : String(error));
       pending.delete(message.id);
     }
@@ -515,6 +516,10 @@ export function createWebCore(
         pending.get(message.id)?.reject(message.message);
         pending.delete(message.id);
         return;
+      case "labels":
+        pending.get(message.id)?.resolve(message.bytes);
+        pending.delete(message.id);
+        return;
       case "event":
         return emit(message.event, message.payload);
     }
@@ -620,7 +625,12 @@ export function createWebCore(
       if (status.state === "failed") return Promise.reject(status.message);
 
       const id = nextId++;
-      const outgoing = callMessage(id, command, args, options);
+      // The labels are the engine's fourth export and no command of its table (`protocol.ts`):
+      // held, sent and settled like a call, and answered with bytes.
+      const outgoing: Outgoing =
+        command === LABELS_COMMAND
+          ? { message: { kind: "labels", id }, transfer: [] }
+          : callMessage(id, command, args, options);
       return new Promise<T>((resolve, reject) => {
         pending.set(id, { resolve: resolve as (value: unknown) => void, reject });
         if (status.state === "ready") send(outgoing);

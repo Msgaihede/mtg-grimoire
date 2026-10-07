@@ -55,12 +55,20 @@ const HOST_UNLOADED = "MTG Grimoire could not finish loading. Check your connect
  * `export_save_file` and `import_pick_file`, which on the other two hosts are a native dialog the
  * host opens. The engine's table has neither — a Worker has no document to pick a file with —
  * so the web host's `Core` is the Worker's with those two names answered in front of it.
+ *
+ * **And the card scanner rides with it** (`./web/scanner`, the light app's step 7.5): the
+ * engine's table has the scanner's commands on every host, and in a browser the session cannot
+ * live in the engine's Worker — so the session's commands and the two for its files are
+ * answered on the page too, in front of the Worker and behind the two file names, by a Worker
+ * and a module of the scanner's own. `./web` is named in the list although only `./web/scanner`
+ * is read from it: the scanner's file imports the engine's `Core`, and naming it here is what
+ * keeps that `Core` a chunk of its own, which the smoke runs find by name.
  */
 export const core: Core =
   import.meta.env.MODE === "web"
     ? deferredCore(() =>
-        Promise.all([import("./web"), import("./web/files")]).then(
-          ([host, files]) => files.answeringFiles(host.webCore),
+        Promise.all([import("./web"), import("./web/files"), import("./web/scanner")]).then(
+          ([, files, scanner]) => files.answeringFiles(scanner.scanningCore),
           () => refusedCore(HOST_UNLOADED),
         ),
       )

@@ -33,6 +33,37 @@ export function megabytes(bytes: number): string {
   return `${Math.max(1, Math.ceil(bytes / 1_000_000))} MB`;
 }
 
+/** Whether the status says the file a row names is loaded and in use. */
+function inUse(status: ScannerStatus | null, key: string): boolean {
+  if (status === null) return false;
+  if (key === "bundle") return status.bundle.loaded;
+  if (key === "detectionModel") return status.detection_model.loaded;
+  if (key === "recognitionModel") return status.recognition_model.loaded;
+  return false;
+}
+
+/**
+ * The offer's one sentence: **a need, or an update that can wait.**
+ *
+ * A host can owe a file the scanner is already running on — a newer bundle of card hashes
+ * than the one it holds, which a host that fetches from a release sees after every release
+ * that rebuilt it. Said as a need (*"The scanner needs its card data"*) that is false: the
+ * scanner is scanning, and the reader is being told to download six megabytes to go on doing
+ * it. So when everything owed is something the status says is loaded, the sentence is about
+ * newer data and nothing in it says *needs*. Read from the two answers a host already gives —
+ * what is owed, and what loaded — on every host alike.
+ */
+export function offerSentence(
+  status: ScannerStatus | null,
+  owed: readonly { key: string }[],
+  bytes: number,
+): string {
+  const update = owed.length > 0 && owed.every((file) => inUse(status, file.key));
+  return update
+    ? `Newer card data is available — about ${megabytes(bytes)}.`
+    : `The scanner needs its card data — about ${megabytes(bytes)}.`;
+}
+
 /** The sentence beside the bar while a fetch runs. */
 function progressLine(progress: ScannerAssetsProgress | null, loading: boolean): string {
   if (loading || progress?.phase === "done") return "Loading the scanner's files…";
@@ -100,7 +131,7 @@ export function ScannerAssets({ status, onLoaded, className, marks }: ScannerAss
             ) : (
               <div className="min-w-0 flex-1 basis-56 space-y-1">
                 <p className="text-sm text-text">
-                  The scanner needs its card data — about {megabytes(assets.bytes)}.
+                  {offerSentence(status, assets.owed, assets.bytes)}
                 </p>
                 <ul className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-dim">
                   {assets.owed.map((file) => (

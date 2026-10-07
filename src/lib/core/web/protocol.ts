@@ -48,7 +48,14 @@ export type ToWorker =
       command: string;
       args?: Record<string, unknown>;
       body?: Uint8Array;
-    };
+    }
+  /**
+   * **Every printing's label, as bytes, for the scanner's own Worker** — the engine's fourth
+   * export, `scanner_labels`, and not a command of its table: it answers bytes where a command
+   * answers JSON, and nothing above `@/lib/core` may ask for it. The page's scanner asks once
+   * per session it builds ({@link LABELS_COMMAND}).
+   */
+  | { kind: "labels"; id: number };
 
 /** Worker → page. */
 export type FromWorker =
@@ -62,8 +69,21 @@ export type FromWorker =
   /** An answer, **matched by `id` and never by arrival**: a slow search is overtaken by a fast one. */
   | { kind: "ok"; id: number; result: unknown }
   | { kind: "err"; id: number; message: string }
+  /**
+   * The answer to `labels`: `card_scanner::labels` bytes, **transferred** — six megabytes for a
+   * full corpus, handed over rather than copied, and handed on to the scanner's Worker the same
+   * way. No bytes is an answer: the corpus is empty, or the read failed and the console said why.
+   */
+  | { kind: "labels"; id: number; bytes: Uint8Array }
   /** An engine event, its payload already parsed. */
   | { kind: "event"; event: string; payload: unknown };
+
+/**
+ * The name the page's scanner asks the web host's `Core` for the labels by. **Not a command**:
+ * the host turns it into a `labels` message and the engine's table never sees it — so it is
+ * spelled with a colon, which no command's name has.
+ */
+export const LABELS_COMMAND = "host:scanner_labels";
 
 /** A message and what it hands over rather than copies. */
 export interface Outgoing {
@@ -100,6 +120,21 @@ export function callMessage(
       args === undefined ? { kind: "call", id, command } : { kind: "call", id, command, args },
     transfer: [],
   };
+}
+
+/**
+ * What rides beside a Worker's answer rather than being copied into it: the labels' buffer, and
+ * nothing for any other message. **Only a view that is the whole of its buffer**, for
+ * {@link callMessage}'s reason — wasm-bindgen copies a returned `Vec<u8>` out of the module's
+ * memory into an array of its own, which is one, and a view over the module's memory itself
+ * must never be handed over.
+ */
+export function transferOf(message: FromWorker): ArrayBuffer[] {
+  if (message.kind !== "labels") return [];
+  const { buffer, byteLength } = message.bytes;
+  return buffer instanceof ArrayBuffer && byteLength === buffer.byteLength && byteLength > 0
+    ? [buffer]
+    : [];
 }
 
 /** A call's arguments as the JSON text the engine reads: `"null"` when the page sent none. */

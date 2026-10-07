@@ -35,7 +35,7 @@ Also supports a light app (Android via Tauri, distributed through Google Play, a
 - `npm run verify` — Build + lint + `cargo fmt --check` + Clippy + Vitest + cargo test. **Run at the end of a feature before committing (not after every change).**
 - `npm run tauri dev` — Run the desktop app (Vite HMR + Rust rebuild). Takes the `app` lock (see `running-the-app` skill).
 - `npm run test` / `test:run` — Run frontend tests via Vitest.
-- `cargo test --workspace` — Run Rust tests across all crates (`src-tauri`, `crates/grimoire-core`, `mobile/src-tauri`, `crates/grimoire-web`).
+- `cargo test --workspace` — Run Rust tests across all crates (`src-tauri`, `crates/grimoire-core`, `mobile/src-tauri`, `crates/grimoire-web`, `crates/grimoire-scan`).
 - `npm run storybook` / `build-storybook` — Component development workbench (`.storybook/`).
 - `npm run mobile:dev` / `mobile:tauri` — Run the light app in a browser fake or in a phone-sized Tauri window.
 - `npm run web:wasm` / `web:build` / `web:preview` — Build and preview the WASM web target.
@@ -70,6 +70,7 @@ This file contains only global instructions. **The binding rules for any specifi
 | [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md)                         | Desktop Rust host, window management, updater, desktop migrations, and `#[tauri::command]` IPC handlers     |
 | [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md)   | Shared headless engine (schema, decks, collection, wishlist, search, Scryfall client, platform abstraction) |
 | [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md)     | Web host — engine compiled to WASM module for browser execution                                             |
+| [`crates/grimoire-scan/CLAUDE.md`](crates/grimoire-scan/CLAUDE.md)   | Web host's scanner — `card-scanner` as a WASM module of its own, for a Worker of its own                    |
 | [`mobile/CLAUDE.md`](mobile/CLAUDE.md)                               | Light app — Android and web UI faces and responsive boundary                                                |
 | [`src/CLAUDE.md`](src/CLAUDE.md)                                     | React frontend, design tokens, `CardImage` rules, Storybook MCP usage                                       |
 | [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md)       | Deck validation, categories, deck editor views, and drag-and-drop interactions                              |

@@ -83,9 +83,10 @@
 # --- Content-addressed: kept for a year, never asked about again ---------------------------------
 #
 # Vite names every file under `assets/` by a hash of its bytes, and the engine's two files sit in
-# a directory named by a hash of theirs (`src/lib/core/web/assets.ts`, `buildIdOf`). A changed
-# byte is a new address, so nothing at an old address is ever stale — with one exception, which
-# has a rule of its own below.
+# a directory named by a hash of theirs (`src/lib/core/web/assets.ts`, `buildIdOf`) — as do the
+# card scanner's two, under `/wasm/<a hash of the scanner's own>/scanner/`. A changed byte is a
+# new address, so nothing at an old address is ever stale — with one exception, the two Workers'
+# own scripts, which have rules of their own below.
 /assets/*
   ! Cache-Control
   Cache-Control: public, max-age=31536000, immutable
@@ -114,6 +115,32 @@
 # constructs the Worker and fails if the file is ever called something this rule does not match.
 # After `/assets/*`, because rules apply in the file's order and the last word wins.
 /assets/worker-*
+  ! Cache-Control
+  Cache-Control: no-cache
+
+# --- And the card scanner's Worker, for the same reason -------------------------------------------
+#
+# `assets/scanWorker-<hash>.js` (`src/lib/core/web/scanWorker.ts`) compiles the scanner's module
+# inside itself, so `'wasm-unsafe-eval'` has to arrive on THIS chunk, and it loads that module
+# from this origin, so `connect-src 'self'` does too. Its policy is this file's and not the
+# chunk's, exactly as the engine's Worker's is — so it is revalidated, exactly as that is.
+# `hosting.test.ts` reads the line that constructs it (`src/lib/core/web/scanner.ts`) and fails
+# if the file is ever called something this rule does not match.
+/assets/scanWorker-*
+  ! Cache-Control
+  Cache-Control: no-cache
+
+# --- The card scanner's three files -------------------------------------------------------------
+#
+# `scanner-assets/card-hashes.bin`, the two `.rten` models and `manifest.json`
+# (`scripts/scanner-assets.mjs --web` fetches them; the web build copies them in). STABLE NAMES
+# WHOSE BYTES CHANGE: the bundle of card hashes is rebuilt with every set and shipped again at
+# each release under the name it always had. So they are revalidated and never kept by the HTTP
+# cache — the default's value, restated so that loosening `/*` cannot take this with it. The page
+# asks for them `no-store` in any case and keeps what it has checked in Cache Storage, by the
+# manifest's digest (`src/lib/core/web/scanStore.ts`); nothing asks for them before a reader
+# presses Download, and the service worker neither precaches nor answers them.
+/scanner-assets/*
   ! Cache-Control
   Cache-Control: no-cache
 

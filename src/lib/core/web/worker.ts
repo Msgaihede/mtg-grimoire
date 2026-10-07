@@ -1,7 +1,7 @@
 import type * as GlueModule from "./grimoire_web";
 import { wasmUrls } from "./assets";
 import { createEngine, type Glue } from "./engine";
-import type { ToWorker } from "./protocol";
+import { transferOf, type ToWorker } from "./protocol";
 
 /**
  * **The database Worker — where the web app's engine is.**
@@ -58,7 +58,12 @@ async function held(directory: string): Promise<boolean | null> {
   }
 }
 
-const engine = createEngine(load, (message) => self.postMessage(message), held);
+// The labels' buffer is handed over and not copied (`transferOf`); every other answer is JSON.
+const engine = createEngine(
+  load,
+  (message) => self.postMessage(message, transferOf(message)),
+  held,
+);
 
 self.addEventListener("message", (event: MessageEvent<ToWorker>) => {
   void engine.handle(event.data);

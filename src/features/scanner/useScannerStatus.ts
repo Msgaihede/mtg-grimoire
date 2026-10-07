@@ -10,6 +10,21 @@ import { bundleSentence, modelsSentence } from "./verdictText";
 export const FILTERS_NEED_NAMES =
   "Filters need the card database. corpus.db wasn't found next to the scanner bundle.";
 
+/**
+ * The same, **on a host that keeps the scanner's files in a store of its own** (a status whose
+ * bundle is `source: "store"`): there is no `corpus.db` beside anything there and no folder a
+ * reader could look in, so the sentence names neither. True of two states it cannot tell
+ * apart and need not — the card data not yet downloaded, and a session built before the card
+ * database had cards — and of both the cure is the same: they arrive.
+ */
+export const FILTERS_NEED_NAMES_STORE =
+  "Filters need card names, which the scanner does not have yet.";
+
+/** Why a status with no labels cannot filter, in the words its host's kind of storage allows. */
+function filtersNeedNames(status: ScannerStatus): string {
+  return status.bundle.source === "store" ? FILTERS_NEED_NAMES_STORE : FILTERS_NEED_NAMES;
+}
+
 /** What a Scanner surface draws from `scanner_status`, each already a conclusion. */
 export interface ScannerStatusFacts {
   /** The answer itself, or `null` until it arrives. */
@@ -32,7 +47,7 @@ export function scannerStatusFacts(status: ScannerStatus | null): ScannerStatusF
   return {
     status,
     hasBundle: status === null || status.bundle.loaded,
-    filtersDisabled: status !== null && status.labels === 0 ? FILTERS_NEED_NAMES : null,
+    filtersDisabled: status !== null && status.labels === 0 ? filtersNeedNames(status) : null,
     assetNotes: [bundleSentence(status), modelsSentence(status)].filter(
       (sentence): sentence is string => sentence !== null,
     ),

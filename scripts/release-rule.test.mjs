@@ -24,6 +24,7 @@ import desktopToml from "../src-tauri/Cargo.toml?raw";
 import coreToml from "../crates/grimoire-core/Cargo.toml?raw";
 import lightToml from "../mobile/src-tauri/Cargo.toml?raw";
 import webToml from "../crates/grimoire-web/Cargo.toml?raw";
+import scanToml from "../crates/grimoire-scan/Cargo.toml?raw";
 import desktopConf from "../src-tauri/tauri.conf.json?raw";
 import lightConf from "../mobile/src-tauri/tauri.conf.json?raw";
 import appGradle from "../mobile/src-tauri/gen/android/app/build.gradle.kts?raw";
@@ -49,6 +50,8 @@ const CRATES = [
   { name: "grimoire-core", dir: "crates/grimoire-core", toml: coreToml, conf: null },
   { name: "grimoire-light", dir: "mobile/src-tauri", toml: lightToml, conf: lightConf },
   { name: "grimoire-web", dir: "crates/grimoire-web", toml: webToml, conf: null },
+  // The browser's scanner: a module of its own, shipped beside the web host's from the same tag.
+  { name: "grimoire-scan", dir: "crates/grimoire-scan", toml: scanToml, conf: null },
 ];
 
 /** A file with its `#` comment lines removed — these files explain themselves in prose. */
@@ -89,7 +92,7 @@ describe("one version in the tree", () => {
   });
 
   it("knows every member of the cargo workspace", () => {
-    // A fifth member owes a row above, and with it a manifest and a lockfile selector in the
+    // A sixth member owes a row above, and with it a manifest and a lockfile selector in the
     // config: one the config does not name is not bumped, and ships a version behind the app.
     const members = /^members = \[([^\]]*)\]$/m.exec(workspaceToml)?.[1];
     expect(members).toBeDefined();
@@ -496,6 +499,10 @@ describe("release.yml", () => {
       "sudo apt-get update && sudo apt-get install -y clang",
       'cargo install wasm-bindgen-cli --version "$bindgen" --locked',
       "run: npm run web:wasm",
+      // The card scanner's three files, and a build that fails without them (step 7.5): a web
+      // app released without its scanner opens, passes its smoke, and cannot scan.
+      "run: npm run scanner:assets -- --web",
+      "GRIMOIRE_SCANNER_ASSETS: required",
       "run: npm run web:build",
       "run: npm run web:smoke",
       "key: web-wasm32",
@@ -503,6 +510,16 @@ describe("release.yml", () => {
       expect(jobs.web, command).toContain(command);
       expect(ciYml, command).toContain(command);
     }
+    // In that order, in both: the modules' build empties the folder the files land in, and
+    // the page's build ships what is there when it runs.
+    for (const text of [jobs.web, ciYml]) {
+      const at = (needle) => text.indexOf(needle);
+      expect(at("run: npm run scanner:assets -- --web")).toBeGreaterThan(at("run: npm run web:wasm"));
+      expect(at("run: npm run web:build")).toBeGreaterThan(at("run: npm run scanner:assets -- --web"));
+      expect(at("run: npm run web:build")).toBeGreaterThan(at("GRIMOIRE_SCANNER_ASSETS: required"));
+    }
+    // And a pull request scans a card with what it built.
+    expect(ciYml).toContain("run: npm run web:scanner-smoke");
     // And the signing a release runs is the signing a pull request proved: `ci.yml` runs the
     // proof over its own bundle, and the proof runs the script `android-sign` runs.
     expect(ciYml).toMatch(

@@ -18,7 +18,7 @@ use crate::index::{format_uuid, Bundle, Mask, Match, Section, ID_LEN};
 use std::collections::HashMap;
 
 /// What a printing is called.
-#[derive(Debug, Clone, serde::Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct Label {
     pub name: String,
     pub set: String,
@@ -107,9 +107,15 @@ pub struct Reference {
     /// double-faced printing is filed once per face.
     bundle_printings: usize,
     labels: HashMap<[u8; ID_LEN], Label>,
-    /// `illustration_id` → every printing that shares it. Populated only when a corpus is
-    /// loaded; its size is the measured fact that half of all artworks are shared.
-    art_printings: HashMap<[u8; ID_LEN], Vec<Label>>,
+    /// `illustration_id` → the first printing that carries it, and how many do. Populated only
+    /// when a corpus is loaded; its size is the measured fact that half of all artworks are
+    /// shared.
+    ///
+    /// **An id and a count, where it was every sharing printing's label over again** — a
+    /// second copy of all 118 475 labels, five strings apiece, of which a candidate reads the
+    /// first and counts the rest. What that cost a host whose memory is never given back is
+    /// below ([`Reference::finishes_of`] has the figures).
+    art_printings: HashMap<[u8; ID_LEN], ([u8; ID_LEN], usize)>,
     /// Printing id → oracle id. The key the tracker pools evidence on, so a card's reprints
     /// do not split their own vote.
     oracle: HashMap<[u8; ID_LEN], [u8; ID_LEN]>,
@@ -139,11 +145,31 @@ pub struct Reference {
     /// `(set, collector number)` to printing — the index the collector line resolves against.
     ///
     /// Lower-cased and with leading zeros stripped on both sides, because the card prints
-    /// `0232` and Scryfall stores `232`.
-    by_set_number: HashMap<(String, String), [u8; ID_LEN]>,
+    /// `0232` and Scryfall stores `232`. Keyed by the pair as one string ([`pair_key`]): one
+    /// allocation a printing where a tuple of two `String`s was two, in a table a third the
+    /// width.
+    by_set_number: HashMap<Box<str>, [u8; ID_LEN]>,
     /// Which finishes each printing exists in, as the corpus's `finishes` column lists them —
-    /// `nonfoil`, `foil`, `etched`. See [`Reference::finishes_of`].
-    finishes: HashMap<[u8; ID_LEN], Vec<String>>,
+    /// `nonfoil`, `foil`, `etched` — as a place in [`Reference::finish_lists`]. See
+    /// [`Reference::finishes_of`].
+    finishes: HashMap<[u8; ID_LEN], u32>,
+    /// Every distinct list of finishes a printing has been given, once each. The corpus has
+    /// eight (counted 2026-10-07), where each printing used to own a `Vec` of `String`s.
+    finish_lists: Vec<Vec<String>>,
+}
+
+/// [`Reference::snapshot`]'s answer. Ordered maps, so two of them compare and print alike
+/// whatever order the reference's own maps iterate in.
+#[cfg(test)]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct Snapshot {
+    labels: std::collections::BTreeMap<[u8; ID_LEN], Label>,
+    art: std::collections::BTreeMap<[u8; ID_LEN], (Option<Label>, usize)>,
+    oracle: std::collections::BTreeMap<[u8; ID_LEN], [u8; ID_LEN]>,
+    oracle_printings: std::collections::BTreeMap<[u8; ID_LEN], Vec<[u8; ID_LEN]>>,
+    by_name: std::collections::BTreeMap<String, Vec<([u8; ID_LEN], bool)>>,
+    by_set_number: std::collections::BTreeMap<(String, String), [u8; ID_LEN]>,
+    finishes: std::collections::BTreeMap<[u8; ID_LEN], Vec<String>>,
 }
 
 /// The shortest read [`Reference::lookup_cards_masked`] will take as the start of a longer name.
@@ -177,6 +203,7 @@ impl Reference {
             by_name: HashMap::new(),
             by_set_number: HashMap::new(),
             finishes: HashMap::new(),
+            finish_lists: Vec::new(),
         }
     }
 
@@ -190,44 +217,61 @@ impl Reference {
         self.labels.len()
     }
 
+    /// Everything the labels put into this reference that a caller can see, in an order of its
+    /// own — so two references built two ways can be held to each other
+    /// (`labels::tests`, where one is `load_labels`' and the other came through bytes).
+    ///
+    /// What an index *answers*, not how it is kept: an artwork is its first label and how many
+    /// printings share it, which is all [`Reference::candidate`] reads of one.
+    #[cfg(test)]
+    pub(crate) fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            labels: self.labels.iter().map(|(id, l)| (*id, l.clone())).collect(),
+            art: self
+                .art_printings
+                .iter()
+                .map(|(id, (first, n))| (*id, (self.labels.get(first).cloned(), *n)))
+                .collect(),
+            oracle: self.oracle.iter().map(|(id, o)| (*id, *o)).collect(),
+            oracle_printings: self
+                .oracle_printings
+                .iter()
+                .map(|(id, v)| (*id, v.clone()))
+                .collect(),
+            by_name: self
+                .by_name
+                .iter()
+                .map(|(name, v)| (name.clone(), v.iter().map(|e| (e.card, e.face)).collect()))
+                .collect(),
+            by_set_number: self
+                .by_set_number
+                .iter()
+                .map(|(k, id)| (pair_of(k).expect("a key `pair_key` made"), *id))
+                .collect(),
+            finishes: self
+                .finishes
+                .keys()
+                .map(|id| (*id, self.finishes_of(id).to_vec()))
+                .collect(),
+        }
+    }
+
     /// Attach corpus labels. Anything unreadable is skipped rather than fatal — a match with
     /// no name is still a match.
+    ///
+    /// What a row is read as and how it is attached are [`crate::labels::Row`]'s — the same
+    /// two a host with no database uses, on rows that were read for it ([`crate::labels`]).
     #[cfg(feature = "corpus")]
     pub fn load_labels(&mut self, corpus: &rusqlite::Connection) -> rusqlite::Result<usize> {
-        let mut stmt = corpus.prepare(
-            "SELECT id, illustration_id, name, set_code, collector_number, lang, released_at,
-                    oracle_id, finishes
-             FROM cards",
-        )?;
-        let rows = stmt.query_map([], |r| {
-            Ok((
-                r.get::<_, String>(0)?,
-                r.get::<_, Option<String>>(1)?,
-                Label {
-                    name: r.get(2)?,
-                    set: r.get(3)?,
-                    number: r.get(4)?,
-                    lang: r.get(5)?,
-                    released: r.get::<_, Option<String>>(6)?.unwrap_or_default(),
-                },
-                r.get::<_, Option<String>>(7)?,
-                r.get::<_, Option<String>>(8)?,
-            ))
-        })?;
+        let mut stmt =
+            corpus.prepare(&format!("SELECT {} FROM cards", crate::labels::COLUMNS))?;
+        let rows = stmt.query_map([], |r| crate::labels::Row::from_sql(r, 0))?;
 
         let mut n = 0;
-        for row in rows.flatten() {
-            let (id, illustration_id, label, oracle_id, finishes) = row;
-            if let Some(raw) = crate::index::parse_uuid(&id) {
-                self.set_finishes(raw, parse_finishes(finishes.as_deref().unwrap_or("")));
-                self.add_label(
-                    raw,
-                    oracle_id.as_deref().and_then(crate::index::parse_uuid),
-                    illustration_id.as_deref().and_then(crate::index::parse_uuid),
-                    label,
-                );
-                n += 1;
-            }
+        // Twice: a row whose columns would not read, then one whose id is not a UUID.
+        for row in rows.flatten().flatten() {
+            row.attach(self);
+            n += 1;
         }
         Ok(n)
     }
@@ -239,22 +283,45 @@ impl Reference {
     /// the corpus exists in one finish (counted 2026-10-01: 48,239 non-foil only, 13,548 foil
     /// only, 892 etched only, of 118,610), and for those the tray's finish needs no reading at
     /// all; for the rest, [`crate::ocr::finish_mark`] is what can say which.
+    ///
+    /// **Three of this struct's indices were made smaller on 2026-10-07, for the browser** (the
+    /// light app's step 7.5), where a module's memory is never given back: a printing's
+    /// finishes are a place in a list of the distinct lists, an artwork is its first printing
+    /// and a count, and a set and number are one string. With the dev corpus's 118 475 labels
+    /// attached, the scanner's module stood at 130.3 MB before and at the figure
+    /// `docs/reference/card-scanner.md` §2 gives after; nothing a caller can ask changed
+    /// (`labels::tests`' whole-corpus run printed the same digest of every index before and
+    /// after).
     pub fn finishes_of(&self, printing: &[u8; ID_LEN]) -> &[String] {
-        self.finishes.get(printing).map_or(&[], Vec::as_slice)
+        self.finishes
+            .get(printing)
+            .and_then(|at| self.finish_lists.get(*at as usize))
+            .map_or(&[], Vec::as_slice)
     }
 
     /// Record a printing's finishes — [`Reference::load_labels`]' own, public for a caller with
     /// no SQLite.
     pub fn set_finishes(&mut self, printing: [u8; ID_LEN], finishes: Vec<String>) {
-        if !finishes.is_empty() {
-            self.finishes.insert(printing, finishes);
+        if finishes.is_empty() {
+            return;
         }
+        // A handful of distinct lists in any corpus, so finding one is a look along them.
+        let at = match self.finish_lists.iter().position(|known| *known == finishes) {
+            Some(at) => at,
+            None => {
+                self.finish_lists.push(finishes);
+                self.finish_lists.len() - 1
+            }
+        };
+        self.finishes.insert(printing, at as u32);
     }
 
     /// Attach one printing's label — the body of [`Reference::load_labels`], public so a
     /// caller with no SQLite (a test, the synthetic evaluation) can build a labelled reference.
     ///
-    /// Adding the same printing twice replaces its label and does not list it twice.
+    /// Adding the same printing twice replaces its label and does not list it twice. (An
+    /// artwork's label is its first printing's as it stands now; until 2026-10-07 it was a
+    /// copy taken when that printing was first added. The corpus never adds one twice.)
     pub fn add_label(
         &mut self,
         id: [u8; ID_LEN],
@@ -269,7 +336,7 @@ impl Reference {
         }
         if fresh {
             if let Some(ill) = illustration {
-                self.art_printings.entry(ill).or_default().push(label.clone());
+                self.art_printings.entry(ill).or_insert((id, 0)).1 += 1;
             }
             self.oracle_printings.entry(card).or_default().push(id);
         }
@@ -282,7 +349,8 @@ impl Reference {
         // English first: a non-English printing shares the set and number with its English
         // counterpart, and `or_insert` would otherwise hand back whichever language the corpus
         // happened to list first.
-        let key = set_number_key(&label.set, &label.number);
+        let (set, number) = set_number_key(&label.set, &label.number);
+        let key = pair_key(&set, &number);
         if label.lang == "en" {
             self.by_set_number.insert(key, id);
         } else {
@@ -369,7 +437,7 @@ impl Reference {
     ) -> Option<[u8; ID_LEN]> {
         candidates.iter().find_map(|(set, number)| {
             self.by_set_number
-                .get(&(set.clone(), number.clone()))
+                .get(&*pair_key(set, number))
                 .copied()
                 .filter(|id| mask.permits(id))
         })
@@ -379,7 +447,7 @@ impl Reference {
     /// candidate the parse produced actually matched, which is the difference between "it
     /// failed" and "it read HOBEN instead of HOB".
     pub fn lookup_pair(&self, set: &str, number: &str) -> Option<[u8; ID_LEN]> {
-        self.by_set_number.get(&(set.to_string(), number.to_string())).copied()
+        self.by_set_number.get(&*pair_key(set, number)).copied()
     }
 
     /// How many (set, number) pairs are indexed.
@@ -579,11 +647,14 @@ impl Reference {
                 // An art id is an illustration, not a printing, so the label shown is the
                 // first printing that carries it — with `printings` alongside saying how many
                 // others it could equally be.
-                Section::Art => self.art_printings.get(&m.id).and_then(|v| v.first().cloned()),
+                Section::Art => self
+                    .art_printings
+                    .get(&m.id)
+                    .and_then(|(first, _)| self.labels.get(first).cloned()),
             },
             printings: match section {
                 Section::Card => None,
-                Section::Art => self.art_printings.get(&m.id).map(|v| v.len()),
+                Section::Art => self.art_printings.get(&m.id).map(|(_, n)| *n),
             },
         }
     }
@@ -840,6 +911,21 @@ fn winner_of(found: &[(ViewPick, Searched)]) -> (ViewPick, f32) {
     winner
 }
 
+/// A set and a number as the one string [`Reference`] files a printing under: the set's length
+/// in bytes, a colon, the set, the number. The length is what keeps two pairs from spelling the
+/// same key — `("ab", "c")` and `("a", "bc")` are `2:abc` and `1:abc`.
+fn pair_key(set: &str, number: &str) -> Box<str> {
+    format!("{}:{set}{number}", set.len()).into_boxed_str()
+}
+
+/// The pair a [`pair_key`] was made from, for a test that reads the index back.
+#[cfg(test)]
+fn pair_of(key: &str) -> Option<(String, String)> {
+    let (len, rest) = key.split_once(':')?;
+    let len: usize = len.parse().ok()?;
+    Some((rest.get(..len)?.to_string(), rest.get(len..)?.to_string()))
+}
+
 /// The key both sides of the collector lookup are normalized to.
 fn set_number_key(set: &str, number: &str) -> (String, String) {
     let n = number.trim_start_matches('0');
@@ -857,7 +943,7 @@ fn set_number_key(set: &str, number: &str) -> (String, String) {
 /// names it holds. Unknown words are dropped rather than failing the row, and an absent or
 /// unreadable column is no finishes, which [`Reference::finishes_of`] reports as "not said".
 #[cfg_attr(not(feature = "corpus"), allow(dead_code))]
-fn parse_finishes(column: &str) -> Vec<String> {
+pub(crate) fn parse_finishes(column: &str) -> Vec<String> {
     column
         .split(|c: char| !c.is_ascii_alphabetic())
         .filter(|w| matches!(*w, "nonfoil" | "foil" | "etched"))
@@ -892,6 +978,20 @@ fn bounded_edit_distance(a: &str, b: &str, max: u32) -> Option<u32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **Two pairs never spell one key.** Without the set's length in front, `("ab", "c")` and
+    /// `("a", "bc")` are both `abc`, and the second printing filed takes the first one's place.
+    #[test]
+    fn a_pair_key_is_its_pairs_alone() {
+        assert_ne!(pair_key("ab", "c"), pair_key("a", "bc"));
+        assert_eq!(&*pair_key("ab", "c"), "2:abc");
+        assert_eq!(&*pair_key("a", "bc"), "1:abc");
+        // A set with a colon in it, and a number with one: still two keys, and read back whole.
+        assert_ne!(pair_key("a:", "b"), pair_key("a", ":b"));
+        for (set, number) in [("ab", "c"), ("a", "bc"), ("", "7"), ("p:x", "1★"), ("mh2", "")] {
+            assert_eq!(pair_of(&pair_key(set, number)), Some((set.to_owned(), number.to_owned())));
+        }
+    }
     use crate::hash::{hash_rgb, HashKind};
     use crate::index::BundleBuilder;
     use image::{ImageBuffer, Rgb};

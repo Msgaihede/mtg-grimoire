@@ -23,6 +23,7 @@ vi.mock("@/lib/ipc", async (original) => ({
 import { refreshForTables } from "@/lib/crossWindow";
 import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 import { PREFS_RETRY_MS, SCANNER_PREFS_BEFORE_LOAD, useScannerPrefs } from "./useScannerPrefs";
+import { HOST_SCANNER_UNAVAILABLE } from "@/lib/core/hostScanner";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /** The prefs' cache entry, spelled as `crossWindow.ts`' `SINGLE_WRITER_KEYS` spells it. */
@@ -497,15 +498,19 @@ describe("useScannerPrefs while another window holds the scanner", () => {
    * refusal. So it settles nothing: never loaded, never sent again, no sentence in the popover,
    * and the stored row untouched.
    */
-  it("never loads, and sends nothing again, on a host with no scanner session", async () => {
+  it.each([
+    SCANNER_NOT_IN_A_BROWSER_YET,
+    // A host's own words for it (`@/lib/core/hostScanner`): the page draws whichever it was told.
+    ...HOST_SCANNER_UNAVAILABLE,
+  ])("never loads, and sends nothing again, on a host with no scanner session: %s", async (said) => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     scannerPrefs.mockResolvedValue(STORED);
-    scannerSetFilters.mockRejectedValue(SCANNER_NOT_IN_A_BROWSER_YET);
+    scannerSetFilters.mockRejectedValue(said);
     const { result } = mount();
     await advance(0);
     expect(scannerSetFilters).toHaveBeenCalledTimes(1);
     expect(result.current.loaded).toBe(false);
-    expect(result.current.unavailable).toBe(SCANNER_NOT_IN_A_BROWSER_YET);
+    expect(result.current.unavailable).toBe(said);
     expect(result.current.filterError).toBeNull();
     // The stored filters are still what is drawn — nothing was put back to none.
     expect(result.current.prefs.filters).toEqual(HOB);

@@ -337,10 +337,11 @@ function LiveScanner() {
                   {camera.message}
                 </p>
               )}
-              {/* **A host with no scanner session** — a web page, until the light app's web step
-                  (`SCANNER_NOT_IN_A_BROWSER_YET`). The engine's sentence where the picture would
-                  be: `loaded` never goes true there, so no camera was asked for and nothing else
-                  will ever fill this box. The tray beside it still reads, edits and files. */}
+              {/* **A host with no scanner session** (`scannerUnavailable`) — a browser that
+                  cannot run the scanner's module, a build made without its files. The host's own
+                  sentence where the picture would be: `loaded` never goes true there, so no
+                  camera was asked for and nothing else will ever fill this box. The tray beside
+                  it still reads, edits and files. */}
               {unavailable !== null && (
                 <p
                   role="alert"

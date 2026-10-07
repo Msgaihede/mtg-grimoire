@@ -453,6 +453,10 @@ const NOT_FOUND = {
  * - **`site.build` is a second deploy**: `sw.js` is served with its build id — a literal in the
  *   file, and the whole of what names its shell cache — swapped for another, and nothing else
  *   changed. To a browser that is a new worker.
+ * - **`site.asked` is every path this server was asked for**, in order, answered or refused
+ *   (`site.refusing` drops the connection *after* the path is written down) — what
+ *   the scanner's run reads to say that none of the scanner's files left the host before a
+ *   reader pressed Download. A request a service worker answered from its cache never arrives.
  */
 async function serve() {
   if (!existsSync(join(DIST, "index.html"))) {
@@ -462,10 +466,13 @@ async function serve() {
     fail("dist-web/_headers is missing: the build did not emit the host's policy.");
   }
   const rules = parseHeaders(readFileSync(join(DIST, "_headers"), "utf8"));
-  const site = { refusing: false, build: null };
+  const site = { refusing: false, build: null, asked: [] };
   const server = createServer(async (request, response) => {
-    if (site.refusing) return void request.socket.destroy();
     const path = decodeURIComponent((request.url ?? "/").split("?")[0]);
+    // Written down before it is refused: what a page asked of a host that is gone is still
+    // what it asked, and a run that says "nothing was asked offline" has to be able to be wrong.
+    site.asked.push(path);
+    if (site.refusing) return void request.socket.destroy();
     const onDisk = normalize(join(DIST, path));
     // A path that climbs out of the folder is nobody's file, and neither is the host's own.
     const file =
@@ -787,6 +794,11 @@ async function watchPolicy(browser, problems, socket = () => false) {
     sockets,
     /** The sessions of the dedicated Workers listened to, oldest first. */
     workers: () => [...targets].filter(([, name]) => name.startsWith("worker ")).map(([id]) => id),
+    /** The same, each with the address of its script: `[sessionId, url]`. */
+    workerScripts: () =>
+      [...targets]
+        .filter(([, name]) => name.startsWith("worker "))
+        .map(([id, name]) => [id, name.slice("worker ".length)]),
   };
 }
 

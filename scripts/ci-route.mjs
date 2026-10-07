@@ -282,10 +282,16 @@ export const ARMS = [
   // since step 6.5, which the same glob routes. **`scripts/web-sync-pull.mjs` is not here on
   // purpose**: it measures a large pull on that harness and no job runs it, so `scripts/*`
   // lints it and that is all a change to it needs.
+  // **`scripts/web-scanner-smoke.mjs`** (step 7.5) is the fourth: a camera that is a file, and
+  // the built app scanning the card on it. **And `scripts/scanner-assets.mjs` with it**, since
+  // that step: `web` runs it with `--web` to fetch the three files the build then ships, so a
+  // change to it is a change to what the web app's scanner is given.
   {
     match: [
       "scripts/build-wasm.mjs",
+      "scripts/scanner-assets.mjs",
       "scripts/web-smoke.mjs",
+      "scripts/web-scanner-smoke.mjs",
       "scripts/web-sync-smoke.mjs",
       "scripts/web-smoke/*",
     ],
@@ -352,7 +358,18 @@ export const ARMS = [
   // phone's. **Above `crates/grimoire-core/*` and `crates/*`**, and the order is the rule: the
   // second would take this tree and cross-compile the engine twice for a change that cannot
   // have moved it.
-  { match: ["crates/grimoire-web/*"], jobs: ["frontend", "rust", "web"] },
+  //
+  // **And the browser's scanner beside it** (phase 7, step 7.5): `grimoire-scan`, the fifth
+  // member — `card-scanner` as a module of its own, for a Worker of its own. The same three
+  // jobs for the same three reasons: `rust` formats, lints and tests it natively; `web` is the
+  // only job that compiles it for `wasm32-unknown-unknown`, with `simd128`, and lints the
+  // shell that target gates; `frontend` for the day a test reads one of its files as text.
+  // **Not `core`**: the engine does not depend on it, nor it on the engine. The crate it *is*
+  // built from, `crates/card-scanner`, is `crates/*`'s below, which already sets `web`.
+  {
+    match: ["crates/grimoire-web/*", "crates/grimoire-scan/*"],
+    jobs: ["frontend", "rust", "web"],
+  },
 
   // The engine: `grimoire-core`, a workspace member three hosts link. `rust` compiles it for
   // the desktop and runs its tests, `core` compiles it for the two targets `rust` never builds,

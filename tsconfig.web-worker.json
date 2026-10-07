@@ -1,6 +1,10 @@
 {
-  /* The web host's database Worker — its own type-check program, for the reason
-     `tsconfig.relay.json` gives for the relay's: one program per runtime.
+  /* The web host's two dedicated Workers — the database's and the card scanner's — in a
+     type-check program of their own, for the reason `tsconfig.relay.json` gives for the
+     relay's: one program per runtime. (`src/lib/core/web/scanWorker.ts` is the second, since the
+     light app's step 7.5: the same global scope, so the same program. What is said of
+     `worker.ts` below is true of it, with `scanSession.ts`, `scanProtocol.ts` and
+     `grimoire_scan.d.ts` as the modules followed from it.)
 
      `src/lib/core/web/worker.ts` runs in a dedicated Worker. It needs the `WebWorker` lib —
      `DedicatedWorkerGlobalScope`, a `postMessage` with no target origin — and the app under
@@ -35,5 +39,5 @@
     "skipLibCheck": true,
     "noEmit": true
   },
-  "include": ["src/lib/core/web/worker.ts"]
+  "include": ["src/lib/core/web/worker.ts", "src/lib/core/web/scanWorker.ts"]
 }

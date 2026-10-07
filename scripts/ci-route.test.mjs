@@ -234,6 +234,8 @@ describe("the arms", () => {
     ["scripts/build-wasm.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke.mjs", T, F, F, F, F, F, T],
     ["scripts/web-sync-smoke.mjs", T, F, F, F, F, F, T],
+    ["scripts/web-scanner-smoke.mjs", T, F, F, F, F, F, T],
+    ["scripts/scanner-assets.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke/default-cards.jsonl", T, F, F, F, F, F, T],
     // What both browser runs are written in, beside the fixtures it answers from.
     ["scripts/web-smoke/harness.mjs", T, F, F, F, F, F, T],
@@ -249,6 +251,11 @@ describe("the arms", () => {
     // Not `core` — the engine does not depend on a host.
     ["crates/grimoire-web/src/lib.rs", T, T, F, F, F, F, T],
     ["crates/grimoire-web/Cargo.toml", T, T, F, F, F, F, T],
+    // The browser's scanner, the web host's twin: `rust` tests it, `web` compiles it with
+    // `simd128`. Not `core` — it links none of the engine.
+    ["crates/grimoire-scan/src/scanner.rs", T, T, F, F, F, F, T],
+    ["crates/grimoire-scan/src/glue.rs", T, T, F, F, F, F, T],
+    ["crates/grimoire-scan/Cargo.toml", T, T, F, F, F, F, T],
     ["crates/grimoire-core/src/lib.rs", T, T, T, F, F, F, T],
     // The schema since 2026-10-02. `src-tauri/src/schema/mod.rs` above is what the desktop host
     // kept of it — the conversion from a single file — so both rows are true, and this is the
@@ -341,6 +348,8 @@ describe("the arms", () => {
     expect(at("crates/grimoire-web/*")).toBeLessThan(at("crates/grimoire-core/*"));
     expect(at("crates/grimoire-web/*")).toBeLessThan(at("crates/*"));
     expect(ARMS[at("crates/grimoire-web/*")].jobs).not.toContain("core");
+    // The browser's scanner is a module of its own and links none of the engine: the same arm.
+    expect(at("crates/grimoire-scan/*")).toBe(at("crates/grimoire-web/*"));
   });
 
   // Each of these is one file inside a tree a wider arm takes, and that arm does not set `web`:
@@ -349,6 +358,8 @@ describe("the arms", () => {
     ["scripts/build-wasm.mjs", "scripts/*"],
     ["scripts/web-smoke.mjs", "scripts/*"],
     ["scripts/web-sync-smoke.mjs", "scripts/*"],
+    ["scripts/web-scanner-smoke.mjs", "scripts/*"],
+    ["scripts/scanner-assets.mjs", "scripts/*"],
     ["scripts/web-smoke/*", "scripts/*"],
     [".storybook/fake/aliases.ts", ".storybook/*"],
   ])("puts `%s` above `%s`", (file, tree) => {

@@ -486,7 +486,17 @@ jobs:
       - name: Build the module
         run: npm run web:wasm
 
+      # The card scanner's three files, from this repository's own public release — what the
+      # desktop's build fetches to embed, fetched here for the web app to serve from its origin
+      # (`scripts/scanner-assets.mjs --web`; `ci.yml`'s `web` job has the long form). The
+      # build is told they are required: a release whose web app cannot scan fails here, not in
+      # a reader's browser.
+      - name: Fetch the scanner's files
+        run: npm run scanner:assets -- --web
+
       - name: Build the page
+        env:
+          GRIMOIRE_SCANNER_ASSETS: required
         run: npm run web:build
 
       # What a deploy cannot do without: the document, the policy and caching rules

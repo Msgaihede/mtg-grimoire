@@ -13,6 +13,7 @@ import {
   type CachesLike,
   type PictureAsk,
 } from "./pictures";
+import { isScannerModule, SCANNER_CACHE } from "../assets";
 import { DOCUMENT, routeFor, shellCacheName, staleShells, type Routable } from "./shell";
 
 /**
@@ -280,6 +281,56 @@ export function createWorker(env: WorkerEnv): Served {
     return hit ?? env.fetch(request);
   }
 
+  /**
+   * A file of the card scanner's module: **the scanner's cache first, then the network — and a
+   * good answer from the network is kept.** The address is content-addressed (`assets.ts`), so
+   * what is kept under it is never stale and is never asked about again.
+   *
+   * - **Read to its end and rebuilt from the bytes**, as a shell file is and for its reasons: the
+   *   two headers that describe the wire and not the body are not carried over, and the answer
+   *   and the kept copy are two responses over the one read.
+   * - **Only a 200 that is not a document is kept.** A host that hands its page to a path it
+   *   does not know would otherwise be this module for good.
+   * - **Another build's module is let go when this build's is kept**: two files of four and a
+   *   half megabytes, of which only the newest can ever be asked for again.
+   * - **A Cache Storage that throws is a miss, and a `put` that fails costs nothing but the
+   *   keeping** — `fromShell`'s rule. With no network and no copy, the rejection is the
+   *   Worker's failed load, which the page says in a sentence (`scanner.ts`).
+   */
+  async function fromKept(
+    key: string,
+    request: Routable,
+    later: (work: Promise<unknown>) => void,
+  ): Promise<Response> {
+    const cache = await env.caches.open(SCANNER_CACHE).catch(() => null);
+    const hit = cache
+      ? await cache.match(key, { ignoreVary: true }).catch(() => undefined)
+      : undefined;
+    if (hit) return hit;
+    const response = await env.fetch(request);
+    const html = (response.headers.get("Content-Type") ?? "").includes("text/html");
+    // A 200 and nothing else in the 2xx: a 204 or a 206 is not the file.
+    if (cache === null || response.status !== 200 || html) return response;
+    const bytes = await response.arrayBuffer();
+    const headers = new Headers(response.headers);
+    headers.delete("Content-Encoding");
+    headers.set("Content-Length", String(bytes.byteLength));
+    const rebuilt = (): Response => new Response(bytes, { status: 200, headers });
+    later(
+      (async () => {
+        await cache.put(key, rebuilt());
+        const build = key.split("/")[2];
+        for (const { url } of await cache.keys()) {
+          const path = new URL(url).pathname;
+          if (isScannerModule(path) && path.split("/")[2] !== build) {
+            await cache.delete(path, { ignoreVary: true });
+          }
+        }
+      })().catch(() => undefined),
+    );
+    return rebuilt();
+  }
+
   /** Count one stored picture, and sweep the oldest away once the cache is past its slack. */
   function stored(cache: CacheLike): Promise<void> {
     sweeping = sweeping
@@ -467,6 +518,8 @@ export function createWorker(env: WorkerEnv): Served {
           return fromShell(DOCUMENT, request);
         case "shell":
           return fromShell(route.key, request);
+        case "kept":
+          return fromKept(route.key, request, later);
         case "not-a-picture":
           // A path that names no picture — or a picture asked for as a page (`shell.ts`).
           return Promise.resolve(refusal(404, "Not a picture."));

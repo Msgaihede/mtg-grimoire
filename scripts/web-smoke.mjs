@@ -82,7 +82,7 @@
 // running — unconditionally: a smoke that could decide it was not the script and exit 0 in
 // silence is one that passes having checked nothing.
 
-import { readdirSync, readFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import {
   ALERT,
@@ -198,7 +198,11 @@ const pictures = (path) => `(async () => {
 /** The three files a shell cache must hold beside the document for the engine to start offline. */
 function engineFiles() {
   const chunk = readdirSync(join(DIST, "assets")).find((file) => /^worker-[\w-]+\.js$/.test(file));
-  const build = readdirSync(join(DIST, "wasm"))[0];
+  // The engine's folder and not the first: the card scanner's module has a folder of its own
+  // beside it (`/wasm/<its own build>/scanner/`), which no shell cache holds.
+  const build = readdirSync(join(DIST, "wasm")).find((id) =>
+    existsSync(join(DIST, "wasm", id, "grimoire_web.js")),
+  );
   if (!chunk || !build) fail("dist-web has no database Worker chunk, or no engine folder.");
   return [
     `/assets/${chunk}`,
