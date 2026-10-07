@@ -5076,6 +5076,310 @@ fn a_copy_folded_onto_a_nameless_twin_gives_the_twin_its_uid() {
     assert_eq!(uids_of_copies(&b), vec![Some(filed)]);
 }
 
+// ---------------------------------------------------------------------------------------
+// A move onto a grain a row of this device's own already holds folds the two
+// ---------------------------------------------------------------------------------------
+
+/// Two uids in a known order, so both ways a fold can keep one are driven rather than left to a
+/// coin toss.
+const LOWER: &str = "0000000000000000000000000000000a";
+const HIGHER: &str = "0000000000000000000000000000000b";
+
+/// `quantity` copies of the test printing (`add_copy`'s grain) wearing `uid`, filed in `folder`.
+fn a_copy_wearing(conn: &Connection, uid: &str, folder: Option<i64>, quantity: i64) {
+    conn.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,sync_uid,
+             created_at,updated_at)
+         VALUES ('c1','lea','1','en','nonfoil','NM',?1,?2,?3,unixepoch(),unixepoch())",
+        rusqlite::params![quantity, folder, uid],
+    )
+    .unwrap();
+}
+
+/// The local id of the binder both devices call `name`.
+fn binder_named(conn: &Connection, name: &str) -> i64 {
+    conn.query_row(
+        "SELECT id FROM collection_folders WHERE name = ?1",
+        [name],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// Drag the copy wearing `uid` into `folder` on `conn`, as the reader does.
+fn drag_copy(conn: &Connection, uid: &str, folder: Option<i64>) {
+    let id: i64 = conn
+        .query_row(
+            "SELECT id FROM collection_entries WHERE sync_uid = ?1",
+            [uid],
+            |r| r.get(0),
+        )
+        .unwrap();
+    crate::collection_folders::set_entry_folder(conn, id, folder).unwrap();
+}
+
+/// **A copy the sender moved to where this device holds a copy of its own it has not sent yet
+/// meets it as one row, as it does on the sender.** Both hold `c`; `b` adds `u`, the same
+/// printing, where `a` — not having heard — drags `c`. The drag is a sparse put naming only the
+/// folder, so `b` finds `c` by its uid, asks no grain, and `idx_collection_grain` is the first to
+/// say `u` is there: the group was rolled back and dropped with an `error_log` row, while on `a`
+/// `u`'s insert grain-matched `c` and the two became one. One row of three there, two rows here,
+/// in different folders, and nothing either would send said so.
+///
+/// Both ways round — into a binder, and out of one onto the root — and both uid orders, since the
+/// survivor is `u`'s row here and `c`'s row there and they must end wearing one name.
+///
+/// **What makes it red**: `write_group` answering the grain's refusal of a move with
+/// `Why::Unbuildable`.
+fn a_copy_moved_onto_one_the_peer_has_not_sent(moved_lower: bool, into_the_binder: bool) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let (c, u) = if moved_lower {
+        (LOWER, HIGHER)
+    } else {
+        (HIGHER, LOWER)
+    };
+    let other = binder(&a, "Other", None);
+    let (from, to) = if into_the_binder {
+        (None, Some(other))
+    } else {
+        (Some(other), None)
+    };
+    a_copy_wearing(&a, c, from, 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+    a_copy_wearing(&b, u, to.map(|_| binder_named(&b, "Other")), 2);
+
+    drag_copy(&a, c, to);
+    let page = since(&a, &mut ma);
+    assert!(
+        page.len() == 1
+            && page[0].uid == c
+            && page[0].fields.is_empty()
+            && page[0].parents.contains_key("folder"),
+        "the premise: one sparse move of c: {page:?}"
+    );
+
+    let rb = apply(&b, &page).unwrap();
+    assert_eq!(unwritten(rb), (0, 0), "b holds {:?}", qty(&b));
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0));
+    for (who, conn) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(conn), (1, 3), "{who} does not hold one row of three");
+        assert_eq!(uids_of_copies(conn), vec![Some(LOWER.to_owned())], "{who}");
+        assert_eq!(
+            copies_at_root(conn),
+            i64::from(!into_the_binder),
+            "{who} holds the row in the wrong place"
+        );
+    }
+    assert!(
+        skips(&a).is_empty() && skips(&b).is_empty(),
+        "{:?} {:?}",
+        skips(&a),
+        skips(&b)
+    );
+}
+
+#[test]
+fn a_lower_copy_moved_into_a_binder_onto_one_the_peer_has_not_sent_ends_as_one_row() {
+    a_copy_moved_onto_one_the_peer_has_not_sent(true, true);
+}
+
+#[test]
+fn a_higher_copy_moved_into_a_binder_onto_one_the_peer_has_not_sent_ends_as_one_row() {
+    a_copy_moved_onto_one_the_peer_has_not_sent(false, true);
+}
+
+#[test]
+fn a_lower_copy_moved_to_the_root_onto_one_the_peer_has_not_sent_ends_as_one_row() {
+    a_copy_moved_onto_one_the_peer_has_not_sent(true, false);
+}
+
+#[test]
+fn a_higher_copy_moved_to_the_root_onto_one_the_peer_has_not_sent_ends_as_one_row() {
+    a_copy_moved_onto_one_the_peer_has_not_sent(false, false);
+}
+
+/// **The same for a wish**: the wishlist's grain carries the folder too, and `refile_wish` is its
+/// merge.
+fn a_wish_moved_onto_one_the_peer_has_not_sent(moved_lower: bool) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let (c, u) = if moved_lower {
+        (LOWER, HIGHER)
+    } else {
+        (HIGHER, LOWER)
+    };
+    let wish = |conn: &Connection, uid: &str, filed: bool, quantity: i64| {
+        conn.execute(
+            "INSERT INTO wishlist_entries
+                (oracle_id, name, quantity, folder_id, sync_uid, created_at, updated_at)
+             VALUES ('o1', 'Bolt', ?1,
+                     CASE WHEN ?2 THEN (SELECT id FROM wishlist_folders WHERE name = 'Wants') END,
+                     ?3, unixepoch(), unixepoch())",
+            rusqlite::params![quantity, filed, uid],
+        )
+        .unwrap();
+    };
+    a.execute(
+        "INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at)
+         VALUES ('Wants', 0, unixepoch(), unixepoch())",
+        [],
+    )
+    .unwrap();
+    let wants = a.last_insert_rowid();
+    wish(&a, c, false, 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+    wish(&b, u, true, 2);
+
+    let moved: i64 = a
+        .query_row("SELECT id FROM wishlist_entries", [], |r| r.get(0))
+        .unwrap();
+    crate::wishlist_folders::set_wish_folder(&a, moved, Some(wants)).unwrap();
+    let page = since(&a, &mut ma);
+    assert!(
+        page.len() == 1 && page[0].uid == c && page[0].fields.is_empty(),
+        "the premise: one sparse move of c: {page:?}"
+    );
+
+    let rb = apply(&b, &page).unwrap();
+    assert_eq!(unwritten(rb), (0, 0));
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0));
+    for (who, conn) in [("a", &a), ("b", &b)] {
+        let wishes: Vec<(Option<String>, bool, i64)> = conn
+            .prepare("SELECT sync_uid, folder_id IS NOT NULL, quantity FROM wishlist_entries")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(
+            wishes,
+            vec![(Some(LOWER.to_owned()), true, 3)],
+            "{who} does not hold one filed wish of three"
+        );
+    }
+    assert!(
+        skips(&a).is_empty() && skips(&b).is_empty(),
+        "{:?} {:?}",
+        skips(&a),
+        skips(&b)
+    );
+}
+
+#[test]
+fn a_lower_wish_moved_onto_one_the_peer_has_not_sent_ends_as_one_wish() {
+    a_wish_moved_onto_one_the_peer_has_not_sent(true);
+}
+
+#[test]
+fn a_higher_wish_moved_onto_one_the_peer_has_not_sent_ends_as_one_wish() {
+    a_wish_moved_onto_one_the_peer_has_not_sent(false);
+}
+
+/// **What rides with the move is applied, and once.** `a` adds two copies to `c` and drags it in
+/// one page, so the group carries a `+2` beside the folder: it lands on the one row the fold
+/// leaves, whichever uid that row kept, and is not counted again by the fold.
+#[test]
+fn a_count_riding_with_a_move_onto_the_peers_copy_is_counted_once() {
+    for (c, u) in [(LOWER, HIGHER), (HIGHER, LOWER)] {
+        let (a, b) = (paired("dev-a"), paired("dev-b"));
+        let (mut ma, mut mb) = (0, 0);
+        let other = binder(&a, "Other", None);
+        a_copy_wearing(&a, c, None, 1);
+        apply(&b, &since(&a, &mut ma)).unwrap();
+        let _ = since(&b, &mut mb);
+        a_copy_wearing(&b, u, Some(binder_named(&b, "Other")), 2);
+
+        a.execute(
+            "UPDATE collection_entries SET quantity = quantity + 2 WHERE sync_uid = ?1",
+            [c],
+        )
+        .unwrap();
+        drag_copy(&a, c, Some(other));
+
+        let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+        assert_eq!(unwritten(rb), (0, 0), "c is {c}");
+        apply(&a, &since(&b, &mut mb)).unwrap();
+        for (who, conn) in [("a", &a), ("b", &b)] {
+            assert_eq!(qty(conn), (1, 5), "{who}, where c is {c}");
+            assert_eq!(uids_of_copies(conn), vec![Some(LOWER.to_owned())], "{who}");
+        }
+    }
+}
+
+/// **A row the page itself moves is never folded into.** Both hold `h` in `Other` and `c` at the
+/// root, one printing; `a` swaps them, by way of a third binder. Each move lands on the grain the
+/// other row is leaving, and neither can go first — but the sender holds two rows, so folding
+/// either into the other would be one row here for two there. They stay two.
+///
+/// **What makes it red**: folding onto whatever holds the grain, without asking whether the page
+/// has its own say about that row.
+#[test]
+fn two_copies_the_sender_swapped_between_the_root_and_a_binder_stay_two() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    let other = binder(&a, "Other", None);
+    let aside = binder(&a, "Aside", None);
+    a_copy_wearing(&a, LOWER, None, 1);
+    a_copy_wearing(&a, HIGHER, Some(other), 2);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    drag_copy(&a, HIGHER, Some(aside));
+    drag_copy(&a, LOWER, Some(other));
+    drag_copy(&a, HIGHER, None);
+
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(
+        qty(&b),
+        (2, 3),
+        "b folded two copies its sender keeps apart"
+    );
+    assert_eq!(copies_at_root(&b), 1);
+}
+
+/// **A row the page deletes is not folded into either, however the page's groups sort.** Both
+/// hold `u` in `Other` and `c` at the root. `a` edits `c`, deletes `u`, then drags `c` into
+/// `Other`: `c`'s group sorts first, by its oldest op, so its move meets `u` still there. It
+/// waits, `u`'s delete lands, and the retry moves `c` onto a free grain — where folding at once
+/// would have put `c`'s copies in the row the delete then took.
+///
+/// **What makes it red**: folding on the first attempt.
+#[test]
+fn a_copy_moved_to_where_the_page_deletes_a_copy_is_not_folded_into_it() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    let other = binder(&a, "Other", None);
+    a_copy_wearing(&a, HIGHER, None, 1);
+    a_copy_wearing(&a, LOWER, Some(other), 2);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    a.execute(
+        "UPDATE collection_entries SET notes = 'played' WHERE sync_uid = ?1",
+        [HIGHER],
+    )
+    .unwrap();
+    a.execute(
+        "DELETE FROM collection_entries WHERE sync_uid = ?1",
+        [LOWER],
+    )
+    .unwrap();
+    drag_copy(&a, HIGHER, Some(other));
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(unwritten(rb), (0, 0));
+    for (who, conn) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(conn), (1, 1), "{who}");
+        assert_eq!(uids_of_copies(conn), vec![Some(HIGHER.to_owned())], "{who}");
+        assert_eq!(copies_at_root(conn), 0, "{who}");
+    }
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
 /// **A delete this database refuses is skipped and recorded, never a stall.** A TEMP trigger
 /// stands in for the first refusal nothing reaches today.
 #[test]
