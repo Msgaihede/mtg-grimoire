@@ -19,9 +19,14 @@
 //! landed, by which time the page's re-filing has taken what it moves — into a folder the page
 //! makes late, or a deck's group the deciding pass itself lands — and left only the rows it never
 //! mentioned for [`rehome`] (§3.3, as amended at the final review).
+//!
+//! **A move a peer made is the same collision met from the other end**, and takes the same merge
+//! ([`fold_onto_the_holder`]): a row filed into a folder — or out of one, onto the root — where
+//! this device holds a row of that grain the sender had not heard of. It is decided on a `Clear`
+//! pass too, by `apply`'s `fold_the_move`, which says when a refusal is that one.
 
 use crate::sync_engine::emission;
-use rusqlite::Connection;
+use rusqlite::{Connection, OptionalExtension};
 
 /// Every `ON DELETE CASCADE` key into a folder table, as `(child table, column, parent table)`:
 /// the paths [`doomed`] follows. Held to the live schema by
@@ -130,6 +135,53 @@ pub(super) fn rehome(conn: &Connection, d: &Doomed) -> Result<(), String> {
         adopt_lower(conn, "wishlist_entries", kept, id, before)?;
     }
     Ok(())
+}
+
+/// The parent key a copy and a wish are filed by, in both their specs.
+pub(super) const FOLDER: &str = "folder";
+
+/// File `table`'s row `uid` into `folder` through the same merge, for a **move** a peer made onto
+/// a grain a row of this device's own already holds — and answer the uid the one row left wears,
+/// with the uid the row in the way wore. `None` where nothing was in the way and the row simply
+/// moved, where no row wears `uid`, and for any table but the two that file by folder.
+///
+/// The survivor takes the lower uid for [`rehome`]'s reason, read the other way round: the row in
+/// the way is one the sender had not heard of on that grain, so its own put reaches the sender
+/// and `find_row`'s grain match lands it on the moved row there, adopting `min`.
+///
+/// **The caller's to undo.** It writes inside the group's savepoint and answers `None` after a
+/// plain move as well, which the caller rolls back with everything else.
+pub(super) fn fold_onto_the_holder(
+    conn: &Connection,
+    table: &str,
+    uid: &str,
+    folder: Option<i64>,
+) -> Result<Option<(String, Option<String>)>, String> {
+    if !matches!(table, "collection_entries" | "wishlist_entries") {
+        return Ok(None);
+    }
+    let id: Option<i64> = conn
+        .query_row(
+            &format!("SELECT id FROM {table} WHERE sync_uid = ?1"),
+            [uid],
+            |r| r.get(0),
+        )
+        .optional()
+        .map_err(|e| e.to_string())?;
+    let Some(id) = id else {
+        return Ok(None);
+    };
+    let kept = if table == "collection_entries" {
+        crate::collection_folders::refile_entry(conn, id, folder)?.id
+    } else {
+        crate::wishlist_folders::refile_wish(conn, id, folder)?.id
+    };
+    if kept == id {
+        return Ok(None);
+    }
+    let holder = uid_of(conn, table, kept)?;
+    adopt_lower(conn, table, kept, id, Some(uid.to_owned()))?;
+    Ok(uid_of(conn, table, kept)?.map(|survivor| (survivor, holder)))
 }
 
 fn uid_of(conn: &Connection, table: &str, id: i64) -> Result<Option<String>, String> {

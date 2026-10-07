@@ -689,7 +689,7 @@ enum Why {
     /// §6).
     Unbuildable(String),
     /// Not decided yet, because what the page does to the group is only known once other groups
-    /// have landed. Two things answer it (spec 2026-09-27 §3.3):
+    /// have landed. Three things answer it (spec 2026-09-27 §3.3, and the third since 2026-10-07):
     ///
     /// - **A group naming a parent [`gone`] says was deleted**, whether its key cascades (moot) or
     ///   is `SET NULL` (written without it), on the first attempt and on every
@@ -705,6 +705,9 @@ enum Why {
     ///   delete. **A `Decide` pass is not late enough for it**: that pass's own decisions land
     ///   groups — a deck written without its gone folder, then the deck's group — and a copy the
     ///   sender moved into such a group is re-filed only after them, later in that same pass.
+    /// - **A move onto a grain a row of this device's own already holds** ([`fold_the_move`]),
+    ///   on every pass but an [`Attempt::Clear`] one, for the clearing delete's reason: it is
+    ///   answered by the same merge, and the row in the way may be one the page takes first.
     ///
     /// **Never classified**, short of the loop's cap: a withheld group is on every pass until it
     /// is decided, `run_groups` stops only on a pass that withheld nothing, and it keeps only
@@ -749,7 +752,8 @@ enum Attempt {
     Decide,
     /// A retry pass after a `Decide` pass on which nothing landed: nothing else in the page can
     /// land any more, so this one takes every withheld decision, clearing deletes included — it
-    /// re-homes what is still filed in a folder at the root and deletes the folder.
+    /// re-homes what is still filed in a folder at the root and deletes the folder, and folds a
+    /// row moved onto a grain this device holds into the row there.
     Clear,
 }
 
@@ -1251,6 +1255,13 @@ fn run_groups<'a>(
     let mut soft: Vec<(&Group, String)> = Vec::new();
     let mut out: Vec<Deferral<'a>> = Vec::new();
     let mut failed: Vec<&'a Group<'a>> = Vec::new();
+    // Every row the page puts on a grain itself — held or not, landed or not — which is every
+    // row a move must never be folded into ([`fold_the_move`]).
+    let placed: BTreeSet<(&str, &str)> = groups
+        .iter()
+        .filter(|g| places(g))
+        .map(|g| (g.table, g.ops[0].uid.as_str()))
+        .collect();
     for g in groups {
         if let Some(class) = held_by(g, blocked) {
             out.push(Deferral {
@@ -1261,7 +1272,7 @@ fn run_groups<'a>(
             continue;
         }
         if let Outcome::Deferred(_) =
-            write_group(conn, g, report, &mut soft, deleted, Attempt::First)?
+            write_group(conn, g, report, &mut soft, deleted, &placed, Attempt::First)?
         {
             failed.push(g);
         }
@@ -1283,7 +1294,9 @@ fn run_groups<'a>(
         let mut withheld = false;
         let mut again: Vec<usize> = Vec::new();
         for i in pending {
-            match write_group(conn, failed[i], report, &mut soft, deleted, attempt)? {
+            match write_group(
+                conn, failed[i], report, &mut soft, deleted, &placed, attempt,
+            )? {
                 Outcome::Written => {
                     last[i] = None;
                     progressed = true;
@@ -2089,6 +2102,7 @@ fn write_group<'a>(
     report: &mut ApplyReport,
     soft: &mut Vec<(&'a Group<'a>, String)>,
     deleted: &BTreeSet<(&str, &str)>,
+    placed: &BTreeSet<(&str, &str)>,
     attempt: Attempt,
 ) -> Result<Outcome, String> {
     let (Some(meta), Some(spec)) = (meta_of(g.table), spec_of(g.table)) else {
@@ -2329,6 +2343,31 @@ fn write_group<'a>(
             }
             insert_row(conn, meta, spec, g, &combined, &wide)
         }
+    };
+    // **A move the grain refused because a row of this device's own is already there is folded
+    // into that row, and not skipped.** A sparse move is found by its uid, so no grain was asked
+    // before the write and the unique index is the first to say another row is in the way: a copy
+    // the sender dragged into a binder where this device holds a copy of that printing it has
+    // not sent yet. The sender met no collision and goes on to fold the two when the other
+    // copy's own put reaches it — `find_row`'s grain match — so refusing here left one row of
+    // both there and two rows here, in different folders, with an `error_log` row for a sync
+    // that had done nothing wrong. [`fold_the_move`] makes the same one row, under the same uid.
+    //
+    // **Taken only on a `Clear` pass**, like the re-homing it borrows: until nothing else in the
+    // page can land, the row in the way may be one the page is about to take — a delete of it
+    // sorting after this group, which is by its oldest op — and the move then lands on a free
+    // grain by itself. The probe is the fold, made and rolled back with the group.
+    let written = match (written, &existing.uid, &existing.displaced) {
+        (Err(e), Some(uid), None) => match fold_the_move(conn, g, &combined, &parents, uid, placed)
+        {
+            Some(_) if !attempt.clears() => {
+                rollback()?;
+                return Ok(Outcome::Deferred(Why::DecidedOnRetry));
+            }
+            Some(survivor) => Ok(survivor),
+            None => Err(e),
+        },
+        (written, ..) => written,
     };
     match written {
         Ok(uid) => {
@@ -2609,6 +2648,81 @@ fn update_row(
     )
     .map_err(|e| e.to_string())?;
     Ok(uid.to_owned())
+}
+
+/// Whether a group says where its row is on a grain: it names a field or a parent one of its
+/// table's grains is made of. A full insert does, and so does a move.
+fn places(g: &Group) -> bool {
+    meta_of(g.table).is_some_and(|meta| {
+        meta.grains
+            .iter()
+            .flat_map(|grain| grain.sources)
+            .any(|source| match source {
+                Source::Field(f) => g.resolved.fields.contains_key(*f),
+                Source::Parent(key) => g.resolved.parents.contains_key(*key),
+            })
+    })
+}
+
+/// Answer a move the grain refused with the crate's own merge: file the row `uid` where its
+/// group sends it, onto the row already there, and write the rest of the group onto the one row
+/// that leaves — whose uid is the answer. `None` where this is not that refusal, with whatever
+/// it wrote left for the caller's rollback.
+///
+/// It is that refusal only where all of these hold, and anything else is still a row this
+/// database cannot build:
+///
+/// - **The group moves the row and names no other term of its grain.** The merge files a row as
+///   it stands, so a group that also changes its condition, say, would be folded onto whatever
+///   holds the *old* condition in that folder — a row the sender never put it on.
+/// - **The move is the one that won.** Where this device moved the row later, `updates` writes
+///   no folder, and the refusal was about something else.
+/// - **The folder it names is a row here.** One named and not found is gone, and was written as
+///   the root by a decision that is not this one's to extend.
+/// - **The row in the way is not one the page places itself** (`placed`). The sender holds that
+///   row somewhere else — it moved it, in this very page — so the two are two rows there, and a
+///   move that cannot land for now is refused as it always was: two copies swapped between two
+///   binders stay two.
+///
+/// **The rest of the group is folded against both rows' histories**, since the survivor is both:
+/// a field the group carries beats what this device wrote to either row only where it is later,
+/// which is what the sender's grain match decides from the other side. Its counters are deltas
+/// and land once, on the summed row.
+fn fold_the_move(
+    conn: &Connection,
+    g: &Group,
+    combined: &Resolved,
+    parents: &BTreeMap<&'static str, Sql>,
+    uid: &str,
+    placed: &BTreeSet<(&str, &str)>,
+) -> Option<String> {
+    let (meta, spec) = (meta_of(g.table)?, spec_of(g.table)?);
+    let (named, at) = g.resolved.parents.get(rehome::FOLDER)?;
+    let won = combined.parents.get(rehome::FOLDER).map(|(_, at)| at);
+    let other_terms = meta
+        .grains
+        .iter()
+        .flat_map(|grain| grain.sources)
+        .any(|source| matches!(source, Source::Field(f) if g.resolved.fields.contains_key(*f)));
+    if won != Some(at) || other_terms {
+        return None;
+    }
+    let folder = match (named, parents.get(rehome::FOLDER)) {
+        (None, _) => None,
+        (Some(_), Some(Sql::Integer(id))) => Some(*id),
+        (Some(_), _) => return None,
+    };
+    let (survivor, holder) = rehome::fold_onto_the_holder(conn, meta.table, uid, folder).ok()??;
+    let mut uids = vec![uid.to_owned()];
+    if let Some(holder) = holder {
+        if placed.contains(&(meta.table, holder.as_str())) {
+            return None;
+        }
+        uids.push(holder);
+    }
+    let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
+    all.extend(local_history(conn, meta.table, &uids).ok()?);
+    update_row(conn, meta, spec, g, &fold(&all), parents, &survivor).ok()
 }
 
 /// The first message wins — [`crate::reconcile`]'s stated rule for this column.
