@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, userEvent, waitFor, within } from "storybook/test";
 import { emitFake } from "../../../.storybook/fake/event";
+import { PAIR_ONLY_SENTENCE } from "../../../.storybook/fake/world";
 import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
 import { SyncPanel } from "./SyncPanel";
 
@@ -521,6 +522,31 @@ export const NotPairedInABrowser: Story = {
     // The membership half has answered by now, so the host's answer has had as long to land.
     await expect(await canvas.findByText(/not connected/i)).toBeInTheDocument();
     await expect(canvas.queryByText(/site data/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **A host that offers no membership** — the light app's Tauri host, which Google Play
+ * distributes, though the panel is never told so. The `pairOnly` fault makes this story's host
+ * answer `membership_elsewhere` in that host's own words, read from its Rust source; the panel
+ * draws the sentence where the offer, the membership's status and the claim code would be.
+ * Every other story in this file is a host that refuses the name.
+ *
+ * Drive it at a phone's width with `npm run mobile:dev` at
+ * `http://localhost:5175/settings?fault=pairOnly`.
+ */
+export const OnAHostThatOffersNoMembership: Story = {
+  parameters: { fake: { fault: "pairOnly" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(PAIR_ONLY_SENTENCE)).toBeInTheDocument();
+    await expect(canvas.getByRole("heading", { name: "Relay" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    await expect(canvas.queryByLabelText(/claim code/i)).not.toBeInTheDocument();
+    await expect(canvasElement).not.toHaveTextContent(/patreon|membership|supporter|supporting|payment|pledge|subscri/i);
+    // Pairing is the way in, and it is still offered.
+    await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
   },
 };
 

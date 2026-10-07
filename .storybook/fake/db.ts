@@ -1572,6 +1572,12 @@ export interface FakeUpdate {
  * `parity.test.ts` holds this table to the commands `desktop.rs` registers. So the fault is read
  * in `world.ts`, which puts the one handler over a world's table for the stories that ask to be
  * a browser, answering the web host's own sentence from where that host keeps it.
+ *
+ * **`pairOnly`** is the second entry about the host, and `lentStorage`'s shape exactly: the
+ * light app's Tauri host — the build Google Play distributes — answers `membership_elsewhere`
+ * (`src/lib/core/hostMembership.ts`) with one sentence saying how sync turns on there, where
+ * every other host refuses the name; and the Sync panel draws that sentence in place of its
+ * membership half. `world.ts` puts the handler over the one world's table.
  */
 export type Fault =
   | "busy"
@@ -1604,7 +1610,8 @@ export type Fault =
   | "scannerFetchFails"
   | "scannerElsewhere"
   | "shareLapsed"
-  | "lentStorage";
+  | "lentStorage"
+  | "pairOnly";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
