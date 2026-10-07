@@ -36,6 +36,12 @@ describe("the two editions", () => {
     expect(LIGHT_EDITION.caption).toBe(false);
   });
 
+  it("lets the full edition publish a share and not the light one", () => {
+    // No light host registers the `share_*` commands (`grimoire_core::commands` has none).
+    expect(FULL_EDITION.publishes).toBe(true);
+    expect(LIGHT_EDITION.publishes).toBe(false);
+  });
+
   it("opens the light edition on a view it draws", () => {
     expect(LIGHT_EDITION.startView).toBe(LIGHT_START);
     expect(editionHas(LIGHT_EDITION, LIGHT_EDITION.startView)).toBe(true);

@@ -49,6 +49,7 @@ The Android app and the Web app share identical client-side code; the phone face
 - Defined in `src/lib/edition.ts`. `DesktopFace` injects `LIGHT_EDITION`; phone Settings reads `LIGHT_SETTINGS`.
 - Chords and views outside the edition are inert.
 - Navigation guard: `useReaches(view)` hides unreachable options, and `useDesktopPlace` rejects programmatic moves outside the edition.
+- Capability guard: `usePublishes()` (`src/lib/reach.ts`, from the edition's `publishes`) is false in the light edition, whose hosts have no `share_*` commands, so the collection's Share half is not drawn there for any membership and `share_list` is never asked.
 
 ### The Phone Import Fence
 `phone/fence.test.ts` verifies that `mobile/phone/` never imports:

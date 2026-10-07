@@ -34,7 +34,7 @@ import {
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { editionHas, useEdition } from "@/lib/edition";
 import { LAYER } from "@/lib/layers";
-import { ReachContext } from "@/lib/reach";
+import { PublishesContext, ReachContext } from "@/lib/reach";
 import { DURATION, statusLine as statusLineMotion } from "@/lib/motion";
 import { matchesChord, matchesShortcut, shortcut } from "@/lib/shortcuts";
 import { useAppStore, type ViewId } from "@/lib/store";
@@ -683,7 +683,11 @@ function Shell({ children, update }: { children: ReactNode; update: Update }) {
             removing it (measured: `main.scrollHeight` 742 → 1646). This line is the same rule
             applied to the outermost scroller, so a view that grows cannot reach the document. */}
           <main className="relative min-h-0 flex-1 overflow-auto p-5">
-            <ReachContext.Provider value={reaches}>{children}</ReachContext.Provider>
+            <ReachContext.Provider value={reaches}>
+              <PublishesContext.Provider value={edition.publishes}>
+                {children}
+              </PublishesContext.Provider>
+            </ReachContext.Provider>
           </main>
         </div>
       </div>
