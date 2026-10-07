@@ -1991,6 +1991,14 @@ the state is the core's `State.scanner` — built empty, still lazy — and `src
 keeps the embedded assets, the raw request body and the commands. Everything below about the
 load order, the lease, the prefs and the tray still holds, in the core's file.
 
+**And since 2026-10-07 the commands' bodies are the core's too** (the light app's step 7.3):
+what each of the twelve does is a function in `crates/grimoire-core/src/scanner.rs` —
+`ScannerState::{status, frame, reset, set_filters, capture}`, `save_prefs`, `save_tray`,
+`commit_tray`, and `frame_from` / `capture_from` for the body — called from two places: the
+core's command table, for a light host (Android through `core_call`), and the desktop's
+`#[tauri::command]` wrappers, which now only fetch the state, the webview's label and the raw
+request. *The IPC seam* below has the table's wire.
+
 **Assets were files in `data/scanner/` and nothing downloaded them — until 2026-09-15.** A
 release build now carries all three inside the binary, and a file here *overrides* the embedded
 copy rather than being the only source; §10 has the load order, the workflow that publishes the
@@ -2022,7 +2030,15 @@ sentences ends with** *Restart the app after placing or replacing a file — ass
 launch*, which is the clause that makes the rest of them actionable: see the next paragraph for
 why there is no button instead.
 
-**Loading is lazy on the first command and never happens again.** `staleTime: Infinity` on the
+**Loading is lazy on the first command and never happens again** — on the desktop, and from the
+page's side everywhere. (The core has had a door since 2026-10-07: `ScannerState::forget()` drops
+the loaded session so the next command loads afresh, waiting behind a frame in flight and leaving
+the lease alone. The dropped session's filters stay owed until a session takes them: a reload
+that cannot build the mask — no labels, because `corpus.db` was being replaced at that moment —
+searches unfiltered, says so in `ScannerStatus.unapplied_filters`, and the next reload is offered
+them again; an accepted `scanner_set_filters` settles the debt too. It is also the way back from
+a poisoned session lock. It exists for assets a light install downloads after its first load;
+**no command calls it yet**, so everything in this paragraph is still what a reader sees.) `staleTime: Infinity` on the
 status query and no `Reload` button, because asking again in the same session cannot report a
 file that has since appeared — the load ran once and the answer is what it loaded. **A bundle
 or a model pair placed after the app started needs an app restart**, and that is the honest
@@ -2060,6 +2076,11 @@ the JPEG as `InvokeBody::Raw` with `FrameOptions` as JSON in an `x-scanner-optio
 `scanner_capture` takes the JPEG raw with the sidecar as JSON in an `x-scanner-capture` header.
 Each is read by one payload function per command, and a JSON body is refused there with a
 sentence. The base64 JSON leg existed for the Android build and went with it on 2026-09-27.
+**The reading itself is the core's since 2026-10-07**: `frame_payload` and `capture_payload` in
+`src-tauri` refuse the JSON body and hand the bytes and a header lookup to
+`grimoire_core::scanner::frame_from` and `capture_from`, which hold the three header names, the
+detail split and every sentence below — one reader, because a light host's frame goes through
+it too (*The IPC seam*).
 
 **A frame's body can carry a second JPEG behind the first** (issue #708, 2026-09-30). With an
 `x-scanner-detail` header, the header is the frame's byte length and everything after it is the
@@ -2099,6 +2120,9 @@ header, losslessly"* pins the exact string `scannerCapture` produced, sweeps it 
 `JSON.parse`. In Rust, `scanner::tests::an_escaped_card_name_comes_back_with_its_accent` asserts
 its input `is_ascii()` and reads `Æther Vial` back out of `capture_payload`, and
 `a_capture_header_that_is_not_visible_ascii_is_a_sentence` proves the refusal on raw bytes.
+(Those are `src-tauri`'s eight, over Tauri's `HeaderMap`; the core's `scanner::tests` hold the
+same cases over a table call's arguments, where the unreadable header is a value that is not a
+string.)
 
 **What no test does is carry one string across.** Each side writes its own `Æther Vial`
 literal, by hand, in a different file, and nothing compares the two — the ordinary shape of a
@@ -2149,6 +2173,16 @@ at once, and only then hear from the refetch that another window had taken the s
   They are not the session and they take the lease anyway, so a window whose writes have not landed
   keeps the scanner until they do. The three **reads** (`scanner_prefs`, `scanner_tray`,
   `scanner_status`) take nothing.
+
+**On a light host the holder is always "the page"** (2026-10-07). The lease is held by a label,
+and a call through the core's command table carries a name, its arguments and a body — no window.
+It needs none: Android's host has one window and the web host refuses a second tab before an
+engine starts, so every table entry admits the constant `scanner::PAGE`. There
+`scanner_elsewhere` answers `false`, always, and `scanner_hold` and every write are admitted,
+always; the lease is still taken and still settles, so the page's heartbeat and retries run the
+same code as on the desktop and mean nothing more than that. **The desktop still passes
+`webview.label()`**, from its own wrappers, and never dispatches a scanner command through the
+table — through it, every window would be admitted as one.
 
 ⚠️ **An admitted command holds the lease until it _settles_, not from the moment it was let in.**
 `admit` answers a `LeaseGuard` the command keeps alive across its whole body, the awaited
@@ -2206,6 +2240,37 @@ shipped window; the suite drives the hook against the workbench's fake window.
 `CallArgs` is `Record<string, unknown> | Uint8Array` and `CallOptions` carries `headers`. The
 Tauri core passes both through to `invoke`.
 
+**A light host's wire: the headers ride as the arguments** (2026-10-07, the light app's step
+7.3). The same `ipc.scannerFrame(bytes, options, detail)` call reaches three transports, and
+only the desktop's has request headers:
+
+| Host | The body | The three headers |
+| --- | --- | --- |
+| Desktop (`tauriCore`) | the raw IPC body, `InvokeBody::Raw` | request headers, read off Tauri's `HeaderMap` |
+| Android (`tableCore`, `src/lib/core/table.ts`) | base64 text in `core_call`'s `body` — Tauri takes no raw body on Android — decoded by the host | `core_call`'s `args`: `{"x-scanner-options": "<json>", "x-scanner-detail": "<n>"}` |
+| Web (`protocol.ts`) | a transferred buffer | the call message's `args`, the same object |
+
+On the last two the call is answered by the core's command table, where `scanner_frame` and
+`scanner_capture` are the two entries of kind `bytes`: the arm hands the body and the arguments
+object (`commands::Carried`) to the entry, and the entry reads them with
+`scanner::frame_from` / `capture_from` — **the reader the desktop's `frame_payload` calls**, over
+a `Header` lookup each host fills from what it has. So the detail split, the shrug at an
+unreadable options header and the refusal of an unreadable sidecar are one piece of code and the
+same sentences on every host. `asciiJson` still escapes both header JSONs for all three: only
+the desktop's transport needs it, and one spelling is one thing to test.
+
+**In a browser the session's commands are refused**, in one sentence —
+`scanner::NOT_IN_A_BROWSER_YET`, *"The scanner does not run in a browser yet."* — because the
+crate's threads and `Instant` trap in a Worker: the status, a frame, a reset, a filter push and a
+capture. The prefs, the tray, its commit and the lease answer. The view matches on that sentence
+(`verdictText.ts`'s `SCANNER_NOT_IN_A_BROWSER_YET`, pinned by `ipc.test.ts`) so that a refused
+filter push there is not counted as an answer: `useScannerPrefs` reports `unavailable`, `loaded`
+never goes true, **no camera is asked for and no frame is sent**, and the sentence is drawn in
+the video box. Before 2026-10-07 the same view on a light host heard *"There is no command named
+scanner_set_filters on this host."*, counted it as a refused filter, opened the camera and sent
+every frame to be refused in turn. The light app's web step removes the refusal and the match
+together.
+
 `ipc.ts`'s scanner types keep the **Rust field names, snake case**, because the header JSON is
 deserialised straight into `FrameOptions` and the verdict is what the debug page already reads.
 That made a third mirror table in `ipc.test.ts`, `snakeMirrors`, alongside the two that
@@ -2242,6 +2307,12 @@ the next generated write is one editor away.
 | File | Owns |
 | --- | --- |
 | `ScannerPage.tsx` | The view: the Match strip over the camera, the tray beside it, and the developer column |
+| `useScannerHold.ts` | The lease's heartbeat — `scanner_hold` on mount and once a poll, stopped while the view is released — and the re-ask of the gate when a frame is refused by the lease |
+| `useParked.ts` | Pause at once, let go after `PARK_GRACE_MS`: the grace itself (`useGrace`), the document's visibility (`usePageHidden`), and the two together for a face with no window (`usePageParked`). `useWindowParked.ts` is the desktop's, over Tauri's minimize |
+| `useTrayLanding.ts` | A decision into the tray: `addDecision` over `tray.latest()` in the finish the Defaults hold, what the strip and the toast say about it, and the flash's key |
+| `useTrayCommit.ts` | Where the tray files (`useTrayFolder`: a stored folder that is gone or not the reader's is the root) and the commit itself (`useTrayCommit`: the plan, the folder asked about again, the snapshot subtracted) |
+| `useScannerStatus.ts` | `scanner_status` once a session, and what a surface draws from it: `hasBundle`, why the filters are refused, the asset sentences |
+| `reader/trayCommit.ts` | Pure: `withoutCommitted`, `isUserFolder` |
 | `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints — or the reader's camera by `deviceId: { exact }`, falling back to the default when that camera has gone — one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. It opens nothing while its `deviceId` is `undefined`, which is how the page holds the camera shut until the stored choice has loaded. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives. `useCameraDevices` lists the `videoinput`s for the picker, re-read on `devicechange` and once a camera is live, because a browser names no camera before one is granted |
 | `reader/MatchStrip.tsx` | The strip above the camera — `readerText.ts`'s `matchStrip` drawn: a pill, the card, one sentence, the bar, and *Reset evidence* beside it |
 | `reader/AddedToast.tsx` | The card laid over the camera for 2.2 s each time the tray takes one |
@@ -2255,7 +2326,7 @@ the next generated write is one editor away.
 | `panels/BudgetPanel.tsx` | The per-stage milliseconds as a stacked bar |
 | `panels/RectifiedPanel.tsx` | The rectification and the detection numbers |
 | `panels/ReadoutsPanel.tsx` | Both OCR bands, and every collector pairing with what it resolved to — drawn from `lastOcr`/`lastCollector` props, **never from `verdict.ocr`** |
-| `scannerOptions.ts` | `FrameOptions::default()` verbatim, the slider specs, `send px`, `detail wait` |
+| `scannerOptions.ts` | `FrameOptions::default()` verbatim, the slider specs, `send px`, `detail wait`, and `frameOptions` — the reader's mode and the previews switch laid over the sliders |
 | `verdictText.ts` | The pure sentence functions the panels, the tests and the stories share |
 | `types.ts` | Re-exports of the `ipc.ts` mirror types, so a panel imports from its own feature |
 | `fixtures.ts` | The canned verdicts the tests and the stories are both driven from |
@@ -2338,11 +2409,14 @@ whose hands knew the old chord.
 
 ### Storybook
 
-`scannerHandlers(db)` sits beside `pluginHandlers()` with **four handlers**, one per command, and
-**no store** — nothing here mirrors a table, and a workbench has no camera, so `scanner_frame`
-answers the decided fixture whatever bytes it is handed and the panel stories are driven from
-fixtures directly. The fault **`scannerMissing`** makes `scanner_status` answer every asset
-absent with its path.
+`scannerHandlers(db)` sits beside `pluginHandlers()`, one handler per command, and its only
+store is the two `app_meta` rows (§10) — nothing here mirrors a table. The panel stories are
+driven from fixtures directly. **`scanner_frame` answered the decided fixture on every frame
+until 2026-10-07**, whatever bytes it was handed, with a `decision_seq` of 1 — which is the
+baseline `useScanLoop` takes and never moves off, so over the fake a camera added nothing. It
+is a script now (`.storybook/fake/scannerScript.ts`; *On the phone face*, below). The fault
+**`scannerMissing`** makes `scanner_status` answer every asset absent with its path, and the
+script find a card it can never name.
 
 `Scanner/Panels` has **ten** stories and `Scanner/Page` **two** — `CameraRefused`, which stubs
 `navigator.mediaDevices` from a `useState` initializer (an effect runs after the first paint, and
@@ -3077,7 +3151,14 @@ stored tray as they were, and puts the backend's own sentence above the rows; a 
 **only the rows it committed**. `remaining` is worked out when the commit actually goes out — it
 queues behind any tray write on the wire — and again when it answers, because the camera keeps
 running: a card that landed meanwhile stays and is written behind it, and a row bumped meanwhile
-keeps only the copies added after the snapshot. It invalidates `OWNED_WRITE_KEYS`, the import's own
+keeps only the copies added after the snapshot. **Its lines are built then too, not at the press**
+(2026-10-07, `useTrayCommit`): what is filed is the pressed rows still in the tray, by identity,
+as the write goes out. The press's in-flight flag is one mount's state, and a view that went away
+while its commit waited on a sync and came back — or the app's other face, across 1024px — could
+be pressed again over the very rows the first press took; built at the press, the second commit
+sent the same lines behind the first and the pile was filed twice. Now it finds its rows gone,
+sends nothing and answers `null`; and a row edited between the press and the send stays in the
+tray rather than being filed as it was. It invalidates `OWNED_WRITE_KEYS`, the import's own
 set. **A stored folder that is gone or not the reader's own is the root**, and persisted as such
 once the folder list answers — the import accepts a deck's group, because the import's deck arm
 files there on purpose, so a stale id naming one would put scanned cards in a deck's box. §8 item
@@ -3858,3 +3939,126 @@ original refusal, following the decklist importer's cleanup rule.
 The scans stay in the tray after creation or cancellation. Creating a deck writes its list;
 the separate **Add to collection** action records physical ownership. The dialog explains
 this before creation, and a successful creation opens the deck editor.
+
+## On the phone face
+
+The light app's phone face (below 1024px; [light-app.md](light-app.md)) has had a Scanner tab
+since phase 3 and a sentence behind it. Since 2026-10-07 it is the scanner:
+`mobile/phone/pages/ScannerPage.tsx` and `mobile/phone/scanner/`. **The desktop reader's parts
+in the phone's idioms** — nothing about how a card is recognised, landed or filed is written a
+second time.
+
+### What is shared
+
+Everything that decides. The camera (`useCamera`, `useCameraDevices`), the pump and its
+one-add-per-card edge (`useScanLoop`), the tray and the prefs (`useTray`, `useScannerPrefs` —
+the same two `app_meta` rows, so a tray scanned on one face of an install is the tray on the
+other), the gate (`useScannerElsewhere`), *Create deck…* (`useScannedDeck`), the reducers in
+`reader/tray.ts`, the sentences in `readerText.ts` and `verdictText.ts`, and the two things
+laid over the picture, `Overlay` and `AddedToast`, as they are.
+
+**Six things lived inside the desktop page and were moved out so both pages call them** — the
+desktop page is otherwise unchanged, and its suite did not move:
+
+| Was, in `ScannerPage.tsx` | Is |
+| --- | --- |
+| The `scanner_hold` effect, and the gate re-asked on a frame the lease refused | `useScannerHold.ts` (`useScannerHold`, `useRefusedElsewhere`) |
+| `useWindowParked`'s grace and its `visibilitychange` half | `useParked.ts` (`useGrace`, `usePageHidden`, `usePageParked`); `useWindowParked` is now `useGrace(useWindowMinimized())` |
+| `onDecision`, `lastAdded`, `landed`, the flash key and its timer | `useTrayLanding.ts` |
+| `isUserFolder`, `withoutCommitted`, the stale-folder effect, `onCommit` | `reader/trayCommit.ts`, `useTrayCommit.ts` (`useTrayFolder`, `useTrayCommit`) |
+| The status query, `hasBundle`, `FILTERS_NEED_NAMES`, the asset notes | `useScannerStatus.ts` |
+| `{ ...options, mode, previews }` | `scannerOptions.ts`' `frameOptions` |
+
+Three smaller moves ride with them: the Add button's words and the reasons it is refused went
+from `TrayPanel.tsx` to `reader/tray.ts` (`addLabel`, `addRefusal`, `deckRefusal`,
+`NEXT_DECISION_LABEL` — `TrayPanel` re-exports the two its importers used); the two modes'
+words and hints went from `ScanBar.tsx` to `readerText.ts` (`SCAN_MODES`); and the strip's bar
+became `MatchStrip.tsx`'s exported `MatchBar`, beside its two tone maps. `Overlay` now checks
+the canvas has a size *before* asking it for a context: a page with no picture yet asked sixty
+times a second, and under jsdom each ask is a "Not implemented" line — which every suite that
+walks through the Scanner tab would have printed.
+
+### What is the phone's
+
+The arrangement, because each of the desktop's is built for a pointer and a wide view.
+
+| Desktop | Phone | Why |
+| --- | --- | --- |
+| `ScanBar`: four anchored popovers, 256–300px wide, and a Developer switch | `ScanControls`: *Stop scanning*, *Fast \| Exact*, and one press opening `OptionsSheet` — Scan mode, Filters, Finish, Condition, Camera as pages of one bottom sheet | An anchored panel has nowhere to be anchored at 360px. The Camera row is drawn only with more than one camera. No Developer switch: the phone sends `previews: false` whatever the stored switch says and never writes it |
+| Each mode's hint is a tooltip | Each mode's hint is a sentence under its name in the sheet | A finger has no hover |
+| The video is a `flex-1` box in a column that is the view's height | `CameraBox`: the column's width at the **stream's own aspect ratio**, 4:3 until a stream reports one, capped at 38dvh (60dvh from 720px) | The page is a scrolling column, where a zero-basis grow collapses to nothing (§9, *The view*). A portrait stream — what a phone held upright is expected to answer, and no phone has yet been seen to — would be 583px tall at 9:16 and 328 wide. Video and overlay canvas share the one object fit |
+| `MatchStrip`: pill, name, printing and instruction on one row | `MatchLine`: the pill, name and printing on one line, the instruction on the next; the same `matchStrip` value, tone maps and `MatchBar` | At 330px the one row is the pill and the instruction with no room for a name |
+| `TrayPanel`: a grid of tiles or a list; 28px finish dropdown and stepper; *More printings…* a chip under the pointer; the clipped name and every refusal a tooltip | `Tray`: one layout, rows. The name wraps; the printing (`MH2 259 ›`) and the finish are 44px presses opening sheets; a 44px stepper that stops at one; a waiting row is its candidates as whole cards three to a line | A finish and a stepper at 44px do not fit under a 156px tile, so there is no grid, and `trayLayout` is left unread and unwritten |
+| *More printings…* opens `AllPrintingsDialog` through the app store | A sheet of the card's printings under the card sheet's own key (`cardPrintingsKey`), each a press calling `setPrinting(tray.latest(), row.key, choice)` | The phone has no store and no all-printings wall. The choice carries the printing's `finishes`, so a printing sold one way settles an `Unknown` row — the desktop's hand-back does not carry them |
+| The tray's footer: *Create deck…*, a folder popover, Add; the header's *Clear all…* | `TrayFooter`, outside the page's scroller: a press naming the destination that opens the reader's own folders as a sheet, a `⋯` opening *Create deck…* and *Clear all…* as sheet rows, and Add | **A refusal is words on the page**: under Add, and on a sheet row's second line |
+| A refused commit's sentence above the rows; a success says nothing | The same sentence above Add; a success is the page's receipt line (*Added 5 copies to Binder.*), with *Undo* only where a ticket came back — and `scanner_tray_commit` answers none (#555). Where the folder list would not load, the footer reads *Folder name unavailable* and the receipt *to your collection*: the stored id is what was sent, and neither prints a place it does not know | The phone's other writes report this way |
+| `useWindowParked`: Tauri's minimize | `usePageParked`: the document's own visibility, and **released from its first render on a page that mounts hidden** | A phone has no window to ask, and reports a hidden page, which WebView2 does not. A tab restored in the background at `/scanner` otherwise asked for the camera and held it for the grace; the desktop's window never mounts minimized as far as it knows, and is as it was |
+| A sheet or popover hands the caret back through `AnchoredPopup` and `Dialog` | Every sheet hands it back to the press that opened it on a choice, Escape and the ✕, and leaves it on a scrim press (`ActionSheet`'s `onDismiss`). The tray's rows find the press again **after the render**, by the row's key and what the press opens | A choice in a row's sheet is a write, drawn a tick after the sheet shuts: the *More printings…* of a row waiting on a pick is on screen at the close and gone when the row draws as settled — a target that is connected and doomed |
+| On a host with no session (`useScannerPrefs`' `unavailable`) the sentence is drawn where the picture would be | The same, in `CameraBox`; and the status line with its *Reset evidence* is not drawn, and the Filters row is refused with the sentence | The gates are the shared `loaded`: no camera is asked for and no frame sent. The tray still reads, edits and files |
+
+**From 720px wide** the camera's column and the tray's stand side by side, each scrolling by
+itself, with the footer under the tray: a 22rem tray, the camera the rest. It asks the viewport,
+not a container: the page's sheets are mounted inside it, and a container is the containing block
+for a `fixed` scrim. **Not from 600px, the rail's breakpoint**, where it was first put: the page
+beside the rail is then 520px, and measured there the tray was a 288px column, its printing press
+43px wide, beside a camera 200×113. From 600 to 720 it is the phone's one column, wider.
+
+**`ScannerDataSlot` is the one place the missing data is said.** A light install carries neither
+the bundle nor the models in its binary, so *absent* is where a phone starts. The slot is handed
+the whole `ScannerStatus` and today draws `bundleSentence` and `modelsSentence` — which name a
+path to put files at, an instruction a phone cannot follow. The step that brings a download
+replaces the slot's body.
+
+### The fake's session is a script
+
+`.storybook/fake/scannerScript.ts`. One card is thirteen frames — three with nothing in frame,
+four weighing (the bar filling to 7 of 8), the one that decides, five held with the same number —
+answered `FAKE_FRAME_MS` (110 ms) apart, so a card about every 1.4 s. The pile is five, in the
+Storybook corpus's own printings: Urza's Saga, Urza's Saga again (a bump to ×2), Ancient Tomb,
+Black Lotus, and Lightning Bolt — which Fast names with a finish it could not read (`Unknown`)
+and Exact cannot split from two reprints (a row waiting on a pick). After the pile the desk is
+empty; `scanner_reset` lays it down again and `decision_seq` keeps its value, as the crate's
+does. The mode and `previews` are read out of the frame's own header, which the fake `invoke`
+now hands a handler as a second argument.
+
+**It is the fake's first slow handler, and it found a hole in the fake.** `invoke` points the
+fake back at a call's world as the call settles, for the continuation of a call a live story
+made. A frame still on the wire when a test ended settled in the *next* test, and took the
+pointer to the finished test's world with it — whose handlers then answered that test's tray
+writes and frames, which are made from timers and continuations and scoped by nothing else.
+`invoke` now re-points only while the world is **standing** (`scope.ts`: mounted, or nothing is
+mounted at all), and `world.test.ts` stages a slow call settling after its world was replaced.
+
+**What it does not do**: ask for a detail frame, read a title or a collector line, apply the
+filters, or report a quad that has anything to do with the picture.
+
+### Measured, 2026-10-07
+
+`npm run mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome with
+`--use-fake-device-for-media-stream` under a touch pointer and the dark scheme, against
+`mobile:dev` — the Storybook fake, not the engine.
+
+| What | 360×800 | 412×915 |
+| --- | --- | --- |
+| The camera's box, on the fake device's 1920×1080 stream | 328×185 | 380×214 |
+| Frames before the third card's row, all Fast, none with previews | 34–35 | 34–35 |
+| The footer, over the tab bar | 634–747 over 747 | 749–862 over 862 |
+| The footer with 5 rows and with 40 | on screen, Add and the folder under a thumb, the list scrolling behind | the same |
+| Controls under 44px — the page, the folder, options, filters and printings sheets, a waiting row | none | none |
+| Sideways scroll, or anything off the side | none | none |
+
+And on its side, **800×360**: the two columns side by side, the camera 336×189 and the tray 319px
+beside it, the footer at 247–360 with Add and the folder pressable, nothing under 44px and
+nothing off the screen.
+
+Two things the pass changed: the set picker inside the filters page was 36px tall, and is floored
+at 44 from outside it as the search sheet floors it; and with the finish reading `Unknown` the
+printing press beside it was cut to `STA 1…`, the collector number gone, which 8px of side
+padding and a narrower count fixed.
+
+**Not seen**: a real lens, a real phone, the engine. The camera's grant (Android's prompt, a
+browser's), a portrait stream in the capped box, the frame rate a phone's canvas and JPEG encode
+give the pump, and the detail frame — a 2560px encode on the frame that can least afford it — are
+all a device's to show. The page was built on step 7.3's commands: on Android the core's table
+answers all twelve, and in a browser the session's five are refused in one sentence, behind
+which the page sits quiet — neither was driven here, on a device or in a built web app.

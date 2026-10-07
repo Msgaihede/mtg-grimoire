@@ -38,16 +38,25 @@
 //! | `owned` | the same, inside [`crate::collection_source::with_write_owned`], which also rebuilds the facet index's `owned` dimension | `&Connection` |
 //! | `blocking` | on the blocking pool, holding nothing — for a body that takes the `State` itself, or that decides something before it takes a connection | `Arc<State>` |
 //! | `task` | where it stands, awaited — for what reaches a network or the sync lane | `Arc<State>` |
-//! | `bytes` | on the blocking pool, with the raw body the call carried — the scanner's frame and capture | `Arc<State>`, `Vec<u8>` |
+//! | `bytes` | on the blocking pool, with the raw body the call carried and what rode beside it — the scanner's frame and capture | `Arc<State>`, `Vec<u8>`, [`Carried`] |
 //!
 //! In a browser "the blocking pool" is the caller ([`crate::platform::spawn`]).
 //!
 //! **The table covers the light app** (phase 4, step 4.2, 2026-10-03): every read, and every write,
 //! feed and sync command a light install can answer, so no page of it is refused by an Android or
 //! a web host. What is still missing is `src-tauri`'s `command_table::NOT_YET`, each with its
-//! reason there — the scanner's commands, `share/`'s, and the two picture warms. **No entry is of
-//! kind `bytes` yet**; that arm is proven by this module's own tests, over a table of their own,
-//! until the scanner's frame joins.
+//! reason there — `share/`'s and the two picture warms. The scanner's ten joined in the light
+//! app's step 7.3 (2026-10-07), `scanner_frame` and `scanner_capture` as the table's two `bytes`
+//! entries.
+//!
+//! **A `bytes` call's arguments are its headers.** A desktop frame is a raw request body with
+//! its JSON in request headers; a host of the table has no headers to send, so the page puts the
+//! same object where the arguments go — `{"x-scanner-options": "<json>", "x-scanner-detail":
+//! "<n>"}` beside the body (`src/lib/core/table.ts`, and the web host's `protocol.ts`). The arm
+//! hands that object to the body as a [`Carried`], whole and unparsed, beside whatever named
+//! arguments the entry declares — the scanner's two declare none. **The body crosses as the
+//! host can carry it**: base64 in `core_call`'s `body` on Android, where Tauri takes no raw
+//! body; a transferred buffer in a browser. Both arrive here as `Some(Vec<u8>)`.
 //!
 //! **Every entry also runs on a host with one connection and one thread** — a browser's shape,
 //! where a read asked for inside a write is the same mutex twice and work "on the pool" is on
@@ -80,6 +89,8 @@ use crate::filters::CardFilters;
 use crate::sorting::Marketplace;
 #[allow(unused_imports)]
 use crate::wishlist::WishlistQuery;
+#[allow(unused_imports)]
+use card_scanner::filters::ScanFilters;
 // A sync command's stretches are `lane.with(…)`, a method of this trait. Anonymous, so a module
 // whose glob exports a `Store` of its own (`bulk_undo`'s ticket store) cannot shadow it.
 #[allow(unused_imports)]
@@ -143,13 +154,48 @@ pub(crate) fn no_body(name: &str, body: &Option<Vec<u8>>) -> Result<(), String> 
     }
 }
 
-/// A `bytes` command's body, or the refusal for a call that carried none.
-///
-/// Only a `bytes` entry calls it, and the real table has none yet — the kinds' own test table is
-/// its caller until the scanner's frame joins.
-#[allow(dead_code)]
+/// A `bytes` command's body, or the refusal for a call that carried none — which is also what
+/// a call that put its bytes in the JSON hears: the arguments are never read as a body.
 pub(crate) fn needs_body(name: &str, body: Option<Vec<u8>>) -> Result<Vec<u8>, String> {
     body.ok_or_else(|| format!("{name} needs a raw body."))
+}
+
+/// What a `bytes` call carried beside its body: **the call's arguments object, as it arrived**
+/// — the headers a raw request would have had (the module doc says why they ride there).
+///
+/// Handed to a `bytes` body unparsed, because a header is read by the module that owns the
+/// payload and by its rules: an options header that does not parse is a shrug and a sidecar that
+/// does not parse is a refusal (`scanner::frame_from`, `scanner::capture_from`), and a typed
+/// argument struct could only ever do one of those. Arguments that were no object — `null`, or
+/// none at all — carried nothing.
+#[derive(Debug, Clone, Default)]
+pub struct Carried(serde_json::Map<String, Value>);
+
+impl Carried {
+    /// A copy of the call's arguments — a few short strings, taken before [`parse`] consumes
+    /// them for the entry's named arguments.
+    pub(crate) fn of(args: &Value) -> Carried {
+        match args {
+            Value::Object(fields) => Carried(fields.clone()),
+            _ => Carried::default(),
+        }
+    }
+
+    /// One of them by name, exactly as sent — `None` for a key the call did not have.
+    pub fn get(&self, name: &str) -> Option<&Value> {
+        self.0.get(name)
+    }
+}
+
+/// What a call carried beside its body, for the arm that hands it on — and an empty one, which
+/// allocates nothing, for every other kind, so no other call pays for a copy of its arguments.
+macro_rules! carried {
+    (bytes, $args:ident) => {
+        $crate::commands::Carried::of(&$args)
+    };
+    ($kind:ident, $args:ident) => {
+        $crate::commands::Carried::default()
+    };
 }
 
 /// Which [`Kind`] a declaration's word is.
@@ -177,7 +223,8 @@ macro_rules! kind {
 /// One command's body, run as its kind says — see the module doc's table. Answers
 /// `Result<T, String>`.
 macro_rules! run {
-    (read, $state:ident, $name:expr, $raw:ident, [$conn:ident], $body:expr) => {{
+    (read, $state:ident, $name:expr, $raw:ident, $carried:ident, [$conn:ident], $body:expr) => {{
+        let _ = $carried;
         $crate::commands::no_body($name, &$raw)?;
         let shared = ::std::sync::Arc::clone($state);
         $crate::platform::spawn::blocking(
@@ -190,7 +237,8 @@ macro_rules! run {
         .await
         .map_err(|e| $crate::commands::lost($name, e))?
     }};
-    (write, $state:ident, $name:expr, $raw:ident, [$conn:ident], $body:expr) => {{
+    (write, $state:ident, $name:expr, $raw:ident, $carried:ident, [$conn:ident], $body:expr) => {{
+        let _ = $carried;
         $crate::commands::no_body($name, &$raw)?;
         let shared = ::std::sync::Arc::clone($state);
         $crate::platform::spawn::blocking(move || {
@@ -199,7 +247,8 @@ macro_rules! run {
         .await
         .map_err(|e| $crate::commands::lost($name, e))?
     }};
-    (owned, $state:ident, $name:expr, $raw:ident, [$conn:ident], $body:expr) => {{
+    (owned, $state:ident, $name:expr, $raw:ident, $carried:ident, [$conn:ident], $body:expr) => {{
+        let _ = $carried;
         $crate::commands::no_body($name, &$raw)?;
         let shared = ::std::sync::Arc::clone($state);
         $crate::platform::spawn::blocking(move || {
@@ -211,7 +260,8 @@ macro_rules! run {
         .await
         .map_err(|e| $crate::commands::lost($name, e))?
     }};
-    (blocking, $state:ident, $name:expr, $raw:ident, [$st:ident], $body:expr) => {{
+    (blocking, $state:ident, $name:expr, $raw:ident, $carried:ident, [$st:ident], $body:expr) => {{
+        let _ = $carried;
         $crate::commands::no_body($name, &$raw)?;
         let $st: ::std::sync::Arc<$crate::state::State> = ::std::sync::Arc::clone($state);
         $crate::platform::spawn::blocking(
@@ -220,14 +270,16 @@ macro_rules! run {
         .await
         .map_err(|e| $crate::commands::lost($name, e))?
     }};
-    (task, $state:ident, $name:expr, $raw:ident, [$st:ident], $body:expr) => {{
+    (task, $state:ident, $name:expr, $raw:ident, $carried:ident, [$st:ident], $body:expr) => {{
+        let _ = $carried;
         $crate::commands::no_body($name, &$raw)?;
         let $st: ::std::sync::Arc<$crate::state::State> = ::std::sync::Arc::clone($state);
         let answer: ::std::result::Result<_, ::std::string::String> = ($body).await;
         answer
     }};
-    (bytes, $state:ident, $name:expr, $raw:ident, [$st:ident, $bytes:ident], $body:expr) => {{
+    (bytes, $state:ident, $name:expr, $raw:ident, $carried:ident, [$st:ident, $bytes:ident, $with:ident], $body:expr) => {{
         let $bytes: ::std::vec::Vec<u8> = $crate::commands::needs_body($name, $raw)?;
+        let $with: $crate::commands::Carried = $carried;
         let $st: ::std::sync::Arc<$crate::state::State> = ::std::sync::Arc::clone($state);
         $crate::platform::spawn::blocking(
             move || -> ::std::result::Result<_, ::std::string::String> { $body },
@@ -254,7 +306,8 @@ macro_rules! commands {
         ),*];
 
         /// Answer the command called `name` with the arguments in `args` — the JSON object a
-        /// host's call carried, camelCase — and, for a `bytes` command, the raw `body`.
+        /// host's call carried, camelCase — and, for a `bytes` command, the raw `body`, whose
+        /// headers are that same object ([`Carried`]).
         ///
         /// A name the table does not have, arguments that do not parse, and a body where none
         /// belongs (or none where one does) are each a refusal in words; so is anything the
@@ -274,8 +327,11 @@ macro_rules! commands {
                     struct Args {
                         $($arg: $ty),*
                     }
+                    let carried = carried!($kind, args);
                     let Args { $($arg),* } = $crate::commands::parse(stringify!($name), args)?;
-                    let answer = run!($kind, state, stringify!($name), body, [$($bind),+], $body)?;
+                    let answer = run!(
+                        $kind, state, stringify!($name), body, carried, [$($bind),+], $body
+                    )?;
                     $crate::commands::answer(stringify!($name), answer)
                 })*
                 _ => Err($crate::commands::no_such(name)),
@@ -834,9 +890,59 @@ commands! {
         )
     };
 
-    // scanner — the reads only: every other scanner command is on `command_table::NOT_YET`
+    // scanner — all twelve, each the desktop wrapper's own body with one thing changed: **the
+    // lease is admitted for `PAGE`**, where a wrapper admits its webview's label. A table call
+    // carries no window and a host of the table has one page (`scanner::PAGE`), so
+    // `scanner_elsewhere` answers `false` here and `scanner_hold` succeeds, always. Every entry
+    // that admits is `blocking` or `bytes` and never `write`/`owned`, because the lease is taken
+    // *before* the write connection is waited for and held until the write settles
+    // (`scanner::save_prefs`) — inside `with_write` it would be taken after the wait. The guard
+    // lives to the end of the body: `let _lease`, never `let _`. The session's five and the
+    // capture are refused on a page in one sentence, inside the functions
+    // (`scanner::not_in_a_browser_yet`).
+    blocking scanner_status in scanner() = |state| state.scanner.status();
+    // The table's two `bytes` entries: the body is the JPEG — or the frame and the detail image
+    // back to back — and the call's arguments are the desktop's three headers by name
+    // (`Carried`, `scanner::Header::of_json`). Admitted before the body is split or decoded, so
+    // a refused frame costs neither; `loaded` is taken and let go inside `ScannerState::frame`,
+    // on the blocking pool, with no `.await` under it.
+    bytes scanner_frame in scanner() = |state, raw, carried| {
+        let _lease = state.scanner.admit(PAGE)?;
+        let (jpeg, detail, opts) = frame_from(&raw, &|name| Header::of_json(carried.get(name)))?;
+        state.scanner.frame(jpeg, detail, &opts)
+    };
+    blocking scanner_reset in scanner() = |state| {
+        let _lease = state.scanner.admit(PAGE)?;
+        state.scanner.reset()
+    };
+    bytes scanner_capture in scanner() = |state, raw, carried| {
+        let _lease = state.scanner.admit(PAGE)?;
+        let (jpeg, sidecar) = capture_from(&raw, &|name| Header::of_json(carried.get(name)))?;
+        state.scanner.capture(jpeg, &sidecar)
+    };
+    blocking scanner_set_filters in scanner(filters: ScanFilters) = |state| {
+        let _lease = state.scanner.admit(PAGE)?;
+        state.scanner.set_filters(filters)
+    };
+    blocking scanner_elsewhere in scanner() = |state| Ok(state.scanner.elsewhere(PAGE));
+    blocking scanner_hold in scanner() = |state| {
+        let _settled = state.scanner.admit(PAGE)?;
+        Ok(())
+    };
     read scanner_prefs in scanner() = |conn| Ok(stored_prefs(conn));
+    blocking set_scanner_prefs in scanner(prefs: ScannerPrefs) = |state| {
+        let _lease = state.scanner.admit(PAGE)?;
+        save_prefs(&state, &prefs)
+    };
     read scanner_tray in scanner() = |conn| Ok(stored_tray(conn));
+    blocking set_scanner_tray in scanner(rows: Vec<ScannerTrayRow>) = |state| {
+        let _lease = state.scanner.admit(PAGE)?;
+        save_tray(&state, &rows)
+    };
+    blocking scanner_tray_commit in scanner(items: Vec<crate::collection::CollectionImportItem>, folder_id: Option<i64>, remaining: Vec<ScannerTrayRow>) = |state| {
+        let _lease = state.scanner.admit(PAGE)?;
+        commit_tray(&state, &items, folder_id, &remaining)
+    };
 
     // search
     read list_sets in search() = |conn| run_list_sets(conn);
@@ -1114,9 +1220,10 @@ mod tests {
         crate::app_meta::set_app_meta(conn, key, value).map_err(|e| e.to_string())
     }
 
-    /// **One command of every kind**, over a table of its own: the real table has no `bytes`
-    /// entry yet, an arm of the macro nothing expands is an arm nothing has compiled, and the two
-    /// writes are told apart here over one key.
+    /// **One command of every kind**, over a table of its own: an arm is proven here apart
+    /// from whichever command uses it, and the two writes are told apart here over one key. The
+    /// `bytes` one takes a named argument *and* reads a header off the same arguments object —
+    /// the real table's two declare no named argument, so nothing else shows the two coexist.
     mod kinds {
         commands! {
             read meta_read in commands::tests(key: String) = |conn| meta(conn, &key);
@@ -1135,15 +1242,17 @@ mod tests {
                 let _ = &state;
                 Ok(said_twice)
             };
-            bytes length in commands::tests(offset: usize) = |state, raw| {
+            bytes length in commands::tests(offset: usize) = |state, raw, carried| {
                 let _ = &state;
-                Ok(raw.len() - offset)
+                let unit = carried.get("x-unit").and_then(Value::as_str).unwrap_or("bytes");
+                Ok(format!("{} {unit}", raw.len() - offset))
             };
         }
     }
 
-    /// **The same fence over the kinds' own table** — the real table's `dispatch` expands every
-    /// arm but `bytes`, so a lock held across an `.await` in that arm would go unseen there.
+    /// **The same fence over the kinds' own table** — written when the real table's `dispatch`
+    /// expanded every arm but `bytes`, and kept now that it expands that one too: this table is
+    /// where an arm is changed first.
     #[allow(dead_code)]
     fn every_kind_holds_nothing_across_a_call(state: &Arc<State>) {
         fn sendable<T: crate::platform::Sendable>(_: T) {}
@@ -1208,9 +1317,20 @@ mod tests {
             call("echo", json!({ "saidTwice": "hello" }), None).await,
             Ok(json!("hello"))
         );
+        // A `bytes` body is handed the raw body, and the call's arguments twice over: parsed
+        // into its named arguments, and whole, as the headers they also are.
         assert_eq!(
             call("length", json!({ "offset": 1 }), Some(vec![1, 2, 3])).await,
-            Ok(json!(2))
+            Ok(json!("2 bytes"))
+        );
+        assert_eq!(
+            call(
+                "length",
+                json!({ "offset": 1, "x-unit": "octets" }),
+                Some(vec![1, 2, 3])
+            )
+            .await,
+            Ok(json!("2 octets"))
         );
         let names: Vec<_> = kinds::TABLE.iter().map(|e| (e.name, e.kind)).collect();
         assert_eq!(
@@ -2194,6 +2314,19 @@ mod tests {
             }),
             "combos_status" | "combos_clear" | "cache_clear" | "sync_status" => Value::Null,
             "art_tags_status" | "oracle_tags_status" => Value::Null,
+            // The scanner's. On the page this test stands in for, the session's five and the
+            // capture stop at `scanner::NOT_IN_A_BROWSER_YET` — which is the point of asking
+            // them here: refused in words, never run into a trap. The lease's two and the three
+            // writes run whole, the commit through `with_write_owned` on the one connection.
+            "scanner_status" | "scanner_reset" | "scanner_elsewhere" | "scanner_hold" => {
+                Value::Null
+            }
+            "scanner_set_filters" => json!({ "filters": {} }),
+            "set_scanner_prefs" => json!({ "prefs": {} }),
+            "set_scanner_tray" => json!({ "rows": [] }),
+            "scanner_tray_commit" => json!({ "items": [], "remaining": [] }),
+            // `bytes`: no headers, and `chosen_body` is what the call carries.
+            "scanner_frame" | "scanner_capture" => json!({}),
             // With text, so the facet pass reads the database rather than answering from memory.
             "facet_cards" => json!({ "req": { "text": "bolt" } }),
             "sync_review_clear" => json!({ "table": reviewable, "uid": "nobody" }),
@@ -2213,6 +2346,12 @@ mod tests {
             | "sync_pairing_cancel" => Value::Null,
             _ => return None,
         })
+    }
+
+    /// The raw body the table test sends a `bytes` command, which is refused at the door
+    /// without one — and nothing, for every other kind, which is refused at the door with one.
+    fn chosen_body(entry: &Entry) -> Option<Vec<u8>> {
+        (entry.kind == Kind::Bytes).then(|| TINY_JPEG.to_vec())
     }
 
     /// What a refusal at the door says — `parse`'s sentence, above.
@@ -2384,12 +2523,16 @@ mod tests {
                     any_args(entry)
                 }
             };
-            let outcome = drive(&mut runtime, dispatch(&state, entry.name, args, None));
+            let body = chosen_body(entry);
+            let outcome = drive(&mut runtime, dispatch(&state, entry.name, args, body));
             ran += 1;
             if let Some(why) = outcome.failure() {
                 failed.push(format!("{} ({:?}): {why}", entry.name, entry.kind));
             }
-            if matches!(&outcome, Alone::Answered(Err(e)) if e.contains(DID_NOT_PARSE)) {
+            // A body that was wanted and missing, or sent and unwanted, is the door too.
+            if matches!(&outcome, Alone::Answered(Err(e))
+                if e.contains(DID_NOT_PARSE) || e.contains("raw body"))
+            {
                 at_the_door.push(entry.name);
             }
         }
@@ -2452,9 +2595,567 @@ mod tests {
         let before = names.len();
         names.dedup();
         assert_eq!(names.len(), before);
-        assert!(
-            TABLE.iter().all(|e| e.kind != Kind::Bytes),
-            "no raw body crosses the table yet: the scanner's frame is not in it"
+    }
+
+    /// **Which commands carry a raw body, pinned** — the scanner's frame and its capture, and
+    /// no other. A third is a new wire: a body some host has to be able to carry (base64 on
+    /// Android, a transferred buffer in a browser), headers riding as the call's arguments, and
+    /// a row on `src-tauri`'s `command_table::RAW_BODY` — so it is added here on purpose.
+    /// Neither declares a named argument, because their arguments object is their headers.
+    #[test]
+    fn the_commands_that_carry_a_raw_body_are_the_scanners_two() {
+        let carrying: Vec<_> = TABLE
+            .iter()
+            .filter(|e| e.kind == Kind::Bytes)
+            .map(|e| (e.name, e.args))
+            .collect();
+        let none: &[&str] = &[];
+        assert_eq!(
+            carrying,
+            [("scanner_frame", none), ("scanner_capture", none)]
         );
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // The scanner, through the table
+    // -----------------------------------------------------------------------------------------
+
+    /// A real JPEG, 160×120, 252 bytes: a dark grey field with a lighter block in it. Small
+    /// enough to write out, and a frame the session's decoder really decodes — so a verdict
+    /// that names its size is a body that crossed the table whole.
+    const TINY_JPEG: &[u8] = &[
+        0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00, 0x01, 0x01, 0x00, 0x00,
+        0x01, 0x00, 0x01, 0x00, 0x00, 0xff, 0xdb, 0x00, 0x43, 0x00, 0x28, 0x1c, 0x1e, 0x23, 0x1e,
+        0x19, 0x28, 0x23, 0x21, 0x23, 0x2d, 0x2b, 0x28, 0x30, 0x3c, 0x64, 0x41, 0x3c, 0x37, 0x37,
+        0x3c, 0x7b, 0x58, 0x5d, 0x49, 0x64, 0x91, 0x80, 0x99, 0x96, 0x8f, 0x80, 0x8c, 0x8a, 0xa0,
+        0xb4, 0xe6, 0xc3, 0xa0, 0xaa, 0xda, 0xad, 0x8a, 0x8c, 0xc8, 0xff, 0xcb, 0xda, 0xee, 0xf5,
+        0xff, 0xff, 0xff, 0x9b, 0xc1, 0xff, 0xff, 0xff, 0xfa, 0xff, 0xe6, 0xfd, 0xff, 0xf8, 0xff,
+        0xc0, 0x00, 0x0b, 0x08, 0x00, 0x78, 0x00, 0xa0, 0x01, 0x01, 0x11, 0x00, 0xff, 0xc4, 0x00,
+        0x16, 0x00, 0x01, 0x01, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x06, 0x05, 0xff, 0xc4, 0x00, 0x14, 0x10, 0x01, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xff, 0xda,
+        0x00, 0x08, 0x01, 0x01, 0x00, 0x00, 0x3f, 0x00, 0xcd, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x14, 0x00, 0x00, 0x27, 0xc0,
+        0x00, 0x00, 0x50, 0x00, 0x00, 0x9f, 0x00, 0x00, 0x01, 0x40, 0x00, 0x02, 0x7c, 0x00, 0x00,
+        0x05, 0x00, 0x00, 0x09, 0xf0, 0x00, 0x00, 0x14, 0x00, 0x00, 0x27, 0xc0, 0x00, 0x00, 0x50,
+        0x00, 0x00, 0x9f, 0x00, 0x00, 0x01, 0x40, 0x00, 0x02, 0x7c, 0x00, 0x00, 0x05, 0x00, 0x00,
+        0x09, 0xf0, 0x00, 0x00, 0x14, 0x00, 0x00, 0x27, 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x07, 0xff, 0xd9,
+    ];
+
+    /// The ten scanner commands that joined the table in step 7.3, and the two reads that
+    /// were there. A list of its own so a test can say "every one of them" and mean it.
+    const SCANNER: [&str; 12] = [
+        "scanner_status",
+        "scanner_frame",
+        "scanner_reset",
+        "scanner_capture",
+        "scanner_set_filters",
+        "scanner_elsewhere",
+        "scanner_hold",
+        "scanner_prefs",
+        "set_scanner_prefs",
+        "scanner_tray",
+        "set_scanner_tray",
+        "scanner_tray_commit",
+    ];
+
+    /// The arguments and body each scanner command is asked with where a test asks all twelve.
+    fn scanner_call(name: &str) -> (Value, Option<Vec<u8>>) {
+        match name {
+            "scanner_frame" | "scanner_capture" => (json!({}), Some(TINY_JPEG.to_vec())),
+            "scanner_set_filters" => (json!({ "filters": {} }), None),
+            "set_scanner_prefs" => (json!({ "prefs": {} }), None),
+            "set_scanner_tray" => (json!({ "rows": [] }), None),
+            "scanner_tray_commit" => (json!({ "items": [], "remaining": [] }), None),
+            _ => (Value::Null, None),
+        }
+    }
+
+    #[test]
+    fn all_twelve_scanner_commands_are_in_the_table() {
+        for name in SCANNER {
+            assert!(TABLE.iter().any(|e| e.name == name), "{name}");
+        }
+        let in_table = TABLE.iter().filter(|e| e.name.contains("scanner")).count();
+        assert_eq!(in_table, SCANNER.len(), "a scanner command this list lacks");
+    }
+
+    /// **The session's commands, through `dispatch`, on a state with no assets** — a real
+    /// `State` over files, nothing in `<data>/scanner/`, which is an Android install before any
+    /// download: the status names three absent paths, and a real frame is decoded and judged
+    /// by a session with no reference rather than refused or failed.
+    #[tokio::test]
+    async fn the_scanners_session_answers_through_the_table_with_no_assets() {
+        let (state, dir) =
+            crate::state::fixtures::on_files("commands-scanner", "http://127.0.0.1:1");
+        let call = |name: &'static str, args: Value, body: Option<Vec<u8>>| {
+            let state = state.clone();
+            async move { dispatch(&state, name, args, body).await }
+        };
+
+        let status = call("scanner_status", Value::Null, None)
+            .await
+            .expect("the status");
+        for asset in ["bundle", "detection_model", "recognition_model"] {
+            assert_eq!(status[asset]["source"], "absent", "{status}");
+            assert_eq!(status[asset]["present"], false, "{status}");
+        }
+        let looked = status["bundle"]["path"].as_str().expect("a path");
+        assert!(
+            looked.ends_with("card-hashes.bin") && looked.contains("scanner"),
+            "{looked}"
+        );
+        assert_eq!(status["labels"], 0);
+
+        // No filter is always a filter; a real one needs names this session does not have, and
+        // the crate's sentence is the refusal, verbatim.
+        assert_eq!(
+            call("scanner_set_filters", json!({ "filters": {} }), None).await,
+            Ok(Value::Null)
+        );
+        let narrowed = call(
+            "scanner_set_filters",
+            json!({ "filters": { "sets": ["lea"] } }),
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            narrowed.starts_with("Filters need card names"),
+            "{narrowed}"
+        );
+
+        // A frame: the body is the JPEG, and the options ride in the arguments under the
+        // desktop's header name, as JSON text — exactly what `table.ts` sends.
+        let verdict = call(
+            "scanner_frame",
+            json!({ "x-scanner-options": r#"{"mode":"exact"}"# }),
+            Some(TINY_JPEG.to_vec()),
+        )
+        .await
+        .expect("a verdict");
+        assert_eq!(verdict["frame"], json!({ "w": 160, "h": 120 }), "{verdict}");
+        assert_eq!(
+            verdict["matcher"], false,
+            "no bundle is a state the verdict names, not a failure: {verdict}"
+        );
+        assert_eq!(verdict["mode"], "exact", "the options header was read");
+        assert_eq!(verdict["decision"], Value::Null);
+        // With no options the frame is judged in the default mode — an absent header is a
+        // shrug, and so is one that is not JSON.
+        for args in [json!({}), json!({ "x-scanner-options": "not json" })] {
+            let plain = call("scanner_frame", args, Some(TINY_JPEG.to_vec()))
+                .await
+                .expect("a verdict");
+            assert_eq!(plain["mode"], "fast", "{plain}");
+        }
+
+        // The detail image: two JPEGs in one body, the first one's length in a header. **What
+        // this can show is where the frame ends, and nothing about the detail**: a session with
+        // no reader never decodes one, so no verdict here depends on the second JPEG — the two
+        // halves are held byte for byte by `scanner::tests`, over `frame_from`. And "the frame
+        // decodes" alone would show nothing either: a JPEG decoder stops at the end-of-image
+        // marker, so the whole pair taken as the frame is the same 160×120 picture.
+        let mut pair = TINY_JPEG.to_vec();
+        pair.extend_from_slice(TINY_JPEG);
+        let split = TINY_JPEG.len().to_string();
+        let paired = call(
+            "scanner_frame",
+            json!({ "x-scanner-detail": split }),
+            Some(pair.clone()),
+        )
+        .await
+        .expect("a verdict for the pair");
+        assert_eq!(paired["frame"], json!({ "w": 160, "h": 120 }), "{paired}");
+        // So the cut is put where it hurts: twenty bytes in, the frame is the head of a JPEG
+        // and nothing more, and the session says it could not decode it. An entry that ignored
+        // the header would have decoded the whole picture, as above.
+        let cut_short = call(
+            "scanner_frame",
+            json!({ "x-scanner-detail": "20" }),
+            Some(pair.clone()),
+        )
+        .await
+        .expect("a verdict for a frame that is not one");
+        assert_eq!(cut_short["ok"], false, "{cut_short}");
+        assert_eq!(cut_short["frame"], json!({ "w": 0, "h": 0 }), "{cut_short}");
+        let said = cut_short["error"].as_str().expect("why");
+        assert!(said.starts_with("decode: "), "{said}");
+        // And a length that cannot split the body is the reader's sentence, through the table.
+        for (length, said) in [
+            (json!("0"), "zero"),
+            (json!(pair.len().to_string()), "no detail image"),
+            (json!("three"), "not a number"),
+            (json!(252), "did not parse: it is not a string"),
+        ] {
+            let refused = call(
+                "scanner_frame",
+                json!({ "x-scanner-detail": length }),
+                Some(pair.clone()),
+            )
+            .await
+            .unwrap_err();
+            assert!(refused.contains(said), "{refused}");
+        }
+
+        assert_eq!(
+            call("scanner_reset", Value::Null, None).await,
+            Ok(Value::Null)
+        );
+
+        // A capture: the file and its sidecar under `<data>/scanner/scans/`, the name read out
+        // of the header the page escaped.
+        let captured = call(
+            "scanner_capture",
+            json!({ "x-scanner-capture": r#"{"expected":"\u00c6ther Vial","votes":"8.0"}"# }),
+            Some(TINY_JPEG.to_vec()),
+        )
+        .await
+        .expect("a capture");
+        let saved = captured["saved"].as_str().expect("the file's name");
+        let scans = dir.join("scanner").join("scans");
+        assert_eq!(
+            std::fs::read(scans.join(saved)).expect("the jpeg"),
+            TINY_JPEG
+        );
+        let sidecar: Value = serde_json::from_slice(
+            &std::fs::read(scans.join(saved).with_extension("json")).expect("the sidecar"),
+        )
+        .expect("json");
+        assert_eq!(sidecar["expected"], "\u{c6}ther Vial");
+        assert_eq!(sidecar["votes"], "8.0");
+        // A sidecar that is there and unreadable writes nothing.
+        let files = || std::fs::read_dir(&scans).expect("scans").count();
+        let before = files();
+        let unreadable = call(
+            "scanner_capture",
+            json!({ "x-scanner-capture": "{not json" }),
+            Some(TINY_JPEG.to_vec()),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            unreadable.starts_with("the capture's sidecar did not parse"),
+            "{unreadable}"
+        );
+        assert_eq!(files(), before);
+    }
+
+    /// **A frame and a capture are a raw body or they are refused**: with none; with the bytes
+    /// put in the JSON instead, as a host that could carry no body might try; and the other way
+    /// round, a body sent to a command that takes none.
+    #[tokio::test]
+    async fn a_scanner_call_with_its_body_in_the_wrong_place_is_refused_in_words() {
+        let (state, _dir) =
+            crate::state::fixtures::on_files("commands-scanner-door", "http://127.0.0.1:1");
+        let refused = |name: &'static str, args: Value, body: Option<Vec<u8>>| {
+            let state = state.clone();
+            async move { dispatch(&state, name, args, body).await.unwrap_err() }
+        };
+        for name in ["scanner_frame", "scanner_capture"] {
+            assert_eq!(
+                refused(name, json!({}), None).await,
+                format!("{name} needs a raw body.")
+            );
+            // The desktop's refused JSON body, on the table's wire: bytes as base64 text among
+            // the arguments. Never read as a frame.
+            let in_the_json = json!({ "jpeg": "AQID", "options": {}, "body": "AQID" });
+            assert_eq!(
+                refused(name, in_the_json, None).await,
+                format!("{name} needs a raw body.")
+            );
+        }
+        for name in SCANNER {
+            if matches!(name, "scanner_frame" | "scanner_capture") {
+                continue;
+            }
+            let (args, _) = scanner_call(name);
+            assert_eq!(
+                refused(name, args, Some(vec![1, 2, 3])).await,
+                format!("{name} takes no raw body."),
+            );
+        }
+        assert!(
+            !state.scanner.is_loaded(),
+            "a call refused at the door loaded the session"
+        );
+    }
+
+    /// Whether `state::with_write` has run on this state's write connection — its first act
+    /// is to arm the managed wishlists' guards there (`managed_wishlist::arm`), which a write
+    /// on the bare connection never does. `scanner::tests` asks the same way.
+    fn armed(state: &State) -> bool {
+        state
+            .lock_db()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM temp.sqlite_master
+                                WHERE type = 'trigger' AND name = 'mw_guard_folder_del')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("the connection's own triggers")
+    }
+
+    /// A state with one printing that says which finishes it comes in, as `scanner::tests`'
+    /// own is, and a warm facet index that owns nothing yet.
+    fn a_state_with_a_bolt(name: &str) -> Arc<State> {
+        let (state, _dir) = crate::state::fixtures::on_files(name, "http://127.0.0.1:1");
+        state
+            .lock_db()
+            .execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,finishes,prices,raw)
+                 VALUES ('c-bolt','o-c-bolt','Lightning Bolt','lea','161','en','normal','common',
+                    '[\"nonfoil\"]','{}','{}')",
+                [],
+            )
+            .expect("a card");
+        crate::index::lifecycle::build_now(&state).expect("an index over the fixture");
+        assert!(!armed(&state), "nothing has written through the state yet");
+        state
+    }
+
+    /// **The prefs, the tray and the commit, through the table** — written, read back through
+    /// the table's own reads, and the refusals in the module's own words.
+    ///
+    /// **And through the state's own definition of a write, which "the rows landed" does not
+    /// show**: a body that wrote on the bare connection, or a commit through plain `with_write`,
+    /// lands every row here. So each write is also held to what only its door does — the first
+    /// write on a state arms the managed wishlists' guards (`with_write`), which is why the
+    /// tray's write is asked on a state of its own; the two plain writes leave the facet index
+    /// exactly as it was; and the commit publishes it again with the card it now owns
+    /// (`with_write_owned`).
+    #[tokio::test]
+    async fn the_scanners_writes_land_through_the_table() {
+        let state = a_state_with_a_bolt("commands-scanner-writes");
+        let index = || crate::index::lifecycle::current(&state).expect("a warm index");
+        let built = index();
+        assert_eq!(built.owned.count(), 0);
+        let call = |name: &'static str, args: Value| {
+            let state = state.clone();
+            async move { dispatch(&state, name, args, None).await }
+        };
+
+        let mut prefs = call("scanner_prefs", Value::Null).await.expect("prefs");
+        assert_eq!(prefs["mode"], "fast");
+        assert!(!armed(&state), "a read arms nothing");
+        prefs["mode"] = json!("exact");
+        prefs["folderId"] = json!(4);
+        assert_eq!(
+            call("set_scanner_prefs", json!({ "prefs": prefs.clone() })).await,
+            Ok(Value::Null)
+        );
+        assert_eq!(call("scanner_prefs", Value::Null).await, Ok(prefs));
+        assert!(
+            armed(&state),
+            "`set_scanner_prefs` wrote beside `with_write`"
+        );
+        // The tray's write, first on a state of its own, for the same question.
+        let fresh = a_state_with_a_bolt("commands-scanner-writes-tray");
+        assert_eq!(
+            dispatch(&fresh, "set_scanner_tray", json!({ "rows": [] }), None).await,
+            Ok(Value::Null)
+        );
+        assert!(
+            armed(&fresh),
+            "`set_scanner_tray` wrote beside `with_write`"
+        );
+
+        let row = |key: &str, quantity: i64| {
+            json!({
+                "key": key, "cardId": "c-bolt", "oracleId": "o-c-bolt",
+                "name": "Lightning Bolt", "setCode": "lea", "collectorNumber": "161",
+                "finish": "nonfoil", "quantity": quantity, "choices": [], "addedAt": 1,
+            })
+        };
+        let rows = json!([row("a", 2), row("b", 1)]);
+        assert_eq!(
+            call("set_scanner_tray", json!({ "rows": rows.clone() })).await,
+            Ok(Value::Null)
+        );
+        assert_eq!(call("scanner_tray", Value::Null).await, Ok(rows.clone()));
+        assert_eq!(
+            call("set_scanner_tray", json!({ "rows": [row("z", 0)] })).await,
+            Err(crate::scanner::TRAY_ROW_NEEDS_A_COPY.to_owned())
+        );
+        assert_eq!(call("scanner_tray", Value::Null).await, Ok(rows));
+        assert!(
+            Arc::ptr_eq(&built, &index()),
+            "the prefs and the tray are plain writes: the index is left alone"
+        );
+
+        // The commit: two copies into the collection and the row that is left into the tray,
+        // one write — `folderId` left out, as `ipc.ts` leaves an optional argument out.
+        let out = call(
+            "scanner_tray_commit",
+            json!({
+                "items": [{ "cardId": "c-bolt", "quantity": 2, "finish": "nonfoil" }],
+                "remaining": [row("b", 1)],
+            }),
+        )
+        .await
+        .expect("the commit");
+        assert_eq!(out["added"], 1, "{out}");
+        assert_eq!(
+            call("scanner_tray", Value::Null).await,
+            Ok(json!([row("b", 1)]))
+        );
+        let held: i64 = state
+            .lock_db_read()
+            .query_row(
+                "SELECT coalesce(sum(quantity), 0) FROM collection_entries",
+                [],
+                |r| r.get(0),
+            )
+            .expect("the copies");
+        assert_eq!(held, 2);
+        let after = index();
+        assert!(
+            !Arc::ptr_eq(&built, &after),
+            "the commit did not publish the index: it is not an owned write"
+        );
+        assert_eq!(after.owned.count(), 1);
+        // A commit the collection refuses files nothing and leaves the tray as it was.
+        let unknown = call(
+            "scanner_tray_commit",
+            json!({
+                "items": [{ "cardId": "no-such-card", "quantity": 1, "finish": "nonfoil" }],
+                "remaining": [],
+            }),
+        )
+        .await
+        .unwrap_err();
+        assert!(unknown.contains("no-such-card"), "{unknown}");
+        assert_eq!(
+            call("scanner_tray", Value::Null).await,
+            Ok(json!([row("b", 1)]))
+        );
+    }
+
+    /// **A table call is the page's, on the lease** (`scanner::PAGE`). A host of the table has
+    /// one page, so nobody is ever elsewhere to it; and what it holds, it holds as the desktop's
+    /// windows hold theirs — which is what a second label here shows, standing in for the
+    /// window a light host does not have.
+    #[tokio::test]
+    async fn a_table_call_holds_the_scanner_as_the_page() {
+        use crate::scanner::{OPEN_ELSEWHERE, PAGE};
+        let (state, _dir) =
+            crate::state::fixtures::on_files("commands-scanner-lease", "http://127.0.0.1:1");
+        let call = |name: &'static str| {
+            let state = state.clone();
+            async move {
+                let (args, body) = scanner_call(name);
+                dispatch(&state, name, args, body).await
+            }
+        };
+        assert_eq!(call("scanner_elsewhere").await, Ok(json!(false)));
+        assert!(!state.scanner.elsewhere("window-2"), "asking takes nothing");
+
+        // The heartbeat takes the lease for the page, and settles as it answers.
+        assert_eq!(call("scanner_hold").await, Ok(Value::Null));
+        assert!(!state.scanner.elsewhere(PAGE));
+        assert!(state.scanner.elsewhere("window-2"));
+        assert_eq!(
+            state.scanner.admit("window-2").err(),
+            Some(OPEN_ELSEWHERE.to_owned())
+        );
+        // Still nobody else's, however often the page asks.
+        assert_eq!(call("scanner_elsewhere").await, Ok(json!(false)));
+        assert_eq!(call("scanner_hold").await, Ok(Value::Null));
+
+        // The other way round: held under another label, every command that admits is refused
+        // in exactly the sentence the page matches on — a frame before its body is decoded,
+        // which is what an unloaded session shows — and the three reads answer regardless.
+        let (held_state, _held_dir) =
+            crate::state::fixtures::on_files("commands-scanner-held", "http://127.0.0.1:1");
+        let _window = held_state
+            .scanner
+            .admit("window-2")
+            .expect("a free scanner admits");
+        let mut refused = Vec::new();
+        for name in SCANNER {
+            let (args, body) = scanner_call(name);
+            match dispatch(&held_state, name, args, body).await {
+                Err(e) if e == OPEN_ELSEWHERE => refused.push(name),
+                Err(e) => panic!("{name}: {e}"),
+                Ok(answer) if name == "scanner_elsewhere" => assert_eq!(answer, json!(true)),
+                Ok(_) => {}
+            }
+        }
+        assert_eq!(
+            refused,
+            [
+                "scanner_frame",
+                "scanner_reset",
+                "scanner_capture",
+                "scanner_set_filters",
+                "scanner_hold",
+                "set_scanner_prefs",
+                "set_scanner_tray",
+                "scanner_tray_commit",
+            ]
+        );
+    }
+
+    /// **A refused frame costs no decode and no load**: the lease is asked before the body is
+    /// split or the session touched. Its own state, so the status read above cannot have been
+    /// what loaded it.
+    #[tokio::test]
+    async fn a_frame_refused_by_the_lease_never_reaches_the_session() {
+        let (state, dir) =
+            crate::state::fixtures::on_files("commands-scanner-refused", "http://127.0.0.1:1");
+        let _window = state.scanner.admit("window-2").expect("admitted");
+        for name in ["scanner_frame", "scanner_capture"] {
+            // A detail length that cannot split the body: were the payload read first, this
+            // would be the reader's sentence rather than the lease's.
+            let args = json!({ "x-scanner-detail": "0", "x-scanner-capture": "{not json" });
+            assert_eq!(
+                dispatch(&state, name, args, Some(TINY_JPEG.to_vec())).await,
+                Err(crate::scanner::OPEN_ELSEWHERE.to_owned()),
+                "{name}"
+            );
+        }
+        assert!(!state.scanner.is_loaded());
+        assert!(!dir.join("scanner").exists());
+    }
+
+    /// **On a page the session's five and the capture are one sentence, and the rest answers.**
+    /// The web host dispatches through this same table, and the `card-scanner` crate's threads
+    /// and clock trap in a Worker — so those six stop before anything is loaded, and the
+    /// prefs, the tray, the commit and the lease work as on any host.
+    #[tokio::test]
+    async fn on_a_page_the_scanners_session_is_refused_and_its_rows_answer() {
+        let (page, _heard, dir) =
+            crate::state::fixtures::single("commands-scanner-page", "http://127.0.0.1:1");
+        let standing_in = crate::platform::host::emulate_page();
+        assert!(!crate::platform::host::keeps_files());
+        let mut refused = Vec::new();
+        for name in SCANNER {
+            let (args, body) = scanner_call(name);
+            match dispatch(&page, name, args, body).await {
+                Err(e) if e == crate::scanner::NOT_IN_A_BROWSER_YET => refused.push(name),
+                Err(e) => panic!("{name}: {e}"),
+                Ok(answer) if name == "scanner_elsewhere" => assert_eq!(answer, json!(false)),
+                Ok(_) => {}
+            }
+        }
+        assert_eq!(
+            refused,
+            [
+                "scanner_status",
+                "scanner_frame",
+                "scanner_reset",
+                "scanner_capture",
+                "scanner_set_filters",
+            ]
+        );
+        assert!(
+            !page.scanner.is_loaded(),
+            "a refused command loaded the session"
+        );
+        // Nothing was written beside the databases either — looked for as the test, not the page.
+        drop(standing_in);
+        assert!(!dir.join("scanner").exists());
     }
 }
