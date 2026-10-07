@@ -2,7 +2,12 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { CollectionFolder, ScannerPrefs, ScannerVerdict } from "@/lib/ipc";
+import type {
+  CollectionFolder,
+  ScannerAssetsOwed,
+  ScannerPrefs,
+  ScannerVerdict,
+} from "@/lib/ipc";
 import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import {
   DEFAULT_SCANNER_PREFS,
@@ -21,6 +26,17 @@ vi.mock("@/lib/ipc", async (orig) => {
     ipc: {
       ...real.ipc,
       scannerStatus: vi.fn(async () => STATUS.missing),
+      // The scanner's files. **Refused by default**, which is a host with nothing to offer — so
+      // every test but the one that says otherwise draws the status's own sentences, as the page
+      // did before there was an offer, and none reaches the real core for an answer.
+      scannerAssets: vi.fn(
+        (): Promise<ScannerAssetsOwed> =>
+          Promise.reject(new Error("There is no command named scanner_assets on this host.")),
+      ),
+      scannerAssetsFetch: vi.fn(
+        async (): Promise<ScannerAssetsOwed> => ({ owed: [], bytes: 0, fetching: false }),
+      ),
+      onScannerAssets: vi.fn(() => () => {}),
       // The lease, free: every test but the ones that say otherwise is a window with the scanner to
       // itself, which is also the only state the page had before there was more than one window.
       scannerElsewhere: vi.fn(async () => false),
@@ -265,6 +281,8 @@ const DECK_GROUP: CollectionFolder = {
 
 const COMMANDS = [
   ipc.scannerStatus,
+  ipc.scannerAssets,
+  ipc.scannerAssetsFetch,
   ipc.scannerElsewhere,
   ipc.scannerHold,
   ipc.scannerFrame,
@@ -1351,5 +1369,47 @@ describe("ScannerPage with another window holding the scanner", () => {
     visit();
     expect(await screen.findByText(SCANNER_OPEN_ELSEWHERE)).toBeInTheDocument();
     expect(getUserMedia).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The scanner's files, in the page** (the light app's step 7.4). Where the host says it owes
+   * them, the reader's view draws the offer in place of the path-and-restart sentence; and when
+   * the download lands the engine's session is a new one, so the page does its two halves of
+   * that — the status is read again, and the stored filters are pushed again, to the session
+   * that can now take them. `ScannerAssets`' and the two hooks' own suites hold the rest.
+   */
+  it("offers the scanner's files where the host owes them, and gives the new session its filters when they land", async () => {
+    const user = userEvent.setup();
+    refused();
+    const filters = { sets: ["hob"], released_from: null, released_to: null };
+    storedPrefs({ filters });
+    vi.mocked(ipc.scannerAssets).mockResolvedValue({
+      owed: [{ key: "bundle", label: "Card hashes", bytes: 5_874_752 }],
+      bytes: 5_874_752,
+      fetching: false,
+    });
+    mount();
+    const offer = await screen.findByRole("region", { name: "Scanner files" });
+    expect(
+      within(offer).getByText("The scanner needs its card data — about 6 MB."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/No reference bundle\. Put/)).not.toBeInTheDocument();
+    // The models were not offered, so their own sentence still stands under the offer.
+    expect(screen.getByText(/No OCR models\. Put/)).toBeInTheDocument();
+    await waitFor(() => expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(1));
+    expect(ipc.scannerStatus).toHaveBeenCalledTimes(1);
+    expect(ipc.scannerAssetsFetch).not.toHaveBeenCalled();
+
+    vi.mocked(ipc.scannerStatus).mockResolvedValue(STATUS.present);
+    await user.click(within(offer).getByRole("button", { name: "Download" }));
+    await waitFor(() => expect(ipc.scannerAssetsFetch).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(ipc.scannerStatus).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(2));
+    expect(ipc.scannerSetFilters).toHaveBeenLastCalledWith(filters);
+    await waitFor(() =>
+      expect(screen.queryByRole("region", { name: "Scanner files" })).not.toBeInTheDocument(),
+    );
+    expect(screen.queryByText(/No reference bundle/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/No OCR models/)).not.toBeInTheDocument();
   });
 });

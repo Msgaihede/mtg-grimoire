@@ -19,6 +19,10 @@
  * that started it),
  * `sync:applied` (`RelayOutcome`, subscribed by `useDeviceSyncInvalidation`),
  * `sync:live` (`SyncLiveEvent`, subscribed by `useDeviceSyncLive`),
+ * `scanner:assets` (`ScannerAssetsProgress`, subscribed by `useScannerAssets` while the scanner's
+ * files are owed or on their way — **a twelfth, and one that grep cannot count**: the core emits
+ * it through the state's event sink, `scanner_assets::PROGRESS_EVENT`, and no `app.emit` names
+ * it; here `scannerAssetHandlers`' fetch is what says it),
  * `startup:changed` (`StartupStatus`, reached through `ipc.onStartupChanged` by `DesktopBoot`,
  * which gates the whole app on it) and
  * `db:changed` (`DbChanged`, subscribed once by `useCrossWindowRefresh`). **That last one is

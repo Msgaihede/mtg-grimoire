@@ -566,6 +566,107 @@ describe("useScannerPrefs while another window holds the scanner", () => {
     expect(result.current.unavailable).toBeNull();
   });
 
+  /**
+   * **`resync`: the engine's session is a new one, and it is given the reader's filters.** The
+   * case it exists for — a phone with no card hashes. The stored filters were refused at mount,
+   * because a session with no bundle has no names to filter by, and the popover was put back to
+   * none; the row was never rewritten. When the files land the engine loads a session that can
+   * take them, and what it is pushed is the **row's** filters, read again — not the none the
+   * cache was left holding.
+   */
+  it("pushes the stored filters again on resync, read from the row rather than the cache", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    scannerSetFilters.mockRejectedValueOnce(
+      "Filters need card names, and the scanner has none loaded — it needs corpus.db beside the bundle.",
+    );
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.prefs.filters).toEqual(DEFAULT_SCANNER_PREFS.filters);
+    expect(result.current.filterError).toMatch(/^Filters need card names/);
+    expect(scannerPrefs).toHaveBeenCalledTimes(1);
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+
+    act(() => result.current.resync());
+    await waitFor(() => expect(scannerSetFilters).toHaveBeenCalledTimes(2));
+    expect(scannerPrefs).toHaveBeenCalledTimes(2);
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(HOB);
+    await waitFor(() => expect(result.current.filterError).toBeNull());
+    expect(result.current.prefs.filters).toEqual(HOB);
+    // The camera and the pump ran on through it: `loaded` never went back.
+    expect(result.current.loaded).toBe(true);
+    // Reading the row back is not a change to it.
+    expect(setScannerPrefs).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A change still on its way to the row is the reader's newer word than the row: with a write
+   * refused and waiting, resync pushes what the cache holds and does not read the row over it.
+   */
+  it("pushes the cache's filters on resync while a change has not reached the row", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    setScannerPrefs.mockRejectedValue(BUSY);
+    const { result } = mount();
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    act(() => result.current.update({ filters: HOB }));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(setScannerPrefs).toHaveBeenCalledTimes(1);
+    const read = scannerPrefs.mock.calls.length;
+    const pushed = scannerSetFilters.mock.calls.length;
+
+    act(() => result.current.resync());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(0);
+    });
+    expect(scannerPrefs).toHaveBeenCalledTimes(read);
+    expect(scannerSetFilters).toHaveBeenCalledTimes(pushed + 1);
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(HOB);
+    expect(result.current.prefs.filters).toEqual(HOB);
+  });
+
+  /**
+   * **A change made while resync is reading the row is not written over by the row.** The read
+   * used to go through the query, which put the row into the cache as it answered: a switch
+   * flipped in that moment went back on screen, while its own write was still going out. The
+   * row now reaches the cache only if nothing changed since the read set out — and what is
+   * pushed is then the reader's newer filters.
+   */
+  it("does not put the row over a change made while resync was reading it", async () => {
+    scannerPrefs.mockResolvedValue(STORED);
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+
+    let answer!: (prefs: ScannerPrefs) => void;
+    scannerPrefs.mockReturnValueOnce(new Promise<ScannerPrefs>((resolve) => (answer = resolve)));
+    act(() => result.current.resync());
+    // While the row is on its way: the reader turns Developer on, and narrows to another set.
+    act(() => result.current.update({ developer: true }));
+    act(() => result.current.update({ filters: ZZZ }));
+    await waitFor(() => expect(scannerSetFilters).toHaveBeenLastCalledWith(ZZZ));
+    const pushed = scannerSetFilters.mock.calls.length;
+
+    await act(async () => answer(STORED));
+    await waitFor(() => expect(scannerSetFilters).toHaveBeenCalledTimes(pushed + 1));
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(ZZZ);
+    expect(result.current.prefs.developer).toBe(true);
+    expect(result.current.prefs.filters).toEqual(ZZZ);
+  });
+
+  /** A resync from a view that has gone sends nothing — an accepted push is the lease, taken. */
+  it("does not resync once the view has gone", async () => {
+    const { result, unmount } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    const resync = result.current.resync;
+    unmount();
+    act(() => resync());
+    await act(async () => {});
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+    expect(scannerPrefs).toHaveBeenCalledTimes(1);
+  });
+
   /** A view that has gone must not push again — an accepted push is the lease, taken. */
   it("sends nothing again once the view has gone", async () => {
     vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });

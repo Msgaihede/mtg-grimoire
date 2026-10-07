@@ -95,6 +95,28 @@ jobs:
       - name: OCR models
         run: node crates/card-scanner/scripts/fetch-ocr-models.mjs models
 
+      # **An installed app pins the two models by SHA-256** and refuses a download whose digest
+      # is not the one it was built with (`crates/grimoire-core/src/scanner_assets.rs`). So a
+      # model that is not that file must never reach the release: every install that fetches
+      # its files at run time would refuse it, for good. The digests are read out of that
+      # source, as the format version is read out of the crate's — one place to change, and a
+      # line this cannot read fails the step rather than passing it. Before the evaluation, the
+      # dry run and the publish alike: the wrong models are wrong on any ref.
+      - name: OCR models are the ones the app pins
+        run: |
+          src=crates/grimoire-core/src/scanner_assets.rs
+          for pair in DETECTION:text-detection.rten RECOGNITION:text-recognition.rten; do
+            name=${pair%%:*}
+            file=models/${pair##*:}
+            want=$(grep -A1 "^pub const ${name}_SHA256: &str" "$src" | grep -oE '[0-9a-f]{64}' | head -n1 || true)
+            got=$(sha256sum "$file" | cut -d' ' -f1)
+            if [ -z "$want" ] || [ "$got" != "$want" ]; then
+              echo "**Refused: \`$file\` is \`$got\`, and the app pins \`${want:-nothing this step could read}\` (\`${name}_SHA256\` in \`$src\`).** Nothing was published. A deliberate change of model changes that constant and its length in the same commit." >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          done
+          echo "OCR models match the digests the app pins." >> "$GITHUB_STEP_SUMMARY"
+
       # **A regression fence, not an accuracy claim**: Scryfall renders degraded in software and
       # fed to both scan modes (`crates/card-scanner/src/bin/eval.rs`). The table lands in the
       # step summary. Before both publish and dry run, so every dispatch shows what the bundle it

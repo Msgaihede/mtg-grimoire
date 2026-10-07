@@ -1006,8 +1006,8 @@ fn a_copy_filed_into_a_binder_deleted_here_and_then_its_rename(
     (receiver, filed, renamed)
 }
 
-/// ⚠ **A `gone` decision and the op that reverses it, split across a page edge: the paged
-/// catch-up is what a live device's pulls make — and that is not what one unpaged pull made.**
+/// **A `gone` decision and the op that reverses it, split across a page edge: the paged
+/// catch-up is what the unpaged one was, and what a live device's pulls made.**
 ///
 /// This device deleted a binder. The other one, not having heard, files a copy into it, and in
 /// a later push renames it — after the delete, so add-wins brings the binder back.
@@ -1019,56 +1019,37 @@ fn a_copy_filed_into_a_binder_deleted_here_and_then_its_rename(
 /// *The copy's push alone, then the rename's*: the copy names a parent that is gone, and
 /// nothing else in what was handed over can bring it back. A binder's key is `SET NULL`, so the
 /// copy is written at the root — which is what the sender does to it when the delete reaches
-/// it — and nothing is held. Then the rename arrives and the binder comes back, empty here.
-/// The sender keeps the copy in the binder: its rename is later than the delete, so the delete
-/// loses there too and clears nothing. **The two devices end differently, and nothing either
-/// will send says so** — the copy's move to the root was `apply`'s own write, behind
-/// `capture::suppressed`, and is no op.
+/// it — and nothing is held. **And `apply` writes down that it did so** (`apply::orphans`, issue
+/// #841): when the rename arrives and the binder comes back, the copy is filed into it again.
 ///
-/// **That is not paging's doing, and paging does not hide it.** A device that was live pulls
-/// between those two pushes whenever they are more than a debounce apart, and ends exactly so
-/// today: `live` below is that device, on the code as it stands, and `paged` equals it. What
-/// paging changes is who meets it — a device that was *behind* used to be handed both pushes
-/// in one answer, and is now handed them as a live one would be when a page edge falls between
-/// them.
+/// **Until then this was the one row of the three-ways table that differed**, and this test's
+/// last assertion held the difference: the binder came back empty here, the sender kept the
+/// copy in it, and nothing either would send said so — the move to the root was `apply`'s own
+/// write, behind `capture::suppressed`. It was older than paging; a live device pulling between
+/// the two pushes met it, and paging only let a device that was behind meet it too.
+/// `apply/tests/cuts.rs` has the other shapes of it.
 ///
 /// **What makes it red**: a paged catch-up that differs from the live one — paging adding an
-/// arrival of its own. *And* the day `apply` learns to re-file a copy when its binder comes
-/// back: the last assertion says the difference is still there, so that whoever closes it
-/// meets this test and deletes the sentence that excuses it.
+/// arrival of its own; and a copy left at the root by either, which is the defect back.
 #[tokio::test]
-async fn a_gone_decision_and_its_reversal_across_a_page_edge_end_as_a_live_devices_pulls_do() {
+async fn a_gone_decision_and_its_reversal_across_a_page_edge_end_as_the_unpaged_pull_ends() {
     let (receiver, filed, renamed) = a_copy_filed_into_a_binder_deleted_here_and_then_its_rename();
     let (unpaged, paged, live) = three_ways(&receiver, &[&filed, &renamed]).await;
 
+    assert!(
+        unpaged
+            .iter()
+            .any(|line| line.starts_with("copy: c1 x1 in B2")),
+        "the fixture: {unpaged:#?}"
+    );
     assert_eq!(
         paged, live,
         "a paged catch-up is not what a live device's pulls made"
     );
-
-    let copy = |picture: &[String]| -> String {
-        picture
-            .iter()
-            .find(|line| line.starts_with("copy: "))
-            .map(|line| line.split(" as ").next().unwrap().to_owned())
-            .unwrap_or_else(|| "no copy".to_owned())
-    };
-    assert_eq!(copy(&unpaged), "copy: c1 x1 in B2", "{unpaged:#?}");
     assert_eq!(
-        copy(&paged),
-        "copy: c1 x1 in (root)",
-        "the copy followed its binder back: the convergence defect this records is closed, and \
-         this test's last assertion with it — {paged:#?}"
+        paged, unpaged,
+        "the copy did not follow its binder back: where the log was cut decided where it is"
     );
-    // The binder itself is back on all three, under the name the rename gave it.
-    for picture in [&unpaged, &paged, &live] {
-        assert!(
-            picture
-                .iter()
-                .any(|line| line.starts_with("binder: B2 in (root)")),
-            "{picture:#?}"
-        );
-    }
 }
 
 /// **A sender held for its clock on a later page than its own earlier batch: the paged catch-up

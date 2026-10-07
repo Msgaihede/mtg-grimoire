@@ -137,7 +137,9 @@ a bare connection, and `install_hook` keeps its signature by delegating with a t
   `sync_devices` and `device_names` from `sync_device_rename`, `sync_state` and `sync_devices` from
   `sync_patreon_claim` and `sync_group_leave`. `price_snapshots` and `sync_peers` are deliberately
   **not** marked — the app writes them itself (a day's prices, a peer watermark) and no window's
-  press does, so no window is behind another about them. `changes::MARKED_BY_COMMAND` and
+  press does, so no window is behind another about them. `sync_gone` (user schema v54) and
+  `sync_orphans` (v60) are unmarked beside them: sync's own bookkeeping, read by `apply` and drawn
+  by no window. `changes::MARKED_BY_COMMAND` and
   `WRITTEN_BY_THE_APP` are the two lists, and a test enumerates `main.sqlite_master` against them, so
   a new `WITHOUT ROWID` table goes red until somebody decides.
   **`sync_state` was on the wrong list in the first draft**, which said the app alone writes it. It

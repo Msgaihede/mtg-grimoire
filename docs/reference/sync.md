@@ -1280,7 +1280,11 @@ through its `AFTER DELETE` trigger, `apply` writes the rest, and no window draws
 `schema.rs` went red with it and are counted inside the sites they fence:
 `the_user_side_is_every_table_no_feed_can_rebuild` (`schema::TABLES`) and the figure in
 `the_user_schema_is_byte_identical_to_what_the_ladder_builds` (`USER_SCHEMA_SQL`) — re-counted
-there rather than incremented.
+there rather than incremented. **`sync_orphans` (user schema v60, 2026-10-07) owed the same
+eight**, `UNDO_V60` ahead of `UNDO_V59`, and one site `sync_gone` did not have on its day:
+`archive::replace`, which clears it beside `sync_gone` when a restore replaces the user tables it
+describes. The census is eight `WITHOUT ROWID` user tables, and the figure went 88 → 92 — a table
+and its three indexes, and no autoindex, since the primary key *is* the table.
 
 Two further corrections, both found by reading `schema.rs` rather than the spec:
 
@@ -2857,11 +2861,18 @@ the same shape, and so is a row dragged *out* of a folder onto a root copy.
   (`two_copies_the_sender_swapped_between_the_root_and_a_binder_stay_two`, one row under that
   mutation). `run_groups` builds that set once a pass (`places`).
 - **It is that refusal only where** a row is on the grain the write lands on, and the folder the
-  group names — where it names one — is a row here
-  (`a_copy_moved_into_a_binder_deleted_here_is_not_folded_into_the_roots_copy`, folded and
-  nothing recorded under that mutation: a folder that is gone is issue
-  [#841](https://github.com/Msgaihede/mtg-grimoire/issues/841)'s). Anything else is still a row
-  this database cannot build, dropped and recorded.
+  group names — where it names one — is a row here: a folder that is gone is issue
+  [#841](https://github.com/Msgaihede/mtg-grimoire/issues/841)'s. Anything else is still a row
+  this database cannot build, dropped and recorded — **or the ledger of orphans' to answer**,
+  which is asked first: a folder that is gone, and either row being one that is on its grain
+  only because *its* folder is (*A decision resting on `gone` is taken back when the parent
+  returns*, below). When this fold was written the ledger was not, and a copy moved into a
+  deleted binder onto the root's copy was refused on purpose — folded with nothing to say so,
+  there would have been no copy to put back in the binder. The ledger says so, and folds it:
+  `a_copy_moved_into_a_binder_deleted_here_is_folded_into_the_roots_copy_by_the_ledger` and its
+  edited sibling, which pinned the refusal under their `…is_not_folded…` names until the two
+  changes met, now hold one row, the lower uid and one `folded` entry with the copy as it would
+  be; they go red if this merge takes the row instead, which leaves no entry.
 
 **An edit of a field the grain is made of is the same refusal, and is answered the same way**
 (2026-10-07, the same day; measured first by a throwaway probe). `a` regrades `c` from NM to LP
@@ -2894,8 +2905,9 @@ a move and such an edit **in one group**, which lands on a grain neither names a
   mutation); never onto a row the page itself places — `places` counts a group naming a grain
   field, so two copies whose conditions the sender swapped stay two
   (`two_copies_the_sender_swapped_between_two_conditions_stay_two`, one row under that mutation);
-  and never where the folder the group names is gone
-  (`a_copy_edited_and_moved_into_a_binder_deleted_here_is_not_folded_into_the_roots_copy`).
+  and never where the folder the group names is gone — that one is the ledger of orphans', which
+  folds it and writes it down (`a_copy_edited_and_moved_into_a_binder_deleted_here_is_folded_by_the_ledger`,
+  red if this fold takes the row and leaves no entry).
 - **Measured** (`a_copy_edited_onto_one_the_peer_has_not_sent` and
   `a_wish_edited_onto_one_the_peer_has_not_sent`, each with and without a move in the group and in
   both uid orders, each red first with every op of the group `dropped`): both devices end on one
@@ -3126,23 +3138,23 @@ one pull after each row was stored — and compared (`client/tests/paged.rs`, `t
 | …the claim first — an order no log can hold | the same, **four** copies | two. Pinned as a premise (`the_other_order_is_not_one_a_log_can_hold`): a relay answering out of `seq` order, or a baseline begun beside a pending op, would make it real, live as paged |
 | A baseline with references, in two chunks | the same | **the same** |
 | A sender held for its clock, its earlier batch a page before | the same | **the same once the clock catches up**; while it is held the earlier batch has applied, where one answer holds the sender whole |
-| A `gone` decision and the op that reverses it | the same | ⚠️ **different** — below |
+| A `gone` decision and the op that reverses it | the same | **the same**, since user schema v60 — below |
 
-⚠️ **The one that differs is a convergence defect in `apply`, and paging neither causes nor hides
-it.** This device deleted a binder; another, not having heard, files a copy into it and, in a
-later push, renames it — later than the delete, so add-wins brings the binder back. *One answer
-carrying both*: the rename ranks first, the binder is back, the copy is filed into it. *The
-copy's push alone, then the rename's*: the copy names a parent that is gone and nothing handed
-over can bring it back; a binder's key is `SET NULL`, so the copy is written at the root and
-nothing is held; then the rename brings the binder back, empty. The sender keeps the copy in the
-binder — its rename beats the delete there too. **The two devices end differently and nothing
-either will send says so**: the move to the root was `apply`'s own write, behind
-`capture::suppressed`. A live device that pulls between those two pushes ends exactly so today,
-on the code as it stood before this step; what paging changes is that a device catching up can
-now meet it too, when a page edge falls between the two pushes.
-`a_gone_decision_and_its_reversal_across_a_page_edge_end_as_a_live_devices_pulls_do` holds paged
-to live, and its last assertion holds the difference itself, so whoever closes it meets the test.
-It is in *What is still owed*.
+**The last row differed until 2026-10-07, and it was a convergence defect in `apply` that paging
+neither caused nor hid** (issue #841). This device deleted a binder; another, not having heard,
+files a copy into it and, in a later push, renames it — later than the delete, so add-wins brings
+the binder back. *One answer carrying both*: the rename ranks first, the binder is back, the copy
+is filed into it. *The copy's push alone, then the rename's*: the copy names a parent that is
+gone and nothing handed over can bring it back; a binder's key is `SET NULL`, so the copy is
+written at the root and nothing is held; then the rename brought the binder back, **empty**,
+while the sender kept the copy in it — and nothing either would send said so, because the move to
+the root was `apply`'s own write, behind `capture::suppressed`. A live device pulling between the
+two pushes had always ended so; paging let a device catching up meet it too, at a page edge.
+`apply` now writes the decision down and takes it back when the binder returns — *A decision
+resting on `gone` is taken back when the parent returns*, after the holds — and
+`a_gone_decision_and_its_reversal_across_a_page_edge_end_as_the_unpaged_pull_ends` holds all
+three ways equal. (Its last assertion held the difference until then, under the name
+`…_end_as_a_live_devices_pulls_do`, so that whoever closed it met the test.)
 
 **`/keys` is asked at most once a trip**, when anything fetched is above the epoch in hand.
 **One ack, at the end — and behind a pull that stopped part of the way through its pages**, for
@@ -3277,6 +3289,234 @@ upgrading brought none of it back. **Reading older sentences**: where this recor
 or the token stacks spec and plan say before 2026-09-27 that an op or a stream "stalls", "defers
 for good" or is "held" for the next pull, read *dropped, with the sender's later ops in that page* —
 which is still exactly what a v51 client does. From this build on, the table above decides.
+
+### A decision resting on `gone` is taken back when the parent returns
+
+Built 2026-10-07 for issue #841, with user schema v60. Everything the section above says of a
+child whose parent is gone is right **while the parent stays gone**. Add-wins brings a parent back
+whenever its own device edited it after the delete, and until this the child's fate was settled
+by which arrived first — in one answer the retry passes find the parent before any decision is
+taken; in two, the decision was taken on the first and never looked at again. The step-6.5b
+fixture pinned the mildest shape. Measured before anything was built, each shape handed to a
+receiver as one answer and as a pull for each push, the sender then hearing the receiver
+(`apply/tests/cuts.rs`; in every row the sender ends as *one answer* does):
+
+| The receiver deleted the parent; the sender's later rename brings it back | One answer | A pull for each push, before v60 |
+| --- | --- | --- |
+| A new copy filed into the binder (`SET NULL`) | copy in the binder | copy at the root |
+| …and the receiver holds a root copy of that printing | 1 in the binder, 1 at the root | **2 at the root**, folded onto the twin |
+| A copy both hold, *moved* into the binder — a sparse op | copy in the binder | copy at the root |
+| A folder the receiver holds, with a sub-folder and a copy in it, moved under the parent (cascade) | the tree intact under the parent | **the folder and its sub-folder deleted**, the copy at the root |
+| A new folder with a copy in it, made under the parent (cascade) | the folder, the copy in it | **no folder**, the copy at the root |
+| A card moved into a deleted pile (cascade) | card in the pile | **card deleted** |
+
+(A card added to a deleted *deck* converged either way: the deck's piles go on both devices.)
+Two devices are enough for all six, and nothing either sends repairs any: each decision is
+`apply`'s own write, behind `capture::suppressed`.
+
+**So every such decision is written down, in `sync_orphans`** — the ledger of orphans
+(`apply/orphans.rs`), one row per child, keyed by the child and indexed by the gone parent it
+rests on — **and `orphans::sweep`, at the end of every pass of every apply, takes back each one
+whose parent is a row here again.** However the parent came back: resurrected by this page, built
+by a claim, or put back by the sweep itself a moment earlier, which is how a folder's sub-tree
+returns in order. It runs inside the pass's savepoint, so a round rolled back takes its replays
+with it. The owner chose the receiving side over the sender re-announcing a parent's children
+when its edit outlives a peer's delete (2026-10-07): no op is added to the wire, any sender build
+is answered, a fold onto a twin can be undone — which no re-announcement could — and the device
+that took the decision is the one that takes it back.
+
+An orphan is in one of three places while its parent is gone, and the entry's `state` says which:
+
+| State | Where the row is | Written by | Taking it back is |
+| --- | --- | --- | --- |
+| `placed` | here, under its own uid, the parent's column clear | the `SET NULL` arm; the moot arm's re-homing of a copy that met no twin; the moot delete of a folder that held decks | the placement, replayed as the op it came from — sparse, at its own stamp, through `write_group` |
+| `folded` | inside a twin: written without its parent it landed on the root's grain | the `SET NULL` arm where `find_row`'s grain hit a root row; the moot arm's re-homing where `refile_entry` folded; a move the root's grain refused | the twin gives back what it took, and the row is built under the parent |
+| `absent` | nowhere | the moot arm: a row consumed, a row it deleted, and every row that delete cascaded through | the row, built as the entry describes it |
+
+- **`placed` holds a stamp and nothing else**, and that is what makes its replay last-writer-wins
+  like the op it stands for: where this device has moved the row somewhere since, its own op is
+  in its own log with a later stamp, the replay loses to it, and the row stays where the reader
+  put it — which is where the sender puts it too, on hearing of that move
+  (`a_copy_this_device_moved_since_stays_where_it_was_put`). A placement `apply` made by itself —
+  the re-homing — is stamped with a tick of this device's own clock, taken then. **The ledger is
+  told only where the placement under the gone parent is the one that stands**, the moot arm's
+  own question asked of the `SET NULL` arm — and asked of **the row's own history, never of the
+  fold that also takes in the row the grain found**: a root twin made here later by the clock
+  than the sender's filing said the placement had lost, nothing was written down, and the fold
+  was for good (the review; `a_twin_made_later_by_the_clock_does_not_hide_the_fold_from_the_ledger`).
+  An entry ends the moment its row's placement is written again by anything
+  (`a_placed_copy_its_own_device_moved_to_the_root_stays_there`).
+- **`absent` and `folded` hold the row as it would be, not the ops that would make it** — its
+  fields, its counters as values, its parents by uid. That is forced, and it is issue #842 seen
+  from here: `apply` remembers no stamp for anything another device wrote, so a row deleted here
+  cannot be folded back together from this device's own log without reverting every field a peer
+  changed. A row this device held is read off the table before the moot delete, with the group
+  laid over it as `update_row` would have written it; one it never held is `insert_row`'s reading
+  of the group. **It is built as it stands, counters included** — not through the fold, whose
+  count for a row is this device's own share of it. **Unless a row is already on its grain**:
+  then two rows are meeting, which is the write path's to answer, and it goes there as one put
+  with its counters as deltas, so the counts **add** — written as a claim, a floor, a copy of two
+  moved into a binder where this device had one of its own ended at two against the sender's
+  three (the review; `a_folded_copy_moved_into_a_binder_that_is_here_is_built_there`).
+- **An op that arrives for an orphan is laid over its entry** (`meet_absent`, `meet_folded`),
+  where it used to be skipped as a row this database cannot build, with an `error_log` row for a
+  reader who had done nothing wrong: a rename of a folder that is only an entry is in the folder
+  when it returns (`a_folder_renamed_while_it_was_an_orphan_comes_back_renamed`), and a `+1` to
+  a folded copy is in the copy and not left in the twin
+  (`a_folded_copy_added_to_before_its_binder_returns_comes_back_whole`). An op that **moves** the
+  orphan to a parent that is here builds it there at once, no parent returning at all
+  (`a_folder_moved_out_from_under_the_deleted_parent_is_built_there`); one that **deletes** it
+  ends the entry, and a folded copy's share leaves the twin with it
+  (`a_copy_its_own_device_deleted_does_not_come_back_with_the_binder`,
+  `a_folder_its_own_device_deleted_does_not_come_back_with_the_parent`). Laid over the entry **on
+  a deciding pass only**, like every decision resting on `gone`: once a retry pass, and a
+  counter's delta would be added once a pass
+  (`a_card_added_to_while_it_was_an_orphan_comes_back_with_the_whole_count_once`).
+- **The moot arm's re-homing is done a row at a time** (`rehome::rehome_one`), so that what it did
+  to each row is known; the delete arm's is unchanged. **A group whose own ops end in a delete
+  records nothing**: its own device deleted the row, and a parent's return brings back nothing.
+  **The walk of what a moot delete takes keeps a list of where it has been**: a ring of folders
+  is cut at the end of every pass, but a pass can make one first — a move the page landed a
+  moment ago closing a ring with one this device made — and the first build walked it until the
+  stack gave out, on a page that would have come back on every pull (the review;
+  `a_ring_of_folders_made_in_the_same_page_does_not_overflow_the_moot_arm`).
+- **An entry that cannot be replayed is let go and recorded** — one `error_log` row under
+  `Source::Relay`, "a change to {table} could not be put back when what it belongs to returned" —
+  because one that failed on every pull would be a fault with no end. That includes a replay the
+  write path itself declines.
+
+**A fold is two rows in one, and it is where every hard case lives.** Only a copy and a wish can
+fold — their grain carries the folder — and the root's unique index leaves room for one row where
+the sender, having folded nothing, goes on holding two. The first build undid a fold from two
+readings of the twin, before and after; an independent review broke that five ways on
+neighbouring two-device shapes, each by experiment, and its second pass broke the rework twice
+more. What stands now is what those found (`apply/tests/cuts/found.rs`):
+
+- **What the twin took is measured, write by write.** Each write a folded row's ops make to its
+  twin is read on both sides and the difference added to the entry's `share` (counters) and
+  `changed` (fields, the first "before" kept). Read whole when the fold was undone, the twin's
+  own later `+1` — the sender's, or this device's reader's — was counted as the orphan's share and
+  the root left a copy short
+  (`what_happens_to_a_twin_while_a_copy_is_folded_into_it_stays_with_the_twin`,
+  `a_note_the_folded_copy_carried_leaves_the_twin_with_it`).
+- **The twin is found by a column that follows it, and wears the lowest uid in it.** `twin` is
+  the uid of the row a folded orphan is inside *now*: a row is renamed whenever two meet on a
+  grain and the lower uid wins, and `orphans::renamed` — called from `adopt_uid`, from the
+  re-homing's `adopt_lower` and from a fold being undone — re-points every entry lent to it. With
+  the twin found by the name it had worn when the fold was made, two copies folded onto one twin
+  took their shares out of each other, or out of a copy already back in its binder — five of
+  twelve orders of uid and return
+  (`two_copies_folded_onto_one_twin_each_return_to_their_own_binder`,
+  `two_copies_a_moot_delete_refiled_onto_one_twin_each_return_to_their_own_folder`: every order);
+  the sweep reads each entry again before it replays it, for the same reason. **`alias` is the
+  twin's own name**, held by the entry of whichever orphan's uid the row is wearing, which the
+  sender still calls the twin by (`orphans::survivor_of` routes those ops to it;
+  `a_twin_renamed_by_a_fold_is_still_reached_by_its_own_name`). When that orphan leaves, the row
+  takes **the lowest uid still in it** — its own, or another orphan's, whose entry then holds the
+  alias — because that is what the sender's own re-homing calls the pair if the rest stay
+  deleted; given its own name back regardless, the row ended `u-3` here and `u-2` there (the
+  second pass: all 66 of its partial-return failures;
+  `a_twin_some_of_whose_orphans_returned_wears_the_lowest_uid_still_in_it`).
+- **A row that lands on a `placed` orphan does not fold into it.** The orphan holds that grain
+  only while its parent is gone. A loose copy the sender added later grain-hit it, and the
+  binder's return then carried both counts into the binder or left both at the root. So the
+  orphan **steps aside** — its row taken out, inside the group's savepoint — the newcomer is
+  written as if the grain were free, and the orphan is folded into *it* (`orphans::lend`)
+  (`a_loose_copy_that_meets_a_placed_orphan_is_not_carried_off_with_it`). **Where the newcomer
+  is an orphan too, the lower uid keeps the row and the other is folded into it**: a `placed`
+  row is never renamed, because the ledger knows it by its uid, so the one that would have taken
+  its name steps aside for it instead — and while both parents stay gone the pair is one row
+  under the lower uid, which is what the sender's own re-homing makes of it. (The first rework
+  kept the newcomer's name whichever was lower, and a suite older than the ledger went red half
+  the time on two wishes ending under different uids on the two devices;
+  `two_copies_filed_into_two_binders_that_stay_deleted_end_as_one_row_under_the_lower_uid` pins
+  both orders.)
+- **A row that leaves the root's grain leaves behind what was folded into it there.** Those rows
+  were lent to the *place*: their own parents are still gone, and the sender — once the deletes
+  reach it — has them at the root, not wherever this row went. So after any write that moves a
+  row with lenders under a parent, each is taken back out and put where a row without its
+  parent goes: alone at the root, or into whatever holds its grain there now
+  (`orphans::leave_behind`). That is a `placed` row going back to its own binder
+  (`two_copies_filed_into_two_deleted_binders_each_return_to_their_own`,
+  `a_copy_folded_into_a_placed_one_stays_at_the_root_when_only_the_others_binder_returns`), and
+  a twin its own device moves into a binder, which used to carry the share with it — two in the
+  binder here, one there and one at the root (the second pass;
+  `a_twin_moved_off_the_root_leaves_behind_the_copy_folded_into_it`). **The ledger's own put is
+  under no real stamp, so it is never judged by one**: a row put back at the root that met
+  another there was asked whether its placement "stood" against a row this device had made
+  itself, lost, and was folded with nothing written down — one sub-folder's copy back with both
+  counts and the other not at all (the second pass's must-fix;
+  `copies_left_at_the_root_by_a_row_that_returned_still_come_back_to_their_folders`).
+- **A delete for the twin's own name, when the twin wears an orphan's, takes the twin and no
+  more.** It is not ambiguous: the sender can only delete that name while it is still a row
+  there, which is while it has folded nothing. The merged row goes and each orphan in it is put
+  back as a row of its own (`orphans::twin_deleted`;
+  `a_twin_its_own_device_deleted_while_a_copy_was_folded_into_it_goes_alone`). **And what this
+  device's reader does to a merged row goes with the name it went out under**: every fold
+  records this device's clock, and when it is undone this device's own ops under the orphan's
+  uid since then leave the twin with the orphan — they landed on the orphan's row on the sender
+  (`what_this_devices_reader_adds_to_a_folded_row_goes_with_the_name_it_went_out_under`, both
+  orders; root 4 and binder 1 here against root 1 and binder 4 there, before).
+- **A refusal by the root's grain is not always a row this database cannot build.** A sparse
+  move is found by uid, so no grain is asked before the write and the unique index is the first
+  to say another row is in the way. Two of those refusals used to be skipped with an `error_log`
+  row while the sender, who met no collision, went on. Where **the row being moved is the
+  orphan** — a copy both hold, moved into a binder deleted here, its column cleared onto the
+  root's twin — it is filed there by the crate's own merge, as the sender's re-homing files it
+  when the delete arrives, the ledger is told it is folded, and the group is written again onto
+  the twin; that divergence is **older than the ledger** and stood whether or not the binder ever
+  returned (`a_held_copy_moved_into_a_deleted_binder_onto_a_root_twin_folds_and_follows_it_back`,
+  both halves). Where **the row in the way is the orphan**, it steps aside as above
+  (`a_copy_moved_to_the_root_where_a_placed_orphan_stands_is_moved`).
+
+**What it costs.** One indexed read of an almost always empty table for each group, one more for
+each row a page builds, one for each copy or wish a page moves, and one `EXISTS` a pass; with
+entries in it, one walk of the parent index a pass, parent by parent. `twin` and `alias` each
+have a partial index: the reviewer measured the unindexed alias lookup at 2.25 s for 1,000 new
+rows over 20,000 entries (debug). **Nothing clears an entry whose parent never returns** — a few
+hundred bytes for each child that met a deleted parent, as `sync_gone` keeps its own rows.
+`archive::replace` clears the table with the user tables it describes; leaving a group does not,
+as it does not clear `sync_gone`.
+
+**What it does not reach**, the first in *What is still owed* and the rest only here:
+
+- **Three devices.** `apply` still decides last-writer-wins and add-wins by what arrived
+  together (issue #842), and the ledger, recording only decisions resting on `gone`, does not
+  bring back what a peer's *real* delete re-homed when a third device's edit resurrects the
+  folder.
+- **A delete addressed to the uid a merged row wears is read one way, and the other is as
+  likely.** The sender deleting that name may mean its own row alone, or — if it has since heard
+  of the delete and folded the pair itself — the one row both became, and nothing on the wire
+  says which. Addressed to an orphan's uid it takes the orphan's share and leaves the twin;
+  addressed to the twin's own, while the twin wears it, it takes the whole row, as it did before
+  the ledger.
+- ~~**A sparse move onto a grain a row of this device's own already holds is still refused**~~ —
+  the refusal with no orphan in it, which the ledger's review measured and left alone, **was
+  closed the same day on `main`** by *A move onto a grain a row of this device's own already
+  holds folds the two*, above (`fold_onto_the_holder`, which the same day came to answer an edit of a grain field as well as a move). The two meet in `write_group` at one refusal,
+  and the ledger's cases are asked first: a row in the way that is a `placed` orphan steps aside
+  and is never folded into by that merge, which would carry the moved row off with it when the
+  orphan's parent returned (`a_copy_moved_to_the_root_where_a_placed_orphan_stands_is_moved`
+  goes red when the merge is let go first); a row moved under a parent that is itself gone is
+  left to the ledger by that merge's own rule; a `placed` orphan that an edit lands on another
+  row's grain is folded into it by the ledger, as an orphan, and not by the merge, which would
+  leave its entry naming a row no longer its own
+  (`a_placed_copy_regraded_onto_a_root_copy_folds_as_an_orphan_and_follows_its_binder_back`);
+  and where the merge does fold, whatever the ledger had folded into the row that moved follows
+  it into the survivor.
+
+**The tests** are `apply/tests/cuts.rs` and `apply/tests/cuts/found.rs` — thirty-seven for the
+ledger, almost all run both ways and against the sender, with the ledger required empty at the
+end wherever every parent returns, and three that pin issue #842 — and `client/tests/paged.rs`'s
+three-ways fixture above. Twenty-four of the ledger's paths were mutated one at a time and each
+turns a test red; which mutation reddens which test is in the pull request.
+
+**The upgrade, A/B against `main`** (2026-10-07, debug builds, two byte copies of the main
+checkout's dev database — paired, at v59, their `relay_url` pointed at a dead local port so
+neither could reach the group): after one launch each, the copies differ by `user_version`, by
+`sync_orphans` and its three indexes — created empty — and by the stamps of the rows a launch
+writes (`update_last_check_at`, and the three `error_log` rows for the relay that was not
+there). Nothing else in thirty-three tables.
 
 ### A pile's list is on the wire since user schema v53
 
@@ -4542,6 +4782,7 @@ CI's `core (aarch64-linux-android)` job is what compiles it).
 | `sync_state` | key/value: `pull_cursor`, `last_acked` and `pull_hold` — a place in one group's log, forgotten whenever the group changes — `last_sync_at`, the `applying` guard, the entitlement tokens the hosted relay design §10 adds, the superseded group keys (`group_key@<epoch>`) and the last manifest's ids that `identity::supersede` keeps, and `relay_url` — which is **a test/dev override with no UI**, not something a reader types |
 | `sync_peers` | per-device watermarks — what makes a counter idempotent |
 | `sync_gone` (v54) | tombstones as rows saying a parent went — not the `del` ops in `sync_ops` that are also called tombstones — `(tbl, uid)` and `WITHOUT ROWID`, **not synced**: one row per deleted row of a table other rows are filed under, written by the `sync_gone_{table}` trigger and, for a row `apply` never held, by `apply::tombstone`, and read by `apply`'s `gone` (*Held while it can resolve, skipped when it cannot*) |
+| `sync_orphans` (v60) | the ledger of orphans: what `apply` did with a synced row whose parent was gone, kept so it can be taken back. `(tbl, uid)` is the child and the key, `(parent_tbl, parent_uid)` the gone parent it rests on (`idx_sync_orphans_parent`), `twin` the uid of the row a folded child is inside now and `alias` that row's own uid, held by the entry of the child whose uid it is wearing (a partial index each, `idx_sync_orphans_twin` and `idx_sync_orphans_alias`, both asked with `=`, which is the only form a partial index answers), `state` the JSON `apply::orphans::State` — `placed`, `folded` or `absent` — with no `CHECK`. `WITHOUT ROWID`, **not synced**, written and read by `apply` alone, by hand and with no trigger, and created empty: nothing recorded the decisions taken before it (*A decision resting on `gone` is taken back when the parent returns*) |
 | `error_log` rebuilt | `source` gains `'relay'`, which is a table rebuild because the vocabulary is inside a `CHECK` |
 | `sync_devices.baselined_at INTEGER` (v30) | when this peer was last handed a baseline. NULL is "never", which is the trigger. **`sync_peers` is deliberately not consulted** — see the pairing-baseline design §10 |
 
@@ -4807,17 +5048,39 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   - **A claim let through that cannot be written says nothing**, as the skip it replaces said
     nothing: no hold, no `error_log` row. Its row is simply still missing, and the next delivery
     tries again.
-- ⚠️ **A copy filed into a binder that was deleted here, whose binder a later push brings back,
-  stays at the root — and the sender keeps it in the binder.** Found by step 6.5b's
-  split-across-a-page-edge tests and not made by paging: `apply` writes the copy at the root
-  when its parent is `gone` and nothing in the answer reverses that (`SET NULL`, behind
-  `capture::suppressed`, so no op says it happened), and never revisits it when a later answer
-  resurrects the binder. One answer carrying both pushes files it correctly, because the
-  binder's op ranks first. A live device pulling between the two pushes ends wrong today; a
-  device catching up now can too, when a page edge falls between them.
-  `a_gone_decision_and_its_reversal_across_a_page_edge_end_as_a_live_devices_pulls_do`
-  (`client/tests/paged.rs`) pins the difference in its last assertion. The fix is `apply`'s —
-  re-file what a `gone` decision moved when its parent comes back — with its own tests.
+- ~~⚠️ **A copy filed into a binder that was deleted here, whose binder a later push brings back,
+  stays at the root — and the sender keeps it in the binder.**~~ **Closed 2026-10-07 by user
+  schema v60's ledger of orphans** (issue #841) — *A decision resting on `gone` is taken back
+  when the parent returns*, above, which also records that the copy at the root was the mildest
+  of six shapes: on the cascading arm the receiver deleted rows the sender kept. Found by step
+  6.5b's split-across-a-page-edge tests and not made by paging.
+- ⚠️ **With three devices, an older edit that arrives in a later pull beats a newer one applied
+  before it** (issue #842; suspected by the paging review and settled by experiment on
+  2026-10-07). `apply` folds what it is handed with this device's *own* op log and keeps no stamp
+  for anything another device wrote, so two *other* devices' writes are compared only when they
+  arrive in one answer. `a` edits a note while offline, `c` edits it later and pushes first, `b`
+  pulls, `a` pushes, `b` pulls: `b` ends on `a`'s older note while `a` and `c` both hold `c`'s. A
+  placement is the same — `b` leaves at the root a copy the other two hold in a binder — and so
+  is add-wins: a row `a` deleted and `c` edited later survives on `a` and `c`, and on `b` only
+  when both arrive together (*A third device's tombstone against a third device's edit*, further
+  down this list, recorded one order of that). Two devices cannot meet it. **The ledger of orphans is beside it, not a cure
+  for it**: it records decisions resting on `gone` and nothing else, so a folder a peer really
+  deleted and a third device's later edit brings back returns empty on a device that re-homed
+  copies of its own out of it — and only on a device whose own log can rebuild the folder at all.
+  The fix is for `apply` to remember, per row, the stamp that won each field and placement, and
+  for a deleted row enough to rebuild it; storage then grows with every row a peer wrote, which
+  is why it is its own design. Pinned, each with the difference in its last assertion, by
+  `apply/tests/cuts.rs`'s `an_older_edit_from_a_third_device_still_beats_a_newer_one_applied_before_it`,
+  `an_older_move_from_a_third_device_…` and
+  `a_row_one_device_deleted_and_another_edited_later_is_still_lost_on_a_third`.
+- ~~**A move of a copy this device holds into a binder deleted here is refused where the root
+  holds its twin**~~ — found while closing the bullet above and **closed with it** (2026-10-07).
+  The `SET NULL` arm cleared the column of the row it had found by uid, the root's grain refused,
+  and the group was skipped with an `error_log` row, while the sender's re-homing folded the copy
+  onto its own root twin when the delete reached it: one row of two there, two rows of one each
+  here, whether or not the binder ever returned. The refusal is now answered by the fold itself
+  (*A decision resting on `gone` is taken back when the parent returns*, the last bullet of its
+  folds).
 - **A catch-up's pages are fetched again from the first when a request of it fails.** A pull
   applies nothing until it has fetched to the head of the log, because how it applies is
   decided over all of it; so a link that drops the fortieth page of a hundred has, at the

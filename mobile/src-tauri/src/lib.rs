@@ -475,6 +475,43 @@ mod tests {
         AAAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAA\
         ABQAACfAAAAAAAAAAAAAAAAAAAAAB//Z";
 
+    /// **What this install owes of the scanner's files, as the page asks it** — through the one
+    /// command this host registers, forwarded to the core's table, which is the whole of what a
+    /// phone needs for the offer: nothing here is the host's own. An Android build embeds none
+    /// of the three, so a fresh install owes all of them, at the core's sizes. The fetch itself
+    /// is the core's to test (`scanner_assets::tests`): a call from here would ask GitHub.
+    #[test]
+    fn a_fresh_install_owes_the_scanners_three_files() {
+        let (state, _dir) =
+            grimoire_core::state::fixtures::on_files("light-scanner-assets", "http://127.0.0.1:9");
+        let owed = tauri::async_runtime::block_on(forward(&state, "scanner_assets", None, None))
+            .expect("what is owed");
+        let keys: Vec<_> = owed["owed"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["key"].as_str().expect("a key"))
+            .collect();
+        assert_eq!(keys, ["bundle", "detectionModel", "recognitionModel"]);
+        assert_eq!(owed["fetching"], false);
+        assert_eq!(
+            owed["bytes"],
+            grimoire_core::scanner_assets::BUNDLE_BYTES
+                + grimoire_core::scanner_assets::DETECTION_BYTES
+                + grimoire_core::scanner_assets::RECOGNITION_BYTES
+        );
+        // And the fetch is a command this host answers — refused here only for carrying a body.
+        assert_eq!(
+            tauri::async_runtime::block_on(forward(
+                &state,
+                "scanner_assets_fetch",
+                None,
+                Some("AAEC".to_owned())
+            )),
+            Err("scanner_assets_fetch takes no raw body.".to_owned())
+        );
+    }
+
     /// **A camera frame, as it crosses this host**: the call `src/lib/core/table.ts` makes of a
     /// `Uint8Array` — the headers as `args`, the bytes as base64 in `body` — forwarded to the
     /// core's table and judged by its session. On an install with nothing in `<data>/scanner/`,

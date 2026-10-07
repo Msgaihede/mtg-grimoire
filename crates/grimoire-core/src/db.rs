@@ -353,11 +353,12 @@ pub fn open_read(data_dir: &Path) -> rusqlite::Result<Connection> {
 /// `image_cache` produced no callback at all and the row was there. Twelve corpus tables are
 /// `WITHOUT ROWID`: `image_cache`, `marketplace_prices`, `art_tags`, `art_tag_parents`,
 /// `art_taggings`, `art_tag_illustrations`, `oracle_tags`, `oracle_tag_parents`,
-/// `oracle_taggings`, `oracle_tag_cards`, `cards_fts_idx` and `cards_fts_config`. **Six are on
+/// `oracle_taggings`, `oracle_tag_cards`, `cards_fts_idx` and `cards_fts_config`. **Eight are on
 /// the user side** — `muted_tags`, `device_names`, `sync_devices` and `sync_state`, which a
-/// command marks by hand, and `price_snapshots` and `sync_peers`, which only the app writes; the
-/// census and its `sqlite_master` test are the desktop's `changes::MARKED_BY_COMMAND` and
-/// `changes::WRITTEN_BY_THE_APP` — `changes` is one of that host's observers and stays there. Two of the six are synced — `muted_tags` and, since
+/// command marks by hand, and `price_snapshots`, `sync_peers`, `sync_gone` (user schema v54) and
+/// `sync_orphans` (v60), which only the app writes; this read six until v60, one short since
+/// v54. The census and its `sqlite_master` test are the desktop's `changes::MARKED_BY_COMMAND` and
+/// `changes::WRITTEN_BY_THE_APP` — `changes` is one of that host's observers and stays there. Two of the eight are synced — `muted_tags` and, since
 /// user schema v31, `device_names` ([`crate::schema::SYNCED_TABLES`]). A transaction whose *only*
 /// corpus write is to one of the first twelve is invisible here, and `image_cache` is the
 /// likeliest candidate in the crate.

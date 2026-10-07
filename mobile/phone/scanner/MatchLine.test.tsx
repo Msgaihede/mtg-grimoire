@@ -1,13 +1,12 @@
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
-import { STATUS, VERDICTS } from "@/features/scanner/fixtures";
+import { VERDICTS } from "@/features/scanner/fixtures";
 import { matchStrip, type LastAdded } from "@/features/scanner/reader/readerText";
 import type { ScanMode, ScannerResolution, ScannerVerdict } from "@/lib/ipc";
 import { CameraBox } from "./CameraBox";
 import { MatchLine } from "./MatchLine";
 import { ScanControls } from "./ScanControls";
-import { ScannerDataSlot } from "./ScannerDataSlot";
 
 const SARUMAN: LastAdded = {
   name: "Storm of Saruman",
@@ -262,19 +261,5 @@ describe("the camera's box", () => {
   });
 });
 
-describe("the slot for the scanner's data", () => {
-  it("draws nothing while the status is unanswered or everything loaded", () => {
-    const { container, rerender } = render(<ScannerDataSlot status={null} />);
-    expect(container).toBeEmptyDOMElement();
-    rerender(<ScannerDataSlot status={STATUS.embedded} />);
-    expect(container).toBeEmptyDOMElement();
-  });
-
-  it("says what is missing, in the status's own sentences", () => {
-    const { container } = render(<ScannerDataSlot status={STATUS.missing} />);
-    const slot = container.querySelector("[data-scanner-data-slot]");
-    expect(slot?.children).toHaveLength(2);
-    expect(slot).toHaveTextContent("No reference bundle.");
-    expect(slot).toHaveTextContent("No OCR models.");
-  });
-});
+// The slot for the scanner's data has a suite of its own, `ScannerDataSlot.test.tsx`: it asks
+// the host what is owed, so it is rendered over a world rather than bare.

@@ -104,6 +104,10 @@ import wishlistOptimizeRsDesktop from "../../src-tauri/src/wishlist_optimize/mod
 // `src-tauri`, joined below as `scannerRs`.
 import scannerRsCore from "../../crates/grimoire-core/src/scanner.rs?raw";
 import scannerRsDesktop from "../../src-tauri/src/scanner/mod.rs?raw";
+// The scanner's files, fetched on first use (the light app's step 7.4): the engine's module, and
+// `downloads.rs` for the row it answers in — `Due`, the shape every offer of a download is made of.
+import scannerAssetsRs from "../../crates/grimoire-core/src/scanner_assets.rs?raw";
+import downloadsRs from "../../crates/grimoire-core/src/downloads.rs?raw";
 import sessionRs from "../../crates/card-scanner/src/session.rs?raw";
 import resolveRs from "../../crates/card-scanner/src/resolve.rs?raw";
 import filtersRs from "../../crates/card-scanner/src/filters.rs?raw";
@@ -137,6 +141,7 @@ import {
   type FeedProgressEvent,
   type OracleTagProgressEvent,
   type RelayOutcome,
+  type ScannerAssetsProgress,
   type StartupStatus,
   type SyncLiveEvent,
   type SyncProgressEvent,
@@ -3982,6 +3987,72 @@ describe("ipc argument names match the Rust command signatures", () => {
       /fn scanner_tray_commit\([^)]*\bitems\s*:\s*Vec<crate::collection::CollectionImportItem>\s*,\s*folder_id\s*:\s*Option<i64>\s*,\s*remaining\s*:\s*Vec<ScannerTrayRow>/s,
     );
   });
+
+  /**
+   * **The scanner's files** (the light app's step 7.4, 2026-10-07): what this install owes of
+   * them, the fetch a reader's press starts, and the event the fetch reports itself through.
+   *
+   * Neither command takes an argument — `home_layout`'s trap again, an argument object sent to a
+   * command that declares only the managed state. And both failures here are silent ones, which
+   * is why the names are read out of the crate: the offer is drawn only when `scanner_assets`
+   * **answers**, so a name nothing registers is a rejection the page reads as "this host has
+   * nothing to offer" — a phone whose scanner names nothing and says nothing about why. A
+   * misspelt event is a bar that never moves over a download that is working.
+   */
+  it("asks what the scanner owes, starts the fetch and hears it, by the engine's own names", async () => {
+    expect(scannerAssetsRs.length, "scanner_assets.rs was not read").toBeGreaterThan(1_000);
+
+    const owed = {
+      owed: [{ key: "bundle", label: "Card hashes", bytes: 5_874_752 }],
+      bytes: 5_874_752,
+      fetching: false,
+    };
+    invoke.mockResolvedValue(owed);
+    expect(await ipc.scannerAssets()).toEqual(owed);
+    expect(invoke).toHaveBeenCalledWith("scanner_assets");
+    expect(await ipc.scannerAssetsFetch()).toEqual(owed);
+    expect(invoke).toHaveBeenCalledWith("scanner_assets_fetch");
+    // The desktop's two wrappers, each taking the managed state and nothing a page sends.
+    expect(scannerRsDesktop).toMatch(
+      /pub async fn scanner_assets\(\s*state: tauri::State<'_, Arc<AppState>>,\s*\)/,
+    );
+    expect(scannerRsDesktop).toMatch(
+      /pub async fn scanner_assets_fetch\(\s*state: tauri::State<'_, Arc<AppState>>,\s*\)/,
+    );
+
+    let emit: ((evt: { payload: ScannerAssetsProgress }) => void) | undefined;
+    listen.mockImplementation(
+      (_name: string, handler: (evt: { payload: ScannerAssetsProgress }) => void) => {
+        emit = handler;
+        return Promise.resolve(vi.fn());
+      },
+    );
+    const heard: ScannerAssetsProgress[] = [];
+    await ipc.onScannerAssets((e) => heard.push(e));
+    const progress: ScannerAssetsProgress = {
+      phase: "downloading",
+      file: "bundle",
+      done: 262_144,
+      total: 18_101_604,
+      message: null,
+    };
+    emit?.({ payload: progress });
+    expect(listen).toHaveBeenCalledWith("scanner:assets", expect.any(Function));
+    expect(heard).toEqual([progress]);
+    expect(scannerAssetsRs).toContain('pub const PROGRESS_EVENT: &str = "scanner:assets";');
+    // The four phases and the three keys the page reads, each as the engine spells it.
+    for (const phase of ["downloading", "checking", "done", "error"]) {
+      expect(scannerAssetsRs, phase).toContain(
+        `pub const PHASE_${phase.toUpperCase()}: &str = "${phase}";`,
+      );
+    }
+    // And no phase is said that is not one of the four constants.
+    expect(scannerAssetsRs).not.toMatch(/say\(\s*"/);
+    expect(scannerAssetsRs).not.toMatch(/phase: "/);
+    for (const key of ["bundle", "detectionModel", "recognitionModel"]) {
+      expect(scannerAssetsRs, key).toContain(`=> "${key}",`);
+    }
+  });
 });
 
 it("unwraps the sync:progress payload and returns the unlisten handle", async () => {
@@ -5621,6 +5692,18 @@ describe("the CardSummary mirror agrees with the Rust struct field for field", (
     ["ScannerPrefs", scannerRs, "ScannerPrefs"],
     ["ScannerTrayRow", scannerRs, "ScannerTrayRow"],
     ["ScannerTrayChoice", scannerRs, "ScannerTrayChoice"],
+    // **The scanner's files, fetched on first use** (the light app's step 7.4) — what is owed,
+    // the row it is owed in, and the fetch's progress. camelCase like the three above and for
+    // their reason: the app's own answers, not the detector's JSON.
+    //
+    // Each drift is a quiet one. A renamed `owed` is `undefined`, and the page — which draws its
+    // offer only for a non-empty list — reads that as nothing owed: a phone with no card hashes
+    // and no way offered to get them. A renamed `fetching` is falsy, so a reader who comes back
+    // to the view mid-download is offered a second one, which the engine refuses. And a renamed
+    // `done` or `total` is a bar with no fraction for the whole of an 18 MB download.
+    ["ScannerAssetDue", downloadsRs, "Due"],
+    ["ScannerAssetsOwed", scannerAssetsRs, "Owed"],
+    ["ScannerAssetsProgress", scannerAssetsRs, "Progress"],
     // **The three oldest structs in the app, and none of them had ever been fenced** (2026-09-22,
     // added with strict colours and the type chips). `SearchRequest` is every search the window
     // asks for, `CardFilters` is the half of it the collection and the wishlist flatten into

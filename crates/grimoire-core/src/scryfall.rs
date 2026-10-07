@@ -365,6 +365,7 @@ impl Client {
             // bounded by `STALL` instead — `api_send`'s for an answer, `Client::stream`'s for
             // each chunk.
             read_timeout: Some(READ_TIMEOUT),
+            https_only: false,
         });
         Client {
             // Trailing slash trimmed so joining a path can never produce `//`.

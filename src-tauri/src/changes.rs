@@ -21,7 +21,7 @@
 //!
 //! **`update_hook` has two blind spots, and a command marks by hand for each.**
 //!
-//! * **`WITHOUT ROWID` tables.** Seven user tables are, and the hook never fires for them. Their
+//! * **`WITHOUT ROWID` tables.** Eight user tables are, and the hook never fires for them. Their
 //!   write sites take a bare `&Connection` in modules that have no business with this mask, so the
 //!   mark is made by the *command* that a reader's press reaches, after its write — see
 //!   [`MARKED_BY_COMMAND`] and [`WRITTEN_BY_THE_APP`], and the test that holds `sqlite_master` to
@@ -75,7 +75,14 @@ pub const MARKED_BY_COMMAND: &[&str] =
 /// as a side effect of the app's own write rather than as anything the reader asked to change,
 /// and no window draws a tombstone: it is read by `sync_engine::apply` alone. So there is no
 /// window to be behind about it, and a mark would ring for nothing.
-pub const WRITTEN_BY_THE_APP: &[&str] = &["price_snapshots", "sync_gone", "sync_peers"];
+///
+/// **`sync_orphans` is here on the list's plain footing** (user schema v60), with none of
+/// `sync_gone`'s qualification: no press reaches it even as a side effect. `sync_engine::apply`
+/// writes it by hand while applying another device's ops — what it did with a row whose parent
+/// was gone — and reads it back when that parent returns; there is no trigger, and no window
+/// draws a row of it.
+pub const WRITTEN_BY_THE_APP: &[&str] =
+    &["price_snapshots", "sync_gone", "sync_orphans", "sync_peers"];
 
 /// One bit per user table, and the bell the commit hook rings.
 pub struct Changes {
@@ -469,7 +476,7 @@ mod tests {
     }
 
     /// `update_hook` cannot see these, so each one is a decision — marked by the command that
-    /// writes it, or written only by the app. An eighth goes red here until somebody decides.
+    /// writes it, or written only by the app. A ninth goes red here until somebody decides.
     #[test]
     fn every_without_rowid_user_table_has_been_decided_about() {
         let conn = crate::schema::memory_pair();

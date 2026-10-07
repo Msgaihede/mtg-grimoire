@@ -5770,16 +5770,23 @@ fn a_copy_edited_to_where_the_page_deletes_a_copy_is_not_folded_into_it() {
     assert!(skips(&b).is_empty(), "{:?}", skips(&b));
 }
 
-/// **A folder that is gone is not this fold's to answer** (issue #841). `b` has deleted the
-/// binder `a`, not having heard, moves `c` into — and holds a root copy `u` on the grain `c`
-/// lands on once it is written without that binder. Whether `c` belongs at the root at all is
-/// the decision resting on `gone`, which a later page can still take back by bringing the binder
-/// back; folded into `u` now, there would be no `c` left to put in it. So the refusal stands,
-/// recorded, as it did before — with and without an edit of `c`'s condition riding in the group.
+/// **A folder that is gone is not this fold's to answer — it is the ledger of orphans'** (issue
+/// #841). `b` has deleted the binder `a`, not having heard, moves `c` into — and holds a root copy
+/// `u` on the grain `c` lands on once it is written without that binder. Whether `c` belongs at
+/// the root at all is the decision resting on `gone`, which a later page can still take back by
+/// bringing the binder back.
 ///
-/// **What makes it red**: folding wherever the row lands, without asking whether the folder its
-/// group names is a row here.
-fn a_copy_sent_into_a_binder_deleted_here_is_not_folded_into_the_roots_copy(and_edited: bool) {
+/// When this fold was written the ledger was not, and the refusal stood: folded into `u` with
+/// nothing to say so, there would have been no `c` left to put back in the binder. The ledger is
+/// what says so. `c` is folded into `u` — as `a`'s own re-homing folds it when the delete gets
+/// there — under the lower uid, and one `folded` entry rests on the binder, with `c` as it would
+/// be: the edit of its condition too, where one rode in the group.
+/// `cuts::found::a_held_copy_moved_into_a_deleted_binder_onto_a_root_twin_folds_and_follows_it_back`
+/// is the binder coming back.
+///
+/// **What makes it red**: this fold taking it — one row and no entry, so nothing to take the
+/// fold back by; or the refusal, two rows here against one on `a`.
+fn a_copy_sent_into_a_binder_deleted_here_is_folded_by_the_ledger(and_edited: bool) {
     let (a, b) = (paired("dev-a"), paired("dev-b"));
     let mut ma = 0;
     let from = binder(&a, "From", None);
@@ -5797,23 +5804,37 @@ fn a_copy_sent_into_a_binder_deleted_here_is_not_folded_into_the_roots_copy(and_
 
     let page = since(&a, &mut ma);
     let rb = apply(&b, &page).unwrap();
-    assert_eq!(unwritten(rb), (0, page.len()));
-    assert_eq!(
-        qty(&b),
-        (2, 3),
-        "b folded a copy whose binder may yet come back"
+    assert_eq!(unwritten(rb), (0, 0));
+    assert_eq!(qty(&b), (1, 3), "b did not fold the copy into the root's");
+    assert_eq!(uids_of_copies(&b), vec![Some(LOWER.to_owned())]);
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+
+    let entry: (String, String, String) = b
+        .query_row(
+            "SELECT o.uid, o.twin, o.state FROM sync_orphans o
+              WHERE o.tbl = 'collection_entries' AND o.parent_tbl = 'collection_folders'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("the fold was not written down");
+    assert_eq!((entry.0.as_str(), entry.1.as_str()), (HIGHER, LOWER));
+    assert!(entry.2.contains(r#""kind":"folded""#), "{}", entry.2);
+    let would_be = if and_edited { "LP" } else { "NM" };
+    assert!(
+        entry.2.contains(&format!(r#""condition":"{would_be}""#)),
+        "the copy as it would be is not {would_be}: {}",
+        entry.2
     );
-    assert_eq!(skips(&b).len(), 1, "{:?}", skips(&b));
 }
 
 #[test]
-fn a_copy_moved_into_a_binder_deleted_here_is_not_folded_into_the_roots_copy() {
-    a_copy_sent_into_a_binder_deleted_here_is_not_folded_into_the_roots_copy(false);
+fn a_copy_moved_into_a_binder_deleted_here_is_folded_into_the_roots_copy_by_the_ledger() {
+    a_copy_sent_into_a_binder_deleted_here_is_folded_by_the_ledger(false);
 }
 
 #[test]
-fn a_copy_edited_and_moved_into_a_binder_deleted_here_is_not_folded_into_the_roots_copy() {
-    a_copy_sent_into_a_binder_deleted_here_is_not_folded_into_the_roots_copy(true);
+fn a_copy_edited_and_moved_into_a_binder_deleted_here_is_folded_by_the_ledger() {
+    a_copy_sent_into_a_binder_deleted_here_is_folded_by_the_ledger(true);
 }
 
 /// **A delete this database refuses is skipped and recorded, never a stall.** A TEMP trigger
@@ -5895,3 +5916,5 @@ fn every_cascade_into_a_folder_table_is_one_doomed_follows() {
     want.sort();
     assert_eq!(edges, want);
 }
+
+mod cuts;

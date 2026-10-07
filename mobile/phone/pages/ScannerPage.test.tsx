@@ -740,20 +740,88 @@ describe("what the Scanner page says when it cannot scan", () => {
     expect(await screen.findByRole("alert", {}, SETTLE)).toHaveTextContent("No camera on this device.");
   });
 
-  it("draws the missing data in its slot, says it cannot identify, and refuses the filters in words", async () => {
+  it("offers the missing data in its slot, says it cannot identify, and refuses the filters in words", async () => {
     noCamera("NotAllowedError");
     const { view } = mount({ fake: { seed: "starter", fault: "scannerMissing" } });
+    const slot = () => view.container.querySelector("[data-scanner-data-slot]");
     await waitFor(
-      () => expect(view.container.querySelector("[data-scanner-data-slot]")).toHaveTextContent("No reference bundle."),
+      () => expect(slot()).toHaveTextContent("The scanner needs its card data — about 19 MB."),
       SETTLE,
     );
-    expect(view.container.querySelector("[data-scanner-data-slot]")).toHaveTextContent("No OCR models.");
+    // The offer, and not an instruction to put a file where nobody holding this page can reach.
+    expect(within(slot() as HTMLElement).getByRole("button", { name: "Download" })).toBeInTheDocument();
+    expect(slot()).not.toHaveTextContent("No reference bundle.");
+    expect(slot()).not.toHaveTextContent("Restart the app");
     await waitFor(() => expect(statusLine()).toHaveTextContent("Can't identify"), SETTLE);
 
     await userEvent.click(screen.getByRole("button", { name: "Scanner options" }));
     const sheet = await screen.findByRole("dialog", { name: "Scanner options" });
     // A greyed row's name includes its reason.
     expect(within(sheet).getByRole("button", { name: /^Filters\s*Filters need the card database/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  });
+
+  /**
+   * **The download, from the press to a scanner that has its data.** The host owes the three
+   * files; the reader presses once; the bar stands where the button was; and when the files have
+   * landed the offer is gone with no restart — the status is read again and says the bundle
+   * loaded, the line stops saying it cannot identify, the filters can be opened, and the new
+   * session is given the reader's stored filters, which the one with no card names had refused.
+   */
+  it("fetches the scanner's data on a press, and afterwards has it: the offer gone, the status read again, the filters pushed", async () => {
+    noCamera("NotAllowedError");
+    const hob = { sets: ["hob"], released_from: null, released_to: null };
+    const asked = { status: 0, fetches: 0, filters: [] as unknown[] };
+    const { view } = mount({
+      fake: { seed: "starter", fault: "scannerMissing" },
+      prefs: { filters: hob },
+      over: (own) => ({
+        scanner_status: () => {
+          asked.status += 1;
+          return (own.scanner_status as () => unknown)();
+        },
+        scanner_assets_fetch: () => {
+          asked.fetches += 1;
+          return (own.scanner_assets_fetch as () => unknown)();
+        },
+        scanner_set_filters: (args: { filters: unknown }) => {
+          asked.filters.push(args.filters);
+          return (own.scanner_set_filters as (a: unknown) => unknown)(args);
+        },
+      }),
+    });
+    const slot = () => view.container.querySelector("[data-scanner-data-slot]");
+    await waitFor(() => expect(slot()).toHaveTextContent("about 19 MB"), SETTLE);
+    await waitFor(() => expect(statusLine()).toHaveTextContent("Can't identify"), SETTLE);
+    // Nothing is fetched until the press; and the stored filters were pushed once, to a session
+    // with no card names to filter by.
+    expect(asked.fetches).toBe(0);
+    expect(asked.status).toBe(1);
+    expect(asked.filters).toEqual([hob]);
+
+    const download = within(slot() as HTMLElement).getByRole("button", { name: "Download" });
+    // A finger's size under a coarse pointer.
+    expect(download.classList.contains("coarse:min-h-[var(--target-min)]")).toBe(true);
+    await userEvent.click(download);
+    expect(
+      await within(slot() as HTMLElement).findByRole("progressbar", {
+        name: "Downloading the scanner's files",
+      }),
+    ).toBeInTheDocument();
+    expect(within(slot() as HTMLElement).queryByRole("button")).not.toBeInTheDocument();
+
+    // Landed: no element left in the slot, and the page reads a scanner that has its data.
+    await waitFor(() => expect(slot()).toBeNull(), SETTLE);
+    expect(asked.fetches).toBe(1);
+    expect(asked.status).toBe(2);
+    await waitFor(() => expect(statusLine()).not.toHaveTextContent("Can't identify"), SETTLE);
+    await waitFor(() => expect(asked.filters).toEqual([hob, hob]), SETTLE);
+
+    await userEvent.click(screen.getByRole("button", { name: "Scanner options" }));
+    const sheet = await screen.findByRole("dialog", { name: "Scanner options" });
+    expect(within(sheet).getByRole("button", { name: /^Filters/ })).not.toHaveAttribute(
       "aria-disabled",
       "true",
     );
