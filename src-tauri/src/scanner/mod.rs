@@ -280,6 +280,38 @@ pub async fn scanner_tray_commit(
         .map_err(|e| format!("the collection could not be written: {e}"))?
 }
 
+/// What this install lacks of the scanner's three files, and what fetching them costs — the
+/// core's `scanner_assets::owed`. **Nothing, on a build that embeds them** ([`compiled`]), which
+/// is every release: the page draws no offer and nothing is ever requested. A build without them
+/// — a developer's — is offered the download a phone is.
+///
+/// On the blocking pool for [`scanner_status`]'s reason: it asks the status, and the first ask
+/// loads the session.
+#[tauri::command]
+pub async fn scanner_assets(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<grimoire_core::scanner_assets::Owed, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || grimoire_core::scanner_assets::owed(&state))
+        .await
+        .map_err(|e| format!("the scanner thread failed: {e}"))?
+}
+
+/// Download every file this install owes into `<data>/scanner/`, each checked before it takes
+/// its name, and let the loaded session go so the next scanner command reads them — the core's
+/// `scanner_assets::fetch`, which has the rules. It reports itself through
+/// `scanner_assets::PROGRESS_EVENT`, which the state's sink forwards to every window.
+///
+/// **No lease, and no webview**: who holds the scanner is one question and what is loaded is
+/// another, and the fetch outlives the view that pressed. Only a reader's press calls it.
+#[tauri::command]
+pub async fn scanner_assets_fetch(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<grimoire_core::scanner_assets::Owed, String> {
+    let state = state.inner().clone();
+    grimoire_core::scanner_assets::fetch(&state.core).await
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

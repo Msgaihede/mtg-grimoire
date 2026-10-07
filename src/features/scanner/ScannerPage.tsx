@@ -14,6 +14,7 @@ import { ScanBar } from "./reader/ScanBar";
 import { setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
 import { withoutCommitted } from "./reader/trayCommit";
 import { TrayPanel } from "./reader/TrayPanel";
+import { ScannerAssets } from "./ScannerAssets";
 import { ScannerPanels } from "./ScannerPanels";
 import {
   DEFAULT_DETAIL_WAIT_MS,
@@ -80,7 +81,7 @@ function ElsewhereSentence() {
 
 function LiveScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const { prefs, update, filterError, loaded, unavailable } = useScannerPrefs();
+  const { prefs, update, filterError, loaded, unavailable, resync } = useScannerPrefs();
   // Session-only: a deliberate Stop survives minimize/restore, but a new visit starts as before.
   const [scanning, setScanning] = useState(true);
   // **A minimized window stands down** (issue #556): the pump pauses at once, and the camera and
@@ -113,8 +114,9 @@ function LiveScanner() {
     () => frameOptionsOf(options, prefs.mode, prefs.developer),
     [options, prefs.mode, prefs.developer],
   );
-  // Asked once a session — `useScannerStatus` says why there is no button to ask again.
-  const { status: statusData, hasBundle, filtersDisabled, assetNotes } = useScannerStatus();
+  // Asked once a session, and again when a download of the scanner's files lands —
+  // `useScannerStatus` says why nothing else asks, and `ScannerAssets`, below, is that download.
+  const { status: statusData, hasBundle, filtersDisabled } = useScannerStatus();
 
   // **The heartbeat: this view holds the scanner from its first render, whatever its camera is
   // doing** — `useScannerHold`, stopped while the window is released (minimized past the grace).
@@ -359,13 +361,17 @@ function LiveScanner() {
                 {scanning ? detectorSentence : ""}
               </p>
             </div>
-            {assetNotes.length > 0 && (
-              <div className="space-y-1 text-xs text-dim">
-                {assetNotes.map((note) => (
-                  <p key={note}>{note}</p>
-                ))}
-              </div>
-            )}
+            {/* The scanner's files: the offer to download them where the host says it owes
+                them, and otherwise whatever the status still has to say. When a download lands
+                the engine's session is a new one — it is given the filters again, and what the
+                last one said is dropped, so the next verdict starts a stream of its own. */}
+            <ScannerAssets
+              status={statusData}
+              onLoaded={() => {
+                resync();
+                loop.clearReads();
+              }}
+            />
           </div>
 
           {/* **The tray's side, and below 88rem it is one fixed column.** With the developer panels

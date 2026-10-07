@@ -213,16 +213,22 @@ export const FolderSheet: Story = {
  * The scanner's data absent — the state a light install starts in, since it does not carry the
  * bundle and the reading models inside its binary.
  *
- * What is missing is said in the slot kept for it under the camera, in the status's own sentences;
- * a later step of phase 7 draws the offer to download the data there. The status line says cards
- * can be found and not named, and the Filters row in Options is refused, with its reason.
+ * The slot kept for it under the camera draws the offer to fetch it — one sentence with the
+ * measured size, what each file is, and a Download button — in place of the status's own
+ * sentences, which named a path to put files at. Nothing is fetched until the press. The status
+ * line says cards can be found and not named, and the Filters row in Options is refused, with its
+ * reason. (`Scanner/Assets` presses it: the bar, the failure, and the offer clearing.)
  */
 export const AssetsMissing: Story = {
   parameters: { fake: { fault: "scannerMissing" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/No reference bundle\. Put/)).toBeInTheDocument();
-    await expect(await canvas.findByText(/No OCR models\. Put/)).toBeInTheDocument();
+    const offer = await canvas.findByRole("region", { name: "Scanner files" });
+    await expect(
+      within(offer).getByText("The scanner needs its card data — about 19 MB."),
+    ).toBeInTheDocument();
+    await expect(within(offer).getByRole("button", { name: "Download" })).toBeInTheDocument();
+    await expect(canvas.queryByText(/No reference bundle\. Put/)).not.toBeInTheDocument();
     await waitFor(() =>
       expect(canvas.getByRole("status", { name: "Scanner status" })).toHaveTextContent(
         "Card hashes aren't loaded",

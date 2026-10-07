@@ -1143,6 +1143,7 @@ fn client() -> &'static http::Client {
             user_agent: crate::scryfall::USER_AGENT,
             connect_timeout: Some(CONNECT_TIMEOUT),
             read_timeout: Some(READ_TIMEOUT),
+            https_only: false,
         })
     })
 }

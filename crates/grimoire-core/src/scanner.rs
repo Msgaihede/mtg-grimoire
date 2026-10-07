@@ -26,8 +26,10 @@
 //! `src-tauri/scanner-assets/` holds them) and says so once, through [`ScannerState::carry`],
 //! before any command can ask; a host that never says carries nothing. A file placed in
 //! `data/scanner/` overrides the embedded copy so a new bundle can be tried without a rebuild.
-//! Nothing here downloads. A missing bundle is a session that detects and rectifies and names
-//! nothing — the debug server's behaviour — and a missing model pair is a session with no reader.
+//! Nothing here downloads — `scanner_assets` does, when a reader asks it to, into that same
+//! folder, and then lets the loaded session go. A missing bundle is a session that detects and
+//! rectifies and names nothing — the debug server's behaviour — and a missing model pair is a
+//! session with no reader.
 //! The status reports the exact path it looked at for each, and [`Asset::source`] says which of
 //! the three answered, so "no bundle" is never the whole message.
 //!
@@ -71,6 +73,7 @@
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -394,6 +397,10 @@ pub struct ScannerState {
     /// later one until one takes them — see [`Owed`]. **Only ever taken with `loaded` already in
     /// hand**, by everything that touches it, so the two locks have one order and cannot cross.
     owed: Mutex<Option<Owed>>,
+    /// Whether a fetch of this install's assets is running — `scanner_assets`' claim, taken and
+    /// let go there. Here because it is this state's: two states are two installs, and a
+    /// process-wide flag would have one test's download refuse another's.
+    pub(crate) fetching: AtomicBool,
 }
 
 /// Filters a dropped session held that no session has taken since.
@@ -424,6 +431,7 @@ impl ScannerState {
             owner: Mutex::new(None),
             embedded: OnceLock::new(),
             owed: Mutex::new(None),
+            fetching: AtomicBool::new(false),
         }
     }
 
@@ -432,6 +440,12 @@ impl ScannerState {
     /// that no longer described the loaded session would be worse than none.
     pub fn carry(&self, embedded: Embedded) {
         let _ = self.embedded.set(embedded);
+    }
+
+    /// What the host said its binary carries, or nothing if it never said — what
+    /// `scanner_assets` reads to know which files no download could be owed for.
+    pub fn carried(&self) -> Embedded {
+        self.embedded.get().copied().unwrap_or_default()
     }
 
     /// Admit the calling window, or refuse with [`OPEN_ELSEWHERE`]. The answer is the command's
@@ -481,7 +495,7 @@ impl ScannerState {
                 &self.dir(),
                 &self.data_dir.join(crate::db::CORPUS_DB),
                 TOP,
-                self.embedded.get().copied().unwrap_or_default(),
+                self.carried(),
             );
             let mut owed = self
                 .owed

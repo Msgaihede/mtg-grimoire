@@ -98,19 +98,26 @@ export const CameraRefused: Story = {
 };
 
 /**
- * The three scanner assets absent, which is a build without them embedded until a reader places
- * them — `scannerHandlers`' `scanner_status` names the bundle's own path in the sentence, so
- * the fixture and the page agree on where "here" is without either hard-coding the other's copy.
+ * The three scanner assets absent, which is a build without them embedded — a phone, or a
+ * developer's build — until they are fetched. The host says it owes them (`scanner_assets`), so
+ * the reader's view draws the offer to download them, with its measured size, under the camera:
+ * a reader who cannot scan anything is owed the way out without a switch to find. `ScannerAssets`'
+ * own stories press it.
  *
- * The sentence is drawn on the reader's view, under the status line, rather than only in the
- * Developer panels: a reader who cannot scan anything is owed the path without a switch to find.
- * With no bundle there are no labels either, so the Filters trigger is out of reach and says why.
+ * It stands where the instruction to place a file at a path and restart was; the Developer
+ * panels still name the path. With no bundle there are no labels either, so the Filters trigger
+ * is out of reach and says why.
  */
 export const AssetsMissing: Story = {
   parameters: { fake: { fault: "scannerMissing" } },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement);
-    await expect(await canvas.findByText(/No reference bundle\. Put/)).toBeInTheDocument();
+    const offer = await canvas.findByRole("region", { name: "Scanner files" });
+    await expect(
+      within(offer).getByText("The scanner needs its card data — about 19 MB."),
+    ).toBeInTheDocument();
+    await expect(within(offer).getByRole("button", { name: "Download" })).toBeInTheDocument();
+    await expect(canvas.queryByText(/No reference bundle\. Put/)).not.toBeInTheDocument();
     await expect(await canvas.findByRole("status", { name: "Scanner status" })).toHaveTextContent(
       "Card hashes aren't loaded",
     );

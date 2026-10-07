@@ -151,6 +151,9 @@ pub mod reset;
 /// **The scanner's session glue**: the `card-scanner` session behind a lazy load, the one-window
 /// lease, the reader's scanner prefs and review tray. `State.scanner` holds it.
 pub mod scanner;
+/// **The scanner's three files, fetched when a reader asks**: what this install owes of them,
+/// and the download — checked, renamed into place, and the loaded session let go.
+pub mod scanner_assets;
 /// **Every table, both ladders and the staging swaps.** `bring_to_head` is the half of a launch
 /// that may stop it; `prepare_database` is that and the half that is logged and left owing.
 pub mod schema;

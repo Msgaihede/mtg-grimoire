@@ -105,6 +105,27 @@ describe("the sentences", () => {
     expect(models).not.toContain("No OCR models");
   });
 
+  /**
+   * **A file the host has offered to fetch draws no instruction to place it** — the offer stands
+   * where the sentence would, and a path nobody can reach on a phone is not said. Absent or
+   * there-and-unreadable alike: both are a bundle a download replaces. What is not about a file
+   * to fetch is said either way, and so is everything once the file has loaded.
+   */
+  it("says nothing about a file the host has offered to fetch", () => {
+    expect(bundleSentence(STATUS.missing, true)).toBeNull();
+    expect(bundleSentence(STATUS.corrupt, true)).toBeNull();
+    expect(modelsSentence(STATUS.noModels, true)).toBeNull();
+    expect(modelsSentence(STATUS.corrupt, true)).toBeNull();
+    // Card names are `corpus.db`'s, not a file an offer covers.
+    expect(bundleSentence(STATUS.unlabelled, true)).toBe(bundleSentence(STATUS.unlabelled));
+    expect(bundleSentence(STATUS.unlabelled, true)).not.toBeNull();
+    expect(bundleSentence(STATUS.present, true)).toBeNull();
+    expect(modelsSentence(STATUS.present, true)).toBeNull();
+    // And unsaid, the offer changes nothing: the Developer panels still name the path.
+    expect(bundleSentence(STATUS.missing, false)).toBe(bundleSentence(STATUS.missing));
+    expect(bundleSentence(STATUS.missing)).toContain(STATUS.missing.bundle.path);
+  });
+
   /** The pair fails as one, so the sentence names whichever asset is carrying the reason. */
   it("names the recognition model when it is the one that failed", () => {
     const recognitionOnly: ScannerStatus = {
