@@ -414,6 +414,10 @@ struct Owed {
 
 impl ScannerState {
     pub fn new(data_dir: PathBuf) -> ScannerState {
+        // The crate's stage timings read this host's clock from here on: it has none of its own
+        // in a browser, where `Instant::now()` panics. Once per process; a second state's word
+        // is ignored, and is the same word.
+        card_scanner::host::set_clock(crate::platform::clock::monotonic_ms);
         ScannerState {
             data_dir,
             loaded: Mutex::new(None),

@@ -46,6 +46,7 @@ use imageproc::geometric_transformations::{warp_into, Border, Interpolation, Pro
 use imageproc::geometry::{convex_hull, min_area_rect};
 use imageproc::point::Point;
 
+use crate::host::Stopwatch;
 use crate::{CARD_ASPECT, RECTIFIED_H, RECTIFIED_W};
 
 /// How the card's boundary is separated from its background.
@@ -447,7 +448,8 @@ pub struct DetectTimings {
     /// this is the stage a 12 MP still pays and a camera frame does not.
     pub resize_ms: f32,
     /// Canny or Otsu, plus the morphology. **The slowest mask's, not the sum**: the masks run
-    /// on threads of their own, so this is the stage's share of the wall clock.
+    /// on threads of their own, so this is the stage's share of the wall clock. On a host with
+    /// one thread they run in turn and that share *is* the sum, which is what this holds there.
     pub mask_ms: f32,
     /// Contours, hulls, polygon approximation and scoring — the rest of the threaded stage's
     /// wall clock after [`DetectTimings::mask_ms`], plus the merge.
@@ -534,9 +536,9 @@ pub fn detect(
     };
 
     // ── Stages 6-7: the homography, from the full-resolution source ───────────────
-    let t_rectify = std::time::Instant::now();
+    let t_rectify = Stopwatch::start();
     let views = rectify_views(&rgb, &located.quad, opts);
-    let rectify_ms = t_rectify.elapsed().as_secs_f32() * 1000.0;
+    let rectify_ms = t_rectify.ms();
     let trace = trace.map(|mut t| {
         t.timings.rectify_ms = rectify_ms;
         t.timings.total_ms += rectify_ms;
@@ -570,9 +572,9 @@ pub fn locate(
     rgb: &RgbImage,
     opts: &DetectOptions,
 ) -> (Result<Located, DetectError>, Option<DetectTrace>) {
-    let t_start = std::time::Instant::now();
+    let t_start = Stopwatch::start();
     let mut timings = DetectTimings::default();
-    let ms = |t: std::time::Instant| t.elapsed().as_secs_f32() * 1000.0;
+    let ms = |t: Stopwatch| t.ms();
 
     let (sw, sh) = source.dimensions();
     if sw == 0 || sh == 0 {
@@ -586,7 +588,7 @@ pub fn locate(
         ((sw as f32 / scale).round() as u32).max(1),
         ((sh as f32 / scale).round() as u32).max(1),
     );
-    let t_resize = std::time::Instant::now();
+    let t_resize = Stopwatch::start();
     let work = source.resize_exact(ww, wh, image::imageops::FilterType::Triangle);
     let gray = work.to_luma8();
     timings.resize_ms = ms(t_resize);
@@ -601,7 +603,7 @@ pub fn locate(
     let passes = opts.method.passes();
     // The whole frame's area in this image's pixels — see `DetectOptions::window_share`.
     let frame_area = (ww * wh) as f32 / opts.window_share.clamp(f32::EPSILON, 1.0);
-    let t_passes = std::time::Instant::now();
+    let t_passes = Stopwatch::start();
     let mut masks: Vec<GrayImage> = Vec::with_capacity(passes.len());
     let mut candidates: Vec<ScoredQuad> = Vec::new();
     let mut examined = 0usize;
@@ -609,8 +611,15 @@ pub fn locate(
     // One level for both polarities, taken once — they are the same split read either way up.
     let otsu = (opts.method == EdgeMethod::Otsu)
         .then(|| opts.otsu_level.unwrap_or_else(|| otsu_level(&gray)));
+    // Whether the passes overlap in time, asked before they run: side by side the stage costs
+    // its slowest mask, and one after another it costs them all.
+    let side_by_side = crate::host::threads();
     for out in run_passes(&gray, &passes, otsu, opts) {
-        timings.mask_ms = timings.mask_ms.max(out.mask_ms);
+        timings.mask_ms = if side_by_side {
+            timings.mask_ms.max(out.mask_ms)
+        } else {
+            timings.mask_ms + out.mask_ms
+        };
         examined += out.examined;
         candidates.extend(out.candidates);
         all_contours.extend(out.contours);
@@ -630,7 +639,7 @@ pub fn locate(
         if !candidates.is_empty() || opts.method != EdgeMethod::Canny {
             break;
         }
-        let t = std::time::Instant::now();
+        let t = Stopwatch::start();
         let soft = imageproc::filter::gaussian_blur_f32(&gray, sigma);
         let (lo, hi) = canny_pair(opts.canny_low * 0.375, opts.canny_high * 0.45);
         let mask =
@@ -1057,34 +1066,25 @@ struct PassOutput {
     mask_ms: f32,
 }
 
-/// Every pass, each on a thread of its own when there is more than one.
+/// Every pass, each on a thread of its own when there is more than one — and one after another,
+/// in `passes` order, on a host with no thread to give ([`crate::host::fan_out`]).
 ///
 /// A panic on a pass's thread is carried back to the caller's rather than swallowed, so the
-/// session's `catch_unwind` sees exactly what it saw when the passes ran inline.
+/// session's guard sees exactly what it saw when the passes ran inline.
 fn run_passes(
     gray: &GrayImage,
     passes: &[EdgePass],
     otsu: Option<u8>,
     opts: &DetectOptions,
 ) -> Vec<PassOutput> {
-    if let [only] = passes {
-        return vec![run_pass(gray, *only, otsu, opts)];
-    }
-    std::thread::scope(|s| {
-        let handles: Vec<_> =
-            passes.iter().map(|&p| s.spawn(move || run_pass(gray, p, otsu, opts))).collect();
-        handles
-            .into_iter()
-            .map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
-            .collect()
-    })
+    crate::host::fan_out(passes, |&pass| run_pass(gray, pass, otsu, opts))
 }
 
 /// One mask, and the scored quads its contours make.
 ///
 /// `otsu` is the level an Otsu pass splits at, taken once by [`detect`] for both polarities.
 fn run_pass(gray: &GrayImage, pass: EdgePass, otsu: Option<u8>, opts: &DetectOptions) -> PassOutput {
-    let started = std::time::Instant::now();
+    let started = Stopwatch::start();
     let (ww, wh) = gray.dimensions();
 
     // ── Stage 2: separate the card from its background ────────────────────────────
@@ -1145,7 +1145,7 @@ fn run_pass(gray: &GrayImage, pass: EdgePass, otsu: Option<u8>, opts: &DetectOpt
             imageproc::morphology::close(&despeckled, Norm::LInf, 2)
         }
     };
-    let mask_ms = started.elapsed().as_secs_f32() * 1000.0;
+    let mask_ms = started.ms();
 
     // ── Stages 3-5: contours, polygon approximation, scoring ──────────────────────
     let mut candidates: Vec<ScoredQuad> = Vec::new();
