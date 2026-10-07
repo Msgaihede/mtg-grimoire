@@ -738,6 +738,11 @@ pub fn run() {
             scanner::scanner_tray,
             scanner::set_scanner_tray,
             scanner::scanner_tray_commit,
+            // The scanner's three files where the binary does not carry them: what this install
+            // owes, and the download a reader's press starts. A release build embeds all three,
+            // owes nothing and so is never offered it. See the core's `scanner_assets`.
+            scanner::scanner_assets,
+            scanner::scanner_assets_fetch,
             // The relay, the membership and the review queue (spec §6.1, §7.2–§7.4, §7.7 and
             // §10). The panel's two reads, the Connect press, the claim code the reader pastes
             // back, one round trip now, the rows carrying a sentence, clearing one of them, and

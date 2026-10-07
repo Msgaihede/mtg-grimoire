@@ -944,6 +944,17 @@ commands! {
         commit_tray(&state, &items, folder_id, &remaining)
     };
 
+    // scanner_assets — what this install lacks of the scanner's three files, and the download a
+    // reader's press starts (the light app's step 7.4). **Neither takes the lease**: what is
+    // loaded and who holds the scanner are two questions (`ScannerState::forget`), and a fetch
+    // outlives the view that started it. The read is `blocking` because it asks the status,
+    // which loads the session on its first ask; the fetch is a `task`, awaited where it stands
+    // — it reaches a network, and says how far it has got through `State::events`
+    // (`scanner_assets::PROGRESS_EVENT`). Both are refused on a page in the scanner's own
+    // sentence (`scanner::not_in_a_browser_yet`), before any request.
+    blocking scanner_assets in scanner_assets() = |state| owed(&state);
+    task scanner_assets_fetch in scanner_assets() = |state| async move { fetch(&state).await };
+
     // search
     read list_sets in search() = |conn| run_list_sets(conn);
     read search_cards in search(req: SearchRequest) = |conn| run_search(conn, &req);
@@ -2327,6 +2338,9 @@ mod tests {
             "scanner_tray_commit" => json!({ "items": [], "remaining": [] }),
             // `bytes`: no headers, and `chosen_body` is what the call carries.
             "scanner_frame" | "scanner_capture" => json!({}),
+            // The scanner's files: the read and the fetch (a `task`) both stop at the same
+            // sentence on a page, before the session is loaded or any host is asked.
+            "scanner_assets" | "scanner_assets_fetch" => Value::Null,
             // With text, so the facet pass reads the database rather than answering from memory.
             "facet_cards" => json!({ "req": { "text": "bolt" } }),
             "sync_review_clear" => json!({ "table": reviewable, "uid": "nobody" }),
@@ -2672,13 +2686,55 @@ mod tests {
         }
     }
 
+    /// The two that fetch the scanner's files (step 7.4) — a list of their own, because they
+    /// are not the session's: neither takes the lease, and neither is one of the twelve above.
+    const SCANNER_ASSETS: [&str; 2] = ["scanner_assets", "scanner_assets_fetch"];
+
     #[test]
     fn all_twelve_scanner_commands_are_in_the_table() {
-        for name in SCANNER {
-            assert!(TABLE.iter().any(|e| e.name == name), "{name}");
+        for name in SCANNER.iter().chain(&SCANNER_ASSETS) {
+            assert!(TABLE.iter().any(|e| e.name == *name), "{name}");
         }
         let in_table = TABLE.iter().filter(|e| e.name.contains("scanner")).count();
-        assert_eq!(in_table, SCANNER.len(), "a scanner command this list lacks");
+        assert_eq!(
+            in_table,
+            SCANNER.len() + SCANNER_ASSETS.len(),
+            "a scanner command these lists lack"
+        );
+    }
+
+    /// **The scanner's files, through the table**: on an install with nothing, the read names
+    /// the three files and what they cost, in the keys the page reads; and neither command
+    /// takes a body or an argument. The fetch itself is `scanner_assets::tests`' — a table call
+    /// reaches the shipped source, and no test asks GitHub for anything.
+    #[tokio::test]
+    async fn what_the_scanner_owes_is_read_through_the_table() {
+        let (state, _dir) =
+            crate::state::fixtures::on_files("commands-scanner-assets", "http://127.0.0.1:1");
+        let owed = dispatch(&state, "scanner_assets", Value::Null, None)
+            .await
+            .expect("what is owed");
+        let keys: Vec<_> = owed["owed"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["key"].as_str().expect("a key"))
+            .collect();
+        assert_eq!(keys, ["bundle", "detectionModel", "recognitionModel"]);
+        assert_eq!(owed["bytes"], 18_101_604);
+        assert_eq!(owed["fetching"], false);
+        let row = &owed["owed"][1];
+        assert_eq!(row["bytes"], crate::scanner_assets::DETECTION_BYTES);
+        assert!(row["label"].as_str().is_some_and(|label| !label.is_empty()));
+
+        for name in SCANNER_ASSETS {
+            assert_eq!(
+                dispatch(&state, name, Value::Null, Some(vec![1, 2, 3])).await,
+                Err(format!("{name} takes no raw body."))
+            );
+            let entry = TABLE.iter().find(|e| e.name == name).expect("in the table");
+            assert!(entry.args.is_empty(), "{name} takes nothing");
+        }
     }
 
     /// **The session's commands, through `dispatch`, on a state with no assets** — a real

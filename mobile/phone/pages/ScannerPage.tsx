@@ -121,7 +121,7 @@ export function ScannerPage() {
  */
 function LiveScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const { prefs, update, filterError, loaded, unavailable } = useScannerPrefs();
+  const { prefs, update, filterError, loaded, unavailable, resync } = useScannerPrefs();
   // Session-only, the desktop's: a deliberate Stop survives the page being hidden and shown.
   const [scanning, setScanning] = useState(true);
   const parked = usePageParked();
@@ -254,7 +254,16 @@ function LiveScanner() {
             >
               <AddedToast card={scanning ? landed : null} onDone={clearLanded} />
             </CameraBox>
-            <ScannerDataSlot status={status} />
+            {/* The scanner's files, where this install owes them. When a download lands the
+                engine's session is a new one: it is given the reader's filters again, and what
+                the last one said is dropped, so the next verdict starts a stream of its own. */}
+            <ScannerDataSlot
+              status={status}
+              onLoaded={() => {
+                resync();
+                loop.clearReads();
+              }}
+            />
             {unavailable === null && (
               <MatchLine
                 verdict={scanning ? loop.verdict : null}

@@ -23,7 +23,9 @@
 //   6. *Add* is one `scanner_tray_commit` for the chosen folder, the tray empties and the receipt
 //      says what was filed;
 //   7. leaving the page stops the camera's track, and so does hiding it past the grace;
-//   8. with the scanner's data absent the page says so in the slot kept for it, and adds nothing;
+//   8. with the scanner's data absent the page offers it in the slot kept for it — one sentence
+//      with its size and a Download button — and adds nothing; a press draws the bar, and when
+//      the data has landed the offer clears with no reload and the running camera names cards;
 //   9. in Exact the card the script cannot pin waits in the tray as a question, and a press on a
 //      candidate answers it;
 //  10. on its side at 800×360 the camera's column and the tray's stand side by side, with nothing
@@ -450,14 +452,36 @@ async function phone(send, width, height) {
 
   // ------------------------------------------------ 8. no scanner data -------------------
   await page.go("/scanner?fault=scannerMissing");
-  const slot = await page.until(`document.querySelector('[data-scanner-data-slot]')?.textContent`, "the slot's sentence");
-  if (!/No reference bundle/.test(slot) || !/No OCR models/.test(slot)) fail(`${at}: with no data the slot says "${slot}"`);
+  const SLOT = `document.querySelector('[data-scanner-data-slot]')`;
+  const slot = await page.until(`${SLOT}?.textContent`, "the slot's offer");
+  if (!/The scanner needs its card data — about 19 MB\./.test(slot)) fail(`${at}: with no data the slot says "${slot}"`);
+  // The offer, and never the instruction it replaced: a file at a path nobody here can reach.
+  if (/No reference bundle|No OCR models|Restart the app/.test(slot)) fail(`${at}: the slot still tells a phone to place a file — "${slot}"`);
   await page.until(`/Can't identify/.test(smoke.status())`, "the status line to say it cannot identify");
   await sleep(2500);
-  const missing = await page.evaluate(`({ ...smoke.measure(), rows: smoke.rows().length })`);
+  const missing = await page.evaluate(`({ ...smoke.measure(), rows: smoke.rows().length, download: !!smoke.button('Download') })`);
   if (missing.rows !== 0) fail(`${at}: ${missing.rows} cards landed with no bundle`);
+  if (!missing.download) fail(`${at}: the offer has no Download to press`);
+  // `hold` is where the button is measured: with every other control, 44px under the pointer.
   hold(`${at}, no scanner data`, missing);
   await page.shot("assets-missing");
+  // The press: the bar stands where the button was, and when the data has landed the offer is
+  // gone — no restart, no reload — the line stops saying it cannot identify, and the camera that
+  // was running all along starts naming cards.
+  // The fake's download is half a second, so the bar is watched for from inside the page rather
+  // than caught between two looks at it from here.
+  await page.evaluate(`(() => {
+    window.sawBar = false;
+    new MutationObserver(() => {
+      if (${SLOT}?.querySelector('[role="progressbar"]') && !smoke.button('Download')) window.sawBar = true;
+    }).observe(document.body, { childList: true, subtree: true });
+    smoke.press(smoke.button('Download'), 'Download');
+  })()`);
+  await page.until(`window.sawBar === true`, "the bar where the button was");
+  await page.until(`${SLOT} === null`, "the offer to clear once the data has landed");
+  await page.until(`!/Can't identify/.test(smoke.status())`, "the status line to stop saying it cannot identify");
+  await page.until(`smoke.rows().length >= 1`, "a card to land once the scanner has its data", 30_000);
+  say(`${at}: no scanner data — the offer with its size, a press, the bar, and a scanner that names cards with no reload`);
 
   // ------------------------------------------------ 9. Exact ------------------------------
   await page.go("/scanner");

@@ -2002,8 +2002,10 @@ request. *The IPC seam* below has the table's wire.
 **Assets were files in `data/scanner/` and nothing downloaded them — until 2026-09-15.** A
 release build now carries all three inside the binary, and a file here *overrides* the embedded
 copy rather than being the only source; §10 has the load order, the workflow that publishes the
-assets and the release step that fetches them. Nothing downloads at run time still. The table
-says what each file does when it is placed by hand in a build that embeds nothing.
+assets and the release step that fetches them. **Nothing downloaded at run time until
+2026-10-07**; since then a build that embeds nothing is offered a download of the three, on a
+reader's press (§10, *Where the files come from on each host*). The table says what each file
+does when it is placed by hand — or not yet fetched — in such a build.
 
 | Path under `data/scanner/` | Missing, with nothing embedded, means |
 | --- | --- |
@@ -2037,8 +2039,10 @@ the lease alone. The dropped session's filters stay owed until a session takes t
 that cannot build the mask — no labels, because `corpus.db` was being replaced at that moment —
 searches unfiltered, says so in `ScannerStatus.unapplied_filters`, and the next reload is offered
 them again; an accepted `scanner_set_filters` settles the debt too. It is also the way back from
-a poisoned session lock. It exists for assets a light install downloads after its first load;
-**no command calls it yet**, so everything in this paragraph is still what a reader sees.) `staleTime: Infinity` on the
+a poisoned session lock. It exists for assets an install downloads after its first load, and
+**its one caller is that download** — `scanner_assets_fetch`, §10 — after which the page asks the
+status again; for a file placed by hand everything in this paragraph is still what a reader
+sees.) `staleTime: Infinity` on the
 status query and no `Reload` button, because asking again in the same session cannot report a
 file that has since appeared — the load ran once and the answer is what it loaded. **A bundle
 or a model pair placed after the app started needs an app restart**, and that is the honest
@@ -2582,6 +2586,194 @@ The bundle behind every figure in this section — the evaluation and the live p
 built on 2026-09-15 by a **release** `build-hashes` from the main checkout's dev `corpus.db`:
 **113,494 printings, 5,447,744 B** (`32 + n × 48`, 5.45 MB), 1,590 s, 0 failed. The first
 workflow run is the first from `--bulk`.
+
+### Where the files come from on each host
+
+Landed 2026-10-07 — the light app's step 7.4 (issue #761). Until then the three files reached
+an install one way, at build time, and a build without them told its reader to put them at a path
+and restart. **A build that carries none is now offered a download of them**, and nothing is
+fetched until the reader presses.
+
+| Host | Where the three files come from | Asked at run time |
+| --- | --- | --- |
+| Desktop, release build | embedded by `build.rs` from `src-tauri/scanner-assets/`, which `npm run scanner:assets` fills from the release | nothing — it owes nothing, is offered nothing and makes no request |
+| Desktop, a build with nothing embedded | a file placed in `data/scanner/` by hand, or the download below | GitHub, on the reader's press |
+| Android | the download below, into `<app data>/data/scanner/` | GitHub, on the reader's press |
+| Web | not yet — both commands are refused on a page (`scanner::NOT_IN_A_BROWSER_YET`); a release download sends no CORS header, so the source is the web step's own | nothing |
+
+**The source is the release the build already reads**: `scanner-bundle-v<FORMAT_VERSION>`, at
+`https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v3/<name>`
+(`scanner_assets::release_url`, read from the crate's `FORMAT_VERSION` rather than typed). The
+release's names are flat — `text-detection.rten` — where the folder keeps the models under
+`models/`; `Piece::asset` and `Piece::place` are the two spellings, pinned to
+`scanner::{BUNDLE_FILE, DETECTION_MODEL, RECOGNITION_MODEL}` by a test.
+
+**Two commands, in `crates/grimoire-core/src/scanner_assets.rs`**, each a table entry and a
+desktop wrapper, neither taking an argument or the scanner's lease:
+
+- **`scanner_assets`** answers `Owed { owed, bytes, fetching }` — the files this install lacks
+  as `downloads::Due` rows (`bundle`, `detectionModel`, `recognitionModel`, each with a label and
+  its bytes), the total, and whether a fetch is running.
+- **`scanner_assets_fetch`** downloads every owed file, checks it, puts it in place, lets the
+  loaded session go, and answers what is owed afterwards.
+
+**What is owed is what did not load and the binary does not carry.** The rule is `lacking`, a
+pure function over the status, with a test of each case:
+
+- **nothing the binary carries is ever owed** — so a release build answers an empty list
+  whatever is in `data/scanner/`, and a file placed over an embedded copy that will not load
+  stays the reader's to remove, with its error drawn as before;
+- **the bundle is owed when none loaded**: absent, or *there and not a bundle this build reads*
+  — which is what an app update that moved `FORMAT_VERSION` leaves on a phone, where nobody can
+  reach the folder. A bundle that loaded without its card names is not owed; the names are
+  `corpus.db`'s;
+- **a model is owed when the pair did not load and that file is not the pinned one**: missing,
+  the wrong length, or the right length and the wrong bytes — told apart by its SHA-256, which
+  is read off the disk only in this state, never for a scanner that works. Two files that are
+  both the pinned ones and still did not load owe **nothing**: fetching the same bytes again
+  changes nothing, and an offer that could never clear is worse than the status's own sentence.
+
+So a fetch a network dropped after the bundle owes two files, not three, and the reader's
+next press is 12.2 MB rather than 18.1. **The digest is what lets an offer end** (review,
+2026-10-07): by length alone, a detection model that was corrupt at its right length beside a
+missing recognition model owed only the second — every press downloaded 9.7 MB, failed the
+pair, deleted it and offered the same again.
+
+**The sizes are in the engine, and only the models' are exact.** `DETECTION_BYTES` 2 510 284
+and `RECOGNITION_BYTES` 9 716 568 are the files' lengths and are checked; `BUNDLE_BYTES`
+5 874 752 is the bundle as measured on the release on 2026-10-07, used for the offer and for
+nothing else — the file is rebuilt weekly and grows with every set, so a bundle is trusted
+because it parses. Together 18 101 604 B; the page rounds each figure **up** to whole megabytes,
+as the launch downloads' prompt does, so it reads *about 19 MB* (6, 3 and 10).
+
+**A file takes its name only once it has been checked.** Each download is written to
+`<name>.part` beside its destination — the same folder, so the rename is one operation on one
+filesystem — and `scanner::load` never reads that name. Then:
+
+- **the two models are pinned.** They are the same two files in every release — `ocrs-models`'
+  — so each must be **exactly** its length, refused on the answer's `Content-Length` before a
+  byte of body is read and counted again as the body arrives; and then its **SHA-256 must be
+  the one compiled into the app** (`DETECTION_SHA256` `f15cfb56…b5ca`, `RECOGNITION_SHA256`
+  `e484866d…5a6e`), checked before any loader has seen a byte of it. Then the pair must build a
+  `TitleReader`, the very reader the session will build, before either is renamed. A model that
+  is not byte for byte the published one is never parsed. The digests were read three ways that
+  agreed on 2026-10-07: the release's own asset digests, a fresh download hashed locally, and
+  the copy the frame bench ran on. **`scanner-bundle.yml` checks the same two before it
+  publishes**, reading them out of the Rust source, so the workflow cannot upload a model the
+  installed apps would refuse;
+- **the bundle cannot be pinned** — it is rebuilt weekly — so it is held to what can be said of
+  any bundle: under its ceiling (`MAX_BUNDLE_BYTES`, 64 MiB, declared or counted as it
+  arrives), parsed by `Bundle::from_bytes` (the magic, this build's format version, the length
+  its own header declares), and **not empty**: a header with no card behind it parses, would
+  load, would name nothing, and — since what is owed is what did not load — would never be
+  owed again. It is renamed as soon as it passes, so a bundle that arrived is kept when a model
+  after it fails. **What vouches for a bundle's contents is the HTTPS chain to GitHub and
+  nothing else**: a wrong bundle that parses names the wrong cards, and runs no code.
+
+A refusal deletes the `.part` — every model's, whichever step failed — and is one sentence the
+page shows, **naming the file and never where it is kept**: on a phone the folder is
+`/data/user/0/…`, which no reader can act on. A folder that cannot be made, or something that
+is not a file where a file belongs, is said **before anything is asked of the network**, so it
+is a sentence on every press and never eighteen megabytes downloaded to fail at the rename. A
+failure is also written to `error_log`, as the feeds' are (`database` / `scanner_assets`, the
+release's address in the detail): a fetch outlives its view, and one that fails after the reader
+left is otherwise recorded nowhere. **A `.part` a killed process left is started over, never
+resumed** — `Writer::create` empties it. The whole fetch is 18 MB, the bundle changes every
+week, and a partial of last week's file continued with this week's is the join
+`scryfall::Client::download` keeps an `.origin` record to avoid. One that is never fetched
+again — the reader placed the files by hand instead — is left where it is.
+
+**HTTPS on every hop, constants, and a redirect that is followed.** The host and the path are
+constants and the base is injectable only through a private `Source` seam its tests use.
+GitHub answers a release download `302` to its asset host —
+`release-assets.githubusercontent.com` when asked on 2026-10-07 — and the client follows it,
+under `reqwest`'s default policy: at most ten hops, to whichever host each answer names.
+Pinning the asset host would break the day GitHub renames it, which it has done before. What
+is held instead is the scheme, **on the request and on every hop**: the client is built
+`https_only` (`platform::http::Config`, a switch this step added; `reqwest`'s own, which its
+redirect policy enforces too), so a hop to `http://` ends the request as an error instead of
+being followed. The first cut checked only where the answer finally came from, which an
+https→http→https chain passes. In a browser there is nothing to set: a page served over HTTPS
+may not fetch an `http://` address at all. The request carries the app's `User-Agent` and
+nothing else. **Not through `scryfall::Client`**: that is Scryfall's pacing gate and its 429
+lockout.
+
+**Bounded in silence, not in length, and one at a time.** Every wait — for the answer to begin,
+and for each chunk — is under `scryfall::STALL`, sixty seconds. That is a bound on a link that
+has gone quiet: one that keeps delivering slowly is never given up on, **there is no deadline
+on the whole fetch and nothing cancels one but its end**. A second call while one runs is
+**refused** (`ALREADY_FETCHING`), as a second card sync is, by a claim on `ScannerState` that a
+guard lets go however the run ends — on the state and not in a static, because two states are
+two installs. There is no retry loop: a failure is a sentence, and the retry is the reader's
+press, for what is still owed.
+
+**It outlives the page.** The fetch is awaited by the host's command, so leaving the Scanner
+view changes nothing. `Owed.fetching` is how a view that comes back learns one is running, and
+the event **`scanner:assets`** how it draws how far — `Progress { phase, file, done, total,
+message }`, `phase` one of `downloading`, `checking`, `done`, `error`, the bytes counted across
+the whole run and reported every 256 KiB.
+
+**When a file has landed the fetch calls `ScannerState::forget()`** — a failed run included, if
+anything landed before it failed — so the next scanner command loads a session that has seen
+it. No restart, which is the point: §9's *Loading is lazy and never happens again* is still true
+of a file placed by hand, and no longer of one fetched.
+
+**On the page** (`src/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`) the reader's
+view draws the offer under the camera, where the path-and-restart sentences were: *The scanner
+needs its card data — about 19 MB*, what each file is, and **Download**; then a bar with how far
+it has got; then, on a failure, the engine's sentence and **Retry**. **It is drawn from what
+the host answers and from nothing else**: no rows — a release build, or a host that refuses the
+command — is no offer, and then the status's own sentences are what is left, as before. The
+offer replaces a sentence only for a file it offers; card names that did not load are said
+either way; and the Developer panels still name each path and each error, which is where a
+developer placing a file by hand reads them. When a fetch ends the page does its two halves of
+the reload: `scanner_status` is asked again — the one thing that ever invalidates that query —
+and `useScannerPrefs.resync` pushes the **stored** filters to the new session, read from the row
+again, because a session with no bundle refused them at mount and the popover was put back to
+none. **The status is marked stale by the press's own promise, which outlives the view** — a
+fetch that lands while the reader is on another view would otherwise leave the view that came
+back drawing the status it read before the download — and the last failure is kept in the
+cache for the same reason, so a download that failed while nobody was looking says why when
+the reader returns. A window that did not press hears the event too, and re-reads both. The latched reads are dropped (`loop.clearReads`), so the next verdict starts a stream of
+its own; `decision_seq` restarting at zero needs nothing more, since the loop takes every
+verdict's number and the first frame of a new session carries no decision.
+
+**When `FORMAT_VERSION` moves.** An installed app keeps asking for its own version's tag, so a
+bundle published for a newer format is never fetched by a build that cannot read it. What the
+old tag still holds is what it gets — stale, if the weekly workflow no longer publishes there —
+and if the release is deleted the fetch says *card-hashes.bin is not published for this version
+of the app (HTTP 404)*. An app **updated** across the move finds the old bundle on disk, fails
+to load it, and owes a new one: the offer comes back, with no file to remove by hand.
+
+**What it does not do.** **There is no refresh**: an install that fetched once keeps that
+bundle until a `FORMAT_VERSION` bump makes it unreadable, so sets released after the download
+go unrecognised there — as they do on a desktop, whose embedded copy is as old as its release.
+The weekly publish replaces the three assets with `--clobber`, one after another, so a fetch
+that lands in that moment can meet a 404 whose sentence — *not published for this version* —
+is wrong about why; the next press works. And the offer says the size, not whether the link
+is metered: the launch's mobile-data hold does not cover a download the reader starts.
+
+**Measured, 2026-10-07, this desktop (Windows 11), a debug build** — the one real fetch, from
+a test marked `#[ignore]` (`scanner_assets::tests::the_published_files_land_and_load`), into a
+scratch state with nothing in its `scanner/` folder, run twice: before the review round and
+after it, with the digests pinned and the client HTTPS-only. Before it, three files owed,
+18 101 604 B. **`fetch` answered in 1.82 s, and in 1.35 s the second time**: 5 874 752,
+2 510 284 and 9 716 568 B landed under their three names, the bundle parsed, both models
+matched their pinned digests, the pair loaded, 76 `scanner:assets` events ending on `done` at
+18 101 604 of 18 101 604 (74 before each model had a check of its own), nothing owed and
+nothing in `error_log`. `scanner_status` on the same state, with no restart, then read all
+three `source: file`, `loaded: true`. Those figures are this machine's network and say nothing
+about a phone's.
+
+**Not seen.** No phone has run it: not the download on a mobile link, not the pair load in
+that build, not the 18 MB against a phone's storage. No metered connection. No stall, no
+dropped connection and no redirect to plain HTTP against the real host: the first two are the
+mock servers', and the third is `reqwest`'s switch, shown refusing a plain-HTTP *request* and
+not a redirect — which would take a TLS server to be redirected from. The workflow's digest
+step was run by hand against the real models, a tampered one and an unreadable source, and
+never in Actions. No app window over the real engine: the phone face's smoke drove the offer, the press and the reload in a headless Chromium over the fake (light-app.md §11.4), and nothing drove them in a running
+desktop or light build. And no release whose `FORMAT_VERSION` moved under an installed app; the
+paragraph above is a reading of the code.
 
 ### Filters
 

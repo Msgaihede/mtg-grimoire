@@ -110,6 +110,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - Publishes OCR models and hashes to prerelease `scanner-bundle-v<FORMAT_VERSION>`.
   - Fenced by strict fetch failure thresholds (< 0.5% transient errors) and size checks (≥ 99% of previous bundle size).
   - Evaluates models with `continue-on-error: true` so performance summaries are posted without blocking publishing.
+  - **Refuses to go on unless both OCR models' SHA-256 are the ones the app pins** (`DETECTION_SHA256`, `RECOGNITION_SHA256` in `crates/grimoire-core/src/scanner_assets.rs`, read out of that source by the step): an installed app that fetches its scanner files refuses any other model, so one must never be published. Changing a model means changing those two constants and the two lengths in the same commit.
 - **`android-emulator.yml`**:
   - Non-gating performance diagnostic workflow. Builds and boots the Android APK on an x86_64 emulator under KVM.
   - Times cold launch, measures first-run corpus sync, checks for process crashes (`destroyed mutex`, `Fatal signal`), and captures screenshots.

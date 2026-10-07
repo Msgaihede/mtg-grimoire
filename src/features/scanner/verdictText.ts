@@ -163,11 +163,19 @@ function didNotLoad(file: string, path: string, error: string): string {
  * `data/scanner/`. The one sentence an embedded bundle can still earn is the labels' — the names
  * come out of `corpus.db` and never out of the binary, so embedding cannot lose them and cannot
  * supply them either.
+ *
+ * **`offered` is the host saying it can fetch the bundle** (`scanner_assets` listed it as owed),
+ * and then a bundle that did not load draws nothing here: the offer to download it stands where
+ * this sentence would, and "put a file at this path and restart" is the wrong instruction for a
+ * reader with a button — and an impossible one on a phone, whose path nobody can reach. The
+ * labels' sentence is not about a file to fetch and stands either way. The Developer panels pass
+ * nothing, so a developer placing a file by hand still reads its path and its error there.
  */
-export function bundleSentence(status: ScannerStatus | null): string | null {
+export function bundleSentence(status: ScannerStatus | null, offered = false): string | null {
   if (status === null) return null;
   const bundle = status.bundle;
   if (bundle.source === "embedded" && bundle.loaded && bundle.error === null) return null;
+  if (offered && !bundle.loaded) return null;
   if (!bundle.present) {
     return `No reference bundle. Put \`${BUNDLE_FILE}\` at ${bundle.path}. ${RESTART}`;
   }
@@ -186,12 +194,16 @@ export function bundleSentence(status: ScannerStatus | null): string | null {
  * **They load as a pair and fail as one**: `TitleReader::load` writes the identical sentence
  * onto both assets, so this names whichever one is carrying it rather than printing it twice.
  * Either file missing is the placement sentence, because a lone model reads nothing.
+ *
+ * `offered` is {@link bundleSentence}'s, for the models: the host listed one of them as owed, so
+ * the offer stands in for every sentence here.
  */
-export function modelsSentence(status: ScannerStatus | null): string | null {
+export function modelsSentence(status: ScannerStatus | null, offered = false): string | null {
   if (status === null) return null;
   const det = status.detection_model;
   const rec = status.recognition_model;
   if (det.loaded && rec.loaded) return null;
+  if (offered) return null;
   if (!det.present || !rec.present) {
     return `No OCR models. Put \`${DETECTION_FILE}\` and \`${RECOGNITION_FILE}\` at ${det.path}. ${RESTART}`;
   }

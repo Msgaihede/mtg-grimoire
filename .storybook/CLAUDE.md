@@ -45,7 +45,7 @@ Full reference, measurements, and design history: [`docs/reference/storybook.md`
   - Configured per story via `parameters: { fake: { fault: "<fault-name>" } }`.
   - Network & Sync: `busy`, `syncing`, `syncError`, `feedFetchError`, `combosFetchError`.
   - Taxonomies: `oracleTagsMissing`, `oracleTagsFetchError`, `artTagsMissing`, `artTagsFetchError`.
-  - Hardware & Locks: `scannerElsewhere` (scanner lease held by another window), `scannerMissing`.
+  - Hardware & Locks: `scannerElsewhere` (scanner lease held by another window), `scannerMissing` (the three scanner files absent — and owed: `scanner_assets` lists them, and `scanner_assets_fetch` takes a moment, reports through `scanner:assets`, and ends the fault), `scannerFetchFails` (the same three owed and the download refused; for `ScannerAssets`' own stories — `scanner_status` does not read it).
   - Supporter States: `patreonDeclined` (grace window), `patreonLapsed` (revoked entitlement), `patreonGroupEntitled` (secondary device entitled via group).
   - Host: `lentStorage` (the story is a browser: the host answers `storage_group_warning` with the web host's sentence). The one fault that adds a command — put over the world's table in `world.ts`, never in `allHandlers`, which parity holds to `desktop.rs`.
 - **Data fixtures**:

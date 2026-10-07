@@ -694,6 +694,7 @@ fn build_http() -> http::Client {
         user_agent: crate::scryfall::USER_AGENT,
         connect_timeout: Some(Duration::from_secs(10)),
         read_timeout: Some(Duration::from_secs(30)),
+        https_only: false,
     })
     .deadline(REQUEST_DEADLINE)
 }

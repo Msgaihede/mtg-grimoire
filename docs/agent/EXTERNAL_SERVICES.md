@@ -17,6 +17,7 @@ construction).
 - [Sync and the hosted relay](#sync-and-the-hosted-relay)
 - [Entitlements, removal and leaving](#entitlements-removal-and-leaving)
 - [The share Worker (read-only shared collection)](#the-share-worker-read-only-shared-collection)
+- [The scanner's files, from this repository's GitHub release](#the-scanners-files-from-this-repositorys-github-release)
 - [The app Worker (the light app's web host)](#the-app-worker-the-light-apps-web-host)
 
 ## Scryfall and the price feeds
@@ -178,6 +179,39 @@ same value on both Workers; ask the host before you believe any of this or its o
 [collection-sharing.md](../reference/collection-sharing.md) is the record, and lists what only a
 real publish can settle.
 
+## The scanner's files, from this repository's GitHub release
+
+**The scanner's three files are the sixth, the only download a launch never starts, and the
+first thing the _engine_ asks GitHub for** (2026-10-07; the desktop's own updater has asked
+`api.github.com` since it shipped). The scanner needs a bundle of card hashes and two OCR models
+— 18.1 MB together. A desktop release build carries them in its binary and asks nobody. An
+install that does not — a phone, a developer's build — is **offered** them: `scanner_assets` says
+which are owed and what they cost, and only a reader's press on that offer calls
+`scanner_assets_fetch`, which downloads them from
+`https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
+— the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
+`scripts/scanner-assets.mjs` already reads at build time. **Optional in the price feeds' sense**:
+nothing is fetched until the reader asks, and without them the scanner detects a card and names
+nothing rather than failing.
+
+**What is trusted, and why.** The request carries the app's `User-Agent` and nothing else — no
+token, the repository is public. GitHub answers with a redirect to its asset host
+(`release-assets.githubusercontent.com` when asked on 2026-10-07), which the client follows —
+and the client is **HTTPS-only**, on the request and on every hop of a redirect, so nothing is
+read over a link that is not encrypted. **The two models are pinned by SHA-256** in the engine
+(`scanner_assets::{DETECTION,RECOGNITION}_SHA256`): a model that is not byte for byte the
+published one is refused before any loader sees it, whoever sent it, and the publishing
+workflow checks the same two digests so it cannot upload one the installed apps would refuse.
+**The bundle cannot be pinned** — it is rebuilt every week — so it is held to its ceiling, its
+format and not being empty; what vouches for its contents is the HTTPS chain to GitHub and the
+repository's own release. A wrong bundle that parses would name the wrong cards; it runs no
+code. No file takes its name until it has passed its check, and a failed fetch is a sentence and
+a row in `error_log`.
+
+**A browser cannot ask it**: a release download sends no `Access-Control-Allow-Origin`, so the
+engine refuses both commands on a page before any request, and the web host's source for these
+files is its own origin's to provide (the light app's step 7.5).
+[card-scanner.md](../reference/card-scanner.md) §10 has the rules and what was measured.
 ## The app Worker (the light app's web host)
 
 **A _third_ Worker is the light app's web host, and it has been deployed since 2026-10-04.** `app-worker/` serves

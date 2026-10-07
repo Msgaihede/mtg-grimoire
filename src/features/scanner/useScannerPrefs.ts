@@ -108,6 +108,14 @@ export interface ScannerPrefsState {
    * sends no frame — and nothing is sent again, because no wait changes it.
    */
   unavailable: string | null;
+  /**
+   * **The engine's session is a new one: give it the reader's filters again.** The mount's push
+   * went to a session the engine has since let go (`ScannerState::forget`, for scanner files
+   * that arrived by download), so this sends the stored filters to the one that replaced it —
+   * what the mount effect does, asked for by name. Nothing else is touched: `loaded` stays as it
+   * is, so the camera and the pump run on through it.
+   */
+  resync: () => void;
 }
 
 function current(qc: QueryClient): ScannerPrefs {
@@ -343,6 +351,48 @@ export function useScannerPrefs(): ScannerPrefsState {
     }
   }, [data, failed, push]);
 
+  /**
+   * The filters to a session that has just replaced the one the mount pushed to.
+   *
+   * **The stored row's, read again — not the cache's.** A session with no card hashes has no
+   * names to filter by, so the mount's push of a reader's stored filters was refused there and
+   * the cache was put back to none, which is what that session was searching under. The row was
+   * never rewritten for it, so the row still holds what the reader chose, and the session that
+   * can finally take it is this one. Unless a change is still on its way to the row: then the
+   * cache is the newer word, and it is what is pushed.
+   *
+   * Never after the view has gone — an accepted push is the scanner's lease, taken.
+   */
+  const resync = useCallback(() => {
+    if (!mountedRef.current) return;
+    if (hasUnsavedPrefs(qc)) {
+      push(current(qc).filters, false);
+      return;
+    }
+    // **Read beside the cache, not through it.** A read through the query would write the row
+    // over the entry as it answered — and over a change the reader made while it was on its
+    // way, whose own write is still going out. So the row is read on its own, and it reaches
+    // the entry only if the entry is still the one this read set out from, with nothing
+    // unsaved; otherwise the reader has said something newer, and that is what is pushed.
+    const before = qc.getQueryData<ScannerPrefs>(PREFS_KEY);
+    ipc.scannerPrefs().then(
+      (stored) => {
+        if (!mountedRef.current) return;
+        const untouched = qc.getQueryData<ScannerPrefs>(PREFS_KEY) === before;
+        if (!untouched || hasUnsavedPrefs(qc)) {
+          push(current(qc).filters, false);
+          return;
+        }
+        qc.setQueryData<ScannerPrefs>(PREFS_KEY, stored);
+        push(stored.filters, false);
+      },
+      // The row would not read: the cache is all there is to push.
+      () => {
+        if (mountedRef.current) push(current(qc).filters, false);
+      },
+    );
+  }, [qc, push]);
+
   const update = useCallback(
     (patch: Partial<ScannerPrefs>) => {
       qc.setQueryData<ScannerPrefs>(PREFS_KEY, { ...current(qc), ...patch });
@@ -362,5 +412,6 @@ export function useScannerPrefs(): ScannerPrefsState {
     update,
     filterError,
     unavailable,
+    resync,
   };
 }

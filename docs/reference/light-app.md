@@ -7542,9 +7542,184 @@ has not loaded real assets on any light host, and `forget` has never run against
   act on — Android until 7.4.
 - **A raw-body command with no table entry** fails the fence as it stands; there is none.
 
-### 11.4 Step 7.4 — the assets are fetched on first use
+### 11.4 Step 7.4 — the assets are fetched on first use (2026-10-07)
 
-*Not merged yet.*
+Issue #761, phase 7; the box *"Scanner assets fetched on first use with their measured size …
+not embedded"*. Until this step nothing fetched the scanner's files on any host: the desktop's
+release build embeds them, and every other install — a phone above all — had a status that
+named three absent paths and told its reader to restart. Built and tested on Windows 11, debug
+builds, on top of step 7.3's branch at `dbd771be` and merged with it at `43395ed5`, which is
+`main` through step 7.1, then with `main` at `a0cc6188` (step 7.3 merged, and #854), and last
+with `main` at `67963efe`, which is step 7.6's phone page, and at `9b04035d`, a sync fix that
+touches none of this. The engine's suites below were run after the review round and the real
+fetch twice — once before the review and once after it; the page's suites, the stories and the
+phone smoke were run on the tree with the phone page, and the engine's own module and the
+command table once more on the last.
+[card-scanner.md](card-scanner.md) §10,
+*Where the files come from on each host*, has every rule; this is the step's record.
+
+**What was built.**
+
+- **The core, once** (`crates/grimoire-core/src/scanner_assets.rs`), as two table entries and
+  two desktop wrappers that add nothing. `scanner_assets` answers which of the three files this
+  install lacks — `downloads::Due` rows, the total, and whether a fetch is running.
+  `scanner_assets_fetch` downloads them from the repository's `scanner-bundle-v<FORMAT_VERSION>`
+  release into `<data>/scanner/`, reports through `scanner:assets`, and calls
+  `ScannerState::forget()` — its first caller — so the next scanner command reads them with no
+  restart. The Android host gained a test and nothing else: `core_call` forwards both.
+- **What is owed is what did not load and the binary does not carry.** A desktop release build
+  therefore owes nothing, is offered nothing and makes no request; nothing anywhere fetches
+  until a reader presses. A bundle that is there and unreadable is owed too, which is what an
+  app updated across a `FORMAT_VERSION` leaves on a phone.
+- **A file takes its name only once it is checked**: written to `<name>.part` beside its
+  destination, and only then renamed. **The two models are pinned by SHA-256** — exact length,
+  then the digest compiled into the engine, before any loader sees a byte, then the pair builds
+  the reader the session will build. **The bundle cannot be pinned**, so it is held to its
+  ceiling as it arrives, to `Bundle::from_bytes`, and to not being empty. A leftover `.part` is
+  started over, never resumed. One fetch at a time, a second refused in a sentence; every wait
+  under the feeds' sixty-second stall bound; no retry loop.
+- **HTTPS on every hop, with constants, and GitHub's redirect followed** under `reqwest`'s
+  default policy: the client is built `https_only` — a switch this step gave
+  `platform::http::Config` — so the request and each hop of a redirect are HTTPS or the request
+  ends as an error.
+- **A failure is one sentence and a row in `error_log`**, the feeds' pattern
+  (`database` / `scanner_assets`). The sentence names the file, never the app-private folder.
+- **Both commands are refused on a page**, in step 7.3's sentence from step 7.3's helper,
+  before any request. GitHub sends no CORS header; the browser's source is step 7.5's.
+- **The page** (`src/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`, both clean of
+  the phone's import fence): the offer with its measured size — *The scanner needs its card data
+  — about 19 MB*, each figure rounded up as the launch prompt's are — a Download button with the
+  touch floor, a bar that follows the event, the engine's sentence and a Retry on a failure.
+  **Drawn from what the host answers and nothing else**: no rows, or a refusal, is no offer.
+  It stands where the path-and-restart sentences were, for the files it offers; the Developer
+  panels still name each path and error. **Mounted on both faces**: in the desktop face's
+  `ScannerPage` as one component in place of the notes, and in the phone face's slot under its
+  camera (`mobile/phone/scanner/ScannerDataSlot.tsx`, which step 7.6 left for it), where it
+  replaced the sentences that told a phone to put files at a path. Each page hands it the same
+  two things to do when a download lands. The status query both pages read is under one
+  exported key, `SCANNER_STATUS_KEY`, which is the key a landed download marks stale.
+- **When a fetch ends the page does its two halves of the reload**: the status is asked again,
+  and `useScannerPrefs.resync` pushes the *stored* filters — read from the row again, because
+  a session with no bundle refused them at mount and the popover was put back to none — to the
+  session that can now take them. The loop's latched reads are dropped. `decision_seq`
+  restarting at zero needed nothing: the loop takes every verdict's number, and a new session's
+  first frame carries no decision.
+- **The fake** owes the three files under `scannerMissing`, and its fetch is the one handler
+  that takes time — three short stretches, said through `scanner:assets` — after which the
+  fault is over and its status reads present. `scannerFetchFails` is the refused download.
+
+**Decided here, and the owner's to reverse.** A second fetch is *refused*, not joined — the
+house rule for a second sync or refresh — and the page learns of a running one from
+`Owed.fetching`. A leftover `.part` is *started over*: 18 MB, and a bundle that changes weekly.
+The redirect's host is *not* pinned, because GitHub has renamed it before; the scheme is. The
+sizes round *up*, so the offer reads 19 MB for 18.1. And the launch's mobile-data hold does not
+cover this fetch: it starts only on a press that has just read the size.
+
+**A fresh reviewer read it as network-and-file code**, and found no way for a partial or a
+wrong file to be renamed into place, no unbounded memory, no claim left held, no request from a
+release desktop build and no lock across an `await`. Its verdict was to ship after six fixes,
+all taken:
+
+- **A fetch that ended with no Scanner view mounted left the status stale.** The page's status
+  query never goes stale by itself and only a mounted hook marked it, so a reader who pressed
+  Download, left, and came back after it landed was shown the status read before the download —
+  *put a file at this path and restart* — for a scanner the engine had already reloaded; and a
+  failure while away was state of a hook that no longer existed. The press's own promise marks
+  the status now, mounted or not, and the last failure is kept in the cache. Both tests were
+  red first.
+- **Two sentences carried an app-private path, and one path leaked a `.part`**: a rename that
+  failed on the first model left the second model's 9.7 MB under its temporary name, because
+  the list it was on had been emptied before the loop. Sentences name the file; every model's
+  `.part` goes on any failure; a panic on the blocking pool is a sentence without the runtime's
+  account of it.
+- **The streaming limits had no test**, because the mock server always declares a length. A
+  raw server now answers with none: a model that runs past its length is stopped a chunk in, a
+  bundle past its ceiling likewise, a body that ends short of what it declared is the
+  transport's error. The ceiling moved into the test seam; a redirect is followed in a test.
+- **No `error_log` row**, where every feed writes one. Written now.
+- **The models were held to a length and a loader, and the HTTPS check looked only at where the
+  answer finally came from.** The two models are pinned by SHA-256 — `f15cfb56…b5ca` and
+  `e484866d…5a6e`, read three ways that agreed — and checked before the loader; an empty bundle
+  is refused; the client is HTTPS-only on every hop; and `scanner-bundle.yml` refuses to go on
+  unless the models it fetched are the two the app pins, reading the digests out of the Rust.
+- **An offer that could never clear**: a detection model corrupt at its right length beside a
+  missing recognition model owed only the second, and every press fetched 9.7 MB to fail the
+  pair. A model is owed by its digest now, hashed only when the pair did not load; two pinned
+  files that still do not load owe nothing; and a folder where a file belongs, or a file where
+  the models' folder belongs, is a sentence before anything is asked of the network.
+
+And four smaller ones: a window that did not press hears the fetch's events and re-reads what is
+owed and the status; `resync` no longer puts the stored row over a change made while it was
+reading it; the page is told once per fetch end, whatever answers late; and the bar's last line
+is the total the offer named.
+
+**The fixes were mutated and went red**: eight of them at once in the engine — the `.part`
+cleanup, the per-chunk ceiling, the digest check, the empty-bundle refusal, the `error_log` row,
+the not-a-file refusal, the digest in what is owed, the HTTPS-only switch — turned twelve of the
+module's twenty-two tests red, each fix's own among them. The page's two tests for a fetch that
+ends with nothing mounted were written first and seen red.
+
+**Measured.** The real fetch, from a test marked `#[ignore]`, into a scratch state with an empty
+`scanner/` folder, twice: three files owed, 18 101 604 B; **`fetch` answered in 1.82 s before
+the review and 1.35 s after it** on this desktop's link, with 5 874 752, 2 510 284 and
+9 716 568 B under their three names, both models matching their pinned digests, 76 progress
+events ending on `done`, nothing owed and nothing in `error_log`; `scanner_status` on the same
+state, with no restart, then read all three `source: file`, `loaded: true`. Against local
+servers: the happy path, a 404 and a 503, a body that goes quiet (given up on at the stall
+bound) and one that is cut off, a bundle with the wrong magic, one cut short and one that is
+empty, a bundle past its ceiling declared and undeclared, a model too short, too long and of
+the wrong digest, a pair that does not load, one missing model fetched alone, a corrupt one
+replaced, a place a file cannot take, a rename that fails, a redirect, a plain-HTTP release
+refused by the HTTPS-only client, a leftover `.part`, a second concurrent call and the page
+refusal — each leaving nothing in place that was not checked. Core `scanner` 82, of which
+`scanner_assets` 22, `commands` 41, `platform::http` 5 and the fence 8; desktop `scanner` 9 and
+`command_table` 9; `grimoire-light` 18; `cargo fmt` clean over the four crates; clippy for the
+workspace and for `wasm32`; 2 009 frontend tests over `ipc.test.ts`, `src/features/scanner`,
+`.storybook/fake` and `scripts/`; the two scanner story files' ten plays through a throwaway
+copy of the story harness (the whole of `stories.test.tsx` was left for the fan-in); the
+hosting census, the phone's import fence and the token sweep. The workflow's digest step was
+run by hand in Git Bash against the real models, a tampered one and a source it could not
+read: matched, refused, refused.
+
+**Seen on the phone face, over the fake.** `npm run mobile:scanner-smoke`, a headless Chromium
+at 360×800 and 412×915 under a touch pointer with its test-pattern camera running: with the
+scanner's data absent the slot draws the offer and its size, nothing scrolls sideways and
+Download is at least 44px; a press draws the bar; and when the fake's download lands the offer
+clears with no reload, the line stops saying it cannot identify, and the camera that was
+running all along names its next card. That is the page, the hook, the reload and the filter
+push end to end in a browser — and none of the engine: the fake stands in for the download.
+
+**Not seen.** No phone: not the download on a mobile link, not the model pair loading in that
+build, not 18 MB against a phone's storage, and not the offer on a real phone's screen. No
+metered connection. No stall or dropped connection against the real host, and no redirect to
+plain HTTP anywhere — the switch is `reqwest`'s, seen refusing a plain-HTTP request, not a hop.
+The workflow's new step has not run in Actions. No app window over the real engine, desktop
+or light: the real fetch was a test's, and the offer was driven over the fake, so the press,
+the bar and the reload have not been watched against a real download. No release build was made, so *embedded, nothing
+owed, no offer* rests on the rule's test and on the page's. And no `FORMAT_VERSION` has moved
+under an installed app; what happens then is a reading of the code.
+
+**Open after this step:**
+
+- **`scannerStatusFacts`' `assetNotes` has no reader left** but its own test: both faces draw
+  `ScannerAssets`, which chooses the sentences itself because it knows which files are offered.
+- **The browser's source** (step 7.5): a page that answers `scanner_assets` with rows and
+  `scanner_assets_fetch` with the same `Owed`, and says `scanner:assets` in the same payload,
+  draws this offer unchanged. Until then both are refused there and nothing is drawn.
+- **`ScannerStatus.unapplied_filters` is still drawn nowhere.** After a fetch the page pushes
+  its filters itself, which settles the debt the status would have reported.
+- **A `.part` nobody fetches again stays on disk** — a process killed mid-download, and a
+  reader who then placed the files by hand. Up to 12.2 MB, the two models', and nothing reads
+  it. (A fetch that fails removes its own.)
+- **No refresh.** An install that fetched once keeps that bundle until a `FORMAT_VERSION` bump
+  makes it unreadable, so sets released since go unrecognised — as on a desktop, whose embedded
+  copy is as old as its release.
+- **No deadline on the whole fetch, and no cancel**: the stall bound is per chunk, so a link
+  that trickles is never given up on, and nothing ends a fetch but its end.
+- **The weekly `--clobber` has a moment with an asset missing**, and a fetch that lands in it
+  is told the file *is not published for this version* — wrong about why; the next press works.
+- **Metered links**: the offer says the size and nothing about the link, and the launch's
+  mobile-data hold does not cover it.
 
 ### 11.5 Step 7.5 — the web host
 

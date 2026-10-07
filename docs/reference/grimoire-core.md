@@ -78,7 +78,7 @@ All I/O operations go through abstractions defined in `src/platform/`:
    - Hosts register lifecycle hooks (e.g. notifications when database writes finish or cache clears occur).
 
 3. **Event Forwarding (`state.events`)**:
-   - The core emits progress and lifecycle events (`sync:progress`, `collection:reconciled`, live sync's `sync:live` and `sync:applied`) through `state.events`.
+   - The core emits progress and lifecycle events (`sync:progress`, `collection:reconciled`, live sync's `sync:live` and `sync:applied`, and `scanner:assets` while the scanner's files are being fetched) through `state.events`.
    - Host adapters (such as `desktop::WindowEvents`) forward these to active frontend windows.
 
 ---
@@ -108,3 +108,11 @@ Every scanner command that uses the session or writes the prefs or the tray admi
 ### Refused on a page — `scanner::not_in_a_browser_yet`
 
 The web host dispatches through the same table, and the `card-scanner` crate's threads and `Instant` trap in a browser. So the commands that load or run the session — `scanner_status`, `scanner_frame`, `scanner_reset`, `scanner_set_filters` — and `scanner_capture`, which writes files, answer `scanner::NOT_IN_A_BROWSER_YET` on a host where `platform::host::keeps_files()` is false, from one helper asked at `ScannerState::ensure` and `ScannerState::capture`. The prefs, the tray, the tray's commit and the lease's two commands answer on a page. The light app's web step deletes the helper.
+
+### The scanner's files — `scanner_assets` and `scanner_assets_fetch`
+
+Two more table entries since the light app's step 7.4 (2026-10-07), from `crates/grimoire-core/src/scanner_assets.rs`. Neither takes an argument, a body or the scanner's lease.
+
+- **`scanner_assets`** (`blocking`) answers `Owed { owed, bytes, fetching }`: the files this install lacks as `downloads::Due` rows (`key` one of `bundle`, `detectionModel`, `recognitionModel`), their total, and whether a fetch is running. It reads the status, so its first ask loads the session. Empty on a host whose binary carries the files.
+- **`scanner_assets_fetch`** (`task`) downloads every owed file from the release `scanner-bundle-v<FORMAT_VERSION>` over an HTTPS-only client, checks each before it is renamed into `<data>/scanner/` — the two models against SHA-256 digests compiled into the engine, the bundle for its ceiling, its format and not being empty — calls `ScannerState::forget()` and answers what is owed afterwards. A second call while one runs is refused; a failure is one sentence and a row in `error_log` under the operation `scanner_assets`. It reports through the event **`scanner:assets`** — `Progress { phase, file, done, total, message }`, with `phase` one of `downloading`, `checking`, `done`, `error` and `done`/`total` counted across the whole run.
+- **On a page both are refused** in `NOT_IN_A_BROWSER_YET`, the fetch before any request. [card-scanner.md](card-scanner.md) §10, "Where the files come from on each host", has the rules and the measurements.
