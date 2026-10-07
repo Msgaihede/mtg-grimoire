@@ -104,6 +104,13 @@ import type { CommandHandler } from "./core";
 import { emitFake } from "./event";
 import { qrMatrix } from "./qr";
 import {
+  FAKE_FRAME_MS,
+  newScanScript,
+  resetScanScript,
+  scanStep,
+  sentOptions,
+} from "./scannerScript";
+import {
   CURRENT_VERSION,
   NEXT_VERSION,
   producedManaOf,
@@ -125,7 +132,7 @@ import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
 import { typeBucket } from "@/features/decks/deckBuckets";
 import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
-import { DEFAULT_SCANNER_PREFS, STATUS, VERDICTS } from "@/features/scanner/fixtures";
+import { DEFAULT_SCANNER_PREFS, STATUS } from "@/features/scanner/fixtures";
 // The app's own list of the four sizes the cache stores, borrowed rather than re-spelled for
 // `hasVariableCost`'s reason below: `card_image_uri` refuses a variant that is not one of them,
 // and a second hand-typed list here would let the workbench and the window disagree about which
@@ -24528,8 +24535,12 @@ function throughJson<T>(value: T): T {
 }
 
 /**
- * The scanner's commands. A Storybook has no camera, so `scanner_frame` answers the decided
- * fixture whatever bytes it is handed and the panel stories are driven from fixtures directly.
+ * The scanner's commands. The panel stories are driven from fixtures directly; **a camera that
+ * does open is answered by a script** — `scannerScript.ts`' pile of five cards, a frame at a time
+ * and paced like the engine — so the reader's half of the Scanner can be driven over the fake:
+ * `mobile:dev`, the phone page's stories, and `scripts/phone-scanner-smoke.mjs`. Until step 7.6
+ * `scanner_frame` answered the decided fixture on every frame, and its `decision_seq` of 1 was the
+ * baseline `useScanLoop` takes and never moves off: over the fake a camera added nothing.
  *
  * **Two rows of store and no table**: {@link FakeDb.scannerPrefs} and {@link FakeDb.scannerTray}
  * are `app_meta` rows, read and written whole here and nowhere else. Neither is on
@@ -24537,6 +24548,9 @@ function throughJson<T>(value: T): T {
  * answer `busy`, because the crate's go through `sync::with_write`.
  */
 export function scannerHandlers(db: FakeDb) {
+  // The session, which is the host's and not a table's: where the pile has got to, and the
+  // `decision_seq` it has reached. One per fake database.
+  const script = newScanScript();
   return {
     /** `scanner::scanner_status`. */
     scanner_status: (): ScannerStatus => (db.fault === "scannerMissing" ? STATUS.missing : STATUS.present),
@@ -24551,10 +24565,28 @@ export function scannerHandlers(db: FakeDb) {
     scanner_hold: (): void => {
       if (db.fault === "scannerElsewhere") throw refuse(OPEN_ELSEWHERE);
     },
-    /** `scanner::scanner_frame`. */
-    scanner_frame: (): ScannerVerdict => VERDICTS.decided,
-    /** `scanner::scanner_reset`. */
-    scanner_reset: (): void => undefined,
+    /**
+     * `scanner::scanner_frame` — the next frame of the script, whatever bytes it is handed, after
+     * {@link FAKE_FRAME_MS}. The mode and `previews` are read out of the frame's own header (the
+     * fake `invoke` hands a handler its options second); a caller with no header gets the stored
+     * mode. Under `scannerMissing` a card is found and never named.
+     *
+     * **The one handler here that answers late on purpose.** A frame still on the wire when its
+     * story or its test ends settles after the world has gone, which is why `invoke` no longer
+     * points the fake back at a world that is not standing (`scope.ts`' `standing`): before that,
+     * the next test's unscoped calls went to this one's world. A test that opens a camera still
+     * answers its own frames — a hundred milliseconds a frame is a slow test.
+     */
+    scanner_frame: async (
+      _jpeg: unknown,
+      options?: { headers?: Record<string, string> },
+    ): Promise<ScannerVerdict> => {
+      const sent = sentOptions(options) ?? { mode: db.scannerPrefs.mode, previews: false };
+      await new Promise((answered) => setTimeout(answered, FAKE_FRAME_MS));
+      return scanStep(script, sent.mode, sent.previews, db.fault === "scannerMissing");
+    },
+    /** `scanner::scanner_reset` — the pile again from its first card; the number is kept. */
+    scanner_reset: (): void => resetScanScript(script),
     /** `scanner::scanner_capture`. */
     scanner_capture: (): ScannerCaptured => ({ saved: "live-1757300000.jpg" }),
     /**

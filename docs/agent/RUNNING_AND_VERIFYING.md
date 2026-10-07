@@ -28,6 +28,11 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
 - `npm run mobile:dev` / `mobile:tauri` — the light app, over the Storybook fake in a browser
   (port 5175, no lock) or over the real core in a phone-sized window (**takes the `app` lock**).
   See [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
+  **`npm run mobile:scan-smoke`** and **`npm run mobile:scanner-smoke`** drive `mobile:dev` in a
+  headless Chromium with a fake camera, at a phone's width under a touch pointer — the Sync
+  panel's pairing scanner, and the phone's Scanner page (cards landing in the tray, the commit,
+  every refusal, the 44px floor at 360 and 412). Neither takes a lock or runs in CI; each takes
+  another origin after `--`, for a server on a port of your own.
 - `npm run web:wasm` / `web:build` / `web:smoke` — the light app's web host: the engine as a
   WASM module into `dist-wasm/` (needs clang and the `wasm-bindgen` CLI at `Cargo.lock`'s
   version), the page around it into `dist-web/`, and that bundle opened in headless Chromium.

@@ -25,6 +25,22 @@ export function ReadError({ children }: { children: ReactNode }) {
   );
 }
 
+/**
+ * **The touch floor for the desktop's New deck dialog**, set from outside it — `ImportSheet`'s
+ * `TOUCH_FLOOR` arrangement, narrowed. The dialog is the desktop's own and takes no class for a
+ * size, so the host reaches in: its one footer button (`Create deck`, 36px there) is floored at
+ * 44, and every text box is 16px so focusing one does not zoom the page. The form's other
+ * controls keep their desktop sizes, as `Deck settings` on the deck page does.
+ *
+ * `display: contents`, so the wrapper is no box at all — the dialog's `fixed` scrim is positioned
+ * exactly as if it were mounted bare, and a descendant selector still reaches into it.
+ *
+ * Here since the Scanner page became the dialog's second host on this face (*Create deck…* from
+ * the review tray); it was the Decks page's own until then.
+ */
+export const CREATE_DECK_FLOOR =
+  "contents [&_footer_button]:min-h-11 [&_input]:text-base [&_textarea]:text-base";
+
 /** A sentence where a list would be: nothing here, or nothing this view can draw. */
 export function DimNote({ children }: { children: ReactNode }) {
   return <p className="p-4 text-sm text-dim">{children}</p>;

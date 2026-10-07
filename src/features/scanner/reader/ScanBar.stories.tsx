@@ -211,7 +211,7 @@ export const FiltersDisabled: Story = {
 
 /**
  * The Camera list open: the three cameras alphabetically, the open one ticked and marked `Live`,
- * and the line that says a switch restarts the stream and is remembered on this computer.
+ * and the line that says a switch restarts the stream and is remembered on this device.
  */
 export const CameraOpen: Story = {
   play: async ({ canvasElement }) => {

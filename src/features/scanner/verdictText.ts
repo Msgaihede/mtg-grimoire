@@ -13,6 +13,14 @@ export const SURE_DISTANCE = 0.3;
 export const SCANNER_OPEN_ELSEWHERE = "The scanner is open in another window.";
 
 /**
+ * The line under {@link SCANNER_OPEN_ELSEWHERE}, on both Scanner surfaces: the gate asks again
+ * each second, so the view opens by itself. It says "that window" because the engine's sentence
+ * above it does.
+ */
+export const SCANNER_OPENS_HERE_LATER =
+  "It will open here once that window closes or leaves the scanner.";
+
+/**
  * What the scanner's session answers on a host that is a web page — `scanner::NOT_IN_A_BROWSER_YET`,
  * the same string, pinned by `ipc.test.ts`. The engine refuses the status, a frame, a reset, a
  * capture and a filter push with it there, because the `card-scanner` crate's threads and clock

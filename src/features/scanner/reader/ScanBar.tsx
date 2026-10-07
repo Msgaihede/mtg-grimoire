@@ -15,7 +15,7 @@ import { sortOptions } from "@/lib/options";
 import { radioKeys } from "@/lib/radioGroup";
 import { cn } from "@/lib/utils";
 import type { CameraDevice } from "../useCamera";
-import { filterSummary } from "./readerText";
+import { CAMERA_CHOICE_NOTE, filterSummary, NO_FILTERS, SCAN_MODES } from "./readerText";
 import { DETECT, FINISH_PREF_LABEL } from "./trayFinish";
 
 export interface ScanBarProps {
@@ -46,24 +46,9 @@ export interface ScanBarProps {
   onDeveloper: (on: boolean) => void;
 }
 
-/** The unrestricted filter, spelled once for the Clear press and nowhere else. */
-const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: null };
-
-/**
- * The two modes, in the order a reader meets them: the quick one first.
- *
- * The hints say what each mode *does for the reader* and never how — no hashes, no tiers, no
- * bursts. Those words belong to the developer panels behind the switch at the other end of this
- * row, and a reader choosing between two scans needs only to know which one pins the printing.
- */
-const MODES: readonly { id: ScanMode; label: string; hint: string }[] = [
-  { id: "fast", label: "Fast", hint: "Recognizes cards by their picture. Fastest for mixed piles." },
-  {
-    id: "exact",
-    label: "Exact",
-    hint: "Also reads the name and collector number to identify the exact printing.",
-  },
-];
+// The two modes' words and the unrestricted filter are `readerText.ts`'s — shared with the light
+// app's phone page, which draws its own switch and its own Clear from them.
+const MODES = SCAN_MODES;
 
 /**
  * **Deliberately not through `sortOptions` — the order is the information.** `Detect` first,
@@ -577,7 +562,7 @@ function CameraBody({
       </div>
       <div aria-hidden="true" className="my-1 h-px bg-border" />
       <p className="px-2 pb-1.5 pt-1 text-xs leading-snug text-dim">
-        Switching restarts the camera. Your choice is remembered on this computer.
+        {CAMERA_CHOICE_NOTE}
       </p>
     </div>
   );
