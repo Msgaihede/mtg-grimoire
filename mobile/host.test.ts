@@ -3,7 +3,7 @@ import manifest from "./src-tauri/gen/android/app/src/main/AndroidManifest.xml?r
 import filePaths from "./src-tauri/gen/android/app/src/main/res/xml/file_paths.xml?raw";
 import appGradle from "./src-tauri/gen/android/app/build.gradle.kts?raw";
 import androidIgnore from "./src-tauri/gen/android/.gitignore?raw";
-import signScript from "../scripts/android-sign.sh?raw";
+import signScript from "../scripts/android-release/sign-bundle.sh?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
 import mainActivity from "./src-tauri/gen/android/app/src/main/java/com/mtggrimoire/app/MainActivity.kt?raw";
 import themes from "./src-tauri/gen/android/app/src/main/res/values/themes.xml?raw";
@@ -64,10 +64,10 @@ describe("the Android project's hand edits", () => {
   });
 
   it("signs a release build with the debug key, and knows no other", () => {
-    // The release key is `release.yml`'s `android-sign` job's, which re-signs what this project
-    // built (`scripts/android-sign.sh`) and runs no build. A signing config here would put the
-    // keystore and its passwords on disk beside every npm script, cargo build script and Gradle
-    // plugin a build runs.
+    // The upload key is `release.yml`'s `android-sign` job's, which re-signs the bundle this
+    // project built (`scripts/android-release/sign-bundle.sh`) and runs no build. A signing
+    // config here would put the keystore and its passwords on disk beside every npm script,
+    // cargo build script and Gradle plugin a build runs.
     const release = appGradle.slice(appGradle.indexOf('getByName("release")'));
     expect(release).toMatch(/signingConfig = signingConfigs\.getByName\("debug"\)/);
     const code = appGradle
@@ -85,12 +85,12 @@ describe("the Android project's hand edits", () => {
   });
 
   it("names the release's signer in one line of hex, once the owner has made the key", () => {
-    // `src-tauri/release-signer.sha256` is the SHA-256 of the certificate every release's APK is
-    // signed with — public, and in every such APK. `release.yml` attaches no APK until it is
-    // committed, and `scripts/android-sign.sh` refuses a keystore that is not the one it names:
-    // a key made a second time signs happily and installs over nothing. **Absent until the key
-    // exists**, so this holds its shape for the day it appears — the script reads it with the
-    // same rule, and a file it cannot read is a release with no APK.
+    // `src-tauri/release-signer.sha256` is the SHA-256 of the upload certificate every release's
+    // bundle is signed with — public, and what Play Console shows as the upload key. `release.yml`
+    // signs no bundle until it is committed, and `scripts/android-release/sign-bundle.sh` refuses
+    // a keystore that is not the one it names. **Absent until the key exists**, so this holds
+    // its shape for the day it appears — the script reads it with the same rule, and a file it
+    // cannot read is a release with no bundle to upload.
     const pins = Object.entries(
       import.meta.glob("./src-tauri/release-signer.sha256", {
         query: "?raw",
