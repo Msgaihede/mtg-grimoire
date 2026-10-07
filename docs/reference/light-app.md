@@ -7234,3 +7234,63 @@ under *What is still owed* in [sync.md](sync.md), with its fixture in
   missing rows;
 - **a copy filed into a binder that was deleted on the receiver**, whose sender later brings
   the binder back, is kept on one device and not the other.
+
+## 11. Google Play — the host offers no membership (2026-10-07)
+
+The Android host is published on Google Play
+(`docs/superpowers/specs/2026-10-07-google-play-release-design.md`). Play's Payments policy
+requires its own billing for anything an app sells, and forbids an app to lead a reader to a
+payment made elsewhere — "buttons, links, messaging... or other calls to action" — except
+through programs that need enrolment and reporting. It allows an app to use what was paid for
+somewhere else. Sync is paid for on Patreon, and a membership belongs to a group, so the owner
+chose **pair-only**: the Play build offers nothing, and a phone gets sync by being paired into
+a group that already has it.
+
+- **One name, answered by one host.** The Sync panel asks `membership_elsewhere`
+  (`src/lib/core/hostMembership.ts`). The light Tauri host answers a sentence of its own
+  (`mobile/src-tauri/src/membership.rs`); the desktop app and the web host have no such command
+  and draw what they always have. On a host that answered, the panel's second half is headed
+  *Relay*, keeps the sentence about the relay needing no account, draws the host's sentence
+  while sync is not on, and keeps the figures, the socket's line and *Sync now*. It draws no
+  status line, no offer and no claim code, and nothing at all until the host has answered or
+  refused.
+- **Two refusals.** `sync_patreon_begin` and `sync_patreon_claim` are refused in `core_call`
+  before the table is reached.
+- **Four sentences reworded.** The relay's device cap (`entitlement::GROUP_IS_FULL`) reads as
+  the pairing ceremony's own (`identity::GROUP_IS_FULL`); a removal with nothing to carry it
+  (`identity::NO_MEMBERSHIP`) loses "Connect a membership first."; a 401's "the membership
+  has ended" becomes "sync is no longer on for this group"; and the key check's 401, which
+  tells a reader to "reconnect Patreon once", says instead that sync is not on for the group
+  yet, or has to be set up again on the device it was turned on from. That fourth one is a
+  literal inside a function in the core and not a constant, so the host matches its opening
+  words and `mobile/host.test.ts` holds those words to the core's source. Each is matched
+  **wherever it appears in an error**, keeping what surrounds it, because the core wraps them
+  ("Could not reach the relay to collect … {error}"). A sync error that still names a
+  membership after that — in a wording this host has not seen — is replaced whole by "Sync
+  could not do that for this group."; that last fence is scoped to commands named `sync_*`
+  and to error-log rows from the relay, so a deck a reader named "Patreon rewards" keeps its
+  own message. The refusals of the two connecting commands carry no command name, because the
+  name itself says Patreon. The core's wording is unchanged for the other two hosts.
+- **What a phone-only member does.** Opens `https://mtg-grimoire.app` in the phone's browser,
+  connects there, and pairs the app with it by the typed code. That costs one of the group's
+  five places.
+- **The error log, and what is left knowingly.** The core writes two of those sentences to `error_log` as they
+  happen — the relay's device cap by the live-sync loop, and the key check's 401 by the sync
+  client — and for a group nobody has turned sync on for, the key check's is written at
+  pairing and again at every launch, because the relay answers 401 to a key check for any
+  group it holds no rows for. Two Play phones paired together would fill Settings → Errors
+  with it, so the host rewords the rows `error_log_list` answers, the same way
+  (`membership::reword_rows`, called from `core_call` on that one command's `Ok`). The
+  settings search still matches the words `patreon`, `supporter` and `membership` on the
+  desktop face, and displays none of them. The collection's Share button on the desktop face is drawn for a device whose
+  group is entitled and calls a command no light host has — on the web app too — and is its
+  own change.
+- **Not seen in a window yet.** The panel on a host that answers has been driven only by its
+  tests and its story (`SyncPanel.test.tsx`, `OnAHostThatOffersNoMembership`). Owed: a look at a
+  phone's width over the fake (`mobile:dev` at `/settings?fault=pairOnly`), the real host's own
+  sentence under a page (`mobile:tauri`), and the phone itself.
+  Seen since, over the fake (`mobile:dev`, 2026-10-07): at 375px and at 1280px a host that
+  answers draws *Relay*, the host's sentence and "Sync is off. Nothing leaves this device.",
+  with no membership wording; a host that refuses draws the membership half as before. Still
+  owed: the real host under a page, a phone, and — the state no fake can stage — two devices
+  paired in a group nobody has turned sync on for, then Settings → Errors and *Sync now*.

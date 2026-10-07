@@ -3,6 +3,7 @@ import type { QueryKey } from "@tanstack/react-query";
 import { Heart, Link2, LogOut, RefreshCw, ShieldCheck, X } from "lucide-react";
 import { useEffect, useRef, useState, type JSX } from "react";
 import { core } from "@/lib/core";
+import { MEMBERSHIP_ELSEWHERE } from "@/lib/core/hostMembership";
 import { STORAGE_GROUP_WARNING } from "@/lib/core/hostStorage";
 import { count, plural, verb } from "@/lib/counts";
 import { FOCUS } from "@/lib/focus";
@@ -108,6 +109,23 @@ function sentence(answer: unknown): string | null {
  */
 const askStorageWarning = (): Promise<string | null> =>
   core.call<unknown>(STORAGE_GROUP_WARNING).then(sentence, () => null);
+
+/**
+ * Whether the host offers a membership itself, asked the way {@link askStorageWarning} asks:
+ * outside the `["sync"]` root, because no round trip and no pairing changes a host's answer.
+ */
+const MEMBERSHIP_ELSEWHERE_KEY: QueryKey = ["host", "membership", "elsewhere"];
+
+/**
+ * Ask the host, once, how sync is turned on where it offers no membership.
+ *
+ * A sentence, or `null`: the desktop app and the web host have no such command and refuse the
+ * name, and that refusal — silent, for {@link askStorageWarning}'s reasons — is the answer on
+ * every host that draws this panel's membership half as it always was. An answer that is not a
+ * sentence is a refusal too: {@link sentence}.
+ */
+const askMembershipElsewhere = (): Promise<string | null> =>
+  core.call<unknown>(MEMBERSHIP_ELSEWHERE).then(sentence, () => null);
 
 /**
  * What the panel says when a pairing attempt ran out of time.
@@ -438,11 +456,14 @@ export function relayState(
  *
  * @param now unix **seconds**, passed rather than read so the panel and its stories agree about
  * the clock. {@link ago} takes milliseconds, which is what the conversion below is.
+ * @param hosted whether the host answered `membership_elsewhere` — see {@link MEMBERSHIP_ELSEWHERE}.
+ * Only `off` differs: it is the one state whose sentence tells a reader what to connect.
  */
 export function relayNote(
   state: RelayState,
   status: RelayStatus | null,
   now: number,
+  hosted = false,
 ): string | null {
   const at = status?.lastSyncAt ?? null;
   switch (state) {
@@ -450,9 +471,11 @@ export function relayNote(
     case "syncing":
       return null;
     case "off":
-      return (
-        "Sync is off. Nothing leaves this device until you connect a membership."
-      );
+      // On a host that offers no membership (`hosted`), how sync turns on is that host's
+      // sentence to say, and it is drawn above this one. Here it is only off.
+      return hosted
+        ? "Sync is off. Nothing leaves this device."
+        : "Sync is off. Nothing leaves this device until you connect a membership.";
     case "failed":
       return (
         "Sync didn't finish. Your changes are safe and will sync next time."
@@ -534,11 +557,11 @@ export function liveNote(state: LiveState): string | null {
  * number in this sentence is a handful of changes; this one reaches four digits, which is the
  * case `plural`'s own doc comment hands to `count`.
  */
-export function outcomeText(outcome: RelayOutcome | null): string {
+export function outcomeText(outcome: RelayOutcome | null, hosted = false): string {
   if (outcome === null) {
-    return (
-      "Nothing to sync. Connect a membership and pair a device first."
-    );
+    return hosted
+      ? "Nothing to sync. Sync is not on for this device."
+      : "Nothing to sync. Connect a membership and pair a device first.";
   }
   const parts = [
     `Sent ${plural(outcome.pushed, "change")} and received ${plural(outcome.pulled, "change")}.`,
@@ -781,6 +804,12 @@ export const PULL_HELD_CLOCK_NOTICE =
  * component and `SyncPanel` around it agree about the socket's state on the same render — the
  * hook's own guard against a stale seed overwriting a real transition is per-call, not
  * per-process, so two independent subscriptions could momentarily disagree.
+ *
+ * **On a host that offers no membership, none of the above is drawn** — it asks
+ * {@link MEMBERSHIP_ELSEWHERE}, and a host that answers hands back the one sentence that
+ * stands in for the offer, the status line and the claim code. The figures, the socket's line
+ * and Sync now stay: they say whether sync works, and none of them names a payment. The panel
+ * does not know which host that is; it knows a sentence, or a refusal.
  */
 function SupporterSection({
   live,
@@ -806,6 +835,19 @@ function SupporterSection({
   });
   const supporter: SupporterStatus | null = supporterRead.data ?? null;
   const membership = supporterState(supporter);
+
+  const elsewhereRead = useQuery({
+    queryKey: MEMBERSHIP_ELSEWHERE_KEY,
+    queryFn: askMembershipElsewhere,
+    staleTime: Infinity,
+  });
+  /**
+   * `undefined` until the host has answered or refused; `null` on a host that offers a
+   * membership itself; a sentence on one that does not.
+   */
+  const elsewhere = elsewhereRead.data;
+  /** A host answered: this panel says nothing about a membership, and draws its sentence. */
+  const hosted = typeof elsewhere === "string";
 
   const connect = useMutation({
     // **Both halves in one `mutationFn`, so a browser that refuses to open is a refusal this
@@ -848,7 +890,7 @@ function SupporterSection({
   // `Date.now()` in a render body, so the read is `nowSeconds()` here and an argument everywhere
   // below. Two reads in one render is also two answers: a panel drawing "just now" beside
   // "1 minute ago" for one timestamp.
-  const note = relayNote(state, status, nowSeconds());
+  const note = relayNote(state, status, nowSeconds(), hosted);
   const liveText = liveNote(live);
   /** Connected enough for the relay to answer: `grace` counts, which is §7.2's whole point. */
   const on = membership === "active" || membership === "grace";
@@ -868,20 +910,40 @@ function SupporterSection({
     if (code.trim() !== "" && !claim.isPending) claim.mutate(code.trim());
   };
 
+  // **Nothing of this half until the host has said which kind it is.** The question is one
+  // rejected promise on a desktop and one answered call on a phone, and either takes a moment:
+  // drawn before it settles, the heading and the Connect Patreon press below would flash on a
+  // host that must never show them. An empty box, so the rule above it holds its place.
+  if (elsewhere === undefined) {
+    return <div className="border-t border-border pt-4" />;
+  }
+
   return (
     <div className="space-y-3 border-t border-border pt-4">
-      <h3 className="font-heading text-sm leading-none">Membership</h3>
+      <h3 className="font-heading text-sm leading-none">{hosted ? "Relay" : "Membership"}</h3>
 
       <p className="text-sm text-dim">
         Your devices sync through an end-to-end encrypted relay server that requires no account.
-        Relay hosting is funded by supporters on Patreon.
+        {hosted ? null : " Relay hosting is funded by supporters on Patreon."}
       </p>
 
-      {/* **No controls at all while the read is unanswered**, which is the pairing half's rule
-          one rung up and is load-bearing here rather than tidy: a Connect Patreon button drawn
-          over an answer nobody has yet is one a supporter sees flash on every visit to this
-          page, and it invites a second claim that would be refused. */}
-      {supporter === null ? (
+      {hosted ? (
+        // **The host's sentence, and none of this panel's.** It says how sync turns on where
+        // nothing is offered, so it is drawn only while sync is not on: to a device whose group
+        // has it, it is an answer to a question nobody has. No status line, no offer, no claim
+        // code — and no "loading membership", which would name the thing this host never does.
+        supporter === null ? (
+          supporterRead.isError ? (
+            <p className="text-sm text-dim">Couldn't load whether sync is on.</p>
+          ) : null
+        ) : on ? null : (
+          <p className="text-sm">{elsewhere}</p>
+        )
+      ) : // **No controls at all while the read is unanswered**, which is the pairing half's rule
+      // one rung up and is load-bearing here rather than tidy: a Connect Patreon button drawn
+      // over an answer nobody has yet is one a supporter sees flash on every visit to this
+      // page, and it invites a second claim that would be refused.
+      supporter === null ? (
         <p className="text-sm text-dim">
           {supporterRead.isError
             ? "Couldn't load your membership."
@@ -1027,7 +1089,7 @@ function SupporterSection({
           nothing to do is news rather than an alarm, and it is the commonest thing this button
           reports. */}
       <PanelAlert tone="plain">
-        {outcome === undefined || syncing ? null : outcomeText(outcome)}
+        {outcome === undefined || syncing ? null : outcomeText(outcome, hosted)}
       </PanelAlert>
 
       {/* The refusal itself, in the app's destructive red — a press the reader made did not

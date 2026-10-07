@@ -50,7 +50,9 @@ import { seed } from "./seeds";
 import type { SeedName } from "./seeds";
 import { resetWindow } from "./window";
 import { resetBulkUndo } from "@/lib/bulkUndo";
+import { MEMBERSHIP_ELSEWHERE } from "@/lib/core/hostMembership";
 import { STORAGE_GROUP_WARNING } from "@/lib/core/hostStorage";
+import lightMembership from "../../mobile/src-tauri/src/membership.rs?raw";
 import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
 import { useAppStore } from "@/lib/store";
 
@@ -176,6 +178,20 @@ function worldQueryClient(scope: FakeScope): QueryClient {
 }
 
 /**
+ * What the light app's Tauri host answers `membership_elsewhere` with — **read out of that
+ * host's own source**, not copied here, so a `pairOnly` story draws the sentence a phone draws.
+ * `membership.rs` keeps the literal on one line for this; a literal this cannot find is a
+ * thrown error at import, never an empty sentence a story would draw as nothing.
+ */
+export const PAIR_ONLY_SENTENCE: string = (() => {
+  const found = /pub const SENTENCE: &str =\s*"([^"\\]+)";/.exec(lightMembership)?.[1];
+  if (found === undefined) {
+    throw new Error("mobile/src-tauri/src/membership.rs holds no one-line SENTENCE literal");
+  }
+  return found;
+})();
+
+/**
  * Build one story's world and point the fake at it.
  *
  * Synchronous and total: everything a story could change is either owned by the object this
@@ -237,6 +253,12 @@ export function installWorld(
   // at `lentStorage`.
   if (db.fault === "lentStorage") {
     scope.commands = { ...scope.commands, [STORAGE_GROUP_WARNING]: () => SITE_DATA_WARNING };
+  }
+  // The other fault about the host: the build Google Play distributes, which answers a name
+  // every other host refuses — in that host's own words (`PAIR_ONLY_SENTENCE`, above). Over
+  // the world's table and not in `allHandlers`, for `lentStorage`'s reason.
+  if (db.fault === "pairOnly") {
+    scope.commands = { ...scope.commands, [MEMBERSHIP_ELSEWHERE]: () => PAIR_ONLY_SENTENCE };
   }
   activateScope(scope);
 

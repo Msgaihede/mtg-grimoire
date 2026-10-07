@@ -13,7 +13,7 @@
  * denormalisation exists to survive, staged by accident.
  */
 import { beforeEach, describe, expect, it } from "vitest";
-import { installWorld } from "./world";
+import { PAIR_ONLY_SENTENCE, installWorld } from "./world";
 import { invoke, resetCommands } from "./core";
 import { emitFake, listen } from "./event";
 import { seed } from "./seeds";
@@ -134,6 +134,22 @@ describe("per-story isolation", () => {
 
     installWorld({ seed: "paired" });
     await expect(invoke("storage_group_warning")).rejects.toThrow(/No fake handler registered/);
+  });
+
+  /**
+   * `pairOnly` is the other fault about the *host*: the light app's Tauri host — the build
+   * Google Play distributes — answers `membership_elsewhere` with a sentence of its own, and a
+   * desktop, which is what a story is unless it says otherwise, refuses the name. The sentence
+   * is read out of that host's Rust source, so a story draws what a phone draws.
+   */
+  it("makes a world the Play build's for `pairOnly`, and leaves the next one a desktop", async () => {
+    installWorld({ fault: "pairOnly" });
+    await expect(invoke("membership_elsewhere")).resolves.toBe(PAIR_ONLY_SENTENCE);
+    expect(PAIR_ONLY_SENTENCE).toMatch(/paired with one that already syncs/);
+    expect(PAIR_ONLY_SENTENCE).not.toMatch(/patreon|membership|supporter|supporting|payment|pledge|subscri/i);
+
+    installWorld({ seed: "starter" });
+    await expect(invoke("membership_elsewhere")).rejects.toThrow(/No fake handler registered/);
   });
 
   it("defaults to starter with no fault when a story says nothing", () => {

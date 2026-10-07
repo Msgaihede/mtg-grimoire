@@ -59,8 +59,9 @@ function Panel({ id, log }: { id: LightPanel; log: ErrorLog }): JSX.Element {
     case "prices":
       return <Prices />;
     case "sync":
-      // The desktop's own panel, link and all: *Connect Patreon* leaves through `@/lib/core`'s
-      // host seam, which is a new tab in a browser and the system browser on the Android host.
+      // The desktop's own panel. Where the host offers a membership (the web app), *Connect
+      // Patreon* leaves through `@/lib/core`'s host seam, as a new tab. The Android host offers
+      // none, and the panel draws that host's sentence in its place (`@/lib/core/hostMembership`).
       return <SyncPanel />;
     case "review":
       return <ReviewPanel />;

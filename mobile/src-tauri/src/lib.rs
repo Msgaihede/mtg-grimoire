@@ -15,6 +15,9 @@
 //!   through the system's own picker and save dialog ([`files`]), and **a navigation guard** that
 //!   keeps the window on the app's pages and hands every web link to the system browser
 //!   ([`navigation`]) — step 4.3.
+//! - **how sync is turned on here** ([`membership`]): this is the build Google Play
+//!   distributes, so it offers no membership — one sentence for the Sync panel, the two
+//!   connecting commands refused, and four of the core's sentences reworded on their way out.
 //!
 //! **What it starts is the desktop's launch less what is the desktop's alone** ([`start`]): the
 //! facet index, the image upkeep, the card sync and, behind it on a first run, the optional
@@ -38,6 +41,7 @@ use tauri::Manager;
 
 mod downloads;
 mod files;
+mod membership;
 mod navigation;
 mod startup;
 
@@ -74,6 +78,11 @@ async fn core_call(
     if files::answers(&name) {
         return files::answer(&app, &name, args).await;
     }
+    // Nor does how sync is turned on here: one sentence, and two refusals. Before the state,
+    // so the answer is the same on a launch that has not opened its database yet.
+    if membership::answers(&name) {
+        return membership::answer(&name);
+    }
     let Some(state) = app.try_state::<Arc<State>>() else {
         return Err(format!("{name}: the app is still starting."));
     };
@@ -83,7 +92,18 @@ async fn core_call(
         return downloads::answer(state, &hold, &name, args).await;
     }
     let body = body.map(|b| decode_body(&name, &b)).transpose()?;
-    grimoire_core::dispatch(&state, &name, args.unwrap_or(Value::Null), body).await
+    grimoire_core::dispatch(&state, &name, args.unwrap_or(Value::Null), body)
+        .await
+        .map_err(|error| membership::reword(&name, error))
+        .map(|answer| {
+            // The core writes the key check's 401 sentence into `error_log` as it happens, and
+            // Settings → Errors reads those rows through this command: reword them as well.
+            if name == membership::ERROR_LOG {
+                membership::reword_rows(answer)
+            } else {
+                answer
+            }
+        })
 }
 
 /// A raw body, from the base64 it crossed the bridge as.
