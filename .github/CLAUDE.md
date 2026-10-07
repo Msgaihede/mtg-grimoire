@@ -19,7 +19,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - `src-tauri/**` routes to `frontend` and `rust` (frontend tests inspect Rust files as text).
   - `crates/grimoire-core/**` routes to `frontend`, `rust`, and `core` (must stay above `crates/*`).
   - `crates/*` routes to `frontend`, `rust`, and `core` (covers `crates/card-scanner`).
-  - `crates/grimoire-web/**` routes to `frontend`, `rust`, and `web`.
+  - `crates/grimoire-web/**` and `crates/grimoire-scan/**` (the web host's two modules) route to `frontend`, `rust`, and `web`.
   - `mobile/**` routes to `frontend` and `storybook`; `vite.mobile.config.ts` routes to `frontend`, `rust`, `android`, and `web`.
   - `app-worker/**` routes to `frontend` and `web`.
   - `scripts/android-release/*` routes to `frontend`, `rust`, and `android` (must sit above `scripts/*`); `.release-please-manifest.json` routes to `frontend`.
@@ -51,8 +51,10 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
     then proves the release's signing by running `scripts/android-release/proof.sh` over the bundle: throwaway keys, one signing, five refusals.
   - **`web`**: Builds the WebAssembly host:
     - Reads the exact `wasm-bindgen` CLI version from `Cargo.lock` and compiles via `cargo install wasm-bindgen-cli --version "$bindgen" --locked`.
-    - Builds the module (`npm run web:wasm`) and web assets (`npm run web:build`).
+    - Builds both modules (`npm run web:wasm`: the engine, held under a size ceiling by the script, and the card scanner with `simd128`) and web assets (`npm run web:build`).
+    - Fetches the scanner's three files from this repository's public release (`npm run scanner:assets -- --web`) before the page is built, and builds with `GRIMOIRE_SCANNER_ASSETS=required` — as `release.yml`'s `web` job does.
     - Executes headless Chrome smoke tests (`npm run web:smoke`) against fixture cards, enforcing offline operation and CORS safety.
+    - Scans one real card through the scanner's own module (`npm run web:scanner-smoke`: a file for a camera, the desktop face and then the phone face); the card's picture is the one request the script makes of Scryfall, kept by `actions/cache` between runs.
     - Runs the live-sync walk (`npm run web:sync-smoke`: two Chrome profiles, `relay/` under `wrangler dev --local`), with wrangler installed from `app-worker/package-lock.json` (`npm ci --ignore-scripts --prefix app-worker`) — never `npx wrangler@…`, and no secret in the job. `relay/**` routes to `frontend`, `rust` and `web`.
   - **`powershell`**: Runs `lock.test.ps1` for worktree locks on `windows-latest`. Windows is required because holder PID, process name, and `StartTime` are inspected.
 
@@ -79,7 +81,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   - `android-sign` re-signs the bundle with the owner's **upload key** (`scripts/android-release/sign-bundle.sh`, `jarsigner`) and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle`, which the owner uploads to Play Console. Nothing Android is attached to the release.
     The key is held to the committed fingerprint `mobile/src-tauri/release-signer.sha256`: no file, no bundle; another key, a debug certificate or an archive that is not a bundle is refused.
   - `web-deploy` installs `wrangler` from `app-worker/package-lock.json` (`npm ci --ignore-scripts`, no secret in that step), runs `npx --no-install wrangler deploy`,
-    then `scripts/web-deploy-probe.mjs` against the origin. It needs `build`, `android-sign` and `web` — a deploy is live at once, so it goes last — and refuses a tag older than the newest published release.
+    then `scripts/web-deploy-probe.mjs` against the origin (the document, its policy, and the card scanner's manifest). It needs `build`, `android-sign` and `web` — a deploy is live at once, so it goes last — and refuses a tag older than the newest published release.
   - `publish` needs `build`, `android-sign` and `web-deploy`; any failure leaves the release a draft.
 - **Secrets live in jobs that build nothing, and in the `release` environment**: `android-sign` and `web-deploy` run no root `npm ci`, cargo or Gradle, and are the only jobs with `environment: release`
   (a repository secret is readable from any branch's workflow; an environment's only from `main`, once the owner restricts it). `on:` is a push to `main` only.

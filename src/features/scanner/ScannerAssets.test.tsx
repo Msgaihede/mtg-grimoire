@@ -23,7 +23,7 @@ vi.mock("@/lib/ipc", async (original) => ({
   },
 }));
 
-import { megabytes, ScannerAssets } from "./ScannerAssets";
+import { megabytes, offerSentence, ScannerAssets } from "./ScannerAssets";
 
 const BUNDLE = { key: "bundle", label: "Card hashes", bytes: 5_874_752 };
 const DETECTION = { key: "detectionModel", label: "Text detection model", bytes: 2_510_284 };
@@ -245,5 +245,32 @@ describe("ScannerAssets", () => {
     mount(STATUS.missing);
     const button = await screen.findByRole("button", { name: "Download" });
     expect(button.classList.contains("coarse:min-h-[var(--target-min)]")).toBe(true);
+  });
+});
+
+describe("an offer for data the scanner is already running on", () => {
+  // A release that rebuilt the bundle owes it again while the old copy still loads and scans.
+  it("reads as an update that can wait, not as a need", async () => {
+    scannerAssets.mockResolvedValue({ owed: [BUNDLE], bytes: BUNDLE.bytes, fetching: false });
+    mount(STATUS.present);
+    const offer = await screen.findByRole("region", { name: "Scanner files" });
+    expect(within(offer).getByText("Newer card data is available — about 6 MB.")).toBeInTheDocument();
+    expect(within(offer).queryByText(/needs/)).not.toBeInTheDocument();
+    expect(within(offer).getByRole("button", { name: "Download" })).toBeInTheDocument();
+  });
+
+  it("still reads as a need when anything owed is not loaded", () => {
+    expect(offerSentence(STATUS.missing, [BUNDLE], BUNDLE.bytes)).toBe(
+      "The scanner needs its card data — about 6 MB.",
+    );
+    // The bundle loaded and a model that did not: the scanner lacks something.
+    expect(offerSentence(STATUS.noModels, [BUNDLE, RECOGNITION], 15_591_320)).toBe(
+      "The scanner needs its card data — about 16 MB.",
+    );
+    // Before the status has answered, nothing is known to be loaded.
+    expect(offerSentence(null, [BUNDLE], BUNDLE.bytes)).toMatch(/^The scanner needs/);
+    expect(offerSentence(STATUS.present, [BUNDLE, DETECTION], 8_385_036)).toBe(
+      "Newer card data is available — about 9 MB.",
+    );
   });
 });

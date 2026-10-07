@@ -118,10 +118,14 @@ it("stops listening when it unmounts", async () => {
  * LEFT JOIN, and the reconciler now walks `deck_cards` too — so a sync that repoints a
  * printing has changed what an open deck says about it.
  *
+ * `["scanner", "status"]` is the seventh, added the same way (the light app's step 7.5): the
+ * scanner's card names are read out of `cards`, its status is asked once and kept, and a
+ * Scanner opened before a first run's sync landed went on saying it had no names.
+ *
  * `["formatSpecs"]` is **not** here and must not be: the table is seeded by a migration and
  * a sync cannot touch it.
  */
-it("invalidates exactly the six known roots", () => {
+it("invalidates exactly the seven known roots", () => {
   expect(SYNC_INVALIDATED).toEqual([
     ["cards"],
     ["collection"],
@@ -129,6 +133,7 @@ it("invalidates exactly the six known roots", () => {
     ["card"],
     ["sets"],
     ["decks"],
+    ["scanner", "status"],
   ]);
 });
 

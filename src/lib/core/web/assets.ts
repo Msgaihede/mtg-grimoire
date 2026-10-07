@@ -34,6 +34,71 @@ export function wasmUrls(origin: string, build: string): { glue: string; wasm: s
 }
 
 /**
+ * **The scanner's own module**, which `scripts/build-wasm.mjs` writes into a folder of
+ * `dist-wasm/` beside the engine's two files: wasm-bindgen's glue and the module, built with
+ * `simd128` and loaded by a Worker of its own (`scanWorker.ts`).
+ *
+ * **Served under `/wasm/<build>/scanner/`, and the build there is the scanner's own** — a hash of
+ * these two files and not of the engine's, so a change to either module moves that module's
+ * address and leaves the other's where it was. Under `/wasm/` because everything said of that
+ * tree is true of these: content-addressed, kept for a year, never a page.
+ */
+export const SCANNER_DIR = "scanner";
+export const SCANNER_GLUE_FILE = `${SCANNER_DIR}/grimoire_scan.js`;
+export const SCANNER_WASM_FILE = `${SCANNER_DIR}/grimoire_scan_bg.wasm`;
+
+/** The scanner's glue and module, as absolute URLs on `origin`. `build` is the scanner's own id. */
+export function scannerUrls(origin: string, build: string): { glue: string; wasm: string } {
+  return {
+    glue: new URL(wasmPath(build, SCANNER_GLUE_FILE), origin).href,
+    wasm: new URL(wasmPath(build, SCANNER_WASM_FILE), origin).href,
+  };
+}
+
+/** Whether a request's path names a file of the scanner's module, whatever build's. */
+export function isScannerModule(path: string): boolean {
+  return new RegExp(`^/wasm/[^/]+/${SCANNER_DIR}/`).test(path);
+}
+
+/**
+ * **Where the scanner's three files are served from: `/scanner-assets/`**, under the names the
+ * release publishes them by, with {@link SCANNER_MANIFEST} beside them saying what each one is.
+ *
+ * **Stable names, unlike the two trees a build hashes**: the bundle of card hashes is rebuilt
+ * with every set and shipped again at each release under the name it always had, so these
+ * addresses are revalidated and never kept by the HTTP cache (`app-worker/_headers`) — and the
+ * page keeps what it fetched in Cache Storage itself, by what the manifest said of it
+ * (`scanStore.ts`). Not `/scanner/`: that is the Scanner page's own place.
+ */
+export const SCANNER_ASSETS_PREFIX = "/scanner-assets/";
+/** The build's word on the three files: their names, lengths, digests and the bundle's format. */
+export const SCANNER_MANIFEST = "manifest.json";
+
+/**
+ * **The scanner's cache: what it fetched, kept for good.** One cache, two writers, and neither
+ * is a build's: the page puts the three files here once it has checked them (`scanStore.ts`),
+ * and the service worker keeps the scanner's module here the first time a Worker loads it
+ * (`sw/serve.ts`) — so a reader who has scanned once can scan offline.
+ *
+ * **Not a shell and not the pictures.** A shell cache is deleted when its build is replaced,
+ * and this must outlive a deploy; and Settings' *Clear cache* empties the picture cache alone,
+ * as the desktop's sweeps its picture folder and leaves `data/scanner/` where it is. The `v1`
+ * is for a day the *stored shape* changes — the headers an entry is kept under — and nothing
+ * else moves it: a new bundle is a new digest under the same name.
+ */
+export const SCANNER_CACHE = "grimoire-scanner-v1";
+
+/**
+ * Whether one of a build's files — its path from the output folder — is **the scanner's, and so
+ * fetched on first use and never precached**: its module and its three files. Neither is asked
+ * for until a reader opens the Scanner and presses Download, and a service worker that put them
+ * in its shell would spend 23 MB of every first visit on a view most readers never open.
+ */
+export function isScannerFile(file: string): boolean {
+  return isScannerModule(`/${file}`) || `/${file}`.startsWith(SCANNER_ASSETS_PREFIX);
+}
+
+/**
  * The file a request for `path` asks for, relative to the engine's folder — `null` for a path
  * that is not under `/wasm/<build>/`, or that climbs out of it. What the dev server and the
  * preview read `dist-wasm/` by; the build id is not checked there, because a dev server has one
@@ -88,8 +153,8 @@ export function wasmContentType(file: string): string {
 /**
  * **Where nothing is a page**, whatever the caller accepts: the two trees a build writes its
  * files into, the tree the service worker answers card pictures under (`src/lib/images.ts`'s
- * `WEB_IMAGE_PREFIX`; `assets.test.ts` holds this spelling to that constant), and `/_headers`,
- * which a host parses and does not serve.
+ * `WEB_IMAGE_PREFIX`; `assets.test.ts` holds this spelling to that constant), the folder the
+ * scanner's three files are fetched from, and `/_headers`, which a host parses and does not serve.
  *
  * A path under any of them names a file or nothing. Answered with the document, a chunk a
  * deploy renamed would be a 200 of HTML where a script was asked for, and a picture a page asks
@@ -99,7 +164,13 @@ export function wasmContentType(file: string): string {
  * server and the hosting Worker's script answer by one rule.** It was the Worker's own list
  * until the three local servers were found handing the document to `/mtgimg/x`.
  */
-export const NOT_A_PLACE: readonly string[] = ["/assets/", "/wasm/", "/mtgimg/", "/_headers"];
+export const NOT_A_PLACE: readonly string[] = [
+  "/assets/",
+  "/wasm/",
+  "/mtgimg/",
+  SCANNER_ASSETS_PREFIX,
+  "/_headers",
+];
 
 /**
  * Whether a request is a page navigation the app's document answers — the history fallback its

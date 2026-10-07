@@ -1784,9 +1784,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "grimoire-scan"
+version = "0.42.0"
+dependencies = [
+ "card-scanner",
+ "image",
+ "serde",
+ "serde_json",
+ "wasm-bindgen",
+]
+
+[[package]]
 name = "grimoire-web"
 version = "0.42.0"
 dependencies = [
+ "card-scanner",
  "console_error_panic_hook",
  "flate2",
  "futures-util",

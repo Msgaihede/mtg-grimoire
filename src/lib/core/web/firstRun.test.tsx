@@ -43,6 +43,7 @@ const engineSide = {
 const READY = { kind: "ready", journal: "delete", corpusJournal: "delete", schemaVersion: 59 };
 
 const glue: Glue = {
+  scanner_labels: () => Promise.resolve(new Uint8Array(0)),
   open: () => Promise.resolve(JSON.stringify(READY)),
   call: (name) =>
     Promise.resolve(

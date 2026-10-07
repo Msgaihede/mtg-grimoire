@@ -18,6 +18,15 @@ import { queryClient } from "@/lib/query";
  * walks `deck_cards` too, so `collection:reconciled` now means deck rows repointed, folded
  * or flagged as well.
  *
+ * `["scanner", "status"]` because **the scanner's card names are read out of `cards`**, and
+ * what the status says of them is asked once and kept (`useScannerStatus`, `staleTime:
+ * Infinity`). A Scanner opened on a first run, before its card sync has landed, is told there
+ * are no names — and went on being told so for as long as the reader stayed, with ids where
+ * names belong, until this asked again. A host whose session reads the names when it is built
+ * builds it again on that ask; one that reads them from a database beside it answers what it
+ * answered. The key is `useScannerStatus`'s `SCANNER_STATUS_KEY`, spelled here because a
+ * `lib` module does not import a feature — `useScannerStatus.test.ts` holds the two equal.
+ *
  * `["formatSpecs"]` is deliberately **not** here: that table is seeded by a migration, and a
  * sync cannot touch it. It is the one query in the app with a flat `staleTime: Infinity`.
  */
@@ -28,6 +37,7 @@ export const SYNC_INVALIDATED = [
   ["card"],
   ["sets"],
   ["decks"],
+  ["scanner", "status"],
 ];
 
 /** Mark all of it stale; only the queries actually on screen pay for a refetch. */

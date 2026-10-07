@@ -1,6 +1,6 @@
 # grimoire-web — the light app's web host
 
-`grimoire-core` compiled to WebAssembly (WASM) and loaded by one dedicated Web Worker, with the page communicating via the `Core` seam (see [grimoire-web.md](../../docs/reference/grimoire-web.md) and [light-app.md](../../docs/reference/light-app.md) §6 & §9). The cargo workspace's fourth member. It holds almost nothing of its own: three exports, the OPFS pool for the two databases, and state management. The engine's core rules in [`crates/grimoire-core/CLAUDE.md`](../grimoire-core/CLAUDE.md) strictly bind here.
+`grimoire-core` compiled to WebAssembly (WASM) and loaded by one dedicated Web Worker, with the page communicating via the `Core` seam (see [grimoire-web.md](../../docs/reference/grimoire-web.md) and [light-app.md](../../docs/reference/light-app.md) §6 & §9). The cargo workspace's fourth member. It holds almost nothing of its own: four exports, the OPFS pool for the two databases, and state management. The engine's core rules in [`crates/grimoire-core/CLAUDE.md`](../grimoire-core/CLAUDE.md) strictly bind here.
 
 For global repo workflow, style, and testing conventions, refer to:
 - [Workflow & Commits](../../docs/agent/WORKFLOW.md)
@@ -11,17 +11,19 @@ For global repo workflow, style, and testing conventions, refer to:
 
 ## 1. Exported Wire Contract
 
-Three functions are exposed to the Worker:
+Four functions are exposed to the Worker:
 
 | Export | Takes | Answers |
 | --- | --- | --- |
 | `open(directory)` | OPFS directory name (bare name string, not path) | JSON: `{"kind":"ready",...}`, `{"kind":"already-open"}`, or `{"kind":"failed","message":"..."}` |
 | `call(name, args, body?)` | Desktop command name, JSON string args (`"null"` for none), optional byte body | JSON: `{"ok": <value>}` or `{"err": "<sentence>"}` |
 | `listen(handler)` | Callback `(name, payload)` with payload as JSON string | Nothing; subsequent calls replace previous handler |
+| `scanner_labels()` | — | `Promise<Uint8Array>`: every printing's label as `card_scanner::labels` bytes, for the scanner's own Worker; **no bytes** before `open` is ready and while the corpus is empty. **Rejects with one sentence** when the read failed or gave up on a corpus that kept changing (`LABEL_ATTEMPTS`, twelve: a launch moves the corpus's schema cookie eight times) — the page must be able to tell that from empty |
 
 - **Wire synchronization**: The Worker's hand-written definitions live in `src/lib/core/web/grimoire_web.d.ts` and `protocol.ts`. A change to an export or wire string in `wire.rs` must update both TypeScript files in the same commit.
-- **Strict export check**: `scripts/build-wasm.mjs` checks `EXPORTS` and fails the build if any of the three is missing (missing `#[wasm_bindgen]` attributes compile without warnings).
+- **Strict export check**: `scripts/build-wasm.mjs` checks each module's `exports` and fails the build if any is missing (missing `#[wasm_bindgen]` attributes compile without warnings).
 - **Core dispatch**: `call` dispatches directly via `grimoire_core::dispatch`. Commands are added in `crates/grimoire-core/src/commands.rs`, never directly in this crate.
+- **The scanner is not in this module.** Its session runs in a Worker of its own on `crates/grimoire-scan` (see [its guide](../grimoire-scan/CLAUDE.md)); this host only hands it the labels, because it holds the corpus. `host::scanner_labels` reads `cards` through the state's one connection a page at a time (`LABEL_PAGE`), lets go of the connection between pages, takes a `Breather` turn on `feed::WORK_BUDGET`, and starts over if the corpus's schema cookie moved (a sync's swap). Never open a second connection for it. On the wire it is a message of its own — `{ kind: "labels" }`, answered with the bytes transferred (`protocol.ts`'s `transferOf`) — and no command of the table; the page's scanner (`src/lib/core/web/scanner.ts`) asks once per session it builds.
 
 ---
 
@@ -76,6 +78,8 @@ The Worker executes on a single thread with no parallel background threads:
 - **Version alignment**: Workspace version matches the app release; managed by `release-please`.
 - **Toolchain pin**: `wasm-bindgen-cli` version must strictly match `Cargo.lock`.
 - **SQLite features**: `rusqlite` uses `hooks` and must not disable default features (`default-features = false` breaks WASM SQLite).
+- **`card-scanner` is here for `labels` alone** (`corpus` feature): nothing in this crate may reach a session, or fat LTO stops dropping the scanner and its OCR runtime from this module. A new class or a megabyte in `dist-wasm/grimoire_web_bg.wasm` is the symptom.
+- **No `simd128` here.** That target feature is the scanner module's alone; `scripts/build-wasm.mjs` refuses an engine module that names it.
 - **Dev dependencies**: `httpmock` and `flate2` are used for testing downloads against local mock endpoints without hitting live Scryfall or Commander Spellbook feeds.
 
 ---
@@ -87,7 +91,7 @@ Run verification only at the end of a feature (not after each change):
 | Command | Action |
 | --- | --- |
 | `cargo test -p grimoire-web` | Run native logic and wire tests |
-| `npm run web:wasm` | Build WASM module into `dist-wasm/` using `wasm` profile |
+| `npm run web:wasm` | Build both WASM modules using the `wasm` profile: this host's into `dist-wasm/`, the scanner's (`grimoire-scan`, with `simd128`) into `dist-wasm/scanner/`. `-- --only engine` for this one alone |
 | `npm run web:dev` | Start Vite dev server on port 5176 using current WASM build |
 | `npm run web:build` | Build production web bundle into `dist-web/` |
 | `npm run web:smoke` | Run headless Chromium offline smoke tests |

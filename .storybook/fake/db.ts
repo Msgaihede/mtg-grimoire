@@ -1520,6 +1520,11 @@ export interface FakeUpdate {
  * in** ({@link scannerAssetHandlers}): `scanner_assets` lists the three, and `scanner_assets_fetch`
  * fetches them — after which the fault is over, and `scanner_status` reads present.
  *
+ * **`scannerUpdate`** is a scanner that works and is owed a newer bundle: `scanner_status`
+ * reads present, and `scanner_assets` lists the one file — the state a host that fetches the
+ * bundle from a release is in after a release that rebuilt it. The fetch brings it, and the
+ * fault is over.
+ *
  * **`scannerFetchFails`** is those same three files owed and the download unable to get them:
  * `scanner_assets_fetch` starts, says so, and is refused in the engine's sentence for a file the
  * release does not have. **The offer's own fault, and `scanner_status` does not read it** — a
@@ -1601,6 +1606,7 @@ export type Fault =
   | "patreonGroupEntitled"
   | "wishGone"
   | "scannerMissing"
+  | "scannerUpdate"
   | "scannerFetchFails"
   | "scannerElsewhere"
   | "shareLapsed"
@@ -24713,7 +24719,11 @@ export function scannerAssetHandlers(db: FakeDb) {
   let fetching = false;
   const owed = (): ScannerAssetsOwed => {
     const files =
-      db.fault === "scannerMissing" || db.fault === "scannerFetchFails" ? SCANNER_FILES : [];
+      db.fault === "scannerMissing" || db.fault === "scannerFetchFails"
+        ? SCANNER_FILES
+        : db.fault === "scannerUpdate"
+          ? SCANNER_FILES.slice(0, 1)
+          : [];
     return {
       owed: throughJson(files),
       bytes: files.reduce((sum, file) => sum + file.bytes, 0),
@@ -24749,7 +24759,7 @@ export function scannerAssetHandlers(db: FakeDb) {
         say({ phase: "checking", file: files[files.length - 1].key, done, message: null });
         // Only the fault this fetch is the end of: a story that changed its world's fault while
         // the download ran — to `busy`, say — keeps the one it set.
-        if (db.fault === "scannerMissing") db.fault = null;
+        if (db.fault === "scannerMissing" || db.fault === "scannerUpdate") db.fault = null;
         say({ phase: "done", file: null, done, message: null });
       } finally {
         fetching = false;

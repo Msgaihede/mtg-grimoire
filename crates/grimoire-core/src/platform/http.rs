@@ -181,6 +181,13 @@ impl Response {
         self.0.headers().get(name).and_then(|v| v.to_str().ok())
     }
 
+    /// Where the answer came from: the request's own address, or the last one a redirect led
+    /// to. For a caller that follows a host's redirect and still has something to say about
+    /// where it ended — `scanner_assets` refuses an answer that left HTTPS.
+    pub fn url(&self) -> &str {
+        self.0.url().as_str()
+    }
+
     /// What the response *claims* its body's length is. A chunked response claims nothing.
     pub fn content_length(&self) -> Option<u64> {
         self.0.content_length()

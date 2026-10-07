@@ -7727,9 +7727,286 @@ under an installed app; what happens then is a reading of the code.
 - **Metered links**: the offer says the size and nothing about the link, and the launch's
   mobile-data hold does not cover it.
 
-### 11.5 Step 7.5 — the web host
+**What was built.**
 
-*Not merged yet.*
+- **The core, once** (`crates/grimoire-core/src/scanner_assets.rs`), as two table entries and
+  two desktop wrappers that add nothing. `scanner_assets` answers which of the three files this
+  install lacks — `downloads::Due` rows, the total, and whether a fetch is running.
+  `scanner_assets_fetch` downloads them from the repository's `scanner-bundle-v<FORMAT_VERSION>`
+  release into `<data>/scanner/`, reports through `scanner:assets`, and calls
+  `ScannerState::forget()` — its first caller — so the next scanner command reads them with no
+  restart. The Android host gained a test and nothing else: `core_call` forwards both.
+- **What is owed is what did not load and the binary does not carry.** A desktop release build
+  therefore owes nothing, is offered nothing and makes no request; nothing anywhere fetches
+  until a reader presses. A bundle that is there and unreadable is owed too, which is what an
+  app updated across a `FORMAT_VERSION` leaves on a phone.
+- **A file takes its name only once it is checked**: written to `<name>.part` beside its
+  destination, then the bundle parses, each model is its exact length and the pair builds the
+  reader the session will build — and only then renamed. A leftover `.part` is started over,
+  never resumed. One fetch at a time, a second refused in a sentence; every wait under the
+  feeds' sixty-second stall bound; no retry loop.
+- **HTTPS with constants, and GitHub's redirect followed** under `reqwest`'s default policy —
+  `platform::http` sets none — with one thing added: an answer that did not arrive over HTTPS
+  is refused before its body is read (`Response::url`, new in `platform::http`).
+- **Both commands are refused on a page**, in step 7.3's sentence from step 7.3's helper,
+  before any request. GitHub sends no CORS header; the browser's source is step 7.5's.
+- **The page** (`src/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`, both clean of
+  the phone's import fence): the offer with its measured size — *The scanner needs its card data
+  — about 19 MB*, each figure rounded up as the launch prompt's are — a Download button with the
+  touch floor, a bar that follows the event, the engine's sentence and a Retry on a failure.
+  **Drawn from what the host answers and nothing else**: no rows, or a refusal, is no offer.
+  It stands where the path-and-restart sentences were, for the files it offers; the Developer
+  panels still name each path and error. Mounted in the desktop face's `ScannerPage` as one
+  component in place of the notes; the phone face's page takes it in step 7.6.
+- **When a fetch ends the page does its two halves of the reload**: the status is asked again,
+  and `useScannerPrefs.resync` pushes the *stored* filters — read from the row again, because
+  a session with no bundle refused them at mount and the popover was put back to none — to the
+  session that can now take them. The loop's latched reads are dropped. `decision_seq`
+  restarting at zero needed nothing: the loop takes every verdict's number, and a new session's
+  first frame carries no decision.
+- **The fake** owes the three files under `scannerMissing`, and its fetch is the one handler
+  that takes time — three short stretches, said through `scanner:assets` — after which the
+  fault is over and its status reads present. `scannerFetchFails` is the refused download.
+
+**Decided here, and the owner's to reverse.** A second fetch is *refused*, not joined — the
+house rule for a second sync or refresh — and the page learns of a running one from
+`Owed.fetching`. A leftover `.part` is *started over*: 18 MB, and a bundle that changes weekly.
+The redirect's host is *not* pinned, because GitHub has renamed it before; the scheme is. The
+sizes round *up*, so the offer reads 19 MB for 18.1. And the launch's mobile-data hold does not
+cover this fetch: it starts only on a press that has just read the size.
+
+**Measured.** One real fetch, from a test marked `#[ignore]`, into a scratch state with an empty
+`scanner/` folder: three files owed, 18 101 604 B; **`fetch` answered in 1.82 s** on this
+desktop's link, with 5 874 752, 2 510 284 and 9 716 568 B under their three names, 74 progress
+events ending on `done`, and nothing owed; `scanner_status` on the same state, with no
+restart, then read all three `source: file`, `loaded: true`. Against a mock server: the happy
+path, a 404, a body that stops halfway (given up on at the stall bound), a bundle with the wrong
+magic and one cut short, a model of the wrong length, a pair that does not load, one missing
+model fetched alone, a leftover `.part`, a second concurrent call and the page refusal — each
+leaving nothing in place that was not checked. Core `scanner` 73, of which `scanner_assets` 13,
+and `commands` 41; desktop `scanner` 9 and `command_table` 9; `grimoire-light` 18; `cargo fmt`
+clean over the four crates; clippy for the workspace and for `wasm32`; 1 704 frontend tests
+over `ipc.test.ts`, `src/features/scanner` and `.storybook/fake`; the two scanner story files'
+ten plays through a throwaway copy of the story harness (the whole of `stories.test.tsx` was
+left for the fan-in); the hosting census, the phone's import fence and the token sweep.
+
+**Not seen.** No phone: not the download on a mobile link, not the model pair loading in that
+build, not 18 MB against a phone's storage, and not the offer on a phone's screen — the phone
+face's Scanner page does not mount it until step 7.6. No metered connection. No stall or
+dropped connection against the real host. No app window at all, desktop or light: the offer was
+driven in tests and stories, never in a running build, so the press, the bar and the reload
+have not been watched over a live camera. No release build was made, so *embedded, nothing
+owed, no offer* rests on the rule's test and on the page's. And no `FORMAT_VERSION` has moved
+under an installed app; what happens then is a reading of the code.
+
+**Open after this step:**
+
+- **The phone face's slot** (step 7.6): `<ScannerAssets status onLoaded />`, where `onLoaded`
+  is the page's `resync()` and `clearReads()`.
+- **The browser's source** (step 7.5): a page that answers `scanner_assets` with rows and
+  `scanner_assets_fetch` with the same `Owed`, and says `scanner:assets` in the same payload,
+  draws this offer unchanged. Until then both are refused there and nothing is drawn.
+- **`ScannerStatus.unapplied_filters` is still drawn nowhere.** After a fetch the page pushes
+  its filters itself, which settles the debt the status would have reported.
+- **A `.part` nobody fetches again stays on disk** — a reader who placed the files by hand
+  after a failed download. At most 9.7 MB, and nothing reads it.
+
+### 11.5 Step 7.5 — the web host (2026-10-07)
+
+The web app scans a card: camera → a Worker of the scanner's own → verdicts → the tray → a
+commit, on both faces. Two halves, one Rust and one TypeScript, and a review of each.
+
+**The scanner's module.** `crates/grimoire-scan` is the cargo workspace's fifth member:
+`card-scanner` with `ocr` and without `corpus`, six `#[wasm_bindgen]` exports over one session,
+and nothing of the engine. A member rather than a package beside the crate, for the lockfile —
+one `wasm-bindgen` for both of the web host's modules — and it is only the crate alone when it
+is built alone: `scripts/build-wasm.mjs` builds it with `-p grimoire-scan`, with
+`-C target-feature=+simd128` in that one run's environment and a build tree of its own, and
+reads each module's `target_features` back, refusing a scanner module that does not name
+`simd128` and an engine module that does. 4 472 762 B as this step leaves it, 1 166 235 B
+through brotli at level 5. Every string it answers is `{"ok": …}` or `{"err": "…"}`, and a
+verdict is the crate's own serialisation — never through a `serde_json::Value`, which sorts
+keys and widens every `f32`. Options left out, empty or unreadable are the defaults, as the
+engine's table reads an unreadable header.
+
+**The labels cross as bytes.** `card_scanner::labels` writes the nine columns `load_labels`
+reads with each distinct word and id once: 6 002 656 B for 118 601 labels, against some 21.6 MB
+as JSON. The engine's `scanner_labels()` reads `cards` through its one connection 200 rows at a
+time, lets go between stretches, takes its turns on the work budget, and starts over when the
+corpus's schema cookie moves — up to twelve times, because a full launch moves it eight (four
+feeds, each a staged table and a swap), and **a read that fails or gives up is a rejection and
+not no bytes**: no bytes is an empty corpus. On the wire it is a message of its own
+(`{ kind: "labels" }`), its answer's buffer transferred to the page and from the page to the
+scanner's Worker.
+
+**Three of `Reference`'s indices were made smaller**: the module stands at 84.9 MB with the
+bundle and the labels where it stood at 130.3 MB (118.1 MB from 157.9 MB with the readers); one
+digest of every index over the whole corpus was the same before and after.
+
+**The engine's module carried an OCR runtime it can never run, and now the build refuses
+one that does.** Since step 7.3 put the scanner's commands in the table, the engine's module
+kept the readers' runtime — **9 961 355 B against 6 902 679 B** — because a refusal at run time
+does not let the linker drop what is behind it. Nothing measured the module after 7.3, so
+nothing was red; this step found it by reading a size the build script had printed all along,
+on the first tree that had steps 7.3 and 7.4 and the scanner's own module together. The name
+section said what: 2.64 MB of `rten`, kept alive by `scanner_assets::fetch_from`'s future. That
+function refuses on a page with its first line, and in an `async fn` that keeps nothing out:
+every state past the first `.await` is entered by a number read back out of the future, which
+nothing proves is never written, so the states stay linked and so does everything they call.
+An early return in front of it changed the module by 63 B. **`platform::host::with_files`
+closes it at compile time** — the work is a closure, and the page's arm never calls it —
+and the module is 7 030 970 B with it (7 040 098 B after step 7.4's review round and this
+step's own; the 137 kB over the old figure is step 7.3's code for the prefs, the tray and a
+frame's parse — and 7 291 289 B once `main`'s #855 was merged under it, a sync fix that is
+251 kB of the engine's own). **And `scripts/build-wasm.mjs` now refuses an engine module over
+8 000 000 B**, with the reason and the way to raise it written beside the number: a tenth of
+headroom for growth like that, and two megabytes short of where the runtime put the module,
+so the three megabytes cannot come back unseen. `Cargo.toml`'s rule ("no command in the table reaches its session")
+had been false for one step.
+
+**The page's half** is `src/lib/core/web/`, in front of the engine's `Core` and below
+`@/lib/core`, so nothing above it changed shape:
+
+- **`scanner.ts` answers seven names on the page** — the status, a frame, a reset, the filters,
+  a capture (refused: a page keeps no files) and the two for the files — and passes the prefs,
+  the tray, its commit and the lease through. It hears `scanner_hold` on its way past.
+- **A Worker of its own, made only when there is something to load.** With none of the three
+  files in the store no Worker is made and the module is never asked for; the filters are
+  owed, and a frame is refused in a sentence one second late — the page's loop sends the next
+  frame the moment the last is answered, and an instant refusal would be a storm.
+- **Its life**: built by the first command that needs a session (the store, the engine's
+  labels, one `load` with four buffers transferred); ended fifteen seconds after the last
+  `scanner_hold` or session command with nothing in flight — longer than the page's own grace
+  for a minimised window, and the only way a WASM memory is given back; ended on a trap, with
+  whatever was in flight refused in one sentence; ended when an ask goes unanswered past its
+  deadline (thirty seconds a frame, two minutes a load — some seventy times a build measured
+  on a full corpus), which is the only word there is on a Worker that hangs; and built again
+  by the next command with the filters the last session held. A build that fails is waited
+  out, five seconds doubling to a minute. Nothing is cached between builds.
+- **The store is Cache Storage**, `grimoire-scanner-v1` (`scanStore.ts`): not OPFS, which is
+  the engine's pool; not a shell, which a deploy deletes; not the pictures, which *Clear cache*
+  empties — that command leaves the scanner's files alone, as the desktop's leaves
+  `data/scanner/`. A file is kept only whole and hashed, by the manifest's length and SHA-256
+  — a browser that cannot hash keeps nothing — and the two models' digests are the ones the
+  core writes down, held to the Rust text by a test.
+- **The build ships the three files from the app's own origin** (`/scanner-assets/`, stable
+  names served `no-cache`, with a manifest), because a release download sends no CORS header.
+  Neither they nor the module (`/wasm/<its own build>/scanner/`, a build id of its own so that
+  neither module's change moves the other) is in the service worker's precache; the worker
+  keeps the module the first time it is fetched. The policy did not change: one `worker-src
+  'self'`, `'wasm-unsafe-eval'` and `connect-src 'self'` already cover a second Worker
+  compiling a second module from this origin. The scanner Worker's chunk is revalidated like
+  the engine's, for the same reason.
+- **A browser that cannot run the module is told before anything is fetched** — thirty-one
+  bytes of SIMD to `WebAssembly.validate` — in a sentence the page reads as no scanner at all
+  (`hostScanner.ts`, `verdictText.ts`'s `scannerUnavailable`); a build made without the files
+  says so the same way. `scanner::not_in_a_browser_yet` stays, as the engine's backstop and as
+  what drops the session from its module; its doc no longer says the crate traps in a browser.
+- **`AssetSource` gained `store`**: a host with no folder, which `absent` — a path to put a
+  file at — would misdescribe. No sentence about a `store` asset names a file, a folder or a
+  restart, the filters' own included.
+
+**What is asked, and when — said exactly.** Opening the Scanner asks the origin for
+`/scanner-assets/manifest.json`, six hundred bytes, past every cache, on every visit: it is
+what an offer's sizes are read from and how a rebuilt bundle is noticed. **Nothing else of the
+scanner is asked before the press** — not the module, not one of the three files — and none
+of it is precached. The offer's *about 19 MB* is the three files, 18.1 MB that brotli takes
+8 % off; **the module is not in that figure**: 1.2 MB more over the wire, fetched by the first
+session built after the download. Offline, a reader who has scanned once scans again, and what
+is asked of the absent host is the manifest (refused; all three in hand owe nothing) and
+`sw.js`, which the browser asks on every load. **That does not survive a deploy that changed
+the scanner's module** until the first scan online: the new module's address is in nobody's
+cache. An offer for a file the scanner is already running on — every release that rebuilt the
+bundle — reads *Newer card data is available*, not that the scanner *needs* anything.
+
+**Measured**, `npm run web:scanner-smoke`, headless Chrome 154 on Windows, the built app under
+the hosting's own headers, a 1280 × 720 Y4M of Counterspell (MH2 267) for a camera, a corpus of
+seven cards: the desktop face at 1440 × 900 in three clean passes (45.3 s, 44.2 s with a cargo
+build beside it, and the last with the phone face's leg behind it, 54.5 s in all).
+
+| | |
+| --- | --- |
+| What a first scan fetches | `grimoire_scan_bg.wasm` 4 472 762 B (1 166 235 B through brotli 5) and its glue 11 918 B (3 295 B); `card-hashes.bin` 5 874 752 B, `text-detection.rten` 2 510 284 B, `text-recognition.rten` 9 716 568 B — 18 101 604 B that brotli takes 8 % off |
+| The download, from the press to the offer going | 0.27–0.56 s on localhost, about 20 progress events |
+| The press to the card in the tray | 3.9–5.6 s — the session's build, the camera's frames, a read |
+| A plain frame's round trip (640 px JPEG) | medians of 105, 113 and 151 ms; the slowest 241 ms |
+| A read frame, with its 1280 px detail | 0.83, 1.07 and 1.29 s (one in each pass) |
+| The module's memory after 60 frames, readers loaded, seven labels | 86.05 MB each time |
+| Leaving the Scanner to its Worker gone | 14.5–15.4 s |
+
+**And once on a full corpus** — the number both halves had listed as not seen. One real first
+run in the same headless Chrome: Scryfall's own card file, 118 601 cards ingested through the
+OPFS pool 36 s after the gate (the Tagger files, the combos and the price list held back, so
+the engine was otherwise idle), then:
+
+| | |
+| --- | --- |
+| `scanner_labels()` alone | 1.25 s for 6 002 656 B |
+| The engine while it read them | never deaf: 24 `sync_status` round trips answered during the read, the slowest 47 ms — one work budget |
+| A whole session build (the store, the labels, a Worker, the module, `load`) | 1.35 s; 1.81 s for the second, after the idle end |
+| The engine during those builds | the slowest `sync_status` 48 ms and 50 ms |
+| The first frame after a build | 134 ms and 216 ms (a blank frame) |
+| The module's memory, full labels and both readers | 120 782 848 B — 120.8 MB — and the same again after the Worker had been ended and a session rebuilt |
+
+**It also holds**: nothing of the scanner but its manifest asked of the host before the press,
+and nothing of it in the shell cache; each file fetched once; a fault staged in the Worker
+ends it and the next frame is answered by a new one; no Content-Security-Policy refusal on
+nine targets (the page, both dedicated Workers, the service worker); and, in a profile of its
+own at 360 × 800, the phone face draws the offer in its page's slot with nothing off the
+screen, downloads, lands the card in a tray that was empty, and files it.
+
+**Two fresh reviewers read the step, one half each, and neither found a must-fix**: the module
+and the files are not fetched before the press and are out of the precache by rule; no buffer
+is used after it is transferred; the policy is untouched; frames go only to the scanner's
+Worker; no panic is reachable from network bytes at realistic sizes. Both said to ship after
+fixes, and these were taken — each with a test that goes red when the fix is backed out:
+
+- **A trap under the load rebuilt the session about once a second, for good.** Only a module
+  that did not arrive backed off. A build that fails is waited out now, longer each time.
+- **Nothing posted to the Worker had a deadline**, so a Worker that hung held the page's one
+  frame in flight for ever, and the idle rule — which never ends a Worker with an ask pending
+  — could not fire. Each ask is stamped; a status that rebuilt its session could also post a
+  frame to the Worker it had just ended, and `messageerror` was unheard.
+- **The smoke's offline claim was vacuous and false**: the harness dropped a refused request
+  before writing it down, so "the server was asked nothing" could not fail — and the page does
+  ask, for the manifest. The harness writes first now, and the assertion names what is asked.
+- **A session built before the card sync landed stayed nameless while the reader stayed**: the
+  status is asked once and kept. A finished sync marks `["scanner", "status"]` stale, with the
+  six roots it already marked, so the host's rebuild rule fires; and a read of the names the
+  engine *gave up on* is told from an empty corpus and asked again.
+- **A place-a-file sentence was reachable on a host with no folder** (*"corpus.db wasn't found
+  next to the scanner bundle"*, whenever there were no labels), and **every rebuilt bundle was
+  offered as a need**. Both have a wording of their own now.
+- **The digest check was optional** where `crypto.subtle` was missing, and what it skipped was
+  then trusted by digest. A browser that cannot hash keeps nothing.
+- **Nothing fenced the new CI and release steps.** The release rule's test holds the asset
+  fetch, the `required` build and their order in both workflows; the post-deploy probe asks the
+  address for the scanner's manifest; `scanner-assets.mjs` holds the models to the pinned
+  digests and reuses a file by its digest, never its length; the smoke's one outside request is
+  tried three times, under the app's `User-Agent`, and cached between CI runs.
+- In the Rust: `scanner_labels`' three attempts reasoned from two schema moves where a launch
+  makes eight; a test that passed over a decoder panic (it holds the sentence to `decode:`
+  now); a reservation of eight times a labels file's bytes that could overflow on wasm32; the
+  bundle's declared length summed in `u64` so that a 32-bit `usize` cannot wrap it, with a
+  test that pins the wrap; `pair_key`'s injectivity; and `frame`'s options made optional in
+  the glue, where an omitted argument was a `TypeError` before Rust ran.
+- Smaller: only a `200` is kept by the service worker's runtime rule; `scanner_reset` refuses
+  without SIMD as its siblings do; a detail length of `+5` parses as Rust's does; a storage
+  failure's sentence no longer ends in the browser's own; offline before any download the
+  offer is still drawn, at the core's sizes, and its press says the files cannot be reached.
+
+**Seen now that neither half had**: the labels crossing between two real Workers and naming a
+card; the module instantiated and run by the app's own page on both faces; `scanner_labels`
+on a full corpus through the OPFS pool, sliced as designed; a session's real cost and memory.
+**Still not seen**: a browser without SIMD (the probe and the `CompileError` path are
+unit-tested; no such browser was run); a real panic in this module in a browser (the staged
+fault is the Worker *saying* it trapped — no export panics on request, and its clock swallows
+a throwing `performance.now`); a Worker that really hangs, or that a browser really kills
+(the deadline is driven by a fake clock); a card sync landing under an open Scanner in a
+browser (the invalidation and the rebuild rule are each tested, not the two together); a
+launch's eight schema moves under a read of the labels (one move is, natively); a phone — its
+120 MB of module, its frame times, its camera; Safari, Firefox, a real camera, the CI runner's
+first run of the new steps, and production.
 
 ### 11.6 Step 7.6 — the phone's Scanner page (2026-10-07)
 

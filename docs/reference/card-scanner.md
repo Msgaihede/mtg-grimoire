@@ -206,6 +206,114 @@ A permanent 404 is recorded so a re-run never retries it; a transient failure is
 *not* recorded, so the next run picks it up. A bounded run of 1024 images completed in 11 s at
 93/s with zero failures (2026-09-01), which puts a full build at roughly half an hour.
 
+### The labels, as bytes — `labels.rs` (2026-10-07)
+
+The bundle holds ids. What an id *is* — a name, a set, a number, a language, a release date,
+an oracle, an artwork, its finishes — is nine columns of `corpus.db`'s `cards`, which
+`Reference::load_labels` reads behind the `corpus` feature. **A browser's scanner has no
+`corpus` feature**: it is a module of this crate alone in a Worker of its own
+(`crates/grimoire-scan`, the light app's step 7.5), and the corpus is the engine's, in another
+Worker. So the engine reads the nine columns, writes them down, and the page hands the bytes
+across. `src/labels.rs` is both ends:
+
+| | Needs `corpus` | What |
+| --- | --- | --- |
+| `Row`, `Row::attach` | no | One printing as the corpus has it, and the two calls that attach it — `set_finishes`, then `add_label`. `load_labels` goes through the same two |
+| `Encoder` | no | `push(&Row)` a row at a time, `finish()` the file |
+| `decode`, `attach` | no | Read a file through and answer it only if all of it is sound; attach every row, or none |
+| `COLUMNS`, `Row::from_sql`, `read_page` | yes | The nine columns, one row read from them, and `limit` rows after a `rowid` into an `Encoder` |
+
+**The layout, version 1** (`MAGIC` is `MTGL`, `VERSION` is 1; a varint is LEB128, ten bytes at
+most):
+
+```text
+"MTGL" · version (1 byte) · rows (varint)
+six string tables — name, set, collector number, language, release date, finish —
+    each: entries (varint), then per entry a length (varint) and that many bytes of UTF-8
+two id tables — oracle, illustration — each: entries (varint), then 16 bytes per entry
+rows ×  id (16 bytes)
+        oracle, illustration       varint each: 0 for none, else 1 + its place in the table
+        name, set, number,         varint each: a place in its table
+          language, released
+        finishes                   varint n, then n places in the finish table
+```
+
+Nothing follows the last row. A release date that was `NULL` is the empty string, as
+`load_labels` reads it. **Tables, because a label is mostly words it shares**: the dev corpus's
+118 475 printings (counted 2026-10-07) have 38 260 names, 1 052 sets, 16 833 collector numbers,
+19 languages, 1 288 release dates, 38 705 oracle ids and 51 236 illustration ids. Each table is
+in first-seen order, so the encoder is one pass and holds no row.
+
+**5 998 193 B for those 118 475 labels** — against 21 555 383 B for the same rows as the JSON
+the frame bench carries (§11), 28% of it. Through brotli at quality 11 it is 4 748 121 B, which
+matters to nobody: it never crosses a network, only from one Worker to the next.
+
+**Rows are in the order they were pushed, and that order is behaviour.** `read_page` reads
+`ORDER BY rowid`, which is the order a scan of `cards` walks and so the order `load_labels`
+attaches in: the first printing of a card, the first label under an artwork and the order of
+two cards under one name all follow it.
+
+**The decoder trusts nothing**, because a module that panics is a module that has ended (§11).
+Every count is held against the bytes that are left before anything is allocated for it, every
+place against its table, every string against UTF-8, and `attach` reads the whole file before
+it attaches the first row. A refusal is a `LabelsError` — `BadMagic`, `BadVersion`, `Truncated`
+or `Damaged`, each a sentence with the byte it happened at — and leaves the reference as it
+was. Its tests cut a file short at every length, set every byte to each of six values, and
+hand it a row count and a table count of four billion.
+
+**The same change took one overflow out of the bundle's own reader.** `Bundle::from_bytes`
+summed and multiplied its two section counts unchecked; where `usize` is 32 bits two counts of
+four billion wrap to a size the file does hold, and the read that follows runs off its end.
+Checked now, and a `Truncated`.
+
+**Measured on the dev corpus, 2026-10-07**, a Ryzen 9 5900X with other sessions' builds on it
+throughout, so each is a figure with a wide margin:
+
+| | |
+| --- | --- |
+| Reading the nine columns of every row | 1.9–3.2 s a page of 200 at a time, and 2.1–3.1 s as one scan — `node:sqlite`, a fresh process each, the file already in the OS's cache. Paging costs nothing measurable |
+| The same read through `read_page`, with the encode | 1.4 s and 2.0 s natively (release), behind a first read of the file by the same process that took 18 s both times and was not explained |
+| `decode` alone | 16–17 ms natively |
+| `decode` and attach | 0.6–0.8 s natively; **0.6–0.9 s in the Worker** (a `load` of bundle and labels 639 ms and 918 ms on two runs, of the bundle alone 19–24 ms) |
+
+`labels::tests::the_whole_corpus_encodes_to_the_reference_load_labels_builds` is where the
+native figures come from. It is `#[ignore]`d and wants a corpus:
+
+```
+SCANNER_LABELS_CORPUS=<corpus.db> [SCANNER_LABELS_OUT=<file>] cargo test --release \
+  --features cli --lib labels::tests::the_whole_corpus -- --ignored --nocapture
+```
+
+It also holds the promise at its real size: the reference attached from the file is the one
+`load_labels` builds from the same corpus, index for index (`Reference::snapshot`, test-only),
+and it prints one digest of all of them.
+
+**Three of `Reference`'s indices were made smaller in the same change**, because §11 had found
+the labels were nearly all of the module's memory and a module's memory is never given back:
+
+| Index | Was | Is |
+| --- | --- | --- |
+| `art_printings` | every printing's `Label` again, under its artwork — a second copy of all of them | the artwork's first printing and a count, which is all a candidate reads |
+| `finishes` | a `Vec<String>` a printing | a place in a list of the distinct lists; the corpus has eight |
+| `by_set_number` | a key of two `String`s | one string, `<set's length>:<set><number>` |
+
+**The scanner's module stood at 130.3 MB with the bundle and the labels attached before, and
+at 84.9 MB after** (headless Chrome 154, the published bundle, the dev corpus's labels as
+bytes; 13.1 MB with the bundle alone). With the readers loaded as well it was 157.9 MB and is
+118.1 MB, and at the end of 240 frames 192.3 MB and 152.4 MB — both loose upper bounds, since
+the page builds that second session in the instance the first was dropped from. §11's
+150.3 MB was the first of these sessions with the labels as 21.6 MB of JSON text. Nothing a caller can ask changed: the whole-corpus digest was
+`6884307f4f7cd680` before and after, the crate's suite passes, and the module still agrees with
+both native runs of the frame bench on every frame of its 120. The one difference there is to
+find is in the artwork index, which no shipped bundle has a section for: an artwork's label is
+its first printing's as it stands, where it was a copy taken when that printing was first
+added — the same thing unless a printing is added twice with two labels, which a corpus keyed
+by id never does. **What is left is mostly the labels themselves** — five `String`s a printing
+in a hash table sized for twice as many — and the three maps keyed by printing; an index into
+one `Vec<Label>` is the next cut, and was not taken: `mask_for`, `collector_among` and
+`label_for` all read that map, and it is past what this step could hold to a digest in the
+hour it had.
+
 ## 3. One frame, end to end
 
 ### Detect — two detectors, and an aspect prior doing most of the work
@@ -2263,17 +2371,45 @@ unreadable options header and the refusal of an unreadable sidecar are one piece
 same sentences on every host. `asciiJson` still escapes both header JSONs for all three: only
 the desktop's transport needs it, and one spelling is one thing to test.
 
-**In a browser the session's commands are refused**, in one sentence —
-`scanner::NOT_IN_A_BROWSER_YET`, *"The scanner does not run in a browser yet."* — because the
-crate's threads and `Instant` trap in a Worker: the status, a frame, a reset, a filter push and a
-capture. The prefs, the tray, its commit and the lease answer. The view matches on that sentence
-(`verdictText.ts`'s `SCANNER_NOT_IN_A_BROWSER_YET`, pinned by `ipc.test.ts`) so that a refused
-filter push there is not counted as an answer: `useScannerPrefs` reports `unavailable`, `loaded`
-never goes true, **no camera is asked for and no frame is sent**, and the sentence is drawn in
-the video box. Before 2026-10-07 the same view on a light host heard *"There is no command named
-scanner_set_filters on this host."*, counted it as a refused filter, opened the camera and sent
-every frame to be refused in turn. The light app's web step removes the refusal and the match
-together.
+**In a browser the session's commands are answered on the page** (step 7.5, 2026-10-07), in
+front of the engine's table and in its shapes — `src/lib/core/web/scanner.ts`, which wraps the
+web host's `Core` as `files.ts` wraps it for the two file dialogs:
+
+| Command | What the web host does with it |
+| --- | --- |
+| `scanner_status` | Builds the session if there is something to load — the three files out of Cache Storage, the labels out of the engine's Worker (`scanner_labels`, a `labels` message), each buffer transferred to the scanner's Worker — and composes `ScannerStatus` from the module's `load` facts. Every asset's `source` is `store` |
+| `scanner_frame` | The body split at `x-scanner-detail` as `frame_from` splits it — two views of one buffer, the buffer transferred — and `x-scanner-options` passed as text; the module reads unreadable options as the defaults, as the table does. The verdict is the crate's own serialisation |
+| `scanner_reset`, `scanner_set_filters` | The scanner's Worker; a refusal is the crate's sentence. With no session the filters are owed to the first one built, and a reset is nothing |
+| `scanner_capture` | Refused: a page keeps no files |
+| `scanner_assets`, `scanner_assets_fetch` | The store and the app's own origin — §10 |
+| the prefs, the tray, its commit, `scanner_hold`, `scanner_elsewhere` | The engine, unchanged. `scanner_hold` is heard on its way past: it is how the web host knows the Scanner is open |
+
+**The Worker's life is the page's to manage**: made by the first command that has something to
+load, ended fifteen seconds after the last `scanner_hold` or session command with nothing in
+flight (the only way a WASM memory is given back), ended on a trap — whatever was in flight is
+refused in one sentence — and built again by the next command, with the filters the last
+session held. **Nothing posted to it is waited for without end**: each ask has a deadline
+(thirty seconds a frame, two minutes a load), a watch ticks once a second while there is a
+Worker, and one overdue ends the Worker as a trap does — a Worker that hangs, or that the
+browser ends without a word, raises nothing else. **A build that fails is not tried again at
+once**: a trap under the load, an unreadable answer or a load past its deadline sets a wait of
+five seconds that doubles to a minute and is cleared by a load that answers, so a phone that
+cannot grow the module's memory is not re-reading eighteen megabytes and compiling a module
+once a second. **The names are the engine's to give, and a read it gave up on is not an empty
+corpus**: `scanner_labels` rejects then, the status says why there are none, and the next
+status asks again — which a card sync landing brings about, because `["scanner", "status"]`
+is one of the entries a finished sync marks stale (`useSyncInvalidation`). The engine still refuses a session command that reaches it
+(`scanner::NOT_IN_A_BROWSER_YET`); nothing a reader does arrives there.
+
+**A host that has no scanner at all says so in a sentence the page stays quiet on.** The view
+matches a refused filter push against a closed list (`verdictText.ts`'s `scannerUnavailable`:
+the engine's sentence, pinned by `ipc.test.ts`, and the web host's two in
+`src/lib/core/hostScanner.ts` — a browser without WebAssembly SIMD, a build made without the
+scanner's files) so that it is not counted as an answer: `useScannerPrefs` reports
+`unavailable`, `loaded` never goes true, **no camera is asked for and no frame is sent**, and
+the sentence is drawn in the video box. Before 2026-10-07 the same view on a light host heard
+*"There is no command named scanner_set_filters on this host."*, counted it as a refused filter,
+opened the camera and sent every frame to be refused in turn.
 
 `ipc.ts`'s scanner types keep the **Rust field names, snake case**, because the header JSON is
 deserialised straight into `FrameOptions` and the verdict is what the debug page already reads.
@@ -2599,7 +2735,45 @@ fetched until the reader presses.
 | Desktop, release build | embedded by `build.rs` from `src-tauri/scanner-assets/`, which `npm run scanner:assets` fills from the release | nothing — it owes nothing, is offered nothing and makes no request |
 | Desktop, a build with nothing embedded | a file placed in `data/scanner/` by hand, or the download below | GitHub, on the reader's press |
 | Android | the download below, into `<app data>/data/scanner/` | GitHub, on the reader's press |
-| Web | not yet — both commands are refused on a page (`scanner::NOT_IN_A_BROWSER_YET`); a release download sends no CORS header, so the source is the web step's own | nothing |
+| Web | the app's own origin, `/scanner-assets/` — the release's three files, copied into the web build (`npm run scanner:assets -- --web`), with a manifest of their lengths and digests; kept in Cache Storage | the app's own origin, on the reader's press |
+
+**The browser's arm** (step 7.5, 2026-10-07). GitHub answers a release download with no CORS
+header, so a page cannot read the place a native host fetches from; the web build serves the
+same three files itself. `scripts/scanner-assets.mjs --web` fetches them into
+`dist-wasm/scanner-assets/` and writes `manifest.json` beside them — each file's key, name,
+exact length and SHA-256, and the bundle's `FORMAT_VERSION` — and `vite.mobile.config.ts` holds
+the folder to that manifest before it emits a byte (CI's and the release's builds *require*
+it; a developer's build without it says the scanner's files are not part of it). The page's
+half is `src/lib/core/web/scanStore.ts`:
+
+- **Owed is what the store does not hold as the manifest describes it, by digest** — so a
+  release that rebuilt the bundle owes it again under the name it always had, and until the
+  new one lands the old one still loads. A manifest for another `FORMAT_VERSION`, or naming a
+  model digest other than the two the core writes down, is refused whole.
+- **A file is kept only after it has been checked**: read to its end into memory, held to the
+  manifest's exact length and digest, then `put` as a response built from the bytes — there is
+  no half-written entry to meet. A browser with no `crypto.subtle` keeps nothing: a file is
+  trusted from then on by the digest it was kept under. Each wait is under the feeds' 30 s stall bound, one fetch runs
+  at a time (`ALREADY_FETCHING`, the core's sentence), and the events are the core's sequence.
+- **Cache Storage, in a cache of its own** (`grimoire-scanner-v1`): not OPFS, which is the
+  engine's SQLite pool; not a shell cache, which a deploy deletes; not the picture cache, which
+  *Clear cache* empties. The addresses are served `no-cache` and asked for `no-store`.
+- **Neither the files nor the scanner's module is precached or fetched before the press** —
+  the manifest is: opening the Scanner asks it, past every cache, for the offer's sizes. The
+  module (`/wasm/<its own build>/scanner/`, a year and immutable) is kept by the service worker
+  the first time a Worker loads it, in the same cache, so a reader who has scanned once can
+  scan with no network (`web:scanner-smoke` does) — **until a deploy changes the module**,
+  whose new address is in nobody's cache until the first scan online. The module is not in the
+  offer's "about 19 MB": it is 1.2 MB more over the wire, fetched by the first session.
+- **With no manifest to be had, the store alone answers**: all three in hand owe nothing, and
+  a reader offline scans; a file missing is offered at the size the core writes down for it,
+  and the press says the files cannot be reached. **An offer for a file the scanner is already
+  running on reads as an update** — *Newer card data is available* — on every host
+  (`ScannerAssets`' `offerSentence`): a release that rebuilt the bundle owes it again while the
+  old copy still scans.
+- **A failed fetch writes no `error_log` row**, where a host with a folder writes one: the
+  engine's table has no command a page could write one through. It is said on the console, in
+  the event and in the command's refusal.
 
 **The source is the release the build already reads**: `scanner-bundle-v<FORMAT_VERSION>`, at
 `https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v3/<name>`
@@ -4105,7 +4279,9 @@ maps keyed by printing, card, illustration, name and set-and-number, one of whic
 (`art_printings`) holds a second copy of every label. With the readers it stood at **232.6 MB**,
 which is an upper bound and a loose one: the page loads a second session into the instance the
 first was just dropped from. **Nobody has asked what that costs a phone**, natively or in a
-tab.
+tab. (Step 7.5 moved both halves of this: the labels reach the module the app ships as 6.0 MB
+of bytes and no JSON, and three of the indices are smaller — §2, *The labels, as bytes*, has
+the figures for that module. The bench's own module still reads `labels.json`.)
 
 **What was not seen.** A photograph: the frames are renders degraded in software, as §10's are.
 A detail frame, so a reader's bands were never warped from more than 960 px. Any browser but

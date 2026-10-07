@@ -33,12 +33,28 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   panel's pairing scanner, and the phone's Scanner page (cards landing in the tray, the commit,
   every refusal, the 44px floor at 360 and 412). Neither takes a lock or runs in CI; each takes
   another origin after `--`, for a server on a port of your own.
-- `npm run web:wasm` / `web:build` / `web:smoke` — the light app's web host: the engine as a
-  WASM module into `dist-wasm/` (needs clang and the `wasm-bindgen` CLI at `Cargo.lock`'s
-  version), the page around it into `dist-web/`, and that bundle opened in headless Chromium.
+- `npm run web:wasm` / `web:build` / `web:smoke` — the light app's web host: **two WASM
+  modules** — the engine into `dist-wasm/`, and the card scanner (`crates/grimoire-scan`, built
+  with `simd128` in a build tree of its own, `src-tauri/target/scanner-simd128`) into
+  `dist-wasm/scanner/` — which needs clang, for the engine's SQLite, and the `wasm-bindgen` CLI
+  at `Cargo.lock`'s version; `web:wasm -- --only engine` or `-- --only scanner` builds one and
+  leaves the other. Then the page around them into `dist-web/`, and that bundle opened in
+  headless Chromium.
   No lock; `web:dev` serves it on port 5176, and **`web:preview` serves the build under the
   hosting's own headers** — the local server to drive under the shipped policy; `web:smoke`
   serves under it too since 2026-10-04, and fails on a refusal.
+  **`web:wasm` refuses an engine module over its ceiling** (8 000 000 B; `scripts/build-wasm.mjs`
+  has why, and how to raise it): the card scanner's OCR runtime linked into the engine is three
+  megabytes nothing else would notice. **A full `web:wasm` empties `dist-wasm/`**, the scanner's
+  files with it — run `scanner:assets -- --web` after it, not before.
+  **`npm run web:scanner-smoke`** scans a card in the built app: `npm run scanner:assets --
+  --web` first (the scanner's three files into `dist-wasm/scanner-assets/`, which `web:build`
+  then ships; without them the page says the build has no scanner), then a headless Chromium
+  whose camera is a file showing one real card, on the desktop face — the offer, Download,
+  the tray, the collection, offline, a staged fault, and the Worker ended on leaving — and
+  again on the phone face at 360px, in a profile of its own. The
+  card's picture is fetched from Scryfall's CDN once by the script and kept in the temp
+  folder; `SCAN_CARD_PICTURE=<file>` runs it with no request at all.
   **`npm run web:sync-smoke`** is live sync end to end: two headless Chromium profiles (the
   desktop face and the phone face) claim, pair and sync through `relay/`'s own code under
   workerd (`wrangler dev --local`, a local D1, nothing that reaches Cloudflare), by the relay's

@@ -621,12 +621,26 @@ from yet is a header on no request. So:
    installer's folder), and a **`wasm-bindgen` CLI of exactly the version `Cargo.lock` resolves**
    — `cargo install wasm-bindgen-cli --version <that> --locked`. The script checks all three and
    says which is wrong.
-3. **`npm run web:build`** — the page, into `dist-web/`, with the engine under `wasm/<build id>/`
-   and `_headers` at its root. ⚠️ **`wrangler deploy` uploads whatever is in `dist-web/`**: the
+3. **`npm run scanner:assets -- --web`, then `npm run web:build`** — the card scanner's three
+   files into `dist-wasm/scanner-assets/` with their manifest (18 MB from this repository's
+   public release), then the page, into `dist-web/`, with the engine under `wasm/<build id>/`,
+   the scanner's module under `wasm/<its own build id>/scanner/`, the three files and
+   `manifest.json` under `scanner-assets/`, and `_headers` at its root. Without the first
+   command the build still builds and says the scanner's files are not in it; with
+   `GRIMOIRE_SCANNER_ASSETS=required` — as CI and the release set it — it fails instead. ⚠️ **`wrangler deploy` uploads whatever is in `dist-web/`**: the
    last build on this machine, not this commit. Build from the commit being deployed, with a clean
    tree, and check `dist-web/_headers` is there — a `dist-web/` built before step 5.5 has none,
    and deploys as an app with no policy and no caching rules.
-4. **`npm run web:smoke`**, then **`npm run web:preview`** and a look in a real browser. The
+4. **`npm run web:smoke`** and **`npm run web:scanner-smoke`** (a file for a camera, one real
+   card, from the offer's Download to the collection and then offline), then
+   **`npm run web:preview`** and a look in a real browser. Against a deployed or `wrangler dev`
+   host, the scanner's addresses to probe are: `/scanner-assets/manifest.json` and the three
+   files (`200`, `Cache-Control: no-cache`, the manifest `application/json`),
+   `/wasm/<id>/scanner/grimoire_scan_bg.wasm` (`application/wasm`, a year and immutable) and
+   `/assets/scanWorker-<hash>.js` (`no-cache`, carrying the policy — a Worker runs under its
+   own script's). After a deploy, `scripts/web-deploy-probe.mjs` asks the first of these itself: the
+   manifest the address serves must be the bundle's, byte for byte, and for the bundle format
+   this tree's scanner reads — a web app deployed without its scanner's files is red there. The
    preview applies the policy by this repository's own reading of `_headers`. **And
    `npm run web:sync-smoke`** when the engine's sync, the relay or `connect-src` changed: two
    headless Chrome profiles — the desktop face and the phone face — claim, pair and sync

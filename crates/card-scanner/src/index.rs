@@ -512,12 +512,19 @@ impl Bundle {
             return Err(BundleError::BadHashWidth(bits));
         }
         let built_at = i64::from_le_bytes(bytes[14..22].try_into().expect("8 bytes"));
-        let n_card = u32::from_le_bytes(bytes[22..26].try_into().expect("4 bytes")) as usize;
-        let n_art = u32::from_le_bytes(bytes[26..30].try_into().expect("4 bytes")) as usize;
+        let declared_cards = u32::from_le_bytes(bytes[22..26].try_into().expect("4 bytes"));
+        let declared_arts = u32::from_le_bytes(bytes[26..30].try_into().expect("4 bytes"));
+        let n_card = declared_cards as usize;
+        let n_art = declared_arts as usize;
 
         let hash_bytes = bits as usize / 8;
         let entry = ID_LEN + hash_bytes;
-        let expected = HEADER_LEN + (n_card + n_art) * entry;
+        // In 64 bits, and only then narrowed, for the host whose `usize` is 32: two counts of
+        // four billion wrap there, to a size the file does hold, and the read that follows runs
+        // off its end — a panic, which in a browser's module is the end of the instance (§11 of
+        // the reference doc). A length this host cannot count to is one no file here can be.
+        let expected = usize::try_from(declared_len(declared_cards, declared_arts, entry))
+            .unwrap_or(usize::MAX);
         if bytes.len() < expected {
             return Err(BundleError::Truncated { expected, actual: bytes.len() });
         }
@@ -600,9 +607,38 @@ impl BundleBuilder {
     }
 }
 
+/// The bytes a bundle declaring this many card and art entries must be: the header and every
+/// entry. **In `u64`, whatever the host's `usize`**, so the sum cannot wrap on any host this
+/// builds for — two `u32` counts and an entry of at most a few hundred bytes are far inside it.
+/// The caller narrows the answer to its own `usize` and reads one that will not fit as a file
+/// that is too short, which is the only thing such a file can be.
+fn declared_len(cards: u32, arts: u32, entry: usize) -> u64 {
+    (u64::from(cards) + u64::from(arts)) * entry as u64 + HEADER_LEN as u64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **The declared length is counted where it cannot wrap.** On a host whose `usize` is 32
+    /// bits — the browser's module — the old sum in `usize` wrapped for counts a header can
+    /// declare: `(4 294 967 295 + 1) × 48` is zero there, so a thirty-byte file passed the
+    /// length check and the read ran off its end. The sum is `u64` now, and this holds the
+    /// two facts that makes true: it is the real number, and that number does not fit in 32
+    /// bits — so the narrowing in `from_bytes` refuses it there.
+    #[test]
+    fn a_declared_length_is_the_real_one_and_too_long_for_a_32_bit_host_to_be_handed() {
+        let entry = ID_LEN + 32;
+        let whole = declared_len(u32::MAX, 1, entry);
+        assert_eq!(whole, (1u64 << 32) * entry as u64 + HEADER_LEN as u64);
+        assert!(u32::try_from(whole).is_err(), "a 32-bit `usize` could not hold it");
+        // What the wrapped sum came to: the header alone, which every file is longer than.
+        let wrapped = (u32::MAX.wrapping_add(1) as u64) * entry as u64 + HEADER_LEN as u64;
+        assert_eq!(wrapped, HEADER_LEN as u64);
+        assert_ne!(whole, wrapped);
+        // And an honest bundle's length is what it always was.
+        assert_eq!(declared_len(3, 2, entry), (5 * entry + HEADER_LEN) as u64);
+    }
 
     fn desc(bits: u16, seed: u64) -> Descriptor {
         let mut words = [0u64; 4];

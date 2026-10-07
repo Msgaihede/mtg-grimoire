@@ -36,10 +36,11 @@
 //! **Every file goes through `platform::files`**, the models included — `TitleReader::load`
 //! reads its two files with `std::fs` inside the crate, so [`load`] reads them here and hands the
 //! bytes to `TitleReader::from_bytes`, with that function's sentences kept word for word. **In a
-//! browser the load finds nothing, and the session still would not run**: the crate keeps its own
-//! threads and `Instant`, which panic there. So every door to the session and to a file is shut
-//! there in one sentence ([`not_in_a_browser_yet`]) until the light app's web step puts them
-//! behind a seam of their own — the prefs, the tray and the lease are rows and a mutex, and
+//! browser this module runs no session at all**: the page's scanner is a Worker of its own on a
+//! module of its own (`crates/grimoire-scan`, the light app's step 7.5), and the web host answers
+//! the session's commands on the page, in front of this table. So every door here to the session
+//! and to a file is shut on a page in one sentence ([`not_in_a_browser_yet`]) — a backstop no
+//! reader should meet — while the prefs, the tray and the lease, which are rows and a mutex,
 //! answer on a page as anywhere.
 //!
 //! **The load can be let go** ([`ScannerState::forget`]): the first [`ScannerState::ensure`] keeps
@@ -126,12 +127,21 @@ pub const DETECT_FINISH: &str = "detect";
 /// `File` also covers a file that is there and did **not** parse: the reader placed it, so its
 /// error is the answer, and quietly falling back to the embedded copy would hide exactly the file
 /// they are trying to test. `Absent` is "nothing to load anywhere".
+///
+/// **`Store` is a host that has no folder**: the web host keeps what it downloaded in the
+/// browser's own storage, where no reader can put a file, and says so of all three assets —
+/// one it has and one it has not fetched yet alike, because `Absent` promises a path to place a
+/// file at and a page has none. [`load`] never answers it: this crate runs no session on a page
+/// ([`not_in_a_browser_yet`]), and the status a page reads is composed by the web host
+/// (`src/lib/core/web/scanner.ts`) in this struct's shape. It is declared here because the shape
+/// is declared here, and `src/lib/ipc.ts` mirrors it from this text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AssetSource {
     File,
     Embedded,
     Absent,
+    Store,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]
@@ -263,32 +273,47 @@ pub const LEASE: Duration = Duration::from_secs(2);
 /// would have every window admitted as one, which is the reason it must not without a label.
 pub const PAGE: &str = "page";
 
-/// What every scanner command that would load the session, run it, or write a file answers on
-/// a host that is a web page.
+/// What every scanner command that would load the session, run it, or write a file answers
+/// **when it is asked of this crate** on a host that is a web page. The name and the words are
+/// step 7.3's, from when no browser ran a scanner; since step 7.5 one does, and this is what
+/// the engine says if a session command ever reaches it instead of the page's own scanner.
 pub const NOT_IN_A_BROWSER_YET: &str = "The scanner does not run in a browser yet.";
 
-/// **The session cannot run in a browser yet, so a page is refused before it is loaded.** `Ok`
-/// on every host that keeps files; on one that does not (`platform::host::keeps_files`) the
-/// refusal, in a sentence a reader can be shown — [`NOT_IN_A_BROWSER_YET`].
+/// **This crate runs no scanner session on a page, so a page is refused before one is
+/// loaded.** `Ok` on every host that keeps files; on one that does not
+/// (`platform::host::keeps_files`) the refusal, in a sentence — [`NOT_IN_A_BROWSER_YET`].
 ///
-/// **A fact about the `card-scanner` crate as it is today**: its detector and its Exact resolve
-/// run on `std::thread::scope` and a spawned thread, and a frame is timed with `Instant` — each
-/// compiles for `wasm32-unknown-unknown` and traps when it runs. A trap in the web host's Worker
-/// is a page that stops answering, with nothing it can show; and the load itself would find no
-/// asset, since a page has no `data/scanner/` to read.
+/// **The reason is where the session would be, not whether it could run.** The `card-scanner`
+/// crate runs on one thread with a clock handed to it since step 7.1, so it compiles and runs
+/// as WebAssembly — in a module and a Worker **of its own** (`crates/grimoire-scan`). Not in
+/// this one: the web host's module is built with `panic = "abort"`, so a panic anywhere in a
+/// frame would be a trap that ends the instance holding the reader's databases; a read frame
+/// would block the one Worker every search queues through for a third of a second to more
+/// than one; and a session's hundred megabytes would be memory the engine's Worker can never
+/// give back. And the load here would find no asset: a page has no `data/scanner/` to read.
+///
+/// **A backstop, and what makes the linker drop the session.** The web host answers the
+/// session's commands and the two for its files on the page, in front of the table
+/// (`src/lib/core/web/scanner.ts`), so nothing a reader does arrives here. This stays because
+/// the table still names those commands for every host, and because on `wasm32` it is a
+/// constant refusal: everything behind it — the session, the readers, their OCR runtime — is
+/// unreachable, and fat LTO leaves it out of the engine's module — three megabytes of it.
+/// **That holds for an ordinary function and not for an `async fn`**, whose later states
+/// stay reachable whatever its first line returns: `scanner_assets::fetch` is the one such
+/// door, and is shut by `platform::host::with_files` instead.
 ///
 /// **Where it is asked**, which is every way in: [`ScannerState::ensure`] — the one door to the
-/// session, so the status, a frame, a reset and a filter push all pass it — and
-/// [`ScannerState::capture`], which writes files and touches no session.
+/// session, so the status, a frame, a reset and a filter push all pass it —
+/// [`ScannerState::capture`], which writes files and touches no session, and the two asset
+/// commands.
 ///
 /// **What it deliberately leaves alone**: the prefs and the tray, read and written, and the
 /// tray's commit — rows in a database a page has too; and the lease's two commands, which are a
-/// mutex. A reader on a page can still review and file a tray.
+/// mutex. Those the web host passes through to this crate, unchanged.
 ///
-/// ⚠️ **The light app's web step deletes this function**, in the change that gives the crate's
-/// threads and clock a seam and the page its assets. Deleting it leaves the compiler naming
-/// both places above; `verdictText.ts`'s `SCANNER_NOT_IN_A_BROWSER_YET`, the two places the
-/// page reads it, and `ipc.test.ts`'s pin of this sentence go with it.
+/// `verdictText.ts`'s `SCANNER_NOT_IN_A_BROWSER_YET` is the same sentence, `ipc.test.ts` pins
+/// it, and the page reads it as it reads the web host's own two for a scanner it cannot offer
+/// (`src/lib/core/hostScanner.ts`): quietly, with no camera asked for and no frame sent.
 pub fn not_in_a_browser_yet() -> Result<(), String> {
     if !crate::platform::host::keeps_files() {
         return Err(NOT_IN_A_BROWSER_YET.to_owned());
@@ -481,8 +506,8 @@ impl ScannerState {
     /// The session, loading it on first use. Held for the length of one frame.
     ///
     /// **The one door to the session, so the one place it is shut on a page**
-    /// ([`not_in_a_browser_yet`]): nothing is loaded there, and nothing can reach a session that
-    /// would trap. A session loaded after a [`ScannerState::forget`] is offered the filters the
+    /// ([`not_in_a_browser_yet`]): nothing is loaded there — a page's session is its own
+    /// Worker's. A session loaded after a [`ScannerState::forget`] is offered the filters the
     /// last one was searching under, and they stay owed if it cannot take them ([`Owed`]).
     pub fn ensure(&self) -> Result<MutexGuard<'_, Option<Loaded>>, String> {
         not_in_a_browser_yet()?;

@@ -117,6 +117,27 @@ export const Fails: Story = {
 };
 
 /**
+ * **An update that can wait.** The scanner is running on the card data it has, and the host
+ * owes a newer copy of it — what a release that rebuilt the bundle leaves on a host that
+ * fetches from one. The offer says *newer*, and not that the scanner *needs* anything: it is
+ * scanning. The same box, the same button, one file.
+ */
+export const Update: Story = {
+  parameters: { fake: { fault: "scannerUpdate" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    await canvas.findByText("scanner_status: bundle loaded");
+    const offer = await canvas.findByRole("region", { name: "Scanner files" });
+    await expect(
+      within(offer).getByText("Newer card data is available — about 6 MB."),
+    ).toBeVisible();
+    await expect(within(offer).queryByText(/needs/)).not.toBeInTheDocument();
+    await expect(within(offer).getAllByRole("listitem")).toHaveLength(1);
+    await expect(within(offer).getByRole("button", { name: "Download" })).toBeVisible();
+  },
+};
+
+/**
  * A host that owes nothing — every desktop release build, whose binary carries the files, and
  * any install once they have landed. No box, no button, and no request: the component draws
  * nothing at all.

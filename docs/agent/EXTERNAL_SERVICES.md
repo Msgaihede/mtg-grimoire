@@ -14,6 +14,7 @@ construction).
 - [Scryfall and the price feeds](#scryfall-and-the-price-feeds)
 - [Scryfall's Tagger datasets](#scryfalls-tagger-datasets)
 - [Commander Spellbook's combo feed](#commander-spellbooks-combo-feed)
+- [The scanner's files, from this repository's GitHub release](#the-scanners-files-from-this-repositorys-github-release)
 - [Sync and the hosted relay](#sync-and-the-hosted-relay)
 - [Entitlements, removal and leaving](#entitlements-removal-and-leaving)
 - [The share Worker (read-only shared collection)](#the-share-worker-read-only-shared-collection)
@@ -67,6 +68,36 @@ pile hold_. Two questions, never one statement — and the card side is why `com
 prose columns (**corpus schema 2**, the corpus ladder's first rung ever) and why "this card is in
 no combo" and "we have never downloaded the list" have to be two different sentences.
 [commander-brackets.md](../reference/commander-brackets.md) has every measurement.
+
+## The scanner's files, from this repository's GitHub release
+
+**GitHub is an outbound host of the engine's since 2026-10-07, and the only one a launch never
+asks.** The scanner needs a bundle of card hashes and two OCR models — 18.1 MB together. A
+desktop release build carries them in its binary and asks nobody. An install that does not — a
+phone, a developer's build — is **offered** them: `scanner_assets` says which are owed and what
+they cost, and only a reader's press on that offer calls `scanner_assets_fetch`, which downloads
+them from `https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v<FORMAT_VERSION>/`
+— the prerelease `.github/workflows/scanner-bundle.yml` publishes weekly and
+`scripts/scanner-assets.mjs` already reads at build time. **Optional in the price feeds' sense**:
+nothing is fetched until the reader asks, and without them the scanner detects a card and names
+nothing rather than failing. GitHub answers with a redirect to its asset host
+(`release-assets.githubusercontent.com` when asked on 2026-10-07), which the client follows; an
+answer that did not arrive over HTTPS is refused, each file is checked before it is kept, and
+the request carries the app's `User-Agent` and nothing else — no token, the repository is public.
+**A browser cannot ask it**: a release download sends no `Access-Control-Allow-Origin`, so the
+engine refuses both commands on a page before any request, and the web host's source for these
+files is its own origin's to provide (the light app's step 7.5).
+[card-scanner.md](../reference/card-scanner.md) §10 has the rules and what was measured.
+
+**The web app asks GitHub nothing.** A release download sends no CORS header, so a browser
+cannot read it: the web build copies the same three files into its own static files
+(`npm run scanner:assets -- --web`, run by `ci.yml`'s and `release.yml`'s `web` jobs) and a
+reader's press fetches them from the app's own origin, `/scanner-assets/` — no new host in the
+hosting policy's `connect-src`. `npm run web:scanner-smoke` makes one request of its own, from
+Node and never from the browser: the picture of the one card its camera shows, from
+`cards.scryfall.io`, under the app's `User-Agent`, tried three times and kept — by
+`actions/cache` in CI, in the temp folder on a desk — so most runs ask nothing (card image
+bytes are not committed).
 
 ## Sync and the hosted relay
 
