@@ -314,6 +314,122 @@ async fn answered(
     grimoire_core::dispatch(&state, name, args, body).await
 }
 
+/// How many rows of `cards` one stretch of [`scanner_labels`] reads before it lets go of the
+/// connection and looks at its budget.
+///
+/// A stretch is a scan of that many rows of a table whose rows are kilobytes each: the whole
+/// of the dev corpus took 3.0 s through `node:sqlite` on a desk (2026-10-07), which is some
+/// 5 ms a stretch there. **Nobody has timed one in a browser**, where the same pages come
+/// through the OPFS pool; the figure is small so that a stretch several times slower is still
+/// inside one [`grimoire_core::feed::WORK_BUDGET`].
+pub const LABEL_PAGE: usize = 200;
+
+/// How many times [`scanner_labels`] reads the table before it gives up on a corpus that
+/// keeps changing under it: **twelve.**
+///
+/// The cookie a read watches is the whole corpus file's, and a full launch moves it **eight**
+/// times, not twice: four feeds each make a staged table and swap it — the cards, the oracle
+/// tags, the art tags and the combos (`schema::create_staging` / `swap_staging` and their three
+/// siblings). They are minutes apart on a first run and can be seconds apart on a later one,
+/// when every feed finds little to do; so a read can meet several, and three attempts — the
+/// first figure here, reasoned from the card sync alone — could all be spent inside one launch.
+/// Twelve covers every move a launch makes with four to spare, and each restart is bounded:
+/// it throws away one read of the table, seconds, and takes its turns like the first.
+pub const LABEL_ATTEMPTS: u32 = 12;
+// Eight moves a full launch. Held where a smaller number cannot be built.
+const _: () = assert!(LABEL_ATTEMPTS > 8);
+
+/// **The labels the browser's scanner needs, as bytes** — every printing's name, set, number,
+/// language, release date, oracle, artwork and finishes, read from `cards` and encoded as
+/// `card_scanner::labels` lays them out. The scanner's session runs in a Worker of its own on
+/// a module with no database (`crates/grimoire-scan`); this host holds the corpus, so the
+/// page asks here and hands what it gets across.
+///
+/// **No bytes at all when there is nothing to hand over**: no state yet, or a corpus with no
+/// card in it — a first run whose sync has not landed. The scanner's module reads no bytes as
+/// no labels and answers ids.
+///
+/// **Read through the state's one connection, a page at a time** ([`LABEL_PAGE`]). This host
+/// has one thread and one connection, and a scan of the whole table is seconds: so each
+/// stretch takes the connection, reads its rows and lets go, and the loop gives the event
+/// loop a turn whenever a [`Breather`] on the engine's work budget says one is owed — a
+/// command the page sent meanwhile is answered between two stretches, on the connection this
+/// just let go of. Nothing is held across a turn.
+///
+/// **A card sync that lands between two stretches starts the read over.** The swap drops
+/// `cards` and renames the staged table into its place (`schema::swap_staging`), so the rows
+/// before it and the rows after are two different corpora, and the new table's `rowid`s are
+/// its own. Each stretch reads the corpus's schema cookie (`PRAGMA schema_version`), which the
+/// swap's own transaction moves, and one that finds it moved throws away what was read. **Not
+/// the table's root page**, which was the first idea: both files are `auto_vacuum`, where a
+/// dropped table's root is refilled by whichever root is last in the file, so the new `cards`
+/// can stand on the very page the old one did. The cookie moves for any schema change — the
+/// staged table being made, a tag feed's swap — and a read that starts over for one of those
+/// has lost a second or two and nothing else. In rowid order, which is the order
+/// `Reference::load_labels` walks: the first printing of a card and the first label under an
+/// artwork follow it.
+///
+/// **An `Err` is not an empty corpus, and the page is told which it got.** A read that failed,
+/// or a corpus that changed under every one of [`LABEL_ATTEMPTS`], is a sentence: `glue` writes
+/// it to the console and **rejects** with it, where no bytes is an answer. Answered as no
+/// bytes — as it was until the review of 2026-10-07 — a read that gave up was a session built
+/// without names and called done, with nothing to say the names were there to be had a moment
+/// later. The page's scanner keeps the two apart (`src/lib/core/web/scanner.ts`): it says the
+/// sentence in its status and asks again when the status is next asked for.
+///
+/// [`Breather`]: grimoire_core::platform::timer::Breather
+pub async fn scanner_labels(state: Option<Arc<State>>) -> Result<Vec<u8>, String> {
+    match state {
+        Some(state) => labels_by_pages(&state, LABEL_PAGE, LABEL_ATTEMPTS).await,
+        None => Ok(Vec::new()),
+    }
+}
+
+async fn labels_by_pages(state: &State, page: usize, attempts: u32) -> Result<Vec<u8>, String> {
+    use card_scanner::labels::{read_page, Encoder};
+    use grimoire_core::platform::timer::Breather;
+
+    fn unread(e: impl std::fmt::Display) -> String {
+        format!("the scanner's labels could not be read: {e}")
+    }
+    let cookie = format!("PRAGMA {}.schema_version", grimoire_core::db::CORPUS);
+    let mut breather = Breather::new(grimoire_core::feed::WORK_BUDGET);
+    for _ in 0..attempts {
+        let mut encoder = Encoder::new();
+        let mut schema: Option<i64> = None;
+        let mut after = 0;
+        let changed = loop {
+            // One stretch: the guard is taken, used and dropped before anything is awaited.
+            let read = {
+                let conn = state.lock_db_read();
+                let now = conn
+                    .prepare_cached(&cookie)
+                    .and_then(|mut asked| asked.query_row([], |row| row.get::<_, i64>(0)))
+                    .map_err(unread)?;
+                if *schema.get_or_insert(now) != now {
+                    break true;
+                }
+                read_page(&conn, after, page, &mut encoder).map_err(unread)?
+            };
+            match read.last {
+                Some(last) if read.met == page => after = last,
+                _ => break false,
+            }
+            breather.breathe().await;
+        };
+        if !changed {
+            return Ok(if encoder.is_empty() {
+                Vec::new()
+            } else {
+                encoder.finish()
+            });
+        }
+    }
+    Err(unread(format_args!(
+        "the card database changed under each of {attempts} attempts"
+    )))
+}
+
 /// An event's payload as the text `listen`'s handler is called with.
 pub fn payload_text(payload: &Value) -> String {
     payload.to_string()
@@ -914,5 +1030,203 @@ mod tests {
         assert_eq!((cards_asked.calls(), oracle_asked.calls()), (2, 2));
         assert_eq!(art_asked.calls(), 1, "the art tags were not due");
         assert_eq!(count(&state, "SELECT count(*) FROM cards"), 3);
+    }
+
+    // ---- The scanner's labels -----------------------------------------------------------------
+
+    /// A printing's id, from one digit.
+    fn printing(n: u32) -> String {
+        format!("0000000{n}-0bba-4488-8f7a-6194544ce91e")
+    }
+
+    /// One row of `table` — `cards`, or the table a sync stages into — with the nine columns a
+    /// label is read from and the three others the table will not take a row without.
+    fn add_card(state: &State, table: &str, n: u32, name: &str, set: &str, finishes: &str) {
+        state
+            .lock_db()
+            .execute(
+                &format!(
+                    "INSERT INTO {table} (id, oracle_id, name, lang, released_at, set_code,
+                                          collector_number, layout, finishes, illustration_id, raw)
+                     VALUES (?1, 'b34bb2dc-c1af-4d77-b0b3-a0fb342a5fc6', ?2, 'en', '2024-08-02',
+                             ?3, ?4, 'normal', ?5, NULL, '{{}}')"
+                ),
+                (printing(n), name, set, n.to_string(), finishes),
+            )
+            .unwrap();
+    }
+
+    /// The names a labels file holds, in its order.
+    fn names(bytes: &[u8]) -> Vec<String> {
+        card_scanner::labels::decode(bytes)
+            .expect("the scanner's module must be able to read it")
+            .rows()
+            .map(|row| row.label.name)
+            .collect()
+    }
+
+    /// **Nothing to hand over is no bytes**, which the scanner's module reads as no labels: a
+    /// call before `open`, and a corpus whose first sync has not landed.
+    #[tokio::test]
+    async fn no_state_and_an_empty_corpus_hand_over_no_bytes() {
+        assert_eq!(scanner_labels(None).await, Ok(Vec::new()));
+        let dir = scratch("web-labels-empty");
+        let state = start(&dir, "x", Arc::new(Recording::default()))
+            .unwrap()
+            .state;
+        let _alone = grimoire_core::platform::alone::emulate();
+        assert_eq!(scanner_labels(Some(state)).await, Ok(Vec::new()));
+    }
+
+    /// **What crosses is what the crate's own decoder reads back** — every row, in the order
+    /// the table holds them, whatever the page — and a row `load_labels` would skip is skipped
+    /// without ending the read.
+    #[tokio::test]
+    async fn the_labels_are_the_tables_rows_in_its_order_whatever_the_page() {
+        let dir = scratch("web-labels");
+        let state = start(&dir, "x", Arc::new(Recording::default()))
+            .unwrap()
+            .state;
+        add_card(&state, "cards", 1, "Forest", "blb", r#"["nonfoil","foil"]"#);
+        add_card(&state, "cards", 2, "Lim-Dûl's Vault", "all", "[]");
+        state
+            .lock_db()
+            .execute(
+                "INSERT INTO cards (id, name, lang, set_code, collector_number, layout, raw)
+                 VALUES ('not-an-id', 'Nobody', 'en', 'x', '0', 'normal', '{}')",
+                [],
+            )
+            .unwrap();
+        add_card(&state, "cards", 3, "Shock", "m21", r#"["foil"]"#);
+        let _alone = grimoire_core::platform::alone::emulate();
+
+        let whole = scanner_labels(Some(Arc::clone(&state))).await.unwrap();
+        assert_eq!(names(&whole), ["Forest", "Lim-Dûl's Vault", "Shock"]);
+        let rows: Vec<_> = card_scanner::labels::decode(&whole)
+            .unwrap()
+            .rows()
+            .collect();
+        assert_eq!(
+            card_scanner::index::format_uuid(&rows[0].id),
+            printing(1),
+            "an id crosses as its sixteen bytes"
+        );
+        assert_eq!(rows[0].finishes, ["nonfoil", "foil"]);
+        assert_eq!(
+            (rows[0].label.set.as_str(), rows[0].label.number.as_str()),
+            ("blb", "1")
+        );
+        assert_eq!(rows[0].label.released, "2024-08-02");
+        assert!(rows[0].oracle.is_some() && rows[0].illustration.is_none());
+        assert!(rows[1].finishes.is_empty());
+
+        // A page of one row is five stretches — the skipped row is one of them — and the same
+        // bytes.
+        for page in [1, 2, 3, 4] {
+            assert_eq!(
+                labels_by_pages(&state, page, LABEL_ATTEMPTS).await.as_ref(),
+                Ok(&whole),
+                "a page of {page}"
+            );
+        }
+    }
+
+    /// **A read lets go of the connection at every turn, and a command sent meanwhile is
+    /// answered in one** — on one connection, on a thread standing in for a Worker, where a
+    /// read that kept its guard across a turn is a lock taken twice.
+    #[tokio::test]
+    async fn a_command_is_answered_between_two_stretches_of_a_read() {
+        let dir = scratch("web-labels-turns");
+        let state = start(&dir, "x", Arc::new(Recording::default()))
+            .unwrap()
+            .state;
+        for n in 1..=6 {
+            add_card(&state, "cards", n, &format!("Card {n}"), "blb", "[]");
+        }
+        let _alone = grimoire_core::platform::alone::emulate();
+        let _every = grimoire_core::platform::timer::turn_at_every_pass();
+
+        let done = Cell::new(false);
+        let read = async {
+            let bytes = labels_by_pages(&state, 1, LABEL_ATTEMPTS).await.unwrap();
+            done.set(true);
+            bytes
+        };
+        let asked = async {
+            // Behind the read's first turn, so it is in the middle of its pages.
+            grimoire_core::platform::timer::yield_to_host().await;
+            assert!(!done.get(), "the read finished without giving a turn");
+            parsed(&call(Some(Arc::clone(&state)), "deck_list", "null", None).await)
+        };
+        let (bytes, listed) = futures_util::join!(read, asked);
+        assert_eq!(listed, json!({ "ok": [] }));
+        assert_eq!(names(&bytes).len(), 6);
+    }
+
+    /// **A sync that swaps `cards` under a read starts the read over**: what is handed across
+    /// is the corpus that is there when the read ends, whole, and never the first rows of the
+    /// old one with the last rows of the new.
+    #[tokio::test]
+    async fn a_swap_under_a_read_starts_it_over_and_hands_across_the_new_corpus_whole() {
+        let dir = scratch("web-labels-swap");
+        let state = start(&dir, "x", Arc::new(Recording::default()))
+            .unwrap()
+            .state;
+        for n in 1..=5 {
+            add_card(&state, "cards", n, &format!("Old {n}"), "old", "[]");
+        }
+        let _alone = grimoire_core::platform::alone::emulate();
+        let _every = grimoire_core::platform::timer::turn_at_every_pass();
+
+        let read = labels_by_pages(&state, 1, LABEL_ATTEMPTS);
+        let sync = async {
+            // Two turns in: the read holds two of the old rows.
+            grimoire_core::platform::timer::yield_to_host().await;
+            grimoire_core::platform::timer::yield_to_host().await;
+            grimoire_core::schema::create_staging(&state.lock_db()).unwrap();
+            // The same ids under new names, so a mix of the two would still decode.
+            for n in 1..=4 {
+                add_card(&state, "cards_staging", n, &format!("New {n}"), "new", "[]");
+            }
+            grimoire_core::schema::swap_staging(&state.lock_db()).unwrap();
+        };
+        let (bytes, ()) = futures_util::join!(read, sync);
+        assert_eq!(names(&bytes.unwrap()), ["New 1", "New 2", "New 3", "New 4"]);
+    }
+
+    /// **A corpus that changes under every attempt is a sentence, never no bytes.** No bytes
+    /// is what an empty corpus answers, and the page builds a nameless session on it and is
+    /// done; a read that gave up has names to hand over a moment later, and has to say so.
+    #[tokio::test]
+    async fn a_corpus_that_changes_under_every_attempt_is_a_refusal_and_not_an_empty_one() {
+        let dir = scratch("web-labels-give-up");
+        let state = start(&dir, "x", Arc::new(Recording::default()))
+            .unwrap()
+            .state;
+        for n in 1..=5 {
+            add_card(&state, "cards", n, &format!("Card {n}"), "set", "[]");
+        }
+        let _alone = grimoire_core::platform::alone::emulate();
+        let _every = grimoire_core::platform::timer::turn_at_every_pass();
+
+        // One attempt, and a staged table made two turns into it: the cookie moves under it.
+        let read = labels_by_pages(&state, 1, 1);
+        let sync = async {
+            grimoire_core::platform::timer::yield_to_host().await;
+            grimoire_core::platform::timer::yield_to_host().await;
+            grimoire_core::schema::create_staging(&state.lock_db()).unwrap();
+        };
+        let (answer, ()) = futures_util::join!(read, sync);
+        assert_eq!(
+            answer,
+            Err(
+                "the scanner's labels could not be read: the card database changed under \
+                 each of 1 attempts"
+                    .to_owned()
+            ),
+        );
+        // The same corpus, left alone, is read whole — by the attempts a launch is given.
+        let whole = labels_by_pages(&state, 1, LABEL_ATTEMPTS).await.unwrap();
+        assert_eq!(names(&whole).len(), 5);
     }
 }

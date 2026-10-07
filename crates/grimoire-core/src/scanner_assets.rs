@@ -63,7 +63,11 @@
 //!
 //! **On a page both commands are refused**, in `scanner::NOT_IN_A_BROWSER_YET` — GitHub sends no
 //! CORS header, so a browser cannot ask this source at all, and a page keeps no files to put an
-//! answer in. The browser's source and storage are the light app's web step's.
+//! answer in. A browser's source is the app's own origin and its storage the browser's, and
+//! both are the web host's, answered on the page in front of this table
+//! (`src/lib/core/web/scanner.ts`, step 7.5) — in this module's shapes, with [`Piece`]'s keys
+//! and labels, the `PHASE_*` words, the two models' digests and [`ALREADY_FETCHING`]'s
+//! sentence, each of which `scanStore.test.ts` holds to this text.
 
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -305,7 +309,13 @@ pub struct Progress {
 /// **It asks the status, so it loads the session if nothing has yet** — the page asks
 /// `scanner_status` beside it, and the two share the one load. Refused on a page, where the
 /// status is ([`crate::scanner::not_in_a_browser_yet`]).
+///
+/// **Refused before [`Source::shipped`] is built.** That source holds a pointer to
+/// `TitleReader::from_bytes`, and a pointer taken is code kept; asked first, the refusal is a
+/// constant on `wasm32` and nothing after it — the source included — is in the web host's
+/// module. (An ordinary function, so an early return is enough here; [`fetch`] is not one.)
 pub fn owed(state: &State) -> Result<Owed, String> {
+    crate::scanner::not_in_a_browser_yet()?;
     owed_from(state, &Source::shipped())
 }
 
@@ -463,8 +473,18 @@ impl Refusal {
 ///
 /// The module doc has the rules. `Err` is one sentence a page can show; a file that had already
 /// landed when a later one failed stays landed, and the session is let go for it all the same.
+///
+/// **Refused on a page by `host::with_files`, not by a first line.** [`fetch_from`]'s own
+/// first line refuses too, and in an `async fn` that keeps nothing out of the web host's
+/// module: every state past the first `.await` stays reachable to the linker, and through
+/// them the download, the model check and the readers' whole OCR runtime (`with_files` has
+/// the measurement). So the body is handed over as a closure the page's arm never calls.
 pub async fn fetch(state: &Arc<State>) -> Result<Owed, String> {
-    fetch_from(state, Source::shipped()).await
+    crate::platform::host::with_files(
+        || fetch_from(state, Source::shipped()),
+        || Err(crate::scanner::NOT_IN_A_BROWSER_YET.to_owned()),
+    )
+    .await
 }
 
 async fn fetch_from(state: &Arc<State>, source: Source) -> Result<Owed, String> {

@@ -33,6 +33,14 @@ crate-type = ["cdylib", "rlib"]
 # behind that feature are not scaffolding (the core's manifest says which), and on in a shipped
 # module they would be an image fetcher that accepts loopback and an undo that finds nothing.
 grimoire-core = { path = "../grimoire-core" }
+# For one module: `card_scanner::labels`, which reads the nine columns a scanner's label is
+# made of and writes them down as bytes (`host::scanner_labels`). The browser's scanner is a
+# module of its own in a Worker of its own (`crates/grimoire-scan`) and has no database; this
+# host holds the corpus, so it hands the labels over. The core's own line for the crate less
+# `ocr`, which the core's turns on for this graph anyway — and nothing here reaches a session,
+# so fat LTO still drops the scanner from this module, readers and all. What the export keeps
+# is the encoder: measured at step 7.5, the root `Cargo.toml`'s `wasm` profile has the bytes.
+card-scanner = { path = "../card-scanner", features = ["corpus"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 # `Shared`, for the one `open` every caller of it awaits (`host::Once`). The core's version.

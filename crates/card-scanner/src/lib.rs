@@ -15,6 +15,7 @@ pub mod edges;
 pub mod filters;
 pub mod host;
 pub mod index;
+pub mod labels;
 pub mod lock;
 pub mod ocr;
 pub mod reference;

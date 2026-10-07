@@ -7464,12 +7464,20 @@ export interface ScannerOptions {
  *
  * The load order, first hit wins: a file in `data/scanner/`, then the copy compiled into the
  * binary, then nothing. `file` also covers a file that is there and did not parse.
+ *
+ * **`store` is a host with no folder** — the web host, which keeps what it downloaded in the
+ * browser's own storage and says `store` of all three assets, one it has not fetched yet
+ * included: `absent` promises a path a reader could put a file at, and a page has none. So a
+ * `store` asset is never told to be placed anywhere (`verdictText.ts`).
  */
-export type ScannerAssetSource = "file" | "embedded" | "absent";
+export type ScannerAssetSource = "file" | "embedded" | "absent" | "store";
 
 /** One file the scanner needs, and whether it is there — `Asset` in `crates/grimoire-core/src/scanner.rs`. */
 export interface ScannerAsset {
-  /** The file the load looked at in `data/scanner/` — named even for an embedded or absent one. */
+  /**
+   * The file the load looked at in `data/scanner/` — named even for an embedded or absent one.
+   * For a `store` asset, the address the host fetches it from.
+   */
   path: string;
   /** Something to load was there: the file, or for `embedded` the binary's copy. */
   present: boolean;

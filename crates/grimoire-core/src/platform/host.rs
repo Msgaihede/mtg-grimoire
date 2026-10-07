@@ -61,6 +61,45 @@ pub fn asks_as_a_page() -> bool {
     imp::page()
 }
 
+/// **Await `work` on a host that keeps files; on a page answer `refused`, and leave `work`
+/// out of the build.**
+///
+/// For an `async fn` whose whole body is a host with files' business — a download into a
+/// folder — and which a page must not carry the code of. **An early return does not do that
+/// in an `async fn`**, though it does in an ordinary one: `if !keeps_files() { return … }` is
+/// a constant on `wasm32` and the optimiser drops what follows it — in the function's *first*
+/// state. Every `.await` after it is another state of the same machine, entered by a number
+/// read back out of the future, and nothing proves to the linker that the number is never
+/// written; so the states stay, and so does everything they call. Measured on 2026-10-07: the
+/// scanner's asset fetch, refused on a page by exactly such a first line, kept its whole body
+/// in the web host's module and with it the OCR runtime its model check names — 9 961 355 B
+/// where the module is 6.9 MB without (`Cargo.toml`'s `[profile.wasm]` has the rule that
+/// broke).
+///
+/// Here the page's arm never *calls* `work`, so the closure's body is instantiated by nothing
+/// and whatever it alone reaches is not in the module at all — a fact about what is compiled,
+/// not about what an optimiser can see. A native thread standing in for a page
+/// ([`emulate_page`]) takes the same arm, so a test of the refusal runs on a desktop.
+pub async fn with_files<T, F>(work: impl FnOnce() -> F, refused: impl FnOnce() -> T) -> T
+where
+    F: std::future::Future<Output = T>,
+{
+    #[cfg(target_family = "wasm")]
+    {
+        // Dropped uncalled: nothing behind it is compiled into this target.
+        drop(work);
+        refused()
+    }
+    #[cfg(not(target_family = "wasm"))]
+    {
+        if keeps_files() {
+            work().await
+        } else {
+            refused()
+        }
+    }
+}
+
 /// Whether the calling thread is *standing in for* a page ([`emulate_page`]) rather than being
 /// one. Always `false` in a build that ships, and always `false` in a browser.
 ///
@@ -146,6 +185,37 @@ mod imp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `with_files` runs the work on a host with files and never on a page — where it answers
+    /// the refusal instead, without the work's closure having been called at all.
+    #[test]
+    fn work_for_a_host_with_files_is_never_called_on_a_page() {
+        use std::future::Future as _;
+
+        let run = |called: &std::cell::Cell<bool>| {
+            let work = || async {
+                called.set(true);
+                "worked"
+            };
+            let mut future = std::pin::pin!(with_files(work, || "refused"));
+            let waker = std::task::Waker::noop();
+            match future
+                .as_mut()
+                .poll(&mut std::task::Context::from_waker(waker))
+            {
+                std::task::Poll::Ready(answer) => answer,
+                std::task::Poll::Pending => unreachable!("nothing here waits"),
+            }
+        };
+        let called = std::cell::Cell::new(false);
+        assert_eq!(run(&called), "worked");
+        assert!(called.get());
+
+        let called = std::cell::Cell::new(false);
+        let _page = emulate_page();
+        assert_eq!(run(&called), "refused");
+        assert!(!called.get(), "a page ran the work it was to be kept from");
+    }
 
     /// A native host keeps files and asks as itself; a thread standing in for a page does
     /// neither, is alone, and is given everything back when the guard goes.

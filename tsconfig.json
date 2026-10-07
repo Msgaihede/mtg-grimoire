@@ -69,13 +69,19 @@
   // `vite.mobile.config.ts`. In this program for `share/`'s reason: a webview program with no
   // Node in it, resolving `@/*` through the same paths.
   //
-  // **Two files under `src/` are not in this program**: the web host's database Worker, which
-  // runs in a dedicated Worker and is checked by `tsconfig.web-worker.json`, and its service
-  // worker, checked by `tsconfig.web-sw.json` — each under the `WebWorker` lib. That lib and this
+  // **Three files under `src/` are not in this program**: the web host's database Worker and
+  // its card scanner's, which run in dedicated Workers and are checked by
+  // `tsconfig.web-worker.json`, and its service worker, checked by `tsconfig.web-sw.json` — each
+  // under the `WebWorker` lib. That lib and this
   // program's `DOM` declare the same globals differently, so each file is left out here rather
   // than given both. Nothing imports either — the page names them by URL — so the exclusion
   // holds; a module that did import one would pull it straight back in.
   "include": ["src", "share", "mobile"],
-  "exclude": [".claude", "src/lib/core/web/worker.ts", "src/lib/core/web/sw/sw.ts"],
+  "exclude": [
+    ".claude",
+    "src/lib/core/web/worker.ts",
+    "src/lib/core/web/scanWorker.ts",
+    "src/lib/core/web/sw/sw.ts"
+  ],
   "references": [{ "path": "./tsconfig.node.json" }]
 }

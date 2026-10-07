@@ -1,0 +1,61 @@
+[package]
+name = "grimoire-scan"
+# **The app's version**, as every workspace member's is: release-please bumps it with the
+# others (`release-please-config.json`), and `scripts/release-rule.test.mjs` goes red when a
+# member's parts from the app's. The module ships beside the web host's, from the same tag.
+version = "0.42.0"
+description = "MTG Grimoire, light: the card scanner as a module of its own, for a browser's Worker"
+authors = ["Markus Seerup"]
+license = "AGPL-3.0-or-later"
+edition = "2021"
+publish = false
+
+# **The browser's scanner** (the light app's phase 7, step 7.5): `card-scanner` compiled to
+# WASM and loaded by a dedicated Worker **of its own** — not the engine's Worker and not the
+# engine's module. `docs/reference/light-app.md` §11.2 has the four figures that decided it: a
+# panic ends the instance, so it must not be the instance that holds the database; a frame a
+# reader runs on blocks its Worker for 0.3–1.2 s; a WASM memory is never given back, so the
+# page ends the Worker when the reader leaves the Scanner; and it is a megabyte of module only
+# a reader who scans has to fetch.
+#
+# **The crate alone.** `card-scanner` with `ocr` and **never `corpus`**: `corpus` is SQLite,
+# and the labels this module needs arrive as bytes the engine encoded
+# (`card_scanner::labels`, `grimoire_web`'s `scanner_labels`). No `grimoire-core`, no `tokio`,
+# no `reqwest` — nothing here fetches, stores or waits. `cargo tree -p grimoire-scan` is the
+# check, and what `scripts/build-wasm.mjs` builds is `-p grimoire-scan` alone, so the features
+# the engine turns on for the same crate elsewhere in the workspace do not reach it.
+#
+# **A workspace member, where the frame bench beside the crate is not.** A member shares the
+# root lockfile — so its `wasm-bindgen` is the engine's by construction, the one CLI version
+# `scripts/build-wasm.mjs` checks fits both modules — and the root's `wasm` profile, and
+# `cargo test --workspace`, `clippy --workspace` and `cargo fmt -p grimoire-scan` reach it on a
+# desktop. The bench stays outside for its `--release` native runner and its feature switch.
+#
+# **Built with `-C target-feature=+simd128`, in a build tree of its own** — the flag is the
+# difference between a title read at 0.3 s and at 0.9–1.6 s (`rten`'s WASM kernels are compiled
+# only under it), and a tree of its own is how the flag never reaches the engine's artifacts.
+# `scripts/build-wasm.mjs` has both.
+#
+# **It builds natively as nearly nothing, on purpose**, as the web host does: only the
+# `#[wasm_bindgen]` shell (`src/glue.rs`) is gated to the target, so everything with a decision
+# in it is compiled and tested on a desktop.
+
+[lib]
+name = "grimoire_scan"
+# `cdylib` is the `.wasm` `wasm-bindgen` reads; `rlib` is what this crate's own tests link.
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+# `ocr`, and nothing else: the two readers. See above for why never `corpus`.
+card-scanner = { path = "../card-scanner", features = ["ocr"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# The root lockfile's, which is the version of the CLI `scripts/build-wasm.mjs` insists on.
+wasm-bindgen = "0.2"
+
+[dev-dependencies]
+# For the tests' frames: a card drawn on a table, as a JPEG. The scanner's own line, less the
+# two codecs a test never needs.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }

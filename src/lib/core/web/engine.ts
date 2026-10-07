@@ -8,8 +8,8 @@ import { answerOf, argsText, openedOf, readable } from "./protocol";
  * Worker nor a wasm module (`engine.test.ts`). `worker.ts` is the two handed in.
  */
 
-/** The engine's three calls — the module's exports, less its initialiser. */
-export type Glue = Pick<typeof GlueModule, "open" | "call" | "listen">;
+/** The engine's four calls — the module's exports, less its initialiser. */
+export type Glue = Pick<typeof GlueModule, "open" | "call" | "listen" | "scanner_labels">;
 
 /**
  * Run `make` at most once, **including for callers that arrive while the first is still
@@ -136,6 +136,26 @@ export function createEngine(
     }
   }
 
+  /**
+   * The labels for the scanner's Worker. **Refused exactly as a call is** — before an open, and
+   * for a database that did not open — and otherwise the engine's bytes, which may be none: an
+   * empty corpus is an answer, and the scanner then names nothing and says so.
+   */
+  async function labels(id: number): Promise<void> {
+    try {
+      if (opening === undefined) return post({ kind: "err", id, message: NOT_OPENED });
+      const { opened } = await opening;
+      if (opened.kind !== "ready") {
+        const why = opened.kind === "already-open" ? NOT_OPENED : opened.message;
+        return post({ kind: "err", id, message: why });
+      }
+      const glue = await loaded();
+      post({ kind: "labels", id, bytes: await glue.scanner_labels() });
+    } catch (error) {
+      post({ kind: "err", id, message: readable(error) });
+    }
+  }
+
   return {
     handle(message: ToWorker): Promise<void> {
       switch (message.kind) {
@@ -145,6 +165,8 @@ export function createEngine(
           );
         case "call":
           return call(message);
+        case "labels":
+          return labels(message.id);
       }
     },
   };

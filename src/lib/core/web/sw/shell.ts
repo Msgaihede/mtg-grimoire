@@ -1,4 +1,4 @@
-import { buildIdOf } from "../assets";
+import { buildIdOf, isScannerFile, isScannerModule } from "../assets";
 import { pictureOf, type PictureAsk } from "./pictures";
 
 /**
@@ -45,6 +45,11 @@ export const WORKER_FILE = "sw.js";
  * - **Not the worker itself**, which the browser keeps, and **not a file the host reads rather
  *   than serves** — `_headers` and its kind, and Vite's `.vite/` metadata. One 404 fails the
  *   whole install, by design (`serve.ts`), so a file listed here must be one the host answers.
+ * - **Not the card scanner's module, and not its three files** (`assets.ts`'s `isScannerFile`):
+ *   twenty-three megabytes that are fetched when a reader opens the Scanner and presses
+ *   Download, and by nobody before. The module is kept the first time it is fetched
+ *   ({@link routeFor}'s `kept`), and the three files by the page itself (`scanStore.ts`). The
+ *   scanner Worker's own script is a few kilobytes under `/assets/` and is shell like any chunk.
  *
  * Sorted, so the list — and with it the worker's bytes — does not move with the order a
  * filesystem happened to list a folder in.
@@ -52,6 +57,7 @@ export const WORKER_FILE = "sw.js";
 export function precacheList(files: readonly string[]): string[] {
   const served = files.filter((file) => {
     if (file === WORKER_FILE || file === "index.html") return false;
+    if (isScannerFile(file)) return false;
     const first = file.split("/")[0];
     return !first.startsWith("_") && !first.startsWith(".");
   });
@@ -85,6 +91,8 @@ export type Route =
   | { kind: "navigation" }
   /** One of this build's own files: cache first, by its path. */
   | { kind: "shell"; key: string }
+  /** A file of the card scanner's module: the scanner's cache first, and kept once fetched. */
+  | { kind: "kept"; key: string }
   | { kind: "picture"; ask: PictureAsk }
   /** Under the picture prefix and not a picture — or one asked for as a page: a 404, asked of nobody. */
   | { kind: "not-a-picture" };
@@ -114,6 +122,11 @@ export interface Routable {
  * `shell` when it is one of the build's (`/assets/`, `/wasm/` and whatever else was precached)
  * and the network's own answer otherwise. A page that asks for a script and is handed HTML fails
  * on a MIME error instead of a missing file, and that is the failure an update must not meet.
+ *
+ * **The card scanner's module is `kept`, not `shell`** — read before the `/wasm/` tree it lives
+ * in. It is in no build's precache, so a shell cache never has it; it is fetched the first time
+ * the scanner's Worker loads it and kept then, in a cache no deploy deletes, which is what lets
+ * a reader who has scanned once scan again with no network.
  */
 export function routeFor(request: Routable, origin: string, precached: ReadonlySet<string>): Route {
   if (request.method !== "GET") return { kind: "passthrough" };
@@ -136,6 +149,7 @@ export function routeFor(request: Routable, origin: string, precached: ReadonlyS
   // preview and the host serve the document by); a file opened in a tab of its own is the file.
   const place = !path.slice(path.lastIndexOf("/") + 1).includes(".");
   if (request.mode === "navigate" && place) return { kind: "navigation" };
+  if (isScannerModule(path)) return { kind: "kept", key: path };
   if (path.startsWith("/assets/") || path.startsWith("/wasm/") || precached.has(path)) {
     return { kind: "shell", key: path };
   }

@@ -259,9 +259,10 @@ jobs:
       #
       # **All three run from the repository root, over every workspace member** (2026-10-02):
       # the app in `src-tauri`, the engine in `crates/grimoire-core`, the light app's Android
-      # host in `mobile/src-tauri` and its web host in `crates/grimoire-web`. This is the only
-      # job that runs the core's tests, and the only one that compiles it for Windows — `core`
-      # below builds it for the other two targets and runs nothing.
+      # host in `mobile/src-tauri`, its web host in `crates/grimoire-web` and the browser's
+      # scanner in `crates/grimoire-scan`. This is the only job that runs the core's tests, and
+      # the only one that compiles it for Windows — `core` below builds it for the other two
+      # targets and runs nothing.
       #
       # **`fmt` names the members one by one and never `--all`**, which follows path
       # dependencies into `crates/card-scanner` — not a member, and not rustfmt-clean (below).
@@ -269,7 +270,7 @@ jobs:
       # **So a new member is a new `-p` here**, and in `npm run lint:rust`, or nothing formats it.
       - name: cargo fmt
         if: matrix.os == 'ubuntu-22.04'
-        run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web --check
+        run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan --check
 
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -727,10 +728,37 @@ jobs:
       - name: Clippy, the web host for wasm32
         run: cargo clippy --lib -p grimoire-web --locked --target wasm32-unknown-unknown -- -D warnings
 
-      # `cargo build -p grimoire-web --lib --target wasm32-unknown-unknown --profile wasm
-      # --locked`, then `wasm-bindgen --target web` into `dist-wasm/`.
-      - name: Build the module
+      # **The scanner's module, the same way** (phase 7, step 7.5): `crates/grimoire-scan` is
+      # the browser's card scanner, a module of its own in a Worker of its own, and its
+      # `#[wasm_bindgen]` shell is gated to this target as the web host's is. **With the flag
+      # it ships with and in the build tree it ships from** — `scripts/build-wasm.mjs` has
+      # both, and why: `simd128` is this module's alone, and a tree of its own is what keeps a
+      # build with the flag and a build without from throwing each other's artifacts away.
+      # `-p` and nothing beside it, so the features are this crate's graph's — `card-scanner`
+      # with `ocr` and no `corpus`, and so no SQLite.
+      - name: Clippy, the scanner's module for wasm32
+        env:
+          RUSTFLAGS: -C target-feature=+simd128
+        run: cargo clippy --lib -p grimoire-scan --locked --target wasm32-unknown-unknown --target-dir src-tauri/target/scanner-simd128 -- -D warnings
+
+      # Both modules: `cargo build -p grimoire-web --lib --target wasm32-unknown-unknown
+      # --profile wasm --locked` and the same for `grimoire-scan` with `simd128`, then
+      # `wasm-bindgen --target web` over each, into `dist-wasm/` and `dist-wasm/scanner/`. The
+      # script holds each to its exports and to the target features it must and must not name.
+      - name: Build the modules
         run: npm run web:wasm
+
+      # **The card scanner's three files, into `dist-wasm/scanner-assets/`** (step 7.5): the
+      # bundle of card hashes and the two OCR models, from this repository's own public release
+      # `scanner-bundle-v<FORMAT_VERSION>` — no secret, 18 MB — with the manifest the page reads
+      # them by. A browser cannot ask that release itself (a release download sends no CORS
+      # header), so the web build serves them from the app's origin. After the modules, because
+      # the folder is theirs; before the page, because the build copies what is there. The
+      # script exits non-zero on any failure, and the build below is told the files are
+      # **required**: a web app built without its scanner would pass every check but the one
+      # that scans.
+      - name: Fetch the scanner's files
+        run: npm run scanner:assets -- --web
 
       # `tsc` over the page's program and the Worker's own, then the light entry in `web` mode
       # into `dist-web/`, with the engine from `dist-wasm/` emitted under `dist-web/wasm/` in a
@@ -738,6 +766,8 @@ jobs:
       # a build whose engine is not there.
       - name: Build the page
         id: build
+        env:
+          GRIMOIRE_SCANNER_ASSETS: required
         run: npm run web:build
 
       # Every `.wasm` the bundle holds, raw and as a server would send it, and the bundle
@@ -803,6 +833,30 @@ jobs:
       - name: Open the built app in headless Chrome
         timeout-minutes: 10
         run: npm run web:smoke
+
+      # **The scanner's own module, in a real browser** (step 7.5): the same bundle on the
+      # desktop face, a camera that is a file showing one real card, and the run from the
+      # offer's Download to the card filed in the collection — then offline, a staged fault, and
+      # the Worker gone when the Scanner is left (`scripts/web-scanner-smoke.mjs` has the
+      # eleven checks). Under the shipped policy, so a second Worker the policy refuses is red
+      # here, and again on the phone face at 360px in a profile of its own. **One request
+      # leaves the runner that the first smoke's rule would forbid**: the card's picture,
+      # fetched by the script from Scryfall's CDN under the app's User-Agent — card image bytes
+      # are never committed — and never by the browser. **Bounded**, for the first smoke's
+      # reason.
+      # The card's picture, kept between runs so that most runs ask Scryfall nothing: keyed on
+      # the card, whose scan does not change. A miss is the script's to fill — three tries — and
+      # a picture it still cannot get fails the job, as it should: a skip would scan nothing.
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/scan-card
+          key: scan-card-1920dae4-fb92-4f19-ae4b-eb3276b8dac7
+
+      - name: Scan a card in headless Chrome
+        timeout-minutes: 10
+        env:
+          SCAN_CARD_CACHE: ${{ runner.temp }}/scan-card
+        run: npm run web:scanner-smoke
 
       # **Live sync, two browsers and the relay's own code** (phase 6, step 6.3):
       # `scripts/web-sync-smoke.mjs` starts `relay/` under workerd (`wrangler dev --local`, a

@@ -188,6 +188,27 @@ pub async fn call(name: String, args: String, body: Option<Vec<u8>>) -> String {
     host::call(state, &name, &args, body).await
 }
 
+/// `scanner_labels(): Promise<Uint8Array>` — every printing's label, as the bytes the
+/// scanner's own module attaches (`card_scanner::labels`; [`host::scanner_labels`] has what
+/// they are and how they are read). The page hands them to the scanner's Worker, which has no
+/// database of its own.
+///
+/// **No bytes when there is nothing to hand over** — before [`open`] has answered `ready`,
+/// or while the corpus has no card in it. **Rejected, with one sentence and a line in the
+/// console, when the read failed or gave up** on a corpus that kept changing under it: that
+/// is not an empty corpus, and the page must be able to tell (`host::scanner_labels`). It
+/// takes its turns of the event loop as a download's ingest does, so a `call` sent meanwhile
+/// is answered between two of its stretches.
+#[wasm_bindgen]
+pub async fn scanner_labels() -> Result<Vec<u8>, JsValue> {
+    // Cloned out, as `call` clones it: no borrow of the slot is held across an `.await`.
+    let state = STATE.with(|state| state.borrow().clone());
+    host::scanner_labels(state).await.map_err(|sentence| {
+        warn(&sentence);
+        JsValue::from_str(&sentence)
+    })
+}
+
 /// `listen(handler: (name: string, payload: string) => void): void` — where the engine's
 /// events go from now on. `payload` is JSON text.
 ///

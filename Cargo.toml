@@ -43,7 +43,14 @@
 # falls back to resolver 1, which unifies features across targets — and the core's WASM build
 # asks `rusqlite` for a different feature set than the desktop's does.
 resolver = "2"
-members = ["src-tauri", "crates/grimoire-core", "mobile/src-tauri", "crates/grimoire-web"]
+# **`crates/grimoire-scan` is the scanner as a module of its own for a browser** (the light
+# app's step 7.5): `card-scanner` with `ocr` and without `corpus`, and nothing of the engine.
+# A member for the lockfile — one `wasm-bindgen` for both of the web host's modules — and for
+# the `wasm` profile below. ⚠️ **It is only that crate alone when it is built alone**:
+# `cargo build -p grimoire-scan` resolves the features of its own graph, while any build that
+# names the workspace unifies them with the engine's, which asks the scanner for `corpus` and
+# with it SQLite. `scripts/build-wasm.mjs` builds it with `-p`, in a build tree of its own.
+members = ["src-tauri", "crates/grimoire-core", "mobile/src-tauri", "crates/grimoire-web", "crates/grimoire-scan"]
 exclude = ["crates/card-scanner"]
 
 # **The scanner's crates at full optimisation in a debug build.** The `image`/`imageproc`
@@ -106,7 +113,11 @@ opt-level = 3
 # - `lto = "fat"` and `codegen-units = 1` — one unit for the whole graph, so what no export
 #   reaches is dropped rather than carried. **That is the whole of how the card scanner stays
 #   out of this module**: the core links it on every target, no command in the table reaches
-#   its session, and so its detection, its hashes, `ocrs`, the eleven `rten*` crates and the
+#   its session *on this target* — since step 7.3 the table names the scanner's commands, and
+#   each is shut on a page by a refusal that is a constant here (`scanner::not_in_a_browser_yet`;
+#   an `async fn` needs `platform::host::with_files` for the same effect, which step 7.5
+#   measured: 9 961 418 B with the OCR runtime still linked, 7 030 970 B without) — and so its
+#   detection, its hashes, `ocrs`, the eleven `rten*` crates and the
 #   image codecs are all dropped at link time — read off the name section on 2026-10-04, what
 #   is left of the scanner is 35 583 B of code: the review tray's and the preferences' reads
 #   and writes, which a browser does call, and the drop glue of what they name. ⚠️ **An export is a root, and that is how it went wrong
@@ -148,6 +159,16 @@ opt-level = 3
 # module at 3 is 7 729 043 B. **The table is of the tree the four were timed on; the module
 # that step shipped is 6 767 338 B, 2 372 783 B through `gzip -9`** — the same profile, with
 # the step's last engine changes in it — and was not timed again.
+#
+# **Two modules are built with this profile since step 7.5 (2026-10-07)**, and the second is
+# where the scanner runs: `crates/grimoire-scan`, the crate alone in a Worker of its own, with
+# `-C target-feature=+simd128` from `scripts/build-wasm.mjs`'s environment and never from here
+# or from `.cargo/config.toml` — the engine's module has to load in a browser without it.
+# Measured that day, no `wasm-opt`, names stripped: **the scanner's module is 4 473 528 B,
+# 985 315 B through brotli at quality 11**. **The engine's went from 6 871 580 B to
+# 6 902 679 B** (1 659 056 B to 1 664 011 B through brotli) for one new export,
+# `scanner_labels` — the labels' encoder, a paged read of `cards` and the glue of an async
+# export; its classes are still `reqwest`'s three, so nothing of the session came with it.
 [profile.wasm]
 inherits = "release"
 lto = "fat"

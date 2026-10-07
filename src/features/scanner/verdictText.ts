@@ -1,4 +1,12 @@
-import type { ScannerRule, ScannerStanding, ScannerStatus, ScannerTracked, ScannerVerdict } from "./types";
+import { HOST_SCANNER_UNAVAILABLE } from "@/lib/core/hostScanner";
+import type {
+  ScannerAsset,
+  ScannerRule,
+  ScannerStanding,
+  ScannerStatus,
+  ScannerTracked,
+  ScannerVerdict,
+} from "./types";
 
 export const CARD_ASPECT = 63 / 88;
 /** The distance gate, as a fraction of the descriptor's bits — `TrackerOptions::max_normalized`. */
@@ -21,21 +29,29 @@ export const SCANNER_OPENS_HERE_LATER =
   "It will open here once that window closes or leaves the scanner.";
 
 /**
- * What the scanner's session answers on a host that is a web page — `scanner::NOT_IN_A_BROWSER_YET`,
- * the same string, pinned by `ipc.test.ts`. The engine refuses the status, a frame, a reset, a
- * capture and a filter push with it there, because the `card-scanner` crate's threads and clock
- * trap in a browser; the prefs, the tray and the lease answer as anywhere.
- *
- * **The page matches on it for one reason: to stay quiet.** A refused filter push is otherwise an
- * answer — the view counts its filters as settled, opens the camera and sends frames, each of
- * which would be refused in turn, as fast as the page can encode them. `useScannerPrefs` reads
- * this one as "there is no session here" instead, so no camera is asked for and no frame goes out,
- * and `ScannerPage` draws the sentence where the picture would be.
- *
- * ⚠️ **Goes with `scanner::not_in_a_browser_yet`**, which the light app's web step deletes: this
- * constant, `useScannerPrefs`' `unavailable`, and the line in `ScannerPage` that draws it.
+ * What the engine answers when a scanner session is asked of it on a web page —
+ * `scanner::NOT_IN_A_BROWSER_YET`, the same string, pinned by `ipc.test.ts`. A page's session is
+ * a Worker of its own since the light app's step 7.5, and the web host answers the session's
+ * commands in front of the engine, so no reader should meet this: it is the engine's backstop
+ * for a call that reached it anyway.
  */
 export const SCANNER_NOT_IN_A_BROWSER_YET = "The scanner does not run in a browser yet.";
+
+/**
+ * **Whether a refusal is the host saying it has no scanner to offer at all** — in its own
+ * words, which this only knows the list of: the engine's sentence above, and the two a web host
+ * says for a browser that cannot run the scanner's module and for a build made without its
+ * files (`@/lib/core/hostScanner`, which that host imports its sentences from).
+ *
+ * **The page matches on them for one reason: to stay quiet.** A refused filter push is otherwise
+ * an answer — the view counts its filters as settled, opens the camera and sends frames, each
+ * of which would be refused in turn, as fast as the page can encode them. `useScannerPrefs`
+ * reads one of these as "there is no session here" instead, so no camera is asked for and no
+ * frame goes out, and `ScannerPage` draws the sentence where the picture would be.
+ */
+export function scannerUnavailable(sentence: string): boolean {
+  return sentence === SCANNER_NOT_IN_A_BROWSER_YET || HOST_SCANNER_UNAVAILABLE.includes(sentence);
+}
 
 /**
  * `db::BUSY`, verbatim — what every write answers while a sync holds the write connection.
@@ -149,6 +165,18 @@ function didNotLoad(file: string, path: string, error: string): string {
 }
 
 /**
+ * The one sentence a `store` asset can earn: **it is there and did not load.** A host that
+ * keeps the files in a store of its own has no folder to name and nothing a restart reads, so
+ * neither is said; and one it does not hold says nothing here at all — the offer to download it
+ * stands where a sentence would, and where the host cannot make that offer either, the frame's
+ * own refusal says why.
+ */
+function storeSentence(what: string, asset: ScannerAsset, offered: boolean): string | null {
+  if (asset.loaded || offered || !asset.present) return null;
+  return `${what} did not load: ${asset.error ?? "no reason given"}.`;
+}
+
+/**
  * What the Match panel says instead of, or under, a card's name.
  *
  * **Three states, not two, and `loaded` alone cannot tell them apart** — which is what the
@@ -174,6 +202,12 @@ function didNotLoad(file: string, path: string, error: string): string {
 export function bundleSentence(status: ScannerStatus | null, offered = false): string | null {
   if (status === null) return null;
   const bundle = status.bundle;
+  if (bundle.source === "store") {
+    if (!bundle.loaded) return storeSentence("The scanner's card data", bundle, offered);
+    return bundle.error === null
+      ? null
+      : `Card names didn't load: ${bundle.error}. Matches will show IDs.`;
+  }
   if (bundle.source === "embedded" && bundle.loaded && bundle.error === null) return null;
   if (offered && !bundle.loaded) return null;
   if (!bundle.present) {
@@ -204,6 +238,9 @@ export function modelsSentence(status: ScannerStatus | null, offered = false): s
   const rec = status.recognition_model;
   if (det.loaded && rec.loaded) return null;
   if (offered) return null;
+  if (det.source === "store") {
+    return storeSentence("The scanner's text readers", det.present ? det : rec, false);
+  }
   if (!det.present || !rec.present) {
     return `No OCR models. Put \`${DETECTION_FILE}\` and \`${RECOGNITION_FILE}\` at ${det.path}. ${RESTART}`;
   }

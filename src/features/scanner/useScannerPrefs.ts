@@ -6,7 +6,7 @@ import type { ScanFilters, ScannerPrefs } from "./types";
 import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 import {
   refusalPasses,
-  SCANNER_NOT_IN_A_BROWSER_YET,
+  scannerUnavailable,
   SCANNER_OPEN_ELSEWHERE,
 } from "./verdictText";
 
@@ -170,7 +170,8 @@ function current(qc: QueryClient): ScannerPrefs {
  * lease, taken.
  *
  * **A push refused because the host has no session at all is not answered either** —
- * `SCANNER_NOT_IN_A_BROWSER_YET`, a web page until the light app's web step. Counted as an
+ * `scannerUnavailable`: a browser that cannot run the scanner's module, a build made without
+ * its files. Counted as an
  * ordinary refusal it settled the filters, `loaded` went true, the camera opened and the pump
  * sent frame after frame into the same refusal. So it settles nothing, reverts nothing and is
  * never sent again; `unavailable` carries the sentence for the page to draw in place of the
@@ -302,7 +303,7 @@ export function useScannerPrefs(): ScannerPrefsState {
               elsewhereRef.current = setTimeout(send, SCANNER_ELSEWHERE_POLL_MS);
               return;
             }
-            if (sentence === SCANNER_NOT_IN_A_BROWSER_YET) {
+            if (scannerUnavailable(sentence)) {
               // No session on this host: not an answer about these filters, and not one a wait
               // changes — see the hook's doc. Nothing settles, so `loaded` stays false.
               if (mountedRef.current) setUnavailable(sentence);
