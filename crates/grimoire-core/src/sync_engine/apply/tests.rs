@@ -5202,8 +5202,8 @@ fn a_higher_copy_moved_to_the_root_onto_one_the_peer_has_not_sent_ends_as_one_ro
     a_copy_moved_onto_one_the_peer_has_not_sent(false, false);
 }
 
-/// **The same for a wish**: the wishlist's grain carries the folder too, and `refile_wish` is its
-/// merge.
+/// **The same for a wish**: the wishlist's grain carries the folder too, and
+/// `wishlist::fold_wish` is its merge.
 fn a_wish_moved_onto_one_the_peer_has_not_sent(moved_lower: bool) {
     let (a, b) = (paired("dev-a"), paired("dev-b"));
     let (mut ma, mut mb) = (0, 0);
@@ -5378,6 +5378,463 @@ fn a_copy_moved_to_where_the_page_deletes_a_copy_is_not_folded_into_it() {
         assert_eq!(copies_at_root(conn), 0, "{who}");
     }
     assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
+// ---------------------------------------------------------------------------------------
+// An edit onto a grain a row of this device's own already holds folds the two as well
+// ---------------------------------------------------------------------------------------
+
+/// [`a_copy_wearing`], in `condition` — the third term of the collection's grain.
+fn a_copy_graded(
+    conn: &Connection,
+    uid: &str,
+    condition: &str,
+    folder: Option<i64>,
+    quantity: i64,
+) {
+    conn.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,sync_uid,
+             created_at,updated_at)
+         VALUES ('c1','lea','1','en','nonfoil',?1,?2,?3,?4,unixepoch(),unixepoch())",
+        rusqlite::params![condition, quantity, folder, uid],
+    )
+    .unwrap();
+}
+
+/// Grade the copy wearing `uid` on `conn`: one sparse put naming `condition` and nothing else.
+fn grade_copy(conn: &Connection, uid: &str, condition: &str) {
+    conn.execute(
+        "UPDATE collection_entries SET condition = ?1 WHERE sync_uid = ?2",
+        [condition, uid],
+    )
+    .unwrap();
+}
+
+fn conditions(conn: &Connection) -> Vec<String> {
+    let mut stmt = conn
+        .prepare("SELECT condition FROM collection_entries ORDER BY condition")
+        .unwrap();
+    let rows = stmt.query_map([], |r| r.get(0)).unwrap();
+    rows.map(Result::unwrap).collect()
+}
+
+/// **A copy the sender edited onto the grain of a copy this device has not sent yet meets it as
+/// one row, as it does on the sender** — [`a_copy_moved_onto_one_the_peer_has_not_sent`] with no
+/// move in it. Both hold `c`, near mint; `b` adds `u`, the same printing lightly played, where
+/// `a` — not having heard — regrades `c` to lightly played. The edit is a sparse put naming only
+/// `condition`, so `b` finds `c` by its uid, asks no grain, and `idx_collection_grain` is the
+/// first to say `u` is there: the group was dropped with an `error_log` row, while on `a` `u`'s
+/// insert grain-matched `c`. One row of three there, two rows here.
+///
+/// `and_moved` has `a` drag `c` into the binder `u` is filed in as well, in the same page: one
+/// group naming a field of the grain **and** its folder, which lands on a grain neither names
+/// alone.
+///
+/// **What makes it red**: `write_group` answering the grain's refusal of such an edit with
+/// `Why::Unbuildable` — which is also what filing the row as it stands does, since the row in the
+/// way holds the *new* condition and a merge that asks about the old one finds nothing.
+fn a_copy_edited_onto_one_the_peer_has_not_sent(edited_lower: bool, and_moved: bool) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    let (c, u) = if edited_lower {
+        (LOWER, HIGHER)
+    } else {
+        (HIGHER, LOWER)
+    };
+    let other = binder(&a, "Other", None);
+    a_copy_graded(&a, c, "NM", None, 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let _ = since(&b, &mut mb);
+    let filed = and_moved.then(|| binder_named(&b, "Other"));
+    a_copy_graded(&b, u, "LP", filed, 2);
+
+    grade_copy(&a, c, "LP");
+    if and_moved {
+        drag_copy(&a, c, Some(other));
+    }
+    let page = since(&a, &mut ma);
+    let fields: Vec<&String> = page.iter().flat_map(|op| op.fields.keys()).collect();
+    let parents: Vec<&String> = page.iter().flat_map(|op| op.parents.keys()).collect();
+    assert!(
+        page.iter().all(|op| op.uid == c)
+            && fields == ["condition"]
+            && parents.len() == usize::from(and_moved),
+        "the premise: a sparse edit of c's condition, and its move where asked: {page:?}"
+    );
+
+    let rb = apply(&b, &page).unwrap();
+    assert_eq!(unwritten(rb), (0, 0), "b holds {:?}", qty(&b));
+    let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+    assert_eq!(unwritten(ra), (0, 0));
+    for (who, conn) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(conn), (1, 3), "{who} does not hold one row of three");
+        assert_eq!(uids_of_copies(conn), vec![Some(LOWER.to_owned())], "{who}");
+        assert_eq!(conditions(conn), ["LP"], "{who}");
+        assert_eq!(
+            copies_at_root(conn),
+            i64::from(!and_moved),
+            "{who} holds the row in the wrong place"
+        );
+    }
+    assert!(
+        skips(&a).is_empty() && skips(&b).is_empty(),
+        "{:?} {:?}",
+        skips(&a),
+        skips(&b)
+    );
+}
+
+#[test]
+fn a_lower_copy_edited_onto_one_the_peer_has_not_sent_ends_as_one_row() {
+    a_copy_edited_onto_one_the_peer_has_not_sent(true, false);
+}
+
+#[test]
+fn a_higher_copy_edited_onto_one_the_peer_has_not_sent_ends_as_one_row() {
+    a_copy_edited_onto_one_the_peer_has_not_sent(false, false);
+}
+
+#[test]
+fn a_lower_copy_edited_and_moved_onto_one_the_peer_has_not_sent_ends_as_one_row() {
+    a_copy_edited_onto_one_the_peer_has_not_sent(true, true);
+}
+
+#[test]
+fn a_higher_copy_edited_and_moved_onto_one_the_peer_has_not_sent_ends_as_one_row() {
+    a_copy_edited_onto_one_the_peer_has_not_sent(false, true);
+}
+
+/// `(sync_uid, filed, quantity, oracle_id, card_id, preferred_finish)` of every wish on `conn`.
+type Wish = (
+    Option<String>,
+    bool,
+    i64,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+fn wishes(conn: &Connection) -> Vec<Wish> {
+    conn.prepare(
+        "SELECT sync_uid, folder_id IS NOT NULL, quantity, oracle_id, card_id, preferred_finish
+           FROM wishlist_entries ORDER BY sync_uid",
+    )
+    .unwrap()
+    .query_map([], |r| {
+        Ok((
+            r.get(0)?,
+            r.get(1)?,
+            r.get(2)?,
+            r.get(3)?,
+            r.get(4)?,
+            r.get(5)?,
+        ))
+    })
+    .unwrap()
+    .map(Result::unwrap)
+    .collect()
+}
+
+/// **The same for a wish, over each of the three fields its grain is made of** — the printing it
+/// is pinned to, the finish it prefers, and the card it names. `b`'s unsent wish `u` already says
+/// what `a`'s edit makes `c` say; `and_moved` files `u` in a wishlist folder and has `a` move `c`
+/// there in the same page.
+fn a_wish_edited_onto_one_the_peer_has_not_sent(edited_lower: bool, and_moved: bool) {
+    for (column, new) in [
+        ("preferred_finish", "foil"),
+        ("card_id", "c9"),
+        ("oracle_id", "o9"),
+    ] {
+        let (a, b) = (paired("dev-a"), paired("dev-b"));
+        let (mut ma, mut mb) = (0, 0);
+        let (c, u) = if edited_lower {
+            (LOWER, HIGHER)
+        } else {
+            (HIGHER, LOWER)
+        };
+        let wish = |conn: &Connection, uid: &str, edited: bool, filed: bool, quantity: i64| {
+            let said = |term: &str| (edited && term == column).then_some(new);
+            conn.execute(
+                "INSERT INTO wishlist_entries
+                    (oracle_id, card_id, preferred_finish, name, quantity, folder_id, sync_uid,
+                     created_at, updated_at)
+                 VALUES (coalesce(?1, 'o1'), ?2, ?3, 'Bolt', ?4,
+                         CASE WHEN ?5 THEN (SELECT id FROM wishlist_folders WHERE name = 'Wants')
+                         END,
+                         ?6, unixepoch(), unixepoch())",
+                rusqlite::params![
+                    said("oracle_id"),
+                    said("card_id"),
+                    said("preferred_finish"),
+                    quantity,
+                    filed,
+                    uid
+                ],
+            )
+            .unwrap();
+        };
+        a.execute(
+            "INSERT INTO wishlist_folders (name, sort_order, created_at, updated_at)
+             VALUES ('Wants', 0, unixepoch(), unixepoch())",
+            [],
+        )
+        .unwrap();
+        let wants = a.last_insert_rowid();
+        wish(&a, c, false, false, 1);
+        apply(&b, &since(&a, &mut ma)).unwrap();
+        let _ = since(&b, &mut mb);
+        wish(&b, u, true, and_moved, 2);
+
+        a.execute(
+            &format!("UPDATE wishlist_entries SET {column} = ?1 WHERE sync_uid = ?2"),
+            [new, c],
+        )
+        .unwrap();
+        if and_moved {
+            let moved: i64 = a
+                .query_row("SELECT id FROM wishlist_entries", [], |r| r.get(0))
+                .unwrap();
+            crate::wishlist_folders::set_wish_folder(&a, moved, Some(wants)).unwrap();
+        }
+        let page = since(&a, &mut ma);
+        let fields: Vec<&String> = page.iter().flat_map(|op| op.fields.keys()).collect();
+        assert!(
+            page.iter().all(|op| op.uid == c) && fields == [column],
+            "the premise: a sparse edit of c's {column}: {page:?}"
+        );
+
+        let rb = apply(&b, &page).unwrap();
+        assert_eq!(unwritten(rb), (0, 0), "{column}: b holds {:?}", wishes(&b));
+        let ra = apply(&a, &since(&b, &mut mb)).unwrap();
+        assert_eq!(unwritten(ra), (0, 0), "{column}");
+        let said = |term: &str| (term == column).then(|| new.to_owned());
+        let one = (
+            Some(LOWER.to_owned()),
+            and_moved,
+            3,
+            said("oracle_id").or(Some("o1".to_owned())),
+            said("card_id"),
+            said("preferred_finish"),
+        );
+        for (who, conn) in [("a", &a), ("b", &b)] {
+            assert_eq!(wishes(conn), vec![one.clone()], "{column}: {who}");
+        }
+        assert!(
+            skips(&a).is_empty() && skips(&b).is_empty(),
+            "{column}: {:?} {:?}",
+            skips(&a),
+            skips(&b)
+        );
+    }
+}
+
+#[test]
+fn a_lower_wish_edited_onto_one_the_peer_has_not_sent_ends_as_one_wish() {
+    a_wish_edited_onto_one_the_peer_has_not_sent(true, false);
+}
+
+#[test]
+fn a_higher_wish_edited_onto_one_the_peer_has_not_sent_ends_as_one_wish() {
+    a_wish_edited_onto_one_the_peer_has_not_sent(false, false);
+}
+
+#[test]
+fn a_lower_wish_edited_and_moved_onto_one_the_peer_has_not_sent_ends_as_one_wish() {
+    a_wish_edited_onto_one_the_peer_has_not_sent(true, true);
+}
+
+#[test]
+fn a_higher_wish_edited_and_moved_onto_one_the_peer_has_not_sent_ends_as_one_wish() {
+    a_wish_edited_onto_one_the_peer_has_not_sent(false, true);
+}
+
+/// **What rides with the edit is applied, and once**:
+/// [`a_count_riding_with_a_move_onto_the_peers_copy_is_counted_once`], for an edit. `a` adds two
+/// copies to `c`, writes a note on it and regrades it in one page. The `+2` is a delta and lands
+/// on the one row the fold leaves, whatever the clocks say.
+///
+/// **The note is a field, so it is last-writer-wins against both rows' histories** — and `u`'s
+/// insert said "no note" at its own stamp. Both orders are driven, by putting one device's clock
+/// an hour ahead: where `a`'s edit is the later the note lands, where `u`'s insert is the later
+/// it does not, and either way the two devices agree. Left to the wall clock, the two writes fall
+/// in one millisecond on a fast machine and the order is the device ids'.
+#[test]
+fn a_count_riding_with_an_edit_onto_the_peers_copy_is_counted_once() {
+    for (c, u) in [(LOWER, HIGHER), (HIGHER, LOWER)] {
+        for edit_is_later in [true, false] {
+            let (a, b) = (paired("dev-a"), paired("dev-b"));
+            let (mut ma, mut mb) = (0, 0);
+            a_copy_graded(&a, c, "NM", None, 1);
+            apply(&b, &since(&a, &mut ma)).unwrap();
+            let _ = since(&b, &mut mb);
+            let ahead = if edit_is_later { &a } else { &b };
+            ahead
+                .execute("UPDATE sync_clock SET ms = ms + 3600000", [])
+                .unwrap();
+            a_copy_graded(&b, u, "LP", None, 2);
+
+            a.execute(
+                "UPDATE collection_entries SET quantity = quantity + 2, notes = 'played'
+                  WHERE sync_uid = ?1",
+                [c],
+            )
+            .unwrap();
+            grade_copy(&a, c, "LP");
+
+            let said = format!("c is {c}, the edit is later: {edit_is_later}");
+            let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+            assert_eq!(unwritten(rb), (0, 0), "{said}");
+            apply(&a, &since(&b, &mut mb)).unwrap();
+            for (who, conn) in [("a", &a), ("b", &b)] {
+                assert_eq!(qty(conn), (1, 5), "{who}, where {said}");
+                assert_eq!(
+                    uids_of_copies(conn),
+                    vec![Some(LOWER.to_owned())],
+                    "{who}, where {said}"
+                );
+                assert_eq!(conditions(conn), ["LP"], "{who}, where {said}");
+                let note: Option<String> = conn
+                    .query_row("SELECT notes FROM collection_entries", [], |r| r.get(0))
+                    .unwrap();
+                assert_eq!(
+                    note.as_deref(),
+                    edit_is_later.then_some("played"),
+                    "{who}, where {said}"
+                );
+            }
+        }
+    }
+}
+
+/// **A row the page itself places is never folded into, by an edit either.** Both hold two copies
+/// of one printing, one near mint and one lightly played; `a` swaps the two conditions, by way of
+/// a third. Each edit lands on the grain the other row is leaving, and the sender holds two rows.
+///
+/// **What makes it red**: folding onto whatever holds the grain the edit lands on, without asking
+/// whether the page has its own say about that row.
+#[test]
+fn two_copies_the_sender_swapped_between_two_conditions_stay_two() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    a_copy_graded(&a, LOWER, "NM", None, 1);
+    a_copy_graded(&a, HIGHER, "LP", None, 2);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    grade_copy(&a, HIGHER, "MP");
+    grade_copy(&a, LOWER, "LP");
+    grade_copy(&a, HIGHER, "NM");
+
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(
+        qty(&b),
+        (2, 3),
+        "b folded two copies its sender keeps apart"
+    );
+}
+
+/// **A row the page deletes is not folded into by an edit, however the page's groups sort**:
+/// [`a_copy_moved_to_where_the_page_deletes_a_copy_is_not_folded_into_it`], for an edit. Both hold
+/// `c` near mint and `u` lightly played. `a` writes a note on `c`, deletes `u`, then regrades `c`
+/// to lightly played: `c`'s group sorts first, by its oldest op, so its edit meets `u` still
+/// there. It waits, `u`'s delete lands, and the retry writes `c` onto a free grain.
+///
+/// **What makes it red**: folding on any pass but a `Clear` one.
+#[test]
+fn a_copy_edited_to_where_the_page_deletes_a_copy_is_not_folded_into_it() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    a_copy_graded(&a, HIGHER, "NM", None, 1);
+    a_copy_graded(&a, LOWER, "LP", None, 2);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    a.execute(
+        "UPDATE collection_entries SET notes = 'played' WHERE sync_uid = ?1",
+        [HIGHER],
+    )
+    .unwrap();
+    a.execute(
+        "DELETE FROM collection_entries WHERE sync_uid = ?1",
+        [LOWER],
+    )
+    .unwrap();
+    grade_copy(&a, HIGHER, "LP");
+
+    let rb = apply(&b, &since(&a, &mut ma)).unwrap();
+    assert_eq!(unwritten(rb), (0, 0));
+    for (who, conn) in [("a", &a), ("b", &b)] {
+        assert_eq!(qty(conn), (1, 1), "{who}");
+        assert_eq!(uids_of_copies(conn), vec![Some(HIGHER.to_owned())], "{who}");
+        assert_eq!(conditions(conn), ["LP"], "{who}");
+    }
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+}
+
+/// **A folder that is gone is not this fold's to answer — it is the ledger of orphans'** (issue
+/// #841). `b` has deleted the binder `a`, not having heard, moves `c` into — and holds a root copy
+/// `u` on the grain `c` lands on once it is written without that binder. Whether `c` belongs at
+/// the root at all is the decision resting on `gone`, which a later page can still take back by
+/// bringing the binder back.
+///
+/// When this fold was written the ledger was not, and the refusal stood: folded into `u` with
+/// nothing to say so, there would have been no `c` left to put back in the binder. The ledger is
+/// what says so. `c` is folded into `u` — as `a`'s own re-homing folds it when the delete gets
+/// there — under the lower uid, and one `folded` entry rests on the binder, with `c` as it would
+/// be: the edit of its condition too, where one rode in the group.
+/// `cuts::found::a_held_copy_moved_into_a_deleted_binder_onto_a_root_twin_folds_and_follows_it_back`
+/// is the binder coming back.
+///
+/// **What makes it red**: this fold taking it — one row and no entry, so nothing to take the
+/// fold back by; or the refusal, two rows here against one on `a`.
+fn a_copy_sent_into_a_binder_deleted_here_is_folded_by_the_ledger(and_edited: bool) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    let from = binder(&a, "From", None);
+    let thrown = binder(&a, "Thrown", None);
+    a_copy_graded(&a, HIGHER, "NM", Some(from), 1);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute("DELETE FROM collection_folders WHERE name = 'Thrown'", [])
+        .unwrap();
+    a_copy_graded(&b, LOWER, if and_edited { "LP" } else { "NM" }, None, 2);
+
+    if and_edited {
+        grade_copy(&a, HIGHER, "LP");
+    }
+    drag_copy(&a, HIGHER, Some(thrown));
+
+    let page = since(&a, &mut ma);
+    let rb = apply(&b, &page).unwrap();
+    assert_eq!(unwritten(rb), (0, 0));
+    assert_eq!(qty(&b), (1, 3), "b did not fold the copy into the root's");
+    assert_eq!(uids_of_copies(&b), vec![Some(LOWER.to_owned())]);
+    assert!(skips(&b).is_empty(), "{:?}", skips(&b));
+
+    let entry: (String, String, String) = b
+        .query_row(
+            "SELECT o.uid, o.twin, o.state FROM sync_orphans o
+              WHERE o.tbl = 'collection_entries' AND o.parent_tbl = 'collection_folders'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .expect("the fold was not written down");
+    assert_eq!((entry.0.as_str(), entry.1.as_str()), (HIGHER, LOWER));
+    assert!(entry.2.contains(r#""kind":"folded""#), "{}", entry.2);
+    let would_be = if and_edited { "LP" } else { "NM" };
+    assert!(
+        entry.2.contains(&format!(r#""condition":"{would_be}""#)),
+        "the copy as it would be is not {would_be}: {}",
+        entry.2
+    );
+}
+
+#[test]
+fn a_copy_moved_into_a_binder_deleted_here_is_folded_into_the_roots_copy_by_the_ledger() {
+    a_copy_sent_into_a_binder_deleted_here_is_folded_by_the_ledger(false);
+}
+
+#[test]
+fn a_copy_edited_and_moved_into_a_binder_deleted_here_is_folded_by_the_ledger() {
+    a_copy_sent_into_a_binder_deleted_here_is_folded_by_the_ledger(true);
 }
 
 /// **A delete this database refuses is skipped and recorded, never a stall.** A TEMP trigger

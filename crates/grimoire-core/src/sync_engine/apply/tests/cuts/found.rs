@@ -969,3 +969,62 @@ fn a_twin_its_own_device_deleted_while_a_copy_was_folded_into_it_goes_alone() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------------------
+// ...and where the ledger meets the merge that answers a refused write (#854, #856)
+// ---------------------------------------------------------------------------------------
+
+/// [`copy_as`], in a condition said out loud.
+fn graded_copy_as(conn: &Connection, uid: &str, folder: Option<i64>, condition: &str) {
+    conn.execute(
+        "INSERT INTO collection_entries
+            (card_id,set_code,collector_number,lang,finish,condition,quantity,folder_id,
+             created_at,updated_at,sync_uid)
+         VALUES ('c1','lea','1','en','nonfoil',?1,1,?2,unixepoch(),unixepoch(),?3)",
+        rusqlite::params![condition, folder, uid],
+    )
+    .unwrap();
+}
+
+/// **A placed copy regraded onto a root copy folds as an orphan, and follows its binder back.**
+/// The root holds a lightly played copy; `a` files a near-mint one into the deleted binder, then
+/// regrades it to lightly played, then renames the binder. On `b` the filed copy is `Placed` at
+/// the root when the edit lands it on the root copy's grain.
+///
+/// That refusal is one `apply`'s own merge answers for two rows that are both here to stay
+/// (`fold_onto_the_holder`). An orphan cannot go through it: folded away by that merge, its
+/// entry would name a row that is no longer its own — and the binder's return would move the
+/// merged row, root copy and all, or find nothing to move.
+///
+/// **What makes it red**: the merge taking an orphan — both copies in the binder, or both at
+/// the root, when it returns.
+#[test]
+fn a_placed_copy_regraded_onto_a_root_copy_folds_as_an_orphan_and_follows_its_binder_back() {
+    for (root, filed) in [("u-1", "u-2"), ("u-2", "u-1")] {
+        let pieces = the_cut_decides_nothing(&|| {
+            let (a, b, bin) = a_binder_b_deleted(&|b| graded_copy_as(b, root, None, "LP"));
+            let mut ma = 0;
+            let _ = since(&a, &mut ma);
+            graded_copy_as(&a, filed, Some(bin), "NM");
+            let first = since(&a, &mut ma);
+            a.execute(
+                "UPDATE collection_entries SET condition = 'LP' WHERE sync_uid = ?1",
+                [filed],
+            )
+            .unwrap();
+            let second = since(&a, &mut ma);
+            rename(&a, "collection_folders", "B", "B2");
+            let last = since(&a, &mut ma);
+            (a, b, vec![first, second, last])
+        });
+        assert_eq!(
+            copies(&pieces.receiver),
+            vec![
+                format!("copy: c1 x1 in (root) notes=- as {root}"),
+                format!("copy: c1 x1 in B2 notes=- as {filed}"),
+            ],
+            "the root copy is {root}"
+        );
+        assert_eq!(pieces.skips, 0);
+    }
+}

@@ -2635,8 +2635,9 @@ back only those that cannot run yet on a host with no window. Of the **153** on 
 - **The scanner's ten** (all but its two reads). A session or tray command admits the calling
   window's *label* on the lease, which a table call does not carry; a frame is a JPEG plus a JSON
   header where Android carries base64 (spec §2.4); and the session panics in a browser until
-  phase 7. The phone face's Scanner asks for none of them — **but the desktop face's Scanner page,
-  drawn on an Android tablet past 1024px, would be refused**: phase 7's to close. *(Closed in
+  phase 7. The phone face's Scanner asked for none of them then (it was a sentence until step 7.6)
+  — **but the desktop face's Scanner page, drawn on an Android tablet past 1024px, would be
+  refused**: phase 7's to close. *(Closed in
   phase 7's step 7.3, 2026-10-07: the ten are in the table, a table call admits `scanner::PAGE`,
   and a frame is a `bytes` entry whose headers ride as the call's arguments. In a browser the
   session's five are refused in one sentence until the web step.)*
@@ -7555,6 +7556,135 @@ has not loaded real assets on any light host, and `forget` has never run against
 
 *Not merged yet.*
 
-### 11.6 Step 7.6 — the phone's Scanner page
+### 11.6 Step 7.6 — the phone's Scanner page (2026-10-07)
 
-*Not merged yet.*
+Issue #761, phase 7. The fifth tab was a sentence since phase 3. It is the scanner now:
+`mobile/phone/pages/ScannerPage.tsx` and `mobile/phone/scanner/`. Built on Windows 11 over
+`main` at `63d1a44f` and merged with step 7.3's branch at `43395ed5`, so the page stands on the
+commands that step put in the core's table: on Android all twelve answer, and on a page the
+session's five are refused in one sentence, behind which the page is quiet.
+[card-scanner.md](card-scanner.md), *On the phone face*, has what is shared and what is the
+phone's, file by file.
+
+**The desktop reader's parts in the phone's idioms**, one design built straight (§11). What
+decides is the desktop feature's, imported: the camera, the pump and its one-add-per-card edge,
+the tray and the prefs — the same two `app_meta` rows, so a tray scanned on one face of an install
+is the tray on the other — the gate, the reducers and the sentences. **Six things lived inside
+the desktop page and were moved out so both pages call them**: the lease's heartbeat
+(`useScannerHold`), the grace on a view out of sight (`useParked` — the phone parks on the
+document's own visibility, where the desktop asks Tauri), how a decision lands (`useTrayLanding`),
+where the tray files and the commit (`useTrayCommit`, `reader/trayCommit.ts`), the status facts
+(`useScannerStatus`) and the frame options. The desktop's suite did not move, and its Match strip
+is the same markup as `main`'s in eleven states.
+
+**What is the phone's is the arrangement**, because each of the desktop's is built for a pointer.
+One *Options* sheet stands in for the bar's four popovers, each mode's hint a sentence where the
+desktop has a tooltip. The camera's box is the stream's own shape, capped at 38dvh — a zero-basis
+grow collapses in a scrolling column. The status line folds onto two lines: at 330px the
+desktop's one row is the pill and the instruction with no room for a name. The tray is rows —
+the name wraps, the printing and the finish are 44px presses that open sheets, and a row waiting
+on a pick is its candidates as whole cards. The footer, the destination and Add, is outside the
+scroller. **A refusal is words on the page**: under Add, on a sheet row's second line, over the
+picture. *Stop* keeps the camera lit, as on the desktop.
+
+**Not offered**: the Developer switch — the phone sends `previews: false` whatever the stored
+switch says and never writes it — and the tray's grid: a finish and a stepper at 44px do not fit
+under a 156px tile, so `trayLayout` is left alone.
+
+**For that the fake grew a session.** `scanner_frame` answered one decided verdict for ever, with
+the `decision_seq` the loop takes as its baseline (§11), so over the fake a camera added nothing.
+It is a script now (`.storybook/fake/scannerScript.ts`): a pile of five cards, thirteen frames a
+card, 110 ms a frame, and in Exact a last card that is three reprints it cannot split.
+
+**Driven** — `npm run mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome
+154 with `--use-fake-device-for-media-stream` under a touch pointer and the dark scheme, over
+`mobile:dev`. The fake, not the engine.
+
+| | 360×800 | 412×915 |
+| --- | --- | --- |
+| The camera's box, on a 1920×1080 stream | 328×185 | 380×214 |
+| The footer, over the tab bar | 634–747 over 747 | 749–862 over 862 |
+| With 5 rows and with 40 | Add and the folder under a thumb | the same |
+| A control under 44px, a sideways scroll | none | none |
+
+Three cards make two rows, every frame Fast and without previews; *Stop* holds the picture; Add
+is one `scanner_tray_commit` and the receipt says *Added 4 copies to Binder.*; a hidden page
+closes its camera after the grace and reopens it; leaving the page stops its track; a refused
+camera lands on its sentence. On its side at 800×360 the two columns stand side by side — the
+camera 336×189, the tray 319px beside it — with the footer on screen. Two things the pass
+changed: the set picker in the filters page was 36px tall, and beside a finish reading `Unknown`
+the printing was cut to `STA 1…`.
+
+**The two columns begin at 720px, not at the rail's 600**, where they were first put: the page
+beside the rail is then 520px, and measured there the tray was a 288px column with its printing
+press 43px wide beside a camera 200px across.
+
+**A fresh reviewer read the branch** — the desktop's behaviour unchanged, both fences clean, every
+camera exit path stopping its tracks — and its verdict was to ship after fixes, all taken:
+
+- **A host with no session.** Step 7.3 gave `useScannerPrefs` its `unavailable`, and the phone
+  page had been written before it: it kept its gates on `loaded`, which is enough to ask for no
+  camera and send no frame, and drew nothing to say why. It now draws the engine's sentence where
+  the picture would be, drops the status line and its Reset — one would say *Point the camera at a
+  card*, the other would ask a session that is not there — and refuses the filters.
+- **A pile could be filed twice.** The commit's in-flight flag is one mount's state. Press Add
+  while a sync holds the write connection, tab away and back — or cross 1024px — and press again:
+  the second commit read the same rows, queued behind the first, and sent the same lines. It was
+  the desktop page's behaviour, reachable now from two faces. The lines are built when the write
+  goes out, from the pressed rows still in the tray by identity (`useTray`'s `commit` takes a
+  function), so the second commit finds its rows gone, sends nothing and answers `null`.
+- **A page that mounted hidden opened the camera for five seconds** — a tab restored in the
+  background at `/scanner`. `usePageParked` starts released there; the desktop's window is as it
+  was.
+- **The fake's one slow handler took the fake's pointer with it.** `invoke` points the fake back
+  at a call's world as it settles; a frame still on the wire when a test ended settled in the
+  next test and handed that test's timer-made calls to the finished test's world — found as a
+  tray that was never stored and cards from another test's pile, two runs in three. `invoke` now
+  points back only at a world that is still standing (`scope.ts`), with a test that stages it.
+- **The caret was left on `body`** when a sheet closed, and two things were said to no one: Add's
+  reason was not the button's description, and the note over the picture was a live region
+  mounted with its words already inside. Every sheet hands the caret back to the press that
+  opened it on a choice, Escape and the ✕. In the tray that press is found again after the
+  render: the *More printings…* of a row waiting on a pick is on screen when the sheet shuts and
+  gone a tick later, when the row draws as settled — and unkeyed, React had kept the node and
+  made it the settled row's finish press, with the caret still on it.
+- **The footer and the receipt said `Collection` for a folder they could not name** — the list
+  would not load, and the commit sent the stored id. They say *Folder name unavailable* and *to
+  your collection*.
+- **Four tests proved less than they said, or nothing**: the loop held off until the tray has
+  loaded, a row's sheet shutting when the row leaves, the two-column arm measured by the smoke
+  at 800×360, and an assertion that a string which exists nowhere was absent.
+
+**The fixes were mutated and went red**: the page forgetting `unavailable`, the lines built at
+the press, a hidden mount given its grace, `invoke` pointing back unconditionally, the tray's
+hand-back run once, the region mounted with its words, the description and the folder sheet's
+hand-back removed, and `tray.loaded` out of the loop's gate — ten tests between them. Earlier,
+the camera's gate, `scanning`, the pause, the release and `previews: false`.
+
+**The sentences are shared, not retyped**: *Scanning stopped…*, the line under the gate's
+sentence, and the camera note, which now reads *on this device* on both faces. **The gate still
+says "another window"** on a phone: that sentence is the engine's (`scanner::OPEN_ELSEWHERE`,
+pinned by `ipc.test.ts`), and was left.
+
+**Not seen.** No real lens, no real phone, and no engine behind this page: every frame here was
+the fake's. The camera's grant (Android's prompt, a browser's), a portrait stream in the capped
+box, the frame rate a phone's canvas and JPEG encode give the pump, and the detail frame — a
+2560 px encode on the frame that can least afford it — are a device's to show. Neither the page
+on Android through a real `core_call` nor the quiet page in a built web app was driven.
+
+**Open after this step:**
+
+- **The slot under the camera says to put files at a path**, which a phone cannot do.
+  `ScannerDataSlot` (`mobile/phone/scanner/`, handed the whole `ScannerStatus`) is where step
+  7.4's download offer goes; `unapplied_filters` is still drawn nowhere.
+- **The session in a browser** is step 7.5's, and with it the deletion of the page's match on
+  the engine's sentence — `CameraBox`'s `unavailable`, the hidden status line, and the test
+  named for a host with no session.
+- **A rejected frame is asked again at the grab rate.** `useScanLoop` does not pause on a
+  rejection; a busy database is said over the picture and asked many times a second until it
+  passes. The quiet host is not this case.
+- **Whether a backgrounded Android app reports a hidden page**, which the park rule rests on, and
+  whether a frozen page runs the grace's timer at all.
+- **`setInterval` is not bound to a world in the fake**, and the heartbeat uses one: harmless
+  with one story on a page, said in `scope.ts`.
+- The smoke runs nowhere but by hand.

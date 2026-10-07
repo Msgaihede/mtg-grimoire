@@ -1,26 +1,10 @@
 import { useEffect, useState } from "react";
 import { isWindowMinimized, onWindowFocusChanged, onWindowResized } from "@/lib/window";
+import { useGrace, usePageHidden, type Parked } from "./useParked";
 
-/**
- * How long a minimized Scanner keeps its camera open before letting it go.
- *
- * Long enough that a minimize and a restore in one breath — a glance at the desktop, a misclick on
- * the taskbar — costs no `getUserMedia` and no flicker; short enough that the camera light goes out
- * while the reader is still looking at it, and that a second window waiting on the lease gets it
- * within this plus the lease's two seconds.
- */
-export const PARK_GRACE_MS = 5000;
-
-/** Where a minimized window stands. */
-export interface Parked {
-  /** Minimized now: the pump sends nothing. */
-  paused: boolean;
-  /**
-   * Minimized for {@link PARK_GRACE_MS}: the camera is closed and the heartbeat stopped, so the
-   * lease lapses and another window can take the scanner.
-   */
-  released: boolean;
-}
+// The grace and its shape are `useParked.ts`'s — shared with the light app's phone face, which
+// parks on the document's visibility alone — and re-exported so this module's importers keep theirs.
+export { PARK_GRACE_MS, type Parked } from "./useParked";
 
 /**
  * Whether this window is minimized — answered by Tauri, because the page cannot answer it.
@@ -42,7 +26,7 @@ export interface Parked {
  */
 export function useWindowMinimized(): boolean {
   const [minimized, setMinimized] = useState(false);
-  const [hidden, setHidden] = useState(() => document.visibilityState === "hidden");
+  const hidden = usePageHidden();
 
   useEffect(() => {
     let gone = false;
@@ -61,16 +45,13 @@ export function useWindowMinimized(): boolean {
       if (gone) off();
       else offs.push(off);
     };
-    const onVisibility = () => setHidden(document.visibilityState === "hidden");
 
     reread();
     onWindowResized(reread).then(keep, () => undefined);
     onWindowFocusChanged(reread).then(keep, () => undefined);
-    document.addEventListener("visibilitychange", onVisibility);
     return () => {
       gone = true;
       for (const off of offs) off();
-      document.removeEventListener("visibilitychange", onVisibility);
     };
   }, []);
 
@@ -88,21 +69,5 @@ export function useWindowMinimized(): boolean {
  * sentence.
  */
 export function useWindowParked(): Parked {
-  const minimized = useWindowMinimized();
-  const [graceOver, setGraceOver] = useState(false);
-  // A restore puts the grace back in the render that sees it — React's own answer to state that
-  // follows a value — so no frame reads `released` for a window that is open again.
-  const [was, setWas] = useState(minimized);
-  if (was !== minimized) {
-    setWas(minimized);
-    setGraceOver(false);
-  }
-
-  useEffect(() => {
-    if (!minimized) return;
-    const timer = setTimeout(() => setGraceOver(true), PARK_GRACE_MS);
-    return () => clearTimeout(timer);
-  }, [minimized]);
-
-  return { paused: minimized, released: minimized && graceOver };
+  return useGrace(useWindowMinimized());
 }

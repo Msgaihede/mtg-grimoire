@@ -2,7 +2,7 @@ import { RotateCcw } from "lucide-react";
 import type { ScanMode, ScannerResolution, ScannerVerdict } from "@/lib/ipc";
 import { PRESS } from "@/lib/motion";
 import { cn } from "@/lib/utils";
-import { matchStrip, type LastAdded, type StripTone } from "./readerText";
+import { matchStrip, type LastAdded, type StripState, type StripTone } from "./readerText";
 
 export interface MatchStripProps {
   verdict: ScannerVerdict | null;
@@ -23,8 +23,11 @@ export interface MatchStripProps {
  * The pill's box per tone. **Every tone draws a border**, the filled one in its own fill colour,
  * so the pill is one size in all five and the name beside it does not shift a pixel when a card
  * is matched.
+ *
+ * Exported with {@link STRIP_SENTENCE} and {@link MatchBar} for the light app's phone page, which
+ * lays the same strip out for a 330px column and must not come to colour a tone differently.
  */
-const PILL: Record<StripTone, string> = {
+export const STRIP_PILL: Record<StripTone, string> = {
   idle: "border-border bg-bg text-dim",
   progress: "border-border bg-bg text-dim",
   done: "border-accent bg-accent text-accent-fg",
@@ -33,7 +36,7 @@ const PILL: Record<StripTone, string> = {
 };
 
 /** The sentence at the right of a named card: quiet once it is filed, gold while it waits on the reader. */
-const SENTENCE: Record<StripTone, string> = {
+export const STRIP_SENTENCE: Record<StripTone, string> = {
   idle: "text-text",
   progress: "text-text",
   done: "text-dim",
@@ -93,7 +96,7 @@ export function MatchStrip({
         <span
           className={cn(
             "shrink-0 whitespace-nowrap rounded border px-2 py-0.5 text-xs font-medium",
-            PILL[strip.tone],
+            STRIP_PILL[strip.tone],
           )}
         >
           {strip.word}
@@ -125,7 +128,7 @@ export function MatchStrip({
             <span
               className={cn(
                 "ml-auto shrink-0 whitespace-nowrap text-[13px]",
-                SENTENCE[strip.tone],
+                STRIP_SENTENCE[strip.tone],
               )}
             >
               {strip.sentence}
@@ -137,32 +140,7 @@ export function MatchStrip({
       {/* The bar takes the row and the button its own width; `items-center` puts the 6px bar on
           the button's middle rather than its top. */}
       <div className="flex items-center gap-3">
-        <div
-          role="progressbar"
-          aria-label="Match progress"
-          aria-valuemin={0}
-          aria-valuemax={100}
-          aria-valuenow={Math.round(strip.fill * 100)}
-          className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-bg"
-        >
-          <div
-            className={cn(
-              "h-full transition-[width] motion-reduce:transition-none",
-              strip.committed ? "bg-accent" : "bg-dim",
-            )}
-            style={{ width: `${strip.fill * 100}%` }}
-          />
-          {/* The line the bar has to cross — drawn only while it is being crossed. Empty, there is
-              nothing approaching it; full, it has been crossed, and a dim mark at 70% of a gold bar
-              under the confidence rule would read as a bar that stopped short. */}
-          {leaning && (
-            <span
-              aria-hidden="true"
-              className="absolute inset-y-0 w-px bg-dim"
-              style={strip.threshold === "end" ? { right: 0 } : { left: `${strip.threshold * 100}%` }}
-            />
-          )}
-        </div>
+        <MatchBar strip={strip} />
         <button
           type="button"
           onClick={onReset}
@@ -176,6 +154,45 @@ export function MatchStrip({
           Reset evidence
         </button>
       </div>
+    </div>
+  );
+}
+
+/**
+ * The strip's bar: how close the scanner is to settling on the card, and the line it has to cross.
+ *
+ * A component of its own so the phone page draws the very same bar under its own arrangement of
+ * the words. **Outside the live region wherever it is drawn**: its value moves on almost every
+ * frame, and a region that contained it would have something to say nine times a second.
+ */
+export function MatchBar({ strip }: { strip: StripState }) {
+  const leaning = strip.tone === "progress";
+  return (
+    <div
+      role="progressbar"
+      aria-label="Match progress"
+      aria-valuemin={0}
+      aria-valuemax={100}
+      aria-valuenow={Math.round(strip.fill * 100)}
+      className="relative h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-bg"
+    >
+      <div
+        className={cn(
+          "h-full transition-[width] motion-reduce:transition-none",
+          strip.committed ? "bg-accent" : "bg-dim",
+        )}
+        style={{ width: `${strip.fill * 100}%` }}
+      />
+      {/* The line the bar has to cross — drawn only while it is being crossed. Empty, there is
+          nothing approaching it; full, it has been crossed, and a dim mark at 70% of a gold bar
+          under the confidence rule would read as a bar that stopped short. */}
+      {leaning && (
+        <span
+          aria-hidden="true"
+          className="absolute inset-y-0 w-px bg-dim"
+          style={strip.threshold === "end" ? { right: 0 } : { left: `${strip.threshold * 100}%` }}
+        />
+      )}
     </div>
   );
 }

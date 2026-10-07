@@ -20,13 +20,14 @@
 //! makes late, or a deck's group the deciding pass itself lands — and left only the rows it never
 //! mentioned for [`rehome`] (§3.3, as amended at the final review).
 //!
-//! **A move a peer made is the same collision met from the other end**, and takes the same merge
-//! ([`fold_onto_the_holder`]): a row filed into a folder — or out of one, onto the root — where
-//! this device holds a row of that grain the sender had not heard of. It is decided on a `Clear`
-//! pass too, by `apply`'s `fold_the_move`, which says when a refusal is that one.
+//! **A write a peer made is the same collision met from the other end**, and takes the same merge
+//! ([`fold_into_the_holder`]): a row filed into a folder — or out of one, onto the root — or
+//! edited in a field of its grain, where this device holds a row of the grain it lands on that
+//! the sender had not heard of. It is decided on a `Clear` pass too, by `apply`'s
+//! `fold_onto_the_holder`, which says when a refusal is that one and which row is in the way.
 
 use crate::sync_engine::emission;
-use rusqlite::{Connection, OptionalExtension};
+use rusqlite::Connection;
 
 /// Every `ON DELETE CASCADE` key into a folder table, as `(child table, column, parent table)`:
 /// the paths [`doomed`] follows. Held to the live schema by
@@ -150,48 +151,44 @@ pub(super) fn rehome_one(conn: &Connection, table: &str, id: i64) -> Result<i64,
 /// The parent key a copy and a wish are filed by, in both their specs.
 pub(super) const FOLDER: &str = "folder";
 
-/// File `table`'s row `uid` into `folder` through the same merge, for a **move** a peer made onto
-/// a grain a row of this device's own already holds — and answer the uid the one row left wears,
-/// with the uid the row in the way wore. `None` where nothing was in the way and the row simply
-/// moved, where no row wears `uid`, and for any table but the two that file by folder.
+/// Whether `table` is one whose rows the crate can make one of, by their two ids — the two that
+/// [`fold_into_the_holder`] answers for.
+pub(super) fn folds(table: &str) -> bool {
+    matches!(table, "collection_entries" | "wishlist_entries")
+}
+
+/// Fold `table`'s row `moved`, wearing `moved_uid`, into the row `holder` on the grain a peer's
+/// write lands it on, through the crate's own merge — [`crate::collection::fold_entry`] or
+/// [`crate::wishlist::fold_wish`] — and answer the uid the one row left wears. `None` for any
+/// table but those two.
+///
+/// **By the two ids, and not by re-filing `moved`** as [`rehome`] does. `refile_entry` and
+/// `refile_wish` file a row as it stands: they ask which row holds the grain `moved` is on *now*,
+/// in another folder. A peer's write can change any term of the grain — the condition, the
+/// finish, the printing a wish is pinned to — so the row in the way holds a grain `moved` has not
+/// reached yet, and only the caller, which has the write, can say which row that is.
 ///
 /// The survivor takes the lower uid for [`rehome`]'s reason, read the other way round: the row in
 /// the way is one the sender had not heard of on that grain, so its own put reaches the sender
-/// and `find_row`'s grain match lands it on the moved row there, adopting `min`.
+/// and `find_row`'s grain match lands it on the written row there, adopting `min`.
 ///
-/// **The caller's to undo.** It writes inside the group's savepoint and answers `None` after a
-/// plain move as well, which the caller rolls back with everything else.
-pub(super) fn fold_onto_the_holder(
+/// **The caller's to undo.** It writes inside the group's savepoint, which the caller rolls back
+/// on a pass that only asked.
+pub(super) fn fold_into_the_holder(
     conn: &Connection,
     table: &str,
-    uid: &str,
-    folder: Option<i64>,
-) -> Result<Option<(String, Option<String>)>, String> {
-    if !matches!(table, "collection_entries" | "wishlist_entries") {
-        return Ok(None);
+    holder: i64,
+    moved: i64,
+    moved_uid: &str,
+) -> Result<Option<String>, String> {
+    match table {
+        "collection_entries" => crate::collection::fold_entry(conn, holder, moved),
+        "wishlist_entries" => crate::wishlist::fold_wish(conn, holder, moved),
+        _ => return Ok(None),
     }
-    let id: Option<i64> = conn
-        .query_row(
-            &format!("SELECT id FROM {table} WHERE sync_uid = ?1"),
-            [uid],
-            |r| r.get(0),
-        )
-        .optional()
-        .map_err(|e| e.to_string())?;
-    let Some(id) = id else {
-        return Ok(None);
-    };
-    let kept = if table == "collection_entries" {
-        crate::collection_folders::refile_entry(conn, id, folder)?.id
-    } else {
-        crate::wishlist_folders::refile_wish(conn, id, folder)?.id
-    };
-    if kept == id {
-        return Ok(None);
-    }
-    let holder = uid_of(conn, table, kept)?;
-    adopt_lower(conn, table, kept, id, Some(uid.to_owned()))?;
-    Ok(uid_of(conn, table, kept)?.map(|survivor| (survivor, holder)))
+    .map_err(|e| e.to_string())?;
+    adopt_lower(conn, table, holder, moved, Some(moved_uid.to_owned()))?;
+    uid_of(conn, table, holder)
 }
 
 fn uid_of(conn: &Connection, table: &str, id: i64) -> Result<Option<String>, String> {

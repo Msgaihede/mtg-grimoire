@@ -363,6 +363,50 @@ export function importItems(
 /** Why an Add cannot go: every card in the tray is still waiting on a finish. */
 export const NO_FINISHED_ROWS = "Pick a finish for at least one card first";
 
+/** Why an Add cannot go: there is nothing in the tray. */
+export const EMPTY_REASON = "Nothing scanned yet";
+/** Why an Add cannot go: a row is still waiting for the reader to say which printing it is. */
+export const UNPICKED_REASON = "Pick a printing for every card first";
+/** Why a deck cannot be made yet: a deck's rows each need a finish, where an Add leaves those out. */
+export const DECK_NEEDS_FINISHES = "Choose a finish for every card first";
+
+/**
+ * Why Add is out of reach, in the order a reader can do something about each — **the order
+ * {@link commitPlan} refuses in**, so the drawing and the press agree — or `null` when it can go.
+ *
+ * Words rather than a flag, because both Scanner surfaces say them: the desktop's tray in a
+ * tooltip over the greyed button, the phone's under it — a finger has no hover.
+ */
+export function addRefusal(rows: readonly ScannerTrayRow[]): string | null {
+  if (rows.length === 0) return EMPTY_REASON;
+  if (unresolvedCount(rows) > 0) return UNPICKED_REASON;
+  if (readyRows(rows).length === 0) return NO_FINISHED_ROWS;
+  return null;
+}
+
+/**
+ * Why *Create deck…* is out of reach: everything that stops an Add, and any row still waiting on a
+ * finish — a deck files every row or none, so there is no "the rest stay in the tray" for it.
+ */
+export function deckRefusal(rows: readonly ScannerTrayRow[]): string | null {
+  return addRefusal(rows) ?? (needsFinishCount(rows) > 0 ? DECK_NEEDS_FINISHES : null);
+}
+
+/**
+ * The Add button's words: the copies it files, and — while there are any — the copies it leaves
+ * behind for want of a finish. **One string, never a second element**: the name is computed from
+ * the button's content and a span beside the count would fuse into `collection· 2` (`src/CLAUDE.md`,
+ * the `Missing2` rule).
+ */
+export function addLabel(ready: number, needsFinish: number): string {
+  const add = `Add ${ready} to collection`;
+  if (needsFinish === 0) return add;
+  return `${add} · ${needsFinish} ${needsFinish === 1 ? "needs" : "need"} a finish`;
+}
+
+/** The walk through the tray's open questions — the issue's words, and the press's name. */
+export const NEXT_DECISION_LABEL = "Next card needing a decision";
+
 /**
  * **What one press of Add files, and which rows it takes** — the known-finish rows as import
  * lines, and those same rows as `taken`, for the page to subtract from the tray once the commit

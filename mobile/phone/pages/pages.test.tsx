@@ -203,9 +203,18 @@ describe("the card sheet", () => {
 // The Collection and the Wishlist have suites of their own since steps 3.2 and 3.3 —
 // `CollectionPage.test.tsx` and `WishlistPage.test.tsx`. Settings has one since step 3.7 —
 // `SettingsPage.test.tsx`.
+// The Scanner has one since step 7.6 — `ScannerPage.test.tsx`. What stays here is the one thing
+// every other suite leans on: several of them walk through this tab as a neutral "away" page, in a
+// jsdom with no camera to ask, and it has to stand up there without a word.
 describe("Scanner", () => {
-  it("says what is coming, and opens no camera", () => {
+  it("draws its tray and its footer where there is no camera at all", async () => {
     renderPhone(<PhoneFace />, { path: "/scanner" });
-    expect(screen.getByText(/The scanner arrives in a later phase/)).toBeInTheDocument();
+    expect(await screen.findByText("Cards you scan appear here.", {}, SETTLE)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Scanned cards, 0 copies" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Folder: Collection" })).toBeInTheDocument();
+    // Its one press is drawn, refused, and says why.
+    expect(screen.getByRole("button", { name: "Add 0 to collection" })).toHaveAccessibleDescription(
+      "Nothing scanned yet",
+    );
   });
 });

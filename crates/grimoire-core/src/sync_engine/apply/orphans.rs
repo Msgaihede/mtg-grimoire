@@ -1190,21 +1190,6 @@ pub(super) fn settle(
     )
 }
 
-/// [`settle`], for a row known by its uid: the copy a group moved under a gone parent, which
-/// the root's grain refused because a twin is on it.
-pub(super) fn settle_the_row(
-    conn: &Connection,
-    shape: Shape,
-    uid: &str,
-    parent: (&Parent, &str),
-    at: Hlc,
-) -> Result<(), String> {
-    match id_of(conn, shape.meta.table, uid)? {
-        Some(id) => settle(conn, shape, id, parent, at),
-        None => Ok(()),
-    }
-}
-
 /// The uid of the row on the grain where `g` would land the row `uid` names — what refused the
 /// write, when a unique index did. `parents` is the write's own resolution of the parents the
 /// group names; the others are the row's as they stand.
@@ -1279,6 +1264,37 @@ pub(super) fn step_aside(conn: &Connection, e: &Entry) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     forget(conn, &e.table, &e.uid)
+}
+
+/// A row that a group lands, without its gone parent, on the grain the row `holder` names is
+/// on: take it out, lay the group over the row it would be, and fold it into `holder` —
+/// `Folded`, resting on that parent. Two ways there, and one refusal: a copy both devices hold
+/// that is **moved** under a parent deleted here, and a copy already `Placed` that an **edit**
+/// lands on another row's grain.
+///
+/// The same refusal `apply`'s own merge answers for two rows that are both here to stay
+/// (`fold_onto_the_holder`). An orphan cannot go through that one: it would leave nothing to
+/// take the fold back by when the parent returns, and a `Placed` entry naming a row that is no
+/// longer its own.
+pub(super) fn fold_the_orphan(
+    conn: &Connection,
+    shape: Shape,
+    g: &Group,
+    (uid, holder): (&str, &str),
+    (p, parent_uid): (&Parent, &str),
+) -> Result<(), String> {
+    let table = shape.meta.table;
+    let Some(mut row) = row_of(conn, shape.spec, uid)? else {
+        return Err("no row to fold".to_owned());
+    };
+    let combined = folded_with_history(conn, table, uid, g)?;
+    overlay(&mut row, shape, g, &combined);
+    row.parents
+        .insert(p.key.to_owned(), Some(parent_uid.to_owned()));
+    conn.execute(&format!("DELETE FROM {table} WHERE sync_uid = ?1"), [uid])
+        .map_err(|e| e.to_string())?;
+    forget(conn, table, uid)?;
+    lend(conn, shape, (uid, row), (p, parent_uid), holder)
 }
 
 /// Fold an orphan that [`step_aside`] took out into the row now on its grain.
