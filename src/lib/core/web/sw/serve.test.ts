@@ -171,6 +171,33 @@ describe("installing a build", () => {
     await expect(stored?.text()).resolves.toBe("<html>build a</html>");
   });
 
+  it("answers a navigation to /privacy with the page the host redirected /privacy.html to", async () => {
+    // The host answers `/privacy.html` with a 307 to `/privacy`, which the install's fetch
+    // follows: what it reads is a 200 whose `redirected` is true, and a response like that may
+    // not answer a navigation as it is.
+    const policy = new Response("<h1>MTG Grimoire privacy policy</h1>", {
+      headers: { "Content-Type": "text/html" },
+    });
+    Object.defineProperty(policy, "redirected", { value: true });
+    Object.defineProperty(policy, "clone", { value: () => policy });
+    const { worker, caches } = harness({
+      files: { ...files, "/privacy.html": policy },
+      precache: ["/", "/assets/index-a.js", "/privacy.html"],
+    });
+    await worker.install();
+    const stored = await (await caches.open(shellCacheName("aaaa"))).match("/privacy.html");
+    expect(stored?.redirected).toBe(false);
+
+    const answer = await worker.respond(
+      { url: `${ORIGIN}/privacy`, method: "GET", mode: "navigate" },
+      "",
+      () => undefined,
+    );
+    expect(answer?.status).toBe(200);
+    expect(answer?.redirected).toBe(false);
+    await expect(answer?.text()).resolves.toBe("<h1>MTG Grimoire privacy policy</h1>");
+  });
+
   /**
    * An HTTP/1.1 host: six connections, and one is free again only when the body on it has been
    * read to its end. Measured against a host serving the shell `no-store` (Chrome 154): an

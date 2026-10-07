@@ -62,6 +62,14 @@ describe("Settings on the phone", () => {
     expect(screen.queryByRole("region", { name: "Prices" })).toBeNull();
   });
 
+  it("links to the privacy policy under the last group", async () => {
+    renderPhone(<PhoneFace />, { path: "/settings" });
+    const link = await screen.findByRole("link", { name: "Privacy policy" });
+    expect(link).toHaveAttribute("href", "https://mtg-grimoire.app/privacy");
+    const list = screen.getByRole("list", { name: "Settings sections" });
+    expect(list.compareDocumentPosition(link) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("draws the sync panel and the review queue over whatever the core answers", async () => {
     renderPhone(<PhoneFace />, { path: "/settings" });
     await userEvent.click(group("Sync"));

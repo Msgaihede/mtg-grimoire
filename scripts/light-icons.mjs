@@ -5,23 +5,31 @@
 //
 // A web manifest wants PNGs, and a maskable one besides: Android cuts an installed app's icon to
 // whatever shape the launcher uses, and keeps only a circle 80% of its width whole. So there are
-// two drawings here, both from `logos/svg/mtg-grimoire-mark.svg` and neither a file of its own —
+// four drawings here, all from `logos/svg/mtg-grimoire-mark.svg` and none a file of its own —
 // a third SVG beside the mark and the tile is a third thing to forget when the mark changes:
 //
 //   - **the mark**, transparent, as the desktop's icon is (`logos/README.md` has why the tile is
 //     not the icon), at 192 and 512;
 //   - **the maskable mark**, on the app's ground (`--color-bg`, `#0C0D12`) to every edge, drawn
-//     small enough that the whole of it — clasp and ribbon too — is inside that circle.
+//     small enough that the whole of it — clasp and ribbon too — is inside that circle;
+//   - **the launcher's layers**, for Android's adaptive icon: the mark alone and transparent on
+//     a 108dp square, smaller still, because a launcher keeps only a circle 66dp across; the
+//     ground behind it is a colour the Android project already has (`@color/ground`). And the
+//     48dp icon no phone this app installs on draws (minSdk 26), which is the maskable drawing;
+//   - **the store's**: the maskable drawing at 512 for the listing's icon, and the mark on the
+//     ground at 1024×500 for its feature graphic — a JPEG, because Play takes no alpha there.
 //
 // The renderer is a browser, because that is what this repository has: no image library is a
-// dependency and none is added for four files. Headless Chromium over the DevTools protocol, as
+// dependency and none is added for a handful of pictures. Headless Chromium over the DevTools protocol, as
 // `web-smoke.mjs` drives it; `CHROME` names the browser, else the first of Chrome and Edge found
-// installed. It writes `mobile/public/icons/`, which is committed — nothing runs this in a build.
+// installed. It writes `mobile/public/icons/`, the Android launcher's `res/mipmap-*` under
+// `mobile/src-tauri/gen/android`, and the store's two graphics under `docs/play/` — all
+// committed; nothing runs this in a build.
 //
-// **It measures what it drew.** The maskable mark's scale is a number somebody chose, and the
-// safe zone is a rule a number can break without anything looking wrong on a square preview. So
-// the page reports the furthest painted pixel from the centre, and a mark that reaches past the
-// circle fails the run instead of shipping.
+// **It measures what it drew.** The maskable mark's and the launcher foreground's scales are
+// numbers somebody chose, and a safe zone is a rule a number can break without anything looking
+// wrong on a square preview. So the page reports the furthest painted pixel from the centre, and
+// a mark that reaches past its circle fails the run instead of shipping.
 
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -31,6 +39,8 @@ import { join, resolve } from "node:path";
 
 const MARK = resolve("logos/svg/mtg-grimoire-mark.svg");
 const OUT = resolve("mobile/public/icons");
+const ANDROID_RES = resolve("mobile/src-tauri/gen/android/app/src/main/res");
+const PLAY = resolve("docs/play");
 
 /**
  * `--color-bg` in sRGB — `logos/README.md`'s field, and the manifest's two colours.
@@ -51,12 +61,72 @@ const MASKABLE_SCALE = 0.7;
 /** The share of the icon's width, from its centre, a maskable icon may count on keeping. */
 const SAFE_RADIUS = 0.4;
 
-const ICONS = [
-  { file: "icon-192.png", size: 192, maskable: false },
-  { file: "icon-512.png", size: 512, maskable: false },
-  { file: "maskable-192.png", size: 192, maskable: true },
-  { file: "maskable-512.png", size: 512, maskable: true },
+/**
+ * The mark's scale on the Android launcher's foreground layer.
+ *
+ * An adaptive icon's layer is 108dp square and a launcher shows a 72dp window of it, cut to its
+ * own shape; only a circle 66dp across is promised whole. That is a radius of 33/108 of the
+ * width — 30.6%, against the maskable icon's 40% — so the mark is drawn smaller again: 0.70
+ * reaches 37.5% (measured), and 0.55 is that in proportion with a little air. `measure` checks
+ * the pixels.
+ */
+const ADAPTIVE_SCALE = 0.55;
+const ADAPTIVE_SAFE_RADIUS = 33 / 108;
+
+/** Android's densities, as multiples of a dp. */
+const DENSITIES = [
+  { name: "mdpi", scale: 1 },
+  { name: "hdpi", scale: 1.5 },
+  { name: "xhdpi", scale: 2 },
+  { name: "xxhdpi", scale: 3 },
+  { name: "xxxhdpi", scale: 4 },
 ];
+
+/**
+ * Every picture this writes. `kind` is the drawing: `plain` (the mark, transparent),
+ * `maskable` (smaller, on the ground to every edge), `adaptive` (smaller still, transparent)
+ * and `feature` (the store's banner). A square one names a `size`; the banner its two sides.
+ */
+const ICONS = [
+  { dir: OUT, file: "icon-192.png", size: 192, kind: "plain" },
+  { dir: OUT, file: "icon-512.png", size: 512, kind: "plain" },
+  { dir: OUT, file: "maskable-192.png", size: 192, kind: "maskable" },
+  { dir: OUT, file: "maskable-512.png", size: 512, kind: "maskable" },
+  ...DENSITIES.flatMap(({ name, scale }) => [
+    {
+      dir: join(ANDROID_RES, `mipmap-${name}`),
+      file: "ic_launcher.png",
+      size: 48 * scale,
+      kind: "maskable",
+    },
+    {
+      dir: join(ANDROID_RES, `mipmap-${name}`),
+      file: "ic_launcher_foreground.png",
+      size: 108 * scale,
+      kind: "adaptive",
+    },
+  ]),
+  { dir: PLAY, file: "listing-icon-512.png", size: 512, kind: "maskable" },
+  { dir: PLAY, file: "feature-graphic-1024x500.jpg", width: 1024, height: 500, kind: "feature" },
+];
+
+/**
+ * The adaptive icon itself: two layers by name. Written here rather than by hand so the set is
+ * one command; `mobile/host.test.ts` holds its two lines.
+ */
+const ADAPTIVE_XML = `<?xml version="1.0" encoding="utf-8"?>
+<!--
+  WRITTEN BY scripts/light-icons.mjs — the launcher's icon on every phone this app installs on
+  (minSdk 26). The ground is the app's own (\`values/colors.xml\`); the mark is rendered from
+  \`logos/svg/mtg-grimoire-mark.svg\` inside the 66dp circle a launcher keeps whole.
+  \`tauri android init\` does not write this file and overwrites the pictures beside it:
+  \`mobile/host.test.ts\` holds both.
+-->
+<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+    <background android:drawable="@color/ground" />
+    <foreground android:drawable="@mipmap/ic_launcher_foreground" />
+</adaptive-icon>
+`;
 
 const pause = (ms) => new Promise((done) => setTimeout(done, ms));
 
@@ -138,12 +208,35 @@ async function connect(address) {
   return { send, close: () => socket.close() };
 }
 
-/** The master mark as the drawing an icon wants: sized, and for a maskable one, grounded. */
-function drawing(master, size, maskable) {
+/** The master mark as the drawing an icon wants: sized, scaled, and for a maskable one, grounded. */
+function drawing(master, size, kind) {
   let svg = master.replace(/width="64" height="64"/, `width="${size}" height="${size}"`);
-  if (!maskable) return svg;
+  if (kind === "plain") return svg;
+  if (kind === "adaptive") return svg.replace(/scale\([\d.]+\)/, `scale(${ADAPTIVE_SCALE})`);
   svg = svg.replace(/scale\([\d.]+\)/, `scale(${MASKABLE_SCALE})`);
   return svg.replace("</defs>", `</defs><rect width="64" height="64" fill="${GROUND}"></rect>`);
+}
+
+/** The page a square icon is photographed on: the drawing and nothing else. */
+function iconPage(master, size, kind) {
+  return (
+    `<!doctype html><html><body style="margin:0;overflow:hidden">` +
+    drawing(master, size, kind).replace("<svg ", `<svg style="display:block" `) +
+    `</body></html>`
+  );
+}
+
+/** The store's banner: the mark alone on the ground, two thirds of the height, centred. */
+function featurePage(master, width, height) {
+  const mark = drawing(master, Math.round((height * 2) / 3), "plain").replace(
+    "<svg ",
+    `<svg style="display:block" `,
+  );
+  return (
+    `<!doctype html><html><body style="margin:0;overflow:hidden;width:${width}px;` +
+    `height:${height}px;background:${GROUND};display:flex;align-items:center;` +
+    `justify-content:center">${mark}</body></html>`
+  );
 }
 
 /**
@@ -174,7 +267,6 @@ async function main() {
   if (!/width="64" height="64"/.test(master) || !/scale\([\d.]+\)/.test(master)) {
     throw new Error(`${MARK} is not shaped as this script reads it: a 64-unit mark with a scale.`);
   }
-  await mkdir(OUT, { recursive: true });
 
   const profile = await mkdtemp(join(tmpdir(), "grimoire-light-icons-"));
   undo.push(async () => {
@@ -192,33 +284,48 @@ async function main() {
   // Nothing behind the drawing: the transparent mark stays transparent in the PNG.
   await page("Emulation.setDefaultBackgroundColorOverride", { color: { r: 0, g: 0, b: 0, a: 0 } });
 
-  // The safe zone, measured on the mark alone — the ground reaches every edge by design.
-  const alone = drawing(master, 512, true).replace(/<rect width="64"[^>]*><\/rect>/, "");
-  const { result } = await page("Runtime.evaluate", {
-    expression: measure(alone, 512),
-    awaitPromise: true,
-    returnByValue: true,
-  });
-  const reach = result.value;
-  if (!(reach > 0.2 && reach <= SAFE_RADIUS)) {
-    throw new Error(
-      `the maskable mark reaches ${(reach * 100).toFixed(1)}% of the width from the centre; ` +
-        `the safe zone is ${SAFE_RADIUS * 100}%. Lower MASKABLE_SCALE.`,
+  // The safe zones, measured on the mark alone — a ground reaches every edge by design.
+  const zones = [
+    { kind: "maskable", safe: SAFE_RADIUS, knob: "MASKABLE_SCALE", what: "the maskable mark" },
+    {
+      kind: "adaptive",
+      safe: ADAPTIVE_SAFE_RADIUS,
+      knob: "ADAPTIVE_SCALE",
+      what: "the launcher's foreground",
+    },
+  ];
+  for (const { kind, safe, knob, what } of zones) {
+    const alone = drawing(master, 512, kind).replace(/<rect width="64"[^>]*><\/rect>/, "");
+    const { result } = await page("Runtime.evaluate", {
+      expression: measure(alone, 512),
+      awaitPromise: true,
+      returnByValue: true,
+    });
+    const reach = result.value;
+    if (!(reach > 0.2 && reach <= safe)) {
+      throw new Error(
+        `${what} reaches ${(reach * 100).toFixed(1)}% of the width from the centre; ` +
+          `the safe zone is ${(safe * 100).toFixed(1)}%. Lower ${knob}.`,
+      );
+    }
+    console.log(
+      `ok  ${what} reaches ${(reach * 100).toFixed(1)}% — inside the ${(safe * 100).toFixed(1)}% circle`,
     );
   }
-  console.log(`ok  the maskable mark reaches ${(reach * 100).toFixed(1)}% — inside the 40% circle`);
 
-  for (const { file, size, maskable } of ICONS) {
+  for (const icon of ICONS) {
+    const { dir, file, kind } = icon;
+    const width = icon.width ?? icon.size;
+    const height = icon.height ?? icon.size;
+    await mkdir(dir, { recursive: true });
     await page("Emulation.setDeviceMetricsOverride", {
-      width: size,
-      height: size,
+      width,
+      height,
       deviceScaleFactor: 1,
       mobile: false,
     });
     const html =
-      `<!doctype html><html><body style="margin:0;overflow:hidden">` +
-      drawing(master, size, maskable).replace("<svg ", `<svg style="display:block" `) +
-      `</body></html>`;
+      kind === "feature" ? featurePage(master, width, height) : iconPage(master, width, kind);
     await page("Page.navigate", {
       url: `data:text/html;base64,${Buffer.from(html).toString("base64")}`,
     });
@@ -232,13 +339,20 @@ async function main() {
       if (tries > 100) throw new Error(`${file}: the drawing never loaded`);
       await pause(50);
     }
+    // A JPEG where the store takes no alpha; a PNG everywhere else, so a transparent mark stays so.
+    const jpeg = file.endsWith(".jpg");
     const shot = await page("Page.captureScreenshot", {
-      format: "png",
-      clip: { x: 0, y: 0, width: size, height: size, scale: 1 },
+      format: jpeg ? "jpeg" : "png",
+      ...(jpeg ? { quality: 92 } : {}),
+      clip: { x: 0, y: 0, width, height, scale: 1 },
     });
-    await writeFile(join(OUT, file), Buffer.from(shot.data, "base64"));
-    console.log(`ok  ${file} — ${size}×${size}${maskable ? ", on the ground" : ", transparent"}`);
+    await writeFile(join(dir, file), Buffer.from(shot.data, "base64"));
+    console.log(`ok  ${file} — ${width}×${height}, ${kind}`);
   }
+
+  await mkdir(join(ANDROID_RES, "mipmap-anydpi-v26"), { recursive: true });
+  await writeFile(join(ANDROID_RES, "mipmap-anydpi-v26", "ic_launcher.xml"), ADAPTIVE_XML);
+  console.log("ok  mipmap-anydpi-v26/ic_launcher.xml — the adaptive icon");
 }
 
 main()

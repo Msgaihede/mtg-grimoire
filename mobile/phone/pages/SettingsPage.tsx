@@ -7,6 +7,7 @@ import { ErrorLogPanel } from "@/features/settings/ErrorLogPanel";
 import { HiddenTagsPanel } from "@/features/settings/HiddenTagsPanel";
 import { LabelsPanel } from "@/features/settings/LabelsPanel";
 import { MarketplacePanel } from "@/features/settings/MarketplacePanel";
+import { PrivacyLink } from "@/features/settings/PrivacyLink";
 import { ReviewPanel } from "@/features/settings/ReviewPanel";
 import { SyncPanel } from "@/features/settings/SyncPanel";
 import { TheoryMarksPanel } from "@/features/settings/TheoryMarksPanel";
@@ -189,6 +190,11 @@ export function SettingsPage(): JSX.Element {
           );
         })}
       </ul>
+      {/* Under the last group, in the list's own column: Google Play asks for the policy's link
+          in the app as well as on the listing, and this is every reader's last row. */}
+      <p className="mx-auto max-w-2xl px-4 py-6">
+        <PrivacyLink />
+      </p>
     </div>
   );
 }

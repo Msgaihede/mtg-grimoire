@@ -8,8 +8,8 @@
 // This is the run that instantiates it. It serves `dist-web/` **as the production host will** —
 // every response under the headers `dist-web/_headers` gives its address, the
 // Content-Security-Policy among them, and a miss as the hosting Worker's own 404 — opens it in
-// headless Chromium over the DevTools protocol, and asks seventeen things, in this order — the
-// first sixteen of one browser, and the last of a second, because it needs a first run of its
+// headless Chromium over the DevTools protocol, and asks eighteen things, in this order — the
+// first seventeen of one browser, and the last of a second, because it needs a first run of its
 // own:
 //
 //   1. the app got past its startup gate — the engine loaded, and opened and migrated a database
@@ -32,21 +32,24 @@
 //      its interval asks for the card listing and for no card file
 //  10. Settings' Clear cache empties the picture cache and leaves the shell
 //  11. a second tab is told the app is open elsewhere, and offered a reload
-//  12. a new build of the worker installs and *waits*: the page draws its bar, a second shell
+//  12. the privacy policy opens as itself — `/privacy`, in a tab the service worker controls,
+//      is the document with its one heading and not the app, and loaded under the host's
+//      policy with nothing refused;
+//  13. a new build of the worker installs and *waits*: the page draws its bar, a second shell
 //      cache stands beside the first, and a reload leaves all of that as it is
-//  13. the bar's button, and nothing else, hands over: the page starts again once, on the new
+//  14. the bar's button, and nothing else, hands over: the page starts again once, on the new
 //      build's shell alone, with no bar — and the second tab is neither told nor reloaded
-//  14. a deck is made and a note opened in it: the editor — the app's one lazily loaded chunk,
+//  15. a deck is made and a note opened in it: the editor — the app's one lazily loaded chunk,
 //      over a library that appends a stylesheet of its own unless told not to — draws, takes
 //      typing, and leaves no style element on the page
-//  15. no request would cost a CORS pre-flight — the worker's picture fetch included — and none
+//  16. no request would cost a CORS pre-flight — the worker's picture fetch included — and none
 //      went to a host this script has no answer for; **and the sync relay heard nothing**: live
 //      sync's loop runs in this engine since step 6.3, this device is in no sync group, and it
 //      made no request to the relay and opened no socket to anybody (`watchPolicy` has how a
 //      socket, which no interception sees, is heard)
-//  16. the host's Content-Security-Policy refused nothing, anywhere: not in a page, not in the
+//  17. the host's Content-Security-Policy refused nothing, anywhere: not in a page, not in the
 //      engine's Worker, not in the service worker (`watchPolicy` has why those are three)
-//  17. on a fresh profile whose card file is thirty thousand cards, a reload made the moment
+//  18. on a fresh profile whose card file is thirty thousand cards, a reload made the moment
 //      the engine stops answering — it is inside a synchronous call, and the Worker the page
 //      leaves behind still holds the database — draws the app and no refusal, and the page says
 //      it had to ask again (`reloadInsideTheIngest` has why that line is the check, and what
@@ -55,7 +58,7 @@
 // **No request leaves the machine.** The engine starts the launch's downloads the moment the
 // database opens, and the service worker fetches a picture for every tile, so every
 // cross-origin request is paused by the DevTools `Fetch` domain and answered from
-// `scripts/web-smoke/` with the headers the real host sends — the seventeenth check's card file
+// `scripts/web-smoke/` with the headers the real host sends — the eighteenth check's card file
 // excepted, which is those six cards grown in memory. Two fences stand behind that: a
 // request to a host with no fixture is failed *and fails the run*, and the browser is started
 // with a resolver that knows no name but `localhost`, so a request the interception never saw
@@ -633,9 +636,32 @@ async function main() {
   if (!offered) fail("the second tab was told, and offered no Reload");
   console.log("ok  a second tab was told, and offered a reload");
 
+  // The privacy policy, at the address the store listing and Settings link to. This tab is one
+  // the worker controls, which is the reader it has to work for: the worker answers every
+  // other extensionless navigation with the app.
+  const privacy = await openPage(browser, `${origin}/privacy`, hosts.check, policy);
+  const heading = await privacy.until(
+    "the privacy policy drew",
+    `document.querySelector("h1")?.innerText ?? null`,
+  );
+  if (heading !== "MTG Grimoire privacy policy") fail(`/privacy drew the heading:\n${heading}`);
+  const shape = await privacy.evaluate(
+    `({
+      app: !!document.querySelector("#root"),
+      scripts: document.scripts.length,
+      sheet: [...document.styleSheets].some((sheet) => sheet.href?.endsWith("/privacy.css")),
+      ground: getComputedStyle(document.documentElement).backgroundColor,
+    })`,
+  );
+  if (shape.app || shape.scripts !== 0) fail(`/privacy is not a plain document: ${JSON.stringify(shape)}`);
+  if (!shape.sheet || shape.ground !== "rgb(12, 13, 18)") {
+    fail(`/privacy drew without its stylesheet: ${JSON.stringify(shape)}`);
+  }
+  console.log("ok  /privacy is the policy — one heading, its own sheet, no script, not the app");
+
   // A second deploy: the same files under a worker whose build id differs. The browser finds
-  // it byte-different, installs it — a second shell cache — and keeps it waiting, because two
-  // pages of the old build are open. Nothing but the reader's press may end that wait.
+  // it byte-different, installs it — a second shell cache — and keeps it waiting, because three
+  // pages of the old build are open (the privacy tab above is the third). Nothing but the reader's press may end that wait.
   const next = `${build}-next`;
   const source = readFileSync(join(DIST, "sw.js"), "utf8");
   if (source.split(build).length !== 2) {
@@ -669,7 +695,7 @@ async function main() {
     `ok  a new build waits — the bar is drawn, two shell caches, and a reload changes nothing`,
   );
 
-  // The press. The new worker takes over, deletes the old shell and claims both tabs; the tab
+  // The press. The new worker takes over, deletes the old shell and claims all three; the tab
   // that pressed starts again, once, and the tab with no database stays as it was.
   documents = opens(first);
   await first.evaluate("window.__smokeDocument = true");

@@ -1032,8 +1032,11 @@ Each verified against Cloudflare's documentation on 2026-10-04.
 | `assets.not_found_handling` | `single-page-application` | `workers/static-assets/routing/single-page-application/` — with a script, "*navigation requests* will not invoke the Worker script" |
 | `observability` | `{ "enabled": true }` | as the other two Workers |
 
-`html_handling` is left at its default, `auto-trailing-slash`: `/index.html` redirects to `/`, and
-nothing in the build is another HTML file.
+`html_handling` is left at its default, `auto-trailing-slash`: `/index.html` redirects to `/`.
+**One other HTML file is in the build since 2026-10-07: `privacy.html`**, the privacy policy
+(`mobile/public/`), which that default serves at `/privacy` and redirects `/privacy.html` to.
+A reader the service worker controls never reaches the host for it, bar a cache miss or an
+older worker that has not updated yet: the worker answers `/privacy` with the precached file (`sw/shell.ts`, `routeFor`).
 
 ## Testing
 

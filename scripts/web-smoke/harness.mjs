@@ -446,6 +446,9 @@ const NOT_FOUND = {
  *   runs, as Cloudflare does; one that does not say is a place by `isNavigation`, the script's
  *   own rule, which knows the trees where nothing is one — so `/mtgimg/…` asked for by an
  *   `<img>`, a missing chunk and `/_headers` are each a 404 that nothing may keep.
+ * - **A page of the build's own is answered as the host answers it too**: `/privacy.html` is a
+ *   307 to `/privacy`, and `/privacy` is that file — so the worker's install, which fetches the
+ *   `.html` address, meets the redirect here and not first on the day of a deploy.
  * - **No `no-store` on the shell, and it matters less than it did.** The precache used to start
  *   every fetch at once and read no body until all had answered; uncacheable bodies then held
  *   all six of HTTP/1.1's sockets and the install never ended. It takes four at a time now.
@@ -467,17 +470,27 @@ async function serve() {
     if (site.refusing) return void request.socket.destroy();
     const path = decodeURIComponent((request.url ?? "/").split("?")[0]);
     const onDisk = normalize(join(DIST, path));
+    const isFileOf = (candidate) =>
+      candidate.startsWith(DIST + sep) && existsSync(candidate) && statSync(candidate).isFile();
+    // The host's two rules for a page of the build's own, before its file/place decision: the
+    // `.html` address is a redirect to the extensionless one, which answers the file.
+    if (path.endsWith(".html") && path !== "/index.html" && isFileOf(onDisk)) {
+      const [pathOnly, ...query] = (request.url ?? "/").split("?");
+      const location =
+        pathOnly.slice(0, -".html".length) + (query.length ? `?${query.join("?")}` : "");
+      response.writeHead(307, { Location: location, ...headersFor(rules, path) });
+      response.end();
+      return;
+    }
+    const page =
+      path !== "/" && extname(path) === "" && isFileOf(`${onDisk}.html`) ? `${onDisk}.html` : null;
     // A path that climbs out of the folder is nobody's file, and neither is the host's own.
-    const file =
-      onDisk.startsWith(DIST + sep) &&
-      path !== "/_headers" &&
-      existsSync(onDisk) &&
-      statSync(onDisk).isFile();
+    const file = path !== "/_headers" && isFileOf(onDisk);
     const place =
       path === "/" ||
       request.headers["sec-fetch-mode"] === "navigate" ||
       isNavigation(request.method, request.headers.accept, path);
-    const target = file ? onDisk : place ? join(DIST, "index.html") : null;
+    const target = file ? onDisk : page ? page : place ? join(DIST, "index.html") : null;
     if (target === null) {
       response.writeHead(404, NOT_FOUND);
       response.end("Not found");

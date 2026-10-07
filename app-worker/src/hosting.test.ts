@@ -72,6 +72,10 @@ const UNHASHED = [
   "/mtg-grimoire-mark.svg",
   "/icons/icon-192.png",
   "/icons/maskable-512.png",
+  // The privacy policy: a document and its sheet, under the one policy like everything else.
+  "/privacy",
+  "/privacy.html",
+  "/privacy.css",
 ];
 const SERVICE_WORKER = "/sw.js";
 const EVERY = [...DOCUMENT, ...HASHED, WORKER_CHUNK, ...ENGINE, ...UNHASHED, SERVICE_WORKER];

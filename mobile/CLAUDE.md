@@ -77,7 +77,7 @@ Navigation grammar is standardized in `routes.ts`: views, decks, `?folder=<id>` 
 
 ### Android Host (`src-tauri/` in light mode)
 - Workspace member with minimal footprint: mobile entry, `core_call` IPC forwarding to `grimoire_core::dispatch`, `mtgimg` image protocol, and the launch's background tasks.
-- `gen/android/` configuration is pinned and validated by `host.test.ts` (backup disabled, camera optional, `cache/exports/` FileProvider).
+- `gen/android/` configuration is pinned and validated by `host.test.ts` (backup disabled, camera optional, `cache/exports/` FileProvider, and the launcher's icon). The icon is rendered from the master mark by `node scripts/light-icons.mjs` and committed; never run `tauri android init` or `tauri icon` over `gen/android` — both put stock art back.
 - Scoped capabilities in `capabilities/light.json`: `core:default`, `opener:allow-open-url`, and `opener:allow-default-urls`.
 - Metered network check: Launches hold heavy card downloads until user confirms or unmetered Wi-Fi is available.
 - Ships from the release tag, with the desktop and the web app: `release.yml` builds the APK as CI does (debug-signed), and a job that holds the release key and builds nothing re-signs it (`scripts/android-sign.sh`). The Gradle project reads no keystore — never add a signing config or a `keystore.properties` to `gen/android`. `src-tauri/release-signer.sha256` (absent until the owner makes the key) is the public fingerprint every release's signer is held to: never regenerate or replace it without the owner (`host.test.ts`; [ci-and-releases.md](../docs/reference/ci-and-releases.md), "The release rule").
@@ -88,6 +88,7 @@ Navigation grammar is standardized in `routes.ts`: views, decks, `?folder=<id>` 
 - Singleton Worker instance initialized lazily by `webCore`.
 - Second-tab protection via Web Locks (`mtg-grimoire:database`).
 - Service Worker handles shell precaching and card picture caching in Cache Storage via the app origin (`/mtgimg`).
+- One document is not the app: `mobile/public/privacy.html`, the privacy policy, served at `/privacy`. It runs no script and loads one stylesheet; the service worker answers a navigation to a place whose `.html` it precached with that file (`sw/shell.ts`). `host.test.ts` holds its shape and holds its list of hosts to the web policy's `connect-src` — a new host there owes the page a row.
 - Shipped under strict Content Security Policy (`style-src 'self'`). No runtime `<style>` tags or unauthorized `motion` APIs allowed.
 - Live sync: the web host runs the core's connection manager too (`host::live_sync`, spawned beside the launch's downloads once `open` has answered), over the engine Worker's own `WebSocket` — the bearer in a sub-protocol, a text `ping`. `sync:live` and `sync:applied` reach the page through the Worker's event path, and both faces hear them. The policy's `connect-src` names the relay twice, `https://` and `wss://`: Chrome refuses the socket under the first alone.
 

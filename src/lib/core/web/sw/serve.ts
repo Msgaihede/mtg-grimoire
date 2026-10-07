@@ -462,8 +462,9 @@ export function createWorker(env: WorkerEnv): Served {
         case "passthrough":
           return null;
         case "navigation":
-          // Every place is the one document, and it is this build's: a reload under a waiting
-          // update is the same app, which is what keeps a reload from being an update.
+          // Every place — bar a page of the build's own, such as the privacy policy, which is a
+          // `shell` route — is the one document, and it is this build's: a reload under a
+          // waiting update is the same app, which is what keeps a reload from being an update.
           return fromShell(DOCUMENT, request);
         case "shell":
           return fromShell(route.key, request);
