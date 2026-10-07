@@ -1639,7 +1639,10 @@ add-wins comparison, making a delete always win, or dropping the delete arm each
 nothing it writes is captured back into `sync_ops` — without that guard two devices ping-pong an
 op forever. It drops ops at or below `sync_peers[device]`, **and ops this device wrote itself**:
 a counter is not idempotent, so one of this device's own `+1`s coming back would be a card
-appearing out of nothing, and the relay is not trusted to have filtered it.
+appearing out of nothing, and the relay is not trusted to have filtered it. **One op at or below
+the watermark is not dropped**, since 2026-10-07: an older build's baseline claim for a row this
+device never held, on a fresh install that has heard from no other device (*An older build's claim
+for a row never held*, below).
 
 Three things it does that the plan's design does not, each found by a test rather than by
 reading:
@@ -2142,7 +2145,7 @@ before it was fixed (2026-10-03, debug, Windows):
 | Pair | What happens |
 | --- | --- |
 | this emitter → an older receiver | the `emission` field is ignored; claims are judged by `at` as they always were, with every loss above |
-| an older emitter → this receiver | no `emission` field: `main`'s rules, unchanged — judged by the watermark on `at`, a covered put dropped as inside. The original same-second `+1` stays lost for this pair alone |
+| an older emitter → this receiver | no `emission` field: `main`'s rules — judged by the watermark on `at`, a covered put dropped as inside — **but for a claim about a row never held here, on a fresh install that has heard from no other device**, which the watermark stopped judging on 2026-10-07 (*An older build's claim for a row never held*, below). A claim stripped at the door is not one of those. The original same-second `+1` stays lost for this pair alone |
 | both on this build | everything above |
 
 A mixed group is never worse than it was, and the gains are between upgraded devices. No rung: every
@@ -2163,6 +2166,131 @@ it (`a_page_an_older_build_applied_writes_nothing_again_after_the_upgrade`). A d
 (`the_upgrade_cut_is_minted_once`). **What it costs is a day**: for up to `MAX_AHEAD_MS` after a
 device first applies under this build, a re-baseline it receives from an upgraded emitter behaves
 as before.
+
+#### An older build's claim for a row never held
+
+**Built 2026-10-07** ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)), for the one pair the emission design left on `main`'s
+rules: an emitter older than v0.40.0 and a receiver on this build. Such a claim names no emission,
+so `apply_in` judged it by its sender's watermark and let it raise it — and the first two rows of
+this section's table stayed true for that pair on a device that is *live*. It hears the doorbell on
+the first chunk, or on the emitter's own ordinary op, pulls, and the rest of the baseline arrives
+below a watermark that pull lifted. Step 6.5b keeps a device that is *catching up* out of it, by
+reading such a catch-up as one answer; nothing a pull does can help a device whose two pulls are
+seconds apart. Red on `main` at `63d1a44f` before anything changed (debug, Windows): **3 rows / 1**
+and **5 copies / 0** — the table's own figures — in `apply`, and through the client's two fixtures
+run three ways.
+
+**The rule**: an older build's claim is not skipped as seen where **nothing on this device says it
+ever held the row** (`apply.rs`'s `never_held`) — **on a fresh install that has heard from no
+device but that emitter** (`alone`). A watermark is a place in its device's log, and a row the log
+never brought is one it says nothing about. Everything else about the claim is `main`'s: it goes
+to the fold as it does when it is not seen, builds its row or meets its grain twin, and moves no
+watermark, being at or below it. Once built the row is held here, and the same claim handed back
+is the watermark's again.
+
+**It is this narrow because "missing" is not "never held", and each way of telling them apart
+that was tried and could not be made sound was cut rather than kept.** A row held here came
+through the log, which brings everything that happens to it; the watermark there is the cheap exit
+a re-broadcast is stamped for (`baseline`'s module doc); and a claim let through onto it is a
+floor, which takes back whatever was removed since. So the claim is let through only where every
+row of this table holds, each with a test that went red when it alone was taken out (2026-10-07,
+debug, Windows; all in `apply/emission_tests.rs`, under *An older build's baseline*, their names
+beginning `an_older_builds_` but for the first):
+
+| The claim is let through only where | Taken out | Test |
+| --- | --- | --- |
+| it came with no reference — not one stripped at the door (the upgrade cut, a missing head) | a stripped claim's catch-up is not read as one answer, so a delete that followed it can be a page away | `a_claim_stripped_at_the_door_is_still_the_watermarks` |
+| this device is in its **first generation** | a device back in a group it left reads the log again with its watermarks kept, and builds a row from a claim whose emitter's later ops it then skips | `…claims_are_the_watermarks_on_a_device_not_in_its_first_generation` |
+| it holds **no watermark for another device** | a card a third device deleted comes back on this device alone, **0 / 1 / 0** | `…claims_are_the_watermarks_where_another_device_has_a_watermark` |
+| **no op of another device is in the page**, the client's held-back ones included | the same, where that device's first op and the claim come together | `…claims_are_the_watermarks_beside_another_devices_op` |
+| **no emission was ever taken from another device** — a claim that names one raises no watermark | the same, for a device heard only through its claims | `…claims_are_the_watermarks_once_another_devices_emission_was_taken` |
+| **it is the only op of the page that names its row** | beside a delete, a page handed back rebuilds what the delete took; beside an op already seen, it builds the row without what that op did; beside one not yet seen, the two make a group that holds its sender from a stamp below the watermark; beside a second claim, the two fold by `max` | `…claim_handed_back_beside_the_delete_that_followed_it_builds_nothing`, `…claim_beside_an_op_already_consumed_for_its_row_is_skipped_as_seen`, `…claim_beside_a_fresh_op_for_its_row_is_skipped_and_holds_nothing`, `…two_claims_for_a_row_in_one_page_are_the_watermarks` |
+| no row here wears its uid — a grain twin under another uid is not one | a held row is floored again: the second half handed back applies twice | `…baseline_pulled_in_two_halves_reaches_a_device_that_held_nothing`, `…claim_below_the_watermark_still_meets_its_grain_twin` |
+| this device's own `sync_ops` does not name it | a row deleted here comes back on this device alone, once the delete has reached its emitter, **0 / 1** | `…claim_for_a_row_this_device_deleted_is_skipped_as_seen` |
+| its uid was not merged into another row here (`retired@`) | the merged-away uid is built beside its survivor — the write path's own refusal asks only a claim that names an emission | `…claim_for_a_uid_merged_away_here_builds_nothing` |
+
+**The first generation** is `emission::first_generation`: `logging_resumed` written `0`, which
+`start_logging` writes for a device whose capture turned on with no generation and no watermark
+held before — a fresh install, joined under v0.40.0 or later, that has not left since. Nothing has
+ever sent such a device back to the first row of its log with its watermarks kept. One that left
+and came back reads the log again exactly so, and those watermarks are then all that stands
+between it and a claim it met in its earlier time there; one paired under a build before the mark
+has none, and nothing can say whether it came back in that time. Both keep the watermark's answer
+for every claim.
+
+**Nobody else heard, and why a horizon could not stand in for that.** A delete leaves a `sync_gone`
+row only on a table something is filed under, so a copy a third device's delete took here reads
+exactly like one never held — and the emitter, not having heard the delete, still claims it. Two
+ways of ruling that out were built and thrown away, each by a fresh review of the cut that had it:
+
+- *Compare the emitter's horizon with this device's watermarks for the devices on its roster.*
+  `sync_devices` holds only the devices this one paired with itself: a device that adopted somebody
+  else's rotation learns who left and never who joined (`client::publish_join`). The third device a
+  peer brought in — the one this is about — was the one the roster left out, and the guard passed
+  for want of anything to ask.
+- *Compare it with every watermark instead.* **A horizon says what its emitter passed, not what it
+  applied**: a watermark steps over an envelope sealed under a key the device never held, and over
+  a group it dropped. An emitter removed and paired again steps over what the group wrote while it
+  was out, keeps the row, and reaches the watermark all the same.
+
+What is left asks no horizon: this device has heard from nobody else at all — no watermark, no op
+in the page, no emission taken (`emission::heard_another`; `carried@` is not asked, since it names
+what a taken emission's *emitter* had heard). With one other device in the conversation the only
+deletes are this device's own, which its log names, and the emitter's, which either came before
+the claim was built or are in the same answer as it.
+
+**A claim let through that cannot be written is skipped, as it was**: no hold, no `error_log` row,
+no gap, and counted in `skipped`. Its group is the claim alone (the table's sixth row), and
+`run_groups` answers `Moot` for it whatever `classify` would say; classified like any other it
+would wait on a parent the page does not carry, with its sender's later ops behind it, or be
+dropped and recorded and open the gap — and again on every page handed back and at every
+re-broadcast, since nothing marks a claim below the watermark consumed
+(`…claim_let_through_that_cannot_be_written_is_skipped_in_silence`). The one write that can
+outlast it is the moot arm's own: where the claim names a cascading parent that is gone here and
+its table is one rows are filed under, the arm leaves the `sync_gone` row it always leaves.
+
+The tests that land a row: the two halves, the sparse op ahead, a first-contact parent below the
+watermark, a grain twin in the later half, and a later chunk beside a held row whose same-second
+`+1` stays lost. The client's two fixtures (`client/tests/paged.rs`) run a fresh install and end
+with the live device equal to the unpaged one.
+
+**What it costs**: one indexed read for each seen claim where the row is held — a re-broadcast of
+rows all held here used to be no database work at all — three where it is not, and two reads of
+`sync_state` for a page that carries such a baseline from the only device ever heard. Any other
+page reads nothing.
+
+**The A/B against `main`, 2026-10-07, debug, Windows.** Byte copies of the dev database — user
+schema 59, paired, 277 copies, 6 decks, 729 deck cards — none launched as the app. A throwaway
+harness opened each through `launch::open` and drove `client::pull` over six pulls from one
+scripted peer, each answered by a mock on the loopback: built from `main` at `63d1a44f` in a
+control worktree, and from the branch. The peer was a further copy re-identified as the roster's
+other device, saying things through the real `capture`, `baseline` and `emission` code, sealed
+with the copy's own group key. Nothing reached the relay. **Run twice**: on the database as it
+stands — which has left and rejoined groups and holds a watermark for a device of a former one, so
+is no fresh install — and on a copy made to read as one, by hand: `logging_resumed` set to `0` and
+that one stale watermark removed, as the 2026-10-03 pass set its cut.
+
+| Pull | `main`, both runs | The branch, as it stands | The branch, as a fresh install |
+| --- | --- | --- | --- |
+| Ordinary ops: a `+1`, a new copy, a deck renamed, a deck's card deleted | applied 4 | applied 4 | applied 4 |
+| A v0.40+ re-broadcast, 1 361 claims in 10 chunks | applied 1 361 | applied 1 361 | applied 1 361 |
+| An older build's re-broadcast of the same rows | skipped 1 361, as one answer | the same | the same |
+| That build's own sparse `+1` on a copy it held before it was paired | dropped 1 | dropped 1 | dropped 1 |
+| Its baseline of 1 365 claims, the first half | skipped 750 | skipped 750 | skipped 750 |
+| The second half | skipped 615 | skipped 615 | **applied 4**, skipped 611 |
+
+Every table of each pair compared by rowid, the ones with none as multisets. **As it stands, the
+branch is `main` to the row**: 29 of 33 tables identical, and the other four differ only in the
+wall-clock stamps of rows both runs wrote, the runs 4 s apart — two copies' and a deck's
+`updated_at`, one `error_log` row's times and `sync_clock`. **As a fresh install** the same, and
+the four rows the peer held before it was paired, on the branch alone: a binder and three copies,
+one filed in the binder, the one behind the sparse op at 5 for the emitter's 5. `sync_peers`,
+`sync_state` and `sync_gone` are identical in both pairs — the same cursor, gap and marks. (The
+peer plays a v0.40+ build in one pull and an older one in the next, which no device does; the
+`carried@` mark its emission leaves for the former group's device is what showed that mark must
+not be read as a device heard.)
+
+**What it leaves** is in *What is still owed*.
 
 #### Why no receiver-side rule could trust a claim
 
@@ -2879,9 +3007,15 @@ every chunk since baselines were built, on nothing else, and since v0.40.0 a ref
 op of one; both generations stamp schema 59 — and held to what each really writes
 (`only_a_horizon_with_no_reference_is_an_older_builds_baseline`). Against the unpaged database:
 `an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged` and
-`an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answer`. ⚠️ **A device that
-is live while such a build pushes still loses those rows**, as it always has — each of those
-tests pins it in its last assertion — and that is *What is still owed*'s, not this pull's.
+`an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answer`. **A device that
+is live while such a build pushes lost those rows until 2026-10-07**, and each of those tests
+pinned it in its last assertion. That was `apply`'s to close, and for a fresh install paired
+with one such device, and a row it never held, it has (*An older build's claim for a row never
+held*, above): each test now runs such a receiver and ends with the live device equal to the
+unpaged one. **The one-answer evaluation stays, and that rule leans on it**: it leaves every
+other claim to the watermark, and it sees a delete that followed a claim only where the two are
+in one answer. On such a receiver a page at a time now ends on the same rows, so of those two
+tests' assertions it is `Pulled::whole` alone that still says the catch-up was read as one.
 
 **With no such baseline in it, a paged catch-up equals what an always-live device's sequence of
 pulls produces, not what one unpaged pull produced.** A page is the rows the relay held up to
@@ -4554,21 +4688,31 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   second, and linear memory ends at 69.5 MB; the one-answer evaluation was not measured in a
   browser. **What it leaves owed** is the next three bullets — each its own, none of
   them made by paging — and what this one said until then is kept under them.
-- ⚠️ **A device that is live while a build older than v0.40.0 pushes a baseline loses rows —
-  "a baseline pulled in two halves" and "a sparse op pulled ahead of its baseline", for every
-  emitter that sends no references.** *A claim names its emission* closed both for the builds
-  that send them (2026-10-03, v0.40.0); a claim with no reference is still judged by its
-  sender's watermark, so a peer that hears the doorbell and pulls between that sender's
-  ordinary op and its baseline, or between two of its chunks, skips as seen every row stamped
-  below what it has already applied. Step 6.5b keeps a device that is *catching up* out of it,
-  by reading such a catch-up as one answer; it changes nothing for a device that is live, and
-  nothing could from the pull alone. The fixtures, each with the live device a row short in
-  its last assertion (`client/tests/paged.rs`):
-  `an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged` and
-  `an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answer`. It ends when
-  no device in a group is older than v0.40.0; closing it for a new receiver of an old emitter
-  means judging a reference-less claim by something other than the watermark, which is
-  `apply`'s.
+- ~~**A device that is live while a build older than v0.40.0 pushes a baseline loses rows — "a
+  baseline pulled in two halves" and "a sparse op pulled ahead of its baseline", for every emitter
+  that sends no references.**~~ **Closed 2026-10-07 for a fresh install paired with one such
+  device, and a row it never held** ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843); *An older build's claim for a row never
+  held*, above): there the claim is no longer judged by its sender's watermark, and both fixtures
+  (`client/tests/paged.rs`) end with the live device equal to the unpaged one. ⚠️ **What it
+  leaves**, each ending when no device in a group is older than v0.40.0:
+  - **A receiver that has heard from any device but the old emitter loses the rows as before** —
+    a third device's op, in any pull or in the page; an emission taken from one. A delete of a copy
+    leaves nothing behind to tell a row a third device deleted from one never held, and no horizon
+    settles it, since a horizon says what its emitter passed and not what it applied. A device
+    joining a group that already has a second device on v0.40.0 or later is handed that device's
+    emission, which carries what it holds, the old emitter's rows among them where it has them.
+  - **A receiver that is not in its first generation loses them too**: one that has left a group
+    and joined one again, or was paired under a build before v0.40.0, which wrote no mark to say.
+    It cannot tell a claim it never met from one it read in its earlier time in the group.
+  - **A claim for a row held here is `main`'s still**: the same-second `+1`, and every other loss
+    *A claim names its emission* measured for a held row.
+  - **A claim that is not the only op of its page for its row is skipped still**: a baseline
+    handed back behind its emitter's own op for the row — a held cursor that returns the sparse
+    `+1` and the baseline in one page — or one that arrives with the emitter's fresh edit of that
+    row. The claim may or may not carry the op, and the page does not say which.
+  - **A claim let through that cannot be written says nothing**, as the skip it replaces said
+    nothing: no hold, no `error_log` row. Its row is simply still missing, and the next delivery
+    tries again.
 - ⚠️ **A copy filed into a binder that was deleted here, whose binder a later push brings back,
   stays at the root — and the sender keeps it in the binder.** Found by step 6.5b's
   split-across-a-page-edge tests and not made by paging: `apply` writes the copy at the root
@@ -4645,8 +4789,11 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   judges one (*A claim names its emission*, above), and
   `a_first_contact_parent_below_the_watermark_lands_with_its_child` draws the parent from
   `baseline::build` behind an earlier ordinary op of its emitter's and lands it with its child on
-  the first delivery. **An older emitter's baseline keeps it**, judged by `main`'s rules (the next
-  bullets).
+  the first delivery. **An older emitter's baseline kept it**, judged by `main`'s rules (the next
+  bullets), **until 2026-10-07**: a parent never held here is let through from below the watermark
+  on a fresh install that has heard from no other device
+  (`an_older_builds_first_contact_parent_below_the_watermark_lands_with_its_child`), and keeps it
+  on any other.
 - **A resumed emission, or any active emission while this device has a gap, floors the rows held
   here — and a floor takes back a removal, or reinstates a note, made here in the window before it
   lands** ([the claim emissions design](../superpowers/specs/2026-10-03-baseline-claim-emissions-design.md)
@@ -4674,7 +4821,11 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 - **An older emitter's baselines keep every loss *A claim names its emission* measured** (§11), the
   original same-second `+1` among them, until that device is updated: no `emission` field, so
   `main`'s rules. No test pins the loss; `apply/tests.rs`, which never sets the field, is `main`'s
-  rules unchanged.
+  rules unchanged. **Since 2026-10-07 that is every loss on a row held here, and — on a fresh
+  install that has heard from no other device — no longer the two on a row never held**, the two
+  halves and the sparse op ahead (*An older build's claim for a row never held*);
+  `an_older_builds_later_chunk_lands_and_its_held_row_is_judged_as_it_was` pins the same-second
+  `+1` as still lost beside a row that lands.
 - **A device that resumed before this build sends `since: 0` and no `resumed`** (§11, unmeasured).
   It left and rejoined under an older build, so nothing on this one ever minted its generation,
   and its first emission after the upgrade writes nothing on rows held elsewhere: edits it made

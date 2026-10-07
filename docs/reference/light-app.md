@@ -6776,6 +6776,15 @@ not the second: by the time a page shows the chunk, the page before has moved th
 So the catch-up is **classified whole, before any of it is applied**, which is why a pull
 fetches first.
 
+**Since 2026-10-07 the table's last column reads both rows for a fresh install paired with
+one such device** ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)): on a receiver that has heard from nobody else, `apply` no
+longer judges an older build's claim for a row never held by its sender's watermark
+([sync.md](sync.md), *An older build's claim for a row never held*), and both fixtures run
+such a receiver and end with the live device equal to the unpaged one. The middle column
+was not run again. The one-answer evaluation is kept, and that rule leans on it: every
+other claim is still the watermark's, and a delete that followed a claim is seen beside it
+only where the two are in one answer.
+
 **What says "an older build's baseline" is a horizon with no reference**, and it is exact:
 every build that has emitted a baseline has put the horizon on the first op of every chunk
 (since `94265442`, v0.18.0) and on nothing else; since v0.40.0 every op of a baseline carries
@@ -6955,9 +6964,11 @@ The rest of what the review found is in the list below, each marked as its.
   There is no credential-free tell for it: `GET /g/abc/pull?limit=1` answers the gate's `401`
   before and after. The runbook's item 14 has the two tells a device's own token gives, and
   neither has been read.
-- **A device that is live while a build older than v0.40.0 pushes its baseline still loses
-  rows**, as it always has; [sync.md](sync.md)'s *What is still owed* has it as its own entry,
-  with the fixtures. It ends when no device in a group is older than v0.40.0.
+- **A device that is live while a build older than v0.40.0 pushes its baseline lost rows**, as
+  it always had, **until 2026-10-07** ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)): closed for a fresh install paired
+  with one such device, and a row it never held. [sync.md](sync.md)'s *What is still owed* has
+  what that leaves — a group of three among it — with the fixtures. All of it ends when no
+  device in a group is older than v0.40.0.
 - **The `gone` reversal is not fixed.** It needs `apply` to revisit a `SET NULL` it made when
   the parent comes back — its own entry there too.
 - **A catch-up's pages are fetched again from the first when one request of it fails**, since
