@@ -15,6 +15,7 @@
 use super::meta_of;
 use super::{Class, Deferral};
 use crate::sync_engine::emission::{self, Record, Stamp};
+use crate::sync_engine::hlc::Hlc;
 use crate::sync_engine::merge::{Emission, Horizon, Kind, Op};
 use rusqlite::Connection;
 use std::collections::{BTreeMap, BTreeSet};
@@ -316,6 +317,64 @@ pub(super) fn settle(
         emission::close_gap_if_whole(conn).map_err(sql)?;
     }
     Ok(())
+}
+
+/// A claim with no reference — an older build's baseline (v0.18.0–v0.39), as it was sent — below
+/// its sender's watermark, that the watermark cannot speak for (issue #843). A claim's stamp is its
+/// row's `updated_at` in table order, never a place in its sender's log, so whatever of that
+/// sender's applied here first — a chunk carrying a later stamp, or its own ordinary op pushed a
+/// moment ahead of the baseline — lifted the watermark past it without this device ever holding
+/// the row. Such a claim is let past the watermark where both of these hold:
+///
+/// - **This device does not hold the row and was never told it is gone**: no row wears its uid
+///   here, none was merged here into another ([`emission::retire`]), and no delete of it is in the
+///   page or has ever reached this device as a `sync_gone` row. A delete of this device's own is
+///   left to the fold: this device observes every stamp it applies, so its delete is stamped
+///   above anything below its watermark, and add-wins keeps the row gone.
+/// - **The claim is not older than anything this device has heard from a third device**: its
+///   emitter's `horizon` — the watermarks it held, and its own top stamp, when it read its tables —
+///   reaches every watermark held here for any device but the emitter and this one. A delete of a
+///   leaf row leaves no `sync_gone` row (only a parent's does), so a third device's delete applied
+///   here is invisible to the first test; a re-broadcast read before its emitter heard it would
+///   build the row again here alone, where the watermark's rule leaves it gone as the emitter will
+///   once it hears. In a group of two this always holds; where it does not, the claim is the
+///   watermark's, as it was.
+///
+/// **Everywhere else the watermark's rule stands.** On a row held here under its uid it is the
+/// cheap exit a re-broadcast is stamped for, and a claim let through onto one is a floor that
+/// takes back what was removed here since; a row merged away lives in its survivor, where the
+/// floor would do the same; and a row deleted is one this device was told is gone — stricter
+/// than [`decide`] is with a claim that names its emission, which sends that one to the fold. A
+/// grain twin is not asked here: a claim let through meets it in the fold and merges, `max`, as
+/// [`decide`] sends any claim not held here under its uid. A table this build does not sync is
+/// left to the watermark too: a seen op on one is a skip, never a drop to record again.
+pub(super) fn an_older_claim_the_watermark_cannot_judge(
+    conn: &Connection,
+    op: &Op,
+    horizon: Option<&Horizon>,
+    watermarks: &BTreeMap<String, Hlc>,
+    me: Option<&str>,
+    deleted: &BTreeSet<(&str, &str)>,
+) -> Result<bool, String> {
+    if !op.baseline || op.emission.is_some() || op.kind != Kind::Put {
+        return Ok(false);
+    }
+    if meta_of(&op.table).is_none() {
+        return Ok(false);
+    }
+    let Some(horizon) = horizon else {
+        return Ok(false);
+    };
+    let heard_it_all = watermarks
+        .iter()
+        .filter(|(device, _)| device.as_str() != op.at.device && Some(device.as_str()) != me)
+        .all(|(device, w)| horizon.seen.get(device).is_some_and(|h| h >= w));
+    if !heard_it_all {
+        return Ok(false);
+    }
+    Ok(!(row_here(conn, &op.table, &op.uid)?
+        || retired(conn, &op.table, &op.uid)?
+        || super::gone(conn, &op.table, &op.uid, deleted)?))
 }
 
 /// Whether this device holds the row under exactly this uid.

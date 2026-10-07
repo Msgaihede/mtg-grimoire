@@ -2873,3 +2873,235 @@ fn a_held_back_op_in_a_group_held_as_newer_is_counted_in_no_class() {
         "y's two ops and e's claim, and not c's held-back op: {report:?}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Issue #843 — an older build's claim below its sender's watermark, on a live device
+// ---------------------------------------------------------------------------------------------
+
+/// Every reference taken off, as a build from v0.18.0 to v0.39 sends a baseline: the horizon on
+/// the first op of each chunk, and nothing else.
+fn as_an_older_build_sends(chunks: Vec<Vec<Op>>) -> Vec<Vec<Op>> {
+    chunks
+        .into_iter()
+        .map(|chunk| {
+            chunk
+                .into_iter()
+                .map(|mut op| {
+                    op.emission = None;
+                    op
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// §14 row 1 from an older build: its first chunk lifts a's watermark on b to `c1`'s stamp, and
+/// the second chunk's claims are stamped below it. Judged by that watermark they were skipped as
+/// seen, and b held one card of three for good. b has never known `c2` or `c3`, so their claims
+/// are let through — and handed over again, they add nothing. **In a group of three as well**,
+/// where both have heard c's op before a reads its tables: a's horizon reaches b's watermark for
+/// c, so nothing b heard from c can be newer than the claims.
+#[test]
+fn an_older_builds_baseline_pulled_in_two_halves_reaches_a_device_that_held_nothing() {
+    for third in [false, true] {
+        older_baseline_in_two_halves(third);
+    }
+}
+
+fn older_baseline_in_two_halves(third: bool) {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    if third {
+        let c = paired("dev-c");
+        stash(&c, "opt", 1, 1_700_000_000);
+        apply(&a, &outbox(&c)).unwrap();
+        apply(&b, &outbox(&c)).unwrap();
+        assert!(watermark(&b, "dev-c") > (0, 0), "the fixture: b heard c");
+        a.execute("UPDATE sync_ops SET pushed_at = unixepoch()", [])
+            .unwrap();
+    }
+    stash(&a, "c1", 1, 1_700_000_300);
+    stash(&a, "c2", 1, 1_700_000_200);
+    stash(&a, "c3", 1, 1_700_000_100);
+    // The seeded folder, c's row where a holds it, and `c1` — then `c2` and `c3`.
+    let chunks = as_an_older_build_sends(emit(&a, "dev-a", if third { 3 } else { 2 }));
+    assert_eq!(chunks.len(), 2, "the fixture: two chunks");
+    apply(&b, &page(&[&outbox(&a), &chunks[0]])).unwrap();
+    let held = watermark(&b, "dev-a");
+    assert!(
+        chunks[1].iter().all(|op| (op.at.ms, op.at.ctr) <= held),
+        "the fixture: the second chunk is below the watermark the first left"
+    );
+    let second = apply(&b, &chunks[1]).unwrap();
+    let (c1, c2, c3) = (copies(&b, "c1"), copies(&b, "c2"), copies(&b, "c3"));
+    assert_eq!(
+        ((c1, c2, c3), second.applied),
+        ((1, 1, 1), 2),
+        "third {third}: {second:?}"
+    );
+
+    let again = apply(&b, &chunks[1]).unwrap();
+    assert_eq!(
+        ((copies(&b, "c2"), copies(&b, "c3")), again.applied),
+        ((1, 1), 0),
+        "third {third}: {again:?}"
+    );
+}
+
+/// §14 row 2 from an older build: a's sparse `+1` on a row it held before pairing is pulled ahead
+/// of the baseline, lifts a's watermark on b past the claim for that row, and finds no row to
+/// edit. The claim is let through, and the row is built whole.
+#[test]
+fn an_older_builds_sparse_op_pulled_ahead_of_its_baseline_does_not_cost_the_row() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 4, SECOND - 100);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    apply(&b, &outbox(&a)).unwrap();
+    let baseline = as_an_older_build_sends(vec![whole(&a, "dev-a")]).concat();
+    apply(&b, &baseline).unwrap();
+    assert_eq!(copies(&b, "bolt"), 5);
+}
+
+/// The watermark's rule stands on a row held here: an older build's claim stamped below a's
+/// watermark on b takes back nothing removed since — by b itself, before a re-broadcast; or by a,
+/// in the page that carries a's baseline. Let through, the claim is the floor `max(2, 3)`.
+#[test]
+fn an_older_builds_rebroadcast_below_the_watermark_takes_back_nothing_on_a_row_held_here() {
+    for by_b in [true, false] {
+        let (a, b) = (paired("dev-a"), paired("dev-b"));
+        let mut ma = 0;
+        stash(&a, "bolt", 3, 1_700_000_000);
+        apply(&b, &since(&a, &mut ma)).unwrap();
+        let baseline = as_an_older_build_sends(vec![whole(&a, "dev-a")]).concat();
+        let claim = baseline
+            .iter()
+            .find(|op| op.table == "collection_entries")
+            .unwrap();
+        assert!(
+            (claim.at.ms, claim.at.ctr) <= watermark(&b, "dev-a"),
+            "the fixture: the claim is below the watermark"
+        );
+        if by_b {
+            b.execute("UPDATE collection_entries SET quantity = quantity - 1", [])
+                .unwrap();
+            apply(&b, &baseline).unwrap();
+        } else {
+            step(&a, "bolt", -1, 1_700_000_050);
+            apply(&b, &page(&[&baseline, &since(&a, &mut ma)])).unwrap();
+        }
+        assert_eq!(copies(&b, "bolt"), 2, "removed by b: {by_b}");
+    }
+}
+
+/// …and on a row deleted here, by this device or by another one it heard: a has not heard the
+/// delete, and its re-broadcast, stamped below its watermark on b, never builds the row again.
+/// Neither delete leaves a row to find, nor a `sync_gone` row — only a parent's delete writes one.
+/// b's own is in b's log, stamped above everything b had heard and so above the claim: the fold's
+/// add-wins keeps the row gone. c's is in no log here, and beyond a's horizon, which never reached
+/// b's watermark for c.
+#[test]
+fn an_older_builds_rebroadcast_below_the_watermark_never_rebuilds_a_row_deleted_here() {
+    for own in [false, true] {
+        let (a, b, c) = (paired("dev-a"), paired("dev-b"), paired("dev-c"));
+        let (mut ma, mut mc) = (0, 0);
+        stash(&a, "bolt", 2, 1_700_000_000);
+        let seed = since(&a, &mut ma);
+        apply(&b, &seed).unwrap();
+        if own {
+            b.execute("DELETE FROM collection_entries", []).unwrap();
+        } else {
+            apply(&c, &seed).unwrap();
+            c.execute("DELETE FROM collection_entries", []).unwrap();
+            apply(&b, &since(&c, &mut mc)).unwrap();
+        }
+        assert_eq!(rows(&b, "bolt"), 0, "the fixture");
+        let rebroadcast = as_an_older_build_sends(vec![whole(&a, "dev-a")]).concat();
+        apply(&b, &rebroadcast).unwrap();
+        assert_eq!(rows(&b, "bolt"), 0, "deleted by b itself: {own}");
+    }
+}
+
+/// …and on a row whose delete the page carries: a deletes `bolt` after its baseline, and the page
+/// holding both comes back to b once both are below a's watermark — the cursor held, or the log
+/// position forgotten. A copy's delete leaves no `sync_gone` row, so it is the page's own delete
+/// that says the row is gone.
+#[test]
+fn an_older_builds_claim_beside_the_delete_of_its_row_never_builds_it_when_handed_back() {
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let mut ma = 0;
+    stash(&a, "bolt", 2, 1_700_000_000);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let baseline = as_an_older_build_sends(vec![whole(&a, "dev-a")]).concat();
+    a.execute("DELETE FROM collection_entries", []).unwrap();
+    let handed = page(&[&baseline, &since(&a, &mut ma)]);
+    apply(&b, &handed).unwrap();
+    assert_eq!(rows(&b, "bolt"), 0, "the fixture");
+    apply(&b, &handed).unwrap();
+    assert_eq!(rows(&b, "bolt"), 0);
+}
+
+/// …and on a row merged here into another: b's own `bolt`, under a lower uid, absorbed a's claim
+/// for its `bolt` the first time a's baseline came, and b has since taken two copies out. A's
+/// re-broadcast names the absorbed uid, below a's watermark; let through, it would meet b's row by
+/// grain and floor it back to 3.
+#[test]
+fn an_older_builds_rebroadcast_below_the_watermark_never_floors_a_row_it_was_merged_into() {
+    const LOW: &str = "00000000000000000000000000000001";
+    const HIGH: &str = "ffffffffffffffffffffffffffffffff";
+    let (a, b) = (paired("dev-a"), paired("dev-b"));
+    let insert = |conn: &Connection, uid: &str, quantity: i64| {
+        conn.execute(
+            "INSERT INTO collection_entries
+                (card_id,set_code,collector_number,lang,finish,condition,quantity,
+                 created_at,updated_at,sync_uid)
+             VALUES ('bolt','lea','1','en','nonfoil','NM',?2,1700000000,1700000000,?1)",
+            rusqlite::params![uid, quantity],
+        )
+        .unwrap();
+    };
+    insert(&a, HIGH, 3);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    insert(&b, LOW, 1);
+    let baseline = as_an_older_build_sends(vec![whole(&a, "dev-a")]).concat();
+    apply(&b, &baseline).unwrap();
+    assert_eq!(
+        (rows(&b, "bolt"), copies(&b, "bolt")),
+        (1, 3),
+        "the fixture"
+    );
+    assert!(emission::retired(&b, "collection_entries", HIGH).unwrap());
+    b.execute("UPDATE collection_entries SET quantity = quantity - 2", [])
+        .unwrap();
+    apply(&b, &baseline).unwrap();
+    assert_eq!((rows(&b, "bolt"), copies(&b, "bolt")), (1, 1));
+}
+
+/// A row b holds under a uid of its own, at the claim's grain: the claim let past the watermark
+/// meets it and merges, `max`, as one answer carrying a's `+1` and baseline does — and as a claim
+/// that names its emission does on a row not held here under its uid (design 2026-10-03 §6).
+#[test]
+fn an_older_builds_claim_let_past_the_watermark_merges_with_a_grain_twin_as_one_answer_does() {
+    let ends = |live: bool| {
+        let (a, b) = (paired("dev-a"), paired("dev-b"));
+        stash(&a, "bolt", 3, 1_700_000_000);
+        a.execute("DELETE FROM sync_ops", []).unwrap();
+        stash(&a, "opt", 1, 1_700_000_100);
+        stash(&b, "bolt", 1, 1_700_000_000);
+        let edit = outbox(&a);
+        let baseline = as_an_older_build_sends(vec![whole(&a, "dev-a")]).concat();
+        if live {
+            apply(&b, &edit).unwrap();
+            apply(&b, &baseline).unwrap();
+        } else {
+            apply(&b, &page(&[&edit, &baseline])).unwrap();
+        }
+        (rows(&b, "bolt"), copies(&b, "bolt"), copies(&b, "opt"))
+    };
+    assert_eq!(ends(false), (1, 3, 1), "one answer");
+    assert_eq!(
+        ends(true),
+        ends(false),
+        "the +1's pull, then the baseline's"
+    );
+}

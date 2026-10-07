@@ -1258,20 +1258,22 @@ async fn a_baseline_in_two_chunks_across_a_page_edge_ends_as_the_unpaged_pull_en
     );
 }
 
-/// ⚠ **An older build's baseline is read as one answer, however it is paged.** The same two
-/// chunks from a build that sends no references — every release from v0.18.0 to v0.39 — and an
-/// ordinary row of another device's behind them, a row a page.
+/// **An older build's baseline is read as one answer, however it is paged — and a live device
+/// that pulls between its chunks ends there too.** The same two chunks from a build that sends no
+/// references — every release from v0.18.0 to v0.39 — and an ordinary row of another device's
+/// behind them, a row a page.
 ///
-/// Read a page at a time, the first chunk builds `recent` and lifts the sender's watermark to
-/// its stamp; the second chunk's `older`, stamped below it, is skipped as seen, and this device
-/// never holds a card the sender does. **That is what a live device that pulls between the two
-/// chunks does today** — `live` below, a row short — and what references were built to end for
-/// the builds that send them. A device catching up used to be handed both chunks in one answer,
-/// which `apply` sorts by stamp; so it is handed them as one answer still.
+/// The first chunk builds `recent` and lifts the sender's watermark to its stamp; the second
+/// chunk's `older` is stamped below it. Judged by that watermark it was skipped as seen, and a
+/// live device that pulled between the two chunks never held a card the sender does — a row
+/// short, for good (issue #843). **A claim with no reference about a row this device does not
+/// hold is no longer the watermark's**: `apply` lets it through, and `live` builds `older`. A
+/// device catching up is still handed the whole catch-up as one answer, which `apply` sorts by
+/// stamp.
 ///
-/// **What makes it red**: such a catch-up applied a page at a time — the paged device a row
-/// short, as the live one is. *And* the day a live device stops losing the row: the last
-/// assertion says it still does.
+/// **What makes it red**: such a catch-up applied a page at a time where it should be one answer;
+/// and a live device a row short again — a reference-less claim for a row not held here judged
+/// by its sender's watermark.
 #[tokio::test]
 async fn an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged() {
     let (first, second) = a_baseline_in_two_chunks(false);
@@ -1287,14 +1289,12 @@ async fn an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged() {
     let Pulled { pages, whole, .. } = paged_pull_of(&rows).await;
     assert_eq!((pages, whole), (3, true), "which way the pull says it went");
     assert_eq!(
-        copies_in(&live),
-        2,
-        "a live device no longer loses the row a second chunk holds below the first's stamp: \
-         the defect this records is closed, and this assertion with it — {live:#?}"
+        live, unpaged,
+        "a live device lost the row a second chunk holds below the first's stamp"
     );
 }
 
-/// ⚠ **An older build's own ordinary op, a page ahead of its baseline — the join.** `dev-a`,
+/// **An older build's own ordinary op, a page ahead of its baseline — the join.** `dev-a`,
 /// on a build with no references, holds `held` from before it was paired — no insert of it is
 /// on the log — adds `fresh`, and pairs: its trip pushes the `+1` and then the baseline, as
 /// every trip does. A device joining that group pulls exactly this log, from nought.
@@ -1308,13 +1308,14 @@ async fn an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged() {
 /// page shows the chunk, the page before it has moved the watermark. So the whole catch-up is
 /// classified before any of it is applied, and this one is evaluated as one answer.
 ///
-/// **A live device that hears the doorbell on the `+1` loses the row today** (`live`), and has
-/// since baselines were built: `docs/reference/sync.md`'s "a sparse op pulled ahead of its
-/// baseline". That is not this pull's, and is not changed by it.
+/// **A live device that hears the doorbell on the `+1` holds `held` as well** (`live`). It lost
+/// the row from the day baselines were built until issue #843 — `docs/reference/sync.md`'s "a
+/// sparse op pulled ahead of its baseline": the `+1` lifted the watermark, and the claim was
+/// judged by it. A claim with no reference about a row this device does not hold is let
+/// through instead.
 ///
 /// **What makes it red**: a catch-up evaluated a page at a time whenever its first page looks
-/// ordinary — `held` missing, as on the live device. *And* the day the live device holds it:
-/// the last assertion says it still does not.
+/// ordinary — `held` missing; and the live device missing it again.
 #[tokio::test]
 async fn an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answer() {
     let a = paired("dev-a", 0);
@@ -1348,10 +1349,8 @@ async fn an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answ
     let Pulled { pages, whole, .. } = paged_pull_of(&rows).await;
     assert_eq!((pages, whole), (2, true));
     assert_eq!(
-        copies_in(&live),
-        1,
-        "`held` landed on a device that pulled between the +1 and the baseline: the defect \
-         this records is closed, and this assertion with it — {live:#?}"
+        live, unpaged,
+        "`held` was lost on a device that pulled between the +1 and the baseline"
     );
 }
 

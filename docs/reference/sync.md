@@ -2142,7 +2142,7 @@ before it was fixed (2026-10-03, debug, Windows):
 | Pair | What happens |
 | --- | --- |
 | this emitter → an older receiver | the `emission` field is ignored; claims are judged by `at` as they always were, with every loss above |
-| an older emitter → this receiver | no `emission` field: `main`'s rules, unchanged — judged by the watermark on `at`, a covered put dropped as inside. The original same-second `+1` stays lost for this pair alone |
+| an older emitter → this receiver | no `emission` field: `main`'s rules — judged by the watermark on `at`, a covered put dropped as inside — **but for one claim**: below the watermark, about a row this device does not hold, it goes to the fold (*An older build's claim below its watermark*, below; 2026-10-07). The original same-second `+1` stays lost for this pair alone |
 | both on this build | everything above |
 
 A mixed group is never worse than it was, and the gains are between upgraded devices. No rung: every
@@ -2163,6 +2163,53 @@ it (`a_page_an_older_build_applied_writes_nothing_again_after_the_upgrade`). A d
 (`the_upgrade_cut_is_minted_once`). **What it costs is a day**: for up to `MAX_AHEAD_MS` after a
 device first applies under this build, a re-baseline it receives from an upgraded emitter behaves
 as before.
+
+#### An older build's claim below its watermark
+
+**Closed 2026-10-07 for a receiver on this build** ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)).
+A baseline from v0.18.0–v0.39 carries a horizon and no reference, so its claims were judged by
+their sender's watermark like any op — and raised it. A claim's stamp is its row's `updated_at` in
+table order, not a place in its sender's log, so a device that was live when such a build pushed —
+that heard the doorbell between two chunks, or between that build's own ordinary op and its
+baseline, as every trip pushes them — skipped as seen every row stamped below what it had already
+applied, for good and with nothing in `error_log`. The two probes the claim design closed for
+emitters that send references (*A claim names its emission*, its table's first two rows) stayed open
+for those that do not: **3 / 1** and **5 / 0**.
+
+`apply_in` now lets such a claim past the watermark (`claims::an_older_claim_the_watermark_cannot_judge`)
+where both of these hold, and judges it by the watermark everywhere else:
+
+| Asked | Refused where | Why |
+| --- | --- | --- |
+| The claim was sent with no reference, and is a put on a table this build syncs | stripped at the door, or anything else | only an older emitter's own claims; a seen op on an unknown table stays a skip, never a drop recorded again |
+| No row wears its uid here | it does | the watermark is the cheap exit a re-broadcast is stamped for, and a claim on a held row is a floor that takes back a removal made since — here, or by the emitter in the same page |
+| It was not merged here into another (`retired@`) | it was | its copies live in the survivor, which the floor would take back the same way |
+| No delete of it is in the page, or in `sync_gone` | one is | a page handed back carries a delete below the watermark; a copy's delete leaves no `sync_gone` row, so the page's own is the only witness |
+| The emitter's horizon reaches every watermark held here for a third device | it does not | a third device's delete of a copy, applied here, leaves nothing to find; a re-broadcast read before its emitter heard it would build the row here alone. A group of two always passes |
+
+This device's own delete needs no row of its own in that table: it observes every stamp it applies, so
+its delete is stamped above anything below its watermark, and the fold's add-wins keeps the row gone.
+A grain twin is not asked: the claim meets it in the fold and merges, `max`, as `decide` sends any
+referenced claim not held here under its uid. **What a claim let through does is what it did arriving
+unseen in one unpaged answer** — it never meets a rule that answer would not have put it to — and its
+counters are claims, `max` and never a sum, so it is idempotent: handed over again it adds nothing,
+and once its row is built here it is the watermark's.
+
+What it leaves: a claim on a row held here keeps every loss of *Older builds* above, the same-second
+`+1` among them; and in a group of three or more where the emitter had not heard everything this
+device had from the others, the claim is the watermark's and the row is lost as before. A device
+*catching up* is still handed such a baseline as one answer (*An older build's baseline is one
+answer*, under the paged pull), which needs no guard.
+
+Tests in `apply/emission_tests.rs`, under *Issue #843*: both probes
+(`an_older_builds_baseline_pulled_in_two_halves_reaches_a_device_that_held_nothing`, in a group of two
+and of three; `an_older_builds_sparse_op_pulled_ahead_of_its_baseline_does_not_cost_the_row`); one
+per refusal (`…takes_back_nothing_on_a_row_held_here`, `…never_floors_a_row_it_was_merged_into`,
+`…beside_the_delete_of_its_row_never_builds_it_when_handed_back`, `…never_rebuilds_a_row_deleted_here`
+— the last, the horizon's, with b's own delete beside it); and a grain twin against one answer
+(`…merges_with_a_grain_twin_as_one_answer_does`). Each refusal was mutated out and its test went red,
+but for "named in this device's log", which no test could tell from the fold and so was not built. In
+`client/tests/paged.rs` the two fixtures hold the live device to the unpaged answer.
 
 #### Why no receiver-side rule could trust a claim
 
@@ -2868,7 +2915,10 @@ their sender's watermark like any op, and stamped with their rows' `updated_at` 
 which does not rise with the log. One answer is sorted by stamp before it is applied. In pieces,
 whatever applies first lifts the watermark past what comes later below it — a later chunk's
 rows, or the whole baseline behind that build's own ordinary op, pushed a moment ahead of it as
-every trip pushes — and those rows are skipped as seen for good. That second shape is **any
+every trip pushes — and until 2026-10-07 those rows were skipped as seen for good. `apply` now lets
+such a claim through for a row this device does not hold (*An older build's claim below its
+watermark*), but not where the emitter had heard less than this device from a third one, so a
+catch-up is still read whole. That second shape is **any
 join** against such a build: a new device pulls the log from nought. So when a chunk with **a
 horizon and no reference** is anywhere in what was fetched, all of it is evaluated as one
 answer — every page's envelopes sorted together, one `apply_page`, one move of the cursor: the
@@ -2879,9 +2929,10 @@ every chunk since baselines were built, on nothing else, and since v0.40.0 a ref
 op of one; both generations stamp schema 59 — and held to what each really writes
 (`only_a_horizon_with_no_reference_is_an_older_builds_baseline`). Against the unpaged database:
 `an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged` and
-`an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answer`. ⚠️ **A device that
-is live while such a build pushes still loses those rows**, as it always has — each of those
-tests pins it in its last assertion — and that is *What is still owed*'s, not this pull's.
+`an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answer`. **A device that is
+live while such a build pushes ends there too since 2026-10-07**
+([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)) — each of those tests holds it to the
+unpaged answer in its last assertion, where it used to pin the device a row short.
 
 **With no such baseline in it, a paged catch-up equals what an always-live device's sequence of
 pulls produces, not what one unpaged pull produced.** A page is the rows the relay held up to
@@ -4554,10 +4605,14 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   second, and linear memory ends at 69.5 MB; the one-answer evaluation was not measured in a
   browser. **What it leaves owed** is the next three bullets — each its own, none of
   them made by paging — and what this one said until then is kept under them.
-- ⚠️ **A device that is live while a build older than v0.40.0 pushes a baseline loses rows —
+- ~~⚠️ **A device that is live while a build older than v0.40.0 pushes a baseline loses rows —
   "a baseline pulled in two halves" and "a sparse op pulled ahead of its baseline", for every
-  emitter that sends no references.** *A claim names its emission* closed both for the builds
-  that send them (2026-10-03, v0.40.0); a claim with no reference is still judged by its
+  emitter that sends no references.**~~ **Closed 2026-10-07**
+  ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)): such a claim below its sender's
+  watermark, for a row this device does not hold, goes to the fold — *An older build's claim below
+  its watermark* has the rule, its refusals and what it leaves; both fixtures below now hold the
+  live device to the unpaged answer. What this bullet said until then: *A claim names its
+  emission* closed both for the builds that send them (2026-10-03, v0.40.0); a claim with no reference is still judged by its
   sender's watermark, so a peer that hears the doorbell and pulls between that sender's
   ordinary op and its baseline, or between two of its chunks, skips as seen every row stamped
   below what it has already applied. Step 6.5b keeps a device that is *catching up* out of it,

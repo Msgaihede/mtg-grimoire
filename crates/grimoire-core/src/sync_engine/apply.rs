@@ -889,6 +889,24 @@ fn apply_in(
     // (design 2026-10-03 §5, §6, §10). What `decide` marks to skip or keep is final, and an op it
     // marks to strip loses its reference here, so everything below judges it as `main` always did.
     let decided = claims::decide(conn, ops, me.as_deref(), &seen)?;
+    // The claims an older build sent — a baseline op with no reference as it arrived, never one
+    // stripped below — which are the only ones step 1 may let past the watermark (issue #843), and
+    // each such emitter's horizon, off the first op of every chunk it sent.
+    let unreferenced: BTreeSet<usize> = ops
+        .iter()
+        .enumerate()
+        .filter(|(_, op)| op.baseline && op.emission.is_none())
+        .map(|(i, _)| i)
+        .collect();
+    let mut older_horizons: BTreeMap<&str, Horizon> = BTreeMap::new();
+    for &i in &unreferenced {
+        if let Some(h) = &ops[i].horizon {
+            older_horizons
+                .entry(ops[i].at.device.as_str())
+                .or_default()
+                .absorb(h);
+        }
+    }
     let stripped: Vec<Op>;
     let ops: &[Op] = if decided.strip.is_empty() {
         ops
@@ -920,8 +938,28 @@ fn apply_in(
     // these rules, so the two can never disagree about it.
     let horizon: &Horizon = &decided.older;
 
+    // Every row a delete in this page names, the ones already seen included: a re-delivered
+    // page still carries the delete that makes a child moot, even once the delete itself is
+    // below its sender's watermark.
+    let deleted: BTreeSet<(&str, &str)> = ops
+        .iter()
+        .filter(|op| op.kind == Kind::Del)
+        .map(|op| (op.table.as_str(), op.uid.as_str()))
+        .collect();
+
     // 1. Everything already seen, and everything this device wrote itself — after what `decide`
     //    consumed or kept, which no rule here overrides.
+    //
+    //    **Seen is not the last word on an older build's claim** (issue #843). A claim with no
+    //    reference is judged by its sender's watermark as `main` judged it, but its stamp is its
+    //    row's `updated_at` in table order and no place in that sender's log: a live device that
+    //    pulled one chunk of a v0.18.0–v0.39 baseline, or that build's own ordinary op pushed a
+    //    moment ahead of it, already holds a watermark above the rest. So a seen one about a row
+    //    this device does not hold, never merged away and was never told is gone, read after
+    //    everything this device has heard from anyone else, goes to the fold as if unseen and builds the row — or meets a grain twin and
+    //    merges, as any claim not held here under its uid does (design 2026-10-03 §6). Its
+    //    counters are claims, `max` and never a sum, so one handed over again adds nothing, and
+    //    once its row is built here it is the watermark's again.
     let mut fresh: Vec<&Op> = Vec::new();
     for (i, op) in ops.iter().enumerate() {
         if decided.skip.contains(&i) {
@@ -935,8 +973,23 @@ fn apply_in(
         // Exemptions in spec §9.1's table: a baseline op describes the horizon rather than
         // being described by it, and a tombstone is the one thing a claim cannot express.
         let inside = op.kind == Kind::Put && !op.baseline && horizon.covers(&op.at);
-        if mine(op) || seen(op) || inside {
+        if mine(op) || inside {
             report.skipped += 1;
+        } else if seen(op) {
+            if unreferenced.contains(&i)
+                && claims::an_older_claim_the_watermark_cannot_judge(
+                    conn,
+                    op,
+                    older_horizons.get(op.at.device.as_str()),
+                    &watermarks,
+                    me.as_deref(),
+                    &deleted,
+                )?
+            {
+                fresh.push(op);
+            } else {
+                report.skipped += 1;
+            }
         } else {
             fresh.push(op);
         }
@@ -987,15 +1040,6 @@ fn apply_in(
             g.ops.iter().map(|o| o.at.clone()).min(),
         )
     });
-
-    // Every row a delete in this page names, the ones already seen included: a re-delivered
-    // page still carries the delete that makes a child moot, even once the delete itself is
-    // below its sender's watermark.
-    let deleted: BTreeSet<(&str, &str)> = ops
-        .iter()
-        .filter(|op| op.kind == Kind::Del)
-        .map(|op| (op.table.as_str(), op.uid.as_str()))
-        .collect();
 
     // 3. Apply, discovering as it goes which devices stall — and then apply again with the
     //    stalls known.
