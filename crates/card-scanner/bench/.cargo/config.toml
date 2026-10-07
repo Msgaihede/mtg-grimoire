@@ -1,0 +1,8 @@
+# This package builds into the card scanner's own `target/`, one folder up — the tree
+# `.gitignore` already covers (`crates/*/target/`), and the one a run from the repository root
+# names with `--target-dir crates/card-scanner/target`, as `scripts/scanner-bench.mjs` does.
+#
+# Cargo reads config from the working directory upwards and the nearest file wins, so this
+# answers a run started from inside `crates/card-scanner/bench/`.
+[build]
+target-dir = "../target"

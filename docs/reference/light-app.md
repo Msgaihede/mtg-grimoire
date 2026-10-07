@@ -29,13 +29,15 @@ deployed with all of it**, the relay and then the web app, twice each (§10.7), 
 has paired a browser with a desktop in production and synced between them** (2026-10-05; his
 sentence, not a measurement). What has still not been seen: sync on a phone — the camera's
 grant, a real lens on a real code, a socket across the app going to the background; in
-Safari; and in Firefox. §10 closes with what is open and whose it is.
+Safari; and in Firefox. §10 closes with what is open and whose it is. **The scanner on a light
+install is phase 7, begun on 2026-10-07 and recorded a step at a time in §11.**
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
   pages: [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md); the web host:
   [the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md); sync:
-  [the phase 6 plan](../superpowers/plans/2026-10-04-light-app-phase-6.md).
+  [the phase 6 plan](../superpowers/plans/2026-10-04-light-app-phase-6.md); the scanner:
+  [the phase 7 plan](../superpowers/plans/2026-10-07-light-app-phase-7.md).
 - What is left, phase by phase: [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761).
 - The binding rules for anyone changing it: [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
 
@@ -2460,6 +2462,14 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
   store back on the URL's place without touching history. Hidden rather than refused on the press:
   a link that answered would have nowhere to land, and a share link is a web page a browser opens
   anyway. At 1280 × 800 the collection draws Import and Export and no Open half.
+- **A publish the light hosts cannot make** (2026-10-07). The collection's *Share* half was still
+  drawn for an entitled device in the desktop face — the web app at 1024px and up, an Android
+  tablet — though the five `share_*` commands are registered by the desktop host alone and
+  `grimoire_core::commands` has none of them, so its list and its publish answered *"There is no
+  command named … on this host."* The edition now says `publishes: false`, `AppShell` answers
+  `usePublishes()` from it beside `useReaches`, and `ShareFolderMenu` draws no Share half and
+  asks no `share_list` where it is false. Still a capability rather than a platform question: the
+  page never learns which edition or host it is on. The phone face never drew the control.
 - **`Ctrl+Shift+N`** is the full edition's alone; in the light edition the press is left to the
   browser, where it is the browser's own private-window chord.
 - **`F1` stays the browser's.** Mounting the key map without the caption row would mean an
@@ -6774,6 +6784,15 @@ not the second: by the time a page shows the chunk, the page before has moved th
 So the catch-up is **classified whole, before any of it is applied**, which is why a pull
 fetches first.
 
+**Since 2026-10-07 the table's last column reads both rows for a fresh install paired with
+one such device** ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)): on a receiver that has heard from nobody else, `apply` no
+longer judges an older build's claim for a row never held by its sender's watermark
+([sync.md](sync.md), *An older build's claim for a row never held*), and both fixtures run
+such a receiver and end with the live device equal to the unpaged one. The middle column
+was not run again. The one-answer evaluation is kept, and that rule leans on it: every
+other claim is still the watermark's, and a delete that followed a claim is seen beside it
+only where the two are in one answer.
+
 **What says "an older build's baseline" is a horizon with no reference**, and it is exact:
 every build that has emitted a baseline has put the horizon on the first op of every chunk
 (since `94265442`, v0.18.0) and on nothing else; since v0.40.0 every op of a baseline carries
@@ -6955,9 +6974,11 @@ The rest of what the review found is in the list below, each marked as its.
   There is no credential-free tell for it: `GET /g/abc/pull?limit=1` answers the gate's `401`
   before and after. The runbook's item 14 has the two tells a device's own token gives, and
   neither has been read.
-- **A device that is live while a build older than v0.40.0 pushes its baseline still loses
-  rows**, as it always has; [sync.md](sync.md)'s *What is still owed* has it as its own entry,
-  with the fixtures. It ends when no device in a group is older than v0.40.0.
+- **A device that is live while a build older than v0.40.0 pushes its baseline lost rows**, as
+  it always had, **until 2026-10-07** ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)): closed for a fresh install paired
+  with one such device, and a row it never held. [sync.md](sync.md)'s *What is still owed* has
+  what that leaves — a group of three among it — with the fixtures. All of it ends when no
+  device in a group is older than v0.40.0.
 - ~~**The `gone` reversal is not fixed.** It needs `apply` to revisit a `SET NULL` it made when
   the parent comes back — its own entry there too.~~ **Fixed 2026-10-07** (issue #841, user
   schema v60): `apply` keeps a ledger of what it decided without a parent and takes each
@@ -7240,3 +7261,196 @@ under *What is still owed* in [sync.md](sync.md), with its fixture in
   the binder back, is kept on one device and not the other.~~ **Fixed 2026-10-07** (issue #841);
   what the same experiments found beside it — with three devices, an older edit arriving in a
   later pull beats a newer one — is issue #842 and still owed.
+
+## 11. The scanner on a light install — phase 7, a step at a time
+
+A light install points its camera at a card and names the printing — the same engine, the same
+tray and the same commit the desktop has (spec §8).
+[The plan](../superpowers/plans/2026-10-07-light-app-phase-7.md) has the six steps, one pull
+request each, and [card-scanner.md](card-scanner.md) is the engine's own reference.
+
+**Taken as the defaults before anything was built** (the plan's table). Four of them were put to
+Markus on 2026-10-07 and not answered — he said to keep going — so each is his to reverse:
+
+- **This desktop's figures decide what is built, and the bench is made so a phone can run it** —
+  a native binary pushed with `adb`, a page reached over `adb reverse`. The spec opens the phase
+  with a measurement on a real phone in both hosts; no device was attached to the machine, so
+  that run is the owner's, and nothing is promised about Exact or OCR in a phone's browser
+  until it has happened.
+- **A browser gets the assets from the app's own origin** — the web build copies the three files
+  into its static assets — because it cannot ask GitHub: a release download answers with no
+  `Access-Control-Allow-Origin` (asked on 2026-10-07 with the app's `Origin`). Android asks the
+  release, as the desktop's build does.
+- **The phone's Scanner page is one design, built straight**, where each of phase 3's pages came
+  to the owner as built options first.
+- **Nobody deploys by hand**: `release.yml` puts the web app on its origin at a tag, and no step
+  here needs a deploy before one.
+
+**What the tree held before the phase started** (surveyed 2026-10-07, `main` at `63d1a44f`):
+
+- **The engine was linked into every host and ran on one.** Step 7 of phase 2 (§6.10) made
+  `card-scanner` a dependency of the core, so CI compiled it for `wasm32` and for Android, and
+  nothing called it on either; in the web module fat LTO dropped it whole.
+- **The crate assumed threads and a clock**: five `std::thread::scope` sites, a spawned thread
+  for the Exact resolve, about fourteen `Instant::now()` — every one telemetry for an `_ms`
+  field — and `catch_unwind` twice. In a browser the first frame panics, and under the `wasm`
+  profile's `panic = "abort"` the guard guards nothing.
+- **Two of the scanner's twelve commands were in the core's table.** The other ten were on the
+  desktop's `NOT_YET`: a lease that wants a window's label, a frame that is a raw body, and a
+  session that traps in a browser (§8.2).
+- **No light host had the assets and nothing fetched them.** The published `scanner-bundle-v3`
+  is 18 101 604 B — 5 874 752 of hashes, 2 510 284 and 9 716 568 of OCR models — embedded by the
+  desktop's release build and by nothing else.
+- **The phone face's Scanner was a sentence**, and over the fake a camera never added a card:
+  `scanner_frame` answered one decided verdict with one `decision_seq`, which the loop takes as
+  its baseline.
+
+### 11.1 Step 7.1 — the crate runs where there is no thread and no clock (2026-10-07)
+
+Built on Windows 11 over `main` at `63d1a44f`. [card-scanner.md](card-scanner.md) §11 is the
+reference for all of it — the module, the order things run in on one thread, the fence, the
+bench and its figures; this is the step's record.
+
+**The crate had compiled for `wasm32-unknown-unknown` since the core took it (§6.10) and could
+not have got through a frame there.** Five stages fanned out under `std::thread::scope`, an Exact
+resolve ran on a thread of its own, fourteen timings began at `Instant::now()` — which panics in
+a browser, at run time, in a build that compiled without a warning — and two `catch_unwind`s
+stood guard in a build where a panic is a trap. **All of it is behind one module now,
+`card_scanner::host`**: `fan_out`, `par_map`, `join` and `join3` are the scopes their sites had,
+`background` is the resolve's thread, `Stopwatch` is every timing and `guard` is both
+`catch_unwind`s. Each has an arm that runs its closures on the caller, in one fixed order — the
+caller's share first, then the rest as they were handed over — taken where the target has no
+thread and, on a machine that has many, on any thread holding `host::inline()`.
+
+- **Natively nothing moved**: the same threads, the same work on the caller, the same re-raised
+  panic, the thread still called `exact-resolve`, no key of the verdict changed. A test counts the
+  threads each helper uses, and none under the guard.
+- **A resolve "in the background" is a resolve inside the frame on a host with one thread.**
+  Without that arm the spawn would have answered an error there, the job been dropped unrun, and
+  every stretch reported *the Exact resolve failed on this card*.
+- **The clock is the host's to hand over**: an installed one wins, otherwise `Instant` where the
+  target has one, otherwise zero — and zero is safe, because no reading in the crate paces,
+  bounds or orders anything. `ScannerState::new` installs `platform::clock::monotonic_ms`, a
+  `Tick`: `Instant` natively, as before, and `performance.now()` in a Worker.
+- **The crate has a fence of its own** (`host::tests::the_fence`): nothing in its shipped library
+  outside `host.rs` names a thread, a clock, an unwind or a target. It went red on a planted
+  `Instant::now()` before it was trusted. It is a list of spellings, and what the crate's
+  dependencies do is not its to see.
+- **The same frames through a threaded session and an inline one are equal but for their
+  timings** — two tests, Fast and Exact, each verdict compared as JSON with every `…_ms` key
+  removed.
+
+**Proved by running it, which is what a compile never showed.** `crates/card-scanner/bench` is a
+package beside the crate with two faces over one `load` and one `frame`: the crate as a WASM
+module in a dedicated Worker — a frame in as a transferred `ArrayBuffer`, the trip a camera
+page's frame makes — and a native runner over the same inputs. `npm run scanner:bench` builds
+the module with the web host's profile, drives the page in headless Chrome over the web smoke's
+own launcher, and prints what the page itself shows as text. `bench-prep` writes the inputs
+from the published bundle, the corpus and card pictures. CI's `rust` job runs the bench's tests
+and its `core` job checks the package for `wasm32` and for Android.
+
+**`rten` runs in a Worker.** `ocrs` and the eleven `rten*` crates pull `rayon` and `num_cpus`
+unconditionally, and their one-thread fallbacks had been read and never run. Nothing trapped,
+and over 120 frames of eight real printings the module decided what the desktop decided, on the
+same frames, off the same reads.
+
+**A panic there ends the instance, and that was provoked rather than assumed**: asked for on
+purpose it was a `RuntimeError: unreachable` out of the call, and the next frame asked of the
+same instance trapped as well. `host::guard` guards nothing where a panic aborts; containing one
+is the host's, and the only containment is a new instance.
+
+Checked: the crate's suite as CI runs it — 336 library tests and 5 of `serve`'s under `cli`, the
+`builder` bins' 19, `synth`'s 9 — and the bench's 2; the core's clock, scanner and fence tests,
+its clippy natively and for `wasm32`; the scripts' suite and the lint. **A fresh reviewer read
+old against new**, site by site, and found no behaviour difference natively and no way for the
+inline arm to spawn. What it did find is taken: the bench reported *passed* whatever the hosts
+answered — it now exits red when a host disagrees with the threaded native run about which
+frames decided, what was decided or what a reader read, or when a mode answers no frame — and
+the fence had three ways past it (a module in a sub-folder, code below a test module half-way
+down a file, a gate split across lines), each planted and seen red. It refuses a blocking
+`recv`, a `Condvar` and a `Barrier` too, since each is a hang on one thread.
+
+**Not seen**: the Android build of the bench run anywhere — CI compiles it; and everything
+§11.2 lists.
+
+### 11.2 Step 7.2 — the measurement, and what it decides (2026-10-07)
+
+The spec opens the phase with a measurement on a real phone in both hosts. **What was measured
+is one desktop** — a Ryzen 9 5900X, release builds, headless Chrome 154 — over the published
+`scanner-bundle-v3` (118 313 printings, both models) and the dev corpus's 118 475 labels, with
+frames made in software from Scryfall's renders of eight printings. **No phone has run it**: the
+bench is built so one can (below), and that run is the owner's. The whole table, and how it was
+taken, is [card-scanner.md](card-scanner.md) §11 *Measured*; what decides anything is this:
+
+| | Native, threads | Native, one thread | WASM + `simd128` | WASM, as the web host builds |
+| --- | ---: | ---: | ---: | ---: |
+| A steady frame, Fast | 45 ms | 70 ms | 96 ms | 90–234 ms |
+| One title read | 49–61 ms | 112–125 ms | 273–372 ms | 864–1 630 ms |
+| A Fast frame that reads a title and a collector line | 113 ms | 300 ms | 646 ms | 2 495–3 579 ms |
+| Exact's resolve frame, with the readers | 162 ms | 469 ms | 1 189 ms | 2 442–2 650 ms |
+
+Other sessions' builds shared the machine, so the scalar column is a range of two runs and the
+columns compare only as far as that allows. The module of the crate alone is 4 429 400 B,
+**961 003 B through brotli**; without the readers 352 921 B. Its memory stood at **150 MB** with
+the labels attached — most of it `Reference`'s own index, seven hash maps over the labels — and
+at most 233 MB with the readers.
+
+**Decided from those figures, by the agent building the phase** — the owner was asked how the
+phase should be measured and said to keep going, so each is his to reverse:
+
+- **The browser's session runs in a Worker of its own, on a module of its own — not in the
+  engine's.** Four figures say so, and any one would do. *A panic ends the instance*: in the
+  engine's module that is the database and the app's failure screen; in its own, a Worker
+  thrown away and a session built again in about half a second. *A read frame is 0.65–3.6 s and
+  nothing else runs in that Worker meanwhile*: in the engine's, every command, the live socket
+  and a download wait behind it. *A WASM memory never shrinks*: 150–233 MB in the engine's
+  module is held until the tab closes, where a Worker of its own is let go with the page. *And
+  it is 961 kB of module that only a reader who scans has to fetch.* What it costs is the
+  labels crossing from the engine, which holds the corpus, and a second module to build and
+  serve — step 7.5's.
+- **That module is built with `simd128`, and the engine's is left as it is.** It is the
+  difference between a read at 0.3 s and at 0.9–1.6 s, for 28 kB, and a module of its own can
+  ask for it without the whole app depending on it. Fixed-width SIMD has been in Chrome since
+  91, Firefox since 89 and Safari since 16.4, by their release notes — none tested here beyond
+  the one Chrome. A browser without it cannot compile the module, and the page says so in a
+  sentence; the rest of the app is untouched.
+- **A browser gets Fast and Exact, with the readers.** At 0.65 s for a frame that reads and
+  1.2 s for a resolve, in a Worker of its own, the page and its overlay stay live through both.
+  **Nothing is promised about a phone's browser**: a phone's cores are a fraction of this
+  desk's, and the factor has not been measured.
+- **No threads in the browser.** `rayon` over a `SharedArrayBuffer` needs the page cross-origin
+  isolated, which the hosting is not and which would change how every picture and feed is
+  fetched. About half of the gap to native is threads; it stays.
+- **Android is the native crate with its threads**, as the spec had it, and no figure here is
+  about a phone.
+
+**For the owner's phone, when one is attached** — both runs print the same summary this desk's
+did:
+
+- *Native*: CI's `core` job checks `crates/card-scanner/bench` for Android; built there with
+  `cargo build --release --bin scanner-bench-native --target aarch64-linux-android`, pushed
+  with the inputs to `/data/local/tmp` and run from `adb shell`, its output reduced by
+  `npm run scanner:bench -- --summarise <file>`.
+- *The browser*: `npm run scanner:bench -- --simd --dir <inputs> --serve --port 8787`, then
+  `adb reverse tcp:8787 tcp:8787` and the phone's browser on `http://localhost:8787`.
+
+**Not seen**: any phone, natively or in a tab; any browser but one headless Chrome; a
+photograph, or a detail frame — the readers read a 960 px frame's own bands; a quiet machine
+for the scalar module; what 150–233 MB of module memory costs a phone's tab; an input that
+panics the crate.
+
+### 11.3 Step 7.3 — the scanner's commands are the core's, and Android answers them
+
+*Not merged yet.*
+
+### 11.4 Step 7.4 — the assets are fetched on first use
+
+*Not merged yet.*
+
+### 11.5 Step 7.5 — the web host
+
+*Not merged yet.*
+
+### 11.6 Step 7.6 — the phone's Scanner page
+
+*Not merged yet.*

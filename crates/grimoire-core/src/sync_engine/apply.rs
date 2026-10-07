@@ -3,7 +3,10 @@
 //! Four things happen here and nothing else does:
 //!
 //! 1. **Ops already seen are dropped**, against `sync_peers`. Idempotence is the counter rule's
-//!    other half: an op replayed after a reconnect must add its delta once.
+//!    other half: an op replayed after a reconnect must add its delta once. **One op is not the
+//!    watermark's to call seen**: an older build's baseline claim for a row never held, on a fresh
+//!    install that has heard from nobody else ([`never_held`]) — its stamp is its row's
+//!    `updated_at`, which is no place in a log.
 //! 2. **A row is found by grain, then by uid, then inserted** — and where a grain match carries
 //!    a different uid, both devices set the row's uid to `min(theirs, ours)`, which converges
 //!    with no alias table — except onto a row this page deletes, whose uid the sender retired, so
@@ -931,6 +934,30 @@ fn apply_in(
     // these rules, so the two can never disagree about it.
     let horizon: &Horizon = &decided.older;
 
+    // What an older build's claim below the watermark is asked ([`never_held`]). Read only where
+    // the page carries such a baseline and its emitter is all this device has ever heard from.
+    let emitter = alone(
+        ops,
+        held_back,
+        &decided.strip,
+        &watermarks,
+        me.as_deref(),
+        conn,
+    )?;
+    let mut named: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    if emitter.is_some() {
+        for op in ops.iter().chain(held_back) {
+            *named
+                .entry((op.table.as_str(), op.uid.as_str()))
+                .or_default() += 1;
+        }
+    }
+    let unseen = Unseen { emitter, named };
+    // The rows such a claim was let through for. **Each is a group of that claim and nothing
+    // else** — `never_held` asks that no other op of the page names the row — and where it cannot
+    // be written it is skipped, as it was (`run_groups`).
+    let mut lenient: BTreeSet<(&str, &str)> = BTreeSet::new();
+
     // 1. Everything already seen, and everything this device wrote itself — after what `decide`
     //    consumed or kept, which no rule here overrides.
     let mut fresh: Vec<&Op> = Vec::new();
@@ -946,10 +973,19 @@ fn apply_in(
         // Exemptions in spec §9.1's table: a baseline op describes the horizon rather than
         // being described by it, and a tombstone is the one thing a claim cannot express.
         let inside = op.kind == Kind::Put && !op.baseline && horizon.covers(&op.at);
-        if mine(op) || seen(op) || inside {
+        // **Seen is the watermark's word, and an older build's claim is the one op it can be
+        // wrong about**: its stamp is its row's `updated_at`, not a place in its sender's log, so
+        // a row never held here can sit below a watermark that says nothing about it
+        // ([`never_held`]).
+        if mine(op) || inside {
             report.skipped += 1;
-        } else {
+        } else if !seen(op) {
             fresh.push(op);
+        } else if older_claim(op, decided.strip.contains(&i)) && never_held(conn, op, &unseen)? {
+            lenient.insert((op.table.as_str(), op.uid.as_str()));
+            fresh.push(op);
+        } else {
+            report.skipped += 1;
         }
     }
 
@@ -1043,7 +1079,9 @@ fn apply_in(
         conn.execute_batch("SAVEPOINT sync_pass")
             .map_err(|e| e.to_string())?;
         let mut pass = ApplyReport::default();
-        let deferrals = run_groups(conn, &groups, &blocked, &deleted, waiting, &mut pass)?;
+        let deferrals = run_groups(
+            conn, &groups, &blocked, &deleted, &lenient, waiting, &mut pass,
+        )?;
         let found = blocks_of(&deferrals, &blocked);
         if found == blocked || round == cap {
             // At the cap `found` names blocks this pass did not honour — it applied ops above
@@ -1077,6 +1115,8 @@ fn apply_in(
         match d.class {
             Class::Newer => report.held_newer += n,
             Class::Waiting => report.held_waiting += n,
+            // An older build's claim let through and not written is skipped, as it was.
+            Class::Moot if lenient.contains(&row) => report.skipped += n,
             Class::Moot => report.moot += n,
             Class::Dropped => report.dropped += n,
             Class::HeldBack => {}
@@ -1215,6 +1255,7 @@ fn run_groups<'a>(
     groups: &'a [Group<'a>],
     blocked: &Blocks,
     deleted: &BTreeSet<(&str, &str)>,
+    lenient: &BTreeSet<(&str, &str)>,
     waiting: Waiting,
     report: &mut ApplyReport,
 ) -> Result<Vec<Deferral<'a>>, String> {
@@ -1306,9 +1347,20 @@ fn run_groups<'a>(
     // page order, as the groups were met.
     for (g, why) in failed.into_iter().zip(last) {
         if let Some(why) = why {
+            // **An older build's claim let through from below the watermark is never held and
+            // never recorded** ([`never_held`]): unwritten, it is consumed in silence, which is
+            // what skipping it as seen did. Classified like any group it would wait on a parent
+            // the page does not carry, with its sender's later ops behind it, or be dropped and
+            // recorded and open the gap — and again on every page handed back and at every
+            // re-broadcast, since nothing marks a claim below the watermark consumed.
+            let class = if lenient.contains(&(g.table, g.ops[0].uid.as_str())) {
+                Class::Moot
+            } else {
+                classify(conn, g, &why, deleted, waiting)?
+            };
             out.push(Deferral {
                 group: g,
-                class: classify(conn, g, &why, deleted, waiting)?,
+                class,
                 why: Some(why),
             });
         }
@@ -1613,6 +1665,126 @@ fn observe(conn: &Connection, top: Option<&Hlc>) -> Result<(), String> {
     )
     .map(|_| ())
     .map_err(|e| e.to_string())
+}
+
+/// What [`never_held`] asks of a page before it asks anything of a claim.
+struct Unseen<'a> {
+    /// The one device whose older-build claims may be let through at all ([`alone`]).
+    emitter: Option<&'a str>,
+    /// How many ops of the page name each row, the held-back ones included. Empty where
+    /// `emitter` is `None`.
+    named: BTreeMap<(&'a str, &'a str), usize>,
+}
+
+/// A baseline claim as every build from v0.18.0 to v0.39 sends it: one that came with no
+/// reference. **Not one `claims::decide` stripped at the door** — an emission named at or below
+/// the upgrade cut, a claim whose chunk head is missing — which is judged exactly as an older
+/// build judged it, and whose catch-up the client does not read as one answer.
+fn older_claim(op: &Op, stripped: bool) -> bool {
+    op.baseline && op.kind == Kind::Put && op.emission.is_none() && !stripped
+}
+
+/// The emitter of an older build's baseline in this page, where **it is the only device this
+/// device has ever heard from, and this device is in its first generation** — the case
+/// [`never_held`] is for: a fresh install paired with one device on a build before v0.40.0.
+///
+/// A row can be missing here without never having been held, and each condition is one way:
+///
+/// - **Another device.** A delete leaves no mark on a table nothing is filed under (`sync_gone`
+///   is the parent tables', [`tombstone`]), so a copy a third device's delete took here reads
+///   exactly like one never held — and the emitter, not having heard the delete, still claims it.
+///   Its horizon cannot settle that: a watermark is what a device has *passed*, not what it
+///   applied, and an envelope stepped over for a key it never held is passed. So nobody else may
+///   have been heard at all: no op of another device in the page, the client's held-back ops
+///   included; no watermark for one; and nothing taken from one's emissions
+///   (`emission::heard_another`), which raise no watermark.
+/// - **A second reading.** A device that left a group and joined again reads its log from the
+///   first row with its watermarks kept, and they are then all that stands between it and a
+///   claim it met in its earlier time there, whose emitter's later ops are below the watermark too
+///   and are skipped. `emission::first_generation` is a device that has never done that.
+///
+/// A page with no horizon that came without a reference — every ordinary page — reads nothing.
+/// One with such a horizon is the page the client reads as one answer
+/// (`client::an_older_baseline_is_in`), which is what puts a delete that followed a claim in
+/// the same page as the claim.
+fn alone<'a>(
+    ops: &'a [Op],
+    held_back: &[Op],
+    stripped: &BTreeSet<usize>,
+    watermarks: &BTreeMap<String, Hlc>,
+    me: Option<&str>,
+    conn: &Connection,
+) -> Result<Option<&'a str>, String> {
+    let Some(emitter) = ops
+        .iter()
+        .enumerate()
+        .find(|(i, op)| op.horizon.is_some() && older_claim(op, stripped.contains(i)))
+        .map(|(_, op)| op.at.device.as_str())
+    else {
+        return Ok(None);
+    };
+    let another = |device: &str| device != emitter && Some(device) != me;
+    if me == Some(emitter)
+        || ops.iter().chain(held_back).any(|op| another(&op.at.device))
+        || watermarks.keys().any(|device| another(device))
+    {
+        return Ok(None);
+    }
+    let sql = |e: rusqlite::Error| e.to_string();
+    if !emission::first_generation(conn).map_err(sql)?
+        || emission::heard_another(conn, emitter).map_err(sql)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(emitter))
+}
+
+/// Whether an older build's claim ([`older_claim`]) at or below its sender's watermark is **about
+/// a row nothing on this device says it ever held**. Such a claim is not skipped as seen.
+///
+/// **A watermark is a place in its device's log, and a claim's stamp is not one**: it is its
+/// row's `updated_at`, in table order. So a row the log never brought — one its emitter held
+/// before it was paired, with no insert on any log — can sit below a watermark that an earlier
+/// chunk of the same baseline lifted, or that the emitter's own ordinary op lifted a pull before.
+/// Skipped as seen, it never reached a device that pulled between the two, and every later
+/// re-broadcast was skipped the same way (sync.md, *A claim names its emission*: "a baseline
+/// pulled in two halves", 3 / 1 row, and "a sparse op pulled ahead of its baseline", 5 / 0). A
+/// claim that names its emission was taken out of the watermark's hands on 2026-10-03; this is
+/// what was left for the builds that send none.
+///
+/// **Everything else stays the watermark's.** A row held here came through the log, and let
+/// through its claim is a floor that takes back whatever was removed here since — the cheap exit
+/// a re-broadcast is stamped for (`baseline`'s module doc). So the claim is let through only
+/// where every one of these holds:
+///
+/// - **its emitter is the one [`alone`] answers** — this device is a fresh install that has heard
+///   from nobody else;
+/// - **it is the only op of the page that names its row.** A delete beside it took the row; an
+///   ordinary op beside it, seen or not, did something the claim may not carry, and would make a
+///   group that holds its sender from a stamp below the watermark; a second claim beside it would
+///   fold with it by `max`, whichever is the stale one;
+/// - **no row here wears its uid** — a grain twin under another uid is not it, and merges as it
+///   does when the claim is not seen; once built or renamed the row is held, and once absorbed its
+///   uid is retired, so the same claim handed back writes nothing;
+/// - **this device's own log does not name it** — it held the row, and deleted it. The claim's
+///   wall-clock stamp folded against that delete can win, and the row would be back on this device
+///   alone once the delete reached its emitter;
+/// - **its uid was not merged into another row here** ([`emission::retire`]) — its copies live in
+///   the survivor, and nothing at the write would stop a claim with no reference building them
+///   again.
+///
+/// **It moves no watermark** — the claim is at or below it, and [`advance_watermarks`] only
+/// raises — **and it can hold nothing**: its group is the claim alone, and where that cannot be
+/// written it is skipped as it was ([`run_groups`]). What it costs is one indexed read for each
+/// seen claim where the row is held — a re-broadcast of rows all held here, which used to be no
+/// database work at all — three where it is not, and nothing on a page [`alone`] turns away.
+fn never_held(conn: &Connection, op: &Op, unseen: &Unseen) -> Result<bool, String> {
+    let row = (op.table.as_str(), op.uid.as_str());
+    Ok(unseen.emitter == Some(op.at.device.as_str())
+        && unseen.named.get(&row) == Some(&1)
+        && !claims::row_here(conn, &op.table, &op.uid)?
+        && !claims::named_here(conn, &op.table, &op.uid)?
+        && !claims::retired(conn, &op.table, &op.uid)?)
 }
 
 fn stamp(op: &Op) -> Hlc {

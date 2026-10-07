@@ -337,8 +337,9 @@ jobs:
       # `docs/reference/card-scanner.md` §8 — so `fmt --check` and `clippy -D warnings` would go
       # red on day one for something this step is not about. Tidying it is its own commit.
       #
-      # Linux only, like `cargo fmt` above: the crate has no `cfg`-gated platform paths, so a
-      # second leg would compile `ocrs`/`rten` again to prove the same thing.
+      # Linux only, like `cargo fmt` above: the crate's one platform gate (`host.rs`, since
+      # 2026-10-07) tells a browser from everything else, so Windows and Linux compile the same
+      # paths and a second leg would compile `ocrs`/`rten` again to prove the same thing.
       #
       # **Two commands, because `cli` does not compile the `builder` binaries** (2026-09-15).
       # `build-hashes` and `eval` sit behind `builder` (`ureq` + `rayon`), so until the second line
@@ -356,12 +357,18 @@ jobs:
       # root these would follow `.cargo/config.toml` into `src-tauri/target` — the app's tree,
       # and the one the cache above saves. The flag keeps this package building where it always
       # has; `crates/card-scanner/.cargo/config.toml` says the same to a run started inside it.
+      #
+      # **And a fourth, for the frame bench** (2026-10-07, the light app's step 7.1):
+      # `crates/card-scanner/bench` is a package of its own beside the crate — the session loaded
+      # from bytes, which is what a browser's Worker and an Android shell are each handed — so
+      # none of the three lines above compiles it. Its two other targets are the `core` job's.
       - name: cargo test (card-scanner)
         if: matrix.os == 'ubuntu-22.04'
         run: |
           cargo test --locked --features cli --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
           cargo test --locked --features builder --bins --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
           cargo test --locked --features builder --lib synth --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target
+          cargo test --locked --manifest-path crates/card-scanner/bench/Cargo.toml --target-dir crates/card-scanner/target
 
   # **`grimoire-core` on the two targets a desktop build never touches** (2026-10-02). The engine
   # is moving out of `src-tauri` into a crate three hosts link — this desktop, an Android shell
@@ -466,6 +473,20 @@ jobs:
 
       - name: cargo clippy (${{ matrix.target }})
         run: cargo clippy --lib -p grimoire-core --locked --target ${{ matrix.target }} -- -D warnings
+
+      # **The card scanner with its readers, for this target** (2026-10-07, the light app's step
+      # 7.1). The build above links `card-scanner` too, but nothing in the core's table calls its
+      # session on these targets yet, and what no export reaches a compiler may not look at
+      # hard. `crates/card-scanner/bench` calls all of it: the session, both modes and the
+      # readers behind three exports for a Worker, and behind a `main` that an Android shell
+      # runs. So this is the crate's `host` seam compiling where it matters — and the bench
+      # staying buildable for the phone it has not been run on.
+      #
+      # **`check`, like everything in this job: nothing here runs.** Whether a frame gets through
+      # the module in a browser is `npm run scanner:bench`, a desk's to run. Into the scanner's
+      # own `target/`, as its tests build: the bench is outside the workspace, as the crate is.
+      - name: cargo check, the scanner's frame bench (${{ matrix.target }})
+        run: cargo check --lib --bins --locked --target ${{ matrix.target }} --manifest-path crates/card-scanner/bench/Cargo.toml --target-dir crates/card-scanner/target
 
   # **The light app's Android host, built into an APK** (phase 4, 2026-10-03). The `core` job
   # proves the engine *compiles* for `aarch64-linux-android`; this one links the host

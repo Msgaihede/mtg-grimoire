@@ -717,7 +717,8 @@ impl Reference {
         (self.report(views.len(), found), plain.then_some(pick.rotated))
     }
 
-    /// Hash and search each pick, in parallel when there is more than one.
+    /// Hash and search each pick, in parallel when there is more than one — and one after
+    /// another where the host has no second thread ([`crate::host::par_map`]).
     ///
     /// **Two phases, each timed as wall time**, so `hash_ms` and `search_ms` stay what a frame
     /// waits for rather than a sum of work done side by side.
@@ -731,22 +732,22 @@ impl Reference {
         chroma_weight: Option<f32>,
     ) -> Vec<(ViewPick, Searched)> {
         let (kind, bits) = (self.bundle.kind, self.bundle.bits);
-        let t_hash = std::time::Instant::now();
+        let t_hash = crate::host::Stopwatch::start();
         // `hash_rgb`, not `hash`: the bundle's kind decides whether colour is used, and a
         // grayscale call would silently drop it — matching a colour bundle with a colourless
         // query returns confident nonsense rather than an error.
-        let hashes = par_map(picks, |p| {
+        let hashes = crate::host::par_map(picks, |p| {
             let (upright, rotated) = views[p.view];
             crate::hash::hash_rgb(if p.rotated { rotated } else { upright }, kind, bits)
         });
-        let hash_ms = t_hash.elapsed().as_secs_f32() * 1000.0;
+        let hash_ms = t_hash.ms();
 
-        let t_search = std::time::Instant::now();
-        let matches = par_map(&hashes, |h| match chroma_weight {
+        let t_search = crate::host::Stopwatch::start();
+        let matches = crate::host::par_map(&hashes, |h| match chroma_weight {
             Some(w) => self.bundle.search_weighted(h, Section::Card, k, mask, w),
             None => self.bundle.search_field(h, Section::Card, k, mask, field),
         });
-        let search_ms = t_search.elapsed().as_secs_f32() * 1000.0;
+        let search_ms = t_search.ms();
 
         // The phase times go on the first entry only, so summing them over any set of entries
         // counts each phase once.
@@ -837,29 +838,6 @@ fn winner_of(found: &[(ViewPick, Searched)]) -> (ViewPick, f32) {
         }
     }
     winner
-}
-
-/// `items.iter().map(f)`, on scoped threads when there is more than one item.
-///
-/// The first item runs on the calling thread. A panic in any of them is re-raised here, so a
-/// session's panic guard still sees it.
-fn par_map<T: Sync, R: Send>(items: &[T], f: impl Fn(&T) -> R + Sync) -> Vec<R> {
-    let Some((first, rest)) = items.split_first() else {
-        return Vec::new();
-    };
-    if rest.is_empty() {
-        return vec![f(first)];
-    }
-    let f = &f;
-    std::thread::scope(|s| {
-        let spawned: Vec<_> = rest.iter().map(|item| s.spawn(move || f(item))).collect();
-        let mut out = Vec::with_capacity(items.len());
-        out.push(f(first));
-        out.extend(
-            spawned.into_iter().map(|h| h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))),
-        );
-        out
-    })
 }
 
 /// The key both sides of the collector lookup are normalized to.
@@ -1064,17 +1042,6 @@ mod tests {
                 assert_eq!(ids(&widened), ids(&plain));
             }
         }
-    }
-
-    #[test]
-    fn par_map_keeps_order_and_reraises_a_panic() {
-        assert_eq!(par_map(&[1, 2, 3, 4, 5, 6], |x| x * 10), vec![10, 20, 30, 40, 50, 60]);
-        assert_eq!(par_map(&[7], |x| x + 1), vec![8]);
-        assert!(par_map(&[] as &[u8], |x| *x).is_empty());
-        let caught = std::panic::catch_unwind(|| {
-            par_map(&[1, 2, 3], |&x| if x == 3 { panic!("a spawned item panicked") } else { x })
-        });
-        assert!(caught.is_err(), "a panic on a scoped thread was swallowed");
     }
 
     #[test]

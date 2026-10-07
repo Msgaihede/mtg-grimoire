@@ -38,6 +38,7 @@ All OS- and environment-specific behaviors are isolated behind `platform/`:
 - **Clock (`platform::clock`)**:
   - `Tick`: Monotonic duration tracking via `Instant` (native) or `performance.now()` (browser microsecond precision).
   - `Wall`: Persistent wall-clock timestamps in milliseconds since epoch.
+  - `monotonic_ms()`: a `Tick` as a plain function. `ScannerState::new` installs it as `card-scanner`'s clock (`card_scanner::host::set_clock`), which has none of its own in a browser.
 - **Timer (`platform::timer`)**: `sleep`, `timeout`, `interval` (first tick at once, then one per period on a monotonic grid; beats missed outright are dropped, never taken back to back), and `yield_to_host` (posts message across `MessageChannel` in browser). Streaming loops use `Breather` with `feed::WORK_BUDGET` (50 ms) to avoid starving host IPC.
 - **Pause (`platform::pause`)**: `thread::sleep` on native; immediately returns `false` on single-threaded browser workers.
 - **HTTP (`platform::http`)**: Host-agnostic `Client`, `Request`, and `Response`. Native uses reqwest/rustls; browser uses `fetch`. No `reqwest` types leak outside `platform::http`.
@@ -86,7 +87,7 @@ For hosts without Tauri macro dispatch (Android `core_call` and WASM `call`):
 - **Testing feature**: Scaffolding gated under `#[cfg(any(test, feature = "testing"))]`. Never include `testing` in `[dependencies]`; it belongs solely in `[dev-dependencies]`.
 - **SQLite bindings**: `rusqlite` uses `bundled` + `hooks` on native; WASM uses `hooks` alone (never set `default-features = false`).
 - **Tokio scoping**: Tokio runtime dependencies are restricted to native targets (only `tokio::sync` is permitted on WASM).
-- **Scanner integration**: `crates/card-scanner` is linked across all targets; link-time optimization (LTO) strips OCR runtime code from WASM builds.
+- **Scanner integration**: `crates/card-scanner` is linked across all targets; link-time optimization (LTO) strips OCR runtime code from WASM builds. Its threads, clock and panic guard sit behind its own `host` module, which runs them inline on a one-thread host ([card-scanner.md](../../docs/reference/card-scanner.md) §11).
 
 ---
 
