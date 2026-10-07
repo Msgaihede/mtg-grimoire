@@ -20,6 +20,12 @@
  * control, because that reader has connected something and the publish is what refuses, in the
  * crate's own words (`share::publish::NOT_CONNECTED`), which name where to go.
  *
+ * **Hidden, too, wherever publishing cannot work** — the light app, whose hosts register none of
+ * the `share_*` commands. The shell says so through `usePublishes`, and the page asks nothing
+ * about where it runs; there the Share half is not drawn for any membership, and `share_list`
+ * is never asked, because its only answer would be *"There is no command named share_list on
+ * this host."*
+ *
  * **Everything else is refused as a sentence rather than as a constraint failure.** A locked
  * folder greys the row with its reason; the backend's refusals are drawn as themselves. That
  * mattered on every build until 2026-10-01, while `share::publish::SHARE_BASE` was a
@@ -49,7 +55,7 @@ import { copyText } from "@/lib/clipboard";
 import { FOCUS } from "@/lib/focus";
 import { ipc, ipcError, type CollectionFolder, type ShareFields, type ShareRow } from "@/lib/ipc";
 import { SUPPORTER_KEY, supporterState } from "@/lib/query";
-import { useReaches } from "@/lib/reach";
+import { usePublishes, useReaches } from "@/lib/reach";
 import { useAppStore } from "@/lib/store";
 import { cn } from "@/lib/utils";
 
@@ -218,7 +224,13 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
    * view the light app cannot stand on, and a share link is a web page a browser opens anyway.
    */
   const canOpen = useReaches("shared");
-  const canShare = target !== null && connected;
+  const publishes = usePublishes();
+  /**
+   * `publishes` is the shell's answer to whether a publish can work in this window at all —
+   * false in the light app, whose hosts have no `share_*` commands. A membership does not change
+   * that, so an entitled device there sees no Share half rather than a dialog that cannot send.
+   */
+  const canShare = target !== null && connected && publishes;
 
   /**
    * The group's published shares, and **asked only once there is a membership to ask about**.
@@ -226,9 +238,10 @@ export function ShareFolderMenu({ target }: { target: ShareTarget | null }): JSX
    * `share_list` reconciles against the relay while holding the write connection, so an
    * unconnected device asking would take the exclusive write lock for a round trip to learn
    * something it already has locally — see {@link useShares}. It is read *after* `connected` for
-   * that reason and not by accident.
+   * that reason and not by accident. And not at all where nothing can publish: the command is
+   * not on that host.
    */
-  const shares = useShares(connected);
+  const shares = useShares(connected && publishes);
 
   const [publishing, setPublishing] = useState(false);
   const [withdrawing, setWithdrawing] = useState(false);

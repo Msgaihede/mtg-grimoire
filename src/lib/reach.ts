@@ -23,3 +23,21 @@ export const ReachContext = createContext<(view: ViewId) => boolean>(() => true)
 export function useReaches(view: ViewId): boolean {
   return useContext(ReachContext)(view);
 }
+
+/**
+ * Whether a press in this window can publish a share — asked by the collection's **Share**,
+ * whose every row ends in a `share_*` command, and answered by the shell.
+ *
+ * **A capability, not the edition**, for {@link ReachContext}'s reason: a page asks whether its
+ * own press can work here, never which edition or which host it is on. `AppShell` provides the
+ * edition's `publishes` — false in the light app, whose hosts have no share commands — and no
+ * provider at all is true, which is what the desktop app, a story and a test get.
+ *
+ * A `boolean` rather than a function: it is one answer, and a primitive is stable by value.
+ */
+export const PublishesContext = createContext<boolean>(true);
+
+/** Whether publishing a share can work in this window. */
+export function usePublishes(): boolean {
+  return useContext(PublishesContext);
+}

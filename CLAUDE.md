@@ -2,7 +2,7 @@
 
 Portable Windows desktop app for tracking a Magic: The Gathering collection.
 Built with Tauri 2.11 (Rust core) + React 19 + TypeScript 6. Single local user, SQLite storage.
-Also supports a light app (Android APK via Tauri and Web via WebAssembly in a Cloudflare Worker).
+Also supports a light app (Android via Tauri, distributed through Google Play, and Web via WebAssembly in a Cloudflare Worker).
 
 ## Index
 

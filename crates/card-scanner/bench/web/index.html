@@ -1,0 +1,40 @@
+<!doctype html>
+<!--
+  The card scanner's frame bench: the crate as a WebAssembly module in a Worker, fed frames from
+  this page. `npm run scanner:bench` builds the module, serves this folder and reads the result
+  out of a headless Chrome; `npm run scanner:bench -- --serve` leaves it up for a browser — a
+  phone's, over `adb reverse`. See `page.js`, and docs/reference/card-scanner.md §11.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Card scanner — frame bench</title>
+    <style>
+      body {
+        margin: 1rem;
+        font:
+          14px/1.45 ui-monospace,
+          Menlo,
+          Consolas,
+          monospace;
+        color: #e8e6e3;
+        background: #16161a;
+      }
+      button {
+        font: inherit;
+        padding: 0.4rem 0.9rem;
+      }
+      pre {
+        white-space: pre-wrap;
+        overflow-wrap: anywhere;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Card scanner — frame bench</h1>
+    <p><button id="run">Run again</button> <span id="status">starting…</span></p>
+    <pre id="out"></pre>
+    <script type="module" src="page.js"></script>
+  </body>
+</html>

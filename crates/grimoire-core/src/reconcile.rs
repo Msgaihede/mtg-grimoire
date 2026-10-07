@@ -527,18 +527,7 @@ fn fold_wish_into_existing(
     let Some(target) = target else {
         return Ok(false);
     };
-    tx.execute(
-        "UPDATE wishlist_entries SET
-            quantity = quantity + (SELECT quantity FROM wishlist_entries WHERE id = ?2),
-            notes = coalesce(notes, (SELECT notes FROM wishlist_entries WHERE id = ?2)),
-            updated_at = unixepoch()
-          WHERE id = ?1",
-        params![target, source],
-    )?;
-    tx.execute(
-        "DELETE FROM wishlist_entries WHERE id = ?1",
-        params![source],
-    )?;
+    crate::wishlist::fold_wish(tx, target, source)?;
     Ok(true)
 }
 

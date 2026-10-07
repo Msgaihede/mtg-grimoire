@@ -38,6 +38,7 @@ All OS- and environment-specific behaviors are isolated behind `platform/`:
 - **Clock (`platform::clock`)**:
   - `Tick`: Monotonic duration tracking via `Instant` (native) or `performance.now()` (browser microsecond precision).
   - `Wall`: Persistent wall-clock timestamps in milliseconds since epoch.
+  - `monotonic_ms()`: a `Tick` as a plain function. `ScannerState::new` installs it as `card-scanner`'s clock (`card_scanner::host::set_clock`), which has none of its own in a browser.
 - **Timer (`platform::timer`)**: `sleep`, `timeout`, `interval` (first tick at once, then one per period on a monotonic grid; beats missed outright are dropped, never taken back to back), and `yield_to_host` (posts message across `MessageChannel` in browser). Streaming loops use `Breather` with `feed::WORK_BUDGET` (50 ms) to avoid starving host IPC.
 - **Pause (`platform::pause`)**: `thread::sleep` on native; immediately returns `false` on single-threaded browser workers.
 - **HTTP (`platform::http`)**: Host-agnostic `Client`, `Request`, and `Response`. Native uses reqwest/rustls; browser uses `fetch`. No `reqwest` types leak outside `platform::http`.
@@ -67,6 +68,8 @@ For hosts without Tauri macro dispatch (Android `core_call` and WASM `call`):
 - Macro `commands! { ... }` generates the dispatch table `TABLE` and `grimoire_core::dispatch`.
 - Matches desktop command names and accepts camelCase JSON parameters (`rename_all = "camelCase"`).
 - Six execution categories: `read`, `write`, `owned`, `blocking`, `task`, `bytes`.
+- **`bytes` is the raw-body kind, and the scanner's frame and capture are its two entries** (`scanner_frame`, `scanner_capture`; pinned by `commands::tests::the_commands_that_carry_a_raw_body_are_the_scanners_two`). The call's **arguments object is the headers** a desktop request would have carried — `{"x-scanner-options": "<json>", "x-scanner-detail": "<n>"}` — handed to the body whole as a `commands::Carried`; the body itself arrives as `Some(Vec<u8>)` however the host carried it (base64 on Android, a transferred buffer in a browser). A new `bytes` entry also needs a row on `src-tauri`'s `command_table::RAW_BODY`.
+- **A table call holds the scanner's lease as `scanner::PAGE`**: a host of the table has exactly one page, so `scanner_elsewhere` answers `false` there and `scanner_hold` always succeeds. An entry that admits is `blocking` or `bytes`, never `write`/`owned` — the lease is taken before the write connection is waited for. The desktop never dispatches scanner commands through the table (its wrappers admit the webview's own label).
 - Non-desktop command exception: `card_image_source` is registered exclusively in the table for web service worker image resolution (`TABLE_ONLY`).
 
 ---
@@ -86,7 +89,15 @@ For hosts without Tauri macro dispatch (Android `core_call` and WASM `call`):
 - **Testing feature**: Scaffolding gated under `#[cfg(any(test, feature = "testing"))]`. Never include `testing` in `[dependencies]`; it belongs solely in `[dev-dependencies]`.
 - **SQLite bindings**: `rusqlite` uses `bundled` + `hooks` on native; WASM uses `hooks` alone (never set `default-features = false`).
 - **Tokio scoping**: Tokio runtime dependencies are restricted to native targets (only `tokio::sync` is permitted on WASM).
-- **Scanner integration**: `crates/card-scanner` is linked across all targets; link-time optimization (LTO) strips OCR runtime code from WASM builds.
+- **Scanner integration**: `crates/card-scanner` is linked across all targets; link-time optimization (LTO) strips OCR runtime code from WASM builds. Its threads, clock and panic guard sit behind its own `host` module, which runs them inline on a one-thread host ([card-scanner.md](../../docs/reference/card-scanner.md) §11).
+
+---
+
+## 7a. Scanner Commands (`src/scanner.rs`)
+
+- **One implementation, two callers.** The session's doors are methods of `ScannerState` (`status`, `frame`, `reset`, `set_filters`, `capture`), the three writes are `save_prefs`, `save_tray` and `commit_tray`, and a frame or a capture is read out of a body by `frame_from` / `capture_from` over a header lookup (`Header`: absent, text, or there and unreadable). The command table calls them admitting `PAGE`; `src-tauri`'s wrappers call them admitting the webview's label. Change a scanner command here, never in a host.
+- **Refused on a page, in one sentence, from one helper**: `not_in_a_browser_yet()` (`NOT_IN_A_BROWSER_YET`) is asked by `ScannerState::ensure` — the one door to the session — and by `capture`. The crate's threads and `Instant` trap in a Worker. Prefs, tray, the commit and the lease answer on a page. **The light app's web step deletes that function**, with `SCANNER_NOT_IN_A_BROWSER_YET` in `src/features/scanner/verdictText.ts` and its two readers.
+- **`ScannerState::forget()` drops the loaded session** so the next command loads afresh — for assets that arrive after the first load (a download). It cannot fail: it waits behind a frame in flight, leaves the lease alone, and clears a poisoned session lock (the one way back from one). The dropped session's filters stay **owed** until a session takes them — each reload is offered them again, an accepted `set_filters` settles them, and while a loaded session has refused them `ScannerStatus.unapplied_filters` carries its sentence (mirrored in `src/lib/ipc.ts`). Evidence and `decision_seq` restart. **Nothing calls it yet** but tests.
 
 ---
 

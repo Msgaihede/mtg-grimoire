@@ -2873,3 +2873,507 @@ fn a_held_back_op_in_a_group_held_as_newer_is_counted_in_no_class() {
         "y's two ops and e's claim, and not c's held-back op: {report:?}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// An older build's baseline — claims that name no emission (v0.18.0 to v0.39)
+// ---------------------------------------------------------------------------------------------
+
+/// An emission as every build from v0.18.0 to v0.39 sends it: the same claims, the horizon on each
+/// chunk's first op, and no reference anywhere.
+fn older(mut chunks: Vec<Vec<Op>>) -> Vec<Vec<Op>> {
+    for op in chunks.iter_mut().flatten() {
+        op.emission = None;
+    }
+    chunks
+}
+
+fn older_whole(conn: &Connection, device: &str) -> Vec<Op> {
+    older(emit(conn, device, usize::MAX)).concat()
+}
+
+/// [`paired`], as `identity::join_group` leaves a fresh install: capture turned on for the first
+/// time, with no generation and no watermark held before it — a first generation.
+fn joined(device: &str) -> Connection {
+    let conn = paired(device);
+    emission::start_logging(&conn).unwrap();
+    assert!(emission::first_generation(&conn).unwrap());
+    conn
+}
+
+fn uid_of(conn: &Connection, card: &str) -> String {
+    conn.query_row(
+        "SELECT sync_uid FROM collection_entries WHERE card_id = ?1",
+        [card],
+        |r| r.get(0),
+    )
+    .unwrap()
+}
+
+/// `a` holds three copies from before it was paired, touched in the order that puts the latest
+/// stamp in the first chunk: the seeded folder and `c1`, then `c2` and `c3`.
+fn two_halves(a: &Connection) -> Vec<Vec<Op>> {
+    stash(a, "c1", 1, 1_700_000_300);
+    stash(a, "c2", 1, 1_700_000_200);
+    stash(a, "c3", 1, 1_700_000_100);
+    let chunks = older(emit(a, "dev-a", 2));
+    assert_eq!(chunks.len(), 2);
+    chunks
+}
+
+/// `a` holds `x1` and `x2` from before it was paired, and `b` has taken an ordinary op of `a`'s
+/// from a clock far ahead: every claim `a` makes for them is below `b`'s watermark for it.
+fn two_rows_below_the_watermark(a: &Connection, b: &Connection) {
+    let mut ma = 0;
+    stash(a, "x1", 1, 1_700_000_300);
+    stash(a, "x2", 1, 1_700_000_200);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    set_clock(a, STAMP);
+    stash(a, "z", 1, SECOND);
+    apply(b, &since(a, &mut ma)).unwrap();
+}
+
+/// [`a_baseline_pulled_in_two_halves_reaches_a_device_that_held_nothing`], from a build that sends
+/// no references: the first half lifts its sender's watermark to the latest stamp it carries, and
+/// the second half's rows, touched earlier, sit below it. **A row never held here is not seen**,
+/// whatever its sender's watermark says — and once built it is held, so the half handed back
+/// writes nothing and moves nothing.
+#[test]
+fn an_older_builds_baseline_pulled_in_two_halves_reaches_a_device_that_held_nothing() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    let chunks = two_halves(&a);
+    apply(&b, &page(&[&outbox(&a), &chunks[0]])).unwrap();
+    let mark = watermark(&b, "dev-a");
+    assert!(
+        chunks[1].iter().all(|op| (op.at.ms, op.at.ctr) < mark),
+        "the fixture: the second half sits below the watermark the first left"
+    );
+    apply(&b, &chunks[1]).unwrap();
+    assert_eq!(qty(&b), (3, 3));
+    assert_eq!(watermark(&b, "dev-a"), mark, "a claim below it moved it");
+
+    let again = apply(&b, &chunks[1]).unwrap();
+    assert_eq!(
+        (again.applied, again.skipped, qty(&b)),
+        (0, 2, (3, 3)),
+        "the second half handed back: {again:?}"
+    );
+}
+
+/// [`a_sparse_op_pulled_ahead_of_its_baseline_does_not_cost_the_row`], from a build that sends no
+/// references: the sparse edit cannot build the row and leaves its sender's watermark at now, above
+/// the claim that could.
+#[test]
+fn an_older_builds_sparse_op_pulled_ahead_of_its_baseline_does_not_cost_the_row() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 4, SECOND - 100);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    apply(&b, &outbox(&a)).unwrap();
+    apply(&b, &older_whole(&a, "dev-a")).unwrap();
+    assert_eq!(copies(&b, "bolt"), 5);
+}
+
+/// [`a_first_contact_parent_below_the_watermark_lands_with_its_child`], from a build that sends no
+/// references: the binder's claim sits below the watermark `opt`'s insert left, and the copy filed
+/// in it above. Skipped as seen, the binder left its copy waiting on a parent that never came.
+#[test]
+fn an_older_builds_first_contact_parent_below_the_watermark_lands_with_its_child() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    let binder = folder(&a, "Binder", 1_700_000_000);
+    file_in(&a, "bolt", 2, binder, SECOND + 10);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    stash(&a, "opt", 1, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let report = apply(&b, &older_whole(&a, "dev-a")).unwrap();
+    assert_eq!(report.deferred, 0, "{report:?}");
+    assert_eq!(folder_of(&b, "bolt").as_deref(), Some("Binder"));
+    assert_eq!(copies(&b, "bolt"), 2);
+}
+
+/// **A grain twin counts as a row not held**: this device made its own `bolt` before it was
+/// paired, under its own uid, and the sender's claim for it comes in the second half, below the
+/// watermark. It merges as it does when it is not seen — one row, the larger count, the lower uid
+/// — and handed back it is skipped: under the lower uid the row is held, or the claim's uid is
+/// retired.
+#[test]
+fn an_older_builds_claim_below_the_watermark_still_meets_its_grain_twin() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    stash(&a, "c1", 1, 1_700_000_300);
+    stash(&a, "bolt", 3, 1_700_000_100);
+    stash(&b, "bolt", 1, 1_700_000_000);
+    let lower = uid_of(&a, "bolt").min(uid_of(&b, "bolt"));
+    let chunks = older(emit(&a, "dev-a", 2));
+    assert_eq!(chunks[1].len(), 1, "the fixture: bolt's claim alone");
+    apply(&b, &chunks[0]).unwrap();
+    apply(&b, &chunks[1]).unwrap();
+    assert_eq!((rows(&b, "bolt"), copies(&b, "bolt")), (1, 3));
+    assert_eq!(uid_of(&b, "bolt"), lower);
+
+    let again = apply(&b, &chunks[1]).unwrap();
+    assert_eq!((again.applied, again.skipped), (0, 1), "{again:?}");
+}
+
+/// **A row held here is judged by the watermark, as it always was** — the cheap exit a
+/// re-broadcast is stamped for (`baseline`'s module doc). This device holds `bolt` through its
+/// sender's log and has removed a copy since; the sender, not having heard, re-broadcasts 3 below
+/// the watermark. Let through, the claim is the floor of its row and takes the removal back.
+/// (The row and this device's own log both say it was held; the two halves' hand-back and
+/// [`an_older_builds_later_chunk_lands_and_its_held_row_is_judged_as_it_was`] are where the row
+/// alone says so.)
+#[test]
+fn an_older_builds_rebroadcast_of_a_row_held_here_is_skipped_as_seen() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 3, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    step(&b, "bolt", -1, SECOND);
+    let report = apply(&b, &older_whole(&a, "dev-a")).unwrap();
+    assert_eq!(copies(&b, "bolt"), 2, "{report:?}");
+}
+
+/// The same-second `+1` an older build's re-baseline carries for a row held here stays lost, as
+/// *Older builds, and the upgrade cut* records for this pair — the edit is inside the horizon and
+/// its claim below the watermark — **while the row never held, in the later chunk, lands**
+/// ([`a_later_chunk_lands_after_an_edit_from_a_fast_clock`]'s fixture).
+#[test]
+fn an_older_builds_later_chunk_lands_and_its_held_row_is_judged_as_it_was() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    stash(&a, "opt", 1, SECOND - 5);
+    a.execute("DELETE FROM sync_ops WHERE seq > ?1", [ma])
+        .unwrap();
+    set_clock(&a, STAMP + 3_600_000);
+    step(&a, "bolt", 1, SECOND);
+    let edit = since(&a, &mut ma);
+    let chunks = older(emit(&a, "dev-a", 1));
+    apply(&b, &page(&[&edit, &chunk_of(&chunks, "bolt")])).unwrap();
+    apply(&b, &chunk_of(&chunks, "opt")).unwrap();
+    assert_eq!((copies(&b, "bolt"), copies(&b, "opt")), (2, 1));
+}
+
+/// **A row this device deleted is not one it never held**: its own log names it. The sender, not
+/// having heard the delete, re-broadcasts the row below the watermark — its `updated_at` moved
+/// since by a write behind its log, as applying a peer's op moves it, so the claim is stamped
+/// above the delete. It stays skipped, and the delete takes the row on the sender when it gets
+/// there. Let through, the claim's wall-clock stamp is folded against the delete and wins, and
+/// the row is back on this device alone.
+#[test]
+fn an_older_builds_claim_for_a_row_this_device_deleted_is_skipped_as_seen() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    let (mut ma, mut mb) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    b.execute("DELETE FROM collection_entries", []).unwrap();
+    let del = since(&b, &mut mb);
+    capture::suppressed(&a, || {
+        a.execute(
+            "UPDATE collection_entries SET updated_at = ?1",
+            [SECOND + 60],
+        )
+        .unwrap()
+    });
+    set_clock(&a, STAMP + 120_000);
+    stash(&a, "opt", 1, SECOND + 120);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+
+    let claims = older_whole(&a, "dev-a");
+    let bolt = claims
+        .iter()
+        .find(|op| op.fields.get("card_id").and_then(|v| v.as_str()) == Some("bolt"))
+        .unwrap();
+    assert!(
+        bolt.at > del[0].at && (bolt.at.ms, bolt.at.ctr) <= watermark(&b, "dev-a"),
+        "the fixture: the claim is above the delete and below the watermark"
+    );
+    let report = apply(&b, &claims).unwrap();
+    apply(&a, &del).unwrap();
+    assert_eq!((rows(&a, "bolt"), rows(&b, "bolt")), (0, 0), "{report:?}");
+}
+
+/// **Nor is a uid this device merged into another row** (`retired@`). This device's own `bolt`
+/// absorbed the sender's under its lower uid, and was then filed in a binder; the sender, not
+/// having heard, re-broadcasts its uid at the root, where no grain twin stands any more. Built
+/// there, its copies would be counted beside the survivor's.
+#[test]
+fn an_older_builds_claim_for_a_uid_merged_away_here_builds_nothing() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    stash(&a, "bolt", 2, 1_700_000_100);
+    stash(&b, "bolt", 2, 1_700_000_000);
+    a.execute("UPDATE collection_entries SET sync_uid = 'ffff'", [])
+        .unwrap();
+    b.execute("UPDATE collection_entries SET sync_uid = '0000'", [])
+        .unwrap();
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    let claims = older_whole(&a, "dev-a");
+    apply(&b, &claims).unwrap();
+    assert_eq!(uid_of(&b, "bolt"), "0000");
+    assert!(emission::retired(&b, "collection_entries", "ffff").unwrap());
+
+    let binder = folder(&b, "Binder", 1_700_000_200);
+    b.execute("UPDATE collection_entries SET folder_id = ?1", [binder])
+        .unwrap();
+    let report = apply(&b, &claims).unwrap();
+    assert_eq!((rows(&b, "bolt"), copies(&b, "bolt")), (1, 2), "{report:?}");
+}
+
+// --- The claim is the only op of the page that names its row ---------------------------------
+
+/// **A delete beside the claim took the row.** The sender claimed `bolt` and then deleted it; this
+/// device took both in one page, and the page is handed back. The delete is below the watermark
+/// now and skipped, and the claim beside it must not build the row the delete took.
+#[test]
+fn an_older_builds_claim_handed_back_beside_the_delete_that_followed_it_builds_nothing() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    let mut ma = 0;
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    let claims = older_whole(&a, "dev-a");
+    a.execute("DELETE FROM collection_entries", []).unwrap();
+    let del = since(&a, &mut ma);
+    assert_eq!(del.len(), 1, "{del:?}");
+    let both = page(&[&claims, &del]);
+    apply(&b, &both).unwrap();
+    assert_eq!(rows(&b, "bolt"), 0);
+    let report = apply(&b, &both).unwrap();
+    assert_eq!(rows(&b, "bolt"), 0, "{report:?}");
+}
+
+/// **An op beside the claim that this device has already consumed means the page is being read
+/// again.** The sender's sparse `+1` could not build the row and was dropped, and the page comes
+/// back with its baseline behind it, as a held cursor hands it back. The claim here does carry
+/// that `+1`; a claim built before it would not, and the two read alike, so the row stays as the
+/// watermark left it. Pulled after the cursor has passed the `+1`, the same baseline lands
+/// ([`an_older_builds_sparse_op_pulled_ahead_of_its_baseline_does_not_cost_the_row`]).
+#[test]
+fn an_older_builds_claim_beside_an_op_already_consumed_for_its_row_is_skipped_as_seen() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 4, SECOND - 100);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    step(&a, "bolt", 1, SECOND);
+    let edit = outbox(&a);
+    apply(&b, &edit).unwrap();
+    let report = apply(&b, &page(&[&edit, &older_whole(&a, "dev-a")])).unwrap();
+    assert_eq!(copies(&b, "bolt"), 0, "{report:?}");
+}
+
+/// **An op beside the claim that is not yet seen would make one group with it**, and that group
+/// would hold its sender from the claim's stamp, below the watermark — every later op of the
+/// sender's behind it. Here the copy's binder is in a chunk the page does not carry, so the claim
+/// and the sender's fresh `+1` for the copy would wait on it together, with `later` behind them.
+/// The claim is skipped as it was, the `+1` alone is a row this device cannot build — dropped and
+/// recorded, as it always was — and `later` lands.
+#[test]
+fn an_older_builds_claim_beside_a_fresh_op_for_its_row_is_skipped_and_holds_nothing() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    let mut ma = 0;
+    let binder = folder(&a, "Binder", 1_700_000_000);
+    file_in(&a, "bolt", 2, binder, SECOND - 10);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    set_clock(&a, STAMP);
+    stash(&a, "opt", 1, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let chunks = older(emit(&a, "dev-a", 1));
+    set_clock(&a, STAMP + 5_000);
+    step(&a, "bolt", 1, SECOND + 5);
+    stash(&a, "later", 1, SECOND + 5);
+    let fresh = since(&a, &mut ma);
+    assert_eq!(fresh.len(), 2, "{fresh:?}");
+
+    let (report, held) = apply_held(
+        &b,
+        &page(&[&chunk_of(&chunks, "bolt"), &fresh]),
+        Waiting::Hold,
+    )
+    .unwrap();
+    assert_eq!(
+        (report.deferred, report.dropped, held.len()),
+        (0, 1, 0),
+        "{report:?} {held:?}"
+    );
+    assert_eq!((rows(&b, "bolt"), copies(&b, "later")), (0, 1));
+}
+
+/// **A second claim beside it would fold with it by `max`, whichever of the two is the stale
+/// one.** Two of the sender's baselines come in one page, each claiming `x1` and `x2`: neither is
+/// let through. The later one on its own lands.
+#[test]
+fn an_older_builds_two_claims_for_a_row_in_one_page_are_the_watermarks() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    two_rows_below_the_watermark(&a, &b);
+    let (first, second) = (older_whole(&a, "dev-a"), older_whole(&a, "dev-a"));
+    apply(&b, &page(&[&first, &second])).unwrap();
+    assert_eq!((rows(&b, "x1"), rows(&b, "x2")), (0, 0));
+    apply(&b, &second).unwrap();
+    assert_eq!((rows(&b, "x1"), rows(&b, "x2")), (1, 1));
+}
+
+// --- Its emitter is the only device this one has ever heard from, in its first generation ---
+
+/// **A watermark for another device.** A delete a third device made leaves nothing behind on a
+/// table nothing is filed under, so a row it took here reads exactly like one never held. `c`
+/// deletes `bolt` and this device applies it; `a`, not having heard, re-broadcasts the row below
+/// the watermark. This device has heard from `c`, so `a`'s claims are judged as they always were
+/// — and `a` drops the row itself when the delete reaches it. Built here, it would be a card on
+/// this device alone.
+#[test]
+fn an_older_builds_claims_are_the_watermarks_where_another_device_has_a_watermark() {
+    let (a, b, c) = (paired("dev-a"), joined("dev-b"), paired("dev-c"));
+    let (mut ma, mut mc) = (0, 0);
+    set_clock(&a, STAMP);
+    stash(&a, "bolt", 2, SECOND);
+    let seed = since(&a, &mut ma);
+    apply(&b, &seed).unwrap();
+    apply(&c, &seed).unwrap();
+    c.execute("DELETE FROM collection_entries", []).unwrap();
+    let del = since(&c, &mut mc);
+    apply(&b, &del).unwrap();
+    apply(&b, &older_whole(&a, "dev-a")).unwrap();
+    apply(&a, &del).unwrap();
+    assert_eq!(
+        (rows(&a, "bolt"), rows(&b, "bolt"), rows(&c, "bolt")),
+        (0, 0, 0)
+    );
+}
+
+/// **Another device's op in the page.** This device has no watermark for `c` yet: its first op
+/// comes in the same page as the second half of `a`'s baseline. What that op did, `a` may not
+/// have heard, so the half stays the watermark's.
+#[test]
+fn an_older_builds_claims_are_the_watermarks_beside_another_devices_op() {
+    let (a, b, c) = (paired("dev-a"), joined("dev-b"), paired("dev-c"));
+    let chunks = two_halves(&a);
+    apply(&b, &page(&[&outbox(&a), &chunks[0]])).unwrap();
+    real_stash(&c, "opt", 1);
+    apply(&b, &page(&[&chunks[1], &outbox(&c)])).unwrap();
+    assert_eq!(
+        (copies(&b, "c2"), copies(&b, "c3"), copies(&b, "opt")),
+        (0, 0, 1)
+    );
+}
+
+/// **Something taken from another device's emission.** A claim that names its emission raises no
+/// watermark, so a device heard only through one has no `sync_peers` row to show for it — the
+/// ledger does. `c`, on this build, has baselined this device; `a`'s second half stays the
+/// watermark's.
+#[test]
+fn an_older_builds_claims_are_the_watermarks_once_another_devices_emission_was_taken() {
+    let (a, b, c) = (paired("dev-a"), joined("dev-b"), paired("dev-c"));
+    stash(&c, "opt", 1, 1_700_000_050);
+    c.execute("DELETE FROM sync_ops", []).unwrap();
+    apply(&b, &whole(&c, "dev-c")).unwrap();
+    assert_eq!(copies(&b, "opt"), 1);
+    let watermarks_for_c: i64 = b
+        .query_row(
+            "SELECT count(*) FROM sync_peers WHERE device_id = 'dev-c'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        watermarks_for_c, 0,
+        "the fixture: heard through claims alone"
+    );
+
+    let chunks = two_halves(&a);
+    apply(&b, &page(&[&outbox(&a), &chunks[0]])).unwrap();
+    apply(&b, &chunks[1]).unwrap();
+    assert_eq!((copies(&b, "c2"), copies(&b, "c3")), (0, 0));
+}
+
+/// **Only a device in its first generation.** One that has been in a group before reads its log
+/// again from the first row with its watermarks kept, and nothing tells a claim it read then from
+/// one it never met; and one paired under a build before the mark has none. Both keep the
+/// watermark's answer: the second half is skipped, as it always was.
+#[test]
+fn an_older_builds_claims_are_the_watermarks_on_a_device_not_in_its_first_generation() {
+    for resumed in [None, Some("1")] {
+        let (a, b) = (paired("dev-a"), paired("dev-b"));
+        if let Some(mark) = resumed {
+            b.execute(
+                "INSERT INTO sync_state (key, value) VALUES ('logging_resumed', ?1)",
+                [mark],
+            )
+            .unwrap();
+        }
+        let chunks = two_halves(&a);
+        apply(&b, &page(&[&outbox(&a), &chunks[0]])).unwrap();
+        apply(&b, &chunks[1]).unwrap();
+        assert_eq!(qty(&b), (1, 1), "logging_resumed {resumed:?}");
+    }
+}
+
+/// **Only a claim that came with no reference.** One stripped at the door — here an emission named
+/// at or below the upgrade cut — is judged exactly as an older build judged it, by the watermark:
+/// the client does not read its catch-up as one answer, so a delete that followed it can be a page
+/// away, where nothing here would see it. The page carries a chunk of each kind from `a`: the
+/// older build's lands, the stripped one beside it does not.
+#[test]
+fn a_claim_stripped_at_the_door_is_still_the_watermarks() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    b.execute(
+        "INSERT INTO sync_state (key, value) VALUES ('emissions_since', '9000000000000:0')",
+        [],
+    )
+    .unwrap();
+    two_rows_below_the_watermark(&a, &b);
+    let unnamed = chunk_of(&older(emit(&a, "dev-a", 1)), "x1");
+    let stripped = chunk_of(&emit(&a, "dev-a", 1), "x2");
+    apply(&b, &page(&[&unnamed, &stripped])).unwrap();
+    assert_eq!((rows(&b, "x1"), rows(&b, "x2")), (1, 0));
+}
+
+/// **A claim let through that cannot be written is skipped, as it was**: it holds nothing, is not
+/// recorded, opens no gap, and is counted as skipped. Here the copy's binder is in a chunk the
+/// page does not carry. Classified like any group the copy would wait on it, with `later` behind
+/// it, and when that wait is released be dropped and recorded and open the gap — again at every
+/// page handed back and every re-broadcast, since nothing marks a claim below the watermark
+/// consumed. Both are tried: a page that holds, and the release. When the binder does come, the
+/// same claim lands.
+#[test]
+fn an_older_builds_claim_let_through_that_cannot_be_written_is_skipped_in_silence() {
+    let (a, b) = (paired("dev-a"), joined("dev-b"));
+    let mut ma = 0;
+    let binder = folder(&a, "Binder", 1_700_000_000);
+    file_in(&a, "bolt", 2, binder, SECOND - 10);
+    a.execute("DELETE FROM sync_ops", []).unwrap();
+    set_clock(&a, STAMP);
+    stash(&a, "opt", 1, SECOND);
+    apply(&b, &since(&a, &mut ma)).unwrap();
+    let chunks = older(emit(&a, "dev-a", 1));
+    set_clock(&a, STAMP + 5_000);
+    stash(&a, "later", 1, SECOND + 5);
+    let later = since(&a, &mut ma);
+    let alone = page(&[&chunk_of(&chunks, "bolt"), &later]);
+
+    for (waiting, skipped) in [(Waiting::Hold, 1), (Waiting::Release, 2)] {
+        let (report, held) = apply_held(&b, &alone, waiting).unwrap();
+        assert_eq!(
+            (report.skipped, report.moot, report.deferred, report.dropped),
+            (skipped, 0, 0, 0),
+            "{report:?}"
+        );
+        assert_eq!(held.len(), 0, "{held:?}");
+        assert_eq!((rows(&b, "bolt"), copies(&b, "later")), (0, 1));
+        assert_eq!(skips(&b), Vec::new());
+        assert!(!emission::gap_open(&b).unwrap());
+    }
+
+    let binder_chunk: Vec<Op> = chunks
+        .iter()
+        .find(|c| c[0].fields.get("name").and_then(|v| v.as_str()) == Some("Binder"))
+        .unwrap()
+        .clone();
+    apply(&b, &page(&[&binder_chunk, &chunk_of(&chunks, "bolt")])).unwrap();
+    assert_eq!(folder_of(&b, "bolt").as_deref(), Some("Binder"));
+    assert_eq!(copies(&b, "bolt"), 2);
+}

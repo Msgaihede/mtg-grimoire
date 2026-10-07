@@ -1,88 +1,43 @@
-import { useEffect, useMemo, useRef, useState, type JSX } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
+import { useMemo, useRef, useState, type JSX } from "react";
 import { ConfirmDialog } from "@/features/settings/ConfirmDialog";
 import { CreateDeckDialog } from "@/features/decks/CreateDeckDialog";
 import { useNewDeckFormat } from "@/features/decks/useNewDeckFormat";
 import { plural } from "@/lib/counts";
-import type { CollectionFolder, CollectionImportItem } from "@/lib/ipc";
 import { ipc, ipcError } from "@/lib/ipc";
 import { useAppStore } from "@/lib/store";
-import { invalidateOwnedWrite } from "@/lib/searchMarks";
 import { Overlay } from "./Overlay";
 import { TiersPanel } from "./panels/TiersPanel";
-import { AddedToast, landedFrom, type LandedCard } from "./reader/AddedToast";
+import { AddedToast } from "./reader/AddedToast";
 import { MatchStrip } from "./reader/MatchStrip";
-import type { LastAdded } from "./reader/readerText";
+import { SCANNING_STOPPED } from "./reader/readerText";
 import { ScanBar } from "./reader/ScanBar";
-import { addDecision, commitPlan, setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
-import { trayFinish } from "./reader/trayFinish";
+import { setPrinting, totalCopies, trayLayoutOf } from "./reader/tray";
+import { withoutCommitted } from "./reader/trayCommit";
 import { TrayPanel } from "./reader/TrayPanel";
 import { ScannerPanels } from "./ScannerPanels";
-import { DEFAULT_DETAIL_WAIT_MS, DEFAULT_SCANNER_OPTIONS, DEFAULT_SEND_PX } from "./scannerOptions";
-import type { ScannerDecision, ScannerOptions, ScannerTrayRow } from "./types";
+import {
+  DEFAULT_DETAIL_WAIT_MS,
+  DEFAULT_SCANNER_OPTIONS,
+  DEFAULT_SEND_PX,
+  frameOptions as frameOptionsOf,
+} from "./scannerOptions";
+import type { ScannerOptions, ScannerTrayRow } from "./types";
 import { useCamera, useCameraDevices } from "./useCamera";
 import { useScanLoop } from "./useScanLoop";
-import {
-  SCANNER_ELSEWHERE_KEY,
-  SCANNER_ELSEWHERE_POLL_MS,
-  useScannerElsewhere,
-} from "./useScannerElsewhere";
+import { useScannerElsewhere } from "./useScannerElsewhere";
+import { useRefusedElsewhere, useScannerHold } from "./useScannerHold";
 import { useScannerPrefs } from "./useScannerPrefs";
+import { useScannerStatus } from "./useScannerStatus";
 import { useTray } from "./useTray";
+import { useTrayCommit, useTrayFolder } from "./useTrayCommit";
+import { useTrayLanding } from "./useTrayLanding";
 import { useScannedDeck } from "./useScannedDeck";
 import { useWindowParked } from "./useWindowParked";
-import { bundleSentence, modelsSentence, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
+import { SCANNER_OPEN_ELSEWHERE, SCANNER_OPENS_HERE_LATER } from "./verdictText";
 
-/**
- * How long a row that just landed stays marked as the one to flash.
- *
- * `TrayPanel`'s wash holds for one `slow` tier and fades over the next, so the flash itself is over
- * in about half a second; the key is cleared a while after that so a panel that remounts — a
- * Developer switch that moves the column — does not replay it.
- */
-const FLASH_MS = 1200;
-
-/**
- * Why the filters cannot be used: the scanner narrows by set and date through its labels, and a
- * bundle with no `corpus.db` beside it has none.
- */
-const FILTERS_NEED_NAMES =
-  "Filters need the card database. corpus.db wasn't found next to the scanner bundle.";
-
-/** Is `id` a drawer the reader made? `null` — the root — always is. */
-function isUserFolder(folders: readonly CollectionFolder[], id: number | null): boolean {
-  return id === null || folders.some((folder) => folder.id === id && folder.kind === "user");
-}
-
-/**
- * The tray after a commit — or a confirmed *Clear all…* — that took `committed`, with whatever
- * changed while it was in flight left standing.
- *
- * **Not `[]`, because the camera keeps running while the write does.** The commit waits for the
- * write connection — seconds, while a sync holds it — and a card landing in that window is a row
- * the commit never saw. So a row whose key the commit did not take is new and stays; a row the
- * commit took and nothing has touched since is dropped (the reducer builds a new object for every
- * change, so "untouched" is identity); a row the commit took that was **bumped** since — the same
- * printing and finish, more copies — keeps only the copies added after the snapshot; and a row the
- * commit took that was edited some other way in that window is dropped, because the commit already
- * filed the card it was.
- */
-function withoutCommitted(
-  now: readonly ScannerTrayRow[],
-  committed: readonly ScannerTrayRow[],
-): ScannerTrayRow[] {
-  const taken = new Map(committed.map((row) => [row.key, row]));
-  return now.flatMap((row) => {
-    const was = taken.get(row.key);
-    if (was === undefined) return [row];
-    if (was === row) return [];
-    const samePrinting = was.cardId === row.cardId && was.finish === row.finish;
-    return samePrinting && row.quantity > was.quantity
-      ? [{ ...row, quantity: row.quantity - was.quantity }]
-      : [];
-  });
-}
+// What used to stand here — the flash's hold, the filters' refusal, `isUserFolder` and
+// `withoutCommitted` — moved out with the logic that used it, so the light app's phone page files
+// its cards by the same rules: `useTrayLanding.ts`, `useScannerStatus.ts`, `reader/trayCommit.ts`.
 
 /**
  * The Scanner view: the reader's bar across the top, the camera and one line saying what it is
@@ -118,15 +73,14 @@ function ElsewhereSentence() {
     <section className="flex h-full flex-col gap-3">
       <h2 className="sr-only">Scanner</h2>
       <p>{SCANNER_OPEN_ELSEWHERE}</p>
-      <p className="text-dim">It will open here once that window closes or leaves the scanner.</p>
+      <p className="text-dim">{SCANNER_OPENS_HERE_LATER}</p>
     </section>
   );
 }
 
 function LiveScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const queryClient = useQueryClient();
-  const { prefs, update, filterError, loaded } = useScannerPrefs();
+  const { prefs, update, filterError, loaded, unavailable } = useScannerPrefs();
   // Session-only: a deliberate Stop survives minimize/restore, but a new visit starts as before.
   const [scanning, setScanning] = useState(true);
   // **A minimized window stands down** (issue #556): the pump pauses at once, and the camera and
@@ -147,7 +101,6 @@ function LiveScanner() {
   const deckOpener = useRef<HTMLElement | null>(null);
   const scannedDeck = useScannedDeck(deckRows ?? []);
   const newDeckFormat = useNewDeckFormat();
-  const folderList = useCollectionFolderList();
   const openAllPrintings = useAppStore((s) => s.openAllPrintings);
   // The developer sliders. `mode` rides the same header but is the reader's, so it is taken from
   // the prefs on the way out rather than from here.
@@ -157,53 +110,15 @@ function LiveScanner() {
   // `previews` is the Developer switch's too: the rectified preview and its hash cost a JPEG
   // encode a frame, and nothing but the developer panels draws them.
   const frameOptions = useMemo(
-    () => ({ ...options, mode: prefs.mode, previews: prefs.developer }),
+    () => frameOptionsOf(options, prefs.mode, prefs.developer),
     [options, prefs.mode, prefs.developer],
   );
-  // `staleTime: Infinity` and no button to invalidate it: `scanner_status` loads the bundle and
-  // the models on its first call and answers out of what it loaded thereafter, so asking again
-  // in the same session cannot report a file that has since appeared. A `Reload assets` press
-  // would redraw the same three sentences and read as a repair that had happened; restarting
-  // the app is the honest instruction, and it is what the sentences already name a path for.
-  const status = useQuery({
-    queryKey: ["scanner", "status"],
-    queryFn: ipc.scannerStatus,
-    staleTime: Infinity,
-  });
+  // Asked once a session — `useScannerStatus` says why there is no button to ask again.
+  const { status: statusData, hasBundle, filtersDisabled, assetNotes } = useScannerStatus();
 
-  /**
-   * **The heartbeat: this view holds the scanner from its first render, whatever its camera is
-   * doing.** `scanner_hold` on mount and once a poll while mounted, cleared on unmount — so the lease
-   * is renewed by the view being here rather than by frames, which a camera still starting, refused
-   * or failed never sends. Without it a view with no frames let its lease lapse in two seconds, a
-   * second window got through the gate, and both had the tray on screen; and the first push of the
-   * filters took the lease before the camera was live, so a slow camera could hand the scanner back
-   * and forth between two windows on the Scanner view.
-   *
-   * **Every refusal asks the gate again, not only the first** — which flips it to the sentence and
-   * unmounts this view. Keyed on nothing but the refusal itself, so a run of them is a run of asks:
-   * the frame loop's re-ask below fires once per run of refused frames, and a run that began while
-   * the gate still said "free" could leave a mounted view sending refused frames at full rate. Any
-   * other failure says nothing about the lease and is left to the frame loop's own line.
-   *
-   * **Stopped while the window is released** (minimized past the grace): a window sitting on the
-   * taskbar held the scanner for good before, and nothing else could take it. The restore starts it
-   * again with an immediate beat, whose refusal is the first thing to say another window has it.
-   */
-  const released = parked.released;
-  useEffect(() => {
-    if (released) return;
-    const hold = () => {
-      ipc.scannerHold().catch((e: unknown) => {
-        if (ipcError(e) === SCANNER_OPEN_ELSEWHERE) {
-          void queryClient.invalidateQueries({ queryKey: SCANNER_ELSEWHERE_KEY });
-        }
-      });
-    };
-    hold();
-    const beat = setInterval(hold, SCANNER_ELSEWHERE_POLL_MS);
-    return () => clearInterval(beat);
-  }, [queryClient, released]);
+  // **The heartbeat: this view holds the scanner from its first render, whatever its camera is
+  // doing** — `useScannerHold`, stopped while the window is released (minimized past the grace).
+  useScannerHold(parked.released);
 
   /**
    * Every tray write goes through here, and every writer builds on `tray.latest()` rather than
@@ -215,60 +130,12 @@ function LiveScanner() {
    */
   const writeRows = (rows: ScannerTrayRow[]) => tray.setRows(rows);
 
-  const [lastAdded, setLastAdded] = useState<LastAdded>(null);
-  /**
-   * The card laid over the camera for the length of its hold — what just landed, drawn from the
-   * tray's head row rather than from the decision, because the row is what was filed: a bump,
-   * a re-read and a row waiting for a pick all say something different to a reader holding the
-   * card. Cleared by the overlay itself once its hold runs out.
-   */
-  const [landed, setLanded] = useState<LandedCard | null>(null);
-  const [flashKey, setFlashKey] = useState<string | null>(null);
-  const flashTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  useEffect(
-    () => () => {
-      if (flashTimer.current !== null) clearTimeout(flashTimer.current);
-    },
-    [],
+  // One card, into the tray — once per `decision_seq`, built on `tray.latest()`, in the finish
+  // the Defaults popover holds as the card lands (`useTrayLanding`).
+  const { onDecision, lastAdded, landed, clearLanded, flashKey } = useTrayLanding(
+    tray,
+    prefs.finish,
   );
-
-  /**
-   * One card, into the tray — once per `decision_seq`, which the loop is what guarantees.
-   *
-   * The reducer decides whether it is a new row, a second copy of the newest, or a second opinion
-   * that rewrites the newest row's printing (`replaces_previous` — a switch to Exact on the card
-   * Fast named); this files the answer, marks the row for the flash, and remembers what to say
-   * about it. The finish is the
-   * Defaults popover's at the moment the card landed, which is why a change there moves only the
-   * next card — and under **Detect**, the popover's default, it is `trayFinish`'s reading of this
-   * decision's own facts: the printing's finishes and the separator the collector line showed, or
-   * `unknown` for the reader to settle.
-   */
-  const onDecision = (decision: ScannerDecision) => {
-    const { rows, bumped, replaced } = addDecision(
-      tray.latest(),
-      decision,
-      { finish: trayFinish(prefs.finish, decision) },
-      Date.now(),
-      crypto.randomUUID(),
-    );
-    writeRows(rows);
-    const head = rows[0];
-    setLastAdded({
-      name: head.name,
-      setCode: head.setCode,
-      collectorNumber: head.collectorNumber,
-      bumpedTo: bumped ? head.quantity : null,
-      replaced,
-    });
-    setLanded(landedFrom(head, bumped, replaced));
-    setFlashKey(head.key);
-    if (flashTimer.current !== null) clearTimeout(flashTimer.current);
-    flashTimer.current = setTimeout(() => {
-      flashTimer.current = null;
-      setFlashKey(null);
-    }, FLASH_MS);
-  };
 
   const loop = useScanLoop({
     videoRef,
@@ -282,31 +149,12 @@ function LiveScanner() {
     onDecision,
   });
 
-  // **A refused frame is the lease saying another window has the scanner** — it took it in the
-  // moment between this window's ask and this frame. Asking again flips the gate to the sentence,
-  // which unmounts this view and stops the camera. This is the fast path and not the guarantee: it
-  // fires once per run of refused frames, and the heartbeat above is what asks on every refusal. A
-  // refused *filter push* asks the same question from inside `useScannerPrefs`, which is where that
-  // refusal has to be told apart from a real one — so `filterError` never carries this sentence and
-  // is not read here.
-  const refusedElsewhere = loop.error === SCANNER_OPEN_ELSEWHERE;
-  useEffect(() => {
-    if (refusedElsewhere) void queryClient.invalidateQueries({ queryKey: SCANNER_ELSEWHERE_KEY });
-  }, [refusedElsewhere, queryClient]);
+  // **A refused frame is the lease saying another window has the scanner** — asking the gate again
+  // flips it to the sentence, which unmounts this view and stops the camera.
+  useRefusedElsewhere(loop.error);
 
-  /**
-   * **A folder that is gone, or that is not the reader's own, is the root.** The id is stored and
-   * the folder is not, so another surface can delete it — and `collection_import_commit` accepts a
-   * deck's group, because the import's deck arm files there on purpose, so a stored id that now
-   * names one would put scanned cards in a deck's box behind the reader's back. Decided only once
-   * the list has answered; until then the stored id stands, and the commit asks again.
-   */
-  const staleFolder =
-    folderList.query.isSuccess && !isUserFolder(folderList.folders, prefs.folderId);
-  const folderId = staleFolder ? null : prefs.folderId;
-  useEffect(() => {
-    if (loaded && staleFolder) update({ folderId: null });
-  }, [loaded, staleFolder, update]);
+  // **A folder that is gone, or that is not the reader's own, is the root** — `useTrayFolder`.
+  const { folderId, folderList } = useTrayFolder(prefs.folderId, loaded, update);
 
   /**
    * A refusal to reset has somewhere to go, which `void ipc.scannerReset()` did not give it.
@@ -350,59 +198,19 @@ function LiveScanner() {
     return saved.saved;
   };
 
-  const [committing, setCommitting] = useState(false);
-  const [commitError, setCommitError] = useState<string | null>(null);
-
-  /**
-   * The tray into the collection, in one `scanner_tray_commit` — the collection import and the
-   * tray that is left after it, in one transaction, so all or nothing: a refusal keeps every row
-   * and puts the sentence above them, and the backend's own words are the sentence, because they
-   * already name what is wrong.
-   *
-   * **Every row with a known finish, and none without one.** `commitPlan` splits the tray: the
-   * rows it takes are the import's lines *and* the snapshot {@link withoutCommitted} subtracts, so
-   * a row of unknown finish is never "taken", and it is still in `remaining` when the commit goes
-   * out and still in the tray when it answers — marked, where the reader left it.
-   *
-   * **The stored tray moves with the collection, not behind it.** This used to commit and then let
-   * the tray's debounced write catch up; an app closed in that window — or that write refused, or
-   * an older one landing after the commit — restored the committed rows at the next launch, and the
-   * next Add filed them twice. `tray.commit` queues behind any tray write already on the wire and
-   * computes what is left ({@link withoutCommitted}) against the rows as they are when it goes out.
-   *
-   * The folder is asked about again here rather than trusted from the render: the list may not
-   * have answered yet, and this press is the one moment a wrong answer would write.
-   */
-  const onCommit = () => {
-    if (committing) return;
-    let items: CollectionImportItem[];
-    let snapshot: ScannerTrayRow[];
-    try {
-      ({ items, taken: snapshot } = commitPlan(tray.latest(), prefs.condition));
-    } catch (e) {
-      setCommitError(ipcError(e));
-      return;
-    }
-    const chosen = prefs.folderId;
-    setCommitting(true);
-    setCommitError(null);
-    void (async () => {
-      try {
-        const folders = folderList.query.data ?? (await folderList.query.refetch()).data;
-        // A list that would not load leaves the id to the backend, which refuses a folder that is
-        // gone in words; a list that did load has already said whether the id is the reader's.
-        const target = folders === undefined || isUserFolder(folders, chosen) ? chosen : null;
-        await tray.commit(items, target, (latest) => withoutCommitted(latest, snapshot));
-        // The import's own set, for the import's reason: these are copies the collection did not
-        // hold a moment ago, and every surface that reads "what is owned" moves with them.
-        invalidateOwnedWrite(queryClient);
-      } catch (e) {
-        setCommitError(ipcError(e));
-      } finally {
-        setCommitting(false);
-      }
-    })();
-  };
+  // The tray into the collection, in one `scanner_tray_commit` — all or nothing, the rows with a
+  // known finish, the folder asked about again at the press (`useTrayCommit`).
+  const {
+    commit,
+    committing,
+    error: commitError,
+  } = useTrayCommit({
+    tray,
+    condition: prefs.condition,
+    folderId: prefs.folderId,
+    folderList,
+  });
+  const onCommit = () => void commit();
 
   /**
    * *Clear all…*: the rows the reader was asked about, while the question is up, and the button
@@ -442,16 +250,6 @@ function LiveScanner() {
     });
   };
 
-  const statusData = status.data ?? null;
-  // Unknown is not "absent": `scanner_status` loads the bundle on its first call, which is most of
-  // a second, and a line saying the scanner has no hashes for that second is a false alarm on
-  // every first open. The line waits for the answer instead.
-  const hasBundle = statusData === null || statusData.bundle.loaded;
-  const filtersDisabled =
-    statusData !== null && statusData.labels === 0 ? FILTERS_NEED_NAMES : null;
-  const assetNotes = [bundleSentence(statusData), modelsSentence(statusData)].filter(
-    (sentence): sentence is string => sentence !== null,
-  );
   // The detector's own refusal is a developer's sentence — contours examined, a quad rejected —
   // and the reader has the status line for what it means to them. The loop's failures and a
   // refused reset are not the detector's, and every reader gets those.
@@ -483,7 +281,9 @@ function LiveScanner() {
           filters={prefs.filters}
           onFilters={(filters) => update({ filters })}
           filterError={filterError}
-          filtersDisabled={filtersDisabled}
+          // A host with no session has nothing to narrow, and a filter changed there would be
+          // drawn, never taken and never stored.
+          filtersDisabled={unavailable ?? filtersDisabled}
           finish={prefs.finish}
           onFinish={(finish) => update({ finish })}
           condition={prefs.condition}
@@ -521,10 +321,10 @@ function LiveScanner() {
             <div className="relative min-h-0 flex-1 overflow-hidden rounded-lg bg-black">
               <video ref={videoRef} muted playsInline className="h-full w-full object-cover" />
               <Overlay videoRef={videoRef} verdict={scanning ? loop.verdict : null} />
-              <AddedToast card={scanning ? landed : null} onDone={() => setLanded(null)} />
+              <AddedToast card={scanning ? landed : null} onDone={clearLanded} />
               {!scanning && (
                 <p role="status" className="absolute left-3 top-2 p-2 text-xs text-dim">
-                  Scanning stopped. Press Start scanning to resume.
+                  {SCANNING_STOPPED}
                 </p>
               )}
               {camera.kind === "error" && (
@@ -533,6 +333,18 @@ function LiveScanner() {
                   className="absolute inset-0 flex items-center justify-center p-6 text-center text-dim"
                 >
                   {camera.message}
+                </p>
+              )}
+              {/* **A host with no scanner session** — a web page, until the light app's web step
+                  (`SCANNER_NOT_IN_A_BROWSER_YET`). The engine's sentence where the picture would
+                  be: `loaded` never goes true there, so no camera was asked for and nothing else
+                  will ever fill this box. The tray beside it still reads, edits and files. */}
+              {unavailable !== null && (
+                <p
+                  role="alert"
+                  className="absolute inset-0 flex items-center justify-center p-6 text-center text-dim"
+                >
+                  {unavailable}
                 </p>
               )}
               {/* The detector's own sentence, in a strip that is *emptied* rather than removed: a

@@ -1017,6 +1017,7 @@ fn levenshtein(a: &[u8], b: &[u8]) -> u32 {
 #[cfg(feature = "ocr")]
 mod engine {
     use super::*;
+    use crate::host::Stopwatch;
     use ocrs::{ImageSource, OcrEngine, OcrEngineParams};
     use rten_imageproc::{RectF, RotatedRect};
     use std::path::Path;
@@ -1176,7 +1177,7 @@ mod engine {
         /// well — so "did it return text" cannot decide it. The longer alphabetic result wins,
         /// because a name is longer than a set code and a collector number.
         pub fn read_title(&self, src: &BandSource<'_>) -> TitleRead {
-            let started = std::time::Instant::now();
+            let started = Stopwatch::start();
             let (ba, bb) = (src.band(TITLE_BAND, 2, false), src.band(TITLE_BAND, 2, true));
             let a = self.read_band(&ba, Band::Title).unwrap_or_default();
             let b = self.read_band(&bb, Band::Title).unwrap_or_default();
@@ -1207,7 +1208,7 @@ mod engine {
             flipped_first: bool,
             edits: &dyn Fn(&str) -> Option<u32>,
         ) -> TitleRead {
-            let started = std::time::Instant::now();
+            let started = Stopwatch::start();
             let band_a = src.band(TITLE_BAND, 2, flipped_first);
             let a = self.read_band(&band_a, Band::Title).unwrap_or_default();
             let a_edits = edits(&normalize(&a));
@@ -1243,14 +1244,14 @@ mod engine {
         band: RgbImage,
         raw: String,
         rotated: bool,
-        started: std::time::Instant,
+        started: Stopwatch,
     ) -> TitleRead {
         TitleRead {
             band: Some(band),
             normalized: normalize(&raw),
             raw: raw.split_whitespace().collect::<Vec<_>>().join(" "),
             rotated,
-            elapsed_ms: started.elapsed().as_secs_f32() * 1000.0,
+            elapsed_ms: started.ms(),
         }
     }
 
@@ -1280,7 +1281,7 @@ mod engine {
             src: &BandSource<'_>,
             flipped_first: bool,
         ) -> CollectorRead {
-            let started = std::time::Instant::now();
+            let started = Stopwatch::start();
             // **The first crop settles which way up, and the fallbacks only ever try that
             // one.** Both orientations of every crop is six reads at ~130 ms each, and the
             // cost lands exactly the wrong way round: a card that reads resolves on the first
@@ -1332,7 +1333,7 @@ mod engine {
                 band: Some(shown),
                 origin: src.origin(shown_at, rotated),
                 rotated,
-                elapsed_ms: started.elapsed().as_secs_f32() * 1000.0,
+                elapsed_ms: started.ms(),
             }
         }
     }

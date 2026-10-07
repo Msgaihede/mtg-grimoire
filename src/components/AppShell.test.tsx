@@ -179,7 +179,7 @@ import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider, useAddCardToDeck } from "@/features/card/cardMenu";
 import { DROP_OVER, DROP_RING } from "@/lib/dropMarks";
 import { EditionContext, LIGHT_EDITION } from "@/lib/edition";
-import { useReaches } from "@/lib/reach";
+import { usePublishes, useReaches } from "@/lib/reach";
 import { LAYER } from "@/lib/layers";
 import { DURATION } from "@/lib/motion";
 import type { Update } from "@/lib/useUpdate";
@@ -2017,14 +2017,16 @@ describe("the light edition", () => {
   });
 
   /**
-   * The shell answers `useReaches` from its edition, so a page can hide a way into a view this
-   * window does not draw without ever reading the edition. The control is the full edition.
+   * The shell answers `useReaches` and `usePublishes` from its edition, so a page can hide a way
+   * into a view this window does not draw, or a publish its host has no command for, without ever
+   * reading the edition. The control is the full edition.
    */
-  it("tells a page which views this window can reach", () => {
+  it("tells a page which views this window can reach, and whether it can publish", () => {
     const Probe = () => {
       const shared = useReaches("shared");
       const collection = useReaches("collection");
-      return <span>{`shared:${shared} collection:${collection}`}</span>;
+      const publishes = usePublishes();
+      return <span>{`shared:${shared} collection:${collection} publishes:${publishes}`}</span>;
     };
     const { unmount } = render(
       <EditionContext.Provider value={LIGHT_EDITION}>
@@ -2033,7 +2035,7 @@ describe("the light edition", () => {
         </AppShell>
       </EditionContext.Provider>,
     );
-    expect(screen.getByText("shared:false collection:true")).toBeInTheDocument();
+    expect(screen.getByText("shared:false collection:true publishes:false")).toBeInTheDocument();
     unmount();
 
     render(
@@ -2041,7 +2043,7 @@ describe("the light edition", () => {
         <Probe />
       </AppShell>,
     );
-    expect(screen.getByText("shared:true collection:true")).toBeInTheDocument();
+    expect(screen.getByText("shared:true collection:true publishes:true")).toBeInTheDocument();
   });
 
   /**

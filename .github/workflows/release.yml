@@ -32,9 +32,13 @@ permissions: {}
 #                                         (publish also needs build and android-sign)
 #
 # The two jobs that hold a secret — `android-sign`, `web-deploy` — build nothing, take what they
-# hold from the `release` environment (which only `main` may use), and each ends green and says
-# so when its values are not set. docs/reference/ci-and-releases.md, "The release rule", has the
-# reasons and what only the owner can do.
+# hold from the `release` environment (one only `main` may use once the owner has restricted it —
+# docs/reference/ci-and-releases.md, "What only the owner can do", step 0; until then any
+# branch's workflow can), and each ends green and says so when its values are not set. **The
+# Android host leaves this workflow as a signed bundle the owner uploads to Google Play**;
+# nothing Android is attached to the release.
+# docs/reference/ci-and-releases.md, "The release rule", has the reasons and what only the
+# owner can do.
 #
 # **`on:` is a push to `main` and nothing else.** Not `workflow_dispatch`, not `pull_request`:
 # either would let a branch's copy of this file ask for the release environment's values, and
@@ -170,14 +174,15 @@ jobs:
           gh release upload "${{ needs.release-please.outputs.tag_name }}" \
             "$PORTABLE_ZIP" --clobber --repo "${{ github.repository }}"
 
-  # **The light app's APK, built at the tag** — `ci.yml`'s `android` job, step for step: the same
-  # runner, JDK 21, NDK, toolchain action, cache key and `npx tauri android build`. It holds no
-  # secret, so what Gradle signs it with is the runner's debug key, exactly as in a pull request.
-  # That signature never reaches a release: `android-sign` below replaces it, or nothing is
-  # attached.
+  # **The light app's Android build, at the tag** — `ci.yml`'s `android` job, step for step: the
+  # same runner, JDK 21, NDK, toolchain action, cache key and `npx tauri android build`. It
+  # holds no secret, so what Gradle signs with is the runner's debug key, exactly as in a pull
+  # request. That signature never leaves this workflow: `android-sign` below replaces it on the
+  # bundle, or nothing is handed on. The APK the same run makes stays in this job.
   #
-  # **It runs whether or not there is a key to sign with.** A tag the APK cannot be built from is
-  # a release that would ship two hosts and not the third, and that is a red run, not a skip.
+  # **It runs whether or not there is a key to sign with.** A tag the Android app cannot be
+  # built from is a release that would ship two hosts and not the third, and that is a red run,
+  # not a skip.
   android:
     name: android (build)
     needs: release-please
@@ -220,70 +225,82 @@ jobs:
           workspaces: ". -> src-tauri/target"
           key: android-aarch64
 
-      # From `mobile/`, so the CLI finds the light host's `tauri.conf.json`, as in `ci.yml`. The
-      # APK's `versionName` and `versionCode` come from that file's `version`, which
-      # release-please bumped in the commit this run is on.
-      - name: Build the APK
+      # From `mobile/`, so the CLI finds the light host's `tauri.conf.json`, as in `ci.yml` — and
+      # the same line, so a release runs a command every pull request ran.
+      - name: Build the APK and the bundle
         working-directory: mobile
-        run: npx tauri android build --apk --target aarch64 --ci
+        run: npx tauri android build --apk --aab --target aarch64 --ci
 
-      - name: Find the APK
+      # The `versionName` and `versionCode` come from `tauri.conf.json`'s `version`, which
+      # release-please bumped in the commit this run is on. Held here, before anything is signed:
+      # a bundle that says another version is one Play Console refuses after the release has run.
+      - name: Find the bundle, and hold it to the release's version
         shell: bash
+        env:
+          VERSION: ${{ needs.release-please.outputs.version }}
         run: |
           set -euo pipefail
-          apk=$(find mobile/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
-          [ -n "$apk" ] || { echo "the build produced no APK" >&2; exit 1; }
-          mkdir -p apk-out && cp "$apk" apk-out/mtg-grimoire-light-arm64.apk
-          ls -l apk-out
+          bash scripts/android-release/check-version.sh "$VERSION"
+          aab=$(find mobile/src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' | head -1)
+          [ -n "$aab" ] || { echo "the build produced no bundle" >&2; exit 1; }
+          mkdir -p aab-out && cp "$aab" aab-out/mtg-grimoire-light-arm64.aab
+          ls -l aab-out
 
-      # Handed to `android-sign`, and to nobody else: this is the debug-signed build, and its
+      # Handed to `android-sign`, and to no other job: this is the debug-signed build, and its
       # name says so. Fourteen days, so a sign job that failed can be run again.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: android-apk-debug-signed
-          path: apk-out/mtg-grimoire-light-arm64.apk
+          name: android-aab-debug-signed
+          path: aab-out/mtg-grimoire-light-arm64.aab
           retention-days: 14
           if-no-files-found: error
 
-  # **The release key, in a job of its own.** This is the one structural rule the removed `sign`
-  # job left behind (docs/reference/ci-and-releases.md): a signing secret never sits in a build
+  # **The upload key, in a job of its own.** This is the one structural rule the removed `sign`
+  # job left behind (docs/reference/ci-and-releases.md): a signing key never sits in a build
   # leg, because a build leg runs every npm lifecycle script, every cargo build script and every
   # Gradle plugin, and any of them can read a file or an environment. So this job runs none of
-  # them — no `npm ci`, no cargo, no Gradle. It checks out one script, downloads the APK the
-  # job above built, and re-signs it with the Android SDK's own `apksigner`
-  # (`scripts/android-sign.sh`, which `ci.yml`'s `android` job proves on a throwaway key in every
-  # pull request that can have changed the APK). `scripts/release-rule.test.mjs` holds the rule.
+  # them — no `npm ci`, no cargo, no Gradle. It checks out the scripts, downloads the bundle the
+  # job above built, and re-signs it with the JDK's own `jarsigner`
+  # (`scripts/android-release/sign-bundle.sh`, which `ci.yml`'s `android` job proves on
+  # throwaway keys in every pull request that can have changed the bundle).
+  # `scripts/release-rule.test.mjs` holds the rule.
   #
-  # **With no key it attaches nothing and ends green**, saying so in the summary. It never
-  # attaches the debug-signed build: each runner mints its own debug key, so that APK could not
-  # update over any other, and an update that will not install is an uninstall — which wipes
-  # `user.db` and a paired identity. **With some of the three key values and not all, it
-  # fails**: that is a mistake in the settings, and a skip would hide it for as long as nobody
-  # looked.
+  # **The signed bundle goes to Google Play, by the owner's hand, and nowhere else** (decided
+  # 2026-10-07: Play is the only place the Android app is published). So this job attaches
+  # nothing to the release and can write nothing to the repository: what it signed leaves as the
+  # artifact `play-upload-bundle`, and the summary says where to upload it. **A release is
+  # therefore not on phones when this run ends** — it is when the owner has uploaded the bundle
+  # and Play has reviewed it.
   #
-  # **And with a key but no committed fingerprint it attaches nothing either**
-  # (`mobile/src-tauri/release-signer.sha256`). "Signed by the keystore in the settings" is not
-  # "signed by the key the last release was": a keystore made a second time would sign happily
-  # and strand every phone. The fingerprint is public and the owner has it the moment he makes
-  # the key, so the rule is the strict one — no fingerprint in the tree, no APK on the release —
-  # and the script refuses a keystore that is not the one it names.
+  # **It is an upload key.** Google holds the key Play signs installs with (Play App Signing)
+  # and can reset this one if it is lost, so it is not the unrecoverable thing an APK's signing
+  # key is. It is still held to a committed fingerprint
+  # (`mobile/src-tauri/release-signer.sha256`): a keystore pasted into the settings by mistake
+  # is refused here, by name, and not by Play Console after the release has run.
+  #
+  # **With no key it signs nothing and ends green**, saying so in the summary. **With some of
+  # the three key values and not all, it fails**: that is a mistake in the settings, and a skip
+  # would hide it for as long as nobody looked. **With a key and no committed fingerprint it
+  # signs nothing either**, and says which.
   #
   # **`environment: release`**, and with it the key: a repository-level value is handed to any
   # workflow on any branch of this repository that asks for it, where an environment's is handed
   # only to a job that names the environment, from a branch the environment allows — `main`
-  # alone, set up once by the owner (docs/reference/ci-and-releases.md).
+  # alone once the owner has restricted it (docs/reference/ci-and-releases.md, "What only the
+  # owner can do", step 0). Until then the environment has no branch rule, and a workflow on any
+  # branch can name it.
   android-sign:
-    name: android (sign and attach)
+    name: android (sign for Play)
     needs: [release-please, android]
     if: needs.release-please.outputs.release_created == 'true'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     environment: release
-    # Uploads the signed APK to the draft.
+    # Reads the checkout and the artifact. It uploads nothing to the release.
     permissions:
-      contents: write
+      contents: read
     steps:
-      # The script, and the fingerprint the next step looks for. Nothing is installed.
+      # The scripts, and the fingerprint the next step looks for. Nothing is installed.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -308,7 +325,7 @@ jobs:
           has ANDROID_KEYSTORE_PASSWORD "$HAS_KEYSTORE_PASSWORD"
           has ANDROID_KEY_PASSWORD "$HAS_KEY_PASSWORD"
           if [ -n "$missing" ] && [ "$found" -gt 0 ]; then
-            echo "Some of the signing key's values are set in the release environment and these are not:$missing" >&2
+            echo "Some of the upload key's values are set in the release environment and these are not:$missing" >&2
             echo "Set all three or none — docs/reference/ci-and-releases.md, 'What only the owner can do'." >&2
             exit 1
           fi
@@ -318,21 +335,19 @@ jobs:
           fi
           echo "present=false" >> "$GITHUB_OUTPUT"
           {
-            echo "### Android APK — not attached"
+            echo "### Android bundle — not signed"
             echo
             if [ -n "$missing" ]; then
-              echo "This release has **no Android APK**. The \`release\` environment holds no signing"
-              echo "key (\`ANDROID_KEYSTORE_BASE64\`, \`ANDROID_KEYSTORE_PASSWORD\`,"
-              echo "\`ANDROID_KEY_PASSWORD\`), and a debug-signed APK is never attached: it could not"
-              echo "update over any other build, and an update that will not install is an uninstall."
+              echo "This release has **no bundle to upload to Google Play**. The \`release\` environment"
+              echo "holds no upload key (\`ANDROID_KEYSTORE_BASE64\`, \`ANDROID_KEYSTORE_PASSWORD\`,"
+              echo "\`ANDROID_KEY_PASSWORD\`), and Play takes no bundle signed with a runner's debug key."
             else
-              echo "⚠️ This release has **no Android APK, although the signing key is set**: this tag"
-              echo "holds no \`$PIN\`. Without the certificate's fingerprint in the tree nothing says"
-              echo "the key in the settings is the key the last release was signed with, and an APK"
-              echo "signed by another key installs over nothing. Commit the fingerprint; the next"
-              echo "release attaches an APK."
+              echo "⚠️ This release has **no bundle to upload to Google Play, although the upload key is"
+              echo "set**: this tag holds no \`$PIN\`. Without the certificate's fingerprint in the tree"
+              echo "nothing says the key in the settings is the one Play Console knows. Commit the"
+              echo "fingerprint; the next release signs a bundle."
             fi
-            echo "The APK was built at this tag, so the tag is known to build one."
+            echo "The bundle was built at this tag, so the tag is known to build one."
             echo
             echo "\`docs/reference/ci-and-releases.md\`, *What only the owner can do*, has the commands."
           } >> "$GITHUB_STEP_SUMMARY"
@@ -340,15 +355,15 @@ jobs:
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         if: steps.key.outputs.present == 'true'
         with:
-          name: android-apk-debug-signed
-          path: apk-in
+          name: android-aab-debug-signed
+          path: aab-in
 
       # The only step the key reaches. The keystore is decoded into the runner's temp folder,
       # outside the checkout, readable by this user alone (`umask 077`), and deleted when the
-      # step ends, however it ends. **The alias is a plain word and not a secret**: it is no
-      # secret, and GitHub would mask every `mtg-grimoire` in this job's log — the APK's own
-      # name among them — if it were one.
-      - name: Sign the APK with the release key
+      # step ends, however it ends. **The alias is a plain word and not a secret**: GitHub would
+      # mask every `mtg-grimoire` in this job's log — the bundle's own name among them — if it
+      # were one.
+      - name: Sign the bundle with the upload key
         if: steps.key.outputs.present == 'true'
         shell: bash
         env:
@@ -361,26 +376,36 @@ jobs:
         run: |
           set -euo pipefail
           : "${JAVA_HOME_21_X64:?the runner image did not set JAVA_HOME_21_X64}"
-          : "${ANDROID_HOME:?the runner image did not set ANDROID_HOME}"
           export JAVA_HOME="$JAVA_HOME_21_X64"
           export ANDROID_KEYSTORE="$RUNNER_TEMP/release.keystore"
           trap 'rm -f "$ANDROID_KEYSTORE"' EXIT
           umask 077
           printf '%s' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE"
-          apk="mtg-grimoire-$VERSION-android-arm64.apk"
-          # The APK must say it is this release, with the versionCode that makes it an update.
-          export ANDROID_EXPECT_VERSION="$VERSION"
-          bash scripts/android-sign.sh apk-in/mtg-grimoire-light-arm64.apk "$apk"
-          echo "SIGNED_APK=$apk" >> "$GITHUB_ENV"
+          # The decoded keystore is the only copy the tools need; the base64 need not ride in their environment.
+          unset ANDROID_KEYSTORE_BASE64
+          aab="mtg-grimoire-$VERSION-android.aab"
+          bash scripts/android-release/sign-bundle.sh aab-in/mtg-grimoire-light-arm64.aab "$aab"
+          echo "SIGNED_AAB=$aab" >> "$GITHUB_ENV"
+          IFS=. read -r major minor patch <<< "$VERSION"
+          {
+            echo
+            echo "**Upload \`$aab\` to Play Console** — it is this run's artifact \`play-upload-bundle\`."
+            echo "*Test and release* → the track → *Create new release*. Its versionCode is $((major * 1000000 + minor * 1000 + patch))."
+            echo
+            echo "Until it is uploaded and Play has reviewed it, phones stay on the previous version:"
+            echo "\`docs/reference/ci-and-releases.md\`, *What only the owner can do*."
+          } >> "$GITHUB_STEP_SUMMARY"
 
-      - name: Attach the APK to the draft release
+      # Thirty days: long enough for the owner to upload it, and not an archive — Play Console
+      # keeps every bundle it was given. Anyone signed in to GitHub can download a public
+      # repository's artifact; this one is no secret, and only the Console's owner can upload it.
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         if: steps.key.outputs.present == 'true'
-        shell: bash
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release upload "${{ needs.release-please.outputs.tag_name }}" \
-            "$SIGNED_APK" --clobber --repo "${{ github.repository }}"
+        with:
+          name: play-upload-bundle
+          path: ${{ env.SIGNED_AAB }}
+          retention-days: 30
+          if-no-files-found: error
 
   # **The web app, built at the tag and opened in a browser** — `ci.yml`'s `web` job, step for
   # step, less the lint and the size report: clang 18, the wasm target, the `wasm-bindgen` CLI at
@@ -526,7 +551,7 @@ jobs:
   # `scripts/release-rule.test.mjs` holds both lines to the letter.
   # The account id is kept out of the tree too: it is in no file of this repository.
   #
-  # **It waits for the desktop builds and the APK**, and is the last thing before `publish`. A
+  # **It waits for the desktop builds and the bundle**, and is the last thing before `publish`. A
   # deploy is live the moment it returns, and a release is a draft until `publish` — so the
   # deploy goes as late as it can, when nothing but its own probe and the flip of the draft can
   # still fail.
@@ -536,7 +561,8 @@ jobs:
   # hand. With one of the two values and not the other, it fails.
   #
   # **`environment: release`**, for `android-sign`'s reason: the token is handed only to a job
-  # that names the environment, from `main`.
+  # that names the environment, and from `main` alone once the owner has restricted the
+  # environment to it (step 0 of "What only the owner can do"); until then, from any branch.
   web-deploy:
     name: web (deploy)
     needs: [release-please, build, android-sign, web]
@@ -671,7 +697,7 @@ jobs:
         run: node scripts/web-deploy-probe.mjs dist-web
 
   # **Publishes only when all three hosts are through.** `build` is the desktop's; `android-sign`
-  # ends green with the APK attached or with no key to sign it; `web-deploy` ends green with the
+  # ends green with the bundle signed or with no key to sign it; `web-deploy` ends green with the
   # address serving this tag or with no token to deploy it. A failure in any of them — or in
   # `android` or `web`, which those two need — leaves the release a draft: a release that
   # publishes two hosts and not the third is what the rule exists to prevent.
@@ -684,7 +710,9 @@ jobs:
     permissions:
       contents: write
     steps:
-      # The release goes public only once every platform's assets are attached. A `sign` job sat
+      # The release goes public only once the desktop's assets are attached and the Android bundle
+      # is signed, or knowingly not signed because no key is set (it is an artifact, not a release
+      # asset). A `sign` job sat
       # between the two from 2026-09-28 to 2026-09-29 and was removed: there was no key to sign
       # with. docs/reference/in-app-updates.md records what the updater trusts without it.
       - name: Publish the draft release

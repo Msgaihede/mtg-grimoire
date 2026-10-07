@@ -6,7 +6,16 @@
 //! - **one command, [`core_call`]**, which answers every call the page makes by forwarding it to
 //!   [`grimoire_core::dispatch`] — so a command the core's table does not have is refused here
 //!   in the table's own words, and `src/lib/core` picks this transport by asking nothing of the
-//!   page (see [`HOST_MARK`]);
+//!   page (see [`HOST_MARK`]). **The scanner's commands are twelve of them** (phase 7, step
+//!   7.3): a camera frame is `core_call { name: "scanner_frame", args: <its headers>, body:
+//!   <the JPEG, base64> }`, decoded here and judged by the core's session on the blocking pool.
+//!   This host needs nothing of its own for it — the page's camera is the WebView's, granted
+//!   through the manifest's `CAMERA` permission by wry's own `onPermissionRequest`, as the
+//!   pairing scanner's already is; the video is a `srcObject` and the frame a canvas `toBlob`
+//!   read as bytes, so the CSP is asked for neither `media-src` nor `blob:`. **It embeds no
+//!   scanner asset and downloads none**: the session loads from `<data>/scanner/`
+//!   (`card-hashes.bin`, `models/text-detection.rten`, `models/text-recognition.rten`), and
+//!   until those are there a frame is detected and names nothing;
 //! - **the startup gate** the page waits on before it mounts ([`startup`]), answered inside
 //!   `core_call` because the core has no window to start;
 //! - **the `mtgimg` protocol**, answered by the core's [`grimoire_core::images::answer`] — the
@@ -91,10 +100,27 @@ async fn core_call(
         let hold = app.state::<downloads::Hold>();
         return downloads::answer(state, &hold, &name, args).await;
     }
-    let body = body.map(|b| decode_body(&name, &b)).transpose()?;
-    grimoire_core::dispatch(&state, &name, args.unwrap_or(Value::Null), body)
+    forward(&state, &name, args, body).await
+}
+
+/// A call as the page sent it, to the core's table: the arguments as they came, and the body
+/// out of its base64. [`core_call`]'s tail, apart from the app it is asked through, so the
+/// wire a `bytes` command crosses — `{ name, args: <headers>, body: <base64> }`,
+/// `src/lib/core/table.ts`'s — is tested here without a window.
+///
+/// **It is this host's one call into the core's table, and what the table says about a
+/// membership is reworded on the way back** ([`membership`]): an error, and the rows of the
+/// error log. Nothing reaches the page past it.
+async fn forward(
+    state: &Arc<State>,
+    name: &str,
+    args: Option<Value>,
+    body: Option<String>,
+) -> Result<Value, String> {
+    let body = body.map(|b| decode_body(name, &b)).transpose()?;
+    grimoire_core::dispatch(state, name, args.unwrap_or(Value::Null), body)
         .await
-        .map_err(|error| membership::reword(&name, error))
+        .map_err(|error| membership::reword(name, error))
         .map(|answer| {
             // The core writes the key check's 401 sentence into `error_log` as it happens, and
             // Settings → Errors reads those rows through this command: reword them as well.
@@ -438,6 +464,63 @@ mod tests {
             "{err}"
         );
         assert_eq!(decode_body("x", "AAEC").unwrap(), vec![0u8, 1, 2]);
+    }
+
+    /// A real JPEG, 160×120 — the core's own test frame (`commands::tests::TINY_JPEG`) — as
+    /// the page's `toBase64` would send it.
+    const FRAME: &str =
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDACgcHiMeGSgjISMtKygwPGRBPDc3PHtYXUlkkYCZlo+A\
+        jIqgtObDoKrarYqMyP/L2u71////m8H////6/+b9//j/wAALCAB4AKABAREA/8QAFgABAQEAAAAA\
+        AAAAAAAAAAAAAAYF/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAAPwDNAAAAAAAAAAAAAAAA\
+        AAAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAA\
+        ABQAACfAAAAAAAAAAAAAAAAAAAAAB//Z";
+
+    /// **A camera frame, as it crosses this host**: the call `src/lib/core/table.ts` makes of a
+    /// `Uint8Array` — the headers as `args`, the bytes as base64 in `body` — forwarded to the
+    /// core's table and judged by its session. On an install with nothing in `<data>/scanner/`,
+    /// which is every Android install until the assets are downloaded: the status says where it
+    /// looked, and the frame is decoded and answered by a session with no reference.
+    #[test]
+    fn a_frame_crosses_as_base64_and_is_judged_by_the_cores_session() {
+        use serde_json::json;
+        let (state, dir) =
+            grimoire_core::state::fixtures::on_files("light-scanner-frame", "http://127.0.0.1:9");
+        let ask = |name: &'static str, args: Option<Value>, body: Option<&str>| {
+            tauri::async_runtime::block_on(forward(&state, name, args, body.map(str::to_owned)))
+        };
+
+        // The heartbeat and the gate, sent with no arguments at all, as the page sends them.
+        assert_eq!(ask("scanner_hold", None, None), Ok(Value::Null));
+        assert_eq!(ask("scanner_elsewhere", None, None), Ok(json!(false)));
+
+        let status = ask("scanner_status", None, None).expect("the status");
+        let looked = std::path::PathBuf::from(status["bundle"]["path"].as_str().expect("a path"));
+        assert_eq!(looked, dir.join("scanner").join("card-hashes.bin"));
+        assert_eq!(status["bundle"]["source"], "absent");
+
+        let verdict = ask(
+            "scanner_frame",
+            Some(json!({ "x-scanner-options": r#"{"mode":"exact"}"# })),
+            Some(FRAME),
+        )
+        .expect("a verdict");
+        assert_eq!(verdict["frame"], json!({ "w": 160, "h": 120 }), "{verdict}");
+        assert_eq!(verdict["matcher"], false, "{verdict}");
+        assert_eq!(
+            verdict["mode"], "exact",
+            "the headers rode as the arguments"
+        );
+
+        // A body that is not base64 is this host's refusal, and one that is missing the table's.
+        let garbled = ask("scanner_frame", Some(json!({})), Some("not base64!")).unwrap_err();
+        assert!(
+            garbled.starts_with("scanner_frame: its body is not base64"),
+            "{garbled}"
+        );
+        assert_eq!(
+            ask("scanner_frame", Some(json!({})), None),
+            Err("scanner_frame needs a raw body.".to_owned())
+        );
     }
 
     /// The mark `src/lib/core/index.ts` reads. Its spelling is the contract between the two

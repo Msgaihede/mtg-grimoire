@@ -3,7 +3,7 @@ import manifest from "./src-tauri/gen/android/app/src/main/AndroidManifest.xml?r
 import filePaths from "./src-tauri/gen/android/app/src/main/res/xml/file_paths.xml?raw";
 import appGradle from "./src-tauri/gen/android/app/build.gradle.kts?raw";
 import androidIgnore from "./src-tauri/gen/android/.gitignore?raw";
-import signScript from "../scripts/android-sign.sh?raw";
+import signScript from "../scripts/android-release/sign-bundle.sh?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
 import mainActivity from "./src-tauri/gen/android/app/src/main/java/com/mtggrimoire/app/MainActivity.kt?raw";
 import themes from "./src-tauri/gen/android/app/src/main/res/values/themes.xml?raw";
@@ -68,10 +68,10 @@ describe("the Android project's hand edits", () => {
   });
 
   it("signs a release build with the debug key, and knows no other", () => {
-    // The release key is `release.yml`'s `android-sign` job's, which re-signs what this project
-    // built (`scripts/android-sign.sh`) and runs no build. A signing config here would put the
-    // keystore and its passwords on disk beside every npm script, cargo build script and Gradle
-    // plugin a build runs.
+    // The upload key is `release.yml`'s `android-sign` job's, which re-signs the bundle this
+    // project built (`scripts/android-release/sign-bundle.sh`) and runs no build. A signing
+    // config here would put the keystore and its passwords on disk beside every npm script,
+    // cargo build script and Gradle plugin a build runs.
     const release = appGradle.slice(appGradle.indexOf('getByName("release")'));
     expect(release).toMatch(/signingConfig = signingConfigs\.getByName\("debug"\)/);
     const code = appGradle
@@ -89,12 +89,12 @@ describe("the Android project's hand edits", () => {
   });
 
   it("names the release's signer in one line of hex, once the owner has made the key", () => {
-    // `src-tauri/release-signer.sha256` is the SHA-256 of the certificate every release's APK is
-    // signed with — public, and in every such APK. `release.yml` attaches no APK until it is
-    // committed, and `scripts/android-sign.sh` refuses a keystore that is not the one it names:
-    // a key made a second time signs happily and installs over nothing. **Absent until the key
-    // exists**, so this holds its shape for the day it appears — the script reads it with the
-    // same rule, and a file it cannot read is a release with no APK.
+    // `src-tauri/release-signer.sha256` is the SHA-256 of the upload certificate every release's
+    // bundle is signed with — public, and what Play Console shows as the upload key. `release.yml`
+    // signs no bundle until it is committed, and `scripts/android-release/sign-bundle.sh` refuses
+    // a keystore that is not the one it names. **Absent until the key exists**, so this holds
+    // its shape for the day it appears — the script reads it with the same rule, and a file it
+    // cannot read is a release with no bundle to upload.
     const pins = Object.entries(
       import.meta.glob("./src-tauri/release-signer.sha256", {
         query: "?raw",
@@ -365,6 +365,14 @@ describe("the light host offers no membership", () => {
   const literal = (name: string) =>
     new RegExp(`pub const ${name}: &str =\\s*"([^"\\\\]+)";`).exec(lightMembership)?.[1];
 
+  /** `forward`'s body: `core_call`'s tail, and this host's one call into the core's table. */
+  const forwardBody = () => {
+    const from = lightLib.indexOf("async fn forward(");
+    expect(from).toBeGreaterThan(-1);
+    const rest = lightLib.slice(from);
+    return rest.slice(0, rest.indexOf("\n}\n"));
+  };
+
   it("answers the name the page asks by", () => {
     expect(literal("ELSEWHERE")).toBe(MEMBERSHIP_ELSEWHERE);
     // One line, which is how the Storybook fake reads it.
@@ -377,19 +385,23 @@ describe("the light host offers no membership", () => {
     expect(body).toContain("if membership::answers(&name) {");
     expect(body).toContain("return membership::answer(&name);");
     const asked = body.indexOf("membership::answers");
-    // Before the state lookup and the downloads table as well as the dispatch: until the
-    // database has opened, a name asked after `try_state` is answered "the app is still
-    // starting.", and the Sync panel would draw nothing where the host's sentence belongs.
-    for (const later of ["try_state", "downloads::answers", "grimoire_core::dispatch"]) {
+    // Before the state lookup and the downloads table as well as the call into the core's
+    // table (`forward`): until the database has opened, a name asked after `try_state` is
+    // answered "the app is still starting.", and the Sync panel would draw nothing where the
+    // host's sentence belongs.
+    for (const later of ["try_state", "downloads::answers", "forward(&state"]) {
       expect(body.indexOf(later), later).toBeGreaterThan(-1);
       expect(asked, later).toBeLessThan(body.indexOf(later));
     }
-    // One call into the core's table, and it is the reworded one: a second site that skipped
-    // `reword` would pass the pattern below as long as any one site had it. `reword` is told
-    // the command's name, because its last fence applies to sync commands only.
-    expect(body.match(/grimoire_core::dispatch\(/g)).toHaveLength(1);
-    expect(body).toMatch(
-      /grimoire_core::dispatch\([\s\S]*?\)\s*\.await\s*\.map_err\(\|(\w+)\| membership::reword\(&name, \1\)\)/,
+    // The command reaches the table through `forward` and never round it.
+    expect(body).not.toContain("grimoire_core::dispatch");
+    // One call into the core's table in the whole host, and it is the reworded one: a second
+    // site that skipped `reword` would pass the pattern below as long as any one site had it.
+    // `reword` is told the command's name, because its last fence applies to sync commands
+    // only.
+    expect(lightLib.match(/grimoire_core::dispatch\(/g)).toHaveLength(1);
+    expect(forwardBody()).toMatch(
+      /grimoire_core::dispatch\([\s\S]*?\)\s*\.await\s*\.map_err\(\|(\w+)\| membership::reword\(name, \1\)\)/,
     );
   });
 
@@ -400,10 +412,8 @@ describe("the light host offers no membership", () => {
     // an error and never meets `reword`.
     expect(literal("ERROR_LOG")).toBe("error_log_list");
     expect(coreCommands).toMatch(/\bread error_log_list in /);
-    const call = lightLib.slice(lightLib.indexOf("async fn core_call("));
-    const body = call.slice(0, call.indexOf("\n}\n"));
-    expect(body).toContain("membership::reword_rows");
-    expect(body).toContain("name == membership::ERROR_LOG");
+    expect(forwardBody()).toContain("membership::reword_rows");
+    expect(forwardBody()).toContain("name == membership::ERROR_LOG");
   });
 
   it("refuses both halves of connecting", () => {

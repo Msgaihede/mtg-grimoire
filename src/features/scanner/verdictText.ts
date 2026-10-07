@@ -13,6 +13,31 @@ export const SURE_DISTANCE = 0.3;
 export const SCANNER_OPEN_ELSEWHERE = "The scanner is open in another window.";
 
 /**
+ * The line under {@link SCANNER_OPEN_ELSEWHERE}, on both Scanner surfaces: the gate asks again
+ * each second, so the view opens by itself. It says "that window" because the engine's sentence
+ * above it does.
+ */
+export const SCANNER_OPENS_HERE_LATER =
+  "It will open here once that window closes or leaves the scanner.";
+
+/**
+ * What the scanner's session answers on a host that is a web page — `scanner::NOT_IN_A_BROWSER_YET`,
+ * the same string, pinned by `ipc.test.ts`. The engine refuses the status, a frame, a reset, a
+ * capture and a filter push with it there, because the `card-scanner` crate's threads and clock
+ * trap in a browser; the prefs, the tray and the lease answer as anywhere.
+ *
+ * **The page matches on it for one reason: to stay quiet.** A refused filter push is otherwise an
+ * answer — the view counts its filters as settled, opens the camera and sends frames, each of
+ * which would be refused in turn, as fast as the page can encode them. `useScannerPrefs` reads
+ * this one as "there is no session here" instead, so no camera is asked for and no frame goes out,
+ * and `ScannerPage` draws the sentence where the picture would be.
+ *
+ * ⚠️ **Goes with `scanner::not_in_a_browser_yet`**, which the light app's web step deletes: this
+ * constant, `useScannerPrefs`' `unavailable`, and the line in `ScannerPage` that draws it.
+ */
+export const SCANNER_NOT_IN_A_BROWSER_YET = "The scanner does not run in a browser yet.";
+
+/**
  * `db::BUSY`, verbatim — what every write answers while a sync holds the write connection.
  * `useTray.test.ts` pins it against `db.rs`, so a reworded crate sentence goes red there rather
  * than turning every sync into a refusal the tray gives up on.

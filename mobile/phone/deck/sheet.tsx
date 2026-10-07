@@ -24,6 +24,7 @@ export function ActionSheet({
   subtitle,
   closeLabel,
   onClose,
+  onDismiss = onClose,
   footer,
   children,
 }: {
@@ -31,7 +32,15 @@ export function ActionSheet({
   title: ReactNode;
   subtitle?: ReactNode;
   closeLabel: string;
+  /** A press on the scrim — and Escape and the ✕ too, unless {@link onDismiss} is given. */
   onClose: () => void;
+  /**
+   * Escape and the ✕, where a sheet tells them from a press on the scrim — `Dialog`'s two ways
+   * out: this one hands the caret back to whatever opened the sheet, and the scrim leaves it
+   * where the reader put it. Absent, both are `onClose`, which is every sheet that moves no
+   * caret.
+   */
+  onDismiss?: () => void;
   /** Under the scrolling body and outside it — the sheet's receipt line. */
   footer?: ReactNode;
   children: ReactNode;
@@ -43,7 +52,7 @@ export function ActionSheet({
       subtitle={subtitle}
       closeLabel={closeLabel}
       size="w-full self-end rounded-t-xl border-t border-border max-h-[85dvh] sm:max-h-full sm:w-[26rem] sm:self-center"
-      onDismiss={onClose}
+      onDismiss={onDismiss}
       onClose={onClose}
     >
       {/* `relative` because this box carries the overflow — `src/CLAUDE.md`'s rule for an

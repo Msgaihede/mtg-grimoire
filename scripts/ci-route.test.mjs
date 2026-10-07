@@ -237,9 +237,12 @@ describe("the arms", () => {
     ["scripts/web-smoke/default-cards.jsonl", T, F, F, F, F, F, T],
     // What both browser runs are written in, beside the fixtures it answers from.
     ["scripts/web-smoke/harness.mjs", T, F, F, F, F, F, T],
-    // The release's signing script, which `android` proves on a throwaway key; and the two
-    // deploy scripts no job in this gate runs.
-    ["scripts/android-sign.sh", T, T, F, F, F, T, F],
+    // The Android release's scripts, which `android` proves on throwaway keys and
+    // `mobile/host.test.ts` reads as text; and the two deploy scripts no job in this gate runs.
+    ["scripts/android-release/sign-bundle.sh", T, T, F, F, F, T, F],
+    ["scripts/android-release/proof.sh", T, T, F, F, F, T, F],
+    ["scripts/android-release/check-version.sh", T, T, F, F, F, T, F],
+    ["scripts/android-release/StripSignature.java", T, T, F, F, F, T, F],
     ["scripts/web-deploy-guard.mjs", T, F, F, F, F, F, F],
     ["scripts/web-deploy-probe.mjs", T, F, F, F, F, F, F],
     // The web host: a workspace member `rust` tests, and the crate `web` compiles for a browser.
@@ -355,16 +358,20 @@ describe("the arms", () => {
     expect(ARMS[at(tree)].jobs).not.toContain("web");
   });
 
-  // The same shape for the one script `android` runs: below `scripts/*` it would be linted and
-  // its only run before a release skipped. Held to the workflow, so the arm cannot outlive the
-  // step it is for.
-  it("puts the signing script above `scripts/*`, and `android` runs it", () => {
+  // The same shape for the Android release's scripts, four files under `scripts/android-release/`
+  // (`android` runs two of them directly): below `scripts/*` they would be linted and their only
+  // run before a release skipped. Held to the workflow, so the arm cannot outlive the steps it
+  // is for.
+  it("puts the Android release's scripts above `scripts/*`, and `android` runs them", () => {
     const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));
-    expect(at("scripts/android-sign.sh")).toBeGreaterThan(-1);
-    expect(at("scripts/android-sign.sh")).toBeLessThan(at("scripts/*"));
+    expect(at("scripts/android-release/*")).toBeGreaterThan(-1);
+    expect(at("scripts/android-release/*")).toBeLessThan(at("scripts/*"));
     expect(ARMS[at("scripts/*")].jobs).not.toContain("android");
     const android = ciYml.slice(ciYml.indexOf("\n  android:"), ciYml.indexOf("\n  web:"));
-    expect(android).toMatch(/^\s+bash scripts\/android-sign\.sh /m);
+    expect(android).toMatch(/^\s+bash scripts\/android-release\/check-version\.sh /m);
+    expect(android).toMatch(
+      /^\s+run: bash scripts\/android-release\/proof\.sh aab-out\/mtg-grimoire-light-arm64\.aab$/m,
+    );
   });
 
   // `core` compiles the engine for two foreign targets and runs nothing. Its native compile and

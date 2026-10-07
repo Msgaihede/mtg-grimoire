@@ -56,6 +56,11 @@ Full reference, measurements, and design history: [`docs/reference/storybook.md`
   - `journalled()` wraps deck mutation handlers, snapshotting the deck before and after each write and associating changes with audit log rows.
   - Bulk-undo tickets are stored in a `WeakMap` keyed by the world instance, isolating history per story.
   - State is cleanly reset per story via `installWorld` (`fake/scope.ts`).
+- **The scanner's session is a script, not a fixture** (`fake/scannerScript.ts`):
+  - `scanner_frame` answers the next frame of a pile of five cards, about 110 ms a frame, with a `decision_seq` that moves once per card — so a camera that opens over the fake lands cards in the tray (`mobile:dev`, `mobile:scanner-smoke`). In Exact the last card is three reprints it cannot split. `scanner_reset` lays the pile down again and keeps the number.
+  - It reads the frame's mode and `previews` out of its `x-scanner-options` header: the fake `invoke` hands a handler its options **second**, and only when the caller passed some.
+  - A story has no camera, so stories still write their tray through `set_scanner_tray` and refuse the camera themselves.
+  - **A test that opens a camera overrides `scanner_frame`** with answers a few milliseconds apart: the script's 110 ms is a slow test. It is the fake's one slow handler, and what it exposed is fixed at the root — `invoke` re-points the fake at a call's world as it settles **only while that world is standing** (`scope.ts`' `standing`: mounted, or nothing is). A late answer from a finished test's world used to take the pointer with it.
 - **Plugin handlers**:
   - `plugin:clipboard-manager|write_text` and `plugin:opener|open_url` are mocked in `pluginHandlers()` without backing stores.
   - Native file dialogs are handled by Rust commands: `export_save_file` writes to `D:\Storybook\`, while `import_pick_file` and `mirror_pick_root` simulate picker refusals.

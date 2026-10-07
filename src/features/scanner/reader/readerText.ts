@@ -19,6 +19,40 @@ import type {
 import { barFill } from "../verdictText";
 
 /**
+ * The two modes, in the order a reader meets them: the quick one first.
+ *
+ * The hints say what each mode *does for the reader* and never how — no hashes, no tiers, no
+ * bursts. Those words belong to the developer panels, and a reader choosing between two scans needs
+ * only to know which one pins the printing. Here rather than in `ScanBar`, so the phone page's
+ * switch says the same two words and the same two sentences.
+ */
+export const SCAN_MODES: readonly { id: ScanMode; label: string; hint: string }[] = [
+  { id: "fast", label: "Fast", hint: "Recognizes cards by their picture. Fastest for mixed piles." },
+  {
+    id: "exact",
+    label: "Exact",
+    hint: "Also reads the name and collector number to identify the exact printing.",
+  },
+];
+
+/**
+ * What the picture says while recognition is stopped — both Scanner surfaces', so the press it
+ * names is the one each of them draws.
+ */
+export const SCANNING_STOPPED = "Scanning stopped. Press Start scanning to resume.";
+
+/**
+ * Under the list of cameras, on both surfaces. **"Device", not "computer"**: the choice is a row
+ * of `app_meta` that never syncs, which is true of a phone and of a desktop alike, and the phone
+ * face draws this sentence too.
+ */
+export const CAMERA_CHOICE_NOTE =
+  "Switching restarts the camera. Your choice is remembered on this device.";
+
+/** The unrestricted filter — what *Clear* sets, spelled once for both Scanner surfaces. */
+export const NO_FILTERS: ScanFilters = { sets: [], released_from: null, released_to: null };
+
+/**
  * The card the tray just took, as the strip names it — `null` until one has landed.
  *
  * `bumpedTo` is the row's new quantity when the add folded into the newest row, and `null` for a

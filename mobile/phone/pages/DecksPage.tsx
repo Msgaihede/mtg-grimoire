@@ -32,7 +32,7 @@ import { cn } from "@/lib/utils";
 import { linkTo, navigate } from "../router";
 import { phoneNewDeckDestination } from "../transfer/destinations";
 import { ImportSheet } from "../transfer/ImportSheet";
-import { DimNote, ReadError } from "./parts";
+import { CREATE_DECK_FLOOR, DimNote, ReadError } from "./parts";
 
 /** The gallery's address for a folder, or for the top of the cabinet. */
 const galleryAt = (folderId: number | null) =>
@@ -41,19 +41,6 @@ const galleryAt = (folderId: number | null) =>
 /** A deck's own page — where a deck the gallery just made opens, so its first card is one press
  *  away. A push: Back from the new deck is the gallery it was made from. */
 const openDeck = (deckId: number) => navigate({ view: "decks", deckId, cardId: null });
-
-/**
- * **The touch floor for the desktop's New deck dialog**, set from outside it — `ImportSheet`'s
- * `TOUCH_FLOOR` arrangement, narrowed. The dialog is the desktop's own and takes no class for a
- * size, so the host reaches in: its one footer button (`Create deck`, 36px there) is floored at
- * 44, and every text box is 16px so focusing one does not zoom the page. The form's other
- * controls keep their desktop sizes, as `Deck settings` on the deck page does.
- *
- * `display: contents`, so the wrapper is no box at all — the dialog's `fixed` scrim is positioned
- * exactly as if it were mounted bare, and a descendant selector still reaches into it.
- */
-const CREATE_FLOOR =
-  "contents [&_footer_button]:min-h-11 [&_input]:text-base [&_textarea]:text-base";
 
 /**
  * The reader's decks: the folders filed at the level the reader is standing in, then the decks
@@ -175,7 +162,7 @@ export function DecksPage({ folderId }: { folderId: number | null }) {
   const doors = (
     <>
       <NewDeckBar newDeckRef={newDeckRef} onNew={openBlank} onFromList={() => setMaking("list")} />
-      <div className={CREATE_FLOOR}>
+      <div className={CREATE_DECK_FLOOR}>
         <CreateDeckDialog
           create={create}
           defaultFormatKey={newDeckFormatKey}

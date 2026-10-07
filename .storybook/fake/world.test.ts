@@ -251,6 +251,57 @@ describe("two worlds at once", () => {
     expect(second).toBe(first);
   });
 
+  /**
+   * The fake's one slow handler is `scanner_frame`, 110 ms on purpose. A test that ended with a
+   * frame on the wire had the call settle in the next test, where `invoke` pointed the fake back
+   * at the finished test's world — and that test's tray writes and frames, made from timers and
+   * continuations, went there.
+   */
+  it("does not point the fake back at a world that has gone when one of its calls settles late", async () => {
+    const first = installWorld({ seed: "starter" });
+    const leave = first.mount();
+    let answer: () => void = () => {};
+    first.scope.commands = {
+      ...first.scope.commands,
+      slow: () => new Promise<string>((settle) => (answer = () => settle("late"))),
+    };
+    // Begun in the first world, and still on the wire when its story ends.
+    const late = invoke<string>("slow");
+    leave();
+
+    const second = installWorld({ seed: "empty" });
+    const leaveSecond = second.mount();
+    answer();
+    await expect(late).resolves.toBe("late");
+
+    // A call nothing is holding the pointer for — a timer's, a continuation's. The world on the
+    // page answers it, not the one whose late call just settled.
+    await expect(searchTotal()).resolves.toBe(0);
+    leaveSecond();
+  });
+
+  it("still points back at a world that is standing when its slow call settles", async () => {
+    const starter = installWorld({ seed: "starter" });
+    const leave = starter.mount();
+    let answer: () => void = () => {};
+    starter.scope.commands = {
+      ...starter.scope.commands,
+      slow: () => new Promise<string>((settle) => (answer = () => settle("late"))),
+    };
+    const late = invoke<string>("slow");
+    // A second story on the same page, mounted beside it and left as the pointer's world.
+    const empty = installWorld({ seed: "empty" });
+    const leaveEmpty = empty.mount();
+    await expect(searchTotal()).resolves.toBe(0);
+
+    answer();
+    await late;
+    // The continuation of the first world's call is the first world's: `useSync`'s next poll.
+    await expect(searchTotal()).resolves.toBeGreaterThan(0);
+    leave();
+    leaveEmpty();
+  });
+
   it("fires a timer in the world that scheduled it", async () => {
     const starter = installWorld({ seed: "starter" });
     const empty = installWorld({ seed: "empty" });
