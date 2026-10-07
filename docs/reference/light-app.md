@@ -29,13 +29,15 @@ deployed with all of it**, the relay and then the web app, twice each (§10.7), 
 has paired a browser with a desktop in production and synced between them** (2026-10-05; his
 sentence, not a measurement). What has still not been seen: sync on a phone — the camera's
 grant, a real lens on a real code, a socket across the app going to the background; in
-Safari; and in Firefox. §10 closes with what is open and whose it is.
+Safari; and in Firefox. §10 closes with what is open and whose it is. **The scanner on a light
+install is phase 7, begun on 2026-10-07 and recorded a step at a time in §11.**
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
   pages: [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md); the web host:
   [the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md); sync:
-  [the phase 6 plan](../superpowers/plans/2026-10-04-light-app-phase-6.md).
+  [the phase 6 plan](../superpowers/plans/2026-10-04-light-app-phase-6.md); the scanner:
+  [the phase 7 plan](../superpowers/plans/2026-10-07-light-app-phase-7.md).
 - What is left, phase by phase: [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761).
 - The binding rules for anyone changing it: [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
 
@@ -7234,3 +7236,70 @@ under *What is still owed* in [sync.md](sync.md), with its fixture in
   missing rows;
 - **a copy filed into a binder that was deleted on the receiver**, whose sender later brings
   the binder back, is kept on one device and not the other.
+
+## 11. The scanner on a light install — phase 7, a step at a time
+
+A light install points its camera at a card and names the printing — the same engine, the same
+tray and the same commit the desktop has (spec §8).
+[The plan](../superpowers/plans/2026-10-07-light-app-phase-7.md) has the six steps, one pull
+request each, and [card-scanner.md](card-scanner.md) is the engine's own reference.
+
+**Taken as the defaults before anything was built** (the plan's table). Four of them were put to
+Markus on 2026-10-07 and not answered — he said to keep going — so each is his to reverse:
+
+- **This desktop's figures decide what is built, and the bench is made so a phone can run it** —
+  a native binary pushed with `adb`, a page reached over `adb reverse`. The spec opens the phase
+  with a measurement on a real phone in both hosts; no device was attached to the machine, so
+  that run is the owner's, and nothing is promised about Exact or OCR in a phone's browser
+  until it has happened.
+- **A browser gets the assets from the app's own origin** — the web build copies the three files
+  into its static assets — because it cannot ask GitHub: a release download answers with no
+  `Access-Control-Allow-Origin` (asked on 2026-10-07 with the app's `Origin`). Android asks the
+  release, as the desktop's build does.
+- **The phone's Scanner page is one design, built straight**, where each of phase 3's pages came
+  to the owner as built options first.
+- **Nobody deploys by hand**: `release.yml` puts the web app on its origin at a tag, and no step
+  here needs a deploy before one.
+
+**What the tree held before the phase started** (surveyed 2026-10-07, `main` at `63d1a44f`):
+
+- **The engine was linked into every host and ran on one.** Step 7 of phase 2 (§6.10) made
+  `card-scanner` a dependency of the core, so CI compiled it for `wasm32` and for Android, and
+  nothing called it on either; in the web module fat LTO dropped it whole.
+- **The crate assumed threads and a clock**: five `std::thread::scope` sites, a spawned thread
+  for the Exact resolve, about fourteen `Instant::now()` — every one telemetry for an `_ms`
+  field — and `catch_unwind` twice. In a browser the first frame panics, and under the `wasm`
+  profile's `panic = "abort"` the guard guards nothing.
+- **Two of the scanner's twelve commands were in the core's table.** The other ten were on the
+  desktop's `NOT_YET`: a lease that wants a window's label, a frame that is a raw body, and a
+  session that traps in a browser (§8.2).
+- **No light host had the assets and nothing fetched them.** The published `scanner-bundle-v3`
+  is 18 101 604 B — 5 874 752 of hashes, 2 510 284 and 9 716 568 of OCR models — embedded by the
+  desktop's release build and by nothing else.
+- **The phone face's Scanner was a sentence**, and over the fake a camera never added a card:
+  `scanner_frame` answered one decided verdict with one `decision_seq`, which the loop takes as
+  its baseline.
+
+### 11.1 Step 7.1 — the crate runs where there is no thread and no clock
+
+*Not merged yet.*
+
+### 11.2 Step 7.2 — the measurement, and what it decides
+
+*Not merged yet.*
+
+### 11.3 Step 7.3 — the scanner's commands are the core's, and Android answers them
+
+*Not merged yet.*
+
+### 11.4 Step 7.4 — the assets are fetched on first use
+
+*Not merged yet.*
+
+### 11.5 Step 7.5 — the web host
+
+*Not merged yet.*
+
+### 11.6 Step 7.6 — the phone's Scanner page
+
+*Not merged yet.*
