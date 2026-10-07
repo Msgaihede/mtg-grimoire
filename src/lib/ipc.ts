@@ -7489,6 +7489,17 @@ export interface ScannerStatus {
   recognition_model: ScannerAsset;
   labels: number;
   scans_dir: string;
+  /**
+   * **The reader's filters are not in force**, in the sentence the loaded session refused them
+   * with — or `null`, which is every session that searches under what the popover shows.
+   *
+   * Only ever set after the engine reloaded the session (`ScannerState::forget`, for assets
+   * that arrive after the first load) and the new one could not take the filters the old one
+   * held — it had no card names to build the mask from. The page cannot learn this from its own
+   * pushes, which went to the session that was dropped. The engine keeps the filters owed and
+   * offers them to the next reload; an accepted `scanner_set_filters` settles it too.
+   */
+  unapplied_filters: string | null;
 }
 
 /**

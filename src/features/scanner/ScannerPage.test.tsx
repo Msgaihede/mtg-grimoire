@@ -3,7 +3,7 @@ import userEvent from "@testing-library/user-event";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CollectionFolder, ScannerPrefs, ScannerVerdict } from "@/lib/ipc";
-import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
+import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 import {
   DEFAULT_SCANNER_PREFS,
   MARKS,
@@ -1185,6 +1185,88 @@ describe("ScannerPage in a minimized window", () => {
     } finally {
       restore();
     }
+  });
+});
+
+/**
+ * **The desktop face in a browser**, until the light app's web step: the engine refuses the
+ * session's commands in one sentence (`scanner::NOT_IN_A_BROWSER_YET`) and answers the lease, the
+ * prefs and the tray. Before the page knew that sentence, a refused filter push counted as an
+ * answer — the camera opened and every frame was sent to be refused.
+ */
+describe("ScannerPage on a host with no scanner session", () => {
+  function noSession() {
+    for (const command of [
+      ipc.scannerStatus,
+      ipc.scannerSetFilters,
+      ipc.scannerReset,
+      ipc.scannerCapture,
+    ]) {
+      vi.mocked(command).mockRejectedValue(SCANNER_NOT_IN_A_BROWSER_YET);
+    }
+    // **A few milliseconds late, never already settled** — `paced`'s reason, and here it is what
+    // makes a regression a failure: were the pump to start, a frame refused on a settled promise
+    // sends the next on microtasks alone, starves this file's timers, and the run hangs for as
+    // long as it is left (seen: ten minutes and no result) instead of going red.
+    vi.mocked(ipc.scannerFrame).mockImplementation(
+      () =>
+        new Promise((_, reject) => setTimeout(() => reject(SCANNER_NOT_IN_A_BROWSER_YET), 10)),
+    );
+  }
+
+  it("says so where the picture would be, opens no camera and sends no frame", async () => {
+    const restore = shimVideo();
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({ getTracks: () => [{ stop: () => {} }] } as unknown as MediaStream),
+    );
+    mediaDevices(getUserMedia);
+    noSession();
+    try {
+      const { container } = mount();
+      const said = await screen.findByText(SCANNER_NOT_IN_A_BROWSER_YET);
+      expect(said).toHaveAttribute("role", "alert");
+      expect(videoBox(container)).toContainElement(said);
+      // Long enough for a pump to have gone round many times, had one started.
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(getUserMedia).not.toHaveBeenCalled();
+      expect(ipc.scannerFrame).not.toHaveBeenCalled();
+      // One push, refused, and never sent again.
+      expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(1);
+      // No asset notes: there is no folder on this host to put a file in.
+      expect(screen.queryByText(/card-hashes\.bin/)).not.toBeInTheDocument();
+    } finally {
+      restore();
+    }
+  });
+
+  /** The same host with its prefs read failing as well — once a way to "loaded" with nothing asked. */
+  it("opens no camera and sends no frame when the prefs read fails too", async () => {
+    const restore = shimVideo();
+    const getUserMedia = vi.fn(() =>
+      Promise.resolve({ getTracks: () => [{ stop: () => {} }] } as unknown as MediaStream),
+    );
+    mediaDevices(getUserMedia);
+    noSession();
+    vi.mocked(ipc.scannerPrefs).mockRejectedValue("the prefs could not be read");
+    try {
+      mount();
+      expect(await screen.findByText(SCANNER_NOT_IN_A_BROWSER_YET)).toBeInTheDocument();
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(getUserMedia).not.toHaveBeenCalled();
+      expect(ipc.scannerFrame).not.toHaveBeenCalled();
+      expect(ipc.scannerSetFilters).toHaveBeenCalledTimes(1);
+    } finally {
+      restore();
+    }
+  });
+
+  it("still draws the stored tray, which is a row a page has too", async () => {
+    refused();
+    noSession();
+    vi.mocked(ipc.scannerTray).mockResolvedValue(TRAY_ROWS);
+    mount();
+    expect(await screen.findByText(SCANNER_NOT_IN_A_BROWSER_YET)).toBeInTheDocument();
+    expect(await within(tray()).findAllByText(TRAY_ROWS[0].name)).not.toHaveLength(0);
   });
 });
 
