@@ -85,35 +85,61 @@ is the recommended default, written down as his to reverse.
 
 ## Steps — one PR each
 
-- [ ] **7.1 — the crate runs where there is no thread and no clock.** `host.rs`: a stopwatch, the
+- [x] **7.1 — the crate runs where there is no thread and no clock** (#853, merged 2026-10-07). `host.rs`: a stopwatch, the
   scoped helpers with an inline arm and a guard that makes a thread run them inline, the resolve's
   spawn, the panic guard; a fence over the crate; the same frames threaded and inline, equal but
   for the timings; the core handing the crate its clock. **And proved by running it**: the crate
   as WASM in a Worker in headless Chrome, a frame in as a transferred buffer, beside a native
   runner over the same inputs. ([light-app.md](../../reference/light-app.md) §11.1 is the record.)
-- [ ] **7.2 — the measurement, and what it decides.** Native and WASM on this desktop over the
+- [x] **7.2 — the measurement, and what it decides** (#853, with 7.1; the phone's own run is the
+  owner's). Native and WASM on this desktop over the
   published bundle — Fast and Exact, with and without the models, the first frame and the steady
   one, the module's size and the Worker's memory — and the same two runs on a phone when one is
   attached. It settles whether a browser gets Exact and OCR, and whose Worker the session is.
   (§11.2.)
-- [ ] **7.3 — the scanner's commands are the core's, and Android answers them.** The ten off
+- [x] **7.3 — the scanner's commands are the core's, and Android answers them** (#852, merged
+  2026-10-07). The ten off
   `NOT_YET` and into the table, a frame and a capture as its first `bytes` entries with the wire
   `table.ts` already sends; one implementation under the desktop's wrappers; the lease's fixed
   label; a page still refused, in one sentence from one helper, until the web step; a door for a
   session to load again. (§11.3.)
-- [ ] **7.4 — the assets are fetched on first use.** A download in the core with its measured
+- [x] **7.4 — the assets are fetched on first use** (#859, merged 2026-10-07). A download in the core with its measured
   size and its progress, landing in `<data>/scanner/` on a host that keeps files; the session
   loading again when they arrive; the Scanner destination offering it, on both faces, drawn from
   what the host answers. (§11.4.)
-- [ ] **7.5 — the web host.** The session in a Worker of its own (7.2), on a module of the crate
+- [x] **7.5 — the web host** (#861, merged 2026-10-07). The session in a Worker of its own (7.2), on a module of the crate
   built with `simd128`, fed a transferred buffer; its assets from the app's own origin and held
   without a file; its labels handed over by the engine, which holds the corpus; the refusal 7.3
   left deleted; the hosting policy and the service worker taught the module and the three
   files; driven in a real browser with a fake camera. (§11.5.)
-- [ ] **7.6 — the phone's Scanner page.** Fast and Exact, the review tray, commit to a folder:
+- [x] **7.6 — the phone's Scanner page** (#858, merged 2026-10-07). Fast and Exact, the review tray, commit to a folder:
   the shared hooks under a phone page, the logic the desktop page kept to itself extracted and
   shared, a fake that steps through decisions, and a smoke that scans, edits and commits at 360px
   with a fake camera. (§11.6.)
+
+**Phase 7 is complete (2026-10-07)**: five pull requests for six steps, each read by a fresh
+reviewer before it opened ([light-app.md](../../reference/light-app.md) §11.7 has what is open
+and whose it is). Nothing was deployed: the web app ships at the next release tag.
+
+## Built differently from this plan
+
+- **Steps 7.1 and 7.2 were one pull request.** Proving the seam meant running the crate as WASM,
+  and the bench that did that is the measurement; the figures and the decisions they fed landed
+  with the seam.
+- **The refusal step 7.3 left was kept, not deleted.** With the browser's session in a Worker of
+  its own the engine still cannot run one, so `not_in_a_browser_yet` stays as its backstop — and
+  became a compile-time matter as well: once the scanner's commands were in the table the
+  engine's module kept an OCR runtime it could never run, 9.96 MB where it had been 6.90, because
+  a refusal at run time does not let the linker drop code. `platform::host::with_files` closes
+  those commands off on a page at compile time, and `scripts/build-wasm.mjs` refuses an engine
+  module over its ceiling.
+- **The models are pinned, where the plan asked only that a download be validated.** A review
+  found them trusted on length alone; they are immutable, so both hosts hold them to two SHA-256
+  digests, and the weekly bundle job refuses to publish a model the installed apps would refuse.
+- **The phone page's two columns begin at 720px, not the rail's 600**, where they were first put
+  and measured.
+- **Three label indices in the crate were made smaller**, which no step named: the scanner's
+  module stood at 130 MB with the labels and stands at 85 MB.
 
 ## What only Markus can close
 
@@ -121,3 +147,6 @@ is the recommended default, written down as his to reverse.
   the camera grant in the Android WebView for the scanner, a real card under a real lens in both
   hosts.
 - **The four defaults above** — each was his to choose and is his to reverse.
+- **The first release that carries it**: the web app's deploy at the tag, with the scanner's
+  module and three files beside it, and one look at the Scanner in production.
+- **A second real browser**: Safari and Firefox have not opened it.
