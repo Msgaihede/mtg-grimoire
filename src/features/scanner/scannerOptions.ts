@@ -1,4 +1,4 @@
-import type { ScannerOptions } from "./types";
+import type { ScanMode, ScannerOptions } from "./types";
 
 /**
  * The debug page's sliders as they start, and the mode — `FrameOptions::default()` in the crate,
@@ -18,6 +18,23 @@ export const DEFAULT_SCANNER_OPTIONS: ScannerOptions = {
   lead_margin: 1.3,
   mode: "fast",
 };
+
+/**
+ * What rides each frame's header: the sliders, with the two fields that are not sliders laid over
+ * them.
+ *
+ * **`mode` is the reader's**, taken from the stored prefs on the way out rather than from the
+ * sliders' own state. **`previews` is the Developer switch's**: the rectified preview and its hash
+ * cost a JPEG encode a frame, and nothing but the developer panels draws them — so a surface with
+ * no such panels (the light app's phone page) passes `false` whatever the stored switch says.
+ */
+export function frameOptions(
+  options: ScannerOptions,
+  mode: ScanMode,
+  previews: boolean,
+): ScannerOptions {
+  return { ...options, mode, previews };
+}
 
 /**
  * The long edge a frame is downscaled to before it is sent — the page's `send` slider. Not a

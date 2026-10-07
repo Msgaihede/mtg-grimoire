@@ -148,6 +148,27 @@ export function runInScope<T>(scope: FakeScope, fn: () => T): T {
   }
 }
 
+/**
+ * Whether a call that began in `scope` may point the fake back at it as it settles —
+ * `core.ts`'s `invoke`, on its way out (the third way in, in this file's header).
+ *
+ * **Not once its story has gone and another is standing.** The re-point exists for the
+ * continuation of a call a *live* world made. A call that settles after its world was unmounted
+ * and replaced has no continuation worth serving — its component is gone — and pointing the fake
+ * back at it leaves every later call that nothing else scopes (a timer's, a continuation's, a
+ * click handler's) answered by a world that is over. That was free while every handler answered
+ * at once, because a call settled inside the story that made it; `scanner_frame` answers 110 ms
+ * late on purpose, and a test that ended with a frame on the wire had it settle in the next
+ * test — whose tray writes and frames then went to the finished test's world.
+ *
+ * {@link listeningScopes}' rule, for its reason: with nothing mounted there is no "another
+ * world" to prefer — `core.test.ts`, and every test that installs worlds without mounting them —
+ * so the pointer goes back as it always did.
+ */
+export function standing(scope: FakeScope): boolean {
+  return mounted.size === 0 || mounted.has(scope);
+}
+
 export function mountScope(scope: FakeScope): void {
   mounted.add(scope);
 }
@@ -190,9 +211,14 @@ let timersBound = false;
  *
  * Narrow on purpose. It wraps a **function** handler only (a string one is `eval`, and is
  * nobody's poll), it wraps nothing at all when no world is installed — so a checkout that
- * never renders a story is untouched — and it does not patch `setInterval`, because no code
- * this fake serves uses one. `clearTimeout` needs no patch: the raw timer id is what comes
- * back.
+ * never renders a story is untouched — and it does not patch `setInterval`. **One call site
+ * the fake serves does use one**: the Scanner's heartbeat (`useScannerHold`, `scanner_hold` once
+ * a second), whose callback therefore runs under whichever world the pointer names. That is
+ * the right world wherever one story is on the page, and on a docs page of several Scanner
+ * stories the worst it does is renew — or be refused — a lease in a neighbour's world, which
+ * draws nothing: the view's gate is a query, and a query is bound to its own world. Unpatched
+ * until something an interval asks for is drawn. `clearTimeout` needs no patch: the raw timer
+ * id is what comes back.
  *
  * Installed once, on the first {@link import("./world").installWorld}, and never undone: the
  * wrapper is a no-op when no scope is active, so removing it would buy nothing. Under Vitest

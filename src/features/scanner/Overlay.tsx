@@ -57,8 +57,13 @@ export function Overlay({
         canvas.width = video.videoWidth;
         canvas.height = video.videoHeight;
       }
+      // The size before the context: a stream with no picture yet is a 0×0 canvas with nothing to
+      // draw on, and asking it for a context sixty times a second buys nothing — and under jsdom,
+      // which has no canvas, prints a "Not implemented" line a frame for as long as the view is
+      // mounted. Every suite that merely walks through the Scanner would wear that.
+      if (canvas.width === 0 || canvas.height === 0) return;
       const ctx = canvas.getContext("2d");
-      if (ctx === null || canvas.width === 0 || canvas.height === 0) return;
+      if (ctx === null) return;
       ctx.clearRect(0, 0, canvas.width, canvas.height);
 
       const v = verdictRef.current;
