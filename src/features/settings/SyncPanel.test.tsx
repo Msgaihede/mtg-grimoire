@@ -843,6 +843,16 @@ describe("what the host says to a paired device about its storage", () => {
     );
   const asked = () => expect(hostInvoke).toHaveBeenCalledWith("storage_group_warning");
   /**
+   * What the host answered `storage_group_warning` with. **Found by the command's name, not by
+   * position**: the panel asks its host more than one question, and which is asked first is not
+   * this test's to know.
+   */
+  const answered = (): Promise<unknown> => {
+    const at = hostInvoke.mock.calls.findIndex(([command]) => command === "storage_group_warning");
+    expect(at).toBeGreaterThanOrEqual(0);
+    return hostInvoke.mock.results[at].value as Promise<unknown>;
+  };
+  /**
    * Long enough for an answer the host has already given to have reached the screen. An absence
    * asserted the instant a promise settles is asserted before the query has told React — and
    * would pass over a panel that draws the sentence a frame later.
@@ -904,7 +914,7 @@ describe("what the host says to a paired device about its storage", () => {
 
     await screen.findByText("Phone");
     await waitFor(asked);
-    await expect(hostInvoke.mock.results[0].value).rejects.toMatch(/not found/);
+    await expect(answered()).rejects.toMatch(/not found/);
     // The refusal has been heard and drawn from by now; anything it caused would be on screen.
     await drawn();
     expect(screen.queryByText(/new device/i)).not.toBeInTheDocument();
@@ -945,7 +955,7 @@ describe("what the host says to a paired device about its storage", () => {
 
     await screen.findByRole("button", { name: /pair a device/i });
     await waitFor(asked);
-    await expect(hostInvoke.mock.results[0].value).resolves.toBe(SAID);
+    await expect(answered()).resolves.toBe(SAID);
     await drawn();
     expect(screen.queryByText(SAID)).not.toBeInTheDocument();
   });
@@ -1818,5 +1828,231 @@ describe("the panel under a finger", () => {
     const code = screen.getByText(OFFER.code);
     expect(code.classList.contains("min-w-32")).toBe(true);
     expect(code.classList.contains("flex-1")).toBe(true);
+  });
+});
+
+/**
+ * **A host that offers no membership of its own** — the build Google Play distributes, though
+ * the panel is never told that. It asks `membership_elsewhere`; a host that answers hands back
+ * a sentence saying how sync turns on there, and the panel draws it where the offer, the
+ * membership's status and the claim code would be. Every other host refuses the name, and
+ * every test above this block is one of those.
+ *
+ * **The words are the host's.** Each test hands the panel a sentence no host ships, so a panel
+ * that kept a wording of its own fails on the text.
+ */
+describe("on a host that offers no membership of its own", () => {
+  const SAID = "Sync begins here once this device has joined a group that already has it.";
+  /** Everything Play's rule is about. None of it may be on the page on such a host. */
+  const PAID = /patreon|membership|supporter|supporting|payment|pledge|subscri/i;
+
+  /** A host that answers `membership_elsewhere` with `answer`, and refuses every other name. */
+  const host = (answer: unknown) =>
+    hostInvoke.mockImplementation((command: string) =>
+      command === "membership_elsewhere"
+        ? Promise.resolve(answer)
+        : Promise.reject(`Command ${command} not found`),
+    );
+  /** Long enough for an answer already given to have reached the screen — see `drawn` above. */
+  const drawn = () => act(() => new Promise<void>((settled) => setTimeout(settled, 50)));
+
+  it("draws the host's sentence where the offer would be, and nothing about a membership", async () => {
+    host(SAID);
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    const said = await screen.findByText(SAID);
+    expect(said.tagName).toBe("P");
+    expect(said).not.toHaveAttribute("role");
+    await drawn();
+    expect(screen.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/claim code/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Connect" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Membership" })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(PAID);
+    // And it never asked the engine for Patreon's address.
+    expect(syncPatreonBegin).not.toHaveBeenCalled();
+  });
+
+  it("still says the relay needs no account, and that sync is off", async () => {
+    host(SAID);
+    render(<SyncPanel />, { wrapper: unpaired });
+    await screen.findByText(SAID);
+    expect(screen.getByRole("heading", { name: "Relay" })).toBeInTheDocument();
+    expect(screen.getByText(/end-to-end encrypted relay server that requires no account/i)).toBeInTheDocument();
+    expect(screen.getByText("Sync is off. Nothing leaves this device.")).toBeInTheDocument();
+  });
+
+  it("says nothing more once the group has sync, and keeps Sync now", async () => {
+    host(SAID);
+    syncSupporterStatus.mockResolvedValue(SUPPORTING);
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    render(<SyncPanel />, { wrapper: paired });
+
+    expect(await screen.findByRole("button", { name: /sync now/i })).toBeInTheDocument();
+    await drawn();
+    // How to turn sync on is no news to a device that has it.
+    expect(screen.queryByText(SAID)).not.toBeInTheDocument();
+    expect(screen.getByText(/4 changes pending/i)).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(PAID);
+  });
+
+  it("reports a trip that had nothing to do without naming a membership", async () => {
+    const user = userEvent.setup();
+    host(SAID);
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncNow.mockResolvedValue(null);
+    render(<SyncPanel />, { wrapper: paired });
+
+    await user.click(await screen.findByRole("button", { name: /sync now/i }));
+    expect(await screen.findByText("Nothing to sync. Sync is not on for this device.")).toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(PAID);
+  });
+
+  /**
+   * The gap before the host has spoken. A *Connect Patreon* drawn in it is one a phone shows on
+   * every visit to Settings, for as long as its first call takes.
+   */
+  it("draws nothing of the offer before the host has answered", async () => {
+    hostInvoke.mockImplementation((command: string) =>
+      command === "membership_elsewhere"
+        ? new Promise(() => {})
+        : Promise.reject(`Command ${command} not found`),
+    );
+    render(<SyncPanel />, { wrapper: unpaired });
+
+    // The pairing half is the engine's and draws at once; wait for it, then look.
+    await screen.findByRole("button", { name: /pair a device/i });
+    await drawn();
+    expect(screen.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Membership" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Relay" })).not.toBeInTheDocument();
+    expect(document.body.textContent).not.toMatch(PAID);
+  });
+
+  /** A host that answers the name with something that is not a sentence has said nothing. */
+  it.each([null, "", "   ", 0, {}])("reads an answer that is not a sentence (%j) as a refusal", async (answer) => {
+    host(answer);
+    render(<SyncPanel />, { wrapper: unpaired });
+    expect(await screen.findByRole("button", { name: /connect patreon/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Membership" })).toBeInTheDocument();
+  });
+
+  /**
+   * **A client that would refetch.** The harness client above has `staleTime: Infinity`, which
+   * would hide a query that forgot its own; this one is the app's default of 0 and the panel is
+   * mounted twice on it, so the second mount asks again unless the question says it is settled.
+   */
+  it("asks the host once, however often the panel draws", async () => {
+    host(SAID);
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, staleTime: 0 }, mutations: { retry: false } },
+    });
+    client.setQueryData(PAIRING_KEY, UNPAIRED);
+    const wrapper = ({ children }: { children: ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+
+    const first = render(<SyncPanel />, { wrapper });
+    await screen.findByText(SAID);
+    first.unmount();
+    render(<SyncPanel />, { wrapper });
+    await screen.findByText(SAID);
+    await drawn();
+
+    expect(
+      hostInvoke.mock.calls.filter(([command]) => command === "membership_elsewhere"),
+    ).toHaveLength(1);
+  });
+
+  /** The pairing half is the engine's and draws at once: its first element says the panel settled. */
+  const settled = async (wrapper: typeof unpaired | typeof paired) => {
+    if (wrapper === unpaired) await screen.findByRole("button", { name: /pair a device/i });
+    else await screen.findByText("Phone");
+    // The host's own heading: without it these cases would pass over the empty box the panel
+    // draws while the question is still out.
+    await screen.findByRole("heading", { name: "Relay" });
+    await drawn();
+  };
+
+  /**
+   * **Every state the membership half can be in, on both halves of the page.** The panel keeps a
+   * wording of its own for each of them on a host that does not answer, and every one of those
+   * wordings is a sentence Play forbids. None may reach a host that does.
+   */
+  const GRACE: SupporterStatus = { ...SUPPORTING, status: "grace" };
+  const STATES = {
+    NOT_CONNECTED,
+    REVOKED,
+    GRANT_WITHOUT_STATUS,
+    GROUP_ENTITLED,
+    SUPPORTING,
+    GRACE,
+  };
+  const WRAPPERS = { unpaired, paired };
+  const EVERY_STATE = Object.entries(STATES).flatMap(([state, status]) =>
+    Object.entries(WRAPPERS).map(
+      ([wrapper, harness]) => [`${state} on a ${wrapper} device`, status, harness] as const,
+    ),
+  );
+
+  it.each(EVERY_STATE)("names no membership for %s", async (_label, status, wrapper) => {
+    host(SAID);
+    syncSupporterStatus.mockResolvedValue(status);
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    render(<SyncPanel />, { wrapper });
+
+    await settled(wrapper);
+    expect(document.body.textContent).not.toMatch(PAID);
+    expect(screen.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/claim code/i)).not.toBeInTheDocument();
+  });
+
+  it.each(Object.entries(WRAPPERS))(
+    "names no membership when the status read errors, on a %s device",
+    async (_label, wrapper) => {
+      host(SAID);
+      syncSupporterStatus.mockRejectedValue("the database is busy");
+      syncRelayStatus.mockResolvedValue(RELAY_ON);
+      render(<SyncPanel />, { wrapper });
+
+      await settled(wrapper);
+      expect(document.body.textContent).not.toMatch(PAID);
+      expect(screen.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+      expect(screen.queryByLabelText(/claim code/i)).not.toBeInTheDocument();
+    },
+  );
+
+  it("shows what the host made of a refused sync, and nothing that names a membership", async () => {
+    const user = userEvent.setup();
+    const refusal = "the relay answered 401 to a push; sync is no longer on for this group";
+    host(SAID);
+    syncRelayStatus.mockResolvedValue(RELAY_ON);
+    syncNow.mockRejectedValue(refusal);
+    render(<SyncPanel />, { wrapper: paired });
+
+    await user.click(await screen.findByRole("button", { name: /sync now/i }));
+    expect(await screen.findByRole("alert")).toHaveTextContent(refusal);
+    expect(document.body.textContent).not.toMatch(PAID);
+  });
+});
+
+describe("the two sentences that name a membership, on a host that offers none", () => {
+  it("says sync is off without saying how to pay for it", () => {
+    expect(relayNote("off", null, 0)).toBe(
+      "Sync is off. Nothing leaves this device until you connect a membership.",
+    );
+    expect(relayNote("off", null, 0, true)).toBe("Sync is off. Nothing leaves this device.");
+    // Every other state says the same thing on every host.
+    for (const state of ["unknown", "syncing", "failed", "unpaired", "never", "synced"] as const) {
+      expect(relayNote(state, RELAY_ON, 1_700_000_100, true)).toBe(
+        relayNote(state, RELAY_ON, 1_700_000_100),
+      );
+    }
+  });
+
+  it("says a trip had nothing to do without telling the reader to connect", () => {
+    expect(outcomeText(null)).toBe("Nothing to sync. Connect a membership and pair a device first.");
+    expect(outcomeText(null, true)).toBe("Nothing to sync. Sync is not on for this device.");
+    expect(outcomeText(OUTCOME, true)).toBe(outcomeText(OUTCOME));
   });
 });
