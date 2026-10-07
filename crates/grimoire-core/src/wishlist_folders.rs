@@ -856,17 +856,7 @@ pub(crate) fn refile_wish(
         .map_err(|e| e.to_string())?;
 
     if let Some((target, held)) = target {
-        tx.execute(
-            "UPDATE wishlist_entries SET
-                quantity = quantity + ?2,
-                notes = coalesce(notes, (SELECT notes FROM wishlist_entries WHERE id = ?3)),
-                updated_at = unixepoch()
-              WHERE id = ?1",
-            params![target, quantity, id],
-        )
-        .map_err(|e| e.to_string())?;
-        tx.execute("DELETE FROM wishlist_entries WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
+        crate::wishlist::fold_wish(tx, target, id).map_err(|e| e.to_string())?;
         return Ok(EntryChange {
             id: target,
             quantity: held + quantity,
