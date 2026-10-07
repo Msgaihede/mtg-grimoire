@@ -126,7 +126,7 @@ function ElsewhereSentence() {
 function LiveScanner() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const queryClient = useQueryClient();
-  const { prefs, update, filterError, loaded } = useScannerPrefs();
+  const { prefs, update, filterError, loaded, unavailable } = useScannerPrefs();
   // Session-only: a deliberate Stop survives minimize/restore, but a new visit starts as before.
   const [scanning, setScanning] = useState(true);
   // **A minimized window stands down** (issue #556): the pump pauses at once, and the camera and
@@ -483,7 +483,9 @@ function LiveScanner() {
           filters={prefs.filters}
           onFilters={(filters) => update({ filters })}
           filterError={filterError}
-          filtersDisabled={filtersDisabled}
+          // A host with no session has nothing to narrow, and a filter changed there would be
+          // drawn, never taken and never stored.
+          filtersDisabled={unavailable ?? filtersDisabled}
           finish={prefs.finish}
           onFinish={(finish) => update({ finish })}
           condition={prefs.condition}
@@ -533,6 +535,18 @@ function LiveScanner() {
                   className="absolute inset-0 flex items-center justify-center p-6 text-center text-dim"
                 >
                   {camera.message}
+                </p>
+              )}
+              {/* **A host with no scanner session** — a web page, until the light app's web step
+                  (`SCANNER_NOT_IN_A_BROWSER_YET`). The engine's sentence where the picture would
+                  be: `loaded` never goes true there, so no camera was asked for and nothing else
+                  will ever fill this box. The tray beside it still reads, edits and files. */}
+              {unavailable !== null && (
+                <p
+                  role="alert"
+                  className="absolute inset-0 flex items-center justify-center p-6 text-center text-dim"
+                >
+                  {unavailable}
                 </p>
               )}
               {/* The detector's own sentence, in a strip that is *emptied* rather than removed: a

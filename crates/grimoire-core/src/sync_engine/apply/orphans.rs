@@ -596,10 +596,18 @@ fn write_one(conn: &Connection, op: &Op, deleted: &BTreeSet<(&str, &str)>) -> Re
     let groups = group(&[op]);
     let mut report = ApplyReport::default();
     let mut soft: Vec<(&Group, String)> = Vec::new();
+    // No row is one "the page places": this op is the ledger's own, not a page's.
+    let placed: BTreeSet<(&str, &str)> = BTreeSet::new();
     for g in &groups {
-        if let Outcome::Deferred(why) =
-            write_group(conn, g, &mut report, &mut soft, deleted, Attempt::Clear)?
-        {
+        if let Outcome::Deferred(why) = write_group(
+            conn,
+            g,
+            &mut report,
+            &mut soft,
+            deleted,
+            &placed,
+            Attempt::Clear,
+        )? {
             return Err(why.text());
         }
     }

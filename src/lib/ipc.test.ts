@@ -117,7 +117,10 @@ import ipcSource from "./ipc.ts?raw";
 import { CONDITIONS, CONDITION_NOT_SET } from "@/lib/conditions";
 import { DEFAULT_SCANNER_OPTIONS } from "@/features/scanner/scannerOptions";
 import { DEFAULT_SCANNER_PREFS, TRAY_ROWS } from "@/features/scanner/fixtures";
-import { SCANNER_OPEN_ELSEWHERE } from "@/features/scanner/verdictText";
+import {
+  SCANNER_NOT_IN_A_BROWSER_YET,
+  SCANNER_OPEN_ELSEWHERE,
+} from "@/features/scanner/verdictText";
 import {
   AUTO_BRACKET,
   ipc,
@@ -4225,6 +4228,47 @@ describe("multi-window's cross-boundary names", () => {
     // Built from the page's own constant, so the sentence the page draws and the one Rust refuses
     // with are tied here rather than agreeing by hand.
     expect(scannerRs).toContain(`pub const OPEN_ELSEWHERE: &str = "${SCANNER_OPEN_ELSEWHERE}";`);
+  });
+
+  /**
+   * **The sentence a page is refused the scanner's session in**, tied the same way: the engine
+   * answers it from a browser (`scanner::not_in_a_browser_yet`), and `useScannerPrefs` matches on
+   * it byte for byte to keep the view from opening a camera and pumping frames into the refusal.
+   * A reworded Rust sentence would turn that match off silently, and the pump back on.
+   */
+  it("quotes the sentence a page is refused the scanner's session in", () => {
+    expect(scannerRsCore).toContain(
+      `pub const NOT_IN_A_BROWSER_YET: &str = "${SCANNER_NOT_IN_A_BROWSER_YET}";`,
+    );
+  });
+
+  /**
+   * **The three header names, on both sides of both wires.** The desktop reads them off Tauri's
+   * request and a light host off the call's arguments (`src/lib/core/table.ts` sends the headers
+   * object as `args`), and both hand `scanner::frame_from` / `capture_from` a lookup by these
+   * names — defined once, in the core. The page spells each by hand in `ipc.ts`, so a renamed
+   * constant is a frame whose options are silently the defaults on every host.
+   */
+  it("names the scanner's three headers as the engine names them", async () => {
+    expect(scannerRsCore).toContain('pub const OPTIONS_HEADER: &str = "x-scanner-options";');
+    expect(scannerRsCore).toContain('pub const DETAIL_HEADER: &str = "x-scanner-detail";');
+    expect(scannerRsCore).toContain('pub const CAPTURE_HEADER: &str = "x-scanner-capture";');
+    // And not a second time in the desktop's file, where they lived until the table took them.
+    expect(scannerRsDesktop).not.toMatch(/pub const (OPTIONS|DETAIL|CAPTURE)_HEADER/);
+
+    invoke.mockResolvedValue({});
+    await ipc.scannerFrame(new Uint8Array([1]), DEFAULT_SCANNER_OPTIONS, new Uint8Array([2]));
+    await ipc.scannerCapture(new Uint8Array([1]), {
+      expected: "",
+      reported: "",
+      confidence: "",
+      votes: "",
+      distance: "",
+    });
+    const sent = invoke.mock.calls.flatMap(([, , options]) =>
+      Object.keys((options as { headers: Record<string, string> }).headers),
+    );
+    expect(sent.sort()).toEqual(["x-scanner-capture", "x-scanner-detail", "x-scanner-options"]);
   });
 
   /**

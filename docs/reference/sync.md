@@ -1438,7 +1438,9 @@ group's savepoint rolls back, and each device quietly keeps its own holding area
 while every count still reads one.
 
 **A sparse update op cannot describe a grain and does not need to** — the row it edits is found
-by uid. An *insert* op carries every field, which is what makes the grain rule work at all.
+by uid. An *insert* op carries every field, which is what makes the grain rule work at all. A
+sparse **move** can still land its row on a grain another row holds, and that is answered where it
+is met (*A move onto a grain a row of this device's own already holds folds the two*, below).
 
 **The row handle in `apply` is the uid and never the rowid.** Every synced table but two has an
 `INTEGER PRIMARY KEY`; those two have none at all — `muted_tags` is `WITHOUT ROWID` on
@@ -2815,6 +2817,57 @@ sweep that files them somewhere else afterwards must be a derived write behind
 `capture::suppressed`, like `reconcile`, or both devices sweep the same copy and the destination
 counts it twice.
 
+**A move onto a grain a row of this device's own already holds folds the two** (2026-10-07; older
+than the re-homing above and measured while issue #841's fix was reviewed). A move is a sparse put
+naming only the folder, so `write_group` finds its row by uid, asks no grain, and the unique index
+is the first to say another row is in the way. The ordinary case: both devices hold a copy `c`;
+`b` adds a copy `u` of that printing to binder `Other` and has not sent it; `a`, not having heard,
+drags `c` into `Other`. On `b` the `UPDATE` failed `idx_collection_grain`, the group's savepoint
+rolled back, and the group was dropped with an `error_log` row — "a change to collection_entries
+from another device could not be applied and was skipped" — while on `a`, `u`'s insert
+grain-matched `c` and the two became one row under the lower uid. One row of both there, two rows
+in two folders here, and nothing either would send said so. A wish moved into a wishlist folder is
+the same shape, and so is a row dragged *out* of a folder onto a root copy.
+
+- **The refusal is answered by the crate's own merge** (`apply::fold_the_move`, over
+  `rehome::fold_onto_the_holder`): the moved row is filed where the move sends it through
+  `collection_folders::refile_entry` or `wishlist_folders::refile_wish`, which folds it into the
+  row already there, and **the survivor takes the lower of the two uids**, the other one retired
+  (`emission::retire`) — the re-homing's rule read from the other end, since the row in the way is
+  one the sender had not heard of on that grain, and its own put lands on the moved row there by
+  `find_row`'s grain match, adopting `min`. Both devices end on one row, one count and one uid
+  (`a_copy_moved_onto_one_the_peer_has_not_sent`, into a binder and out to the root, and
+  `a_wish_moved_onto_one_the_peer_has_not_sent`, each in both uid orders and each red first with
+  `dropped: 1`).
+- **The rest of the group is written onto the survivor, once.** Its counters are deltas and land
+  on the summed row (`a_count_riding_with_a_move_onto_the_peers_copy_is_counted_once`); a field it
+  carries is folded against this device's own history of **both** rows, so it wins only where it
+  is later than what was written here to either — what the sender's grain match decides from its
+  side.
+- **Taken only on a `Clear` pass, and withheld as `Why::DecidedOnRetry` until then** — the third
+  thing that reason answers. A group sorts by its oldest op, so a move can be met ahead of the
+  page's own delete of the row in the way: `a` edits `c`, deletes `u`, drags `c` to where `u`
+  was. Folded on the first attempt, `c`'s copies went into the row the delete then took, and the
+  peer held nothing (`a_copy_moved_to_where_the_page_deletes_a_copy_is_not_folded_into_it`, zero
+  rows under that mutation). Waiting, the delete lands and the retry moves `c` onto a free grain.
+  The probe is the fold itself, made inside the group's savepoint and rolled back with it, so no
+  second spelling of the eleven-term grain was written.
+- **Never onto a row the page itself places.** Where the page carries a group for the row in the
+  way that names any term of its grain — a move of its own, or a full insert — the sender holds
+  that row somewhere else, the two are two rows there, and the refusal stands as it always did.
+  Two copies swapped between the root and a binder, by way of a third, each land on the grain the
+  other is leaving and neither can go first; unguarded, the `Clear` pass folded them into one row
+  (`two_copies_the_sender_swapped_between_the_root_and_a_binder_stay_two`, one row under that
+  mutation). `run_groups` builds that set once a pass (`places`).
+- **It is that refusal only where** the group moves the row and names no other term of its
+  grain, the move is the one last-writer-wins kept, and the folder it names is a row here.
+  Anything else is still a row this database cannot build, dropped and recorded — **or the
+  ledger of orphans' to answer**, which is asked first: a folder that is gone, and a row in the
+  way that is there only because *its* folder is (*A decision resting on `gone` is taken back
+  when the parent returns*, below).
+
+What it does not reach is under *What is still owed*.
+
 **The client holds for the reason, and for no longer than the reason lasts.** After `apply` in
 `client::pull`, with the epoch rule (`behind`) unchanged and still first:
 
@@ -3388,12 +3441,16 @@ as it does not clear `sync_gone`.
   says which. Addressed to an orphan's uid it takes the orphan's share and leaves the twin;
   addressed to the twin's own, while the twin wears it, it takes the whole row, as it did before
   the ledger.
-- **A sparse move onto a grain a row of this device's own already holds is still refused** — a
-  copy the sender moved into a binder where this device has an unsent copy of that printing: the
-  unique index refuses, the group is skipped with an `error_log` row, and the sender folds the
-  two when the other copy reaches it. Older than the ledger and not the ledger's — neither row is
-  there only for now — and what it wants is the crate's own merge in place of the refusal, for
-  any move.
+- ~~**A sparse move onto a grain a row of this device's own already holds is still refused**~~ —
+  the refusal with no orphan in it, which the ledger's review measured and left alone, **was
+  closed the same day on `main`** by *A move onto a grain a row of this device's own already
+  holds folds the two*, above (`fold_the_move`). The two meet in `write_group` at one refusal,
+  and the ledger's cases are asked first: a row in the way that is a `placed` orphan steps aside
+  and is never folded into by that merge, which would carry the moved row off with it when the
+  orphan's parent returned (`a_copy_moved_to_the_root_where_a_placed_orphan_stands_is_moved`
+  goes red when the merge is let go first); a row moved under a parent that is itself gone is
+  left to the ledger by `fold_the_move`'s own rule; and where that merge does fold, whatever the
+  ledger had folded into the row that moved follows it into the survivor.
 
 **The tests** are `apply/tests/cuts.rs` and `apply/tests/cuts/found.rs` — thirty-seven for the
 ledger, almost all run both ways and against the sender, with the ledger required empty at the
@@ -5219,6 +5276,31 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   fix is a fold, not a refusal: where the `SET NULL` arm's update would collide, fold
   through `collection_folders::refile_entry` / `wishlist_folders::refile_wish`, the survivor
   keeping the lower uid, as the delete arm's re-homing does. No test pins it either way.
+  **Still open after 2026-10-07**, when a move onto an occupied grain began to fold (*A move onto
+  a grain a row of this device's own already holds folds the two*, above): that fold is taken
+  only where the folder the move names is a row here, and this one names a folder that is gone.
+  Left on purpose — what a decision resting on `gone` does to a row is issue
+  [#841](https://github.com/Msgaihede/mtg-grimoire/issues/841)'s, which has to be able to take
+  it back.
+- **What the fold of a move does not reach** (2026-10-07; the first measured, the rest read off
+  the code):
+  - ⚠️ **An edit of a grain field onto a grain this device holds is still refused** — the same
+    divergence with no move in it. `a` changes `c` from NM to LP while `b` holds an unsent LP copy
+    `u` beside it: `b` drops the edit with an `error_log` row and keeps two rows, and `a` folds
+    the two when `u` arrives (measured by a throwaway probe: one row of three on `a`, two rows on
+    `b`). `refile_entry` cannot answer it, since it files a row as it stands; it wants
+    `collection::fold_entry` by the two ids, and a probe for the grain the edit lands on. A move
+    and such an edit in one group are refused for the same reason.
+  - **A row the page itself places is never folded into, so two same-printing copies the sender
+    swapped between two folders are both still refused**, as they were: two rows on both devices,
+    each still where it was on the receiver, and two `error_log` rows. Counts per folder agree
+    wherever the two rows hold the same number of copies.
+  - **A delete of the moved row, sent before its sender has heard of the fold, is read against
+    one row that is two.** Where the survivor wears the moved row's uid the delete takes the other
+    row's copies with it here and the sender rebuilds that row alone; where it wears the other's,
+    the delete finds nothing here and the moved row's copies stay. *A sparse edit under the
+    losing uid* and *Provenance can differ after a concurrent merge*, above, apply to this fold
+    as to every other.
 - ⚠️ **A page carrying a `del X`, a third device's resurrecting edit of X and a new put Y on X's
   grain renames X to Y** (parked at Task B's scoped re-review, 2026-09-27, read off the code and
   unmeasured). The incoming-uid rule above is keyed on the page's delete set: X's own group folds

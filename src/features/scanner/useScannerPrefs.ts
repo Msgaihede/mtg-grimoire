@@ -4,7 +4,11 @@ import { registerUnsavedCheck } from "@/lib/crossWindow";
 import { ipc, ipcError } from "@/lib/ipc";
 import type { ScanFilters, ScannerPrefs } from "./types";
 import { SCANNER_ELSEWHERE_KEY, SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
-import { refusalPasses, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
+import {
+  refusalPasses,
+  SCANNER_NOT_IN_A_BROWSER_YET,
+  SCANNER_OPEN_ELSEWHERE,
+} from "./verdictText";
 
 /** The one cache entry the prefs live in — the query's key and every write's. */
 const PREFS_KEY = ["scanner", "prefs"] as const;
@@ -98,6 +102,12 @@ export interface ScannerPrefsState {
    * which is about another window rather than about the filters.
    */
   filterError: string | null;
+  /**
+   * **This host has no scanner session**, in the engine's own sentence, or `null` on every host
+   * that has one. While it is set `loaded` never goes true — so the page opens no camera and
+   * sends no frame — and nothing is sent again, because no wait changes it.
+   */
+  unavailable: string | null;
 }
 
 function current(qc: QueryClient): ScannerPrefs {
@@ -150,6 +160,13 @@ function current(qc: QueryClient): ScannerPrefs {
  * the other window let go in between and the view stays, the push goes out again each
  * {@link SCANNER_ELSEWHERE_POLL_MS} — while mounted and never after, since an accepted push is the
  * lease, taken.
+ *
+ * **A push refused because the host has no session at all is not answered either** —
+ * `SCANNER_NOT_IN_A_BROWSER_YET`, a web page until the light app's web step. Counted as an
+ * ordinary refusal it settled the filters, `loaded` went true, the camera opened and the pump
+ * sent frame after frame into the same refusal. So it settles nothing, reverts nothing and is
+ * never sent again; `unavailable` carries the sentence for the page to draw in place of the
+ * picture. The prefs themselves still read and write — they are a row, and a page has the row.
  */
 export function useScannerPrefs(): ScannerPrefsState {
   const qc = useQueryClient();
@@ -160,6 +177,7 @@ export function useScannerPrefs(): ScannerPrefsState {
     gcTime: Infinity,
   });
   const [filterError, setFilterError] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState<string | null>(null);
   // Whether the stored filters have been answered by the session on this mount. State, because
   // `loaded` is drawn from it; set only from a promise's callback, never in an effect's body.
   const [synced, setSynced] = useState(false);
@@ -171,6 +189,8 @@ export function useScannerPrefs(): ScannerPrefsState {
   /** Which push is the newest; an older answer arriving late changes nothing on screen. */
   const seqRef = useRef(0);
   const pushedOnMountRef = useRef(false);
+  /** Whether a failed read's stand-in push has gone out — see the mount effect. */
+  const pushedOnFailureRef = useRef(false);
   /** A push the lease refused, waiting to go out again; cleared by a newer push and on unmount. */
   const elsewhereRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   /** Whether the view is still here — a refusal landing after it has gone schedules nothing. */
@@ -274,6 +294,12 @@ export function useScannerPrefs(): ScannerPrefsState {
               elsewhereRef.current = setTimeout(send, SCANNER_ELSEWHERE_POLL_MS);
               return;
             }
+            if (sentence === SCANNER_NOT_IN_A_BROWSER_YET) {
+              // No session on this host: not an answer about these filters, and not one a wait
+              // changes — see the hook's doc. Nothing settles, so `loaded` stays false.
+              if (mountedRef.current) setUnavailable(sentence);
+              return;
+            }
             settledRef.current = true;
             if (seq !== seqRef.current) return;
             setFilterError(sentence);
@@ -296,12 +322,26 @@ export function useScannerPrefs(): ScannerPrefsState {
 
   // The stored filters, to the session, once per mount. Everything this sets it sets from the
   // promise's callbacks, so the effect's own body writes no state.
+  //
+  // **A read that failed pushes too — the defaults' filters, which are none.** `loaded` used to
+  // go true on a failed read with nothing sent, so the session was never asked anything: on a
+  // host with no session (`unavailable`) that was never learned, and the camera opened and the
+  // pump ran into the very refusal this hook exists to keep it out of. No filters is what the
+  // defaults draw, and a push the crate never refuses, so on every other host this is the
+  // session brought to what the page shows. Its own once, so a read that succeeds later still
+  // sends the stored filters.
   const data = query.data;
+  const failed = query.isError;
   useEffect(() => {
-    if (data === undefined || pushedOnMountRef.current) return;
-    pushedOnMountRef.current = true;
-    push(data.filters, false);
-  }, [data, push]);
+    if (data !== undefined) {
+      if (pushedOnMountRef.current) return;
+      pushedOnMountRef.current = true;
+      push(data.filters, false);
+    } else if (failed && !pushedOnFailureRef.current) {
+      pushedOnFailureRef.current = true;
+      push(NO_FILTERS, false);
+    }
+  }, [data, failed, push]);
 
   const update = useCallback(
     (patch: Partial<ScannerPrefs>) => {
@@ -315,9 +355,12 @@ export function useScannerPrefs(): ScannerPrefsState {
   return {
     prefs: data ?? SCANNER_PREFS_BEFORE_LOAD,
     // A row that could not be read is the defaults, which is what the command itself answers for
-    // one — so a failed read is loaded too, rather than a scanner that never starts.
-    loaded: query.isError || (data !== undefined && synced),
+    // one — so a failed read is loaded too, rather than a scanner that never starts. **Once the
+    // session has answered a push, either way**: that answer is the only thing that says whether
+    // this host has a session at all.
+    loaded: (failed || data !== undefined) && synced,
     update,
     filterError,
+    unavailable,
   };
 }
