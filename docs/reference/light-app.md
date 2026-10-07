@@ -2462,6 +2462,14 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
   store back on the URL's place without touching history. Hidden rather than refused on the press:
   a link that answered would have nowhere to land, and a share link is a web page a browser opens
   anyway. At 1280 × 800 the collection draws Import and Export and no Open half.
+- **A publish the light hosts cannot make** (2026-10-07). The collection's *Share* half was still
+  drawn for an entitled device in the desktop face — the web app at 1024px and up, an Android
+  tablet — though the five `share_*` commands are registered by the desktop host alone and
+  `grimoire_core::commands` has none of them, so its list and its publish answered *"There is no
+  command named … on this host."* The edition now says `publishes: false`, `AppShell` answers
+  `usePublishes()` from it beside `useReaches`, and `ShareFolderMenu` draws no Share half and
+  asks no `share_list` where it is false. Still a capability rather than a platform question: the
+  page never learns which edition or host it is on. The phone face never drew the control.
 - **`Ctrl+Shift+N`** is the full edition's alone; in the light edition the press is left to the
   browser, where it is the browser's own private-window chord.
 - **`F1` stays the browser's.** Mounting the key map without the caption row would mean an
