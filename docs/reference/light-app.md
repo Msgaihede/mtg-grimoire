@@ -6823,22 +6823,24 @@ is handed at once. Each, split across a page edge and run the same three ways:
 | … the claim first | equal — **four** copies | two. Not reachable; pinned as a premise by `the_other_order_is_not_one_a_log_can_hold` |
 | A baseline with references, in two chunks | equal | **equal** |
 | A sender held for its clock, its earlier batch a page before | equal | **equal once the clock catches up**; while it is held, the earlier batch has applied where one answer held the sender whole |
-| A `gone` decision and the op that reverses it | equal | ⚠️ **different** |
+| A `gone` decision and the op that reverses it | equal | **equal**, since user schema v60 (2026-10-07); ⚠️ different when this step shipped |
 
-⚠️ **The last row is a convergence defect in `apply` that paging did not make and does not
-hide.** The fixture
-(`a_gone_decision_and_its_reversal_across_a_page_edge_end_as_a_live_devices_pulls_do`): this
+**The last row was a convergence defect in `apply` that paging did not make and did not hide,
+and it is closed** (issue #841, 2026-10-07; [sync.md](sync.md), *A decision resting on `gone`
+is taken back when the parent returns*). The fixture, now
+`a_gone_decision_and_its_reversal_across_a_page_edge_end_as_the_unpaged_pull_ends`: this
 device deleted a binder; another, not having heard, files a copy into it, and in a later push
 renames it — later than the delete, so add-wins brings the binder back. One answer carrying
 both: the rename ranks first, the binder is back, the copy is in it. The copy's push alone,
 then the rename's: the copy names a parent that is gone and nothing handed over can bring it
 back, a binder's key is `SET NULL`, so the copy is written **at the root** and nothing is held;
-the rename then brings the binder back, **empty**. The sender keeps the copy in the binder.
-The two devices differ and nothing either will send says so — the move to the root is
-`apply`'s own write, behind `capture::suppressed`. **A live device pulling between those two
-pushes ends exactly so today**, on the code before this step; paging lets a device that is
-catching up meet it too, when a page edge falls between the two pushes. The test holds paged
-to live and, in its last assertion, the difference itself.
+the rename then brought the binder back, **empty**, while the sender kept the copy in it — and
+nothing either would send said so, the move to the root being `apply`'s own write, behind
+`capture::suppressed`. A live device pulling between those two pushes had always ended so;
+paging let a device that was catching up meet it too, when a page edge fell between them, and
+this step's test held paged to live and, in its last assertion, the difference itself. `apply`
+now writes the decision down and takes it back when the binder returns, and the test holds
+all three equal.
 
 **Measured again, a page at a time** — `npm run web:sync-pull`, the same harness and machine
 as §10.5, the engine at 6 869 005 B, on 2026-10-05. **Every figure below is of the pull as
@@ -6982,8 +6984,10 @@ The rest of what the review found is in the list below, each marked as its.
   with one such device, and a row it never held. [sync.md](sync.md)'s *What is still owed* has
   what that leaves — a group of three among it — with the fixtures. All of it ends when no
   device in a group is older than v0.40.0.
-- **The `gone` reversal is not fixed.** It needs `apply` to revisit a `SET NULL` it made when
-  the parent comes back — its own entry there too.
+- ~~**The `gone` reversal is not fixed.** It needs `apply` to revisit a `SET NULL` it made when
+  the parent comes back — its own entry there too.~~ **Fixed 2026-10-07** (issue #841, user
+  schema v60): `apply` keeps a ledger of what it decided without a parent and takes each
+  decision back when the parent returns.
 - **A catch-up's pages are fetched again from the first when one request of it fails**, since
   nothing is applied until the last has arrived. Each page is inside the deadline on its own,
   which the unpaged answer was not; a link that drops one page in a hundred pays the hundred
@@ -7258,8 +7262,10 @@ under *What is still owed* in [sync.md](sync.md), with its fixture in
 
 - **an older emitter's baseline arriving in two separate pushes** leaves a live receiver
   missing rows;
-- **a copy filed into a binder that was deleted on the receiver**, whose sender later brings
-  the binder back, is kept on one device and not the other.
+- ~~**a copy filed into a binder that was deleted on the receiver**, whose sender later brings
+  the binder back, is kept on one device and not the other.~~ **Fixed 2026-10-07** (issue #841);
+  what the same experiments found beside it — with three devices, an older edit arriving in a
+  later pull beats a newer one — is issue #842 and still owed.
 
 ## 11. The scanner on a light install — phase 7, a step at a time
 

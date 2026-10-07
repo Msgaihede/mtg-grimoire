@@ -213,6 +213,7 @@ export const TABLE_KEYS: Readonly<Record<string, readonly QueryKey[]>> = {
   sync_group: [SYNC_KEY],
   sync_identity: [SYNC_KEY],
   sync_ops: [],
+  sync_orphans: [],
   sync_peers: [],
   // The membership lives here (`entitlement::SUPPORTER_STATUS`), and *Connect Patreon*'s claim is
   // a press that writes it and settles three keys under `["sync"]`. The table is `WITHOUT ROWID`,

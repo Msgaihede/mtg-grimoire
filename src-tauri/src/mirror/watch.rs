@@ -1187,6 +1187,13 @@ mod tests {
                 // decision either. (v54's `sync_gone` is decided on the same two grounds, and
                 // sorts above, between `sync_devices` and `sync_group`.)
                 "sync_ops",
+                // What an apply did with a row whose parent was gone (user schema v60), in
+                // among sync's three for the name order and belonging with them anyway. It
+                // records decisions about the conversation, not anything the reader holds: the
+                // row it describes is in a table the mirror already watches, and is drawn
+                // from there wherever the decision left it. `WITHOUT ROWID` too, so it could
+                // not reach the hook anyway — which is not a decision; this is.
+                "sync_orphans",
                 "sync_peers",
                 "sync_state",
             ],

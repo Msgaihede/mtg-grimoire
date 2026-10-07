@@ -126,16 +126,26 @@ pub(super) fn doomed(conn: &Connection, table: &str, uid: &str) -> Result<Doomed
 /// first to reach the root becomes the row the next one merges into.
 pub(super) fn rehome(conn: &Connection, d: &Doomed) -> Result<(), String> {
     for &id in &d.collection {
-        let before = uid_of(conn, "collection_entries", id)?;
-        let kept = crate::collection_folders::refile_entry(conn, id, None)?.id;
-        adopt_lower(conn, "collection_entries", kept, id, before)?;
+        rehome_one(conn, "collection_entries", id)?;
     }
     for &id in &d.wishlist {
-        let before = uid_of(conn, "wishlist_entries", id)?;
-        let kept = crate::wishlist_folders::refile_wish(conn, id, None)?.id;
-        adopt_lower(conn, "wishlist_entries", kept, id, before)?;
+        rehome_one(conn, "wishlist_entries", id)?;
     }
     Ok(())
+}
+
+/// One row of [`rehome`]: file `table`'s row `id` at the root, and answer the id of the row that
+/// holds it afterwards — its own, or the twin it folded onto. On its own because the moot arm
+/// takes the rows one at a time, to write down beside each what the move did to it
+/// ([`super::orphans`]).
+pub(super) fn rehome_one(conn: &Connection, table: &str, id: i64) -> Result<i64, String> {
+    let before = uid_of(conn, table, id)?;
+    let kept = match table {
+        "collection_entries" => crate::collection_folders::refile_entry(conn, id, None)?.id,
+        _ => crate::wishlist_folders::refile_wish(conn, id, None)?.id,
+    };
+    adopt_lower(conn, table, kept, id, before)?;
+    Ok(kept)
 }
 
 /// The parent key a copy and a wish are filed by, in both their specs.
@@ -221,6 +231,10 @@ fn adopt_lower(
                 rusqlite::params![moved_uid, kept],
             )
             .map_err(|e| e.to_string())?;
+            // Whatever the ledger of orphans has folded into the survivor follows its new name.
+            if let Some(own) = &own {
+                super::orphans::renamed(conn, table, own, &moved_uid)?;
+            }
             own.map(|own| (own, moved_uid))
         }
     };

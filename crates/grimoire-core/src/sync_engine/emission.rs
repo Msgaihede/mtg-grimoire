@@ -458,6 +458,18 @@ pub fn retire(conn: &Connection, table: &str, uid: &str, survivor: &str) -> rusq
     put(conn, &format!("{RETIRED}{table}/{uid}"), survivor)
 }
 
+/// Take [`retire`]'s mark back off `uid`: the row it was merged into has given its copies back
+/// and `uid` is a row of its own again, or is about to be. One caller, `apply`'s ledger of
+/// orphans: a row folded onto a twin because its parent was gone is un-folded when the parent
+/// comes back, and a claim naming it must build it then as any other.
+pub fn unretire(conn: &Connection, table: &str, uid: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM sync_state WHERE key = ?1",
+        [format!("{RETIRED}{table}/{uid}")],
+    )
+    .map(|_| ())
+}
+
 /// Whether `uid` of `table` was merged here into another row ([`retire`]). Asked of every active
 /// claim a page carries, so the statement is cached.
 pub fn retired(conn: &Connection, table: &str, uid: &str) -> rusqlite::Result<bool> {
