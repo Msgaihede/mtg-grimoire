@@ -4,7 +4,7 @@ name = "grimoire-web"
 # and one core means one schema version (the light-app spec §7's release rule). It is equal to
 # `grimoire-core`'s — release-please bumps it with the others (`release-please-config.json`),
 # and `host::tests::the_host_wears_the_cores_version` goes red when the two part.
-version = "0.42.0"
+version = "0.43.0"
 description = "MTG Grimoire, light: the browser host over grimoire-core"
 authors = ["Markus Seerup"]
 license = "AGPL-3.0-or-later"
