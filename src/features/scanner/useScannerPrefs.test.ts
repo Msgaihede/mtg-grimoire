@@ -23,7 +23,7 @@ vi.mock("@/lib/ipc", async (original) => ({
 import { refreshForTables } from "@/lib/crossWindow";
 import { SCANNER_ELSEWHERE_POLL_MS } from "./useScannerElsewhere";
 import { PREFS_RETRY_MS, SCANNER_PREFS_BEFORE_LOAD, useScannerPrefs } from "./useScannerPrefs";
-import { SCANNER_OPEN_ELSEWHERE } from "./verdictText";
+import { SCANNER_NOT_IN_A_BROWSER_YET, SCANNER_OPEN_ELSEWHERE } from "./verdictText";
 
 /** The prefs' cache entry, spelled as `crossWindow.ts`' `SINGLE_WRITER_KEYS` spells it. */
 const PREFS = ["scanner", "prefs"];
@@ -489,6 +489,81 @@ describe("useScannerPrefs while another window holds the scanner", () => {
     expect(result.current.prefs.filters).toEqual(HOB);
     // Still the mount's own push, answered late: a reading of the row, not a change to it.
     expect(setScannerPrefs).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A host with no session — a web page — is not a refused filter.** Counted as one it settled
+   * the push, `loaded` went true, and the page opened the camera and pumped frames into the same
+   * refusal. So it settles nothing: never loaded, never sent again, no sentence in the popover,
+   * and the stored row untouched.
+   */
+  it("never loads, and sends nothing again, on a host with no scanner session", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockResolvedValue(STORED);
+    scannerSetFilters.mockRejectedValue(SCANNER_NOT_IN_A_BROWSER_YET);
+    const { result } = mount();
+    await advance(0);
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+    expect(result.current.loaded).toBe(false);
+    expect(result.current.unavailable).toBe(SCANNER_NOT_IN_A_BROWSER_YET);
+    expect(result.current.filterError).toBeNull();
+    // The stored filters are still what is drawn — nothing was put back to none.
+    expect(result.current.prefs.filters).toEqual(HOB);
+
+    await advance(SCANNER_ELSEWHERE_POLL_MS * 5);
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+    expect(result.current.loaded).toBe(false);
+    expect(setScannerPrefs).not.toHaveBeenCalled();
+
+    // A pref that is the reader's alone still writes, and carries the stored filters with it.
+    act(() => result.current.update({ developer: true }));
+    await advance(0);
+    expect(setScannerPrefs).toHaveBeenCalledTimes(1);
+    expect(setScannerPrefs).toHaveBeenLastCalledWith({ ...STORED, developer: true });
+  });
+
+  /**
+   * **A prefs read that fails must not be a way round that.** `loaded` was `isError || …`, and a
+   * failed read pushed nothing — so the session was never asked, `unavailable` was never learned,
+   * and on a host with no session the view was "loaded": camera open, frames into the refusal.
+   * The failed read now pushes the defaults' filters (none) and waits for the answer like any.
+   */
+  it("pushes no filters on a failed read, and never loads on a host with no scanner session", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+    scannerPrefs.mockRejectedValue("the prefs could not be read");
+    scannerSetFilters.mockRejectedValue(SCANNER_NOT_IN_A_BROWSER_YET);
+    const { result } = mount();
+    await advance(0);
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(SCANNER_PREFS_BEFORE_LOAD.filters);
+    expect(result.current.loaded).toBe(false);
+    expect(result.current.unavailable).toBe(SCANNER_NOT_IN_A_BROWSER_YET);
+    await advance(SCANNER_ELSEWHERE_POLL_MS * 5);
+    expect(scannerSetFilters).toHaveBeenCalledTimes(1);
+    expect(result.current.loaded).toBe(false);
+  });
+
+  /** …and on a host that has one, a failed read is still the defaults and still a scanner that starts. */
+  it("loads on a failed read once the session has taken the defaults' filters", async () => {
+    let accept!: () => void;
+    scannerPrefs.mockRejectedValue("the prefs could not be read");
+    scannerSetFilters.mockReturnValueOnce(new Promise<void>((resolve) => (accept = resolve)));
+    const { result } = mount();
+    await waitFor(() => expect(scannerSetFilters).toHaveBeenCalledTimes(1));
+    expect(scannerSetFilters).toHaveBeenLastCalledWith(SCANNER_PREFS_BEFORE_LOAD.filters);
+    expect(result.current.loaded).toBe(false);
+    await act(async () => accept());
+    expect(result.current.loaded).toBe(true);
+    expect(result.current.prefs).toEqual(SCANNER_PREFS_BEFORE_LOAD);
+    expect(result.current.unavailable).toBeNull();
+    expect(setScannerPrefs).not.toHaveBeenCalled();
+  });
+
+  /** Every host that has a session says nothing of the kind. */
+  it("reports no missing session on a host that takes the filters", async () => {
+    const { result } = mount();
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    expect(result.current.unavailable).toBeNull();
   });
 
   /** A view that has gone must not push again — an accepted push is the lease, taken. */

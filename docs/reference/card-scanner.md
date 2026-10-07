@@ -1984,6 +1984,14 @@ the state is the core's `State.scanner` — built empty, still lazy — and `src
 keeps the embedded assets, the raw request body and the commands. Everything below about the
 load order, the lease, the prefs and the tray still holds, in the core's file.
 
+**And since 2026-10-07 the commands' bodies are the core's too** (the light app's step 7.3):
+what each of the twelve does is a function in `crates/grimoire-core/src/scanner.rs` —
+`ScannerState::{status, frame, reset, set_filters, capture}`, `save_prefs`, `save_tray`,
+`commit_tray`, and `frame_from` / `capture_from` for the body — called from two places: the
+core's command table, for a light host (Android through `core_call`), and the desktop's
+`#[tauri::command]` wrappers, which now only fetch the state, the webview's label and the raw
+request. *The IPC seam* below has the table's wire.
+
 **Assets were files in `data/scanner/` and nothing downloaded them — until 2026-09-15.** A
 release build now carries all three inside the binary, and a file here *overrides* the embedded
 copy rather than being the only source; §10 has the load order, the workflow that publishes the
@@ -2015,7 +2023,15 @@ sentences ends with** *Restart the app after placing or replacing a file — ass
 launch*, which is the clause that makes the rest of them actionable: see the next paragraph for
 why there is no button instead.
 
-**Loading is lazy on the first command and never happens again.** `staleTime: Infinity` on the
+**Loading is lazy on the first command and never happens again** — on the desktop, and from the
+page's side everywhere. (The core has had a door since 2026-10-07: `ScannerState::forget()` drops
+the loaded session so the next command loads afresh, waiting behind a frame in flight and leaving
+the lease alone. The dropped session's filters stay owed until a session takes them: a reload
+that cannot build the mask — no labels, because `corpus.db` was being replaced at that moment —
+searches unfiltered, says so in `ScannerStatus.unapplied_filters`, and the next reload is offered
+them again; an accepted `scanner_set_filters` settles the debt too. It is also the way back from
+a poisoned session lock. It exists for assets a light install downloads after its first load;
+**no command calls it yet**, so everything in this paragraph is still what a reader sees.) `staleTime: Infinity` on the
 status query and no `Reload` button, because asking again in the same session cannot report a
 file that has since appeared — the load ran once and the answer is what it loaded. **A bundle
 or a model pair placed after the app started needs an app restart**, and that is the honest
@@ -2053,6 +2069,11 @@ the JPEG as `InvokeBody::Raw` with `FrameOptions` as JSON in an `x-scanner-optio
 `scanner_capture` takes the JPEG raw with the sidecar as JSON in an `x-scanner-capture` header.
 Each is read by one payload function per command, and a JSON body is refused there with a
 sentence. The base64 JSON leg existed for the Android build and went with it on 2026-09-27.
+**The reading itself is the core's since 2026-10-07**: `frame_payload` and `capture_payload` in
+`src-tauri` refuse the JSON body and hand the bytes and a header lookup to
+`grimoire_core::scanner::frame_from` and `capture_from`, which hold the three header names, the
+detail split and every sentence below — one reader, because a light host's frame goes through
+it too (*The IPC seam*).
 
 **A frame's body can carry a second JPEG behind the first** (issue #708, 2026-09-30). With an
 `x-scanner-detail` header, the header is the frame's byte length and everything after it is the
@@ -2092,6 +2113,9 @@ header, losslessly"* pins the exact string `scannerCapture` produced, sweeps it 
 `JSON.parse`. In Rust, `scanner::tests::an_escaped_card_name_comes_back_with_its_accent` asserts
 its input `is_ascii()` and reads `Æther Vial` back out of `capture_payload`, and
 `a_capture_header_that_is_not_visible_ascii_is_a_sentence` proves the refusal on raw bytes.
+(Those are `src-tauri`'s eight, over Tauri's `HeaderMap`; the core's `scanner::tests` hold the
+same cases over a table call's arguments, where the unreadable header is a value that is not a
+string.)
 
 **What no test does is carry one string across.** Each side writes its own `Æther Vial`
 literal, by hand, in a different file, and nothing compares the two — the ordinary shape of a
@@ -2142,6 +2166,16 @@ at once, and only then hear from the refetch that another window had taken the s
   They are not the session and they take the lease anyway, so a window whose writes have not landed
   keeps the scanner until they do. The three **reads** (`scanner_prefs`, `scanner_tray`,
   `scanner_status`) take nothing.
+
+**On a light host the holder is always "the page"** (2026-10-07). The lease is held by a label,
+and a call through the core's command table carries a name, its arguments and a body — no window.
+It needs none: Android's host has one window and the web host refuses a second tab before an
+engine starts, so every table entry admits the constant `scanner::PAGE`. There
+`scanner_elsewhere` answers `false`, always, and `scanner_hold` and every write are admitted,
+always; the lease is still taken and still settles, so the page's heartbeat and retries run the
+same code as on the desktop and mean nothing more than that. **The desktop still passes
+`webview.label()`**, from its own wrappers, and never dispatches a scanner command through the
+table — through it, every window would be admitted as one.
 
 ⚠️ **An admitted command holds the lease until it _settles_, not from the moment it was let in.**
 `admit` answers a `LeaseGuard` the command keeps alive across its whole body, the awaited
@@ -2198,6 +2232,37 @@ shipped window; the suite drives the hook against the workbench's fake window.
 `Core.call` widened to `call(command, args?: CallArgs, options?: CallOptions)`, where
 `CallArgs` is `Record<string, unknown> | Uint8Array` and `CallOptions` carries `headers`. The
 Tauri core passes both through to `invoke`.
+
+**A light host's wire: the headers ride as the arguments** (2026-10-07, the light app's step
+7.3). The same `ipc.scannerFrame(bytes, options, detail)` call reaches three transports, and
+only the desktop's has request headers:
+
+| Host | The body | The three headers |
+| --- | --- | --- |
+| Desktop (`tauriCore`) | the raw IPC body, `InvokeBody::Raw` | request headers, read off Tauri's `HeaderMap` |
+| Android (`tableCore`, `src/lib/core/table.ts`) | base64 text in `core_call`'s `body` — Tauri takes no raw body on Android — decoded by the host | `core_call`'s `args`: `{"x-scanner-options": "<json>", "x-scanner-detail": "<n>"}` |
+| Web (`protocol.ts`) | a transferred buffer | the call message's `args`, the same object |
+
+On the last two the call is answered by the core's command table, where `scanner_frame` and
+`scanner_capture` are the two entries of kind `bytes`: the arm hands the body and the arguments
+object (`commands::Carried`) to the entry, and the entry reads them with
+`scanner::frame_from` / `capture_from` — **the reader the desktop's `frame_payload` calls**, over
+a `Header` lookup each host fills from what it has. So the detail split, the shrug at an
+unreadable options header and the refusal of an unreadable sidecar are one piece of code and the
+same sentences on every host. `asciiJson` still escapes both header JSONs for all three: only
+the desktop's transport needs it, and one spelling is one thing to test.
+
+**In a browser the session's commands are refused**, in one sentence —
+`scanner::NOT_IN_A_BROWSER_YET`, *"The scanner does not run in a browser yet."* — because the
+crate's threads and `Instant` trap in a Worker: the status, a frame, a reset, a filter push and a
+capture. The prefs, the tray, its commit and the lease answer. The view matches on that sentence
+(`verdictText.ts`'s `SCANNER_NOT_IN_A_BROWSER_YET`, pinned by `ipc.test.ts`) so that a refused
+filter push there is not counted as an answer: `useScannerPrefs` reports `unavailable`, `loaded`
+never goes true, **no camera is asked for and no frame is sent**, and the sentence is drawn in
+the video box. Before 2026-10-07 the same view on a light host heard *"There is no command named
+scanner_set_filters on this host."*, counted it as a refused filter, opened the camera and sent
+every frame to be refused in turn. The light app's web step removes the refusal and the match
+together.
 
 `ipc.ts`'s scanner types keep the **Rust field names, snake case**, because the header JSON is
 deserialised straight into `FrameOptions` and the verdict is what the debug page already reads.
