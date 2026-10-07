@@ -30,7 +30,12 @@ has paired a browser with a desktop in production and synced between them** (202
 sentence, not a measurement). What has still not been seen: sync on a phone — the camera's
 grant, a real lens on a real code, a socket across the app going to the background; in
 Safari; and in Firefox. §10 closes with what is open and whose it is. **The scanner on a light
-install is phase 7, begun on 2026-10-07 and recorded a step at a time in §11.**
+install is phase 7, built on 2026-10-07 and recorded a step at a time in §11**: the Android app
+answers the scanner's commands from the core, a browser answers them from a Worker of the
+scanner's own, both fetch its three files on a press that has shown their size, and both faces
+draw one Scanner over the same tray. It has been driven in headless Chrome on one desktop —
+the built web app recognises a real card shown to a fake camera and files it — **and on no
+phone**; §11.7 has what is open and whose it is.
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
@@ -8140,6 +8145,60 @@ on Android through a real `core_call` nor the quiet page in a built web app was 
 - **`setInterval` is not bound to a world in the fake**, and the heartbeat uses one: harmless
   with one story on a page, said in `scope.ts`.
 - The smoke runs nowhere but by hand.
+
+### 11.7 The phase, and what is open after it (2026-10-07)
+
+**Phase 7 is complete**: six steps in five pull requests — #853 (7.1 and 7.2), #852 (7.3), #859
+(7.4), #858 (7.6) and #861 (7.5) — with the plan and this section's skeleton in #848. Each step
+was built by one implementer in a worktree of its own and read by a fresh reviewer before its
+pull request opened; every review answered *ship after fixes*, none with a must-fix, and the
+fixes went back to the implementer that had the context.
+
+**What a light install has now.** The Android app answers the scanner's fourteen commands from
+the core's table, with the crate's threads as the desktop has them. A browser answers them on
+the page, from a Worker of the scanner's own, on a module built with `simd128`, with its labels
+handed over by the engine. Both fetch the three files on a press that has shown their size —
+Android from the published release, a browser from the app's own origin — and both faces draw
+one Scanner: the desktop's page at 1024px and wider, the phone's below it, over the same hooks,
+the same tray and the same commit.
+
+**What was driven, and on what** — every run on one Windows desktop, in headless Chrome 154:
+
+| | |
+| --- | --- |
+| The crate as WASM beside native (`npm run scanner:bench`) | the published bundle and models, 120 frames of eight real printings: the hosts agree on every decision and every read |
+| The web app (`npm run web:scanner-smoke`) | a fake camera showing a real card: the offer, the fetch, the card recognised, filed and drawn in the Collection, on both faces; a fault, an idle end, and a second scan with the server refusing |
+| The phone's page (`npm run mobile:scanner-smoke`) | over the fake at 360, 412 and 800 wide under a touch pointer: scanning, the tray's edits, the folder, the commit, the offer |
+| The fetch in the core | the three published files, once, for real: landed, checked against their digests and loaded with no restart |
+
+**Nothing was deployed.** The web app ships at the next release tag, by `release.yml`'s
+`web-deploy`, with the scanner's module and its three files beside it; the Android bundle
+carries the commands and fetches its files on first use.
+
+**Still open, and whose it is:**
+
+- **Markus, with a phone.** No phone has run any of it. The bench's two runs — the native
+  binary from `adb shell` and the page over `adb reverse` (§11.2 has the commands) — are what
+  the spec opened the phase with, and what would say whether a phone's browser can carry Exact
+  and the readers. Then the things only a device shows: the camera's grant in the Android
+  WebView and in a phone's browser, a real card under a real lens, a portrait stream in the
+  phone page's capped box, the frame rate a phone's encode gives the pump, base64 through
+  `core_call` at 960px and for a detail pair, and whether a backgrounded Android app reports a
+  hidden page — which the rule that closes the camera rests on.
+- **Markus, at the next release.** The first deploy that carries the scanner: the module and the
+  three files at the app's origin, and one look at the Scanner in production. The four defaults
+  the phase took without his answer (§11's opening) are his to reverse.
+- **Not seen by anyone**: Safari and Firefox; a browser without SIMD (the refusal was provoked in
+  node's V8); a real panic in the scanner's module in a browser, and a Worker that really hangs
+  — the deadline that ends one is driven by a fake clock; a card sync landing under an open
+  Scanner; a metered or stalled link against the real release; the offer over the real engine
+  in a running desktop or Android window.
+- **Left as it is, on purpose**: no refresh — an install that fetched once keeps that bundle
+  until the format version moves, as a desktop keeps its release's, and a browser is offered a
+  newer one only when a deploy carries it; no threads in the browser, which would need the page
+  cross-origin isolated; no overall deadline and no cancel on the fetch; *Stop* keeps the
+  camera lit, as on the desktop; the scanner's cache appears in no storage figure and only
+  clearing site data removes it.
 
 ## 12. Google Play — the host offers no membership (2026-10-07)
 
