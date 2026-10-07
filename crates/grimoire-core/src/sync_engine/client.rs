@@ -2218,9 +2218,14 @@ fn clock_sentence(conn: &Connection, device: &str, ahead_ms: i64) -> String {
 /// chunk an earlier page would already have moved the watermark. [`Pulled::whole`] says which
 /// way a pull went.
 ///
-/// **What stays as it was**: a device that is *live* while such a build pushes its chunks, and
-/// pulls between two of them, loses the rows it always lost (`docs/reference/sync.md`, "a
-/// baseline pulled in two halves"). That is not this pull's and is not changed by it.
+/// **What this never reached**: a device that is *live* while such a build pushes its chunks,
+/// and pulls between two of them (`docs/reference/sync.md`, "a baseline pulled in two halves").
+/// That was `apply`'s to close, and since 2026-10-07 it has, for a fresh install that has
+/// heard from no other device, and a row it never held: such a claim is not judged by its
+/// sender's watermark (`apply`'s `never_held`). **That rule leans on this one**: it leaves
+/// every other claim to the watermark, and it sees a delete that followed a claim only where
+/// the two are in one answer — which, for a baseline that names no emission, is what this
+/// evaluation guarantees.
 ///
 /// # What a pull holds
 ///
