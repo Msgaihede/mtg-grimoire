@@ -67,7 +67,7 @@ is the recommended default, written down as his to reverse.
 | The phone Scanner page | **One design, built straight**: the desktop reader's parts in the phone's idioms — the camera sized by its aspect ratio, the options in a sheet, the tray under the strip, the folder as a sheet of choices |
 | The lease on a table call | **One fixed label.** A light host has one page — Android one window, the web host one tab holding the database's lock — so a table call admits the page's label, `scanner_elsewhere` answers *false*, and the desktop goes on passing its window's |
 | Where the crate's seam lives | **In the crate**, one module, `host.rs`: it cannot use the core's `platform` (the core depends on it). An installed clock wins, then `Instant` where there is one, then zero; the core installs one built on `platform::clock` |
-| Where the browser's session runs | **Not decided before the figures.** In the engine's Worker it is one code path with Android, and a frame makes every engine command wait and a panic takes the database with it; in a Worker of its own neither is true, and the labels have to cross. Step 7.2 measures both costs |
+| Where the browser's session runs | **Not decided before the figures — and decided by them (step 7.2): a Worker of its own, on a module of its own, built with `simd128`.** In the engine's Worker it would have been one code path with Android, and a frame makes every engine command wait, a panic takes the database with it and 150–233 MB of module memory is never given back; in a Worker of its own none of that is true, and the labels have to cross |
 | Who deploys | **Nobody by hand.** `release.yml`'s `web-deploy` puts the web app on its origin at a tag; this phase needs no deploy before one |
 
 ## Global constraints
@@ -105,10 +105,11 @@ is the recommended default, written down as his to reverse.
   size and its progress, landing in `<data>/scanner/` on a host that keeps files; the session
   loading again when they arrive; the Scanner destination offering it, on both faces, drawn from
   what the host answers. (§11.4.)
-- [ ] **7.5 — the web host.** The session in a Worker — whose, by 7.2 — fed a transferred
-  buffer, its assets from the app's own origin and held without a file, its labels without a
-  second connection; the refusal 7.3 left deleted; the hosting policy and the service worker
-  taught the three files; driven in a real browser with a fake camera. (§11.5.)
+- [ ] **7.5 — the web host.** The session in a Worker of its own (7.2), on a module of the crate
+  built with `simd128`, fed a transferred buffer; its assets from the app's own origin and held
+  without a file; its labels handed over by the engine, which holds the corpus; the refusal 7.3
+  left deleted; the hosting policy and the service worker taught the module and the three
+  files; driven in a real browser with a fake camera. (§11.5.)
 - [ ] **7.6 — the phone's Scanner page.** Fast and Exact, the review tray, commit to a folder:
   the shared hooks under a phone page, the logic the desktop page kept to itself extracted and
   shared, a fake that steps through decisions, and a smoke that scans, edits and commits at 360px

@@ -46,6 +46,17 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   paged pull it measures now). Nothing runs it —
   half a minute at a thousand ops, five at fifty thousand.
   **`verify` runs none of them** — CI's `web` job runs the two smokes. See [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-web/CLAUDE.md).
+- `npm run scanner:bench` — what a frame costs the card scanner as WASM in a Worker: builds
+  `crates/card-scanner/bench` (needs the `wasm-bindgen` CLI at that package's lockfile's version;
+  no clang), serves its page and runs it in headless Chromium, printing a JSON summary.
+  `-- --native` runs the same frames through the native runner too, `-- --sizes` reports the
+  module with and without the readers, `-- --simd` builds and runs it with WASM SIMD,
+  `-- --dir <inputs>` takes a directory `bench-prep` made (the default is invented inputs: no
+  real bundle, no models, so no readers), and `-- --serve --port 8787` leaves the page up for a
+  phone over `adb reverse`. A measurement, not a check — though it exits 1 when a mode saw no
+  card at all, or when `--native`'s hosts disagree about a decision or a read: no lock, no
+  network, and **`verify` and CI do not run it** — CI runs the package's own unit tests and
+  compiles it for WASM and Android. [card-scanner.md](../reference/card-scanner.md) §11.
 - `npm run web:deploy-guard` — may the web app be deployed from this tree, between releases?
   Compares `USER_SCHEMA_VERSION` here with the last release tag's (`git show`), in one sentence:
   exit 0 equal, 1 different, 2 could not tell. It also asks `gh` whether that release is

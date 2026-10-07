@@ -33,6 +33,7 @@ use crate::detect::{
 };
 use crate::filters::ScanFilters;
 use crate::hash::{hash, HashKind};
+use crate::host::{self, Stopwatch};
 use crate::index::{format_uuid, parse_uuid, Mask};
 use crate::lock::{LockState, QuadLock};
 use crate::reference::{Label, MatchReport, Reference};
@@ -127,6 +128,7 @@ pub const EXACT_AT_REST: usize = 3;
 pub enum ResolveOn {
     /// On a thread of its own. The frame that starts it returns at once, and the first frame
     /// after it finishes carries the resolution. What the app and the debug server run.
+    /// **On a host with no thread to give this is [`ResolveOn::Inline`]** ([`host::background`]).
     #[default]
     Background,
     /// Inside the frame that starts it, which then carries the resolution itself.
@@ -140,7 +142,7 @@ pub enum ResolveOn {
 
 /// What a resolve thread hands back: the resolution, and the title and collector views its
 /// reads produced. `Err` is a panic inside it, caught on that thread.
-type ResolveResult = std::thread::Result<(ResolutionView, Option<OcrView>, Option<CollectorView>)>;
+type ResolveResult = host::Caught<(ResolutionView, Option<OcrView>, Option<CollectorView>)>;
 
 /// The two ways a session decides.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize, serde::Deserialize)]
@@ -437,18 +439,7 @@ fn each_method(
     methods: &[EdgeMethod],
     attempt: impl Fn(EdgeMethod) -> Attempt + Sync,
 ) -> Vec<(EdgeMethod, Attempt)> {
-    if let [only] = methods {
-        return vec![(*only, attempt(*only))];
-    }
-    let attempt = &attempt;
-    std::thread::scope(|s| {
-        let handles: Vec<_> =
-            methods.iter().map(|&m| (m, s.spawn(move || attempt(m)))).collect();
-        handles
-            .into_iter()
-            .map(|(m, h)| (m, h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))))
-            .collect()
-    })
+    host::fan_out(methods, |&method| (method, attempt(method)))
 }
 
 /// What one frame came to. The keys are the debug page's — see the module doc.
@@ -1425,9 +1416,11 @@ impl Session {
     /// a worker thread come back as an ordinary "no card". The guard stays — the next
     /// assertion in those crates will not announce itself either — and this seam is how the
     /// test drives a body that really does panic.
+    ///
+    /// **It guards nothing on a host where a panic aborts** — see [`host::guard`].
     fn guarded(&mut self, body: impl FnOnce(&mut Session) -> Verdict) -> Verdict {
         let matcher = self.reference.is_some();
-        match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(self))) {
+        match host::guard(|| body(self)) {
             Ok(v) => v,
             Err(_) => Verdict::failed(
                 "the detector panicked on this frame — see the log for the assertion".into(),
@@ -1445,7 +1438,7 @@ impl Session {
         // that fails to decode reports the mode it was judged in.
         self.set_mode(opts.mode);
         let matcher = self.reference.is_some();
-        let decode_started = std::time::Instant::now();
+        let decode_started = Stopwatch::start();
         let source = match image::load_from_memory(jpeg) {
             Ok(i) => i,
             Err(e) => {
@@ -1459,7 +1452,7 @@ impl Session {
                 )
             }
         };
-        let decode_ms = decode_started.elapsed().as_secs_f32() * 1000.0;
+        let decode_ms = decode_started.ms();
         let frame = FrameSize { w: source.width(), h: source.height() };
 
         // The caller's rule and bar, applied before anything reads the verdict: the tally is
@@ -1582,7 +1575,7 @@ impl Session {
         // Only once locked: while acquiring, the quad has not proved it is anything yet, and
         // rectifying from it would be believing it early. A held quad that admits no
         // homography falls back to the frame's own, as it did when both were always built.
-        let rectify_started = std::time::Instant::now();
+        let rectify_started = Stopwatch::start();
         let views = best.as_ref().and_then(|(method, d, _)| {
             let o = opts.detect_options(*method, settled);
             let relocked = match &held_quad {
@@ -1594,7 +1587,7 @@ impl Session {
                 None => rectify_views(&rgb, &d.quad, &o).map(|views| (views, false)),
             }
         });
-        let rectify_ms = rectify_started.elapsed().as_secs_f32() * 1000.0;
+        let rectify_ms = rectify_started.ms();
 
         // A winner whose own quad admits no homography is `DetectError::Degenerate`, as it was
         // when each method rectified inside `detect`. Its card-likeness was scored by warping
@@ -1981,10 +1974,10 @@ impl Session {
         // Caught here, on the thread that panics, because nothing else would see it: a panic on
         // a spawned thread unwinds only that thread, and `Session::guarded` is not on it.
         let job = move || {
-            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let result = host::guard(|| {
                 let views: Vec<BurstView<'_>> = burst.iter().map(StoredView::view).collect();
                 run_resolve(&r, &mask, &views, reader.as_deref(), gate)
-            }));
+            });
             // Refused when the result was dropped while this ran, which is the point of
             // dropping it.
             let _ = tx.send(result);
@@ -1995,9 +1988,8 @@ impl Session {
             ResolveOn::Inline => job(),
             // A thread the OS will not give us drops `job`, and `tx` with it, so the next poll
             // finds the channel closed and reports a failed resolve rather than waiting for ever.
-            ResolveOn::Background => {
-                let _ = std::thread::Builder::new().name("exact-resolve".into()).spawn(job);
-            }
+            // A host with no threads at all runs it here instead, before this returns.
+            ResolveOn::Background => host::background("exact-resolve", job),
         }
     }
 
@@ -2244,16 +2236,17 @@ fn fast_reads(
     rotated: bool,
     rescue: bool,
 ) -> FastReads {
-    let (title, col) = std::thread::scope(|s| {
-        let col = s.spawn(|| reader.read_collector_first(src, rotated));
-        let title = if rescue {
-            reader.read_title(src)
-        } else {
-            let edits = |text: &str| r.lookup_cards_masked(text, mask).map(|h| h.edits);
-            reader.read_title_first(src, rotated, &edits)
-        };
-        (title, col.join().unwrap_or_else(|e| std::panic::resume_unwind(e)))
-    });
+    let (title, col) = host::join(
+        || {
+            if rescue {
+                reader.read_title(src)
+            } else {
+                let edits = |text: &str| r.lookup_cards_masked(text, mask).map(|h| h.edits);
+                reader.read_title_first(src, rotated, &edits)
+            }
+        },
+        || reader.read_collector_first(src, rotated),
+    );
     let (ocr, observation, hits) = title_view(&title, r, mask);
     let title_cards = hits
         .filter(|h| h.prefix || crate::resolve::title_binds(&title.normalized, h.edits))

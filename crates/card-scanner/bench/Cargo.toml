@@ -1,0 +1,80 @@
+[package]
+name = "scanner-bench"
+version = "0.0.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
+description = "What one frame costs the card scanner on a host — natively, and as WASM in a Worker."
+publish = false
+
+# **A measuring tool, never part of anything that ships** (the light app's phase 7, step 7.1).
+# It answers one question on whatever host it is built for: what does a frame cost here? Two
+# faces over one library, so the two answers come out of the same code:
+#
+# * `--lib --target wasm32-unknown-unknown --profile wasm` is the crate as a module a browser's
+#   Worker loads — `load`, `frame`, `reset` — and `web/` is the page that drives it.
+#   `npm run scanner:bench` builds it, serves it and runs it in headless Chrome.
+# * `--release --bin scanner-bench-native` is the same frames through the same session on this
+#   machine, threads and all. It reads files by path and prints to stdout, with no network and
+#   no argument parser, so it is also what an `aarch64-linux-android` build runs from
+#   `adb shell`.
+#
+# **Its own package, beside the crate and not inside it**, for the dependency list: the crate's
+# `cli` and `builder` features bring `clap`, `tiny_http`, `ureq`, `rayon` and a bundled SQLite,
+# and none of them belongs in a module a phone downloads or in a binary cross-compiled for one.
+# This takes `card-scanner` with `ocr` and nothing else — **never `corpus`**: labels arrive as
+# JSON (`labels.json`, which `bench-prep` writes out of `corpus.db`), so there is no SQLite here.
+
+# Empty on purpose, for the reason the crate's own is: its own workspace root, so cargo stops
+# looking for one in the directories above — a worktree's parent checkout among them.
+[workspace]
+
+[lib]
+name = "scanner_bench"
+path = "src/lib.rs"
+# `cdylib` is the `.wasm` `wasm-bindgen` reads; `rlib` is what the native runner links.
+#
+# **Declared, as the web host declares its own, and not asked for on the command line.**
+# `cargo rustc --crate-type cdylib` over a plain library was tried, to spare a native build the
+# DLL nobody loads: the same sources came out 15% larger (some 650 kB, after `wasm-bindgen`,
+# 2026-10-07) — cargo plans the dependencies' LTO from the manifest, and a module that much
+# larger is a figure about another build than the one the app ships.
+crate-type = ["cdylib", "rlib"]
+
+# **Not `scanner-bench`**, the library's name with a hyphen: on Windows the two would write one
+# `scanner_bench.pdb`, which cargo warns about today and says it may refuse tomorrow.
+[[bin]]
+name = "scanner-bench-native"
+path = "src/bin/native.rs"
+
+[features]
+default = ["ocr"]
+# The two readers. Off, the module is the detector, the hash and the search alone — which is
+# how the bench says what OCR costs a download (`npm run scanner:bench -- --sizes`).
+ocr = ["card-scanner/ocr"]
+
+[dependencies]
+card-scanner = { path = ".." }
+# For one visitor: `labels.json` is read a row at a time (`attach_labels`).
+serde = "1"
+serde_json = "1"
+
+[dev-dependencies]
+# For the tests' one blank frame. The crate's own line, less the two codecs a test never needs.
+image = { version = "0.25", default-features = false, features = ["jpeg"] }
+
+[target.'cfg(target_family = "wasm")'.dependencies]
+# ⚠️ **Pinned to the repository's own `wasm-bindgen`, exactly** — the root `Cargo.lock`'s, which
+# is the version of the CLI every machine that builds the web host already has. The CLI rewrites
+# what the crate emitted and the pair must be the same release (`scripts/build-wasm.mjs` has the
+# reasons); `scripts/scanner-bench.mjs` refuses to build when this file's lock and the CLI
+# disagree. Moving the root's version means moving this line with it.
+wasm-bindgen = "=0.2.127"
+
+# The web host's own profile, copied: one unit for the whole graph, and a panic is a trap. A
+# figure taken with another profile would be a figure about another module. `opt-level` stays at
+# `release`'s 3, as it does there.
+[profile.wasm]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+panic = "abort"

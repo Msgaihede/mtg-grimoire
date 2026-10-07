@@ -39,6 +39,7 @@
     "test:coverage:rust": "node scripts/coverage-rust.mjs",
     "golden": "node scripts/golden.mjs",
     "scanner:assets": "node scripts/scanner-assets.mjs",
+    "scanner:bench": "node scripts/scanner-bench.mjs",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
     "verify": "npm run build && vite build --config vite.mobile.config.ts && npm run lint && npm run lint:rust && npm run test:run && cargo test --workspace && cargo test --manifest-path crates/card-scanner/Cargo.toml --target-dir crates/card-scanner/target --features cli"

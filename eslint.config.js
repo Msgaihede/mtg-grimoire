@@ -61,6 +61,9 @@ export default tseslint.config(
       // person wrote. The smoke removes what it made; a `wrangler dev` stopped any other way
       // does not.
       "**/.wrangler/",
+      // The card scanner's frame bench (`npm run scanner:bench`): wasm-bindgen's glue for the
+      // two modules it builds, machine-written like `dist-wasm/`'s.
+      "crates/card-scanner/bench/web/pkg/",
     ],
   },
   js.configs.recommended,
@@ -95,6 +98,29 @@ export default tseslint.config(
         // Asked and answered: `web-deploy-probe.mjs` gives each `fetch` a deadline, and
         // `AbortSignal.timeout` is the only way to hand `fetch` one.
         AbortSignal: "readonly",
+      },
+    },
+  },
+  // The frame bench's page, its Worker and their shared summariser: three plain scripts a
+  // browser loads as they are, with no bundler and no `tsc` over them — so `no-undef` is live
+  // and the browser's names are listed, by hand, as Node's are above. `summary.js` is imported
+  // by `scripts/scanner-bench.mjs` too and uses none of them.
+  {
+    files: ["crates/card-scanner/bench/web/*.js"],
+    languageOptions: {
+      globals: {
+        console: "readonly",
+        document: "readonly",
+        fetch: "readonly",
+        location: "readonly",
+        navigator: "readonly",
+        performance: "readonly",
+        self: "readonly",
+        window: "readonly",
+        URL: "readonly",
+        URLSearchParams: "readonly",
+        WebAssembly: "readonly",
+        Worker: "readonly",
       },
     },
   },
