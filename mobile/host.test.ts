@@ -3,7 +3,7 @@ import manifest from "./src-tauri/gen/android/app/src/main/AndroidManifest.xml?r
 import filePaths from "./src-tauri/gen/android/app/src/main/res/xml/file_paths.xml?raw";
 import appGradle from "./src-tauri/gen/android/app/build.gradle.kts?raw";
 import androidIgnore from "./src-tauri/gen/android/.gitignore?raw";
-import signScript from "../scripts/android-sign.sh?raw";
+import signScript from "../scripts/android-release/sign-bundle.sh?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
 import mainActivity from "./src-tauri/gen/android/app/src/main/java/com/mtggrimoire/app/MainActivity.kt?raw";
 import themes from "./src-tauri/gen/android/app/src/main/res/values/themes.xml?raw";
@@ -20,12 +20,16 @@ import packageJson from "../package.json?raw";
 import lightConf from "./src-tauri/tauri.conf.json?raw";
 import lightCargo from "./src-tauri/Cargo.toml?raw";
 import lightLib from "./src-tauri/src/lib.rs?raw";
+import lightMembership from "./src-tauri/src/membership.rs?raw";
+import coreCommands from "../crates/grimoire-core/src/commands.rs?raw";
+import coreSyncClient from "../crates/grimoire-core/src/sync_engine/client.rs?raw";
 import desktopConf from "../src-tauri/tauri.conf.json?raw";
 import adaptiveIcon from "./src-tauri/gen/android/app/src/main/res/mipmap-anydpi-v26/ic_launcher.xml?raw";
 import privacyPage from "./public/privacy.html?raw";
 import privacySheet from "./public/privacy.css?raw";
 import hostHeaders from "../app-worker/_headers?raw";
 import { HOST_MARK } from "@/lib/core";
+import { MEMBERSHIP_ELSEWHERE } from "@/lib/core/hostMembership";
 
 /** The launcher's pictures as data URLs — small files, and a PNG's size is in its first bytes. */
 const launcherPngs = import.meta.glob(
@@ -86,10 +90,10 @@ describe("the Android project's hand edits", () => {
   });
 
   it("signs a release build with the debug key, and knows no other", () => {
-    // The release key is `release.yml`'s `android-sign` job's, which re-signs what this project
-    // built (`scripts/android-sign.sh`) and runs no build. A signing config here would put the
-    // keystore and its passwords on disk beside every npm script, cargo build script and Gradle
-    // plugin a build runs.
+    // The upload key is `release.yml`'s `android-sign` job's, which re-signs the bundle this
+    // project built (`scripts/android-release/sign-bundle.sh`) and runs no build. A signing
+    // config here would put the keystore and its passwords on disk beside every npm script,
+    // cargo build script and Gradle plugin a build runs.
     const release = appGradle.slice(appGradle.indexOf('getByName("release")'));
     expect(release).toMatch(/signingConfig = signingConfigs\.getByName\("debug"\)/);
     const code = appGradle
@@ -107,12 +111,12 @@ describe("the Android project's hand edits", () => {
   });
 
   it("names the release's signer in one line of hex, once the owner has made the key", () => {
-    // `src-tauri/release-signer.sha256` is the SHA-256 of the certificate every release's APK is
-    // signed with — public, and in every such APK. `release.yml` attaches no APK until it is
-    // committed, and `scripts/android-sign.sh` refuses a keystore that is not the one it names:
-    // a key made a second time signs happily and installs over nothing. **Absent until the key
-    // exists**, so this holds its shape for the day it appears — the script reads it with the
-    // same rule, and a file it cannot read is a release with no APK.
+    // `src-tauri/release-signer.sha256` is the SHA-256 of the upload certificate every release's
+    // bundle is signed with — public, and what Play Console shows as the upload key. `release.yml`
+    // signs no bundle until it is committed, and `scripts/android-release/sign-bundle.sh` refuses
+    // a keystore that is not the one it names. **Absent until the key exists**, so this holds
+    // its shape for the day it appears — the script reads it with the same rule, and a file it
+    // cannot read is a release with no bundle to upload.
     const pins = Object.entries(
       import.meta.glob("./src-tauri/release-signer.sha256", {
         query: "?raw",
@@ -455,12 +459,146 @@ describe("the privacy policy's page", () => {
     const hosts = [...new Set([...policy.matchAll(/(?:https|wss):\/\/([a-z0-9.-]+)/g)].map((m) => m[1]))];
     expect(hosts.length).toBeGreaterThanOrEqual(6);
     for (const host of hosts) expect(privacyPage, host).toContain(`<td>${host}</td>`);
-    // And the one the Android host asks that a browser may not.
+    // And the two the Android host asks that a browser may not: Mana Pool's price list, and
+    // GitHub for the scanner's files (`scanner_assets::RELEASES`, a reader's press — step 7.4).
     expect(privacyPage).toContain("<td>manapool.com</td>");
+    expect(privacyPage).toContain("<td>github.com</td>");
   });
 
   it("offers nothing to pay for", () => {
     // It says what a membership stores; it never says how to get one.
     expect(privacyPage).not.toMatch(/patreon\.com|\$\s?\d|€\s?\d|per month|subscribe|join now|become a|funded|paid for/i);
+  });
+});
+
+/**
+ * **The build Google Play distributes offers no membership** (2026-10-07). Play forbids an app
+ * to lead a reader to a payment made elsewhere, so this host answers one name with a sentence
+ * of its own, refuses the two commands that connect a membership, and rewords the core's
+ * sentences that tell a reader to. Each of the three is a thing a careless edit can drop, and
+ * a dropped one is a policy strike found by a reviewer and not by a test.
+ */
+describe("the light host offers no membership", () => {
+  const literal = (name: string) =>
+    new RegExp(`pub const ${name}: &str =\\s*"([^"\\\\]+)";`).exec(lightMembership)?.[1];
+
+  /** `forward`'s body: `core_call`'s tail, and this host's one call into the core's table. */
+  const forwardBody = () => {
+    const from = lightLib.indexOf("async fn forward(");
+    expect(from).toBeGreaterThan(-1);
+    const rest = lightLib.slice(from);
+    return rest.slice(0, rest.indexOf("\n}\n"));
+  };
+
+  it("answers the name the page asks by", () => {
+    expect(literal("ELSEWHERE")).toBe(MEMBERSHIP_ELSEWHERE);
+    // One line, which is how the Storybook fake reads it.
+    expect(literal("SENTENCE")).toMatch(/paired/);
+  });
+
+  it("is asked before the core's table, and rewords what the table refuses", () => {
+    const call = lightLib.slice(lightLib.indexOf("async fn core_call("));
+    const body = call.slice(0, call.indexOf("\n}\n"));
+    expect(body).toContain("if membership::answers(&name) {");
+    expect(body).toContain("return membership::answer(&name);");
+    const asked = body.indexOf("membership::answers");
+    // Before the state lookup and the downloads table as well as the call into the core's
+    // table (`forward`): until the database has opened, a name asked after `try_state` is
+    // answered "the app is still starting.", and the Sync panel would draw nothing where the
+    // host's sentence belongs.
+    for (const later of ["try_state", "downloads::answers", "forward(&state"]) {
+      expect(body.indexOf(later), later).toBeGreaterThan(-1);
+      expect(asked, later).toBeLessThan(body.indexOf(later));
+    }
+    // The command reaches the table through `forward` and never round it.
+    expect(body).not.toContain("grimoire_core::dispatch");
+    // One call into the core's table in the whole host, and it is the reworded one: a second
+    // site that skipped `reword` would pass the pattern below as long as any one site had it.
+    // `reword` is told the command's name, because its last fence applies to sync commands
+    // only.
+    expect(lightLib.match(/grimoire_core::dispatch\(/g)).toHaveLength(1);
+    expect(forwardBody()).toMatch(
+      /grimoire_core::dispatch\([\s\S]*?\)\s*\.await\s*\.map_err\(\|(\w+)\| membership::reword\(name, \1\)\)/,
+    );
+  });
+
+  it("rewords the error log's rows as well, because the core writes the sentences there", () => {
+    // The core records the key check's 401 sentence under `Source::Relay` as it happens — at
+    // pairing, on the sync after it and on every launch of a group nobody turned sync on for —
+    // and Settings → Errors reads those rows through `error_log_list`, whose `Ok` answer is not
+    // an error and never meets `reword`.
+    expect(literal("ERROR_LOG")).toBe("error_log_list");
+    expect(coreCommands).toMatch(/\bread error_log_list in /);
+    expect(forwardBody()).toContain("membership::reword_rows");
+    expect(forwardBody()).toContain("name == membership::ERROR_LOG");
+  });
+
+  it("refuses both halves of connecting", () => {
+    expect(lightMembership).toContain('const BEGIN: &str = "sync_patreon_begin";');
+    expect(lightMembership).toContain('const CLAIM: &str = "sync_patreon_claim";');
+    expect(lightMembership).toMatch(/name == ELSEWHERE \|\| name == BEGIN \|\| name == CLAIM/);
+    // `answer` hands every name that is not ELSEWHERE the refusal, never an `Ok`.
+    expect(lightMembership).toContain("Err(NOT_OFFERED.to_owned())");
+  });
+
+  it("knows every command of the core's table that is about a membership", () => {
+    // Every name the table registers, whatever its kind of lane: `read`, `write`, `owned`,
+    // `blocking`, `task` and `bytes` are the six keywords `commands.rs` registers with
+    // (the `for … in` lines are loops, not registrations).
+    const registered = [
+      ...coreCommands.matchAll(/^\s*(?:read|write|owned|blocking|task|bytes) (\w+) in /gm),
+    ].map((m) => m[1]);
+    // A pattern that matched nothing would pass the next check as vacuously as it likes.
+    expect(registered.length).toBeGreaterThan(100);
+    // These three, and only these. A fourth is a command this host must decide about — refuse
+    // it, as the first two are, or answer it — before it ships: a name renamed there would leave
+    // this host refusing a name nobody sends, and the page's presses reaching the table.
+    expect(registered.filter((name) => /patreon|supporter|membership|claim/.test(name)).sort()).toEqual([
+      "sync_patreon_begin",
+      "sync_patreon_claim",
+      "sync_supporter_status",
+    ]);
+  });
+
+  it("rewords the sentences the core still writes for a lapse and for a key it does not know", () => {
+    // The host matches the core's words by value. Were the core's reworded, the host would
+    // stop matching and a phone would read the membership sentence again.
+    const tail = literal("LAPSED_TAIL");
+    expect(tail).toBe("; the membership has ended");
+    expect(coreSyncClient).toContain(`the relay answered 401 to {what}${tail}`);
+    // The key check's 401 has no const in the core: the host matches its opening words, and
+    // the sentence that follows them there still tells a reader to reconnect Patreon.
+    const head = literal("KEY_CHECK_HEAD");
+    expect(head).toBe("the relay did not recognise this device's group key.");
+    expect(coreSyncClient).toContain(`"${head} If your devices synced \\`);
+    expect(lightMembership).toContain("said.find(KEY_CHECK_HEAD)");
+  });
+
+  it("says nothing a reader could pay for, in any sentence of its own", () => {
+    const declared = lightMembership.match(/^(?:pub )?const [A-Z_]+: &str\b/gm) ?? [];
+    const matched = [...lightMembership.matchAll(/^(?:pub )?const [A-Z_]+: &str =\s*"([^"\\]+)";/gm)];
+    // A constant whose literal holds a backslash or an escaped quote is not matched by the
+    // pattern above and would be skipped without a word: every declaration must be read.
+    expect(matched).toHaveLength(declared.length);
+    const own = matched
+      .map((m) => m[1])
+      // Five literals are not sentences a reader is shown: the command this host answers, the
+      // two it refuses, the command whose rows it rewords, and the core's lapse tail, which holds
+      // the very word this test forbids because it is what the host looks for. KEY_CHECK_HEAD is
+      // also the core's words but holds none of them, so it stays in the scanned set.
+      .filter(
+        (text) =>
+          text !== MEMBERSHIP_ELSEWHERE &&
+          !text.startsWith("sync_patreon_") &&
+          text !== "error_log_list" &&
+          text !== "; the membership has ended",
+      );
+    // Twelve declared, five filtered out, seven left: SENTENCE, NOT_OFFERED, LAPSED_HERE,
+    // NO_SYNC_YET, KEY_CHECK_HEAD, KEY_CHECK_HERE and UNSAID.
+    expect(declared).toHaveLength(12);
+    expect(own).toHaveLength(7);
+    for (const text of own) {
+      expect(text, text).not.toMatch(/patreon|membership|supporter|supporting|payment|pledge|subscri|price/i);
+    }
   });
 });

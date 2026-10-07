@@ -191,10 +191,15 @@ fn replace(conn: &Connection, snapshot: &Snapshot) -> Result<(), String> {
          DELETE FROM main.sync_ops;
          DELETE FROM main.sync_peers;
          DELETE FROM main.sync_gone;
+         DELETE FROM main.sync_orphans;
          DELETE FROM main.sync_state;
          INSERT INTO main.sync_state (key,value) VALUES ('applying','1');",
     )
     .map_err(|e| e.to_string())?;
+    // `sync_orphans` goes once, here, where `sync_gone` goes again at the foot: both describe
+    // the discarded database — which rows an apply placed while their parent was gone, by uids
+    // the restored rows may carry too — but only the tombstones have a trigger to refill them
+    // while the user tables below are emptied. Nothing writes an orphan record but `apply`.
     // Deleting the group first makes capture's cross join empty before the first user delete.
     // Identity and clock stay local: neither is imported nor reused from another machine.
     for table in tables() {
@@ -363,7 +368,9 @@ mod tests {
         target
             .execute_batch(
                 "INSERT INTO app_meta (key,value) VALUES ('mirror_root','C:/My archive');
-             INSERT INTO app_meta (key,value) VALUES ('mirror_installation','local-owner');",
+             INSERT INTO app_meta (key,value) VALUES ('mirror_installation','local-owner');
+             INSERT INTO sync_orphans (tbl,uid,parent_tbl,parent_uid,twin,alias,state)
+             VALUES ('collection_entries','copy','collection_folders','binder','copy','old','{}');",
             )
             .unwrap();
         // Exercise managed-folder deletion protection and parent tombstone triggers on the
@@ -376,6 +383,15 @@ mod tests {
         assert_eq!(
             target
                 .query_row("SELECT count(*) FROM sync_gone", [], |row| row
+                    .get::<_, i64>(0))
+                .unwrap(),
+            0
+        );
+        // What the discarded database's applies did with rows whose parents were gone says
+        // nothing about the restored one, and no trigger refills it: seeded above, gone here.
+        assert_eq!(
+            target
+                .query_row("SELECT count(*) FROM sync_orphans", [], |row| row
                     .get::<_, i64>(0))
                 .unwrap(),
             0

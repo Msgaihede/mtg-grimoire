@@ -1006,8 +1006,8 @@ fn a_copy_filed_into_a_binder_deleted_here_and_then_its_rename(
     (receiver, filed, renamed)
 }
 
-/// ⚠ **A `gone` decision and the op that reverses it, split across a page edge: the paged
-/// catch-up is what a live device's pulls make — and that is not what one unpaged pull made.**
+/// **A `gone` decision and the op that reverses it, split across a page edge: the paged
+/// catch-up is what the unpaged one was, and what a live device's pulls made.**
 ///
 /// This device deleted a binder. The other one, not having heard, files a copy into it, and in
 /// a later push renames it — after the delete, so add-wins brings the binder back.
@@ -1019,56 +1019,37 @@ fn a_copy_filed_into_a_binder_deleted_here_and_then_its_rename(
 /// *The copy's push alone, then the rename's*: the copy names a parent that is gone, and
 /// nothing else in what was handed over can bring it back. A binder's key is `SET NULL`, so the
 /// copy is written at the root — which is what the sender does to it when the delete reaches
-/// it — and nothing is held. Then the rename arrives and the binder comes back, empty here.
-/// The sender keeps the copy in the binder: its rename is later than the delete, so the delete
-/// loses there too and clears nothing. **The two devices end differently, and nothing either
-/// will send says so** — the copy's move to the root was `apply`'s own write, behind
-/// `capture::suppressed`, and is no op.
+/// it — and nothing is held. **And `apply` writes down that it did so** (`apply::orphans`, issue
+/// #841): when the rename arrives and the binder comes back, the copy is filed into it again.
 ///
-/// **That is not paging's doing, and paging does not hide it.** A device that was live pulls
-/// between those two pushes whenever they are more than a debounce apart, and ends exactly so
-/// today: `live` below is that device, on the code as it stands, and `paged` equals it. What
-/// paging changes is who meets it — a device that was *behind* used to be handed both pushes
-/// in one answer, and is now handed them as a live one would be when a page edge falls between
-/// them.
+/// **Until then this was the one row of the three-ways table that differed**, and this test's
+/// last assertion held the difference: the binder came back empty here, the sender kept the
+/// copy in it, and nothing either would send said so — the move to the root was `apply`'s own
+/// write, behind `capture::suppressed`. It was older than paging; a live device pulling between
+/// the two pushes met it, and paging only let a device that was behind meet it too.
+/// `apply/tests/cuts.rs` has the other shapes of it.
 ///
 /// **What makes it red**: a paged catch-up that differs from the live one — paging adding an
-/// arrival of its own. *And* the day `apply` learns to re-file a copy when its binder comes
-/// back: the last assertion says the difference is still there, so that whoever closes it
-/// meets this test and deletes the sentence that excuses it.
+/// arrival of its own; and a copy left at the root by either, which is the defect back.
 #[tokio::test]
-async fn a_gone_decision_and_its_reversal_across_a_page_edge_end_as_a_live_devices_pulls_do() {
+async fn a_gone_decision_and_its_reversal_across_a_page_edge_end_as_the_unpaged_pull_ends() {
     let (receiver, filed, renamed) = a_copy_filed_into_a_binder_deleted_here_and_then_its_rename();
     let (unpaged, paged, live) = three_ways(&receiver, &[&filed, &renamed]).await;
 
+    assert!(
+        unpaged
+            .iter()
+            .any(|line| line.starts_with("copy: c1 x1 in B2")),
+        "the fixture: {unpaged:#?}"
+    );
     assert_eq!(
         paged, live,
         "a paged catch-up is not what a live device's pulls made"
     );
-
-    let copy = |picture: &[String]| -> String {
-        picture
-            .iter()
-            .find(|line| line.starts_with("copy: "))
-            .map(|line| line.split(" as ").next().unwrap().to_owned())
-            .unwrap_or_else(|| "no copy".to_owned())
-    };
-    assert_eq!(copy(&unpaged), "copy: c1 x1 in B2", "{unpaged:#?}");
     assert_eq!(
-        copy(&paged),
-        "copy: c1 x1 in (root)",
-        "the copy followed its binder back: the convergence defect this records is closed, and \
-         this test's last assertion with it — {paged:#?}"
+        paged, unpaged,
+        "the copy did not follow its binder back: where the log was cut decided where it is"
     );
-    // The binder itself is back on all three, under the name the rename gave it.
-    for picture in [&unpaged, &paged, &live] {
-        assert!(
-            picture
-                .iter()
-                .any(|line| line.starts_with("binder: B2 in (root)")),
-            "{picture:#?}"
-        );
-    }
 }
 
 /// **A sender held for its clock on a later page than its own earlier batch: the paged catch-up
@@ -1214,6 +1195,15 @@ fn a_baseline_in_two_chunks(references: bool) -> (Envelope, Envelope) {
     )
 }
 
+/// `dev-b` as `identity::join_group` leaves a fresh install: in its first generation, having
+/// heard from nobody — the device `apply` lets an older build's claim for a row never held
+/// through to (`apply`'s `never_held`).
+fn joined_fresh() -> Connection {
+    let conn = paired("dev-b", 0);
+    emission::start_logging(&conn).unwrap();
+    conn
+}
+
 /// How many copies a [`picture`] holds.
 fn copies_in(picture: &[String]) -> usize {
     picture
@@ -1262,22 +1252,27 @@ async fn a_baseline_in_two_chunks_across_a_page_edge_ends_as_the_unpaged_pull_en
 /// chunks from a build that sends no references — every release from v0.18.0 to v0.39 — and an
 /// ordinary row of another device's behind them, a row a page.
 ///
-/// Read a page at a time, the first chunk builds `recent` and lifts the sender's watermark to
-/// its stamp; the second chunk's `older`, stamped below it, is skipped as seen, and this device
-/// never holds a card the sender does. **That is what a live device that pulls between the two
-/// chunks does today** — `live` below, a row short — and what references were built to end for
-/// the builds that send them. A device catching up used to be handed both chunks in one answer,
-/// which `apply` sorts by stamp; so it is handed them as one answer still.
+/// The first chunk builds `recent` and lifts the sender's watermark to its stamp, and the
+/// second chunk's `older` is stamped below it. **Until 2026-10-07 that claim was skipped as
+/// seen**, so a live device that pulled between the two chunks never held a card the sender
+/// does, and a catch-up read a page at a time would have ended the same way — which is why it
+/// is read as one answer, as a device catching up was always handed it. On a fresh install
+/// that has heard from no other device `apply` no longer calls a claim for a row never held
+/// seen (`never_held`), and the live device here holds both — `behind`, another device's row,
+/// comes a pull later. The one-answer evaluation stays: that rule leaves every other claim to
+/// the watermark, and a delete that followed a claim must be in the same answer to be seen
+/// beside it.
 ///
-/// **What makes it red**: such a catch-up applied a page at a time — the paged device a row
-/// short, as the live one is. *And* the day a live device stops losing the row: the last
-/// assertion says it still does.
+/// **What makes it red**: a live device a row short — a claim for a row never held judged by
+/// its sender's watermark again. **And [`Pulled::whole`] alone now says the catch-up was read
+/// as one answer**: on this receiver a page at a time ends on the same rows, so `paged ==
+/// unpaged` no longer tells the two apart.
 #[tokio::test]
 async fn an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged() {
     let (first, second) = a_baseline_in_two_chunks(false);
     let behind = an_ordinary_page("c9");
     let rows = [&first, &second, &behind];
-    let (unpaged, paged, live) = three_ways(&|| paired("dev-b", 0), &rows).await;
+    let (unpaged, paged, live) = three_ways(&joined_fresh, &rows).await;
 
     assert_eq!(copies_in(&unpaged), 3, "the fixture: {unpaged:#?}");
     assert_eq!(
@@ -1287,10 +1282,8 @@ async fn an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged() {
     let Pulled { pages, whole, .. } = paged_pull_of(&rows).await;
     assert_eq!((pages, whole), (3, true), "which way the pull says it went");
     assert_eq!(
-        copies_in(&live),
-        2,
-        "a live device no longer loses the row a second chunk holds below the first's stamp: \
-         the defect this records is closed, and this assertion with it — {live:#?}"
+        live, unpaged,
+        "a live device lost the row a second chunk holds below the first's stamp"
     );
 }
 
@@ -1308,13 +1301,16 @@ async fn an_older_builds_baseline_is_read_as_one_answer_however_it_is_paged() {
 /// page shows the chunk, the page before it has moved the watermark. So the whole catch-up is
 /// classified before any of it is applied, and this one is evaluated as one answer.
 ///
-/// **A live device that hears the doorbell on the `+1` loses the row today** (`live`), and has
-/// since baselines were built: `docs/reference/sync.md`'s "a sparse op pulled ahead of its
-/// baseline". That is not this pull's, and is not changed by it.
+/// **A live device that heard the doorbell on the `+1` lost the row until 2026-10-07**
+/// (`live`), and had since baselines were built: `docs/reference/sync.md`'s "a sparse op
+/// pulled ahead of its baseline". That was never this pull's; `apply` closed it for a fresh
+/// install that has heard from no other device, by not calling a claim for a row never held
+/// seen (`never_held`).
 ///
-/// **What makes it red**: a catch-up evaluated a page at a time whenever its first page looks
-/// ordinary — `held` missing, as on the live device. *And* the day the live device holds it:
-/// the last assertion says it still does not.
+/// **What makes it red**: `held` missing on the live device — a claim for a row never held
+/// judged by its sender's watermark again. **And [`Pulled::whole`] alone now says a catch-up
+/// whose first page looks ordinary was still read as one answer**: on this receiver a page at
+/// a time ends on the same rows.
 #[tokio::test]
 async fn an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answer() {
     let a = paired("dev-a", 0);
@@ -1338,7 +1334,7 @@ async fn an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answ
     let baseline = wire::seal_batch(&group, "dev-a", &claims).unwrap();
     let rows = [&edit, &baseline];
 
-    let (unpaged, paged, live) = three_ways(&|| paired("dev-b", 0), &rows).await;
+    let (unpaged, paged, live) = three_ways(&joined_fresh, &rows).await;
 
     assert_eq!(copies_in(&unpaged), 2, "the fixture: {unpaged:#?}");
     assert_eq!(
@@ -1348,10 +1344,8 @@ async fn an_older_builds_own_op_a_page_ahead_of_its_baseline_is_read_as_one_answ
     let Pulled { pages, whole, .. } = paged_pull_of(&rows).await;
     assert_eq!((pages, whole), (2, true));
     assert_eq!(
-        copies_in(&live),
-        1,
-        "`held` landed on a device that pulled between the +1 and the baseline: the defect \
-         this records is closed, and this assertion with it — {live:#?}"
+        live, unpaged,
+        "`held` was lost on a device that pulled between the +1 and the baseline"
     );
 }
 

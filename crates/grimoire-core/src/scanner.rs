@@ -1,7 +1,16 @@
 //! The scanner's session glue: the `card-scanner` crate's [`Session`] behind a lazy load, the
 //! lease that says which window may use it, and the reader's scanner preferences and review tray.
-//! A host's commands are its own — the desktop's are `src-tauri`'s `scanner` module, over a glob
-//! re-export of this one, and they read a frame out of a raw request body there.
+//!
+//! **What every scanner command does is here, once** (the light app's step 7.3, 2026-10-07): the
+//! session's five doors on [`ScannerState`] ([`ScannerState::status`], [`ScannerState::frame`],
+//! [`ScannerState::reset`], [`ScannerState::set_filters`], [`ScannerState::capture`]), the three
+//! writes ([`save_prefs`], [`save_tray`], [`commit_tray`]), and what a frame and a capture are
+//! read out of ([`frame_from`], [`capture_from`] — a body and a header lookup, so a host hands
+//! over whatever it calls a header). **Two callers, and each only fetches what is its own**: the
+//! command table (`commands.rs`), for a host with one page, which admits [`PAGE`] on the lease
+//! and reads the headers out of the call's arguments; and the desktop's `#[tauri::command]`
+//! wrappers (`src-tauri`'s `scanner` module, over a glob re-export of this one), which admit the
+//! calling webview's label and read the headers out of Tauri's raw request.
 //!
 //! **A field of [`crate::state::State`], `State.scanner`**, built empty from the data directory —
 //! since the extraction's seventh step (2026-10-03); it was the desktop's own managed state,
@@ -17,8 +26,10 @@
 //! `src-tauri/scanner-assets/` holds them) and says so once, through [`ScannerState::carry`],
 //! before any command can ask; a host that never says carries nothing. A file placed in
 //! `data/scanner/` overrides the embedded copy so a new bundle can be tried without a rebuild.
-//! Nothing here downloads. A missing bundle is a session that detects and rectifies and names
-//! nothing — the debug server's behaviour — and a missing model pair is a session with no reader.
+//! Nothing here downloads — `scanner_assets` does, when a reader asks it to, into that same
+//! folder, and then lets the loaded session go. A missing bundle is a session that detects and
+//! rectifies and names nothing — the debug server's behaviour — and a missing model pair is a
+//! session with no reader.
 //! The status reports the exact path it looked at for each, and [`Asset::source`] says which of
 //! the three answered, so "no bundle" is never the whole message.
 //!
@@ -26,8 +37,16 @@
 //! reads its two files with `std::fs` inside the crate, so [`load`] reads them here and hands the
 //! bytes to `TitleReader::from_bytes`, with that function's sentences kept word for word. **In a
 //! browser the load finds nothing, and the session still would not run**: the crate keeps its own
-//! threads and `Instant`, which panic there. Nothing calls it in a browser before the light app's
-//! phase 7, which puts them behind a seam of their own.
+//! threads and `Instant`, which panic there. So every door to the session and to a file is shut
+//! there in one sentence ([`not_in_a_browser_yet`]) until the light app's web step puts them
+//! behind a seam of their own — the prefs, the tray and the lease are rows and a mutex, and
+//! answer on a page as anywhere.
+//!
+//! **The load can be let go** ([`ScannerState::forget`]): the first [`ScannerState::ensure`] keeps
+//! what it loaded for the life of the process, so an asset that arrives later — a download — is
+//! never seen until something drops the session and the next command loads afresh. The filters
+//! the dropped session held stay owed until a session takes them, and the status says so while
+//! one has not ([`ScannerStatus::unapplied_filters`]).
 //!
 //! **The seventh connection.** Labels are loaded on a read-only connection opened for the
 //! load and dropped after — never the state's read connection, the rule the mirror thread and
@@ -54,6 +73,7 @@
 
 use std::borrow::Cow;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::AtomicBool;
 use std::sync::{Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -61,11 +81,12 @@ use card_scanner::filters::ScanFilters;
 use card_scanner::index::Bundle;
 use card_scanner::ocr::TitleReader;
 use card_scanner::reference::Reference;
-use card_scanner::session::{ScanMode, Session};
+use card_scanner::session::{FrameOptions, ScanMode, Session, Verdict};
 use rusqlite::Connection;
 
 use crate::platform::clock::Tick;
 use crate::platform::files;
+use crate::state::State;
 
 pub const BUNDLE_FILE: &str = "card-hashes.bin";
 pub const DETECTION_MODEL: &str = "models/text-detection.rten";
@@ -159,6 +180,17 @@ pub struct ScannerStatus {
     pub labels: usize,
     /// Where `scanner_capture` writes — the same names and sidecar as the debug server's.
     pub scans_dir: String,
+    /// **The reader's filters are not in force**, and this is the sentence the loaded session
+    /// refused them with — `None` on every session that searches under what the reader chose.
+    ///
+    /// Set only after a reload ([`ScannerState::forget`]) whose new session could not take the
+    /// filters the dropped one held: a mask is built from labels, and a reload that found no
+    /// `corpus.db` to read them from — a card sync replacing it at that moment — has none. The
+    /// session then searches every printing while the page's popover still shows the filters,
+    /// which is the one state the page cannot learn from its own pushes. The filters are not
+    /// lost: they stay owed, and the next reload is offered them again. Not part of the load —
+    /// read from the state each time the status is asked, since a later push settles it.
+    pub unapplied_filters: Option<String>,
 }
 
 /// What the panel said at the moment of capture, verbatim, beside what the reader typed.
@@ -211,6 +243,58 @@ pub const OPEN_ELSEWHERE: &str = "The scanner is open in another window.";
 /// failed — sent none: its lease lapsed in two seconds, a second window got through the gate, and
 /// both had the tray on screen, each writing it whole over the other.
 pub const LEASE: Duration = Duration::from_secs(2);
+
+/// The label every call through the command table admits on the lease: **the page**.
+///
+/// A lease is held by a label, and a table call carries a name, its arguments and a body — no
+/// window. It does not need one: **a host of the table has exactly one page.** Android's host
+/// has one window, built once per process; the web host refuses a second tab before any engine
+/// starts (the page's Web Lock, `mtg-grimoire:database`). So every call the table answers comes
+/// from the same place, and this is its name.
+///
+/// What follows from one label: `scanner_elsewhere` answers `false` there, always — nobody
+/// else can have admitted anything — and `scanner_hold` and every write are admitted, always.
+/// The lease is still taken and still settles, so the code a light host runs is the code the
+/// desktop runs, and a host that one day has two pages changes this constant for a label per
+/// page and nothing else.
+///
+/// **The desktop never passes this**: its wrappers admit the calling webview's own label
+/// (`main`, `window-2`, …), and it does not dispatch through the table. A desktop that did
+/// would have every window admitted as one, which is the reason it must not without a label.
+pub const PAGE: &str = "page";
+
+/// What every scanner command that would load the session, run it, or write a file answers on
+/// a host that is a web page.
+pub const NOT_IN_A_BROWSER_YET: &str = "The scanner does not run in a browser yet.";
+
+/// **The session cannot run in a browser yet, so a page is refused before it is loaded.** `Ok`
+/// on every host that keeps files; on one that does not (`platform::host::keeps_files`) the
+/// refusal, in a sentence a reader can be shown — [`NOT_IN_A_BROWSER_YET`].
+///
+/// **A fact about the `card-scanner` crate as it is today**: its detector and its Exact resolve
+/// run on `std::thread::scope` and a spawned thread, and a frame is timed with `Instant` — each
+/// compiles for `wasm32-unknown-unknown` and traps when it runs. A trap in the web host's Worker
+/// is a page that stops answering, with nothing it can show; and the load itself would find no
+/// asset, since a page has no `data/scanner/` to read.
+///
+/// **Where it is asked**, which is every way in: [`ScannerState::ensure`] — the one door to the
+/// session, so the status, a frame, a reset and a filter push all pass it — and
+/// [`ScannerState::capture`], which writes files and touches no session.
+///
+/// **What it deliberately leaves alone**: the prefs and the tray, read and written, and the
+/// tray's commit — rows in a database a page has too; and the lease's two commands, which are a
+/// mutex. A reader on a page can still review and file a tray.
+///
+/// ⚠️ **The light app's web step deletes this function**, in the change that gives the crate's
+/// threads and clock a seam and the page its assets. Deleting it leaves the compiler naming
+/// both places above; `verdictText.ts`'s `SCANNER_NOT_IN_A_BROWSER_YET`, the two places the
+/// page reads it, and `ipc.test.ts`'s pin of this sentence go with it.
+pub fn not_in_a_browser_yet() -> Result<(), String> {
+    if !crate::platform::host::keeps_files() {
+        return Err(NOT_IN_A_BROWSER_YET.to_owned());
+    }
+    Ok(())
+}
 
 /// Which window holds the scanner, when it last admitted or settled a command, and how many of
 /// its admitted commands have not settled yet.
@@ -309,15 +393,45 @@ pub struct ScannerState {
     /// What the host's binary carries — [`ScannerState::carry`]'s word, and [`Embedded::none`]
     /// until it is said.
     embedded: OnceLock<Embedded>,
+    /// The filters a session [`ScannerState::forget`] let go was searching under, owed to a
+    /// later one until one takes them — see [`Owed`]. **Only ever taken with `loaded` already in
+    /// hand**, by everything that touches it, so the two locks have one order and cannot cross.
+    owed: Mutex<Option<Owed>>,
+    /// Whether a fetch of this install's assets is running — `scanner_assets`' claim, taken and
+    /// let go there. Here because it is this state's: two states are two installs, and a
+    /// process-wide flag would have one test's download refuse another's.
+    pub(crate) fetching: AtomicBool,
+}
+
+/// Filters a dropped session held that no session has taken since.
+///
+/// **A debt, not a hand-over.** They were once taken out of here as the next session loaded and
+/// offered to it once; a session that could not build the mask at that moment — no labels,
+/// because `corpus.db` was mid-replacement — refused, and they were gone: every later frame
+/// searched every printing under a popover that still showed them. So the debt stands until a
+/// session accepts it, each reload is offered it again, and an accepted push from the page — the
+/// reader's own newer word — is what else settles it.
+#[derive(Debug, Clone)]
+struct Owed {
+    filters: ScanFilters,
+    /// What the session loaded since said to them, if one has been asked —
+    /// [`ScannerStatus::unapplied_filters`].
+    refusal: Option<String>,
 }
 
 impl ScannerState {
     pub fn new(data_dir: PathBuf) -> ScannerState {
+        // The crate's stage timings read this host's clock from here on: it has none of its own
+        // in a browser, where `Instant::now()` panics. Once per process; a second state's word
+        // is ignored, and is the same word.
+        card_scanner::host::set_clock(crate::platform::clock::monotonic_ms);
         ScannerState {
             data_dir,
             loaded: Mutex::new(None),
             owner: Mutex::new(None),
             embedded: OnceLock::new(),
+            owed: Mutex::new(None),
+            fetching: AtomicBool::new(false),
         }
     }
 
@@ -326,6 +440,12 @@ impl ScannerState {
     /// that no longer described the loaded session would be worse than none.
     pub fn carry(&self, embedded: Embedded) {
         let _ = self.embedded.set(embedded);
+    }
+
+    /// What the host said its binary carries, or nothing if it never said — what
+    /// `scanner_assets` reads to know which files no download could be owed for.
+    pub fn carried(&self) -> Embedded {
+        self.embedded.get().copied().unwrap_or_default()
     }
 
     /// Admit the calling window, or refuse with [`OPEN_ELSEWHERE`]. The answer is the command's
@@ -359,20 +479,180 @@ impl ScannerState {
     }
 
     /// The session, loading it on first use. Held for the length of one frame.
+    ///
+    /// **The one door to the session, so the one place it is shut on a page**
+    /// ([`not_in_a_browser_yet`]): nothing is loaded there, and nothing can reach a session that
+    /// would trap. A session loaded after a [`ScannerState::forget`] is offered the filters the
+    /// last one was searching under, and they stay owed if it cannot take them ([`Owed`]).
     pub fn ensure(&self) -> Result<MutexGuard<'_, Option<Loaded>>, String> {
+        not_in_a_browser_yet()?;
         let mut guard = self
             .loaded
             .lock()
             .map_err(|_| "the scanner state is poisoned".to_string())?;
         if guard.is_none() {
-            *guard = Some(load(
+            let mut loaded = load(
                 &self.dir(),
                 &self.data_dir.join(crate::db::CORPUS_DB),
                 TOP,
-                self.embedded.get().copied().unwrap_or_default(),
-            ));
+                self.carried(),
+            );
+            let mut owed = self
+                .owed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if let Some(debt) = owed.as_mut() {
+                match loaded.session.set_filters(debt.filters.clone()) {
+                    Ok(()) => *owed = None,
+                    // A reload that could not build the mask — no labels to build it from. The
+                    // session searches unfiltered, as a first load does; the debt stands for the
+                    // next reload, and the sentence is the status's to carry until then.
+                    Err(sentence) => debt.refusal = Some(sentence),
+                }
+            }
+            drop(owed);
+            *guard = Some(loaded);
         }
         Ok(guard)
+    }
+
+    /// **Let the loaded session go, so the next command that asks for one loads afresh** — the
+    /// door for assets that arrive after the first load: a download into `data/scanner/`, or a
+    /// file a reader placed by hand. Without it the first [`ScannerState::ensure`] keeps what it
+    /// found, an empty session included, for the life of the process.
+    ///
+    /// Nothing loads here; the cost of the reload is the next command's, as the first load's
+    /// was the first command's. With nothing loaded it does nothing.
+    ///
+    /// **Behind a frame in flight, never under it.** A frame holds `loaded` for the whole of its
+    /// decode, so this waits for it: the frame answers from the session it started on, and the
+    /// next one loads the new. An Exact resolve still running on its own thread keeps its own
+    /// handles to the old reference and its answer is dropped unread, which is what dropping a
+    /// session has always meant to one.
+    ///
+    /// **The lease is not touched, and none is asked for**: who holds the scanner is one
+    /// question and what is loaded is another, and the caller is whatever put the files there —
+    /// which need not be a window on the Scanner view at all.
+    ///
+    /// **What a reload keeps is the filters, and nothing else.** The session the page narrowed
+    /// is the one being dropped, and the page pushes its filters once per mount — so they are
+    /// owed to the next load ([`ScannerState::ensure`]) rather than silently lifted, and stay
+    /// owed past a load that cannot take them ([`Owed`]). A debt already standing is not
+    /// replaced by the nothing the session that failed to take it was searching under. The
+    /// evidence for the card in front of the lens goes, as on a reset, and **`decision_seq`
+    /// starts again from zero**: a page that is pumping across a reload should treat the next
+    /// verdict as a new stream's.
+    ///
+    /// **It cannot fail, and it is the way back from a poisoned lock.** A panic under `loaded`
+    /// — in a load, since a frame's own panics are caught inside the crate — leaves every later
+    /// [`ScannerState::ensure`] answering "the scanner state is poisoned" for the life of the
+    /// process. Dropping whatever is there and loading again is the only repair there is, so
+    /// this takes the lock poisoned or not and clears the mark; `ensure` itself is unchanged and
+    /// still refuses a poisoned lock nobody has cleared.
+    pub fn forget(&self) {
+        let mut guard = self
+            .loaded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        self.loaded.clear_poison();
+        if let Some(old) = guard.take() {
+            let held = old.session.filters();
+            let mut owed = self
+                .owed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if owed.is_none() && !held.is_empty() {
+                *owed = Some(Owed {
+                    filters: held.clone(),
+                    refusal: None,
+                });
+            }
+        }
+    }
+
+    /// Whether a session is loaded right now, asked without loading one — for a test of what a
+    /// refused command cost.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn is_loaded(&self) -> bool {
+        self.loaded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .is_some()
+    }
+
+    /// The loaded session, for one piece of work — loaded first if nothing has asked yet.
+    fn session<T>(&self, work: impl FnOnce(&mut Loaded) -> T) -> Result<T, String> {
+        let mut guard = self.ensure()?;
+        match guard.as_mut() {
+            Some(loaded) => Ok(work(loaded)),
+            // `ensure` answers a guard over `Some`; a sentence rather than a panic all the same.
+            None => Err("the scanner did not load".to_owned()),
+        }
+    }
+
+    /// `scanner_status`: what loaded, and the path each asset was looked for at. Loads the
+    /// session if this is the first scanner command; takes no lease — it is a read.
+    pub fn status(&self) -> Result<ScannerStatus, String> {
+        self.session(|loaded| {
+            let mut status = loaded.status.clone();
+            status.unapplied_filters = self
+                .owed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .as_ref()
+                .and_then(|debt| debt.refusal.clone());
+            status
+        })
+    }
+
+    /// `scanner_frame`'s work: one frame in, one verdict out, on the loaded session.
+    ///
+    /// The detail image is decoded only on a frame whose reads run, so carrying one the session
+    /// did not ask for costs the copy and nothing else. **The caller has admitted its window
+    /// first** ([`ScannerState::admit`]) and holds that guard across this call — the lease is
+    /// the caller's because the label is.
+    pub fn frame(
+        &self,
+        jpeg: &[u8],
+        detail: Option<&[u8]>,
+        opts: &FrameOptions,
+    ) -> Result<Verdict, String> {
+        self.session(|loaded| loaded.session.frame_with_detail(jpeg, detail, opts))
+    }
+
+    /// `scanner_reset`'s work: forget the card in front of the lens.
+    pub fn reset(&self) -> Result<(), String> {
+        self.session(|loaded| loaded.session.reset())
+    }
+
+    /// `scanner_set_filters`' work: narrow every later frame to these sets and release dates.
+    /// Loads the session if this is the first scanner command, because the mask is built from
+    /// the loaded labels.
+    ///
+    /// **The crate's sentence is the error, verbatim** — no labels to filter by, or filters
+    /// that match no printing — and a refusal keeps the previous filters in force.
+    ///
+    /// **An accepted push settles whatever a reload still owed** ([`Owed`]): the session now
+    /// holds what the page just sent, which is the reader's newer word. A refused one settles
+    /// nothing — the page puts its popover back to the filters it last had accepted, and those
+    /// are the ones still owed.
+    pub fn set_filters(&self, filters: ScanFilters) -> Result<(), String> {
+        self.session(|loaded| {
+            loaded.session.set_filters(filters)?;
+            *self
+                .owed
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()) = None;
+            Ok(())
+        })?
+    }
+
+    /// `scanner_capture`'s work: the frame and its sidecar into `scans/` ([`write_capture`]).
+    /// No session is touched, and a page has no folder to write into
+    /// ([`not_in_a_browser_yet`]).
+    pub fn capture(&self, jpeg: &[u8], sidecar: &Sidecar) -> Result<Captured, String> {
+        not_in_a_browser_yet()?;
+        write_capture(&self.dir().join("scans"), jpeg, sidecar)
     }
 }
 
@@ -495,6 +775,8 @@ pub fn load(dir: &Path, corpus: &Path, top: usize, embedded: Embedded) -> Loaded
             recognition_model,
             labels,
             scans_dir: dir.join("scans").display().to_string(),
+            // What `ScannerState::status` fills in; a bare load owes nobody anything.
+            unapplied_filters: None,
         },
     }
 }
@@ -718,6 +1000,175 @@ pub fn write_capture(scans: &Path, jpeg: &[u8], sidecar: &Sidecar) -> Result<Cap
     files::write(&side, &serde_json::to_vec_pretty(&json).unwrap_or_default())
         .map_err(|e| format!("{}: {e}", side.display()))?;
     Ok(Captured { saved: name })
+}
+
+/// The header a frame carries its `FrameOptions` in, as JSON.
+pub const OPTIONS_HEADER: &str = "x-scanner-options";
+/// The header a capture carries its [`Sidecar`] in, as JSON.
+pub const CAPTURE_HEADER: &str = "x-scanner-capture";
+/// The header that says a frame's body is **two** JPEGs back to back, and where the first ends:
+/// the decimal byte length of the frame, with the detail image as everything after it. Absent,
+/// the body is the frame alone. See [`frame_from`].
+pub const DETAIL_HEADER: &str = "x-scanner-detail";
+
+/// One header of a raw-body call, as far as the host that received it could read it.
+///
+/// **Three states, because the two payloads treat the third differently** — an options header
+/// that is there and unreadable is a shrug, a sidecar or a detail length that is there and
+/// unreadable is a refusal ([`frame_from`], [`capture_from`]) — so "could not be read" may not
+/// be folded into "was not sent". Each host fills it from what it calls a header: the desktop
+/// from Tauri's `HeaderMap`, where a value outside visible ASCII is the unreadable one; the
+/// command table from the call's arguments ([`Header::of_json`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Header<'a> {
+    Absent,
+    Text(&'a str),
+    /// There, and not text — with what the host had to say about it, which ends the sentence.
+    Unreadable(String),
+}
+
+impl<'a> Header<'a> {
+    /// A header as a call through the command table carries it: **the call's arguments are the
+    /// headers**, an object of strings, exactly as `src/lib/core/table.ts` and the web host's
+    /// `protocol.ts` send a `Uint8Array` call — `{"x-scanner-options": "<json>",
+    /// "x-scanner-detail": "<n>"}`. A key that is missing or `null` was not sent; a value that
+    /// is not a string is there and unreadable, as a header of raw bytes is on the desktop.
+    pub fn of_json(value: Option<&'a serde_json::Value>) -> Header<'a> {
+        match value {
+            None | Some(serde_json::Value::Null) => Header::Absent,
+            Some(serde_json::Value::String(text)) => Header::Text(text),
+            Some(_) => Header::Unreadable("it is not a string".to_owned()),
+        }
+    }
+}
+
+/// What [`frame_from`] reads out of one call: the frame, the detail image if one came, and the
+/// options. Borrowed from the body — a host that hands the work to another thread copies them.
+pub type FrameParts<'b> = (&'b [u8], Option<&'b [u8]>, FrameOptions);
+
+/// The frame from a call's body, the detail image behind it if [`DETAIL_HEADER`] says there is
+/// one, and the options from [`OPTIONS_HEADER`]. `header` answers one header by name.
+///
+/// **Why one body carrying two JPEGs rather than a second command or a second header.** The
+/// detail image has to be the *same video frame* as the one the crate detects on — the quad it
+/// found in the small image is scaled onto the large one, so a large image one frame later is a
+/// card that has moved by however far the reader's hand did. One request is what makes the pair
+/// arrive together or not at all; a raw body is the only way bytes cross the desktop's boundary
+/// without a base64 step; and a header is the only place left to say where one ends.
+///
+/// **A detail header that is present and wrong is a refusal, where an unreadable options header
+/// is a shrug** — [`capture_from`]'s asymmetry, for a sharper reason. A defaulted slider costs
+/// one frame; a mis-split body hands the decoder the first half of a JPEG as the frame and a
+/// tail of it as the detail, and the verdict that comes back describes neither. So a length that
+/// is not a number, is zero, runs past the body, or leaves nothing behind it for the detail says
+/// so in words, and the page's loop shows the sentence and sends the next frame.
+pub fn frame_from<'b, 'h>(
+    body: &'b [u8],
+    header: &dyn Fn(&str) -> Header<'h>,
+) -> Result<FrameParts<'b>, String> {
+    let opts = match header(OPTIONS_HEADER) {
+        Header::Text(text) => serde_json::from_str(text).unwrap_or_default(),
+        Header::Absent | Header::Unreadable(_) => FrameOptions::default(),
+    };
+    let (jpeg, detail) = split_detail(body, header(DETAIL_HEADER))?;
+    Ok((jpeg, detail, opts))
+}
+
+/// The body split at [`DETAIL_HEADER`]'s length — `(frame, None)` when there is no header, and
+/// the whole body is the frame exactly as it was before the detail image existed.
+fn split_detail<'b>(
+    bytes: &'b [u8],
+    header: Header<'_>,
+) -> Result<(&'b [u8], Option<&'b [u8]>), String> {
+    let text = match header {
+        Header::Absent => return Ok((bytes, None)),
+        Header::Unreadable(e) => {
+            return Err(format!("the frame's detail length did not parse: {e}"))
+        }
+        Header::Text(text) => text,
+    };
+    let n: usize = text
+        .parse()
+        .map_err(|_| format!("the frame's detail length is not a number: {text:?}"))?;
+    if n == 0 {
+        return Err("the frame's detail length is zero, so there is no frame before it".into());
+    }
+    if n >= bytes.len() {
+        return Err(format!(
+            "the frame's detail length is {n} bytes but the body is {} — there is no detail image \
+             behind the frame",
+            bytes.len()
+        ));
+    }
+    let (jpeg, detail) = bytes.split_at(n);
+    Ok((jpeg, Some(detail)))
+}
+
+/// The capture from a call's body and its sidecar from [`CAPTURE_HEADER`].
+///
+/// **A sidecar header that is there and unreadable is a refusal, where an unreadable options
+/// header in [`frame_from`] is a shrug — and the asymmetry is the point.** A defaulted slider
+/// costs one frame out of thirty and the next one corrects it; a defaulted sidecar writes a JPEG
+/// to disk with five empty fields and reports success, which is an *unlabelled* capture the
+/// reader believes they labelled — the one thing the dataset cannot recover from later. An
+/// **absent** header still means [`Sidecar::default`], because capturing without typing a name
+/// is a thing the reader chooses. On the desktop the unreadable case is `HeaderValue::to_str`
+/// refusing any byte outside visible ASCII, so the page escapes non-ASCII as `\uXXXX` before it
+/// puts this JSON on the wire — for every host, though only that one needs it.
+pub fn capture_from<'b, 'h>(
+    body: &'b [u8],
+    header: &dyn Fn(&str) -> Header<'h>,
+) -> Result<(&'b [u8], Sidecar), String> {
+    let sidecar = match header(CAPTURE_HEADER) {
+        Header::Absent => Sidecar::default(),
+        Header::Unreadable(e) => return Err(format!("the capture's sidecar did not parse: {e}")),
+        Header::Text(text) => serde_json::from_str(text)
+            .map_err(|e| format!("the capture's sidecar did not parse: {e}"))?,
+    };
+    Ok((body, sidecar))
+}
+
+/// `set_scanner_prefs`' work: the reader's scanner preferences, through the state's one
+/// definition of a write. Answers [`crate::db::BUSY`] if a sync holds the write connection.
+///
+/// **The caller has admitted its window first, and holds that guard until this returns** — the
+/// admission is the point. The row is written whole, so only the window holding the scanner
+/// may write it; and `with_write` can wait five seconds for the write connection before it
+/// answers `BUSY` — longer than [`LEASE`] — so the scanner stays that window's for as long as
+/// its write is waiting, and for two seconds after it settles, which is long enough for the
+/// page's next try.
+#[track_caller]
+pub fn save_prefs(state: &State, prefs: &ScannerPrefs) -> Result<(), String> {
+    crate::state::with_write(state, |conn| store_prefs(conn, prefs))
+}
+
+/// `set_scanner_tray`'s work: the review tray, whole. The two refusals are [`store_tray`]'s; a
+/// busy write connection answers [`crate::db::BUSY`]. Admitted first and held until it settles
+/// by the caller, for [`save_prefs`]' reason.
+#[track_caller]
+pub fn save_tray(state: &State, rows: &[ScannerTrayRow]) -> Result<(), String> {
+    crate::state::with_write(state, |conn| store_tray(conn, rows))
+}
+
+/// `scanner_tray_commit`'s work: the tray's rows into the collection and what is left of the
+/// tray into `app_meta`, as one write — see [`tray_commit`]. Through `with_write_owned`,
+/// `collection_import_commit`'s own door, so the facet index's `owned` dimension moves with the
+/// copies and a busy write connection answers [`crate::db::BUSY`] with nothing written.
+///
+/// **Admitted first and held until it settles by the caller, like the tray's own write**:
+/// `remaining` is the tray written whole, and a window that has lost the scanner is a window
+/// whose tray may be older than the stored one — its commit would file rows another window has
+/// already filed, and store a tray over theirs.
+#[track_caller]
+pub fn commit_tray(
+    state: &State,
+    items: &[crate::collection::CollectionImportItem],
+    folder_id: Option<i64>,
+    remaining: &[ScannerTrayRow],
+) -> Result<crate::collection::ImportCommitOutcome, String> {
+    crate::collection_source::with_write_owned(state, |conn| {
+        tray_commit(conn, items, folder_id, remaining)
+    })
 }
 
 #[cfg(test)]
@@ -1567,5 +2018,545 @@ mod tests {
             "a lapsed lease is free"
         );
         assert_eq!(owner.map(|lease| lease.label).as_deref(), Some("main"));
+    }
+
+    /// A call's headers as the command table hands them over: its arguments, by name.
+    fn carried<'a>(args: &'a serde_json::Value) -> impl Fn(&str) -> Header<'a> + 'a {
+        move |name| Header::of_json(args.get(name))
+    }
+
+    #[test]
+    fn a_header_out_of_a_calls_arguments_is_absent_text_or_unreadable() {
+        let args = serde_json::json!({ "text": "3", "nothing": null, "number": 3, "list": [] });
+        let header = carried(&args);
+        assert_eq!(header("text"), Header::Text("3"));
+        assert_eq!(header("missing"), Header::Absent);
+        assert_eq!(header("nothing"), Header::Absent);
+        // There, and not a string: unreadable, never quietly absent — the capture's sidecar
+        // turns on the difference.
+        assert!(matches!(header("number"), Header::Unreadable(_)));
+        assert!(matches!(header("list"), Header::Unreadable(_)));
+    }
+
+    /// The desktop's eight body tests (`src-tauri`'s `scanner::tests`), over the table's wire:
+    /// the same reader, handed a call's arguments where the desktop hands it request headers.
+    #[test]
+    fn a_body_with_no_header_is_the_frame_under_the_default_options() {
+        let args = serde_json::json!({});
+        let (jpeg, detail, opts) = frame_from(&[1, 2, 3], &carried(&args)).expect("payload");
+        assert_eq!(jpeg, [1, 2, 3]);
+        // No detail header is the body exactly as it was before the detail image existed.
+        assert_eq!(detail, None);
+        assert_eq!(opts, FrameOptions::default());
+        // And a call that carried no arguments at all reads the same.
+        let none = serde_json::Value::Null;
+        let (jpeg, detail, opts) = frame_from(&[1, 2, 3], &carried(&none)).expect("payload");
+        assert_eq!((jpeg, detail), (&[1u8, 2, 3][..], None));
+        assert_eq!(opts, FrameOptions::default());
+    }
+
+    #[test]
+    fn a_frame_reads_its_options_from_the_header_and_shrugs_at_one_it_cannot_read() {
+        let args = serde_json::json!({ OPTIONS_HEADER: r#"{"decide_at":12,"method":"otsu"}"# });
+        let (_, _, opts) = frame_from(&[9], &carried(&args)).expect("payload");
+        assert_eq!(opts.decide_at, 12.0);
+        assert_eq!(opts.method, card_scanner::session::Method::Otsu);
+        // Not JSON, and not a string: a defaulted slider, never a refused frame.
+        for unreadable in [
+            serde_json::json!({ OPTIONS_HEADER: "not json" }),
+            serde_json::json!({ OPTIONS_HEADER: { "decide_at": 12 } }),
+        ] {
+            let (jpeg, _, opts) = frame_from(&[9], &carried(&unreadable)).expect("payload");
+            assert_eq!(jpeg, [9]);
+            assert_eq!(opts, FrameOptions::default(), "{unreadable}");
+        }
+    }
+
+    /// The page's own shape: the frame, then the detail image, one body, with the frame's length
+    /// in the header. The options header still reads beside it.
+    #[test]
+    fn a_detail_header_splits_the_body_into_the_frame_and_the_detail() {
+        let args = serde_json::json!({
+            DETAIL_HEADER: "3",
+            OPTIONS_HEADER: r#"{"decide_at":12}"#,
+        });
+        let body = [1, 2, 3, 7, 8, 9, 10];
+        let (jpeg, detail, opts) = frame_from(&body, &carried(&args)).expect("payload");
+        assert_eq!(jpeg, [1, 2, 3]);
+        assert_eq!(detail, Some(&[7u8, 8, 9, 10][..]));
+        assert_eq!(opts.decide_at, 12.0);
+    }
+
+    /// Every wrong length is a sentence rather than a split somewhere else: a mis-split body is a
+    /// frame decoded from half a JPEG, and the verdict for it would describe neither image.
+    #[test]
+    fn a_detail_length_that_cannot_split_the_body_is_a_sentence() {
+        let body = [1, 2, 3, 4];
+        let refused = |value: serde_json::Value| {
+            let args = serde_json::json!({ DETAIL_HEADER: value });
+            let refusal = frame_from(&body, &carried(&args)).err();
+            refusal.expect("a length that cannot split is refused")
+        };
+        let err = refused("three".into());
+        assert!(err.contains("not a number"), "{err}");
+        let err = refused("-1".into());
+        assert!(err.contains("not a number"), "{err}");
+        let err = refused("0".into());
+        assert!(err.contains("zero"), "{err}");
+        // Past the end, and exactly at it — the second leaves an empty detail image.
+        let err = refused("9".into());
+        assert!(err.contains("no detail image"), "{err}");
+        let err = refused("4".into());
+        assert!(err.contains("no detail image"), "{err}");
+        // A number where the wire is a string is there and unreadable — a refusal, with the
+        // desktop's own opening words, and never the whole body taken as the frame.
+        let err = refused(3.into());
+        assert_eq!(
+            err,
+            "the frame's detail length did not parse: it is not a string"
+        );
+        // One byte short of the end is still a split, however small the detail.
+        let args = serde_json::json!({ DETAIL_HEADER: "3" });
+        let (jpeg, detail, _) = frame_from(&body, &carried(&args)).expect("payload");
+        assert_eq!((jpeg, detail), (&[1u8, 2, 3][..], Some(&[4u8][..])));
+    }
+
+    #[test]
+    fn a_capture_reads_its_sidecar_from_the_header() {
+        let args = serde_json::json!({ CAPTURE_HEADER: r#"{"expected":"Plains","votes":"8.0"}"# });
+        let (jpeg, sidecar) = capture_from(&[7], &carried(&args)).expect("payload");
+        assert_eq!(jpeg, [7]);
+        assert_eq!(sidecar.expected, "Plains");
+        assert_eq!(sidecar.votes, "8.0");
+        // An absent header is the reader's own choice, not a failure.
+        let none = serde_json::json!({});
+        let (_, sidecar) = capture_from(&[7], &carried(&none)).expect("payload");
+        assert_eq!(sidecar.expected, "");
+    }
+
+    /// The page escapes non-ASCII as `\uXXXX` for every host, so the name survives as the same
+    /// JSON — and a host whose wire is not a header reads the letter itself just as well.
+    #[test]
+    fn a_card_name_comes_back_with_its_accent_escaped_or_not() {
+        for sent in [
+            r#"{"expected":"\u00c6ther Vial"}"#,
+            "{\"expected\":\"\u{c6}ther Vial\"}",
+        ] {
+            let args = serde_json::json!({ CAPTURE_HEADER: sent });
+            let (_, sidecar) = capture_from(&[7], &carried(&args)).expect("payload");
+            assert_eq!(sidecar.expected, "\u{c6}ther Vial", "{sent}");
+        }
+    }
+
+    /// The failure that used to file an unlabelled capture as a success: a sidecar that is there
+    /// and cannot be read is refused, rather than falling back to five empty fields and a
+    /// written JPEG.
+    #[test]
+    fn a_capture_header_that_cannot_be_read_is_a_sentence() {
+        for unreadable in [
+            serde_json::json!({ CAPTURE_HEADER: "{not json" }),
+            serde_json::json!({ CAPTURE_HEADER: { "expected": "Plains" } }),
+            serde_json::json!({ CAPTURE_HEADER: 7 }),
+        ] {
+            let err = capture_from(&[7], &carried(&unreadable)).expect_err("unreadable header");
+            assert!(
+                err.starts_with("the capture's sidecar did not parse: "),
+                "{err}"
+            );
+        }
+    }
+
+    /// The bytes of a bundle holding one printing, and a `corpus.db` beside `scanner/` that
+    /// names it — the least a session needs to accept a filter, which is built from labels.
+    fn a_labelled_bundle(data_dir: &Path) {
+        let id = "f29ba16f-c8fb-42fe-aabf-87089cb214a7";
+        let mut builder = card_scanner::index::BundleBuilder::new(
+            card_scanner::hash::HashKind::DHashChroma32,
+            256,
+        );
+        builder.push(
+            card_scanner::index::Section::Card,
+            card_scanner::index::parse_uuid(id).expect("a uuid"),
+            &card_scanner::hash::Descriptor {
+                words: [1, 2, 3, 4],
+                bits: 256,
+            },
+        );
+        let scanner = data_dir.join("scanner");
+        std::fs::create_dir_all(&scanner).expect("mkdir");
+        std::fs::write(scanner.join(BUNDLE_FILE), builder.finish(0).to_bytes()).expect("write");
+        let corpus = Connection::open(data_dir.join(crate::db::CORPUS_DB)).expect("corpus.db");
+        corpus
+            .execute_batch(&format!(
+                "CREATE TABLE cards (id TEXT PRIMARY KEY, illustration_id TEXT, name TEXT,
+                    set_code TEXT, collector_number TEXT, lang TEXT, released_at TEXT,
+                    oracle_id TEXT, finishes TEXT);
+                 INSERT INTO cards VALUES ('{id}', NULL, 'Lightning Bolt', '2x2', '117', 'en',
+                    '2022-07-08', NULL, '[\"nonfoil\"]');"
+            ))
+            .expect("a card");
+    }
+
+    /// **The first load is kept until it is let go.** A scanner asked with nothing on disk
+    /// loads an empty session, and assets that arrive afterwards — a download — change nothing
+    /// it answers: that is the memo this door exists to open. After `forget`, the next command
+    /// loads what is there now.
+    #[test]
+    fn a_forgotten_session_loads_again_and_finds_what_has_arrived() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = ScannerState::new(dir.path().to_path_buf());
+        // Nothing loaded, nothing to let go.
+        state.forget();
+        assert!(!state.is_loaded());
+
+        let before = state.status().expect("status");
+        assert!(!before.bundle.present && !before.bundle.loaded);
+        assert!(state.is_loaded());
+
+        a_labelled_bundle(dir.path());
+        let still = state.status().expect("status");
+        assert!(
+            !still.bundle.present,
+            "the session loaded once: a file placed since is not seen"
+        );
+
+        state.forget();
+        assert!(!state.is_loaded(), "forgetting loads nothing itself");
+        let after = state.status().expect("status");
+        assert!(after.bundle.present && after.bundle.loaded, "{after:?}");
+        assert_eq!(after.bundle.source, AssetSource::File);
+        assert_eq!(after.labels, 1);
+        assert!(state
+            .ensure()
+            .expect("ensure")
+            .as_ref()
+            .expect("loaded")
+            .session
+            .has_reference());
+    }
+
+    /// **A reload keeps the filters the reader chose.** The page pushes them once per mount, to
+    /// the session that is about to be dropped; lifted silently, every later frame would search
+    /// every printing under a popover that says otherwise.
+    #[test]
+    fn a_forgotten_sessions_filters_are_handed_to_the_next_one() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        a_labelled_bundle(dir.path());
+        let state = ScannerState::new(dir.path().to_path_buf());
+        let filters = the_2x2_filter();
+        state
+            .set_filters(filters.clone())
+            .expect("a set that is there");
+        assert_eq!(in_force(&state), filters);
+
+        state.forget();
+        assert_eq!(in_force(&state), filters, "the reload lifted the filters");
+        assert_eq!(state.status().expect("status").unapplied_filters, None);
+    }
+
+    /// The filters a session is searching under right now, loading one if none is.
+    fn in_force(state: &ScannerState) -> ScanFilters {
+        state
+            .ensure()
+            .expect("ensure")
+            .as_ref()
+            .expect("loaded")
+            .session
+            .filters()
+            .clone()
+    }
+
+    /// The one printing's set, as a filter.
+    fn the_2x2_filter() -> ScanFilters {
+        ScanFilters {
+            sets: vec!["2x2".to_owned()],
+            ..Default::default()
+        }
+    }
+
+    /// **A reload that cannot take the filters still owes them.** A mask is built from labels,
+    /// and a reload that lands while `corpus.db` is being replaced has none: the session loads,
+    /// searches unfiltered, and the filters used to be dropped there for good — every later
+    /// frame matched against every printing under a popover still showing them. Now the status
+    /// says so in the crate's sentence, and the next reload that can take them does.
+    #[test]
+    fn filters_a_reload_could_not_take_stay_owed_until_one_can() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        a_labelled_bundle(dir.path());
+        let state = ScannerState::new(dir.path().to_path_buf());
+        let filters = the_2x2_filter();
+        state
+            .set_filters(filters.clone())
+            .expect("a set that is there");
+        assert_eq!(state.status().expect("status").unapplied_filters, None);
+
+        // The reload that loses its labels: it still loads, unfiltered, and says why.
+        let corpus = dir.path().join(crate::db::CORPUS_DB);
+        std::fs::remove_file(&corpus).expect("remove");
+        state.forget();
+        assert_eq!(in_force(&state), ScanFilters::default());
+        let status = state.status().expect("status");
+        assert!(status.bundle.loaded, "{status:?}");
+        let said = status
+            .unapplied_filters
+            .expect("filters that are not in force are said so");
+        assert!(said.starts_with("Filters need card names"), "{said}");
+
+        // A second reload in the same state owes the same filters, not the nothing the session
+        // in between was searching under.
+        state.forget();
+        assert_eq!(in_force(&state), ScanFilters::default());
+        assert!(state.status().expect("status").unapplied_filters.is_some());
+
+        // The labels are back: the reload takes what was owed, and the status is quiet again.
+        a_labelled_bundle(dir.path());
+        state.forget();
+        assert_eq!(
+            in_force(&state),
+            filters,
+            "the filters were dropped at the reload that could not take them"
+        );
+        assert_eq!(state.status().expect("status").unapplied_filters, None);
+    }
+
+    /// **What settles the debt besides a reload is the reader's own newer word.** An accepted
+    /// push is what the session now holds, so nothing older is owed; a refused one changes
+    /// nothing, and the filters the page puts its popover back to are still the ones owed.
+    #[test]
+    fn an_accepted_push_settles_owed_filters_and_a_refused_one_does_not() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        a_labelled_bundle(dir.path());
+        let state = ScannerState::new(dir.path().to_path_buf());
+        state
+            .set_filters(the_2x2_filter())
+            .expect("a set that is there");
+        std::fs::remove_file(dir.path().join(crate::db::CORPUS_DB)).expect("remove");
+        state.forget();
+        assert!(state.status().expect("status").unapplied_filters.is_some());
+
+        // Refused — this session has no labels for any filter — so the debt stands.
+        let other = ScanFilters {
+            sets: vec!["lea".to_owned()],
+            ..Default::default()
+        };
+        assert!(state.set_filters(other).is_err());
+        assert!(state.status().expect("status").unapplied_filters.is_some());
+
+        // Accepted: the reader cleared the filters. Nothing is owed, and a later reload with
+        // its labels back does not bring the old ones in again.
+        state
+            .set_filters(ScanFilters::default())
+            .expect("no filter is always a filter");
+        assert_eq!(state.status().expect("status").unapplied_filters, None);
+        a_labelled_bundle(dir.path());
+        state.forget();
+        assert_eq!(in_force(&state), ScanFilters::default());
+    }
+
+    /// **`forget` is the way back from a poisoned lock.** Every door to the session refuses a
+    /// poisoned `loaded` — and would for the life of the process, since nothing else clears it.
+    #[test]
+    fn forgetting_recovers_a_poisoned_session_lock() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = ScannerState::new(dir.path().to_path_buf());
+        assert!(state.status().is_ok());
+        let poisoner = std::thread::scope(|scope| {
+            scope
+                .spawn(|| {
+                    let _loaded = state.loaded.lock();
+                    panic!("poisoning the scanner's session on purpose");
+                })
+                .join()
+        });
+        assert!(poisoner.is_err() && state.loaded.is_poisoned());
+        assert_eq!(
+            state.status().err().as_deref(),
+            Some("the scanner state is poisoned"),
+            "`ensure` still refuses a poisoned lock nobody has cleared"
+        );
+
+        state.forget();
+        assert!(!state.loaded.is_poisoned());
+        assert!(!state.is_loaded());
+        assert!(state.status().is_ok(), "the next command loads afresh");
+    }
+
+    /// **Behind a frame in flight, and with the lease left alone.** `forget` waits for the
+    /// session a command is holding rather than dropping it under the command, and whoever held
+    /// the scanner before it still does.
+    #[test]
+    fn forgetting_waits_for_a_command_in_hand_and_leaves_the_lease() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = ScannerState::new(dir.path().to_path_buf());
+        let _lease = state.admit("main").expect("a free scanner admits");
+        let (forgotten_tx, forgotten_rx) = std::sync::mpsc::channel();
+        std::thread::scope(|scope| {
+            // A command holding the session, as a frame does for the whole of its decode.
+            let in_hand = state.ensure().expect("ensure");
+            scope.spawn(|| {
+                state.forget();
+                forgotten_tx.send(()).expect("the test is listening");
+            });
+            assert!(
+                forgotten_rx
+                    .recv_timeout(Duration::from_millis(200))
+                    .is_err(),
+                "the session was dropped under a command that held it"
+            );
+            assert!(in_hand.is_some());
+            drop(in_hand);
+            forgotten_rx
+                .recv_timeout(Duration::from_secs(10))
+                .expect("forget runs once the command lets go");
+        });
+        assert!(!state.is_loaded());
+        assert!(
+            state.elsewhere("window-2"),
+            "the lease went with the session"
+        );
+        assert_eq!(in_flight(&state), 1);
+    }
+
+    /// **On a page every door to the session and to a file is one sentence**, and nothing is
+    /// loaded or written on the way to it; the lease, which is a mutex, answers as anywhere.
+    #[test]
+    fn on_a_page_the_session_and_the_capture_are_refused_in_one_sentence() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let state = ScannerState::new(dir.path().to_path_buf());
+        {
+            let _page = crate::platform::host::emulate_page();
+            let refused = Some(NOT_IN_A_BROWSER_YET.to_owned());
+            assert_eq!(not_in_a_browser_yet().err(), refused);
+            assert_eq!(state.status().err(), refused);
+            assert_eq!(
+                state
+                    .frame(&[1, 2, 3], None, &FrameOptions::default())
+                    .err(),
+                refused
+            );
+            assert_eq!(state.reset().err(), refused);
+            assert_eq!(state.set_filters(ScanFilters::default()).err(), refused);
+            assert_eq!(
+                state
+                    .capture(&[0xFF, 0xD8, 0xFF], &Sidecar::default())
+                    .err(),
+                refused
+            );
+            assert!(state.ensure().is_err());
+            // Letting go of nothing, and holding the scanner, are no session and no file.
+            state.forget();
+            let _held = state.admit(PAGE).expect("the page is admitted");
+            assert!(!state.elsewhere(PAGE));
+        }
+        assert!(!state.is_loaded(), "a refused command loaded the session");
+        assert!(
+            !dir.path().join("scanner").exists(),
+            "a refused capture made a folder"
+        );
+        // And the same state, on a host that keeps files, answers.
+        assert_eq!(not_in_a_browser_yet(), Ok(()));
+        assert!(state.status().is_ok());
+    }
+
+    /// Whether `state::with_write` has run on this state's write connection: its first act is
+    /// to arm the managed wishlists' guards there (`managed_wishlist::arm`), which a write made
+    /// on the bare connection never does. The trigger is the one `arm` itself looks for.
+    fn armed(state: &State) -> bool {
+        state
+            .lock_db()
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM temp.sqlite_master
+                                WHERE type = 'trigger' AND name = 'mw_guard_folder_del')",
+                [],
+                |r| r.get(0),
+            )
+            .expect("the connection's own triggers")
+    }
+
+    /// A state over files with `pair_with_a_card`'s printing in it and a warm facet index that
+    /// owns nothing — so a write that goes through `with_write` shows (the guards it arms), and
+    /// one that goes through `with_write_owned` shows again (the index, published anew).
+    fn a_state_with_a_card(name: &str) -> (std::sync::Arc<State>, PathBuf) {
+        let (state, dir) = crate::state::fixtures::on_files(name, "http://127.0.0.1:1");
+        state
+            .lock_db()
+            .execute(
+                "INSERT INTO cards (id,oracle_id,name,set_code,collector_number,lang,layout,
+                    rarity,finishes,prices,raw)
+                 VALUES ('card-1','o1','Test Card','tst','1','en','normal','common',
+                    '[\"nonfoil\"]','{}','{}')",
+                [],
+            )
+            .expect("a card");
+        crate::index::lifecycle::build_now(&state).expect("an index over the fixture");
+        assert!(!armed(&state), "nothing has written through the state yet");
+        (state, dir)
+    }
+
+    /// **The prefs and the tray are written through `state::with_write`, not on the connection
+    /// underneath it** — a state of its own each, because arming happens once per connection
+    /// and the second write on one state could not show it. That the rows land is this module's
+    /// other tests' business, on a bare connection; what is under test here is the door. Plain
+    /// writes, so the facet index is left exactly as it was.
+    #[test]
+    fn the_prefs_and_the_tray_are_written_through_the_states_own_write() {
+        let (state, _dir) = a_state_with_a_card("scanner-write-prefs");
+        let index = crate::index::lifecycle::current(&state).expect("a warm index");
+        let prefs = ScannerPrefs {
+            mode: ScanMode::Exact,
+            developer: true,
+            ..Default::default()
+        };
+        save_prefs(&state, &prefs).expect("prefs");
+        assert_eq!(stored_prefs(&state.lock_db_read()), prefs);
+        assert!(armed(&state), "`save_prefs` wrote beside `with_write`");
+        assert!(std::sync::Arc::ptr_eq(
+            &index,
+            &crate::index::lifecycle::current(&state).expect("a warm index")
+        ));
+
+        let (state, _dir) = a_state_with_a_card("scanner-write-tray");
+        let index = crate::index::lifecycle::current(&state).expect("a warm index");
+        save_tray(&state, &[tray_row("a", 2), tray_row("b", 1)]).expect("tray");
+        assert_eq!(stored_tray(&state.lock_db_read()).len(), 2);
+        assert!(armed(&state), "`save_tray` wrote beside `with_write`");
+        assert!(std::sync::Arc::ptr_eq(
+            &index,
+            &crate::index::lifecycle::current(&state).expect("a warm index")
+        ));
+        assert_eq!(
+            save_tray(&state, &[tray_row("z", 0)]).unwrap_err(),
+            TRAY_ROW_NEEDS_A_COPY
+        );
+    }
+
+    /// **The commit is an owned write** — `with_write_owned`, `collection_import_commit`'s own
+    /// door: beside the rows and the tray, the facet index is published again with the card it
+    /// now owns. Through plain `with_write` every row here still lands and the index goes stale,
+    /// so the Search view's "owned" filter misses a card the reader has just filed.
+    #[test]
+    fn the_trays_commit_is_an_owned_write_and_moves_the_index() {
+        let (state, _dir) = a_state_with_a_card("scanner-write-commit");
+        let before = crate::index::lifecycle::current(&state).expect("a warm index");
+        assert_eq!(before.owned.count(), 0);
+        save_tray(&state, &[tray_row("a", 2), tray_row("b", 1)]).expect("tray");
+
+        let out = commit_tray(
+            &state,
+            &[import_line("card-1", 2)],
+            None,
+            &[tray_row("b", 1)],
+        )
+        .expect("commit");
+        assert_eq!((out.added, out.updated, out.removed), (1, 0, 0));
+        assert_eq!(copies(&state.lock_db_read()), 2);
+        assert_eq!(stored_tray(&state.lock_db_read()), vec![tray_row("b", 1)]);
+
+        let after = crate::index::lifecycle::current(&state).expect("a warm index");
+        assert!(
+            !std::sync::Arc::ptr_eq(&before, &after),
+            "the commit did not publish the index: it is not an owned write"
+        );
+        assert_eq!(after.owned.count(), 1);
     }
 }

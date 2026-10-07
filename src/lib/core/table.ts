@@ -11,8 +11,13 @@ import type { CallArgs, CallOptions, Core } from "./types";
  * - **The arguments are forwarded untouched**, camelCase as `ipc.ts` spells them: the table's
  *   argument structs read the same keys a desktop wrapper does.
  * - **A byte payload crosses as base64** in `body`, because Tauri accepts no raw body on Android;
- *   its headers ride as the call's `args`. Nothing in the table takes bytes yet — the scanner's
- *   frame joins in phase 7, which settles that shape for good.
+ *   **its headers ride as the call's `args`**, an object of strings under the desktop's own
+ *   header names. That is the shape the table takes — settled in phase 7's step 7.3, when the
+ *   scanner's frame and capture joined it as its two `bytes` entries: `scanner_frame` is
+ *   `{ name, args: { "x-scanner-options": "<json>", "x-scanner-detail": "<n>" }, body }`, and the
+ *   engine reads those two keys with the reader the desktop hands its request headers to
+ *   (`grimoire_core::scanner::frame_from`). The web host's `protocol.ts` sends the same `args`
+ *   beside a transferred buffer.
  * - **Events are Tauri's own**: the host forwards every engine event with `app.emit`, so
  *   subscribing is the desktop's `listen` exactly.
  * - **It is a call through `tauriCore`, never an import of Tauri's API**: `tauri.ts` stays the one

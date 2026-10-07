@@ -18,7 +18,7 @@
     <p>MTG Grimoire is made by Markus Seerup. It is a tool for keeping track of a Magic: The Gathering collection. It has no accounts, shows no advertising, and contains no analytics, tracking or crash-reporting code.</p>
 
     <h2>What stays on your device</h2>
-    <p>Everything you make in the app is stored on your own device, in the app's own storage (on a computer, a data folder that belongs to the app): your collection, decks, wishlist, notes, labels and settings. So are the card database, the card pictures the app has shown you, and a log of errors the app ran into. The app does not send any of this to its maker.</p>
+    <p>Everything you make in the app is stored on your own device, in the app's own storage (on a computer, a data folder that belongs to the app): your collection, decks, wishlist, notes, labels and settings. So are the card database, the card pictures the app has shown you, the card scanner's files if you downloaded them, and a log of errors the app ran into. The app does not send any of this to its maker.</p>
     <p>On Android the app is excluded from Google's device backup, so your collection is not copied to your Google account. In a browser, the same data is kept in that browser's storage for mtg-grimoire.app.</p>
 
     <h2>What the app asks other services for</h2>
@@ -35,9 +35,10 @@
         <tr><td>api.cardkingdom.com</td><td>Card Kingdom's price list, if you choose it</td></tr>
         <tr><td>manapool.com</td><td>Mana Pool's price list, if you choose it (Android and desktop only)</td></tr>
         <tr><td>mtg-grimoire-relay.denmark-east.workers.dev</td><td>Sync between your devices, described below — only while you pair a device, and from then on</td></tr>
+        <tr><td>github.com</td><td>The card scanner's files, about 18 MB — only when you press the scanner's Download, and only in the Android app. GitHub hands the download on to its own file servers</td></tr>
       </tbody>
     </table>
-    <p>The desktop apps also ask GitHub (api.github.com) whether a newer version exists. The Android app and the web app do not.</p>
+    <p>The desktop apps also ask GitHub (api.github.com) whether a newer version exists. The Android app and the web app do not, and the web app asks GitHub for nothing.</p>
 
     <h2>The camera</h2>
     <p>The app asks for the camera the first time you use it to scan a pairing code or, where the app offers it, a card. Pictures from the camera are examined on your device and are never sent anywhere. They are not kept, except that the desktop app's card scanner has a control that saves a picture to a folder on your computer when you press it.</p>

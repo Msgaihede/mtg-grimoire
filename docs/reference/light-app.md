@@ -29,13 +29,15 @@ deployed with all of it**, the relay and then the web app, twice each (§10.7), 
 has paired a browser with a desktop in production and synced between them** (2026-10-05; his
 sentence, not a measurement). What has still not been seen: sync on a phone — the camera's
 grant, a real lens on a real code, a socket across the app going to the background; in
-Safari; and in Firefox. §10 closes with what is open and whose it is.
+Safari; and in Firefox. §10 closes with what is open and whose it is. **The scanner on a light
+install is phase 7, begun on 2026-10-07 and recorded a step at a time in §11.**
 
 - The design, all seven phases: [the spec](../superpowers/specs/2026-10-01-light-app-android-and-web-design.md).
 - How the skeleton was built: [the plan](../superpowers/plans/2026-10-01-light-app-skeleton.md); the
   pages: [the phase 3 plan](../superpowers/plans/2026-10-03-light-app-phase-3.md); the web host:
   [the phase 5 plan](../superpowers/plans/2026-10-04-light-app-phase-5.md); sync:
-  [the phase 6 plan](../superpowers/plans/2026-10-04-light-app-phase-6.md).
+  [the phase 6 plan](../superpowers/plans/2026-10-04-light-app-phase-6.md); the scanner:
+  [the phase 7 plan](../superpowers/plans/2026-10-07-light-app-phase-7.md).
 - What is left, phase by phase: [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761).
 - The binding rules for anyone changing it: [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
 
@@ -2460,6 +2462,14 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
   store back on the URL's place without touching history. Hidden rather than refused on the press:
   a link that answered would have nowhere to land, and a share link is a web page a browser opens
   anyway. At 1280 × 800 the collection draws Import and Export and no Open half.
+- **A publish the light hosts cannot make** (2026-10-07). The collection's *Share* half was still
+  drawn for an entitled device in the desktop face — the web app at 1024px and up, an Android
+  tablet — though the five `share_*` commands are registered by the desktop host alone and
+  `grimoire_core::commands` has none of them, so its list and its publish answered *"There is no
+  command named … on this host."* The edition now says `publishes: false`, `AppShell` answers
+  `usePublishes()` from it beside `useReaches`, and `ShareFolderMenu` draws no Share half and
+  asks no `share_list` where it is false. Still a capability rather than a platform question: the
+  page never learns which edition or host it is on. The phone face never drew the control.
 - **`Ctrl+Shift+N`** is the full edition's alone; in the light edition the press is left to the
   browser, where it is the browser's own private-window chord.
 - **`F1` stays the browser's.** Mounting the key map without the caption row would mean an
@@ -2625,8 +2635,12 @@ back only those that cannot run yet on a host with no window. Of the **153** on 
 - **The scanner's ten** (all but its two reads). A session or tray command admits the calling
   window's *label* on the lease, which a table call does not carry; a frame is a JPEG plus a JSON
   header where Android carries base64 (spec §2.4); and the session panics in a browser until
-  phase 7. The phone face's Scanner asks for none of them — **but the desktop face's Scanner page,
-  drawn on an Android tablet past 1024px, would be refused**: phase 7's to close.
+  phase 7. The phone face's Scanner asked for none of them then (it was a sentence until step 7.6)
+  — **but the desktop face's Scanner page, drawn on an Android tablet past 1024px, would be
+  refused**: phase 7's to close. *(Closed in
+  phase 7's step 7.3, 2026-10-07: the ten are in the table, a table call admits `scanner::PAGE`,
+  and a frame is a `bytes` entry whose headers ride as the call's arguments. In a browser the
+  session's five are refused in one sentence until the web step.)*
 - **`share/`'s five** — the module is still `src-tauri`'s (§6.11). The light edition draws no shared
   view, and the Share control shows only to a connected reader.
 
@@ -2677,8 +2691,9 @@ Android host (§8.1) is the first caller**, through `core_call`; no device has r
 
 **Open after this:**
 
-- The scanner on the table (phase 7): the lease needs a caller the table can name, and a frame a
-  body the Android host can carry.
+- ~~The scanner on the table (phase 7): the lease needs a caller the table can name, and a frame a
+  body the Android host can carry.~~ — step 7.3, 2026-10-07: the caller is `scanner::PAGE`, and
+  the body is base64 in `core_call` with its headers as the arguments.
 - The picture warms, once a light host serves pictures and the core can start a future nobody
   awaits.
 - `share/`, as §6.11 left it.
@@ -6774,6 +6789,15 @@ not the second: by the time a page shows the chunk, the page before has moved th
 So the catch-up is **classified whole, before any of it is applied**, which is why a pull
 fetches first.
 
+**Since 2026-10-07 the table's last column reads both rows for a fresh install paired with
+one such device** ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)): on a receiver that has heard from nobody else, `apply` no
+longer judges an older build's claim for a row never held by its sender's watermark
+([sync.md](sync.md), *An older build's claim for a row never held*), and both fixtures run
+such a receiver and end with the live device equal to the unpaged one. The middle column
+was not run again. The one-answer evaluation is kept, and that rule leans on it: every
+other claim is still the watermark's, and a delete that followed a claim is seen beside it
+only where the two are in one answer.
+
 **What says "an older build's baseline" is a horizon with no reference**, and it is exact:
 every build that has emitted a baseline has put the horizon on the first op of every chunk
 (since `94265442`, v0.18.0) and on nothing else; since v0.40.0 every op of a baseline carries
@@ -6799,22 +6823,24 @@ is handed at once. Each, split across a page edge and run the same three ways:
 | … the claim first | equal — **four** copies | two. Not reachable; pinned as a premise by `the_other_order_is_not_one_a_log_can_hold` |
 | A baseline with references, in two chunks | equal | **equal** |
 | A sender held for its clock, its earlier batch a page before | equal | **equal once the clock catches up**; while it is held, the earlier batch has applied where one answer held the sender whole |
-| A `gone` decision and the op that reverses it | equal | ⚠️ **different** |
+| A `gone` decision and the op that reverses it | equal | **equal**, since user schema v60 (2026-10-07); ⚠️ different when this step shipped |
 
-⚠️ **The last row is a convergence defect in `apply` that paging did not make and does not
-hide.** The fixture
-(`a_gone_decision_and_its_reversal_across_a_page_edge_end_as_a_live_devices_pulls_do`): this
+**The last row was a convergence defect in `apply` that paging did not make and did not hide,
+and it is closed** (issue #841, 2026-10-07; [sync.md](sync.md), *A decision resting on `gone`
+is taken back when the parent returns*). The fixture, now
+`a_gone_decision_and_its_reversal_across_a_page_edge_end_as_the_unpaged_pull_ends`: this
 device deleted a binder; another, not having heard, files a copy into it, and in a later push
 renames it — later than the delete, so add-wins brings the binder back. One answer carrying
 both: the rename ranks first, the binder is back, the copy is in it. The copy's push alone,
 then the rename's: the copy names a parent that is gone and nothing handed over can bring it
 back, a binder's key is `SET NULL`, so the copy is written **at the root** and nothing is held;
-the rename then brings the binder back, **empty**. The sender keeps the copy in the binder.
-The two devices differ and nothing either will send says so — the move to the root is
-`apply`'s own write, behind `capture::suppressed`. **A live device pulling between those two
-pushes ends exactly so today**, on the code before this step; paging lets a device that is
-catching up meet it too, when a page edge falls between the two pushes. The test holds paged
-to live and, in its last assertion, the difference itself.
+the rename then brought the binder back, **empty**, while the sender kept the copy in it — and
+nothing either would send said so, the move to the root being `apply`'s own write, behind
+`capture::suppressed`. A live device pulling between those two pushes had always ended so;
+paging let a device that was catching up meet it too, when a page edge fell between them, and
+this step's test held paged to live and, in its last assertion, the difference itself. `apply`
+now writes the decision down and takes it back when the binder returns, and the test holds
+all three equal.
 
 **Measured again, a page at a time** — `npm run web:sync-pull`, the same harness and machine
 as §10.5, the engine at 6 869 005 B, on 2026-10-05. **Every figure below is of the pull as
@@ -6953,11 +6979,15 @@ The rest of what the review found is in the list below, each marked as its.
   There is no credential-free tell for it: `GET /g/abc/pull?limit=1` answers the gate's `401`
   before and after. The runbook's item 14 has the two tells a device's own token gives, and
   neither has been read.
-- **A device that is live while a build older than v0.40.0 pushes its baseline still loses
-  rows**, as it always has; [sync.md](sync.md)'s *What is still owed* has it as its own entry,
-  with the fixtures. It ends when no device in a group is older than v0.40.0.
-- **The `gone` reversal is not fixed.** It needs `apply` to revisit a `SET NULL` it made when
-  the parent comes back — its own entry there too.
+- **A device that is live while a build older than v0.40.0 pushes its baseline lost rows**, as
+  it always had, **until 2026-10-07** ([#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)): closed for a fresh install paired
+  with one such device, and a row it never held. [sync.md](sync.md)'s *What is still owed* has
+  what that leaves — a group of three among it — with the fixtures. All of it ends when no
+  device in a group is older than v0.40.0.
+- ~~**The `gone` reversal is not fixed.** It needs `apply` to revisit a `SET NULL` it made when
+  the parent comes back — its own entry there too.~~ **Fixed 2026-10-07** (issue #841, user
+  schema v60): `apply` keeps a ledger of what it decided without a parent and takes each
+  decision back when the parent returns.
 - **A catch-up's pages are fetched again from the first when one request of it fails**, since
   nothing is applied until the last has arrived. Each page is inside the deadline on its own,
   which the unpaged answer was not; a link that drops one page in a hundred pays the hundred
@@ -7232,10 +7262,670 @@ under *What is still owed* in [sync.md](sync.md), with its fixture in
 
 - **an older emitter's baseline arriving in two separate pushes** leaves a live receiver
   missing rows;
-- **a copy filed into a binder that was deleted on the receiver**, whose sender later brings
-  the binder back, is kept on one device and not the other.
+- ~~**a copy filed into a binder that was deleted on the receiver**, whose sender later brings
+  the binder back, is kept on one device and not the other.~~ **Fixed 2026-10-07** (issue #841);
+  what the same experiments found beside it — with three devices, an older edit arriving in a
+  later pull beats a newer one — is issue #842 and still owed.
 
-## 12. Google Play — the icon, the policy and the listing (2026-10-07)
+## 11. The scanner on a light install — phase 7, a step at a time
+
+A light install points its camera at a card and names the printing — the same engine, the same
+tray and the same commit the desktop has (spec §8).
+[The plan](../superpowers/plans/2026-10-07-light-app-phase-7.md) has the six steps, one pull
+request each, and [card-scanner.md](card-scanner.md) is the engine's own reference.
+
+**Taken as the defaults before anything was built** (the plan's table). Four of them were put to
+Markus on 2026-10-07 and not answered — he said to keep going — so each is his to reverse:
+
+- **This desktop's figures decide what is built, and the bench is made so a phone can run it** —
+  a native binary pushed with `adb`, a page reached over `adb reverse`. The spec opens the phase
+  with a measurement on a real phone in both hosts; no device was attached to the machine, so
+  that run is the owner's, and nothing is promised about Exact or OCR in a phone's browser
+  until it has happened.
+- **A browser gets the assets from the app's own origin** — the web build copies the three files
+  into its static assets — because it cannot ask GitHub: a release download answers with no
+  `Access-Control-Allow-Origin` (asked on 2026-10-07 with the app's `Origin`). Android asks the
+  release, as the desktop's build does.
+- **The phone's Scanner page is one design, built straight**, where each of phase 3's pages came
+  to the owner as built options first.
+- **Nobody deploys by hand**: `release.yml` puts the web app on its origin at a tag, and no step
+  here needs a deploy before one.
+
+**What the tree held before the phase started** (surveyed 2026-10-07, `main` at `63d1a44f`):
+
+- **The engine was linked into every host and ran on one.** Step 7 of phase 2 (§6.10) made
+  `card-scanner` a dependency of the core, so CI compiled it for `wasm32` and for Android, and
+  nothing called it on either; in the web module fat LTO dropped it whole.
+- **The crate assumed threads and a clock**: five `std::thread::scope` sites, a spawned thread
+  for the Exact resolve, about fourteen `Instant::now()` — every one telemetry for an `_ms`
+  field — and `catch_unwind` twice. In a browser the first frame panics, and under the `wasm`
+  profile's `panic = "abort"` the guard guards nothing.
+- **Two of the scanner's twelve commands were in the core's table.** The other ten were on the
+  desktop's `NOT_YET`: a lease that wants a window's label, a frame that is a raw body, and a
+  session that traps in a browser (§8.2).
+- **No light host had the assets and nothing fetched them.** The published `scanner-bundle-v3`
+  is 18 101 604 B — 5 874 752 of hashes, 2 510 284 and 9 716 568 of OCR models — embedded by the
+  desktop's release build and by nothing else.
+- **The phone face's Scanner was a sentence**, and over the fake a camera never added a card:
+  `scanner_frame` answered one decided verdict with one `decision_seq`, which the loop takes as
+  its baseline.
+
+### 11.1 Step 7.1 — the crate runs where there is no thread and no clock (2026-10-07)
+
+Built on Windows 11 over `main` at `63d1a44f`. [card-scanner.md](card-scanner.md) §11 is the
+reference for all of it — the module, the order things run in on one thread, the fence, the
+bench and its figures; this is the step's record.
+
+**The crate had compiled for `wasm32-unknown-unknown` since the core took it (§6.10) and could
+not have got through a frame there.** Five stages fanned out under `std::thread::scope`, an Exact
+resolve ran on a thread of its own, fourteen timings began at `Instant::now()` — which panics in
+a browser, at run time, in a build that compiled without a warning — and two `catch_unwind`s
+stood guard in a build where a panic is a trap. **All of it is behind one module now,
+`card_scanner::host`**: `fan_out`, `par_map`, `join` and `join3` are the scopes their sites had,
+`background` is the resolve's thread, `Stopwatch` is every timing and `guard` is both
+`catch_unwind`s. Each has an arm that runs its closures on the caller, in one fixed order — the
+caller's share first, then the rest as they were handed over — taken where the target has no
+thread and, on a machine that has many, on any thread holding `host::inline()`.
+
+- **Natively nothing moved**: the same threads, the same work on the caller, the same re-raised
+  panic, the thread still called `exact-resolve`, no key of the verdict changed. A test counts the
+  threads each helper uses, and none under the guard.
+- **A resolve "in the background" is a resolve inside the frame on a host with one thread.**
+  Without that arm the spawn would have answered an error there, the job been dropped unrun, and
+  every stretch reported *the Exact resolve failed on this card*.
+- **The clock is the host's to hand over**: an installed one wins, otherwise `Instant` where the
+  target has one, otherwise zero — and zero is safe, because no reading in the crate paces,
+  bounds or orders anything. `ScannerState::new` installs `platform::clock::monotonic_ms`, a
+  `Tick`: `Instant` natively, as before, and `performance.now()` in a Worker.
+- **The crate has a fence of its own** (`host::tests::the_fence`): nothing in its shipped library
+  outside `host.rs` names a thread, a clock, an unwind or a target. It went red on a planted
+  `Instant::now()` before it was trusted. It is a list of spellings, and what the crate's
+  dependencies do is not its to see.
+- **The same frames through a threaded session and an inline one are equal but for their
+  timings** — two tests, Fast and Exact, each verdict compared as JSON with every `…_ms` key
+  removed.
+
+**Proved by running it, which is what a compile never showed.** `crates/card-scanner/bench` is a
+package beside the crate with two faces over one `load` and one `frame`: the crate as a WASM
+module in a dedicated Worker — a frame in as a transferred `ArrayBuffer`, the trip a camera
+page's frame makes — and a native runner over the same inputs. `npm run scanner:bench` builds
+the module with the web host's profile, drives the page in headless Chrome over the web smoke's
+own launcher, and prints what the page itself shows as text. `bench-prep` writes the inputs
+from the published bundle, the corpus and card pictures. CI's `rust` job runs the bench's tests
+and its `core` job checks the package for `wasm32` and for Android.
+
+**`rten` runs in a Worker.** `ocrs` and the eleven `rten*` crates pull `rayon` and `num_cpus`
+unconditionally, and their one-thread fallbacks had been read and never run. Nothing trapped,
+and over 120 frames of eight real printings the module decided what the desktop decided, on the
+same frames, off the same reads.
+
+**A panic there ends the instance, and that was provoked rather than assumed**: asked for on
+purpose it was a `RuntimeError: unreachable` out of the call, and the next frame asked of the
+same instance trapped as well. `host::guard` guards nothing where a panic aborts; containing one
+is the host's, and the only containment is a new instance.
+
+Checked: the crate's suite as CI runs it — 336 library tests and 5 of `serve`'s under `cli`, the
+`builder` bins' 19, `synth`'s 9 — and the bench's 2; the core's clock, scanner and fence tests,
+its clippy natively and for `wasm32`; the scripts' suite and the lint. **A fresh reviewer read
+old against new**, site by site, and found no behaviour difference natively and no way for the
+inline arm to spawn. What it did find is taken: the bench reported *passed* whatever the hosts
+answered — it now exits red when a host disagrees with the threaded native run about which
+frames decided, what was decided or what a reader read, or when a mode answers no frame — and
+the fence had three ways past it (a module in a sub-folder, code below a test module half-way
+down a file, a gate split across lines), each planted and seen red. It refuses a blocking
+`recv`, a `Condvar` and a `Barrier` too, since each is a hang on one thread.
+
+**Not seen**: the Android build of the bench run anywhere — CI compiles it; and everything
+§11.2 lists.
+
+### 11.2 Step 7.2 — the measurement, and what it decides (2026-10-07)
+
+The spec opens the phase with a measurement on a real phone in both hosts. **What was measured
+is one desktop** — a Ryzen 9 5900X, release builds, headless Chrome 154 — over the published
+`scanner-bundle-v3` (118 313 printings, both models) and the dev corpus's 118 475 labels, with
+frames made in software from Scryfall's renders of eight printings. **No phone has run it**: the
+bench is built so one can (below), and that run is the owner's. The whole table, and how it was
+taken, is [card-scanner.md](card-scanner.md) §11 *Measured*; what decides anything is this:
+
+| | Native, threads | Native, one thread | WASM + `simd128` | WASM, as the web host builds |
+| --- | ---: | ---: | ---: | ---: |
+| A steady frame, Fast | 45 ms | 70 ms | 96 ms | 90–234 ms |
+| One title read | 49–61 ms | 112–125 ms | 273–372 ms | 864–1 630 ms |
+| A Fast frame that reads a title and a collector line | 113 ms | 300 ms | 646 ms | 2 495–3 579 ms |
+| Exact's resolve frame, with the readers | 162 ms | 469 ms | 1 189 ms | 2 442–2 650 ms |
+
+Other sessions' builds shared the machine, so the scalar column is a range of two runs and the
+columns compare only as far as that allows. The module of the crate alone is 4 429 400 B,
+**961 003 B through brotli**; without the readers 352 921 B. Its memory stood at **150 MB** with
+the labels attached — most of it `Reference`'s own index, seven hash maps over the labels — and
+at most 233 MB with the readers.
+
+**Decided from those figures, by the agent building the phase** — the owner was asked how the
+phase should be measured and said to keep going, so each is his to reverse:
+
+- **The browser's session runs in a Worker of its own, on a module of its own — not in the
+  engine's.** Four figures say so, and any one would do. *A panic ends the instance*: in the
+  engine's module that is the database and the app's failure screen; in its own, a Worker
+  thrown away and a session built again in about half a second. *A read frame is 0.65–3.6 s and
+  nothing else runs in that Worker meanwhile*: in the engine's, every command, the live socket
+  and a download wait behind it. *A WASM memory never shrinks*: 150–233 MB in the engine's
+  module is held until the tab closes, where a Worker of its own is let go with the page. *And
+  it is 961 kB of module that only a reader who scans has to fetch.* What it costs is the
+  labels crossing from the engine, which holds the corpus, and a second module to build and
+  serve — step 7.5's.
+- **That module is built with `simd128`, and the engine's is left as it is.** It is the
+  difference between a read at 0.3 s and at 0.9–1.6 s, for 28 kB, and a module of its own can
+  ask for it without the whole app depending on it. Fixed-width SIMD has been in Chrome since
+  91, Firefox since 89 and Safari since 16.4, by their release notes — none tested here beyond
+  the one Chrome. A browser without it cannot compile the module, and the page says so in a
+  sentence; the rest of the app is untouched.
+- **A browser gets Fast and Exact, with the readers.** At 0.65 s for a frame that reads and
+  1.2 s for a resolve, in a Worker of its own, the page and its overlay stay live through both.
+  **Nothing is promised about a phone's browser**: a phone's cores are a fraction of this
+  desk's, and the factor has not been measured.
+- **No threads in the browser.** `rayon` over a `SharedArrayBuffer` needs the page cross-origin
+  isolated, which the hosting is not and which would change how every picture and feed is
+  fetched. About half of the gap to native is threads; it stays.
+- **Android is the native crate with its threads**, as the spec had it, and no figure here is
+  about a phone.
+
+**For the owner's phone, when one is attached** — both runs print the same summary this desk's
+did:
+
+- *Native*: CI's `core` job checks `crates/card-scanner/bench` for Android; built there with
+  `cargo build --release --bin scanner-bench-native --target aarch64-linux-android`, pushed
+  with the inputs to `/data/local/tmp` and run from `adb shell`, its output reduced by
+  `npm run scanner:bench -- --summarise <file>`.
+- *The browser*: `npm run scanner:bench -- --simd --dir <inputs> --serve --port 8787`, then
+  `adb reverse tcp:8787 tcp:8787` and the phone's browser on `http://localhost:8787`.
+
+**Not seen**: any phone, natively or in a tab; any browser but one headless Chrome; a
+photograph, or a detail frame — the readers read a 960 px frame's own bands; a quiet machine
+for the scalar module; what 150–233 MB of module memory costs a phone's tab; an input that
+panics the crate.
+
+### 11.3 Step 7.3 — the scanner's commands are the core's, and Android answers them (2026-10-07)
+
+Issue #761, phase 7. Until this step the table held the scanner's two reads and the other ten
+were on `src-tauri`'s `NOT_YET` for three stated reasons: a lease that wants a window's label, a
+frame that is a raw body with JSON in headers, and a session that traps in a browser. Built and
+tested on Windows 11, debug builds, over `main` at `63d1a44f` and merged with it at `912062b6`.
+
+**What was built.** What each of the twelve commands does is one function in
+`crates/grimoire-core/src/scanner.rs` — `ScannerState::{status, frame, reset, set_filters,
+capture}`, `save_prefs`, `save_tray`, `commit_tray` — called from two places: the table, and the
+desktop's wrappers, which now only fetch the state, the webview's label and the raw request.
+`scanner_frame` and `scanner_capture` are the table's first two `bytes` entries. **The shape the
+page already sent is the shape the table takes**: the body is the JPEG, base64 in `core_call` on
+Android, and the call's arguments object is the desktop's three headers by name. The arm hands
+that object on unparsed (`commands::Carried`) and `scanner::frame_from` / `capture_from` read it
+through the lookup the desktop fills from Tauri's `HeaderMap`, so the detail split and every
+sentence are one piece of code. `table.ts`, the web host's `protocol.ts` and the fake are as they
+were. The Android host gained nothing but a test: the camera is the WebView's, granted through
+the manifest's `CAMERA` by wry as the pairing scanner's is, the video is a `srcObject` and the
+frame a canvas `toBlob` read as bytes, so the CSP is asked for neither `media-src` nor `blob:`.
+
+**The lease on a table call is `scanner::PAGE`.** A host of the table has one page, so
+`scanner_elsewhere` answers `false` there and `scanner_hold` always succeeds. The desktop still
+admits the webview's own label, in its wrapper, on the IPC task and before the body is read —
+which is why "admit, read the payload, do the work" is three calls in two places rather than one
+function: folded into one, the desktop's admission would have moved behind a copy of the body.
+
+**A page is refused, deliberately**: `scanner::not_in_a_browser_yet`, one sentence, asked at
+`ScannerState::ensure` and at the capture — the status, a frame, a reset, a filter push, a
+capture. The prefs, the tray, its commit and the lease answer. **The survey had the page wrong
+and the code corrected it**: a refused filter push that is not `OPEN_ELSEWHERE` counts as an
+answer, so the desktop face on a light host did not sit quiet behind a refusal — it opened its
+camera and sent frames to be refused. The view now matches on the sentence
+(`useScannerPrefs`' `unavailable`), asks for no camera and sends no frame, and draws the
+sentence where the picture would be. A prefs read that failed was a second way to the same loop,
+found in review: `loaded` went true with nothing asked of the session. A failed read now pushes
+the defaults' filters and waits for the answer; with that taken out again, the page's test saw
+the camera asked for.
+
+**The fence was blind to the two raw-body commands**: Tauri fills the `Request` in, so wrapper
+and entry both read as taking nothing and the argument comparison agreed without looking.
+`command_table::RAW_BODY` holds them instead, over every command the app registers: a wrapper
+takes the raw request exactly when it is listed, and a table entry is `bytes`, with no named
+argument, exactly when it is listed.
+
+**`ScannerState::forget()`** drops the loaded session so the next command loads again — the door
+step 7.4's download needs, since the first load is otherwise kept for the life of the process. It
+cannot fail, waits behind a frame in flight, leaves the lease alone and clears a poisoned lock.
+The filters the dropped session held are **owed** until a session takes them: a reload that finds
+no labels — `corpus.db` mid-replacement — searches unfiltered, the status says so in the crate's
+sentence (`ScannerStatus.unapplied_filters`, mirrored in `ipc.ts`), and the next reload is
+offered them again. Nothing calls it but tests.
+
+**A fresh reviewer read old against new and found no behaviour difference**, and no defect; its
+verdict was to ship after six fixes, all taken:
+
+- **Two tests proved less than they said.** The writes' tests passed if a body wrote on the bare
+  connection, or if the commit went through plain `with_write`. Each write is now held to what
+  only its door does: the managed wishlists' guards `with_write` arms on a connection, and the
+  facet index `with_write_owned` publishes again with the card it owns. And the paired-frame
+  assertion passed with the split ignored, because a JPEG decoder stops at its end marker; the
+  body is now cut twenty bytes in, and the verdict is a decode failure only a split that was
+  applied produces.
+- **A test that compared a constant with literals** is gone from the core; the desktop holds
+  `PAGE` against the labels its own config and capability name.
+- **The failed prefs read**, above.
+- **Filters dropped at a reload that could not take them** — they were offered once and gone;
+  now owed, above.
+- **The fence missed `Request` written with its lifetime elided**, and read only the table's
+  wrappers where its doc said every wrapper's.
+
+**The fixes were mutated and went red**: `save_prefs` and `save_tray` on the bare connection, the
+commit through `with_write`, the owed filters dropped on a refusal, the split returning the whole
+body, the bare `Request` unread, and the old `loaded`. Two were not: `PAGE` set to a window's
+label, which is a rebuild of the core and the desktop for one line, and the poisoned lock's
+recovery, which has its own test and no mutation.
+
+**Measured.** Through `dispatch` on a state with no assets: the status names three absent paths;
+a real 160×120 JPEG is decoded and answered `matcher: false` in the mode its options header
+named; four wrong detail lengths are four sentences; a capture writes its file and a sidecar
+reading `Æther Vial`. A frame refused by the lease leaves the session unloaded. On a thread
+standing in for a page, exactly five of the twelve are refused and nothing is loaded or written.
+Through the Android host's own forwarding, the same frame as base64. Core `scanner` 59 and
+`commands` 40, desktop `scanner` 9 (its eight body tests neither moved nor lost) and
+`command_table` 9, `grimoire-light` 17; clippy for the workspace and for `wasm32`; 1 016 frontend
+tests over `ipc.test.ts`, `src/lib/core` and `src/features/scanner`.
+
+**Not seen.** No phone has run it: no camera grant, no frame through a real `core_call`, no
+timing of base64 at 960 px or of a 2560 px detail pair. `aarch64-linux-android` was not compiled
+here. No desktop window was driven: that nothing a desktop command answers changed rests on the
+old code read against the new, by its author and by the reviewer, and on its tests. No browser was driven either. The session
+has not loaded real assets on any light host, and `forget` has never run against a real download.
+
+**Open after this step:**
+
+- **What calls `forget`** — step 7.4's download, once the three files are in `<data>/scanner/`.
+  The page's status query is `staleTime: Infinity` and it pushes its filters once per mount, so
+  neither learns of a reload by itself; `unapplied_filters` is drawn nowhere yet.
+- **The session in a browser** (step 7.5), and with it the deletion of `not_in_a_browser_yet`,
+  the page's match on its sentence and the two test blocks named for a host with no session.
+- **The status sentences name a path and a restart** on a host where neither is the reader's to
+  act on — Android until 7.4.
+- **A raw-body command with no table entry** fails the fence as it stands; there is none.
+
+### 11.4 Step 7.4 — the assets are fetched on first use (2026-10-07)
+
+Issue #761, phase 7; the box *"Scanner assets fetched on first use with their measured size …
+not embedded"*. Until this step nothing fetched the scanner's files on any host: the desktop's
+release build embeds them, and every other install — a phone above all — had a status that
+named three absent paths and told its reader to restart. Built and tested on Windows 11, debug
+builds, on top of step 7.3's branch at `dbd771be` and merged with it at `43395ed5`, which is
+`main` through step 7.1, then with `main` at `a0cc6188` (step 7.3 merged, and #854), and last
+with `main` at `67963efe`, which is step 7.6's phone page, and at `9b04035d`, a sync fix that
+touches none of this. The engine's suites below were run after the review round and the real
+fetch twice — once before the review and once after it; the page's suites, the stories and the
+phone smoke were run on the tree with the phone page, and the engine's own module and the
+command table once more on the last.
+[card-scanner.md](card-scanner.md) §10,
+*Where the files come from on each host*, has every rule; this is the step's record.
+
+**What was built.**
+
+- **The core, once** (`crates/grimoire-core/src/scanner_assets.rs`), as two table entries and
+  two desktop wrappers that add nothing. `scanner_assets` answers which of the three files this
+  install lacks — `downloads::Due` rows, the total, and whether a fetch is running.
+  `scanner_assets_fetch` downloads them from the repository's `scanner-bundle-v<FORMAT_VERSION>`
+  release into `<data>/scanner/`, reports through `scanner:assets`, and calls
+  `ScannerState::forget()` — its first caller — so the next scanner command reads them with no
+  restart. The Android host gained a test and nothing else: `core_call` forwards both.
+- **What is owed is what did not load and the binary does not carry.** A desktop release build
+  therefore owes nothing, is offered nothing and makes no request; nothing anywhere fetches
+  until a reader presses. A bundle that is there and unreadable is owed too, which is what an
+  app updated across a `FORMAT_VERSION` leaves on a phone.
+- **A file takes its name only once it is checked**: written to `<name>.part` beside its
+  destination, and only then renamed. **The two models are pinned by SHA-256** — exact length,
+  then the digest compiled into the engine, before any loader sees a byte, then the pair builds
+  the reader the session will build. **The bundle cannot be pinned**, so it is held to its
+  ceiling as it arrives, to `Bundle::from_bytes`, and to not being empty. A leftover `.part` is
+  started over, never resumed. One fetch at a time, a second refused in a sentence; every wait
+  under the feeds' sixty-second stall bound; no retry loop.
+- **HTTPS on every hop, with constants, and GitHub's redirect followed** under `reqwest`'s
+  default policy: the client is built `https_only` — a switch this step gave
+  `platform::http::Config` — so the request and each hop of a redirect are HTTPS or the request
+  ends as an error.
+- **A failure is one sentence and a row in `error_log`**, the feeds' pattern
+  (`database` / `scanner_assets`). The sentence names the file, never the app-private folder.
+- **Both commands are refused on a page**, in step 7.3's sentence from step 7.3's helper,
+  before any request. GitHub sends no CORS header; the browser's source is step 7.5's.
+- **The page** (`src/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`, both clean of
+  the phone's import fence): the offer with its measured size — *The scanner needs its card data
+  — about 19 MB*, each figure rounded up as the launch prompt's are — a Download button with the
+  touch floor, a bar that follows the event, the engine's sentence and a Retry on a failure.
+  **Drawn from what the host answers and nothing else**: no rows, or a refusal, is no offer.
+  It stands where the path-and-restart sentences were, for the files it offers; the Developer
+  panels still name each path and error. **Mounted on both faces**: in the desktop face's
+  `ScannerPage` as one component in place of the notes, and in the phone face's slot under its
+  camera (`mobile/phone/scanner/ScannerDataSlot.tsx`, which step 7.6 left for it), where it
+  replaced the sentences that told a phone to put files at a path. Each page hands it the same
+  two things to do when a download lands. The status query both pages read is under one
+  exported key, `SCANNER_STATUS_KEY`, which is the key a landed download marks stale.
+- **When a fetch ends the page does its two halves of the reload**: the status is asked again,
+  and `useScannerPrefs.resync` pushes the *stored* filters — read from the row again, because
+  a session with no bundle refused them at mount and the popover was put back to none — to the
+  session that can now take them. The loop's latched reads are dropped. `decision_seq`
+  restarting at zero needed nothing: the loop takes every verdict's number, and a new session's
+  first frame carries no decision.
+- **The fake** owes the three files under `scannerMissing`, and its fetch is the one handler
+  that takes time — three short stretches, said through `scanner:assets` — after which the
+  fault is over and its status reads present. `scannerFetchFails` is the refused download.
+
+**Decided here, and the owner's to reverse.** A second fetch is *refused*, not joined — the
+house rule for a second sync or refresh — and the page learns of a running one from
+`Owed.fetching`. A leftover `.part` is *started over*: 18 MB, and a bundle that changes weekly.
+The redirect's host is *not* pinned, because GitHub has renamed it before; the scheme is. The
+sizes round *up*, so the offer reads 19 MB for 18.1. And the launch's mobile-data hold does not
+cover this fetch: it starts only on a press that has just read the size.
+
+**A fresh reviewer read it as network-and-file code**, and found no way for a partial or a
+wrong file to be renamed into place, no unbounded memory, no claim left held, no request from a
+release desktop build and no lock across an `await`. Its verdict was to ship after six fixes,
+all taken:
+
+- **A fetch that ended with no Scanner view mounted left the status stale.** The page's status
+  query never goes stale by itself and only a mounted hook marked it, so a reader who pressed
+  Download, left, and came back after it landed was shown the status read before the download —
+  *put a file at this path and restart* — for a scanner the engine had already reloaded; and a
+  failure while away was state of a hook that no longer existed. The press's own promise marks
+  the status now, mounted or not, and the last failure is kept in the cache. Both tests were
+  red first.
+- **Two sentences carried an app-private path, and one path leaked a `.part`**: a rename that
+  failed on the first model left the second model's 9.7 MB under its temporary name, because
+  the list it was on had been emptied before the loop. Sentences name the file; every model's
+  `.part` goes on any failure; a panic on the blocking pool is a sentence without the runtime's
+  account of it.
+- **The streaming limits had no test**, because the mock server always declares a length. A
+  raw server now answers with none: a model that runs past its length is stopped a chunk in, a
+  bundle past its ceiling likewise, a body that ends short of what it declared is the
+  transport's error. The ceiling moved into the test seam; a redirect is followed in a test.
+- **No `error_log` row**, where every feed writes one. Written now.
+- **The models were held to a length and a loader, and the HTTPS check looked only at where the
+  answer finally came from.** The two models are pinned by SHA-256 — `f15cfb56…b5ca` and
+  `e484866d…5a6e`, read three ways that agreed — and checked before the loader; an empty bundle
+  is refused; the client is HTTPS-only on every hop; and `scanner-bundle.yml` refuses to go on
+  unless the models it fetched are the two the app pins, reading the digests out of the Rust.
+- **An offer that could never clear**: a detection model corrupt at its right length beside a
+  missing recognition model owed only the second, and every press fetched 9.7 MB to fail the
+  pair. A model is owed by its digest now, hashed only when the pair did not load; two pinned
+  files that still do not load owe nothing; and a folder where a file belongs, or a file where
+  the models' folder belongs, is a sentence before anything is asked of the network.
+
+And four smaller ones: a window that did not press hears the fetch's events and re-reads what is
+owed and the status; `resync` no longer puts the stored row over a change made while it was
+reading it; the page is told once per fetch end, whatever answers late; and the bar's last line
+is the total the offer named.
+
+**The fixes were mutated and went red**: eight of them at once in the engine — the `.part`
+cleanup, the per-chunk ceiling, the digest check, the empty-bundle refusal, the `error_log` row,
+the not-a-file refusal, the digest in what is owed, the HTTPS-only switch — turned twelve of the
+module's twenty-two tests red, each fix's own among them. The page's two tests for a fetch that
+ends with nothing mounted were written first and seen red.
+
+**Measured.** The real fetch, from a test marked `#[ignore]`, into a scratch state with an empty
+`scanner/` folder, twice: three files owed, 18 101 604 B; **`fetch` answered in 1.82 s before
+the review and 1.35 s after it** on this desktop's link, with 5 874 752, 2 510 284 and
+9 716 568 B under their three names, both models matching their pinned digests, 76 progress
+events ending on `done`, nothing owed and nothing in `error_log`; `scanner_status` on the same
+state, with no restart, then read all three `source: file`, `loaded: true`. Against local
+servers: the happy path, a 404 and a 503, a body that goes quiet (given up on at the stall
+bound) and one that is cut off, a bundle with the wrong magic, one cut short and one that is
+empty, a bundle past its ceiling declared and undeclared, a model too short, too long and of
+the wrong digest, a pair that does not load, one missing model fetched alone, a corrupt one
+replaced, a place a file cannot take, a rename that fails, a redirect, a plain-HTTP release
+refused by the HTTPS-only client, a leftover `.part`, a second concurrent call and the page
+refusal — each leaving nothing in place that was not checked. Core `scanner` 82, of which
+`scanner_assets` 22, `commands` 41, `platform::http` 5 and the fence 8; desktop `scanner` 9 and
+`command_table` 9; `grimoire-light` 18; `cargo fmt` clean over the four crates; clippy for the
+workspace and for `wasm32`; 2 009 frontend tests over `ipc.test.ts`, `src/features/scanner`,
+`.storybook/fake` and `scripts/`; the two scanner story files' ten plays through a throwaway
+copy of the story harness (the whole of `stories.test.tsx` was left for the fan-in); the
+hosting census, the phone's import fence and the token sweep. The workflow's digest step was
+run by hand in Git Bash against the real models, a tampered one and a source it could not
+read: matched, refused, refused.
+
+**Seen on the phone face, over the fake.** `npm run mobile:scanner-smoke`, a headless Chromium
+at 360×800 and 412×915 under a touch pointer with its test-pattern camera running: with the
+scanner's data absent the slot draws the offer and its size, nothing scrolls sideways and
+Download is at least 44px; a press draws the bar; and when the fake's download lands the offer
+clears with no reload, the line stops saying it cannot identify, and the camera that was
+running all along names its next card. That is the page, the hook, the reload and the filter
+push end to end in a browser — and none of the engine: the fake stands in for the download.
+
+**Not seen.** No phone: not the download on a mobile link, not the model pair loading in that
+build, not 18 MB against a phone's storage, and not the offer on a real phone's screen. No
+metered connection. No stall or dropped connection against the real host, and no redirect to
+plain HTTP anywhere — the switch is `reqwest`'s, seen refusing a plain-HTTP request, not a hop.
+The workflow's new step has not run in Actions. No app window over the real engine, desktop
+or light: the real fetch was a test's, and the offer was driven over the fake, so the press,
+the bar and the reload have not been watched against a real download. No release build was made, so *embedded, nothing
+owed, no offer* rests on the rule's test and on the page's. And no `FORMAT_VERSION` has moved
+under an installed app; what happens then is a reading of the code.
+
+**Open after this step:**
+
+- **`scannerStatusFacts`' `assetNotes` has no reader left** but its own test: both faces draw
+  `ScannerAssets`, which chooses the sentences itself because it knows which files are offered.
+- **The browser's source** (step 7.5): a page that answers `scanner_assets` with rows and
+  `scanner_assets_fetch` with the same `Owed`, and says `scanner:assets` in the same payload,
+  draws this offer unchanged. Until then both are refused there and nothing is drawn.
+- **`ScannerStatus.unapplied_filters` is still drawn nowhere.** After a fetch the page pushes
+  its filters itself, which settles the debt the status would have reported.
+- **A `.part` nobody fetches again stays on disk** — a process killed mid-download, and a
+  reader who then placed the files by hand. Up to 12.2 MB, the two models', and nothing reads
+  it. (A fetch that fails removes its own.)
+- **No refresh.** An install that fetched once keeps that bundle until a `FORMAT_VERSION` bump
+  makes it unreadable, so sets released since go unrecognised — as on a desktop, whose embedded
+  copy is as old as its release.
+- **No deadline on the whole fetch, and no cancel**: the stall bound is per chunk, so a link
+  that trickles is never given up on, and nothing ends a fetch but its end.
+- **The weekly `--clobber` has a moment with an asset missing**, and a fetch that lands in it
+  is told the file *is not published for this version* — wrong about why; the next press works.
+- **Metered links**: the offer says the size and nothing about the link, and the launch's
+  mobile-data hold does not cover it.
+
+### 11.5 Step 7.5 — the web host
+
+*Not merged yet.*
+
+### 11.6 Step 7.6 — the phone's Scanner page (2026-10-07)
+
+Issue #761, phase 7. The fifth tab was a sentence since phase 3. It is the scanner now:
+`mobile/phone/pages/ScannerPage.tsx` and `mobile/phone/scanner/`. Built on Windows 11 over
+`main` at `63d1a44f` and merged with step 7.3's branch at `43395ed5`, so the page stands on the
+commands that step put in the core's table: on Android all twelve answer, and on a page the
+session's five are refused in one sentence, behind which the page is quiet.
+[card-scanner.md](card-scanner.md), *On the phone face*, has what is shared and what is the
+phone's, file by file.
+
+**The desktop reader's parts in the phone's idioms**, one design built straight (§11). What
+decides is the desktop feature's, imported: the camera, the pump and its one-add-per-card edge,
+the tray and the prefs — the same two `app_meta` rows, so a tray scanned on one face of an install
+is the tray on the other — the gate, the reducers and the sentences. **Six things lived inside
+the desktop page and were moved out so both pages call them**: the lease's heartbeat
+(`useScannerHold`), the grace on a view out of sight (`useParked` — the phone parks on the
+document's own visibility, where the desktop asks Tauri), how a decision lands (`useTrayLanding`),
+where the tray files and the commit (`useTrayCommit`, `reader/trayCommit.ts`), the status facts
+(`useScannerStatus`) and the frame options. The desktop's suite did not move, and its Match strip
+is the same markup as `main`'s in eleven states.
+
+**What is the phone's is the arrangement**, because each of the desktop's is built for a pointer.
+One *Options* sheet stands in for the bar's four popovers, each mode's hint a sentence where the
+desktop has a tooltip. The camera's box is the stream's own shape, capped at 38dvh — a zero-basis
+grow collapses in a scrolling column. The status line folds onto two lines: at 330px the
+desktop's one row is the pill and the instruction with no room for a name. The tray is rows —
+the name wraps, the printing and the finish are 44px presses that open sheets, and a row waiting
+on a pick is its candidates as whole cards. The footer, the destination and Add, is outside the
+scroller. **A refusal is words on the page**: under Add, on a sheet row's second line, over the
+picture. *Stop* keeps the camera lit, as on the desktop.
+
+**Not offered**: the Developer switch — the phone sends `previews: false` whatever the stored
+switch says and never writes it — and the tray's grid: a finish and a stepper at 44px do not fit
+under a 156px tile, so `trayLayout` is left alone.
+
+**For that the fake grew a session.** `scanner_frame` answered one decided verdict for ever, with
+the `decision_seq` the loop takes as its baseline (§11), so over the fake a camera added nothing.
+It is a script now (`.storybook/fake/scannerScript.ts`): a pile of five cards, thirteen frames a
+card, 110 ms a frame, and in Exact a last card that is three reprints it cannot split.
+
+**Driven** — `npm run mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome
+154 with `--use-fake-device-for-media-stream` under a touch pointer and the dark scheme, over
+`mobile:dev`. The fake, not the engine.
+
+| | 360×800 | 412×915 |
+| --- | --- | --- |
+| The camera's box, on a 1920×1080 stream | 328×185 | 380×214 |
+| The footer, over the tab bar | 634–747 over 747 | 749–862 over 862 |
+| With 5 rows and with 40 | Add and the folder under a thumb | the same |
+| A control under 44px, a sideways scroll | none | none |
+
+Three cards make two rows, every frame Fast and without previews; *Stop* holds the picture; Add
+is one `scanner_tray_commit` and the receipt says *Added 4 copies to Binder.*; a hidden page
+closes its camera after the grace and reopens it; leaving the page stops its track; a refused
+camera lands on its sentence. On its side at 800×360 the two columns stand side by side — the
+camera 336×189, the tray 319px beside it — with the footer on screen. Two things the pass
+changed: the set picker in the filters page was 36px tall, and beside a finish reading `Unknown`
+the printing was cut to `STA 1…`.
+
+**The two columns begin at 720px, not at the rail's 600**, where they were first put: the page
+beside the rail is then 520px, and measured there the tray was a 288px column with its printing
+press 43px wide beside a camera 200px across.
+
+**A fresh reviewer read the branch** — the desktop's behaviour unchanged, both fences clean, every
+camera exit path stopping its tracks — and its verdict was to ship after fixes, all taken:
+
+- **A host with no session.** Step 7.3 gave `useScannerPrefs` its `unavailable`, and the phone
+  page had been written before it: it kept its gates on `loaded`, which is enough to ask for no
+  camera and send no frame, and drew nothing to say why. It now draws the engine's sentence where
+  the picture would be, drops the status line and its Reset — one would say *Point the camera at a
+  card*, the other would ask a session that is not there — and refuses the filters.
+- **A pile could be filed twice.** The commit's in-flight flag is one mount's state. Press Add
+  while a sync holds the write connection, tab away and back — or cross 1024px — and press again:
+  the second commit read the same rows, queued behind the first, and sent the same lines. It was
+  the desktop page's behaviour, reachable now from two faces. The lines are built when the write
+  goes out, from the pressed rows still in the tray by identity (`useTray`'s `commit` takes a
+  function), so the second commit finds its rows gone, sends nothing and answers `null`.
+- **A page that mounted hidden opened the camera for five seconds** — a tab restored in the
+  background at `/scanner`. `usePageParked` starts released there; the desktop's window is as it
+  was.
+- **The fake's one slow handler took the fake's pointer with it.** `invoke` points the fake back
+  at a call's world as it settles; a frame still on the wire when a test ended settled in the
+  next test and handed that test's timer-made calls to the finished test's world — found as a
+  tray that was never stored and cards from another test's pile, two runs in three. `invoke` now
+  points back only at a world that is still standing (`scope.ts`), with a test that stages it.
+- **The caret was left on `body`** when a sheet closed, and two things were said to no one: Add's
+  reason was not the button's description, and the note over the picture was a live region
+  mounted with its words already inside. Every sheet hands the caret back to the press that
+  opened it on a choice, Escape and the ✕. In the tray that press is found again after the
+  render: the *More printings…* of a row waiting on a pick is on screen when the sheet shuts and
+  gone a tick later, when the row draws as settled — and unkeyed, React had kept the node and
+  made it the settled row's finish press, with the caret still on it.
+- **The footer and the receipt said `Collection` for a folder they could not name** — the list
+  would not load, and the commit sent the stored id. They say *Folder name unavailable* and *to
+  your collection*.
+- **Four tests proved less than they said, or nothing**: the loop held off until the tray has
+  loaded, a row's sheet shutting when the row leaves, the two-column arm measured by the smoke
+  at 800×360, and an assertion that a string which exists nowhere was absent.
+
+**The fixes were mutated and went red**: the page forgetting `unavailable`, the lines built at
+the press, a hidden mount given its grace, `invoke` pointing back unconditionally, the tray's
+hand-back run once, the region mounted with its words, the description and the folder sheet's
+hand-back removed, and `tray.loaded` out of the loop's gate — ten tests between them. Earlier,
+the camera's gate, `scanning`, the pause, the release and `previews: false`.
+
+**The sentences are shared, not retyped**: *Scanning stopped…*, the line under the gate's
+sentence, and the camera note, which now reads *on this device* on both faces. **The gate still
+says "another window"** on a phone: that sentence is the engine's (`scanner::OPEN_ELSEWHERE`,
+pinned by `ipc.test.ts`), and was left.
+
+**Not seen.** No real lens, no real phone, and no engine behind this page: every frame here was
+the fake's. The camera's grant (Android's prompt, a browser's), a portrait stream in the capped
+box, the frame rate a phone's canvas and JPEG encode give the pump, and the detail frame — a
+2560 px encode on the frame that can least afford it — are a device's to show. Neither the page
+on Android through a real `core_call` nor the quiet page in a built web app was driven.
+
+**Open after this step:**
+
+- **The slot under the camera says to put files at a path**, which a phone cannot do.
+  `ScannerDataSlot` (`mobile/phone/scanner/`, handed the whole `ScannerStatus`) is where step
+  7.4's download offer goes; `unapplied_filters` is still drawn nowhere.
+- **The session in a browser** is step 7.5's, and with it the deletion of the page's match on
+  the engine's sentence — `CameraBox`'s `unavailable`, the hidden status line, and the test
+  named for a host with no session.
+- **A rejected frame is asked again at the grab rate.** `useScanLoop` does not pause on a
+  rejection; a busy database is said over the picture and asked many times a second until it
+  passes. The quiet host is not this case.
+- **Whether a backgrounded Android app reports a hidden page**, which the park rule rests on, and
+  whether a frozen page runs the grace's timer at all.
+- **`setInterval` is not bound to a world in the fake**, and the heartbeat uses one: harmless
+  with one story on a page, said in `scope.ts`.
+- The smoke runs nowhere but by hand.
+
+## 12. Google Play — the host offers no membership (2026-10-07)
+
+The Android host is published on Google Play
+(`docs/superpowers/specs/2026-10-07-google-play-release-design.md`). Play's Payments policy
+requires its own billing for anything an app sells, and forbids an app to lead a reader to a
+payment made elsewhere — "buttons, links, messaging... or other calls to action" — except
+through programs that need enrolment and reporting. It allows an app to use what was paid for
+somewhere else. Sync is paid for on Patreon, and a membership belongs to a group, so the owner
+chose **pair-only**: the Play build offers nothing, and a phone gets sync by being paired into
+a group that already has it.
+
+- **One name, answered by one host.** The Sync panel asks `membership_elsewhere`
+  (`src/lib/core/hostMembership.ts`). The light Tauri host answers a sentence of its own
+  (`mobile/src-tauri/src/membership.rs`); the desktop app and the web host have no such command
+  and draw what they always have. On a host that answered, the panel's second half is headed
+  *Relay*, keeps the sentence about the relay needing no account, draws the host's sentence
+  while sync is not on, and keeps the figures, the socket's line and *Sync now*. It draws no
+  status line, no offer and no claim code, and nothing at all until the host has answered or
+  refused.
+- **Two refusals.** `sync_patreon_begin` and `sync_patreon_claim` are refused in `core_call`
+  before the table is reached.
+- **Four sentences reworded.** The relay's device cap (`entitlement::GROUP_IS_FULL`) reads as
+  the pairing ceremony's own (`identity::GROUP_IS_FULL`); a removal with nothing to carry it
+  (`identity::NO_MEMBERSHIP`) loses "Connect a membership first."; a 401's "the membership
+  has ended" becomes "sync is no longer on for this group"; and the key check's 401, which
+  tells a reader to "reconnect Patreon once", says instead that sync is not on for the group
+  yet, or has to be set up again on the device it was turned on from. That fourth one is a
+  literal inside a function in the core and not a constant, so the host matches its opening
+  words and `mobile/host.test.ts` holds those words to the core's source. Each is matched
+  **wherever it appears in an error**, keeping what surrounds it, because the core wraps them
+  ("Could not reach the relay to collect … {error}"). A sync error that still names a
+  membership after that — in a wording this host has not seen — is replaced whole by "Sync
+  could not do that for this group."; that last fence is scoped to commands named `sync_*`
+  and to error-log rows from the relay, so a deck a reader named "Patreon rewards" keeps its
+  own message. The refusals of the two connecting commands carry no command name, because the
+  name itself says Patreon. The core's wording is unchanged for the other two hosts.
+- **What a phone-only member does.** Opens `https://mtg-grimoire.app` in the phone's browser,
+  connects there, and pairs the app with it by the typed code. That costs one of the group's
+  five places.
+- **The error log, and what is left knowingly.** The core writes two of those sentences to `error_log` as they
+  happen — the relay's device cap by the live-sync loop, and the key check's 401 by the sync
+  client — and for a group nobody has turned sync on for, the key check's is written at
+  pairing and again at every launch, because the relay answers 401 to a key check for any
+  group it holds no rows for. Two Play phones paired together would fill Settings → Errors
+  with it, so the host rewords the rows `error_log_list` answers, the same way
+  (`membership::reword_rows`, called on that one command's `Ok` in `forward`, `core_call`'s
+  tail and this host's one call into the core's table — errors are reworded there too). The
+  settings search still matches the words `patreon`, `supporter` and `membership` on the
+  desktop face, and displays none of them. The collection's Share button on the desktop face is drawn for a device whose
+  group is entitled and calls a command no light host has — on the web app too — and is its
+  own change.
+- **Not seen in a window yet.** The panel on a host that answers has been driven only by its
+  tests and its story (`SyncPanel.test.tsx`, `OnAHostThatOffersNoMembership`). Owed: a look at a
+  phone's width over the fake (`mobile:dev` at `/settings?fault=pairOnly`), the real host's own
+  sentence under a page (`mobile:tauri`), and the phone itself.
+  Seen since, over the fake (`mobile:dev`, 2026-10-07): at 375px and at 1280px a host that
+  answers draws *Relay*, the host's sentence and "Sync is off. Nothing leaves this device.",
+  with no membership wording; a host that refuses draws the membership half as before. Still
+  owed: the real host under a page, a phone, and — the state no fake can stage — two devices
+  paired in a group nobody has turned sync on for, then Settings → Errors and *Sync now*.
+
+## 13. Google Play — the icon, the policy and the listing (2026-10-07)
 
 - **The launcher's icon was Tauri's logo.** `tauri android init` writes it into every
   `mipmap-*`, with Android's stock robot in `drawable*`, and nothing had replaced it — the app

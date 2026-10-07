@@ -231,7 +231,8 @@ const NOT_ASKED_FROM_A_BROWSER: Record<string, string> = {
     "it sends no Access-Control-Allow-Origin, and the engine refuses the feed on a host that cannot reach it before any request (step 5.2)",
   "www.patreon.com":
     "the authorize address the engine builds for the page to open in a new tab — a navigation, which connect-src does not govern",
-  "github.com": "the repository's address inside the User-Agent's text, not an address anything asks",
+  "github.com":
+    "the repository's address inside the User-Agent's text, which nothing asks; and the release the scanner's files are fetched from (scanner_assets.rs), which sends no Access-Control-Allow-Origin — the engine refuses that fetch on a page before any request (step 7.4)",
   "fonts.googleapis.com": "card-scanner's debug page, HTML a native debug server serves",
   "fonts.gstatic.com": "card-scanner's debug page, as above",
 };

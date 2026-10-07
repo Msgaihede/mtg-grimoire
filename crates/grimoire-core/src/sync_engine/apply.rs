@@ -3,7 +3,10 @@
 //! Four things happen here and nothing else does:
 //!
 //! 1. **Ops already seen are dropped**, against `sync_peers`. Idempotence is the counter rule's
-//!    other half: an op replayed after a reconnect must add its delta once.
+//!    other half: an op replayed after a reconnect must add its delta once. **One op is not the
+//!    watermark's to call seen**: an older build's baseline claim for a row never held, on a fresh
+//!    install that has heard from nobody else ([`never_held`]) — its stamp is its row's
+//!    `updated_at`, which is no place in a log.
 //! 2. **A row is found by grain, then by uid, then inserted** — and where a grain match carries
 //!    a different uid, both devices set the row's uid to `min(theirs, ours)`, which converges
 //!    with no alias table — except onto a row this page deletes, whose uid the sender retired, so
@@ -113,6 +116,17 @@
 //! `client::pull` holds `PULL_CURSOR` while either held count is non-zero, so the relay hands the
 //! page back, and ends a waiting hold at its bound by applying the page once more with
 //! [`Waiting::Release`]. [sync.md](../../../docs/reference/sync.md) is the record.
+//!
+//! # A decision resting on a gone parent is written down, and taken back if the parent returns
+//!
+//! Both answers above are right while the parent stays gone, and add-wins can bring it back on a
+//! later pull: its own device edited it after the delete. A decision taken by then was final,
+//! and what a device ended on depended on where the log was cut (issue #841). So each one leaves
+//! an entry in `sync_orphans` — the row written without its parent, the row folded onto a twin
+//! at the root, the row consumed or deleted and everything its delete took — and
+//! [`orphans::sweep`], at the end of every pass, replays every entry whose parent is a row here
+//! again. An op that arrives for a row only the ledger holds is laid over its entry instead of
+//! being skipped. [`orphans`] is the whole of it.
 
 use crate::sync_engine::capture::{self, Absent, Parent, Spec};
 use crate::sync_engine::emission;
@@ -686,7 +700,7 @@ enum Why {
     /// §6).
     Unbuildable(String),
     /// Not decided yet, because what the page does to the group is only known once other groups
-    /// have landed. Two things answer it (spec 2026-09-27 §3.3):
+    /// have landed. Three things answer it (spec 2026-09-27 §3.3, and the third since 2026-10-07):
     ///
     /// - **A group naming a parent [`gone`] says was deleted**, whether its key cascades (moot) or
     ///   is `SET NULL` (written without it), on the first attempt and on every
@@ -702,6 +716,10 @@ enum Why {
     ///   delete. **A `Decide` pass is not late enough for it**: that pass's own decisions land
     ///   groups — a deck written without its gone folder, then the deck's group — and a copy the
     ///   sender moved into such a group is re-filed only after them, later in that same pass.
+    /// - **A move or an edit onto a grain a row of this device's own already holds**
+    ///   ([`fold_onto_the_holder`]), on every pass but an [`Attempt::Clear`] one, for the clearing
+    ///   delete's reason: it is answered by the same merge, and the row in the way may be one the
+    ///   page takes first.
     ///
     /// **Never classified**, short of the loop's cap: a withheld group is on every pass until it
     /// is decided, `run_groups` stops only on a pass that withheld nothing, and it keeps only
@@ -746,7 +764,8 @@ enum Attempt {
     Decide,
     /// A retry pass after a `Decide` pass on which nothing landed: nothing else in the page can
     /// land any more, so this one takes every withheld decision, clearing deletes included — it
-    /// re-homes what is still filed in a folder at the root and deletes the folder.
+    /// re-homes what is still filed in a folder at the root and deletes the folder, and folds a
+    /// row moved or edited onto a grain this device holds into the row there.
     Clear,
 }
 
@@ -920,6 +939,30 @@ fn apply_in(
     // these rules, so the two can never disagree about it.
     let horizon: &Horizon = &decided.older;
 
+    // What an older build's claim below the watermark is asked ([`never_held`]). Read only where
+    // the page carries such a baseline and its emitter is all this device has ever heard from.
+    let emitter = alone(
+        ops,
+        held_back,
+        &decided.strip,
+        &watermarks,
+        me.as_deref(),
+        conn,
+    )?;
+    let mut named: BTreeMap<(&str, &str), usize> = BTreeMap::new();
+    if emitter.is_some() {
+        for op in ops.iter().chain(held_back) {
+            *named
+                .entry((op.table.as_str(), op.uid.as_str()))
+                .or_default() += 1;
+        }
+    }
+    let unseen = Unseen { emitter, named };
+    // The rows such a claim was let through for. **Each is a group of that claim and nothing
+    // else** — `never_held` asks that no other op of the page names the row — and where it cannot
+    // be written it is skipped, as it was (`run_groups`).
+    let mut lenient: BTreeSet<(&str, &str)> = BTreeSet::new();
+
     // 1. Everything already seen, and everything this device wrote itself — after what `decide`
     //    consumed or kept, which no rule here overrides.
     let mut fresh: Vec<&Op> = Vec::new();
@@ -935,10 +978,19 @@ fn apply_in(
         // Exemptions in spec §9.1's table: a baseline op describes the horizon rather than
         // being described by it, and a tombstone is the one thing a claim cannot express.
         let inside = op.kind == Kind::Put && !op.baseline && horizon.covers(&op.at);
-        if mine(op) || seen(op) || inside {
+        // **Seen is the watermark's word, and an older build's claim is the one op it can be
+        // wrong about**: its stamp is its row's `updated_at`, not a place in its sender's log, so
+        // a row never held here can sit below a watermark that says nothing about it
+        // ([`never_held`]).
+        if mine(op) || inside {
             report.skipped += 1;
-        } else {
+        } else if !seen(op) {
             fresh.push(op);
+        } else if older_claim(op, decided.strip.contains(&i)) && never_held(conn, op, &unseen)? {
+            lenient.insert((op.table.as_str(), op.uid.as_str()));
+            fresh.push(op);
+        } else {
+            report.skipped += 1;
         }
     }
 
@@ -1032,7 +1084,9 @@ fn apply_in(
         conn.execute_batch("SAVEPOINT sync_pass")
             .map_err(|e| e.to_string())?;
         let mut pass = ApplyReport::default();
-        let deferrals = run_groups(conn, &groups, &blocked, &deleted, waiting, &mut pass)?;
+        let deferrals = run_groups(
+            conn, &groups, &blocked, &deleted, &lenient, waiting, &mut pass,
+        )?;
         let found = blocks_of(&deferrals, &blocked);
         if found == blocked || round == cap {
             // At the cap `found` names blocks this pass did not honour — it applied ops above
@@ -1066,6 +1120,8 @@ fn apply_in(
         match d.class {
             Class::Newer => report.held_newer += n,
             Class::Waiting => report.held_waiting += n,
+            // An older build's claim let through and not written is skipped, as it was.
+            Class::Moot if lenient.contains(&row) => report.skipped += n,
             Class::Moot => report.moot += n,
             Class::Dropped => report.dropped += n,
             Class::HeldBack => {}
@@ -1204,12 +1260,20 @@ fn run_groups<'a>(
     groups: &'a [Group<'a>],
     blocked: &Blocks,
     deleted: &BTreeSet<(&str, &str)>,
+    lenient: &BTreeSet<(&str, &str)>,
     waiting: Waiting,
     report: &mut ApplyReport,
 ) -> Result<Vec<Deferral<'a>>, String> {
     let mut soft: Vec<(&Group, String)> = Vec::new();
     let mut out: Vec<Deferral<'a>> = Vec::new();
     let mut failed: Vec<&'a Group<'a>> = Vec::new();
+    // Every row the page puts on a grain itself — held or not, landed or not — which is every
+    // row a move or an edit must never be folded into ([`fold_onto_the_holder`]).
+    let placed: BTreeSet<(&str, &str)> = groups
+        .iter()
+        .filter(|g| places(g))
+        .map(|g| (g.table, g.ops[0].uid.as_str()))
+        .collect();
     for g in groups {
         if let Some(class) = held_by(g, blocked) {
             out.push(Deferral {
@@ -1220,7 +1284,7 @@ fn run_groups<'a>(
             continue;
         }
         if let Outcome::Deferred(_) =
-            write_group(conn, g, report, &mut soft, deleted, Attempt::First)?
+            write_group(conn, g, report, &mut soft, deleted, &placed, Attempt::First)?
         {
             failed.push(g);
         }
@@ -1242,7 +1306,9 @@ fn run_groups<'a>(
         let mut withheld = false;
         let mut again: Vec<usize> = Vec::new();
         for i in pending {
-            match write_group(conn, failed[i], report, &mut soft, deleted, attempt)? {
+            match write_group(
+                conn, failed[i], report, &mut soft, deleted, &placed, attempt,
+            )? {
                 Outcome::Written => {
                     last[i] = None;
                     progressed = true;
@@ -1295,13 +1361,30 @@ fn run_groups<'a>(
     // page order, as the groups were met.
     for (g, why) in failed.into_iter().zip(last) {
         if let Some(why) = why {
+            // **An older build's claim let through from below the watermark is never held and
+            // never recorded** ([`never_held`]): unwritten, it is consumed in silence, which is
+            // what skipping it as seen did. Classified like any group it would wait on a parent
+            // the page does not carry, with its sender's later ops behind it, or be dropped and
+            // recorded and open the gap — and again on every page handed back and at every
+            // re-broadcast, since nothing marks a claim below the watermark consumed.
+            let class = if lenient.contains(&(g.table, g.ops[0].uid.as_str())) {
+                Class::Moot
+            } else {
+                classify(conn, g, &why, deleted, waiting)?
+            };
             out.push(Deferral {
                 group: g,
-                class: classify(conn, g, &why, deleted, waiting)?,
+                class,
                 why: Some(why),
             });
         }
     }
+
+    // **A parent that is back takes back what was decided without it** ([`orphans::sweep`]):
+    // every row an earlier apply wrote at the root, folded onto a twin or did not build because
+    // its parent was gone, and whose parent is a row here again — resurrected by this page, most
+    // often. Before the two steps below, which then see the tree as the sweep leaves it.
+    orphans::sweep(conn, deleted)?;
 
     // The soft parent — `decks.default_category_id` — after both passes, because `decks` and
     // `deck_categories` name each other and no order of tables resolves both in one.
@@ -1455,11 +1538,12 @@ fn gone(
 /// deleted anything: a refusal that escaped would fail the apply on every pull after.
 fn cascade_onto_the_row_here(
     conn: &Connection,
-    meta: &Meta,
+    shape: orphans::Shape,
     g: &Group,
-    p: &Parent,
+    (p, gone_uid): (&Parent, &str),
     attempt: Attempt,
 ) -> Result<bool, String> {
+    let meta = shape.meta;
     let uid = &g.ops[0].uid;
     let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
     all.extend(local_history(conn, meta.table, std::slice::from_ref(uid))?);
@@ -1477,8 +1561,12 @@ fn cascade_onto_the_row_here(
             .map_err(|e| e.to_string())?;
         return Ok(false);
     }
+    // **Everything this takes is written down first** ([`orphans::bury`]): the row as it would
+    // stand under the parent, the sub-tree its delete cascades through, and each row it files at
+    // the root — which is the re-homing, done a row at a time so that what it did to each is
+    // known. If the parent comes back, that is what brings them back with it.
     let done = doomed
-        .and_then(|d| rehome::rehome(conn, &d))
+        .and_then(|d| orphans::bury(conn, shape, g, &combined, (p, gone_uid), &d))
         .and_then(|()| {
             conn.execute(
                 &format!("DELETE FROM {} WHERE sync_uid = ?1", meta.table),
@@ -1591,6 +1679,126 @@ fn observe(conn: &Connection, top: Option<&Hlc>) -> Result<(), String> {
     )
     .map(|_| ())
     .map_err(|e| e.to_string())
+}
+
+/// What [`never_held`] asks of a page before it asks anything of a claim.
+struct Unseen<'a> {
+    /// The one device whose older-build claims may be let through at all ([`alone`]).
+    emitter: Option<&'a str>,
+    /// How many ops of the page name each row, the held-back ones included. Empty where
+    /// `emitter` is `None`.
+    named: BTreeMap<(&'a str, &'a str), usize>,
+}
+
+/// A baseline claim as every build from v0.18.0 to v0.39 sends it: one that came with no
+/// reference. **Not one `claims::decide` stripped at the door** — an emission named at or below
+/// the upgrade cut, a claim whose chunk head is missing — which is judged exactly as an older
+/// build judged it, and whose catch-up the client does not read as one answer.
+fn older_claim(op: &Op, stripped: bool) -> bool {
+    op.baseline && op.kind == Kind::Put && op.emission.is_none() && !stripped
+}
+
+/// The emitter of an older build's baseline in this page, where **it is the only device this
+/// device has ever heard from, and this device is in its first generation** — the case
+/// [`never_held`] is for: a fresh install paired with one device on a build before v0.40.0.
+///
+/// A row can be missing here without never having been held, and each condition is one way:
+///
+/// - **Another device.** A delete leaves no mark on a table nothing is filed under (`sync_gone`
+///   is the parent tables', [`tombstone`]), so a copy a third device's delete took here reads
+///   exactly like one never held — and the emitter, not having heard the delete, still claims it.
+///   Its horizon cannot settle that: a watermark is what a device has *passed*, not what it
+///   applied, and an envelope stepped over for a key it never held is passed. So nobody else may
+///   have been heard at all: no op of another device in the page, the client's held-back ops
+///   included; no watermark for one; and nothing taken from one's emissions
+///   (`emission::heard_another`), which raise no watermark.
+/// - **A second reading.** A device that left a group and joined again reads its log from the
+///   first row with its watermarks kept, and they are then all that stands between it and a
+///   claim it met in its earlier time there, whose emitter's later ops are below the watermark too
+///   and are skipped. `emission::first_generation` is a device that has never done that.
+///
+/// A page with no horizon that came without a reference — every ordinary page — reads nothing.
+/// One with such a horizon is the page the client reads as one answer
+/// (`client::an_older_baseline_is_in`), which is what puts a delete that followed a claim in
+/// the same page as the claim.
+fn alone<'a>(
+    ops: &'a [Op],
+    held_back: &[Op],
+    stripped: &BTreeSet<usize>,
+    watermarks: &BTreeMap<String, Hlc>,
+    me: Option<&str>,
+    conn: &Connection,
+) -> Result<Option<&'a str>, String> {
+    let Some(emitter) = ops
+        .iter()
+        .enumerate()
+        .find(|(i, op)| op.horizon.is_some() && older_claim(op, stripped.contains(i)))
+        .map(|(_, op)| op.at.device.as_str())
+    else {
+        return Ok(None);
+    };
+    let another = |device: &str| device != emitter && Some(device) != me;
+    if me == Some(emitter)
+        || ops.iter().chain(held_back).any(|op| another(&op.at.device))
+        || watermarks.keys().any(|device| another(device))
+    {
+        return Ok(None);
+    }
+    let sql = |e: rusqlite::Error| e.to_string();
+    if !emission::first_generation(conn).map_err(sql)?
+        || emission::heard_another(conn, emitter).map_err(sql)?
+    {
+        return Ok(None);
+    }
+    Ok(Some(emitter))
+}
+
+/// Whether an older build's claim ([`older_claim`]) at or below its sender's watermark is **about
+/// a row nothing on this device says it ever held**. Such a claim is not skipped as seen.
+///
+/// **A watermark is a place in its device's log, and a claim's stamp is not one**: it is its
+/// row's `updated_at`, in table order. So a row the log never brought — one its emitter held
+/// before it was paired, with no insert on any log — can sit below a watermark that an earlier
+/// chunk of the same baseline lifted, or that the emitter's own ordinary op lifted a pull before.
+/// Skipped as seen, it never reached a device that pulled between the two, and every later
+/// re-broadcast was skipped the same way (sync.md, *A claim names its emission*: "a baseline
+/// pulled in two halves", 3 / 1 row, and "a sparse op pulled ahead of its baseline", 5 / 0). A
+/// claim that names its emission was taken out of the watermark's hands on 2026-10-03; this is
+/// what was left for the builds that send none.
+///
+/// **Everything else stays the watermark's.** A row held here came through the log, and let
+/// through its claim is a floor that takes back whatever was removed here since — the cheap exit
+/// a re-broadcast is stamped for (`baseline`'s module doc). So the claim is let through only
+/// where every one of these holds:
+///
+/// - **its emitter is the one [`alone`] answers** — this device is a fresh install that has heard
+///   from nobody else;
+/// - **it is the only op of the page that names its row.** A delete beside it took the row; an
+///   ordinary op beside it, seen or not, did something the claim may not carry, and would make a
+///   group that holds its sender from a stamp below the watermark; a second claim beside it would
+///   fold with it by `max`, whichever is the stale one;
+/// - **no row here wears its uid** — a grain twin under another uid is not it, and merges as it
+///   does when the claim is not seen; once built or renamed the row is held, and once absorbed its
+///   uid is retired, so the same claim handed back writes nothing;
+/// - **this device's own log does not name it** — it held the row, and deleted it. The claim's
+///   wall-clock stamp folded against that delete can win, and the row would be back on this device
+///   alone once the delete reached its emitter;
+/// - **its uid was not merged into another row here** ([`emission::retire`]) — its copies live in
+///   the survivor, and nothing at the write would stop a claim with no reference building them
+///   again.
+///
+/// **It moves no watermark** — the claim is at or below it, and [`advance_watermarks`] only
+/// raises — **and it can hold nothing**: its group is the claim alone, and where that cannot be
+/// written it is skipped as it was ([`run_groups`]). What it costs is one indexed read for each
+/// seen claim where the row is held — a re-broadcast of rows all held here, which used to be no
+/// database work at all — three where it is not, and nothing on a page [`alone`] turns away.
+fn never_held(conn: &Connection, op: &Op, unseen: &Unseen) -> Result<bool, String> {
+    let row = (op.table.as_str(), op.uid.as_str());
+    Ok(unseen.emitter == Some(op.at.device.as_str())
+        && unseen.named.get(&row) == Some(&1)
+        && !claims::row_here(conn, &op.table, &op.uid)?
+        && !claims::named_here(conn, &op.table, &op.uid)?
+        && !claims::retired(conn, &op.table, &op.uid)?)
 }
 
 fn stamp(op: &Op) -> Hlc {
@@ -1779,10 +1987,15 @@ fn find_row(
             }
         }
     }
+    by_uid(conn, meta, &op_uid)
+}
+
+/// The row wearing `uid`, and nothing a grain could add.
+fn by_uid(conn: &Connection, meta: &Meta, uid: &str) -> Result<Found, String> {
     let by_uid: Option<String> = conn
         .query_row(
             &format!("SELECT sync_uid FROM {} WHERE sync_uid = ?1", meta.table),
-            [&op_uid],
+            [uid],
             |r| r.get(0),
         )
         .optional()
@@ -1849,6 +2062,8 @@ fn adopt_uid(conn: &Connection, meta: &Meta, found: &Found) -> Result<(), Why> {
         [to, from],
     )
     .map_err(unbuildable)?;
+    // Whatever the ledger of orphans has folded into this row follows it to its new name.
+    orphans::renamed(conn, meta.table, from, to).map_err(Why::Unbuildable)?;
     emission::retire(conn, meta.table, from, to).map_err(unbuildable)
 }
 
@@ -1917,6 +2132,7 @@ fn write_group<'a>(
     report: &mut ApplyReport,
     soft: &mut Vec<(&'a Group<'a>, String)>,
     deleted: &BTreeSet<(&str, &str)>,
+    placed: &BTreeSet<(&str, &str)>,
     attempt: Attempt,
 ) -> Result<Outcome, String> {
     let (Some(meta), Some(spec)) = (meta_of(g.table), spec_of(g.table)) else {
@@ -1926,10 +2142,34 @@ fn write_group<'a>(
         return Ok(Outcome::Deferred(Why::UnknownTable));
     };
 
+    // **A row the ledger of orphans holds is met there first** ([`orphans`]): one that is not
+    // here at all takes the group into its entry, or is built by it; one folded into a twin is
+    // un-folded by a group that moves or deletes it, and otherwise written onto the twin below.
+    let shape = orphans::Shape { meta, spec };
+    let orphan = orphans::of(conn, meta.table, &g.ops[0].uid)?;
+    let mut folded: Option<&orphans::Entry> = None;
+    if let Some(e) = &orphan {
+        match &e.state {
+            orphans::State::Absent { .. } => {
+                return orphans::meet_absent(conn, shape, g, e, deleted, attempt, report);
+            }
+            orphans::State::Folded { .. } => {
+                if let Some(outcome) = orphans::meet_folded(conn, shape, g, e, deleted, report)? {
+                    return Ok(outcome);
+                }
+                folded = Some(e);
+            }
+            orphans::State::Placed { .. } => {}
+        }
+    }
+
     // Parents first, because both the grain lookup and the write need them.
     let mut parents: BTreeMap<&'static str, Sql> = BTreeMap::new();
     let mut soft_pending = false;
     let mut missing: Option<Why> = None;
+    // The `SET NULL` parent this group names and which is gone: the row is written without it,
+    // and the ledger is told, below, once it is known what the write did.
+    let mut orphaned: Option<(&'static Parent, String)> = None;
     for p in spec.parents {
         match resolve_parent(conn, p, &g.resolved)? {
             Resolution::Id(id) => {
@@ -1974,7 +2214,7 @@ fn write_group<'a>(
                     return Ok(Outcome::Deferred(Why::DecidedOnRetry));
                 }
                 if cascades(conn, meta.table, p)? {
-                    if !cascade_onto_the_row_here(conn, meta, g, p, attempt)? {
+                    if !cascade_onto_the_row_here(conn, shape, g, (p, &uid), attempt)? {
                         return Ok(Outcome::Deferred(Why::DecidedOnRetry));
                     }
                     return Ok(Outcome::Deferred(Why::UnknownParent {
@@ -1983,6 +2223,7 @@ fn write_group<'a>(
                     }));
                 }
                 parents.insert(p.key, absent_value(p));
+                orphaned = Some((p, uid));
             }
             Resolution::Unknown(uid) => {
                 missing.get_or_insert(Why::UnknownParent {
@@ -1996,7 +2237,50 @@ fn write_group<'a>(
         return Ok(Outcome::Deferred(why));
     }
 
-    let existing = find_row(conn, meta, g, &parents, deleted)?;
+    // **A row folded into a twin is that twin**, and so is a row addressed by the name a twin
+    // gave up to such a fold: the sender folded nothing, and goes on naming both.
+    let mut existing = match folded.and_then(|e| e.twin.clone()) {
+        Some(twin) => Found {
+            uid: Some(twin),
+            displaced: None,
+            rename: None,
+            absorbed: None,
+        },
+        None => find_row(conn, meta, g, &parents, deleted)?,
+    };
+    if existing.uid.is_none() && !g.resolved.deleted {
+        existing.uid = orphans::survivor_of(conn, meta.table, &g.ops[0].uid)?;
+    }
+    // ...and a delete addressed to that name is the sender deleting the twin, while it still
+    // holds every row folded into it here.
+    if existing.uid.is_none()
+        && g.resolved.deleted
+        && orphans::twin_deleted(conn, shape, g, deleted)?
+    {
+        report.applied += g.ops.len();
+        return Ok(Outcome::Written);
+    }
+    // **A row that lands on a `Placed` orphan does not fold into it.** The orphan holds that
+    // grain only while its parent is gone, and the sender, who folded nothing, holds two rows:
+    // folded into the orphan, the newcomer would be carried off with it when the parent
+    // returned, or left with both counts. So the orphan steps aside — taken out below, inside
+    // the group's savepoint — this group is written as if the grain were free, and the orphan
+    // is folded into what it wrote.
+    //
+    // **Where the newcomer is an orphan too, the lower uid keeps the row**, as wherever two rows
+    // meet: both are at the root only for now, and while both parents stay gone the sender's
+    // own re-homing folds the pair under the lower uid, which is the one this device must end on
+    // as well. So a newcomer with the higher uid folds into the orphan in the ordinary way, and
+    // only one with the lower makes it step aside.
+    let mut aside: Option<(orphans::Entry, orphans::Row)> = None;
+    if let (Some(found), None) = (&existing.displaced, folded) {
+        if orphaned.is_none() || g.ops[0].uid < *found {
+            aside = orphans::placed_on_the_grain(conn, shape, found)?;
+        }
+        if aside.is_some() {
+            existing = by_uid(conn, meta, &g.ops[0].uid)?;
+        }
+    }
 
     // **The second fold, over this device's own history as well.** See the module doc: a
     // tombstone — a `del` op, not a `sync_gone` row — folded on its own has nothing to lose to,
@@ -2013,6 +2297,52 @@ fn write_group<'a>(
     let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
     all.extend(local_history(conn, meta.table, &uids)?);
     let combined = fold(&all);
+
+    // **The ledger is told only where the placement under the gone parent is the one that
+    // stands** — the moot arm's question, asked of the `SET NULL` arm: where this device moved
+    // the row somewhere later, that move wins on the sender too, and there is nothing to take
+    // back. **And where the write is about to land on a twin** — the row's grain carries the
+    // parent, so written without it it meets whatever the root already holds — the twin is read
+    // first, as it stands before the fold, which is the only moment that can be known.
+    //
+    // **"Stands" is asked of the row's own history and never of `combined`**, which also folds
+    // in what this device did to the row the grain *found*: a twin made here later by the clock
+    // than the sender's filing would say the placement had lost, nothing would be written down,
+    // and the fold would be for good — the very defect, by another door (the review of this).
+    let orphaned = match orphaned {
+        Some((p, gone)) => {
+            let own = orphans::folded_with_history(conn, meta.table, &g.ops[0].uid, g)?;
+            let stamp = |r: &Resolved| r.parents.get(p.key).map(|(_, at)| at.clone());
+            // A row the ledger itself is putting back is under no real stamp, and its
+            // placement is the ledger's own word for where it belongs.
+            (orphans::is_a_meeting(g)
+                || (stamp(&g.resolved).is_some() && stamp(&g.resolved) == stamp(&own)))
+            .then_some((p, gone))
+        }
+        None => None,
+    };
+    let twin: Option<(String, orphans::Row)> = match (folded, &orphaned, &existing) {
+        // A row already folded: the write below lands on its twin, and what it does there is
+        // the orphan's.
+        (
+            Some(_),
+            _,
+            Found {
+                uid: Some(twin), ..
+            },
+        ) => orphans::row_of(conn, spec, twin)?.map(|row| (twin.clone(), row)),
+        (
+            None,
+            Some((p, _)),
+            Found {
+                displaced: Some(found),
+                ..
+            },
+        ) if grain_carries(meta, p.key) => {
+            orphans::row_of(conn, spec, found)?.map(|row| (found.clone(), row))
+        }
+        _ => None,
+    };
 
     // **Every write from here is inside the group's savepoint, the uid adoption first** — the
     // delete below addresses the row by the uid it adopts, so a delete ahead of the adoption
@@ -2082,6 +2412,10 @@ fn write_group<'a>(
             rollback()?;
             return Ok(Outcome::Deferred(Why::Unbuildable(e)));
         }
+        // A row that is deleted is nobody's orphan.
+        if orphan.is_some() {
+            orphans::forget(conn, meta.table, &g.ops[0].uid)?;
+        }
         conn.execute_batch(&format!("RELEASE {savepoint}"))
             .map_err(|e| e.to_string())?;
         report.applied += g.ops.len();
@@ -2123,6 +2457,13 @@ fn write_group<'a>(
         }
     }
 
+    if let Some((e, _)) = &aside {
+        if let Err(why) = orphans::step_aside(conn, e) {
+            rollback()?;
+            return Ok(Outcome::Deferred(Why::Unbuildable(why)));
+        }
+    }
+
     let written = match &existing.uid {
         Some(uid) => update_row(conn, meta, spec, g, &combined, &parents, uid),
         None => {
@@ -2158,6 +2499,61 @@ fn write_group<'a>(
             insert_row(conn, meta, spec, g, &combined, &wide)
         }
     };
+    // **A sparse write the grain refused because a row of this device's own is already there is
+    // folded into that row, and not skipped.** A move or an edit is found by its uid, so no grain
+    // was asked before the write and the unique index is the first to say another row is in the
+    // way: a copy the sender dragged into a binder, or regraded, where this device holds a copy
+    // of that printing on that grain which it has not sent yet. The sender met no collision and
+    // goes on to fold the two when the other copy's own put reaches it — `find_row`'s grain
+    // match — so refusing here left one row of both there and two rows here, with an `error_log`
+    // row for a sync that had done nothing wrong. [`fold_onto_the_holder`] makes the same one
+    // row, under the same uid.
+    //
+    // **Taken only on a `Clear` pass**, like the re-homing whose rule it borrows: until nothing
+    // else in the page can land, the row in the way may be one the page is about to take — a
+    // delete of it sorting after this group, which is by its oldest op — and the write then lands
+    // on a free grain by itself. Before that pass the fold is only asked, made and rolled back
+    // with the group.
+    //
+    // **Not where either row is an orphan**: that refusal is the ledger's to answer, below. A
+    // `Placed` orphan is on its grain only while its parent is gone, so folded into by this
+    // merge it would carry the other row off with it when the parent returned — and folded *away*
+    // by it, its entry would name a row that is no longer its own. Nor for a row the ledger has
+    // already folded. (A row moved under a parent that is itself gone is the ledger's too, and
+    // `fold_onto_the_holder` leaves that one alone by its own rule.)
+    // An orphan the group places somewhere itself is an orphan no longer, and the merge's.
+    let an_orphan = match orphan.as_ref().map(|e| &e.state) {
+        Some(orphans::State::Placed { key, .. }) => !g.resolved.parents.contains_key(key.as_str()),
+        _ => false,
+    };
+    let the_ledgers = match (&written, &existing.uid) {
+        (Err(_), Some(uid)) if folded.is_none() && aside.is_none() => {
+            match orphans::in_the_way(conn, shape, g, uid, &parents)? {
+                Some(holder) => {
+                    an_orphan || orphans::placed_on_the_grain(conn, shape, &holder)?.is_some()
+                }
+                None => false,
+            }
+        }
+        _ => true,
+    };
+    let written = match (written, &existing.uid, &existing.displaced) {
+        (Err(e), Some(uid), None) if !the_ledgers => {
+            match fold_onto_the_holder(conn, g, &combined, &parents, uid, placed) {
+                Some(_) if !attempt.clears() => {
+                    rollback()?;
+                    return Ok(Outcome::Deferred(Why::DecidedOnRetry));
+                }
+                // Whatever the ledger had folded into the row that moved is in the survivor now.
+                Some(survivor) => match orphans::renamed(conn, meta.table, uid, &survivor) {
+                    Ok(()) => Ok(survivor),
+                    Err(e) => Err(e),
+                },
+                None => Err(e),
+            }
+        }
+        (written, ..) => written,
+    };
     match written {
         Ok(uid) => {
             conn.execute_batch(&format!("RELEASE {savepoint}"))
@@ -2179,6 +2575,52 @@ fn write_group<'a>(
                     flag(conn, meta.table, &uid, RESURRECTED)?;
                 }
             }
+            // **What the write did to a row whose parent is gone goes in the ledger**
+            // ([`orphans`]), so it can be taken back if the parent returns: folded into a twin,
+            // or here under its own uid with the column clear. A row written onto the twin it
+            // was already folded into only brings that entry up to date. And a `Placed` row
+            // whose placement this group has just written again is an orphan no longer.
+            match (folded, &orphaned, twin) {
+                (Some(e), _, Some((_, before))) => orphans::refold(conn, shape, g, e, &before)?,
+                (Some(_), _, None) => {}
+                (None, Some((p, gone)), Some((own, before))) => {
+                    orphans::fold_into(conn, shape, g, (p, gone), (&own, &uid, &before))?;
+                }
+                (None, Some((p, gone)), None) => {
+                    if let Some((_, at)) = g.resolved.parents.get(p.key) {
+                        // The ledger's own put carries no stamp to replay it under.
+                        let at = match orphans::is_a_meeting(g) {
+                            true => orphans::now(conn)?,
+                            false => at.clone(),
+                        };
+                        orphans::place(conn, meta.table, &uid, (p, gone), at)?;
+                    }
+                }
+                (None, None, _) => {
+                    if let Some(orphans::State::Placed { key, .. }) =
+                        orphan.as_ref().map(|e| &e.state)
+                    {
+                        if g.resolved.parents.contains_key(key.as_str()) {
+                            orphans::forget(conn, meta.table, &g.ops[0].uid)?;
+                        }
+                    }
+                }
+            }
+            // The orphan that stepped aside is folded into the row that took its place.
+            if let Some((e, row)) = aside {
+                orphans::step_back(conn, shape, (&e, row), &uid)?;
+            }
+            // **A row that has left the root's grain leaves behind what was folded into it
+            // there.** Those rows were lent to the place: their parents are still gone, and the
+            // sender — which folded nothing, and re-homes them when the deletes reach it — has
+            // them at the root, not wherever this row went.
+            if folded.is_none() && existing.uid.is_some() {
+                for p in spec.parents {
+                    if g.resolved.parents.contains_key(p.key) && grain_carries(meta, p.key) {
+                        orphans::leave_behind_if_moved(conn, shape, (&uid, p.key), deleted)?;
+                    }
+                }
+            }
             if soft_pending {
                 soft.push((g, uid));
             }
@@ -2192,9 +2634,102 @@ fn write_group<'a>(
             // the only account of the skip the reader will ever have — or, from a newer
             // schema, of a `CHECK` word this build does not know yet.
             rollback()?;
+            // **A move the root's grain refused, where one of the two rows is there only for
+            // now.** A sparse move is found by uid, so no grain was asked before the write, and
+            // the unique index is the first to say another row is in the way. Two of those
+            // refusals are not this database being unable to build a row, and each used to be
+            // skipped with an `error_log` row while the sender, who met no collision, went on:
+            //
+            // - **This row is the orphan**: moved under a parent that is gone, its column
+            //   cleared, it lands on the root's twin. It is filed there by the crate's own merge
+            //   and the ledger told it is folded — what the sender's re-homing does to it when
+            //   the delete arrives there — and the group is written again, onto the twin.
+            // - **The row in the way is the orphan**, `Placed`: it steps aside, the move is
+            //   made, and it is folded into the row that moved.
+            // A `Placed` row its own device has placed again is an orphan no longer, whether or
+            // not this database could make the move.
+            if let (Some(orphans::State::Placed { key, .. }), None) =
+                (orphan.as_ref().map(|e| &e.state), &orphaned)
+            {
+                if g.resolved.parents.contains_key(key.as_str()) {
+                    orphans::forget(conn, meta.table, &g.ops[0].uid)?;
+                }
+            }
+            if let (Some(uid), None, None, None) =
+                (&existing.uid, &existing.displaced, folded, &aside)
+            {
+                if let Some(holder) = orphans::in_the_way(conn, shape, g, uid, &parents)? {
+                    // The gone parent this row rests on: the one this group names, or the
+                    // one its `Placed` entry already does.
+                    let named = orphaned
+                        .as_ref()
+                        .filter(|(p, _)| grain_carries(meta, p.key))
+                        .map(|(p, gone)| (*p, gone.clone()));
+                    let rests = match (&named, an_orphan, &orphan) {
+                        (Some(_), ..) => named,
+                        (None, true, Some(e)) => match &e.state {
+                            orphans::State::Placed { key, .. } => shape
+                                .spec
+                                .parents
+                                .iter()
+                                .find(|p| p.key == key.as_str())
+                                .map(|p| (p, e.parent_uid.clone())),
+                            _ => None,
+                        },
+                        _ => None,
+                    };
+                    if let Some((p, gone)) = rests {
+                        // **This row is the orphan**, or becomes one: written without its
+                        // parent — moved under one that is gone, or already `Placed` and now
+                        // regraded, say — it lands on a row the root holds. The sender holds
+                        // two rows, one of them in the binder; here the orphan is folded into
+                        // the row in the way, with the group laid over the row it would be, and
+                        // the ledger told. **On a `Clear` pass**, for the merge's own reason:
+                        // the row in the way may be one the page is about to take.
+                        if !attempt.clears() {
+                            return Ok(Outcome::Deferred(Why::DecidedOnRetry));
+                        }
+                        let folded_away = orphans::in_savepoint(conn, || {
+                            orphans::fold_the_orphan(conn, shape, g, (uid, &holder), (p, &gone))
+                        })?;
+                        if folded_away.is_ok() {
+                            report.applied += g.ops.len();
+                            return Ok(Outcome::Written);
+                        }
+                    } else if let Some((entry, row)) =
+                        orphans::placed_on_the_grain(conn, shape, &holder)?
+                    {
+                        let applied = report.applied;
+                        let made = orphans::in_savepoint(conn, || {
+                            orphans::step_aside(conn, &entry)?;
+                            match write_group(conn, g, report, soft, deleted, placed, attempt)? {
+                                Outcome::Written => {
+                                    orphans::step_back(conn, shape, (&entry, row), uid)
+                                }
+                                Outcome::Deferred(why) => Err(why.text()),
+                            }
+                        })?;
+                        if made.is_ok() {
+                            return Ok(Outcome::Written);
+                        }
+                        report.applied = applied;
+                    }
+                }
+            }
             Ok(Outcome::Deferred(Why::Unbuildable(e)))
         }
     }
+}
+
+/// Whether one of a table's grains carries `key`'s parent — so a row written without that parent
+/// can land on a row the root already holds.
+fn grain_carries(meta: &Meta, key: &str) -> bool {
+    meta.grains.iter().any(|grain| {
+        grain
+            .sources
+            .iter()
+            .any(|source| matches!(source, Source::Parent(k) if *k == key))
+    })
 }
 
 /// The columns an **update** writes: those the incoming ops actually won.
@@ -2439,6 +2974,165 @@ fn update_row(
     Ok(uid.to_owned())
 }
 
+/// Whether a group says where its row is on a grain: it names a field or a parent one of its
+/// table's grains is made of. A full insert does, and so does a move, and so does an edit of
+/// such a field.
+fn places(g: &Group) -> bool {
+    meta_of(g.table).is_some_and(|meta| {
+        meta.grains
+            .iter()
+            .flat_map(|grain| grain.sources)
+            .any(|source| match source {
+                Source::Field(f) => g.resolved.fields.contains_key(*f),
+                Source::Parent(key) => g.resolved.parents.contains_key(*key),
+            })
+    })
+}
+
+/// The row a sparse write was refused by: the one already on the grain `writes` would land
+/// `uid`'s row on, as `(the row's own id, the id of the row in the way, the uid that one wears)`.
+/// `None` where nothing is in the way — the refusal was about something else — and where no row
+/// wears `uid`.
+///
+/// **The grain is the row's as it stands, overlaid with what the write changes**, and both
+/// halves matter. A move names only the folder and an edit only the field it changed, so neither
+/// carries a grain ([`grain_values`]) and the other terms are the row's own; and the terms it
+/// does change are read from `writes` — [`updates`]' answer, the columns the incoming ops *won* —
+/// and never from the group, since a term this device wrote later is not written and the row
+/// does not land where the group says.
+///
+/// Asked through the table's own [`Grain`], the predicate [`find_row`] asks an insert's by, so
+/// what a duplicate is has one spelling in this module. **Only for a table with an `id`** — the
+/// caller's to see to, which [`rehome::folds`] does.
+fn in_the_way(
+    conn: &Connection,
+    meta: &Meta,
+    spec: &Spec,
+    writes: &[(String, Sql)],
+    uid: &str,
+) -> Result<Option<(i64, i64, Option<String>)>, String> {
+    for grain in meta.grains {
+        let cols: Option<Vec<&str>> = grain
+            .sources
+            .iter()
+            .map(|source| match source {
+                Source::Field(f) => Some(*f),
+                Source::Parent(key) => spec.parents.iter().find(|p| p.key == *key).map(|p| p.col),
+            })
+            .collect();
+        let Some(cols) = cols else {
+            continue;
+        };
+        let stands: Option<(i64, Vec<Sql>)> = conn
+            .query_row(
+                &format!(
+                    "SELECT id, {} FROM {} WHERE sync_uid = ?1",
+                    cols.join(", "),
+                    meta.table
+                ),
+                [uid],
+                |r| {
+                    let terms: rusqlite::Result<Vec<Sql>> =
+                        (1..=cols.len()).map(|i| r.get(i)).collect();
+                    Ok((r.get(0)?, terms?))
+                },
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        let Some((id, stands)) = stands else {
+            return Ok(None);
+        };
+        let mut landing: Vec<Sql> = cols
+            .iter()
+            .zip(stands)
+            .map(|(col, stood)| {
+                writes
+                    .iter()
+                    .find(|(c, _)| c == col)
+                    .map_or(stood, |(_, v)| v.clone())
+            })
+            .collect();
+        landing.push(Sql::Integer(id));
+        let holder: Option<(i64, Option<String>)> = conn
+            .query_row(
+                &format!(
+                    "SELECT id, sync_uid FROM {} WHERE {} AND id <> ?",
+                    meta.table, grain.predicate
+                ),
+                rusqlite::params_from_iter(landing.iter()),
+                |r| Ok((r.get(0)?, r.get(1)?)),
+            )
+            .optional()
+            .map_err(|e| e.to_string())?;
+        if let Some((holder, wears)) = holder {
+            return Ok(Some((id, holder, wears)));
+        }
+    }
+    Ok(None)
+}
+
+/// Answer a sparse write the grain refused with the crate's own merge: fold the row `uid` into
+/// the row already on the grain its group lands it on, and write the rest of the group onto the
+/// one row that leaves — whose uid is the answer. `None` where this is not that refusal, with
+/// whatever it wrote left for the caller's rollback.
+///
+/// **A move, an edit of a field of the grain, or both in one group** — one refusal, since each
+/// lands a row found by its uid on a grain nothing asked about: a copy dragged into a binder, a
+/// copy regraded, a wish pinned to another printing, where this device holds a row of its own on
+/// that grain which it has not sent. [`in_the_way`] says which row that is.
+///
+/// It is that refusal only where all of these hold, and anything else is still a row this
+/// database cannot build:
+///
+/// - **The table is one the crate can fold** ([`rehome::folds`]): copies and wishes.
+/// - **A row is on the grain the write lands on.** Where this device wrote the same terms later,
+///   `updates` writes none of them, the row stays on its own grain, and the refusal was about
+///   something else.
+/// - **The folder the group names, where it names one, is a row here.** One named and not found
+///   is gone, and was written as the root by a decision that is not this one's to extend (issue
+///   #841): a later page can bring the folder back, and the row with it.
+/// - **The row in the way is not one the page places itself** (`placed`). The sender holds that
+///   row somewhere else — it moved or edited it, in this very page — so the two are two rows
+///   there, and a write that cannot land for now is refused as it always was: two copies swapped
+///   between two binders, or between two conditions, stay two.
+///
+/// **The rest of the group is folded against both rows' histories**, since the survivor is both:
+/// a field the group carries beats what this device wrote to either row only where it is later,
+/// which is what the sender's grain match decides from the other side. Its counters are deltas
+/// and land once, on the summed row. **That second write cannot take the survivor off the grain
+/// it was found on**: it writes a subset of the columns the probe overlaid — the same ops against
+/// more history — and the survivor already holds the landing value in every term of the grain.
+fn fold_onto_the_holder(
+    conn: &Connection,
+    g: &Group,
+    combined: &Resolved,
+    parents: &BTreeMap<&'static str, Sql>,
+    uid: &str,
+    placed: &BTreeSet<(&str, &str)>,
+) -> Option<String> {
+    let (meta, spec) = (meta_of(g.table)?, spec_of(g.table)?);
+    if !rehome::folds(meta.table) {
+        return None;
+    }
+    let names_a_folder = matches!(g.resolved.parents.get(rehome::FOLDER), Some((Some(_), _)));
+    if names_a_folder && !matches!(parents.get(rehome::FOLDER), Some(Sql::Integer(_))) {
+        return None;
+    }
+    let writes = updates(spec, g, combined, parents);
+    let (id, holder, wears) = in_the_way(conn, meta, spec, &writes, uid).ok()??;
+    let mut uids = vec![uid.to_owned()];
+    if let Some(wears) = wears {
+        if placed.contains(&(meta.table, wears.as_str())) {
+            return None;
+        }
+        uids.push(wears);
+    }
+    let survivor = rehome::fold_into_the_holder(conn, meta.table, holder, id, uid).ok()??;
+    let mut all: Vec<Op> = g.ops.iter().map(|o| (*o).clone()).collect();
+    all.extend(local_history(conn, meta.table, &uids).ok()?);
+    update_row(conn, meta, spec, g, &fold(&all), parents, &survivor).ok()
+}
+
 /// The first message wins — [`crate::reconcile`]'s stated rule for this column.
 fn flag(conn: &Connection, table: &str, uid: &str, sentence: &str) -> Result<(), String> {
     conn.execute(
@@ -2676,6 +3370,7 @@ fn advance_watermarks(
 }
 
 mod claims;
+mod orphans;
 mod rehome;
 
 #[cfg(test)]

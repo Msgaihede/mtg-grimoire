@@ -46,6 +46,8 @@
  * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
  * `ScannerCaptured`/`ScannerPrefs`/
  * `ScannerTrayRow`/`ScannerTrayChoice`             — `crates/grimoire-core/src/scanner.rs`
+ * `ScannerAssetsOwed`/`ScannerAssetsProgress`      — `crates/grimoire-core/src/scanner_assets.rs`
+ * `ScannerAssetDue`                                — `crates/grimoire-core/src/downloads.rs`
  * `ScannerOptions`/`ScannerVerdict`/`ScannerFrameSize`/
  * `ScannerStages`/`ScannerStanding`/`ScannerTracked`/
  * `ScannerCollectorTry`/`ScannerCollector`/`ScannerOcr`/
@@ -7489,6 +7491,67 @@ export interface ScannerStatus {
   recognition_model: ScannerAsset;
   labels: number;
   scans_dir: string;
+  /**
+   * **The reader's filters are not in force**, in the sentence the loaded session refused them
+   * with — or `null`, which is every session that searches under what the popover shows.
+   *
+   * Only ever set after the engine reloaded the session (`ScannerState::forget`, for assets
+   * that arrive after the first load) and the new one could not take the filters the old one
+   * held — it had no card names to build the mask from. The page cannot learn this from its own
+   * pushes, which went to the session that was dropped. The engine keeps the filters owed and
+   * offers them to the next reload; an accepted `scanner_set_filters` settles it too.
+   */
+  unapplied_filters: string | null;
+}
+
+/**
+ * One of the scanner's files this install lacks — `Due` in
+ * `crates/grimoire-core/src/downloads.rs`, the row every offer of a download is made of.
+ *
+ * **camelCase, unlike the status above**: this is the app's own answer, not the detector's JSON.
+ * `bytes` is exact for a model and a measurement for the bundle, which is rebuilt weekly — so the
+ * page says *about*.
+ */
+export interface ScannerAssetDue {
+  /** `bundle`, `detectionModel` or `recognitionModel` — what {@link ScannerAssetsProgress.file} names. */
+  key: string;
+  /** What the reader is told it is. */
+  label: string;
+  bytes: number;
+}
+
+/**
+ * What `scanner_assets` and `scanner_assets_fetch` answer — `Owed` in
+ * `crates/grimoire-core/src/scanner_assets.rs`.
+ *
+ * `owed` is empty on a host whose binary carries the files (every desktop release) and on any
+ * host once they have landed, and that is the page's whole rule: no rows, no offer. A host that
+ * cannot fetch them at all refuses the command instead, which draws the same nothing.
+ */
+export interface ScannerAssetsOwed {
+  owed: ScannerAssetDue[];
+  /** All of `owed`, added up. */
+  bytes: number;
+  /** A fetch is running now — started here, or by a view that has since been left. */
+  fetching: boolean;
+}
+
+/** Where a fetch of the scanner's files has got to — {@link ScannerAssetsProgress.phase}. */
+export type ScannerAssetsPhase = "downloading" | "checking" | "done" | "error";
+
+/**
+ * The `scanner:assets` payload — `Progress` in `crates/grimoire-core/src/scanner_assets.rs`.
+ *
+ * `done` and `total` count bytes across every file the run fetches, so one bar covers the whole
+ * of it. `file` is the {@link ScannerAssetDue.key} in hand, and `message` the sentence a failed
+ * run ends on — the same one the command rejects with.
+ */
+export interface ScannerAssetsProgress {
+  phase: ScannerAssetsPhase;
+  file: string | null;
+  done: number;
+  total: number;
+  message: string | null;
 }
 
 /**
@@ -11072,6 +11135,25 @@ export const ipc = {
     folderId: number | null,
     remaining: ScannerTrayRow[],
   ) => invoke<ImportCommitOutcome>("scanner_tray_commit", { items, folderId, remaining }),
+  /**
+   * `scanner_assets::owed`, as `scanner_assets`. Which of the scanner's three files this install
+   * lacks, and what fetching them costs. **Empty where the binary carries them** — a desktop
+   * release build — and rejected on a host that cannot fetch them, so a page draws its offer
+   * from the answer and never from what kind of host it is on.
+   */
+  scannerAssets: () => invoke<ScannerAssetsOwed>("scanner_assets"),
+  /**
+   * `scanner_assets::fetch`, as `scanner_assets_fetch`. Downloads every owed file, checks each
+   * before it is kept, and lets the engine's session go so the next scanner command reads them —
+   * no restart. Answers what is owed afterwards (nothing, when it worked); rejects with one
+   * sentence, and with `ALREADY_FETCHING`'s while another call is running. **Only ever called
+   * from a reader's press.** Progress arrives through {@link ipc.onScannerAssets}.
+   */
+  scannerAssetsFetch: () => invoke<ScannerAssetsOwed>("scanner_assets_fetch"),
+  /** The fetch's progress — `scanner_assets::PROGRESS_EVENT`. Best effort, like every event:
+   *  the command's own answer is what says a fetch ended. */
+  onScannerAssets: (cb: (e: ScannerAssetsProgress) => void): Unlisten =>
+    core.listen<ScannerAssetsProgress>("scanner:assets", cb),
   /**
    * Every share the group has published — `share::commands::share_list`, and the only one of the
    * five that could reconcile against the relay first.

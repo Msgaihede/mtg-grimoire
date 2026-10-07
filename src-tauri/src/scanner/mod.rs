@@ -2,16 +2,20 @@
 //! glue, the one-window lease, the reader's prefs and the review tray are
 //! `crates/grimoire-core/src/scanner.rs`, and the state is the core's `State.scanner`.
 //!
-//! **What is still here names this host.** The assets `build.rs` embeds, under
-//! `cfg(scanner_assets)`, which [`compiled`] hands the core's `ScannerState::carry` as the app
-//! starts. The raw request body a frame and a capture arrive in: the JPEG is the body and its JSON
-//! rides in a header — [`OPTIONS_HEADER`] for a frame, [`CAPTURE_HEADER`] for a capture — and
-//! [`frame_payload`] and `capture_payload` read the two and refuse a JSON body in words. A frame
-//! may carry a second JPEG behind the first, the same video frame at the camera's own resolution
-//! for the title and collector reads, and [`DETAIL_HEADER`] says where the first one ends. And the
-//! `#[tauri::command]`s — every one that uses the scanner admits the calling webview's label on
-//! the core's lease, and the status, `scanner_elsewhere` and the two reads take nothing; the
-//! core's module doc, with `LEASE` and `OPEN_ELSEWHERE`, says which and why.
+//! **What is still here names this host, and nothing else is** (the light app's step 7.3,
+//! 2026-10-07 — until then the commands' bodies and the body parsing were here too). The assets
+//! `build.rs` embeds, under `cfg(scanner_assets)`, which [`compiled`] hands the core's
+//! `ScannerState::carry` as the app starts. **The raw request** a frame and a capture arrive in:
+//! [`frame_payload`] and `capture_payload` take Tauri's `InvokeBody` and `HeaderMap`, refuse a
+//! JSON body in words, and hand the bytes and a header lookup to the core's `frame_from` and
+//! `capture_from`, which do the reading — the three header names, the detail split and every
+//! sentence are the core's, shared with the command table. And **the `#[tauri::command]`s**,
+//! each of which fetches what only Tauri can give it — the state, the calling webview's label
+//! for the core's lease, the request — and calls the core function the table's entry of the
+//! same name calls. The lease is admitted here, on the IPC task and before the body is read,
+//! and its guard is held across the awaited `spawn_blocking`; the status, `scanner_elsewhere`
+//! and the two reads take nothing. The core's module doc, with `LEASE`, `OPEN_ELSEWHERE` and
+//! `PAGE`, says which and why.
 
 pub use grimoire_core::scanner::*;
 
@@ -23,14 +27,6 @@ use tauri::http::HeaderMap;
 use tauri::ipc::InvokeBody;
 
 use crate::sync::AppState;
-/// The header a frame carries its `FrameOptions` in, as JSON.
-pub const OPTIONS_HEADER: &str = "x-scanner-options";
-/// The header a capture carries its `Sidecar` in, as JSON.
-pub const CAPTURE_HEADER: &str = "x-scanner-capture";
-/// The header that says a frame's body is **two** JPEGs back to back, and where the first ends:
-/// the decimal byte length of the frame, with the detail image as everything after it. Absent,
-/// the body is the frame alone. See [`frame_payload`].
-pub const DETAIL_HEADER: &str = "x-scanner-detail";
 
 #[cfg(scanner_assets)]
 const EMBEDDED_BUNDLE: &[u8] = include_bytes!("../../scanner-assets/card-hashes.bin");
@@ -57,94 +53,50 @@ pub fn compiled() -> Embedded {
 }
 
 /// What [`frame_payload`] reads out of one request: the frame, the detail image if one came, and
-/// the options.
+/// the options — owned, because the decode runs on another thread than the request lives on.
 pub type FramePayload = (Vec<u8>, Option<Vec<u8>>, FrameOptions);
 
+/// One header of Tauri's request, as the core's payload readers take one: absent, text, or
+/// there and not text. `HeaderValue::to_str` is what decides the third — it refuses any byte
+/// outside visible ASCII, which is why the page escapes non-ASCII as `\uXXXX` before it puts a
+/// JSON on this wire — and its own words end the core's sentence, as they always have.
+fn header<'a>(headers: &'a HeaderMap, name: &str) -> Header<'a> {
+    match headers.get(name) {
+        None => Header::Absent,
+        Some(value) => match value.to_str() {
+            Ok(text) => Header::Text(text),
+            Err(e) => Header::Unreadable(e.to_string()),
+        },
+    }
+}
+
 /// The frame from the request body, the detail image behind it if [`DETAIL_HEADER`] says there
-/// is one, and the options from [`OPTIONS_HEADER`]. See the module doc.
+/// is one, and the options from [`OPTIONS_HEADER`] — the core's [`frame_from`] over Tauri's
+/// request, which has the reasons: one body carrying two JPEGs, and a detail header that is
+/// present and wrong being a refusal where an unreadable options header is a shrug.
 ///
-/// **Why one body carrying two JPEGs rather than a second command or a second header.** The
-/// detail image has to be the *same video frame* as the one the crate detects on — the quad it
-/// found in the small image is scaled onto the large one, so a large image one frame later is a
-/// card that has moved by however far the reader's hand did. One request is what makes the pair
-/// arrive together or not at all; a raw body is the only way bytes cross this boundary without a
-/// base64 step; and a header is the only place left to say where one ends.
-///
-/// **A detail header that is present and wrong is a refusal, where an unreadable options header
-/// is a shrug** — [`capture_payload`]'s asymmetry, for a sharper reason. A defaulted slider costs
-/// one frame; a mis-split body hands the decoder the first half of a JPEG as the frame and a
-/// tail of it as the detail, and the verdict that comes back describes neither. So a length that
-/// is not a number, is zero, runs past the body, or leaves nothing behind it for the detail says
-/// so in words, and the page's loop shows the sentence and sends the next frame.
+/// **What is this host's is the refusal of a JSON body**: Tauri hands a command its arguments
+/// either way, and a frame sent as JSON is a page that built the call wrong — said in words
+/// rather than read as an empty frame.
 pub fn frame_payload(body: &InvokeBody, headers: &HeaderMap) -> Result<FramePayload, String> {
     match body {
         InvokeBody::Raw(bytes) => {
-            let opts = headers
-                .get(OPTIONS_HEADER)
-                .and_then(|v| v.to_str().ok())
-                .and_then(|s| serde_json::from_str(s).ok())
-                .unwrap_or_default();
-            let (jpeg, detail) = split_detail(bytes, headers.get(DETAIL_HEADER))?;
-            Ok((jpeg, detail, opts))
+            let (jpeg, detail, opts) = frame_from(bytes, &|name| header(headers, name))?;
+            Ok((jpeg.to_vec(), detail.map(<[u8]>::to_vec), opts))
         }
         InvokeBody::Json(_) => Err("the frame has to arrive as a raw request body".to_string()),
     }
 }
 
-/// The body split at [`DETAIL_HEADER`]'s length — `(frame, None)` when there is no header, and
-/// the whole body is the frame exactly as it was before the detail image existed.
-fn split_detail(
-    bytes: &[u8],
-    header: Option<&tauri::http::HeaderValue>,
-) -> Result<(Vec<u8>, Option<Vec<u8>>), String> {
-    let Some(value) = header else {
-        return Ok((bytes.to_vec(), None));
-    };
-    let text = value
-        .to_str()
-        .map_err(|e| format!("the frame's detail length did not parse: {e}"))?;
-    let n: usize = text
-        .parse()
-        .map_err(|_| format!("the frame's detail length is not a number: {text:?}"))?;
-    if n == 0 {
-        return Err("the frame's detail length is zero, so there is no frame before it".into());
-    }
-    if n >= bytes.len() {
-        return Err(format!(
-            "the frame's detail length is {n} bytes but the body is {} — there is no detail image \
-             behind the frame",
-            bytes.len()
-        ));
-    }
-    let (jpeg, detail) = bytes.split_at(n);
-    Ok((jpeg.to_vec(), Some(detail.to_vec())))
-}
-
-/// The capture from the request body and its sidecar from [`CAPTURE_HEADER`].
-///
-/// **A sidecar header that is there and unreadable is a refusal, where an unreadable options
-/// header in [`frame_payload`] is a shrug — and the asymmetry is the point.** A defaulted
-/// slider costs one frame out of thirty and the next one corrects it; a defaulted sidecar
-/// writes a JPEG to disk with five empty fields and reports success, which is an *unlabelled*
-/// capture the reader believes they labelled — the one thing the dataset cannot recover from
-/// later. An **absent** header still means [`Sidecar::default`], because capturing without
-/// typing a name is a thing the reader chooses. `HeaderValue::to_str` is what fails here:
-/// it refuses any byte outside visible ASCII, so the page escapes non-ASCII as `\uXXXX`
-/// before it puts this JSON on the wire.
+/// The capture from the request body and its sidecar from [`CAPTURE_HEADER`] — the core's
+/// [`capture_from`] over Tauri's request, which has the reason a sidecar header that is there
+/// and unreadable is a refusal where an unreadable options header in [`frame_payload`] is a
+/// shrug. A JSON body is refused here, for [`frame_payload`]'s reason.
 fn capture_payload(body: &InvokeBody, headers: &HeaderMap) -> Result<(Vec<u8>, Sidecar), String> {
     match body {
         InvokeBody::Raw(bytes) => {
-            let sidecar = match headers.get(CAPTURE_HEADER) {
-                Some(value) => {
-                    let text = value
-                        .to_str()
-                        .map_err(|e| format!("the capture's sidecar did not parse: {e}"))?;
-                    serde_json::from_str(text)
-                        .map_err(|e| format!("the capture's sidecar did not parse: {e}"))?
-                }
-                None => Sidecar::default(),
-            };
-            Ok((bytes.clone(), sidecar))
+            let (jpeg, sidecar) = capture_from(bytes, &|name| header(headers, name))?;
+            Ok((jpeg.to_vec(), sidecar))
         }
         InvokeBody::Json(_) => Err("the capture has to arrive as a raw request body".to_string()),
     }
@@ -155,12 +107,9 @@ pub async fn scanner_status(
     state: tauri::State<'_, Arc<AppState>>,
 ) -> Result<ScannerStatus, String> {
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let guard = state.scanner.ensure()?;
-        Ok(guard.as_ref().expect("ensured").status.clone())
-    })
-    .await
-    .map_err(|e| format!("the scanner thread failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || state.scanner.status())
+        .await
+        .map_err(|e| format!("the scanner thread failed: {e}"))?
 }
 
 #[tauri::command]
@@ -175,15 +124,10 @@ pub async fn scanner_frame(
     let _lease = state.scanner.admit(webview.label())?;
     let (jpeg, detail, opts) = frame_payload(request.body(), request.headers())?;
     let state = state.inner().clone();
+    // The detail image is decoded only on a frame whose reads run, so carrying one the session
+    // did not ask for costs the copy and nothing else.
     tauri::async_runtime::spawn_blocking(move || {
-        let mut guard = state.scanner.ensure()?;
-        // The detail image is decoded only on a frame whose reads run, so carrying one the
-        // session did not ask for costs the copy and nothing else.
-        Ok(guard.as_mut().expect("ensured").session.frame_with_detail(
-            &jpeg,
-            detail.as_deref(),
-            &opts,
-        ))
+        state.scanner.frame(&jpeg, detail.as_deref(), &opts)
     })
     .await
     .map_err(|e| format!("the scanner thread failed: {e}"))?
@@ -196,13 +140,9 @@ pub async fn scanner_reset(
 ) -> Result<(), String> {
     let _lease = state.scanner.admit(webview.label())?;
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut guard = state.scanner.ensure()?;
-        guard.as_mut().expect("ensured").session.reset();
-        Ok(())
-    })
-    .await
-    .map_err(|e| format!("the scanner thread failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || state.scanner.reset())
+        .await
+        .map_err(|e| format!("the scanner thread failed: {e}"))?
 }
 
 #[tauri::command]
@@ -213,8 +153,8 @@ pub async fn scanner_capture(
 ) -> Result<Captured, String> {
     let _lease = state.scanner.admit(webview.label())?;
     let (jpeg, sidecar) = capture_payload(request.body(), request.headers())?;
-    let scans = state.scanner.dir().join("scans");
-    tauri::async_runtime::spawn_blocking(move || write_capture(&scans, &jpeg, &sidecar))
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || state.scanner.capture(&jpeg, &sidecar))
         .await
         .map_err(|e| format!("the scanner thread failed: {e}"))?
 }
@@ -232,16 +172,9 @@ pub async fn scanner_set_filters(
 ) -> Result<(), String> {
     let _lease = state.scanner.admit(webview.label())?;
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let mut guard = state.scanner.ensure()?;
-        guard
-            .as_mut()
-            .expect("ensured")
-            .session
-            .set_filters(filters)
-    })
-    .await
-    .map_err(|e| format!("the scanner thread failed: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || state.scanner.set_filters(filters))
+        .await
+        .map_err(|e| format!("the scanner thread failed: {e}"))?
 }
 
 /// Whether another window holds the scanner. Asked by a second window's Scanner view, once a
@@ -295,11 +228,9 @@ pub async fn set_scanner_prefs(
 ) -> Result<(), String> {
     let _lease = state.scanner.admit(webview.label())?;
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&state, |conn| store_prefs(conn, &prefs))
-    })
-    .await
-    .map_err(|e| format!("the scanner settings could not be saved: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || save_prefs(&state, &prefs))
+        .await
+        .map_err(|e| format!("the scanner settings could not be saved: {e}"))?
 }
 
 /// The review tray as it was last written, or an empty one. Infallible, for [`scanner_prefs`]'
@@ -320,11 +251,9 @@ pub async fn set_scanner_tray(
 ) -> Result<(), String> {
     let _lease = state.scanner.admit(webview.label())?;
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::sync::with_write(&state, |conn| store_tray(conn, &rows))
-    })
-    .await
-    .map_err(|e| format!("the scanner tray could not be saved: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || save_tray(&state, &rows))
+        .await
+        .map_err(|e| format!("the scanner tray could not be saved: {e}"))?
 }
 
 /// Add the tray's rows to the collection and store what is left of the tray, as one write — see
@@ -346,13 +275,41 @@ pub async fn scanner_tray_commit(
 ) -> Result<crate::collection::ImportCommitOutcome, String> {
     let _lease = state.scanner.admit(webview.label())?;
     let state = state.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        crate::collection_source::with_write_owned(&state, |conn| {
-            tray_commit(conn, &items, folder_id, &remaining)
-        })
-    })
-    .await
-    .map_err(|e| format!("the collection could not be written: {e}"))?
+    tauri::async_runtime::spawn_blocking(move || commit_tray(&state, &items, folder_id, &remaining))
+        .await
+        .map_err(|e| format!("the collection could not be written: {e}"))?
+}
+
+/// What this install lacks of the scanner's three files, and what fetching them costs — the
+/// core's `scanner_assets::owed`. **Nothing, on a build that embeds them** ([`compiled`]), which
+/// is every release: the page draws no offer and nothing is ever requested. A build without them
+/// — a developer's — is offered the download a phone is.
+///
+/// On the blocking pool for [`scanner_status`]'s reason: it asks the status, and the first ask
+/// loads the session.
+#[tauri::command]
+pub async fn scanner_assets(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<grimoire_core::scanner_assets::Owed, String> {
+    let state = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || grimoire_core::scanner_assets::owed(&state))
+        .await
+        .map_err(|e| format!("the scanner thread failed: {e}"))?
+}
+
+/// Download every file this install owes into `<data>/scanner/`, each checked before it takes
+/// its name, and let the loaded session go so the next scanner command reads them — the core's
+/// `scanner_assets::fetch`, which has the rules. It reports itself through
+/// `scanner_assets::PROGRESS_EVENT`, which the state's sink forwards to every window.
+///
+/// **No lease, and no webview**: who holds the scanner is one question and what is loaded is
+/// another, and the fetch outlives the view that pressed. Only a reader's press calls it.
+#[tauri::command]
+pub async fn scanner_assets_fetch(
+    state: tauri::State<'_, Arc<AppState>>,
+) -> Result<grimoire_core::scanner_assets::Owed, String> {
+    let state = state.inner().clone();
+    grimoire_core::scanner_assets::fetch(&state.core).await
 }
 
 #[cfg(test)]
@@ -360,6 +317,36 @@ mod tests {
     use super::*;
     use tauri::http::HeaderMap;
     use tauri::ipc::InvokeBody;
+
+    /// **The label a table call admits on the lease is one no window of this app can carry.**
+    /// The core's `PAGE` stands for a light host's one page; this app's windows are the
+    /// config's first — `main`, Tauri's default when the entry names none — and
+    /// `window::open_new`'s `window-N`. Were the two ever to meet, a desktop window would be
+    /// admitted as "the page", and the lease that keeps two windows apart would see one.
+    /// Held here rather than in the core, which cannot know what a host calls its windows.
+    #[test]
+    fn the_tables_label_is_no_window_this_app_opens() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../tauri.conf.json")).expect("the config");
+        let windows = config["app"]["windows"].as_array().expect("its windows");
+        assert!(!windows.is_empty());
+        for window in windows {
+            assert_ne!(window["label"].as_str().unwrap_or("main"), PAGE);
+        }
+        assert!(!PAGE.starts_with(crate::window::LABEL_PREFIX));
+        // And the capability's own list of them, which a test in `desktop.rs` pins to those two
+        // shapes: a label it grants is a label this app can open.
+        let caps: serde_json::Value =
+            serde_json::from_str(include_str!("../../capabilities/desktop.json")).expect("caps");
+        for granted in caps["windows"].as_array().expect("the granted labels") {
+            let granted = granted.as_str().expect("a label or a glob");
+            let matches = match granted.strip_suffix('*') {
+                Some(prefix) => PAGE.starts_with(prefix),
+                None => PAGE == granted,
+            };
+            assert!(!matches, "{granted} would grant a window labelled {PAGE}");
+        }
+    }
 
     #[test]
     fn a_raw_body_with_no_header_uses_the_default_options() {

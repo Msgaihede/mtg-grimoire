@@ -15,7 +15,7 @@
  * the pointer and the four ways it is kept right; read its header before changing anything
  * here.
  */
-import { activateScope, activeScope, createScope, resetScopes } from "./scope";
+import { activateScope, activeScope, createScope, resetScopes, standing } from "./scope";
 import type { CommandTable } from "./scope";
 
 export type { CommandHandler, CommandTable } from "./scope";
@@ -54,22 +54,31 @@ export function commandScope(commands: CommandTable) {
  * pointer says then. Setting it here lands it before that microtask, so the poll chain stays
  * inside the story that started it. Nothing restores it afterwards, deliberately — every
  * entry into the fake sets the pointer first, so a stale one is never read.
+ *
+ * **Unless the world has gone.** A call that settles after its story was unmounted, with another
+ * standing, leaves the pointer where it is (`scope.ts`' `standing`): the re-point is for a live
+ * world's continuation, and a dead one handed the pointer keeps it for every unscoped call that
+ * follows.
  */
 export async function invoke<T>(
   cmd: string,
   args?: Record<string, unknown> | Uint8Array,
-  // Accepted and ignored: nothing here reads a header, and the parameter exists only so a
-  // caller built against the real `invoke`'s three-argument shape still type-checks against
-  // this one.
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  _options?: { headers?: Record<string, string> },
+  // The real `invoke`'s third argument. **Handed to the handler second, and only when a caller
+  // passed one** — every command but the scanner's two byte-bodied ones is called without, and
+  // its handler is still called with exactly its arguments. `scanner_frame` reads the frame's
+  // mode out of its `x-scanner-options` header, which is the only place the mode rides.
+  options?: { headers?: Record<string, string> },
 ): Promise<T> {
   const scope = activeScope();
   const handler = scope.commands[cmd];
   if (!handler) throw new Error(`No fake handler registered for command "${cmd}"`);
   try {
-    return (await (handler as (a: unknown) => unknown)(args ?? {})) as T;
+    const answer =
+      options === undefined
+        ? (handler as (a: unknown) => unknown)(args ?? {})
+        : (handler as unknown as (a: unknown, o: unknown) => unknown)(args ?? {}, options);
+    return (await answer) as T;
   } finally {
-    activateScope(scope);
+    if (standing(scope)) activateScope(scope);
   }
 }

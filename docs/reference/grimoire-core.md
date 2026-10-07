@@ -78,7 +78,7 @@ All I/O operations go through abstractions defined in `src/platform/`:
    - Hosts register lifecycle hooks (e.g. notifications when database writes finish or cache clears occur).
 
 3. **Event Forwarding (`state.events`)**:
-   - The core emits progress and lifecycle events (`sync:progress`, `collection:reconciled`, live sync's `sync:live` and `sync:applied`) through `state.events`.
+   - The core emits progress and lifecycle events (`sync:progress`, `collection:reconciled`, live sync's `sync:live` and `sync:applied`, and `scanner:assets` while the scanner's files are being fetched) through `state.events`.
    - Host adapters (such as `desktop::WindowEvents`) forward these to active frontend windows.
 
 ---
@@ -91,3 +91,28 @@ All I/O operations go through abstractions defined in `src/platform/`:
   - Matches the command against the static dispatch table.
   - Returns `Result<String, String>` (JSON response or error sentence).
 - Hosts (such as `grimoire-web`) delegate their command handling directly to `grimoire_core::dispatch`.
+
+### The `bytes` kind — a raw body, and its headers as the arguments
+
+Six kinds decide where a command's body runs (`read`, `write`, `owned`, `blocking`, `task`, `bytes`). `bytes` is the one whose call carries a raw body, and since the light app's step 7.3 (2026-10-07) two entries use it: **`scanner_frame`** and **`scanner_capture`**.
+
+- **The body** is the JPEG — or, for a frame, the frame and its detail image back to back. It reaches `dispatch` as `Some(Vec<u8>)` whichever way the host carried it: Android's `core_call` takes it as base64 text in `body` (Tauri accepts no raw body there) and decodes it; the web host's Worker is handed a transferred buffer.
+- **The arguments are the headers.** On the desktop a frame's options, its detail length and a capture's sidecar ride in three request headers. A host of the table has none to send, so the page sends the same object as the call's arguments — `{"x-scanner-options": "<json>", "x-scanner-detail": "<n>"}`, `{"x-scanner-capture": "<json>"}` (`src/lib/core/table.ts`, `src/lib/core/web/protocol.ts`). The `bytes` arm hands that object to the body unparsed, as a `commands::Carried`; `scanner::frame_from` and `capture_from` read it through the same `Header` lookup the desktop fills from Tauri's `HeaderMap`. One reader, so the sentences agree: an options header that does not parse is the defaults, a detail length or a sidecar that is there and wrong is a refusal.
+- **Refusals at the door**: a `bytes` command called with no body answers `<name> needs a raw body.` (which is also what a call with its bytes in the JSON hears), and every other kind refuses a body it was sent.
+- **The fence**: `commands::tests::the_commands_that_carry_a_raw_body_are_the_scanners_two` pins the list, and `src-tauri`'s `command_table::RAW_BODY` holds each to a desktop wrapper that takes the raw `tauri::ipc::Request` — the one wire the argument-parity test cannot see.
+
+### The scanner's lease on a table call — `scanner::PAGE`
+
+Every scanner command that uses the session or writes the prefs or the tray admits a **label** on the scanner's lease (`scanner::LEASE`, two seconds; [card-scanner.md](card-scanner.md) §9, "One window scans at a time"). The desktop's wrappers pass the calling webview's label. A table call carries no window, and needs none: a host of the table has exactly one page (Android's one window; the web host's Web Lock against a second tab), so every entry admits the constant **`scanner::PAGE`** (`"page"`). There, `scanner_elsewhere` is always `false` and `scanner_hold` always succeeds. The desktop does not dispatch through the table; were it to, it would have to carry a label first.
+
+### Refused on a page — `scanner::not_in_a_browser_yet`
+
+The web host dispatches through the same table, and the `card-scanner` crate's threads and `Instant` trap in a browser. So the commands that load or run the session — `scanner_status`, `scanner_frame`, `scanner_reset`, `scanner_set_filters` — and `scanner_capture`, which writes files, answer `scanner::NOT_IN_A_BROWSER_YET` on a host where `platform::host::keeps_files()` is false, from one helper asked at `ScannerState::ensure` and `ScannerState::capture`. The prefs, the tray, the tray's commit and the lease's two commands answer on a page. The light app's web step deletes the helper.
+
+### The scanner's files — `scanner_assets` and `scanner_assets_fetch`
+
+Two more table entries since the light app's step 7.4 (2026-10-07), from `crates/grimoire-core/src/scanner_assets.rs`. Neither takes an argument, a body or the scanner's lease.
+
+- **`scanner_assets`** (`blocking`) answers `Owed { owed, bytes, fetching }`: the files this install lacks as `downloads::Due` rows (`key` one of `bundle`, `detectionModel`, `recognitionModel`), their total, and whether a fetch is running. It reads the status, so its first ask loads the session. Empty on a host whose binary carries the files.
+- **`scanner_assets_fetch`** (`task`) downloads every owed file from the release `scanner-bundle-v<FORMAT_VERSION>` over an HTTPS-only client, checks each before it is renamed into `<data>/scanner/` — the two models against SHA-256 digests compiled into the engine, the bundle for its ceiling, its format and not being empty — calls `ScannerState::forget()` and answers what is owed afterwards. A second call while one runs is refused; a failure is one sentence and a row in `error_log` under the operation `scanner_assets`. It reports through the event **`scanner:assets`** — `Progress { phase, file, done, total, message }`, with `phase` one of `downloading`, `checking`, `done`, `error` and `done`/`total` counted across the whole run.
+- **On a page both are refused** in `NOT_IN_A_BROWSER_YET`, the fetch before any request. [card-scanner.md](card-scanner.md) §10, "Where the files come from on each host", has the rules and the measurements.

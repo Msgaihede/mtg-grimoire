@@ -10,7 +10,8 @@ held (§8). The designs it was built against are
 [the 2026-09-08 in-app spec](../superpowers/specs/2026-09-08-scanner-in-app-design.md), and for
 §10 [the 2026-09-15 modes-and-shipping spec](../superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md);
 this document is what the code actually does and does not repeat any spec's reasoning where the
-code agrees with it.
+code agrees with it. §11 is the crate on a host with one thread — a browser's Worker — and the
+bench that ran it there with the published bundle and models (2026-10-07).
 
 **Same contract as every other file here: a figure carries its date and its build.** Every
 measurement below was taken on Windows. The crate's own per-frame timings — the ~100 ms
@@ -84,6 +85,10 @@ Tesseract.
 | `eval` | `builder` | The synthetic evaluation of both scan modes (§10), added 2026-09-15. |
 | `detect-bench` | `builder` | Per-frame cost of detection before and after a lock, on `eval`'s own bursts, one card at a time (§3 *Track*). Added 2026-09-30. |
 | `ocr-bench` | `builder` | Both OCR readers timed and scored on `eval`'s synthetic bands — the old detection path and the current one back to back on every band (§4), added 2026-09-30. |
+| `bench-prep` | `builder` | Write the directory the frame bench reads — a bundle, labels, models and frames, from real files or invented (§11). Added 2026-10-07. |
+
+**The frame bench itself is not one of these**: `crates/card-scanner/bench/` is a package of its
+own with none of these features, because it is built for a browser and for a phone (§11).
 
 `cli` = `clap` + `tiny_http` + `corpus` + `ocr`; `builder` = `clap` + `ureq` + `rayon` +
 `corpus` + `ocr` — **`ocr` joined `builder` on 2026-09-15 for `eval`**, whose Exact passes are
@@ -518,11 +523,12 @@ before.
   the lock. `Verdict::search` says which ran (`full` / `window`); it is the *search* row in the
   app's Rectified panel and on the debug page.
 - **More than one core.** The masks inside one `locate` and the methods inside one frame are
-  independent, so they run under `std::thread::scope` (no new dependency). Candidates merge in
-  pass order and the ranking is a stable sort, so the answer is the serial one. A panic on a
-  worker thread is resumed on the caller's, where `Session::frame`'s guard catches it as before.
-  Because the masks overlap, `DetectTimings::mask_ms` is now the **slowest** mask's time, not
-  the sum.
+  independent, so they run under `std::thread::scope` (no new dependency) — since 2026-10-07
+  through `host::fan_out`, which runs them in turn on a host with one thread (§11). Candidates
+  merge in pass order and the ranking is a stable sort, so the answer is the serial one. A panic
+  on a worker thread is resumed on the caller's, where `Session::frame`'s guard catches it as
+  before. Because the masks overlap, `DetectTimings::mask_ms` is now the **slowest** mask's
+  time, not the sum — and the sum where they do not overlap, which is that host.
 
 **The window is built to give the sweep's answer, not a cheaper one**, and that is the finding
 that shaped it. The lock's smoothed quad is what gets rectified and hashed, so any systematic
@@ -826,8 +832,8 @@ and a card whose two orientations come that close keeps searching both. The hold
 stretch (the lock no longer trusted) and with everything else `forget_card` forgets.
 
 **Whatever still has to be hashed is hashed in parallel** — `std::thread::scope`, because the app
-build carries no rayon — and `hash_ms` and `search_ms` are the two phases' wall time rather than
-a sum of work done side by side. `MatchReport::hashes` counts the descriptors a frame actually
+build carries no rayon, behind `host::par_map` since 2026-10-07 (§11) — and `hash_ms` and
+`search_ms` are the two phases' wall time rather than a sum of work done side by side. `MatchReport::hashes` counts the descriptors a frame actually
 computed; `eval` reports it as *hashes / match*.
 
 **The framing is not held, and that was measured rather than assumed.** Holding framing and
@@ -1649,7 +1655,8 @@ worker threads and exited the server. The pair is ordered before use and the low
 floored at 1 (a low of 0 makes every pixel an edge, so an upstream `u32` underflow at
 `edges.rs:135` becomes certain rather than unlucky), and the `catch_unwind` covers what that does
 not: a dev tool that dies while you are adjusting it is worse than one that reports the failure
-and carries on.
+and carries on. (That guard is `host::guard` now, and it is a desktop's: built with
+`panic = "abort"`, as the web module is, it catches nothing — §11.)
 
 ## 7. Measured, 2026-09-08
 
@@ -1984,11 +1991,21 @@ the state is the core's `State.scanner` — built empty, still lazy — and `src
 keeps the embedded assets, the raw request body and the commands. Everything below about the
 load order, the lease, the prefs and the tray still holds, in the core's file.
 
+**And since 2026-10-07 the commands' bodies are the core's too** (the light app's step 7.3):
+what each of the twelve does is a function in `crates/grimoire-core/src/scanner.rs` —
+`ScannerState::{status, frame, reset, set_filters, capture}`, `save_prefs`, `save_tray`,
+`commit_tray`, and `frame_from` / `capture_from` for the body — called from two places: the
+core's command table, for a light host (Android through `core_call`), and the desktop's
+`#[tauri::command]` wrappers, which now only fetch the state, the webview's label and the raw
+request. *The IPC seam* below has the table's wire.
+
 **Assets were files in `data/scanner/` and nothing downloaded them — until 2026-09-15.** A
 release build now carries all three inside the binary, and a file here *overrides* the embedded
 copy rather than being the only source; §10 has the load order, the workflow that publishes the
-assets and the release step that fetches them. Nothing downloads at run time still. The table
-says what each file does when it is placed by hand in a build that embeds nothing.
+assets and the release step that fetches them. **Nothing downloaded at run time until
+2026-10-07**; since then a build that embeds nothing is offered a download of the three, on a
+reader's press (§10, *Where the files come from on each host*). The table says what each file
+does when it is placed by hand — or not yet fetched — in such a build.
 
 | Path under `data/scanner/` | Missing, with nothing embedded, means |
 | --- | --- |
@@ -2015,7 +2032,17 @@ sentences ends with** *Restart the app after placing or replacing a file — ass
 launch*, which is the clause that makes the rest of them actionable: see the next paragraph for
 why there is no button instead.
 
-**Loading is lazy on the first command and never happens again.** `staleTime: Infinity` on the
+**Loading is lazy on the first command and never happens again** — on the desktop, and from the
+page's side everywhere. (The core has had a door since 2026-10-07: `ScannerState::forget()` drops
+the loaded session so the next command loads afresh, waiting behind a frame in flight and leaving
+the lease alone. The dropped session's filters stay owed until a session takes them: a reload
+that cannot build the mask — no labels, because `corpus.db` was being replaced at that moment —
+searches unfiltered, says so in `ScannerStatus.unapplied_filters`, and the next reload is offered
+them again; an accepted `scanner_set_filters` settles the debt too. It is also the way back from
+a poisoned session lock. It exists for assets an install downloads after its first load, and
+**its one caller is that download** — `scanner_assets_fetch`, §10 — after which the page asks the
+status again; for a file placed by hand everything in this paragraph is still what a reader
+sees.) `staleTime: Infinity` on the
 status query and no `Reload` button, because asking again in the same session cannot report a
 file that has since appeared — the load ran once and the answer is what it loaded. **A bundle
 or a model pair placed after the app started needs an app restart**, and that is the honest
@@ -2053,6 +2080,11 @@ the JPEG as `InvokeBody::Raw` with `FrameOptions` as JSON in an `x-scanner-optio
 `scanner_capture` takes the JPEG raw with the sidecar as JSON in an `x-scanner-capture` header.
 Each is read by one payload function per command, and a JSON body is refused there with a
 sentence. The base64 JSON leg existed for the Android build and went with it on 2026-09-27.
+**The reading itself is the core's since 2026-10-07**: `frame_payload` and `capture_payload` in
+`src-tauri` refuse the JSON body and hand the bytes and a header lookup to
+`grimoire_core::scanner::frame_from` and `capture_from`, which hold the three header names, the
+detail split and every sentence below — one reader, because a light host's frame goes through
+it too (*The IPC seam*).
 
 **A frame's body can carry a second JPEG behind the first** (issue #708, 2026-09-30). With an
 `x-scanner-detail` header, the header is the frame's byte length and everything after it is the
@@ -2092,6 +2124,9 @@ header, losslessly"* pins the exact string `scannerCapture` produced, sweeps it 
 `JSON.parse`. In Rust, `scanner::tests::an_escaped_card_name_comes_back_with_its_accent` asserts
 its input `is_ascii()` and reads `Æther Vial` back out of `capture_payload`, and
 `a_capture_header_that_is_not_visible_ascii_is_a_sentence` proves the refusal on raw bytes.
+(Those are `src-tauri`'s eight, over Tauri's `HeaderMap`; the core's `scanner::tests` hold the
+same cases over a table call's arguments, where the unreadable header is a value that is not a
+string.)
 
 **What no test does is carry one string across.** Each side writes its own `Æther Vial`
 literal, by hand, in a different file, and nothing compares the two — the ordinary shape of a
@@ -2142,6 +2177,16 @@ at once, and only then hear from the refetch that another window had taken the s
   They are not the session and they take the lease anyway, so a window whose writes have not landed
   keeps the scanner until they do. The three **reads** (`scanner_prefs`, `scanner_tray`,
   `scanner_status`) take nothing.
+
+**On a light host the holder is always "the page"** (2026-10-07). The lease is held by a label,
+and a call through the core's command table carries a name, its arguments and a body — no window.
+It needs none: Android's host has one window and the web host refuses a second tab before an
+engine starts, so every table entry admits the constant `scanner::PAGE`. There
+`scanner_elsewhere` answers `false`, always, and `scanner_hold` and every write are admitted,
+always; the lease is still taken and still settles, so the page's heartbeat and retries run the
+same code as on the desktop and mean nothing more than that. **The desktop still passes
+`webview.label()`**, from its own wrappers, and never dispatches a scanner command through the
+table — through it, every window would be admitted as one.
 
 ⚠️ **An admitted command holds the lease until it _settles_, not from the moment it was let in.**
 `admit` answers a `LeaseGuard` the command keeps alive across its whole body, the awaited
@@ -2199,6 +2244,37 @@ shipped window; the suite drives the hook against the workbench's fake window.
 `CallArgs` is `Record<string, unknown> | Uint8Array` and `CallOptions` carries `headers`. The
 Tauri core passes both through to `invoke`.
 
+**A light host's wire: the headers ride as the arguments** (2026-10-07, the light app's step
+7.3). The same `ipc.scannerFrame(bytes, options, detail)` call reaches three transports, and
+only the desktop's has request headers:
+
+| Host | The body | The three headers |
+| --- | --- | --- |
+| Desktop (`tauriCore`) | the raw IPC body, `InvokeBody::Raw` | request headers, read off Tauri's `HeaderMap` |
+| Android (`tableCore`, `src/lib/core/table.ts`) | base64 text in `core_call`'s `body` — Tauri takes no raw body on Android — decoded by the host | `core_call`'s `args`: `{"x-scanner-options": "<json>", "x-scanner-detail": "<n>"}` |
+| Web (`protocol.ts`) | a transferred buffer | the call message's `args`, the same object |
+
+On the last two the call is answered by the core's command table, where `scanner_frame` and
+`scanner_capture` are the two entries of kind `bytes`: the arm hands the body and the arguments
+object (`commands::Carried`) to the entry, and the entry reads them with
+`scanner::frame_from` / `capture_from` — **the reader the desktop's `frame_payload` calls**, over
+a `Header` lookup each host fills from what it has. So the detail split, the shrug at an
+unreadable options header and the refusal of an unreadable sidecar are one piece of code and the
+same sentences on every host. `asciiJson` still escapes both header JSONs for all three: only
+the desktop's transport needs it, and one spelling is one thing to test.
+
+**In a browser the session's commands are refused**, in one sentence —
+`scanner::NOT_IN_A_BROWSER_YET`, *"The scanner does not run in a browser yet."* — because the
+crate's threads and `Instant` trap in a Worker: the status, a frame, a reset, a filter push and a
+capture. The prefs, the tray, its commit and the lease answer. The view matches on that sentence
+(`verdictText.ts`'s `SCANNER_NOT_IN_A_BROWSER_YET`, pinned by `ipc.test.ts`) so that a refused
+filter push there is not counted as an answer: `useScannerPrefs` reports `unavailable`, `loaded`
+never goes true, **no camera is asked for and no frame is sent**, and the sentence is drawn in
+the video box. Before 2026-10-07 the same view on a light host heard *"There is no command named
+scanner_set_filters on this host."*, counted it as a refused filter, opened the camera and sent
+every frame to be refused in turn. The light app's web step removes the refusal and the match
+together.
+
 `ipc.ts`'s scanner types keep the **Rust field names, snake case**, because the header JSON is
 deserialised straight into `FrameOptions` and the verdict is what the debug page already reads.
 That made a third mirror table in `ipc.test.ts`, `snakeMirrors`, alongside the two that
@@ -2235,6 +2311,12 @@ the next generated write is one editor away.
 | File | Owns |
 | --- | --- |
 | `ScannerPage.tsx` | The view: the Match strip over the camera, the tray beside it, and the developer column |
+| `useScannerHold.ts` | The lease's heartbeat — `scanner_hold` on mount and once a poll, stopped while the view is released — and the re-ask of the gate when a frame is refused by the lease |
+| `useParked.ts` | Pause at once, let go after `PARK_GRACE_MS`: the grace itself (`useGrace`), the document's visibility (`usePageHidden`), and the two together for a face with no window (`usePageParked`). `useWindowParked.ts` is the desktop's, over Tauri's minimize |
+| `useTrayLanding.ts` | A decision into the tray: `addDecision` over `tray.latest()` in the finish the Defaults hold, what the strip and the toast say about it, and the flash's key |
+| `useTrayCommit.ts` | Where the tray files (`useTrayFolder`: a stored folder that is gone or not the reader's is the root) and the commit itself (`useTrayCommit`: the plan, the folder asked about again, the snapshot subtracted) |
+| `useScannerStatus.ts` | `scanner_status` once a session, and what a surface draws from it: `hasBundle`, why the filters are refused, the asset sentences |
+| `reader/trayCommit.ts` | Pure: `withoutCommitted`, `isUserFolder` |
 | `useCamera.ts` | The stream: `getUserMedia` with the debug page's constraints — or the reader's camera by `deviceId: { exact }`, falling back to the default when that camera has gone — one `stopAll` every exit path goes through, a tolerated `play()` rejection, and the wait for `loadedmetadata` before reporting a size. It opens nothing while its `deviceId` is `undefined`, which is how the page holds the camera shut until the stored choice has loaded. Its error state is **keyed on `verdictText.ts`'s `cameraSentence`**, which is where the wording lives. `useCameraDevices` lists the `videoinput`s for the picker, re-read on `devicechange` and once a camera is live, because a browser names no camera before one is granted |
 | `reader/MatchStrip.tsx` | The strip above the camera — `readerText.ts`'s `matchStrip` drawn: a pill, the card, one sentence, the bar, and *Reset evidence* beside it |
 | `reader/AddedToast.tsx` | The card laid over the camera for 2.2 s each time the tray takes one |
@@ -2248,7 +2330,7 @@ the next generated write is one editor away.
 | `panels/BudgetPanel.tsx` | The per-stage milliseconds as a stacked bar |
 | `panels/RectifiedPanel.tsx` | The rectification and the detection numbers |
 | `panels/ReadoutsPanel.tsx` | Both OCR bands, and every collector pairing with what it resolved to — drawn from `lastOcr`/`lastCollector` props, **never from `verdict.ocr`** |
-| `scannerOptions.ts` | `FrameOptions::default()` verbatim, the slider specs, `send px`, `detail wait` |
+| `scannerOptions.ts` | `FrameOptions::default()` verbatim, the slider specs, `send px`, `detail wait`, and `frameOptions` — the reader's mode and the previews switch laid over the sliders |
 | `verdictText.ts` | The pure sentence functions the panels, the tests and the stories share |
 | `types.ts` | Re-exports of the `ipc.ts` mirror types, so a panel imports from its own feature |
 | `fixtures.ts` | The canned verdicts the tests and the stories are both driven from |
@@ -2331,11 +2413,14 @@ whose hands knew the old chord.
 
 ### Storybook
 
-`scannerHandlers(db)` sits beside `pluginHandlers()` with **four handlers**, one per command, and
-**no store** — nothing here mirrors a table, and a workbench has no camera, so `scanner_frame`
-answers the decided fixture whatever bytes it is handed and the panel stories are driven from
-fixtures directly. The fault **`scannerMissing`** makes `scanner_status` answer every asset
-absent with its path.
+`scannerHandlers(db)` sits beside `pluginHandlers()`, one handler per command, and its only
+store is the two `app_meta` rows (§10) — nothing here mirrors a table. The panel stories are
+driven from fixtures directly. **`scanner_frame` answered the decided fixture on every frame
+until 2026-10-07**, whatever bytes it was handed, with a `decision_seq` of 1 — which is the
+baseline `useScanLoop` takes and never moves off, so over the fake a camera added nothing. It
+is a script now (`.storybook/fake/scannerScript.ts`; *On the phone face*, below). The fault
+**`scannerMissing`** makes `scanner_status` answer every asset absent with its path, and the
+script find a card it can never name.
 
 `Scanner/Panels` has **ten** stories and `Scanner/Page` **two** — `CameraRefused`, which stubs
 `navigator.mediaDevices` from a `useState` initializer (an effect runs after the first paint, and
@@ -2502,6 +2587,194 @@ built on 2026-09-15 by a **release** `build-hashes` from the main checkout's dev
 **113,494 printings, 5,447,744 B** (`32 + n × 48`, 5.45 MB), 1,590 s, 0 failed. The first
 workflow run is the first from `--bulk`.
 
+### Where the files come from on each host
+
+Landed 2026-10-07 — the light app's step 7.4 (issue #761). Until then the three files reached
+an install one way, at build time, and a build without them told its reader to put them at a path
+and restart. **A build that carries none is now offered a download of them**, and nothing is
+fetched until the reader presses.
+
+| Host | Where the three files come from | Asked at run time |
+| --- | --- | --- |
+| Desktop, release build | embedded by `build.rs` from `src-tauri/scanner-assets/`, which `npm run scanner:assets` fills from the release | nothing — it owes nothing, is offered nothing and makes no request |
+| Desktop, a build with nothing embedded | a file placed in `data/scanner/` by hand, or the download below | GitHub, on the reader's press |
+| Android | the download below, into `<app data>/data/scanner/` | GitHub, on the reader's press |
+| Web | not yet — both commands are refused on a page (`scanner::NOT_IN_A_BROWSER_YET`); a release download sends no CORS header, so the source is the web step's own | nothing |
+
+**The source is the release the build already reads**: `scanner-bundle-v<FORMAT_VERSION>`, at
+`https://github.com/Msgaihede/mtg-grimoire/releases/download/scanner-bundle-v3/<name>`
+(`scanner_assets::release_url`, read from the crate's `FORMAT_VERSION` rather than typed). The
+release's names are flat — `text-detection.rten` — where the folder keeps the models under
+`models/`; `Piece::asset` and `Piece::place` are the two spellings, pinned to
+`scanner::{BUNDLE_FILE, DETECTION_MODEL, RECOGNITION_MODEL}` by a test.
+
+**Two commands, in `crates/grimoire-core/src/scanner_assets.rs`**, each a table entry and a
+desktop wrapper, neither taking an argument or the scanner's lease:
+
+- **`scanner_assets`** answers `Owed { owed, bytes, fetching }` — the files this install lacks
+  as `downloads::Due` rows (`bundle`, `detectionModel`, `recognitionModel`, each with a label and
+  its bytes), the total, and whether a fetch is running.
+- **`scanner_assets_fetch`** downloads every owed file, checks it, puts it in place, lets the
+  loaded session go, and answers what is owed afterwards.
+
+**What is owed is what did not load and the binary does not carry.** The rule is `lacking`, a
+pure function over the status, with a test of each case:
+
+- **nothing the binary carries is ever owed** — so a release build answers an empty list
+  whatever is in `data/scanner/`, and a file placed over an embedded copy that will not load
+  stays the reader's to remove, with its error drawn as before;
+- **the bundle is owed when none loaded**: absent, or *there and not a bundle this build reads*
+  — which is what an app update that moved `FORMAT_VERSION` leaves on a phone, where nobody can
+  reach the folder. A bundle that loaded without its card names is not owed; the names are
+  `corpus.db`'s;
+- **a model is owed when the pair did not load and that file is not the pinned one**: missing,
+  the wrong length, or the right length and the wrong bytes — told apart by its SHA-256, which
+  is read off the disk only in this state, never for a scanner that works. Two files that are
+  both the pinned ones and still did not load owe **nothing**: fetching the same bytes again
+  changes nothing, and an offer that could never clear is worse than the status's own sentence.
+
+So a fetch a network dropped after the bundle owes two files, not three, and the reader's
+next press is 12.2 MB rather than 18.1. **The digest is what lets an offer end** (review,
+2026-10-07): by length alone, a detection model that was corrupt at its right length beside a
+missing recognition model owed only the second — every press downloaded 9.7 MB, failed the
+pair, deleted it and offered the same again.
+
+**The sizes are in the engine, and only the models' are exact.** `DETECTION_BYTES` 2 510 284
+and `RECOGNITION_BYTES` 9 716 568 are the files' lengths and are checked; `BUNDLE_BYTES`
+5 874 752 is the bundle as measured on the release on 2026-10-07, used for the offer and for
+nothing else — the file is rebuilt weekly and grows with every set, so a bundle is trusted
+because it parses. Together 18 101 604 B; the page rounds each figure **up** to whole megabytes,
+as the launch downloads' prompt does, so it reads *about 19 MB* (6, 3 and 10).
+
+**A file takes its name only once it has been checked.** Each download is written to
+`<name>.part` beside its destination — the same folder, so the rename is one operation on one
+filesystem — and `scanner::load` never reads that name. Then:
+
+- **the two models are pinned.** They are the same two files in every release — `ocrs-models`'
+  — so each must be **exactly** its length, refused on the answer's `Content-Length` before a
+  byte of body is read and counted again as the body arrives; and then its **SHA-256 must be
+  the one compiled into the app** (`DETECTION_SHA256` `f15cfb56…b5ca`, `RECOGNITION_SHA256`
+  `e484866d…5a6e`), checked before any loader has seen a byte of it. Then the pair must build a
+  `TitleReader`, the very reader the session will build, before either is renamed. A model that
+  is not byte for byte the published one is never parsed. The digests were read three ways that
+  agreed on 2026-10-07: the release's own asset digests, a fresh download hashed locally, and
+  the copy the frame bench ran on. **`scanner-bundle.yml` checks the same two before it
+  publishes**, reading them out of the Rust source, so the workflow cannot upload a model the
+  installed apps would refuse;
+- **the bundle cannot be pinned** — it is rebuilt weekly — so it is held to what can be said of
+  any bundle: under its ceiling (`MAX_BUNDLE_BYTES`, 64 MiB, declared or counted as it
+  arrives), parsed by `Bundle::from_bytes` (the magic, this build's format version, the length
+  its own header declares), and **not empty**: a header with no card behind it parses, would
+  load, would name nothing, and — since what is owed is what did not load — would never be
+  owed again. It is renamed as soon as it passes, so a bundle that arrived is kept when a model
+  after it fails. **What vouches for a bundle's contents is the HTTPS chain to GitHub and
+  nothing else**: a wrong bundle that parses names the wrong cards, and runs no code.
+
+A refusal deletes the `.part` — every model's, whichever step failed — and is one sentence the
+page shows, **naming the file and never where it is kept**: on a phone the folder is
+`/data/user/0/…`, which no reader can act on. A folder that cannot be made, or something that
+is not a file where a file belongs, is said **before anything is asked of the network**, so it
+is a sentence on every press and never eighteen megabytes downloaded to fail at the rename. A
+failure is also written to `error_log`, as the feeds' are (`database` / `scanner_assets`, the
+release's address in the detail): a fetch outlives its view, and one that fails after the reader
+left is otherwise recorded nowhere. **A `.part` a killed process left is started over, never
+resumed** — `Writer::create` empties it. The whole fetch is 18 MB, the bundle changes every
+week, and a partial of last week's file continued with this week's is the join
+`scryfall::Client::download` keeps an `.origin` record to avoid. One that is never fetched
+again — the reader placed the files by hand instead — is left where it is.
+
+**HTTPS on every hop, constants, and a redirect that is followed.** The host and the path are
+constants and the base is injectable only through a private `Source` seam its tests use.
+GitHub answers a release download `302` to its asset host —
+`release-assets.githubusercontent.com` when asked on 2026-10-07 — and the client follows it,
+under `reqwest`'s default policy: at most ten hops, to whichever host each answer names.
+Pinning the asset host would break the day GitHub renames it, which it has done before. What
+is held instead is the scheme, **on the request and on every hop**: the client is built
+`https_only` (`platform::http::Config`, a switch this step added; `reqwest`'s own, which its
+redirect policy enforces too), so a hop to `http://` ends the request as an error instead of
+being followed. The first cut checked only where the answer finally came from, which an
+https→http→https chain passes. In a browser there is nothing to set: a page served over HTTPS
+may not fetch an `http://` address at all. The request carries the app's `User-Agent` and
+nothing else. **Not through `scryfall::Client`**: that is Scryfall's pacing gate and its 429
+lockout.
+
+**Bounded in silence, not in length, and one at a time.** Every wait — for the answer to begin,
+and for each chunk — is under `scryfall::STALL`, sixty seconds. That is a bound on a link that
+has gone quiet: one that keeps delivering slowly is never given up on, **there is no deadline
+on the whole fetch and nothing cancels one but its end**. A second call while one runs is
+**refused** (`ALREADY_FETCHING`), as a second card sync is, by a claim on `ScannerState` that a
+guard lets go however the run ends — on the state and not in a static, because two states are
+two installs. There is no retry loop: a failure is a sentence, and the retry is the reader's
+press, for what is still owed.
+
+**It outlives the page.** The fetch is awaited by the host's command, so leaving the Scanner
+view changes nothing. `Owed.fetching` is how a view that comes back learns one is running, and
+the event **`scanner:assets`** how it draws how far — `Progress { phase, file, done, total,
+message }`, `phase` one of `downloading`, `checking`, `done`, `error`, the bytes counted across
+the whole run and reported every 256 KiB.
+
+**When a file has landed the fetch calls `ScannerState::forget()`** — a failed run included, if
+anything landed before it failed — so the next scanner command loads a session that has seen
+it. No restart, which is the point: §9's *Loading is lazy and never happens again* is still true
+of a file placed by hand, and no longer of one fetched.
+
+**On the page** (`src/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`) the reader's
+view draws the offer under the camera, where the path-and-restart sentences were: *The scanner
+needs its card data — about 19 MB*, what each file is, and **Download**; then a bar with how far
+it has got; then, on a failure, the engine's sentence and **Retry**. **It is drawn from what
+the host answers and from nothing else**: no rows — a release build, or a host that refuses the
+command — is no offer, and then the status's own sentences are what is left, as before. The
+offer replaces a sentence only for a file it offers; card names that did not load are said
+either way; and the Developer panels still name each path and each error, which is where a
+developer placing a file by hand reads them. When a fetch ends the page does its two halves of
+the reload: `scanner_status` is asked again — the one thing that ever invalidates that query —
+and `useScannerPrefs.resync` pushes the **stored** filters to the new session, read from the row
+again, because a session with no bundle refused them at mount and the popover was put back to
+none. **The status is marked stale by the press's own promise, which outlives the view** — a
+fetch that lands while the reader is on another view would otherwise leave the view that came
+back drawing the status it read before the download — and the last failure is kept in the
+cache for the same reason, so a download that failed while nobody was looking says why when
+the reader returns. A window that did not press hears the event too, and re-reads both. The latched reads are dropped (`loop.clearReads`), so the next verdict starts a stream of
+its own; `decision_seq` restarting at zero needs nothing more, since the loop takes every
+verdict's number and the first frame of a new session carries no decision.
+
+**When `FORMAT_VERSION` moves.** An installed app keeps asking for its own version's tag, so a
+bundle published for a newer format is never fetched by a build that cannot read it. What the
+old tag still holds is what it gets — stale, if the weekly workflow no longer publishes there —
+and if the release is deleted the fetch says *card-hashes.bin is not published for this version
+of the app (HTTP 404)*. An app **updated** across the move finds the old bundle on disk, fails
+to load it, and owes a new one: the offer comes back, with no file to remove by hand.
+
+**What it does not do.** **There is no refresh**: an install that fetched once keeps that
+bundle until a `FORMAT_VERSION` bump makes it unreadable, so sets released after the download
+go unrecognised there — as they do on a desktop, whose embedded copy is as old as its release.
+The weekly publish replaces the three assets with `--clobber`, one after another, so a fetch
+that lands in that moment can meet a 404 whose sentence — *not published for this version* —
+is wrong about why; the next press works. And the offer says the size, not whether the link
+is metered: the launch's mobile-data hold does not cover a download the reader starts.
+
+**Measured, 2026-10-07, this desktop (Windows 11), a debug build** — the one real fetch, from
+a test marked `#[ignore]` (`scanner_assets::tests::the_published_files_land_and_load`), into a
+scratch state with nothing in its `scanner/` folder, run twice: before the review round and
+after it, with the digests pinned and the client HTTPS-only. Before it, three files owed,
+18 101 604 B. **`fetch` answered in 1.82 s, and in 1.35 s the second time**: 5 874 752,
+2 510 284 and 9 716 568 B landed under their three names, the bundle parsed, both models
+matched their pinned digests, the pair loaded, 76 `scanner:assets` events ending on `done` at
+18 101 604 of 18 101 604 (74 before each model had a check of its own), nothing owed and
+nothing in `error_log`. `scanner_status` on the same state, with no restart, then read all
+three `source: file`, `loaded: true`. Those figures are this machine's network and say nothing
+about a phone's.
+
+**Not seen.** No phone has run it: not the download on a mobile link, not the pair load in
+that build, not the 18 MB against a phone's storage. No metered connection. No stall, no
+dropped connection and no redirect to plain HTTP against the real host: the first two are the
+mock servers', and the third is `reqwest`'s switch, shown refusing a plain-HTTP *request* and
+not a redirect — which would take a TLS server to be redirected from. The workflow's digest
+step was run by hand against the real models, a tampered one and an unreadable source, and
+never in Actions. No app window over the real engine: the phone face's smoke drove the offer, the press and the reload in a headless Chromium over the fake (light-app.md §11.4), and nothing drove them in a running
+desktop or light build. And no release whose `FORMAT_VERSION` moved under an installed app; the
+paragraph above is a reading of the code.
+
 ### Filters
 
 **Sets and a release-date range, and nothing else.** Language is absent rather than unimplemented
@@ -2606,7 +2879,8 @@ frames in a row about its leader.
 is in front of the lens and still owns "has it left". While in Exact the session keeps the last
 `EXACT_BURST` (3) locked frames' rectified views, and on the first frame where the stretch has held
 `EXACT_STEADY_FRAMES` (3) with no attempt yet for this card, it hands them to `resolve::resolve`
-**on a thread of its own** and returns. The Match strip reads *Reading* and *Hold steady —
+**on a thread of its own** and returns — where the host has one to give; in a browser's Worker
+the resolve runs inside that frame, as it did everywhere before #706 (§11). The Match strip reads *Reading* and *Hold steady —
 reading…* meanwhile, and an Exact commit with no decision yet stays *Reading* rather than
 *Matched*, because Exact is decided by its resolve.
 
@@ -2638,8 +2912,8 @@ lock saw nothing, and a card swapped mid-resolve was invisible to it. What repla
   a decision must not depend on a clock. The eval sets it, so its *median frames* column still
   counts frames and its *mean ms* still holds each resolve's whole wall time.
 
-**Inside the resolve, the whole-card search and the two reads run at once** (`std::thread::scope`
-in `resolve::resolve`). None needs another's answer: the title and the collector line are different
+**Inside the resolve, the whole-card search and the two reads run at once** (`host::join3` in
+`resolve::resolve` — a `std::thread::scope`, or the three in turn on a host with one thread). None needs another's answer: the title and the collector line are different
 bands of the same views, and the search reads neither. The tiers still *apply* in the order below,
 so running them together changes the time and nothing else —
 `the_title_and_the_collector_line_are_read_at_the_same_time` has each reader wait for the other,
@@ -3069,7 +3343,14 @@ stored tray as they were, and puts the backend's own sentence above the rows; a 
 **only the rows it committed**. `remaining` is worked out when the commit actually goes out — it
 queues behind any tray write on the wire — and again when it answers, because the camera keeps
 running: a card that landed meanwhile stays and is written behind it, and a row bumped meanwhile
-keeps only the copies added after the snapshot. It invalidates `OWNED_WRITE_KEYS`, the import's own
+keeps only the copies added after the snapshot. **Its lines are built then too, not at the press**
+(2026-10-07, `useTrayCommit`): what is filed is the pressed rows still in the tray, by identity,
+as the write goes out. The press's in-flight flag is one mount's state, and a view that went away
+while its commit waited on a sync and came back — or the app's other face, across 1024px — could
+be pressed again over the very rows the first press took; built at the press, the second commit
+sent the same lines behind the first and the pile was filed twice. Now it finds its rows gone,
+sends nothing and answers `null`; and a row edited between the press and the send stays in the
+tray rather than being filed as it was. It invalidates `OWNED_WRITE_KEYS`, the import's own
 set. **A stored folder that is gone or not the reader's own is the root**, and persisted as such
 once the folder list answers — the import accepts a deck's group, because the import's deck arm
 files there on purpose, so a stale id naming one would put scanned cards in a deck's box. §8 item
@@ -3506,6 +3787,333 @@ The spec's §11 measurements:
 | The bundle workflow's first cold run, and a warm one | CI, `ubuntu-latest` | **Not possible before merge** — `workflow_dispatch` appears only once the file is on `main` |
 | Whether the updater's release lookup can ever return the `scanner-bundle-v3` prerelease | — | **No, by reading the code** — `update::parse_release_page` drops every `prerelease` before anything compares versions. Not verified live |
 
+## 11. The host seam — one thread, no clock, nothing to catch
+
+Landed 2026-10-07, as step 7.1 of the light app's phase 7
+([#761](https://github.com/Msgaihede/mtg-grimoire/issues/761)). Until then the crate ran only
+where a desktop's three assumptions held: there is a second thread to give, there is a clock to
+read, and a panic can be caught. A browser's Worker has none of them — it is one thread,
+`Instant::now()` **panics** on `wasm32-unknown-unknown` at run time in a build that compiled
+without a warning, and the web module is built with `panic = "abort"`, where a panic is a trap.
+The crate compiled for that target from the day the core took it (2026-10-03) and could not have
+got through a frame there.
+
+**`crates/card-scanner/src/host.rs` is now the one file that knows the machine.** Nothing else in
+the crate's shipped library names a thread, a clock, an unwind or a target:
+
+| What the crate had | Where | What it asks now |
+| --- | --- | --- |
+| `std::thread::scope`, every item spawned | `detect::run_passes` (a mask a thread), `session::each_method` (a detector a thread) | `host::fan_out` |
+| `std::thread::scope`, first item on the caller | `reference::par_map` (the hashes, then the searches) | `host::par_map` |
+| `std::thread::scope`, two reads beside the caller's search | `resolve::resolve` | `host::join3` |
+| `std::thread::scope`, one read beside the caller's | `session::fast_reads` | `host::join` |
+| `thread::Builder::spawn("exact-resolve")` | `Session::start_resolve` | `host::background` |
+| `Instant::now()`, fourteen of them | `detect`, `reference`, `resolve`, `ocr`, `session` | `host::Stopwatch` |
+| `catch_unwind`, twice | `Session::guarded`, the resolve's job | `host::guard` |
+
+**Natively nothing moved.** Each helper is the scope its site had — `fan_out` leaves the caller
+idle and `par_map` gives it the first item, because that is what the two kinds of site did, and
+`host::tests::each_helper_uses_the_threads_it_says_and_none_under_the_guard` counts the threads.
+A worker's panic is still re-raised on the caller, the resolve's thread is still called
+`exact-resolve`, and no key of the verdict changed.
+
+**On a host with one thread the same closures run on the caller, one after another**, and the
+order is one rule: *the caller's share first, then every other share in the order it was handed
+over.* So a frame's detectors run Canny then Otsu, a detector's masks in pass order, the picks'
+hashes in pick order, a Fast frame's title before its collector line, and an Exact resolve's
+whole-card search, then its title, then its collector line. The sites never needed each other's
+answers — that is why they could be threads — so the order changes when an answer arrives and
+never what it is. A panic in one share stops the ones after it, where with threads they would
+have run to their ends first; it reaches the caller either way.
+
+**A resolve "in the background" is a resolve inside the frame there.** `host::background` runs
+its job where it stands when there is no thread to give, to its end, before it returns — so
+`ResolveOn::Background`, the default, *is* `ResolveOn::Inline` on such a host, and the poll that
+follows `start_resolve` finds the channel already full. The session was never at risk of waiting
+on a spawn that cannot happen, but only because of that arm: on `wasm32-unknown-unknown`
+`Builder::spawn` answers an error, the job is dropped unrun, and the old code would have reported
+*the Exact resolve failed on this card* on every stretch, for ever. The frame that starts a
+resolve therefore carries its whole cost in a browser — measured below — which is what the
+session did everywhere until 2026-09-30 and stopped doing for a reason (§10 *Exact*): **a web
+host that wants the overlay live through a resolve has to solve that outside this crate**, with
+a second Worker or by slicing the resolve.
+
+**`host::inline()` is the one-thread arm on a machine that has many**: a guard, and while it
+lives every helper called *on that thread* runs where it stands. Per thread is enough, because
+work that is never handed to another thread never leaves the one the guard is on — a resolve's
+search fanning out its hashes and a frame's methods fanning out their masks find it too. It is
+never global: a test binary runs its tests on many threads, and one that made the process a
+Worker would take the threads from all the others. It is public and not test-only, so a host
+may hold one — the native bench does, for its `--one-thread` column.
+
+**The clock: an installed one wins, otherwise `Instant` where the target has one, otherwise
+zero.** `host::set_clock(fn() -> f64)` takes milliseconds on anything monotonic, once per
+process. Two callers install one: `grimoire-core`'s `ScannerState::new` hands over
+`platform::clock::monotonic_ms` — a `Tick`, so `Instant` natively, exactly as before, and
+`performance.now()` in a Worker — and the bench's module hands over `performance.now()` itself.
+A host that installs nothing still scans, with every `_ms` at zero, because **no reading in the
+crate paces, bounds or orders anything**: all fourteen end in a field of the verdict.
+
+**Two timings mean something slightly different on one thread, and neither is wrong.**
+`DetectTimings::mask_ms` is the masks' share of the wall clock — the slowest mask's when they
+overlap, and their sum when they run in turn, which is what it holds there. And `Verdict::timings`
+is the *winning* detector's own trace: with threads the two detectors overlap, so its `total_ms`
+is near enough the stage's; in turn, the other detector's time is in the frame and in no field.
+**On one thread a frame's cost is its round trip, never `decode_ms + timings.total_ms + …`** —
+which is why the bench reports the call and not a sum.
+
+**⚠️ `host::guard` guards nothing where a panic aborts**, and that is not something this crate
+can fix. With `panic = "abort"` there is no unwinding for `catch_unwind` to stop: the panic is a
+trap, the export never returns, and `Verdict::failed("the detector panicked on this frame…")` is
+never built. What that looks like was provoked rather than assumed (`npm run scanner:bench --
+--trap`, headless Chrome 154, 2026-10-07): a panic inside the session surfaced in the Worker as
+`RuntimeError: unreachable` thrown out of the call, after the module's panic hook had written
+the panic's own sentence and line to the console; and **the next frame asked of the same instance
+trapped as well** — `RefCell already borrowed`, because nothing ran the borrow's destructor. So an instance that panicked in a frame is finished:
+every later call into the session traps. **Containing it is the host's, and the only containment
+is a new instance** — the Worker thrown away and the bundle and labels loaded again, about half
+a second on a desk (below). A host that keeps the session behind a `Mutex`, as
+`ScannerState` does, meets the same thing one line later: std's `Mutex` panics on a second lock
+by the one thread there is. And if that instance is also the engine — the module that holds the
+database — the panic takes the engine with it, which is the argument for the scanner being an
+instance of its own. No input is known to reach either guard since `detect::canny_pair` (§6).
+
+**The fence is `host::tests::the_fence`.** It reads every `.rs` file under `src/` at any depth
+but `host.rs` — a module that grows into a folder is still the library — up to the file's first
+column-0 `#[cfg(test)]` that gates a module, skips comment lines, and refuses `Instant`,
+`SystemTime`, `UNIX_EPOCH`, `catch_unwind` and `resume_unwind` as whole words, `std::thread` and
+`thread::` as written, and any `cfg` that names a target (`target_…`, or a bare `windows`,
+`unix` or `wasm`) — read as one gate however many lines rustfmt broke it over. **It also refuses
+three ways of waiting**: a channel's blocking `.recv()`, a `Condvar` and a `Barrier`. None is a
+thread or a clock, and each is a wait for another thread, which on a host with one is a wait
+for ever; `try_recv`, which the session polls a resolve with, is another word. `src/bin/` is
+outside it — the tools are a desktop's — and so is test code, which is where the three tests
+that need real threads and clocks stay
+(`the_title_and_the_collector_line_are_read_at_the_same_time`,
+`a_background_resolve_decides_on_a_later_frame_and_only_once`, and `host`'s own).
+
+**A test module has to be the last thing in its file**, because the sweep stops reading at one:
+code found below the module it cut at is a failure of its own, naming the line. Every file's
+cut is its terminal `mod tests` today. Without that rule a `#[cfg(test)] mod helpers { … }`
+half-way down a file would have hidden everything under it, and nothing would have said so.
+
+`the_fence_refuses_each_spelling_and_reads_past_a_gated_item` holds the sweep itself to
+fourteen lines it must refuse and nine it must not, a gate split over four lines, and two files
+with code under a test module — `detect.rs` gates a `thread_local!` 140 lines above its tests,
+and a sweep that stopped at the first gate would have read none of them. **Each rule went red
+on a plant before it was trusted**: a clock read in `trim.rs`; a file with one in a new
+subdirectory of `src/`; a test module half-way down `trim.rs` with a function under it; a
+`cfg(any(` with its `target_os` on the next line; a `.recv()`, a `Condvar` and a `Barrier`.
+**It is a list of spellings**: a thread reached through an alias or another crate passes it,
+and what the crate's *dependencies* do is not its to see — `rten` builds a `rayon` pool and
+`ocrs` calls it, which is what the bench below was built to run.
+
+**`host::tests`' two `…_session_answers_the_same_on_one_thread_as_on_many`** are the promise as
+tests, one for Fast and one for Exact: frames of a banded card on a table, through a session
+whose sites fan out and through one under `host::inline()`, each verdict compared as JSON with
+every `…_ms` key removed at any depth — the quad, the lock, the candidates and their distances,
+the tally, the resolution's tiers, the decision and the frame it lands on. The threaded session
+is told to resolve inline, since a real background resolve lands on whichever frame follows it;
+the inline one is left at the app's default, so the same test holds that a host with no thread
+resolves inside the frame. A debug build spends about a second on a frame, which is why the two
+modes are two tests: the harness runs them side by side.
+
+**They run four of the six sites both ways, and neither read.** The sessions have no readers —
+no model is in the tree, and CI has none — so what is compared threaded against inline is a
+frame's detectors and a detector's masks (`fan_out`, twice), its hashes and its searches
+(`par_map`), a resolve's whole-card search (`join3`, whose two reads are `NoReaders` and answer
+at once) and the resolve itself (`background`, on its inline arm). `session::fast_reads`'
+`join` never runs in them, and no real read ever runs beside a search. Those two are held
+elsewhere: by the helpers' own tests — the threads each uses, the order each keeps, the panic
+each carries — and, with the published models, by the bench below, which fails when a native
+run and the module disagree about a decision or a read. That second one is a desk's to run.
+
+### The frame bench
+
+`crates/card-scanner/bench/` is a package of its own beside the crate — its own workspace root,
+its own lockfile, building into `crates/card-scanner/target/` — because of what it must *not*
+depend on: `cli` and `builder` bring `clap`, `tiny_http`, `ureq`, `rayon` and a bundled SQLite,
+and none of that belongs in a module a phone downloads or a binary cross-compiled for one. It
+takes `card-scanner` with `ocr` and never `corpus`. Two faces over one library:
+
+| | What | Built by |
+| --- | --- | --- |
+| The module | `load(bundle, labels, detection, recognition)`, `frame(jpeg, options, detail)`, `reset()`, `memory_bytes()` and `trap()` behind `wasm-bindgen`; installs `performance.now()` as the crate's clock and a panic hook that writes to the console | `cargo build --lib --target wasm32-unknown-unknown --profile wasm`, then `wasm-bindgen --target web` |
+| `scanner-bench-native` | the same frames through the same `load` and `frame`, as raw per-frame records on stdout; `--one-thread` holds the run under `host::inline()` and sets `RTEN_NUM_THREADS=1` | `cargo build --release --bin scanner-bench-native` |
+
+```
+npm run scanner:bench                         build, run in headless Chrome, print the summary
+npm run scanner:bench -- --native             and the native runner, with threads and held to one
+npm run scanner:bench -- --sizes              and the module built without the readers, for its size
+npm run scanner:bench -- --simd               the module built with `simd128`, and run instead
+npm run scanner:bench -- --dir <inputs>       a directory `bench-prep` made, instead of an invented one
+npm run scanner:bench -- --serve --port 8787  leave the page up: a phone opens it after
+                                              `adb reverse tcp:8787 tcp:8787`
+npm run scanner:bench -- --summarise <file>   reduce a native runner's output, e.g. from `adb shell`
+npm run scanner:bench -- --trap               after the run, panic in the module on purpose
+```
+
+**The page does the measuring** (`bench/web/page.js`, plain scripts, no bundler): it fetches the
+frames, posts each to a dedicated module Worker as a **transferred** `ArrayBuffer` — the trip a
+camera page's frame makes — and times the round trip as well as the call inside it. It shows the
+result as text and leaves it on `window.__scannerBench`, which is all `scripts/scanner-bench.mjs`
+reads out of the headless browser; so a phone's screen and the script's JSON are one
+measurement. The browser and its DevTools socket are the web smoke's own
+(`scripts/web-smoke/harness.mjs`'s `launch` and `connect`, exported for this). `bench/web/summary.js`
+reduces a run for both hosts — the page imports it and so does the script, for the native
+runner's records — into four kinds of frame kept apart: the **first**, the frame an Exact
+**resolve** landed on, a frame a reader **read** on, and the **steady** rest. A record also
+keeps what each reader read and what the read was matched to, because a model that runs and
+returns noise costs the same milliseconds as one that reads.
+
+**It is a measurement, and its exit code is about two things that are not timings.** No figure
+is held to a threshold. A run exits 1 — after printing everything it found, with the reasons
+under `refused` in its JSON — when **a mode answered `ok` on no frame of a run**, on any host,
+which is what a session that never loaded or a directory of unreadable frames looks like from
+outside; and, **under `--native`, when the hosts disagree**: per configuration (readers or
+none) and per mode, the native run with its threads, the native run held to one and the module
+must agree on how many frames answered `ok`, how many decisions there were, which frame the
+first fell on and what each named, how many frames a reader ran on, and how many reads there
+were and what they matched. The frame a decision lands on is comparable across all three only
+because every host resolves inside the frame here (below). A disagreement is a finding before
+it is a bug — the module's inference runs other kernels than a desktop's, and a read on the edge
+may fall the other way — but it is the one thing the bench exists to notice, so it is never a
+pass. Without `--native` there is nothing to compare, and exit 0 says only that the module ran
+and every mode saw a card.
+
+**The profile is the web host's, copied into the bench's manifest** — `lto = "fat"`, one codegen
+unit, `panic = "abort"`, `opt-level` 3 — and the `cdylib` is declared there rather than asked for
+on the command line: `cargo rustc --crate-type cdylib` over a plain library gave a module 15%
+larger from the same sources (some 650 kB), cargo planning the dependencies' LTO from the
+manifest. No `wasm-opt`, as for the web host. The `wasm-bindgen` CLI must be the version the
+bench's lockfile resolves, which is pinned to the root lockfile's.
+
+**The inputs are a directory**, the same one for both faces: `card-hashes.bin`, an optional
+`labels.json`, an optional `models/text-detection.rten` and `models/text-recognition.rten`, and
+`frames/*.jpg` in name order. `bench-prep` (a `builder` binary of the crate) writes one and reads
+nothing from the network:
+
+```
+bench-prep --out <dir>                                    everything invented
+bench-prep --out <dir> --bundle card-hashes.bin --corpus corpus.db \
+           --models <dir> --card <picture>...             the published bundle, real cards
+```
+
+A card's picture becomes a burst of frames the way the evaluation makes one (`synth::burst`:
+posed, lit, blurred, JPEG-compressed, jittered per frame), one burst a card, so a run is a card
+held and then the next laid in its place. `--corpus` becomes `labels.json` — an array of
+nine-element rows, `[id, oracle_id, illustration_id, name, set, number, lang, released,
+finishes]`, attached through `Reference::add_label` and `set_finishes` a row at a time. Without
+`--bundle` the bundle is built there: the cards' own descriptors and then `--pad` (120 000)
+entries of noise, because the search is brute force over every entry and a bundle of two cards
+would time nothing. Without `--card` the cards are invented too — a border, the five bands
+`cardness` reads, an art box of waves and rows of strokes for text.
+
+**It also builds for a phone, and has not run on one.** The runner reads files by path, prints
+to stdout and parses its own four flags, so `cargo build --release --bin scanner-bench-native
+--target aarch64-linux-android --manifest-path crates/card-scanner/bench/Cargo.toml` is the
+whole of it, pushed with the directory and run from `adb shell`; CI's `core` job `cargo check`s
+the package for both of its targets. Neither the Android target nor an NDK is on the desk this
+was written at.
+
+### Measured, 2026-10-07
+
+Windows 11, a Ryzen 9 5900X (12 cores), release builds, the browser a headless Chrome 154 with
+the page and its Worker on `localhost`. **The assets are the published ones** — release
+`scanner-bundle-v3`: `card-hashes.bin` (5 874 752 B, 118 313 printings) and the two models
+(2 510 284 B and 9 716 568 B) — with the dev corpus's 118 475 labels as a 21 555 383 B
+`labels.json` (8 204 737 B through brotli at quality 5). **The frames are still synthetic**:
+`synth::burst` over Scryfall's `display` renders of eight printings, fifteen 960×540 frames
+each, so every figure below is about cost and none is about a camera. Timings are three runs
+per mode over the first thirty frames — Counterspell MH2 267, then Swords to Plowshares LEA 40
+laid in its place — each run from a reset session, a figure being the median of the three runs'
+medians. No detail frame was sent, so the readers read the 960 px frame's own bands.
+
+**Other sessions' builds shared the machine throughout, and it shows.** The three left-hand
+columns are one run in a quiet stretch, whose three runs agree to a few percent. The scalar
+module was run twice, neither time quietly, and is given as the range of both; its best
+stretch — three runs within 3 ms of each other — is the low end. Read the columns against each
+other only as far as that allows.
+
+| | Native, threads | Native, one thread | WASM + `simd128` | WASM, as the web host builds |
+| --- | ---: | ---: | ---: | ---: |
+| Session built, no readers / with | 437 / 414 ms | 434 / 430 ms | 468 / 547 ms | 457–1 650 ms |
+| **Steady frame**, Fast / Exact | **45 / 45 ms** | **70 / 67 ms** | **96 / 84 ms** | **90–234 ms** |
+| The same with the readers loaded | 46 / 46 ms | 69 / 74 ms | 85 / 89 ms | 90–216 ms |
+| One title read (`ocr.elapsed_ms`) | 49–61 ms | 112–125 ms | 273–372 ms | **864–1 630 ms** |
+| One collector read | 49–57 ms | 108–119 ms | 257–286 ms | **669–1 771 ms** |
+| **A Fast frame that reads both** | 113 ms | 300 ms | **646 ms** | **2 495–3 579 ms** |
+| Exact's resolve frame, no readers | 80 ms | 142 ms | 164 ms | 223–360 ms |
+| **Exact's resolve frame, with them** | 162 ms | 469 ms | **1 189 ms** | **2 442–2 650 ms** |
+
+**The native resolve rows are not what the desktop app does.** Both native columns resolve
+*inside* the frame (`ResolveOn::Inline`, set by `scanner-bench-native`), which is the
+like-for-like with a Worker and is how the evaluation runs; the app resolves on a thread of its
+own and its frame returns at once (§10 *Exact*), so no desktop frame ever costs 162 ms for a
+resolve — that is what the resolve costs, wherever it is put.
+
+**"Session built" is not the same span on both sides.** Natively the clock starts once the
+files are read and are bytes in memory. In the Worker it is the call to the module's `load`,
+which begins by copying those bytes into linear memory and transcoding the 21.5 MB of labels
+from a JavaScript string to UTF-8 — work a native host has no counterpart to, and part of what
+a web host would pay. The fetch before it (100–220 ms from `localhost`) is in neither.
+
+"One thread" natively is `host::inline()` **and** `RTEN_NUM_THREADS=1`: the readers' inference
+keeps a `rayon` pool of its own, a thread a physical core, which the crate's seam has no say
+over — the first real-asset run left it alone, and the one-thread column read a title in 40 ms.
+
+**`rten` runs in a Worker, and reads what it reads natively.** That was the open question:
+`ocrs` and the eleven `rten*` crates pull `rayon` and `num_cpus` unconditionally, and their
+single-thread fallbacks had been read and never run. Nothing trapped. The module read
+*Counterspell* off the frame and decided the same printing on the same frame as the desktop; and
+on one pass over all eight cards — 120 frames, both modes, with and without the readers — the
+three hosts agreed about everything a record keeps: which frames decided (the 6th, 5th, 7th and
+9th first), how many frames a reader ran on (17 in Fast), which fourteen title reads matched a
+card and which names, and which cards were decided. That was eight of eight in every pass but
+Fast with the readers, which left Thoughtseize THS 107 undecided on all three hosts alike. Six
+were the exact printing; Llanowar Elves M19 314 and Sol Ring C21 263 were named as their own
+reprints on The List, which share the picture.
+
+**What it costs is the finding.** A frame nobody reads is about twice a desktop's in a Worker —
+about half of the gap being the threads it has not got — and the module's own stages are
+unremarkable: decode is about three times native, rectify half as much again, the hash no slower.
+**A read is another matter: fifteen to thirty times a desktop's as the web host builds today**,
+0.7–1.6 s against 50–60 ms, so the Fast frame that reads a title and a collector line
+together takes **2.5–3.6 s** and an Exact resolve **2.4–2.7 s**, inside the frame, with the
+overlay frozen for all of it. Two things make up that factor and they were measured apart.
+The threads are about 2×: the same read held to one native thread costs 110–125 ms. The rest is
+that the module is scalar — `rten`'s WASM kernel is compiled only under
+`target_feature = "simd128"`, and the root's `wasm` profile sets no target feature. Built with
+`RUSTFLAGS="-C target-feature=+simd128"` (`npm run scanner:bench -- --simd`, a tree of its own)
+the same reads cost **257–372 ms** — two and a half to four times faster, for 28 kB of module —
+which puts a read frame at 0.65 s and a resolve at 1.2 s. **Nothing in this repository builds with
+that flag**, the engine's module included, and which of the app's browsers would refuse such a
+module was not looked up.
+
+**The module is 4 429 400 B, 961 003 B through brotli** (quality 11); without the readers
+1 273 409 B and 352 921 B; with `simd128` 4 457 773 B and 981 069 B. So `ocrs` and `rten` are
+3.2 MB of the module, 0.6 MB compressed, before either of their models — which are another
+12.2 MB to fetch. It was fetched from `localhost` and instantiated in 13–42 ms.
+
+**Memory is the labels.** The module's linear memory stood at **150.3 MB** with the bundle and
+the labels loaded, and frames added nothing to it; on an earlier pass over an invented bundle
+of the same size it stood at 13.6 MB with the bundle alone and 34.1 MB after sixty frames. A
+WASM memory never shrinks, so 150 MB is a high-water mark and includes the 21.6 MB of JSON
+text the bench's own loader held while it read — the app will read the same rows out of
+`corpus.db` and hold no such text — but most of it is `Reference`'s index itself: seven hash
+maps keyed by printing, card, illustration, name and set-and-number, one of which
+(`art_printings`) holds a second copy of every label. With the readers it stood at **232.6 MB**,
+which is an upper bound and a loose one: the page loads a second session into the instance the
+first was just dropped from. **Nobody has asked what that costs a phone**, natively or in a
+tab.
+
+**What was not seen.** A photograph: the frames are renders degraded in software, as §10's are.
+A detail frame, so a reader's bands were never warped from more than 960 px. Any browser but
+one headless Chrome on a desktop; any phone; the Android build of the bench, which CI compiles
+and nobody has run. A module with threads — `rayon` over `SharedArrayBuffer` needs the page
+cross-origin isolated, which the app's hosting is not. A quiet machine for the scalar module.
+And an input that panics the crate: the trap above was asked for.
+
 ## Creating a deck from the review tray
 
 The tray's **Create deck…** action opens the same full settings dialog as the Decks gallery
@@ -3523,3 +4131,126 @@ original refusal, following the decklist importer's cleanup rule.
 The scans stay in the tray after creation or cancellation. Creating a deck writes its list;
 the separate **Add to collection** action records physical ownership. The dialog explains
 this before creation, and a successful creation opens the deck editor.
+
+## On the phone face
+
+The light app's phone face (below 1024px; [light-app.md](light-app.md)) has had a Scanner tab
+since phase 3 and a sentence behind it. Since 2026-10-07 it is the scanner:
+`mobile/phone/pages/ScannerPage.tsx` and `mobile/phone/scanner/`. **The desktop reader's parts
+in the phone's idioms** — nothing about how a card is recognised, landed or filed is written a
+second time.
+
+### What is shared
+
+Everything that decides. The camera (`useCamera`, `useCameraDevices`), the pump and its
+one-add-per-card edge (`useScanLoop`), the tray and the prefs (`useTray`, `useScannerPrefs` —
+the same two `app_meta` rows, so a tray scanned on one face of an install is the tray on the
+other), the gate (`useScannerElsewhere`), *Create deck…* (`useScannedDeck`), the reducers in
+`reader/tray.ts`, the sentences in `readerText.ts` and `verdictText.ts`, and the two things
+laid over the picture, `Overlay` and `AddedToast`, as they are.
+
+**Six things lived inside the desktop page and were moved out so both pages call them** — the
+desktop page is otherwise unchanged, and its suite did not move:
+
+| Was, in `ScannerPage.tsx` | Is |
+| --- | --- |
+| The `scanner_hold` effect, and the gate re-asked on a frame the lease refused | `useScannerHold.ts` (`useScannerHold`, `useRefusedElsewhere`) |
+| `useWindowParked`'s grace and its `visibilitychange` half | `useParked.ts` (`useGrace`, `usePageHidden`, `usePageParked`); `useWindowParked` is now `useGrace(useWindowMinimized())` |
+| `onDecision`, `lastAdded`, `landed`, the flash key and its timer | `useTrayLanding.ts` |
+| `isUserFolder`, `withoutCommitted`, the stale-folder effect, `onCommit` | `reader/trayCommit.ts`, `useTrayCommit.ts` (`useTrayFolder`, `useTrayCommit`) |
+| The status query, `hasBundle`, `FILTERS_NEED_NAMES`, the asset notes | `useScannerStatus.ts` |
+| `{ ...options, mode, previews }` | `scannerOptions.ts`' `frameOptions` |
+
+Three smaller moves ride with them: the Add button's words and the reasons it is refused went
+from `TrayPanel.tsx` to `reader/tray.ts` (`addLabel`, `addRefusal`, `deckRefusal`,
+`NEXT_DECISION_LABEL` — `TrayPanel` re-exports the two its importers used); the two modes'
+words and hints went from `ScanBar.tsx` to `readerText.ts` (`SCAN_MODES`); and the strip's bar
+became `MatchStrip.tsx`'s exported `MatchBar`, beside its two tone maps. `Overlay` now checks
+the canvas has a size *before* asking it for a context: a page with no picture yet asked sixty
+times a second, and under jsdom each ask is a "Not implemented" line — which every suite that
+walks through the Scanner tab would have printed.
+
+### What is the phone's
+
+The arrangement, because each of the desktop's is built for a pointer and a wide view.
+
+| Desktop | Phone | Why |
+| --- | --- | --- |
+| `ScanBar`: four anchored popovers, 256–300px wide, and a Developer switch | `ScanControls`: *Stop scanning*, *Fast \| Exact*, and one press opening `OptionsSheet` — Scan mode, Filters, Finish, Condition, Camera as pages of one bottom sheet | An anchored panel has nowhere to be anchored at 360px. The Camera row is drawn only with more than one camera. No Developer switch: the phone sends `previews: false` whatever the stored switch says and never writes it |
+| Each mode's hint is a tooltip | Each mode's hint is a sentence under its name in the sheet | A finger has no hover |
+| The video is a `flex-1` box in a column that is the view's height | `CameraBox`: the column's width at the **stream's own aspect ratio**, 4:3 until a stream reports one, capped at 38dvh (60dvh from 720px) | The page is a scrolling column, where a zero-basis grow collapses to nothing (§9, *The view*). A portrait stream — what a phone held upright is expected to answer, and no phone has yet been seen to — would be 583px tall at 9:16 and 328 wide. Video and overlay canvas share the one object fit |
+| `MatchStrip`: pill, name, printing and instruction on one row | `MatchLine`: the pill, name and printing on one line, the instruction on the next; the same `matchStrip` value, tone maps and `MatchBar` | At 330px the one row is the pill and the instruction with no room for a name |
+| `TrayPanel`: a grid of tiles or a list; 28px finish dropdown and stepper; *More printings…* a chip under the pointer; the clipped name and every refusal a tooltip | `Tray`: one layout, rows. The name wraps; the printing (`MH2 259 ›`) and the finish are 44px presses opening sheets; a 44px stepper that stops at one; a waiting row is its candidates as whole cards three to a line | A finish and a stepper at 44px do not fit under a 156px tile, so there is no grid, and `trayLayout` is left unread and unwritten |
+| *More printings…* opens `AllPrintingsDialog` through the app store | A sheet of the card's printings under the card sheet's own key (`cardPrintingsKey`), each a press calling `setPrinting(tray.latest(), row.key, choice)` | The phone has no store and no all-printings wall. The choice carries the printing's `finishes`, so a printing sold one way settles an `Unknown` row — the desktop's hand-back does not carry them |
+| The tray's footer: *Create deck…*, a folder popover, Add; the header's *Clear all…* | `TrayFooter`, outside the page's scroller: a press naming the destination that opens the reader's own folders as a sheet, a `⋯` opening *Create deck…* and *Clear all…* as sheet rows, and Add | **A refusal is words on the page**: under Add, and on a sheet row's second line |
+| A refused commit's sentence above the rows; a success says nothing | The same sentence above Add; a success is the page's receipt line (*Added 5 copies to Binder.*), with *Undo* only where a ticket came back — and `scanner_tray_commit` answers none (#555). Where the folder list would not load, the footer reads *Folder name unavailable* and the receipt *to your collection*: the stored id is what was sent, and neither prints a place it does not know | The phone's other writes report this way |
+| `useWindowParked`: Tauri's minimize | `usePageParked`: the document's own visibility, and **released from its first render on a page that mounts hidden** | A phone has no window to ask, and reports a hidden page, which WebView2 does not. A tab restored in the background at `/scanner` otherwise asked for the camera and held it for the grace; the desktop's window never mounts minimized as far as it knows, and is as it was |
+| A sheet or popover hands the caret back through `AnchoredPopup` and `Dialog` | Every sheet hands it back to the press that opened it on a choice, Escape and the ✕, and leaves it on a scrim press (`ActionSheet`'s `onDismiss`). The tray's rows find the press again **after the render**, by the row's key and what the press opens | A choice in a row's sheet is a write, drawn a tick after the sheet shuts: the *More printings…* of a row waiting on a pick is on screen at the close and gone when the row draws as settled — a target that is connected and doomed |
+| On a host with no session (`useScannerPrefs`' `unavailable`) the sentence is drawn where the picture would be | The same, in `CameraBox`; and the status line with its *Reset evidence* is not drawn, and the Filters row is refused with the sentence | The gates are the shared `loaded`: no camera is asked for and no frame sent. The tray still reads, edits and files |
+
+**From 720px wide** the camera's column and the tray's stand side by side, each scrolling by
+itself, with the footer under the tray: a 22rem tray, the camera the rest. It asks the viewport,
+not a container: the page's sheets are mounted inside it, and a container is the containing block
+for a `fixed` scrim. **Not from 600px, the rail's breakpoint**, where it was first put: the page
+beside the rail is then 520px, and measured there the tray was a 288px column, its printing press
+43px wide, beside a camera 200×113. From 600 to 720 it is the phone's one column, wider.
+
+**`ScannerDataSlot` is the one place the missing data is said.** A light install carries neither
+the bundle nor the models in its binary, so *absent* is where a phone starts. The slot is handed
+the whole `ScannerStatus` and today draws `bundleSentence` and `modelsSentence` — which name a
+path to put files at, an instruction a phone cannot follow. The step that brings a download
+replaces the slot's body.
+
+### The fake's session is a script
+
+`.storybook/fake/scannerScript.ts`. One card is thirteen frames — three with nothing in frame,
+four weighing (the bar filling to 7 of 8), the one that decides, five held with the same number —
+answered `FAKE_FRAME_MS` (110 ms) apart, so a card about every 1.4 s. The pile is five, in the
+Storybook corpus's own printings: Urza's Saga, Urza's Saga again (a bump to ×2), Ancient Tomb,
+Black Lotus, and Lightning Bolt — which Fast names with a finish it could not read (`Unknown`)
+and Exact cannot split from two reprints (a row waiting on a pick). After the pile the desk is
+empty; `scanner_reset` lays it down again and `decision_seq` keeps its value, as the crate's
+does. The mode and `previews` are read out of the frame's own header, which the fake `invoke`
+now hands a handler as a second argument.
+
+**It is the fake's first slow handler, and it found a hole in the fake.** `invoke` points the
+fake back at a call's world as the call settles, for the continuation of a call a live story
+made. A frame still on the wire when a test ended settled in the *next* test, and took the
+pointer to the finished test's world with it — whose handlers then answered that test's tray
+writes and frames, which are made from timers and continuations and scoped by nothing else.
+`invoke` now re-points only while the world is **standing** (`scope.ts`: mounted, or nothing is
+mounted at all), and `world.test.ts` stages a slow call settling after its world was replaced.
+
+**What it does not do**: ask for a detail frame, read a title or a collector line, apply the
+filters, or report a quad that has anything to do with the picture.
+
+### Measured, 2026-10-07
+
+`npm run mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome with
+`--use-fake-device-for-media-stream` under a touch pointer and the dark scheme, against
+`mobile:dev` — the Storybook fake, not the engine.
+
+| What | 360×800 | 412×915 |
+| --- | --- | --- |
+| The camera's box, on the fake device's 1920×1080 stream | 328×185 | 380×214 |
+| Frames before the third card's row, all Fast, none with previews | 34–35 | 34–35 |
+| The footer, over the tab bar | 634–747 over 747 | 749–862 over 862 |
+| The footer with 5 rows and with 40 | on screen, Add and the folder under a thumb, the list scrolling behind | the same |
+| Controls under 44px — the page, the folder, options, filters and printings sheets, a waiting row | none | none |
+| Sideways scroll, or anything off the side | none | none |
+
+And on its side, **800×360**: the two columns side by side, the camera 336×189 and the tray 319px
+beside it, the footer at 247–360 with Add and the folder pressable, nothing under 44px and
+nothing off the screen.
+
+Two things the pass changed: the set picker inside the filters page was 36px tall, and is floored
+at 44 from outside it as the search sheet floors it; and with the finish reading `Unknown` the
+printing press beside it was cut to `STA 1…`, the collector number gone, which 8px of side
+padding and a narrower count fixed.
+
+**Not seen**: a real lens, a real phone, the engine. The camera's grant (Android's prompt, a
+browser's), a portrait stream in the capped box, the frame rate a phone's canvas and JPEG encode
+give the pump, and the detail frame — a 2560px encode on the frame that can least afford it — are
+all a device's to show. The page was built on step 7.3's commands: on Android the core's table
+answers all twelve, and in a browser the session's five are refused in one sentence, behind
+which the page sits quiet — neither was driven here, on a device or in a built web app.

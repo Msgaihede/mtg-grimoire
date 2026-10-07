@@ -104,6 +104,13 @@ import type { CommandHandler } from "./core";
 import { emitFake } from "./event";
 import { qrMatrix } from "./qr";
 import {
+  FAKE_FRAME_MS,
+  newScanScript,
+  resetScanScript,
+  scanStep,
+  sentOptions,
+} from "./scannerScript";
+import {
   CURRENT_VERSION,
   NEXT_VERSION,
   producedManaOf,
@@ -125,7 +132,7 @@ import { DEFAULT_GROUP_BY } from "@/features/decks/grouping";
 import { typeBucket } from "@/features/decks/deckBuckets";
 import { DEFAULT_SORT_BY } from "@/features/decks/sorting";
 import { SPECS } from "@/features/decks/validation/fixtures";
-import { DEFAULT_SCANNER_PREFS, STATUS, VERDICTS } from "@/features/scanner/fixtures";
+import { DEFAULT_SCANNER_PREFS, STATUS } from "@/features/scanner/fixtures";
 // The app's own list of the four sizes the cache stores, borrowed rather than re-spelled for
 // `hasVariableCost`'s reason below: `card_image_uri` refuses a variant that is not one of them,
 // and a second hand-typed list here would let the workbench and the window disagree about which
@@ -249,6 +256,9 @@ import type {
   ReviewRow,
   ReviewTable,
   ScanFilters,
+  ScannerAssetDue,
+  ScannerAssetsOwed,
+  ScannerAssetsProgress,
   ScannerCaptured,
   ScannerPrefs,
   ScannerStatus,
@@ -1506,7 +1516,15 @@ export interface FakeUpdate {
  * **`scannerMissing`** is the three scanner assets being absent and `scanner_status` naming their
  * paths — not a failure, the state a build without embedded assets is in until a reader places
  * the files. With no bundle there are no labels, so `scanner_set_filters` refuses any filter but
- * the empty one, in the crate's words.
+ * the empty one, in the crate's words. **It is also the state the fake owes the scanner's files
+ * in** ({@link scannerAssetHandlers}): `scanner_assets` lists the three, and `scanner_assets_fetch`
+ * fetches them — after which the fault is over, and `scanner_status` reads present.
+ *
+ * **`scannerFetchFails`** is those same three files owed and the download unable to get them:
+ * `scanner_assets_fetch` starts, says so, and is refused in the engine's sentence for a file the
+ * release does not have. **The offer's own fault, and `scanner_status` does not read it** — a
+ * story of the whole page under it would draw a working scanner beside an offer — so it is for
+ * the stories of `ScannerAssets`, which are handed their status.
  *
  * **`scannerElsewhere`** is another window holding the scanner's lease, so `scanner_elsewhere`
  * answers `true` and the Scanner view draws one sentence and opens no camera. It is a fault rather
@@ -1549,6 +1567,12 @@ export interface FakeUpdate {
  * `parity.test.ts` holds this table to the commands `desktop.rs` registers. So the fault is read
  * in `world.ts`, which puts the one handler over a world's table for the stories that ask to be
  * a browser, answering the web host's own sentence from where that host keeps it.
+ *
+ * **`pairOnly`** is the second entry about the host, and `lentStorage`'s shape exactly: the
+ * light app's Tauri host — the build Google Play distributes — answers `membership_elsewhere`
+ * (`src/lib/core/hostMembership.ts`) with one sentence saying how sync turns on there, where
+ * every other host refuses the name; and the Sync panel draws that sentence in place of its
+ * membership half. `world.ts` puts the handler over the one world's table.
  */
 export type Fault =
   | "busy"
@@ -1577,9 +1601,11 @@ export type Fault =
   | "patreonGroupEntitled"
   | "wishGone"
   | "scannerMissing"
+  | "scannerFetchFails"
   | "scannerElsewhere"
   | "shareLapsed"
-  | "lentStorage";
+  | "lentStorage"
+  | "pairOnly";
 
 /**
  * What the picture cache costs, as the Settings page's one button sees it.
@@ -24528,8 +24554,12 @@ function throughJson<T>(value: T): T {
 }
 
 /**
- * The scanner's commands. A Storybook has no camera, so `scanner_frame` answers the decided
- * fixture whatever bytes it is handed and the panel stories are driven from fixtures directly.
+ * The scanner's commands. The panel stories are driven from fixtures directly; **a camera that
+ * does open is answered by a script** — `scannerScript.ts`' pile of five cards, a frame at a time
+ * and paced like the engine — so the reader's half of the Scanner can be driven over the fake:
+ * `mobile:dev`, the phone page's stories, and `scripts/phone-scanner-smoke.mjs`. Until step 7.6
+ * `scanner_frame` answered the decided fixture on every frame, and its `decision_seq` of 1 was the
+ * baseline `useScanLoop` takes and never moves off: over the fake a camera added nothing.
  *
  * **Two rows of store and no table**: {@link FakeDb.scannerPrefs} and {@link FakeDb.scannerTray}
  * are `app_meta` rows, read and written whole here and nowhere else. Neither is on
@@ -24537,6 +24567,9 @@ function throughJson<T>(value: T): T {
  * answer `busy`, because the crate's go through `sync::with_write`.
  */
 export function scannerHandlers(db: FakeDb) {
+  // The session, which is the host's and not a table's: where the pile has got to, and the
+  // `decision_seq` it has reached. One per fake database.
+  const script = newScanScript();
   return {
     /** `scanner::scanner_status`. */
     scanner_status: (): ScannerStatus => (db.fault === "scannerMissing" ? STATUS.missing : STATUS.present),
@@ -24551,10 +24584,28 @@ export function scannerHandlers(db: FakeDb) {
     scanner_hold: (): void => {
       if (db.fault === "scannerElsewhere") throw refuse(OPEN_ELSEWHERE);
     },
-    /** `scanner::scanner_frame`. */
-    scanner_frame: (): ScannerVerdict => VERDICTS.decided,
-    /** `scanner::scanner_reset`. */
-    scanner_reset: (): void => undefined,
+    /**
+     * `scanner::scanner_frame` — the next frame of the script, whatever bytes it is handed, after
+     * {@link FAKE_FRAME_MS}. The mode and `previews` are read out of the frame's own header (the
+     * fake `invoke` hands a handler its options second); a caller with no header gets the stored
+     * mode. Under `scannerMissing` a card is found and never named.
+     *
+     * **The one handler here that answers late on purpose.** A frame still on the wire when its
+     * story or its test ends settles after the world has gone, which is why `invoke` no longer
+     * points the fake back at a world that is not standing (`scope.ts`' `standing`): before that,
+     * the next test's unscoped calls went to this one's world. A test that opens a camera still
+     * answers its own frames — a hundred milliseconds a frame is a slow test.
+     */
+    scanner_frame: async (
+      _jpeg: unknown,
+      options?: { headers?: Record<string, string> },
+    ): Promise<ScannerVerdict> => {
+      const sent = sentOptions(options) ?? { mode: db.scannerPrefs.mode, previews: false };
+      await new Promise((answered) => setTimeout(answered, FAKE_FRAME_MS));
+      return scanStep(script, sent.mode, sent.previews, db.fault === "scannerMissing");
+    },
+    /** `scanner::scanner_reset` — the pile again from its first card; the number is kept. */
+    scanner_reset: (): void => resetScanScript(script),
     /** `scanner::scanner_capture`. */
     scanner_capture: (): ScannerCaptured => ({ saved: "live-1757300000.jpg" }),
     /**
@@ -24617,6 +24668,93 @@ export function scannerHandlers(db: FakeDb) {
       };
       db.scannerTray = throughJson(args.remaining);
       return outcome;
+    },
+  } satisfies Record<string, CommandHandler>;
+}
+
+/* ------------------------------------------------------------ the scanner's files ---- */
+
+/**
+ * The three files as `scanner_assets.rs` lists them: its keys, its labels and its sizes — the
+ * bundle's as measured on the release on 2026-10-07, the two models' exact.
+ */
+const SCANNER_FILES: ScannerAssetDue[] = [
+  { key: "bundle", label: "Card hashes", bytes: 5_874_752 },
+  { key: "detectionModel", label: "Text detection model", bytes: 2_510_284 },
+  { key: "recognitionModel", label: "Text recognition model", bytes: 9_716_568 },
+];
+/** `scanner_assets.rs`' `ALREADY_FETCHING`, verbatim. */
+const ALREADY_FETCHING = "The scanner's files are already downloading.";
+/** The engine's sentence for a file the release does not have — what `scannerFetchFails` ends on. */
+const BUNDLE_NOT_PUBLISHED =
+  "card-hashes.bin is not published for this version of the app (HTTP 404).";
+/** How long each stretch of the fake download takes: long enough for a story to see the bar,
+ *  short enough that the whole of it is well inside a `findBy`'s wait. */
+const SCANNER_FETCH_STEP_MS = 120;
+
+/**
+ * The scanner's files: what is owed, and the download a reader's press starts
+ * (`scanner_assets.rs`, the light app's step 7.4).
+ *
+ * **A block of its own beside {@link scannerHandlers}**, because these are not the session's
+ * commands: they take no lease and touch neither `app_meta` row. They read the same fault, which
+ * is the whole of what joins them — under `scannerMissing` (and `scannerFetchFails`) the three
+ * files are owed, and in every other world nothing is, which is a desktop release build's answer.
+ *
+ * **The fetch is the one handler here that takes time**, where every other answers inside
+ * `invoke`: a download is a thing a reader watches, and a story has to be able to see the bar
+ * between the press and the end. So it says where it has got to through `scanner:assets`, in the
+ * engine's phases, over three short stretches; a second call while it runs is refused in the
+ * engine's words; and when it lands **the fault is over** — `db.fault` is cleared, which is what
+ * makes {@link scannerHandlers}' `scanner_status` read present and its filters work, exactly as
+ * the engine's session does after `ScannerState::forget`.
+ */
+export function scannerAssetHandlers(db: FakeDb) {
+  let fetching = false;
+  const owed = (): ScannerAssetsOwed => {
+    const files =
+      db.fault === "scannerMissing" || db.fault === "scannerFetchFails" ? SCANNER_FILES : [];
+    return {
+      owed: throughJson(files),
+      bytes: files.reduce((sum, file) => sum + file.bytes, 0),
+      fetching,
+    };
+  };
+  const pause = () => new Promise<void>((resolve) => setTimeout(resolve, SCANNER_FETCH_STEP_MS));
+  return {
+    /** `scanner_assets::owed`. */
+    scanner_assets: (): ScannerAssetsOwed => owed(),
+    /** `scanner_assets::fetch`. */
+    scanner_assets_fetch: async (): Promise<ScannerAssetsOwed> => {
+      if (fetching) throw refuse(ALREADY_FETCHING);
+      const { owed: files, bytes: total } = owed();
+      // Nothing owed is nothing fetched: no request, no event, and the same answer.
+      if (files.length === 0) return owed();
+      const say = (progress: Omit<ScannerAssetsProgress, "total">) =>
+        emitFake<ScannerAssetsProgress>("scanner:assets", { ...progress, total });
+      fetching = true;
+      try {
+        say({ phase: "downloading", file: files[0].key, done: 0, message: null });
+        await pause();
+        if (db.fault === "scannerFetchFails") {
+          say({ phase: "error", file: null, done: 0, message: BUNDLE_NOT_PUBLISHED });
+          throw refuse(BUNDLE_NOT_PUBLISHED);
+        }
+        let done = 0;
+        for (const file of files) {
+          done += file.bytes;
+          say({ phase: "downloading", file: file.key, done, message: null });
+          await pause();
+        }
+        say({ phase: "checking", file: files[files.length - 1].key, done, message: null });
+        // Only the fault this fetch is the end of: a story that changed its world's fault while
+        // the download ran — to `busy`, say — keeps the one it set.
+        if (db.fault === "scannerMissing") db.fault = null;
+        say({ phase: "done", file: null, done, message: null });
+      } finally {
+        fetching = false;
+      }
+      return owed();
     },
   } satisfies Record<string, CommandHandler>;
 }
@@ -24699,6 +24837,7 @@ export function allHandlers(db: FakeDb) {
     ...journalled(db, writeHandlers(db)),
     ...undoHandlers(db),
     ...scannerHandlers(db),
+    ...scannerAssetHandlers(db),
     ...windowHandlers(),
     ...pluginHandlers(),
   };

@@ -13,6 +13,31 @@ export const SURE_DISTANCE = 0.3;
 export const SCANNER_OPEN_ELSEWHERE = "The scanner is open in another window.";
 
 /**
+ * The line under {@link SCANNER_OPEN_ELSEWHERE}, on both Scanner surfaces: the gate asks again
+ * each second, so the view opens by itself. It says "that window" because the engine's sentence
+ * above it does.
+ */
+export const SCANNER_OPENS_HERE_LATER =
+  "It will open here once that window closes or leaves the scanner.";
+
+/**
+ * What the scanner's session answers on a host that is a web page — `scanner::NOT_IN_A_BROWSER_YET`,
+ * the same string, pinned by `ipc.test.ts`. The engine refuses the status, a frame, a reset, a
+ * capture and a filter push with it there, because the `card-scanner` crate's threads and clock
+ * trap in a browser; the prefs, the tray and the lease answer as anywhere.
+ *
+ * **The page matches on it for one reason: to stay quiet.** A refused filter push is otherwise an
+ * answer — the view counts its filters as settled, opens the camera and sends frames, each of
+ * which would be refused in turn, as fast as the page can encode them. `useScannerPrefs` reads
+ * this one as "there is no session here" instead, so no camera is asked for and no frame goes out,
+ * and `ScannerPage` draws the sentence where the picture would be.
+ *
+ * ⚠️ **Goes with `scanner::not_in_a_browser_yet`**, which the light app's web step deletes: this
+ * constant, `useScannerPrefs`' `unavailable`, and the line in `ScannerPage` that draws it.
+ */
+export const SCANNER_NOT_IN_A_BROWSER_YET = "The scanner does not run in a browser yet.";
+
+/**
  * `db::BUSY`, verbatim — what every write answers while a sync holds the write connection.
  * `useTray.test.ts` pins it against `db.rs`, so a reworded crate sentence goes red there rather
  * than turning every sync into a refusal the tray gives up on.
@@ -138,11 +163,19 @@ function didNotLoad(file: string, path: string, error: string): string {
  * `data/scanner/`. The one sentence an embedded bundle can still earn is the labels' — the names
  * come out of `corpus.db` and never out of the binary, so embedding cannot lose them and cannot
  * supply them either.
+ *
+ * **`offered` is the host saying it can fetch the bundle** (`scanner_assets` listed it as owed),
+ * and then a bundle that did not load draws nothing here: the offer to download it stands where
+ * this sentence would, and "put a file at this path and restart" is the wrong instruction for a
+ * reader with a button — and an impossible one on a phone, whose path nobody can reach. The
+ * labels' sentence is not about a file to fetch and stands either way. The Developer panels pass
+ * nothing, so a developer placing a file by hand still reads its path and its error there.
  */
-export function bundleSentence(status: ScannerStatus | null): string | null {
+export function bundleSentence(status: ScannerStatus | null, offered = false): string | null {
   if (status === null) return null;
   const bundle = status.bundle;
   if (bundle.source === "embedded" && bundle.loaded && bundle.error === null) return null;
+  if (offered && !bundle.loaded) return null;
   if (!bundle.present) {
     return `No reference bundle. Put \`${BUNDLE_FILE}\` at ${bundle.path}. ${RESTART}`;
   }
@@ -161,12 +194,16 @@ export function bundleSentence(status: ScannerStatus | null): string | null {
  * **They load as a pair and fail as one**: `TitleReader::load` writes the identical sentence
  * onto both assets, so this names whichever one is carrying it rather than printing it twice.
  * Either file missing is the placement sentence, because a lone model reads nothing.
+ *
+ * `offered` is {@link bundleSentence}'s, for the models: the host listed one of them as owed, so
+ * the offer stands in for every sentence here.
  */
-export function modelsSentence(status: ScannerStatus | null): string | null {
+export function modelsSentence(status: ScannerStatus | null, offered = false): string | null {
   if (status === null) return null;
   const det = status.detection_model;
   const rec = status.recognition_model;
   if (det.loaded && rec.loaded) return null;
+  if (offered) return null;
   if (!det.present || !rec.present) {
     return `No OCR models. Put \`${DETECTION_FILE}\` and \`${RECOGNITION_FILE}\` at ${det.path}. ${RESTART}`;
   }

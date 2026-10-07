@@ -51,9 +51,14 @@ testing = []
 # the labels out of `corpus.db`, `ocr` for the two readers. **It was measured on wasm32 before it
 # came here** — the core with it checks and builds clean, and libsqlite3-sys is not in that tree
 # at all, so the crate's `bundled` asks nothing of a browser build; Android is CI's `core` job to
-# compile, as for everything here. **It does not yet run in a browser** —
-# the crate's own threads and `Instant` panic there — and nothing calls it there before the light
-# app's phase 7 gives them a seam.
+# compile, as for everything here. **It runs in a browser since the light app's step 7.1
+# (2026-10-07)**: the crate's threads, its clock and its panic guard are behind one module,
+# `card_scanner::host`, which runs each of them where it stands on a host with one thread —
+# `ScannerState::new` hands it this crate's clock — and a module of the crate alone put frames
+# through a session in a Worker, readers and all (`docs/reference/card-scanner.md` §11).
+# **Nothing in this crate's command table calls its session there yet**, a panic in one is a
+# trap that ends the instance, and a read costs fifteen to thirty times a desktop's as this
+# module is built today: that section has all three.
 card-scanner = { path = "../card-scanner", features = ["corpus", "ocr"] }
 # What makes two label names the same name. `deck_labels` is one global list since schema v21
 # and its uniqueness grain is a **key** rather than the word itself: NFC, then Unicode

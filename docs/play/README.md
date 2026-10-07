@@ -196,7 +196,9 @@ Everything else: **not collected**. In particular:
   above.
 - The requests for card data go from the device straight to Scryfall, Commander Spellbook,
   Card Kingdom and Mana Pool and carry nothing about the reader's collection or decks. Each
-  sees the request's IP address, as the privacy policy says.
+  sees the request's IP address, as the privacy policy says. The same holds for the card
+  scanner's files, which the app downloads from this repository's GitHub release when the
+  reader presses the scanner's Download and not before.
 
 **The one judgement in this section**, for the owner: Cloudflare keeps a log of each request to
 the relay in his own account for up to seven days (`observability` is on in

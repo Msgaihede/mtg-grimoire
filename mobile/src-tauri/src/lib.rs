@@ -6,7 +6,16 @@
 //! - **one command, [`core_call`]**, which answers every call the page makes by forwarding it to
 //!   [`grimoire_core::dispatch`] — so a command the core's table does not have is refused here
 //!   in the table's own words, and `src/lib/core` picks this transport by asking nothing of the
-//!   page (see [`HOST_MARK`]);
+//!   page (see [`HOST_MARK`]). **The scanner's commands are twelve of them** (phase 7, step
+//!   7.3): a camera frame is `core_call { name: "scanner_frame", args: <its headers>, body:
+//!   <the JPEG, base64> }`, decoded here and judged by the core's session on the blocking pool.
+//!   This host needs nothing of its own for it — the page's camera is the WebView's, granted
+//!   through the manifest's `CAMERA` permission by wry's own `onPermissionRequest`, as the
+//!   pairing scanner's already is; the video is a `srcObject` and the frame a canvas `toBlob`
+//!   read as bytes, so the CSP is asked for neither `media-src` nor `blob:`. **It embeds no
+//!   scanner asset and downloads none**: the session loads from `<data>/scanner/`
+//!   (`card-hashes.bin`, `models/text-detection.rten`, `models/text-recognition.rten`), and
+//!   until those are there a frame is detected and names nothing;
 //! - **the startup gate** the page waits on before it mounts ([`startup`]), answered inside
 //!   `core_call` because the core has no window to start;
 //! - **the `mtgimg` protocol**, answered by the core's [`grimoire_core::images::answer`] — the
@@ -15,6 +24,9 @@
 //!   through the system's own picker and save dialog ([`files`]), and **a navigation guard** that
 //!   keeps the window on the app's pages and hands every web link to the system browser
 //!   ([`navigation`]) — step 4.3.
+//! - **how sync is turned on here** ([`membership`]): this is the build Google Play
+//!   distributes, so it offers no membership — one sentence for the Sync panel, the two
+//!   connecting commands refused, and four of the core's sentences reworded on their way out.
 //!
 //! **What it starts is the desktop's launch less what is the desktop's alone** ([`start`]): the
 //! facet index, the image upkeep, the card sync and, behind it on a first run, the optional
@@ -38,6 +50,7 @@ use tauri::Manager;
 
 mod downloads;
 mod files;
+mod membership;
 mod navigation;
 mod startup;
 
@@ -74,6 +87,11 @@ async fn core_call(
     if files::answers(&name) {
         return files::answer(&app, &name, args).await;
     }
+    // Nor does how sync is turned on here: one sentence, and two refusals. Before the state,
+    // so the answer is the same on a launch that has not opened its database yet.
+    if membership::answers(&name) {
+        return membership::answer(&name);
+    }
     let Some(state) = app.try_state::<Arc<State>>() else {
         return Err(format!("{name}: the app is still starting."));
     };
@@ -82,8 +100,36 @@ async fn core_call(
         let hold = app.state::<downloads::Hold>();
         return downloads::answer(state, &hold, &name, args).await;
     }
-    let body = body.map(|b| decode_body(&name, &b)).transpose()?;
-    grimoire_core::dispatch(&state, &name, args.unwrap_or(Value::Null), body).await
+    forward(&state, &name, args, body).await
+}
+
+/// A call as the page sent it, to the core's table: the arguments as they came, and the body
+/// out of its base64. [`core_call`]'s tail, apart from the app it is asked through, so the
+/// wire a `bytes` command crosses — `{ name, args: <headers>, body: <base64> }`,
+/// `src/lib/core/table.ts`'s — is tested here without a window.
+///
+/// **It is this host's one call into the core's table, and what the table says about a
+/// membership is reworded on the way back** ([`membership`]): an error, and the rows of the
+/// error log. Nothing reaches the page past it.
+async fn forward(
+    state: &Arc<State>,
+    name: &str,
+    args: Option<Value>,
+    body: Option<String>,
+) -> Result<Value, String> {
+    let body = body.map(|b| decode_body(name, &b)).transpose()?;
+    grimoire_core::dispatch(state, name, args.unwrap_or(Value::Null), body)
+        .await
+        .map_err(|error| membership::reword(name, error))
+        .map(|answer| {
+            // The core writes the key check's 401 sentence into `error_log` as it happens, and
+            // Settings → Errors reads those rows through this command: reword them as well.
+            if name == membership::ERROR_LOG {
+                membership::reword_rows(answer)
+            } else {
+                answer
+            }
+        })
 }
 
 /// A raw body, from the base64 it crossed the bridge as.
@@ -418,6 +464,100 @@ mod tests {
             "{err}"
         );
         assert_eq!(decode_body("x", "AAEC").unwrap(), vec![0u8, 1, 2]);
+    }
+
+    /// A real JPEG, 160×120 — the core's own test frame (`commands::tests::TINY_JPEG`) — as
+    /// the page's `toBase64` would send it.
+    const FRAME: &str =
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDACgcHiMeGSgjISMtKygwPGRBPDc3PHtYXUlkkYCZlo+A\
+        jIqgtObDoKrarYqMyP/L2u71////m8H////6/+b9//j/wAALCAB4AKABAREA/8QAFgABAQEAAAAA\
+        AAAAAAAAAAAAAAYF/8QAFBABAAAAAAAAAAAAAAAAAAAAAP/aAAgBAQAAPwDNAAAAAAAAAAAAAAAA\
+        AAAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAAABQAACfAA\
+        ABQAACfAAAAAAAAAAAAAAAAAAAAAB//Z";
+
+    /// **What this install owes of the scanner's files, as the page asks it** — through the one
+    /// command this host registers, forwarded to the core's table, which is the whole of what a
+    /// phone needs for the offer: nothing here is the host's own. An Android build embeds none
+    /// of the three, so a fresh install owes all of them, at the core's sizes. The fetch itself
+    /// is the core's to test (`scanner_assets::tests`): a call from here would ask GitHub.
+    #[test]
+    fn a_fresh_install_owes_the_scanners_three_files() {
+        let (state, _dir) =
+            grimoire_core::state::fixtures::on_files("light-scanner-assets", "http://127.0.0.1:9");
+        let owed = tauri::async_runtime::block_on(forward(&state, "scanner_assets", None, None))
+            .expect("what is owed");
+        let keys: Vec<_> = owed["owed"]
+            .as_array()
+            .expect("rows")
+            .iter()
+            .map(|row| row["key"].as_str().expect("a key"))
+            .collect();
+        assert_eq!(keys, ["bundle", "detectionModel", "recognitionModel"]);
+        assert_eq!(owed["fetching"], false);
+        assert_eq!(
+            owed["bytes"],
+            grimoire_core::scanner_assets::BUNDLE_BYTES
+                + grimoire_core::scanner_assets::DETECTION_BYTES
+                + grimoire_core::scanner_assets::RECOGNITION_BYTES
+        );
+        // And the fetch is a command this host answers — refused here only for carrying a body.
+        assert_eq!(
+            tauri::async_runtime::block_on(forward(
+                &state,
+                "scanner_assets_fetch",
+                None,
+                Some("AAEC".to_owned())
+            )),
+            Err("scanner_assets_fetch takes no raw body.".to_owned())
+        );
+    }
+
+    /// **A camera frame, as it crosses this host**: the call `src/lib/core/table.ts` makes of a
+    /// `Uint8Array` — the headers as `args`, the bytes as base64 in `body` — forwarded to the
+    /// core's table and judged by its session. On an install with nothing in `<data>/scanner/`,
+    /// which is every Android install until the assets are downloaded: the status says where it
+    /// looked, and the frame is decoded and answered by a session with no reference.
+    #[test]
+    fn a_frame_crosses_as_base64_and_is_judged_by_the_cores_session() {
+        use serde_json::json;
+        let (state, dir) =
+            grimoire_core::state::fixtures::on_files("light-scanner-frame", "http://127.0.0.1:9");
+        let ask = |name: &'static str, args: Option<Value>, body: Option<&str>| {
+            tauri::async_runtime::block_on(forward(&state, name, args, body.map(str::to_owned)))
+        };
+
+        // The heartbeat and the gate, sent with no arguments at all, as the page sends them.
+        assert_eq!(ask("scanner_hold", None, None), Ok(Value::Null));
+        assert_eq!(ask("scanner_elsewhere", None, None), Ok(json!(false)));
+
+        let status = ask("scanner_status", None, None).expect("the status");
+        let looked = std::path::PathBuf::from(status["bundle"]["path"].as_str().expect("a path"));
+        assert_eq!(looked, dir.join("scanner").join("card-hashes.bin"));
+        assert_eq!(status["bundle"]["source"], "absent");
+
+        let verdict = ask(
+            "scanner_frame",
+            Some(json!({ "x-scanner-options": r#"{"mode":"exact"}"# })),
+            Some(FRAME),
+        )
+        .expect("a verdict");
+        assert_eq!(verdict["frame"], json!({ "w": 160, "h": 120 }), "{verdict}");
+        assert_eq!(verdict["matcher"], false, "{verdict}");
+        assert_eq!(
+            verdict["mode"], "exact",
+            "the headers rode as the arguments"
+        );
+
+        // A body that is not base64 is this host's refusal, and one that is missing the table's.
+        let garbled = ask("scanner_frame", Some(json!({})), Some("not base64!")).unwrap_err();
+        assert!(
+            garbled.starts_with("scanner_frame: its body is not base64"),
+            "{garbled}"
+        );
+        assert_eq!(
+            ask("scanner_frame", Some(json!({})), None),
+            Err("scanner_frame needs a raw body.".to_owned())
+        );
     }
 
     /// The mark `src/lib/core/index.ts` reads. Its spelling is the contract between the two

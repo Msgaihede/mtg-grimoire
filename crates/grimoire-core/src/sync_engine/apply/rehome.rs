@@ -19,6 +19,12 @@
 //! landed, by which time the page's re-filing has taken what it moves — into a folder the page
 //! makes late, or a deck's group the deciding pass itself lands — and left only the rows it never
 //! mentioned for [`rehome`] (§3.3, as amended at the final review).
+//!
+//! **A write a peer made is the same collision met from the other end**, and takes the same merge
+//! ([`fold_into_the_holder`]): a row filed into a folder — or out of one, onto the root — or
+//! edited in a field of its grain, where this device holds a row of the grain it lands on that
+//! the sender had not heard of. It is decided on a `Clear` pass too, by `apply`'s
+//! `fold_onto_the_holder`, which says when a refusal is that one and which row is in the way.
 
 use crate::sync_engine::emission;
 use rusqlite::Connection;
@@ -120,16 +126,69 @@ pub(super) fn doomed(conn: &Connection, table: &str, uid: &str) -> Result<Doomed
 /// first to reach the root becomes the row the next one merges into.
 pub(super) fn rehome(conn: &Connection, d: &Doomed) -> Result<(), String> {
     for &id in &d.collection {
-        let before = uid_of(conn, "collection_entries", id)?;
-        let kept = crate::collection_folders::refile_entry(conn, id, None)?.id;
-        adopt_lower(conn, "collection_entries", kept, id, before)?;
+        rehome_one(conn, "collection_entries", id)?;
     }
     for &id in &d.wishlist {
-        let before = uid_of(conn, "wishlist_entries", id)?;
-        let kept = crate::wishlist_folders::refile_wish(conn, id, None)?.id;
-        adopt_lower(conn, "wishlist_entries", kept, id, before)?;
+        rehome_one(conn, "wishlist_entries", id)?;
     }
     Ok(())
+}
+
+/// One row of [`rehome`]: file `table`'s row `id` at the root, and answer the id of the row that
+/// holds it afterwards — its own, or the twin it folded onto. On its own because the moot arm
+/// takes the rows one at a time, to write down beside each what the move did to it
+/// ([`super::orphans`]).
+pub(super) fn rehome_one(conn: &Connection, table: &str, id: i64) -> Result<i64, String> {
+    let before = uid_of(conn, table, id)?;
+    let kept = match table {
+        "collection_entries" => crate::collection_folders::refile_entry(conn, id, None)?.id,
+        _ => crate::wishlist_folders::refile_wish(conn, id, None)?.id,
+    };
+    adopt_lower(conn, table, kept, id, before)?;
+    Ok(kept)
+}
+
+/// The parent key a copy and a wish are filed by, in both their specs.
+pub(super) const FOLDER: &str = "folder";
+
+/// Whether `table` is one whose rows the crate can make one of, by their two ids — the two that
+/// [`fold_into_the_holder`] answers for.
+pub(super) fn folds(table: &str) -> bool {
+    matches!(table, "collection_entries" | "wishlist_entries")
+}
+
+/// Fold `table`'s row `moved`, wearing `moved_uid`, into the row `holder` on the grain a peer's
+/// write lands it on, through the crate's own merge — [`crate::collection::fold_entry`] or
+/// [`crate::wishlist::fold_wish`] — and answer the uid the one row left wears. `None` for any
+/// table but those two.
+///
+/// **By the two ids, and not by re-filing `moved`** as [`rehome`] does. `refile_entry` and
+/// `refile_wish` file a row as it stands: they ask which row holds the grain `moved` is on *now*,
+/// in another folder. A peer's write can change any term of the grain — the condition, the
+/// finish, the printing a wish is pinned to — so the row in the way holds a grain `moved` has not
+/// reached yet, and only the caller, which has the write, can say which row that is.
+///
+/// The survivor takes the lower uid for [`rehome`]'s reason, read the other way round: the row in
+/// the way is one the sender had not heard of on that grain, so its own put reaches the sender
+/// and `find_row`'s grain match lands it on the written row there, adopting `min`.
+///
+/// **The caller's to undo.** It writes inside the group's savepoint, which the caller rolls back
+/// on a pass that only asked.
+pub(super) fn fold_into_the_holder(
+    conn: &Connection,
+    table: &str,
+    holder: i64,
+    moved: i64,
+    moved_uid: &str,
+) -> Result<Option<String>, String> {
+    match table {
+        "collection_entries" => crate::collection::fold_entry(conn, holder, moved),
+        "wishlist_entries" => crate::wishlist::fold_wish(conn, holder, moved),
+        _ => return Ok(None),
+    }
+    .map_err(|e| e.to_string())?;
+    adopt_lower(conn, table, holder, moved, Some(moved_uid.to_owned()))?;
+    uid_of(conn, table, holder)
 }
 
 fn uid_of(conn: &Connection, table: &str, id: i64) -> Result<Option<String>, String> {
@@ -172,6 +231,10 @@ fn adopt_lower(
                 rusqlite::params![moved_uid, kept],
             )
             .map_err(|e| e.to_string())?;
+            // Whatever the ledger of orphans has folded into the survivor follows its new name.
+            if let Some(own) = &own {
+                super::orphans::renamed(conn, table, own, &moved_uid)?;
+            }
             own.map(|own| (own, moved_uid))
         }
     };

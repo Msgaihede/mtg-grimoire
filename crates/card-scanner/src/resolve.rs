@@ -130,7 +130,8 @@ impl BurstView<'_> {
 
 /// What the readers found — injected, so the tiers are testable without models.
 ///
-/// `Sync`, because the title and the collector line are read on two threads at once.
+/// `Sync`, because the title and the collector line are read on two threads at once — where
+/// there are two ([`crate::host::join3`]).
 pub trait Readers: Sync {
     /// The normalized title text when the read is usable.
     fn title(&self, view: &BurstView<'_>) -> Option<String>;
@@ -165,7 +166,7 @@ pub fn resolve(
     readers: &dyn Readers,
     max_normalized: f32,
 ) -> ResolutionView {
-    let started = std::time::Instant::now();
+    let started = crate::host::Stopwatch::start();
     let mut tiers = Vec::with_capacity(6);
     let bits = f32::from(r.bundle.bits);
     let named = |p: &Id| r.label_for(p);
@@ -193,11 +194,15 @@ pub fn resolve(
     // answer: the title and the collector line are different bands of the same views, and the
     // search reads neither. What each tier *does* with its answer still happens below, in order,
     // so running them together changes the time and nothing else.
-    let (mut best, title_read, (collector_raw, pairs)) = std::thread::scope(|s| {
-        let title = s.spawn(|| order.iter().take(2).find_map(|v| readers.title(v)));
+    //
+    // **On a host with one thread they run in turn** — the search, the title, the collector line
+    // ([`crate::host::join3`]) — which is the same three answers, one after another.
+    let (mut best, title_read, (collector_raw, pairs)) = crate::host::join3(
+        || whole_card(r, mask, burst, max_normalized),
+        || order.iter().take(2).find_map(|v| readers.title(v)),
         // The first read that pairs anything; failing that, the first read's text, which the
         // collector tier can still match against the survivors.
-        let collector = s.spawn(|| {
+        || {
             let mut first: Option<(String, Vec<(String, String)>)> = None;
             for v in order.iter().take(2) {
                 let read = readers.collector_text(v);
@@ -207,10 +212,8 @@ pub fn resolve(
                 first.get_or_insert(read);
             }
             first.unwrap_or_default()
-        });
-        let best = whole_card(r, mask, burst, max_normalized);
-        (best, joined(title), joined(collector))
-    });
+        },
+    );
 
     // ---- 1 whole card ----------------------------------------------------------------------
     let mut survivors: Vec<Id> = best.keys().copied().collect();
@@ -453,7 +456,7 @@ pub fn resolve(
         outcome,
         choices,
         tiers,
-        elapsed_ms: started.elapsed().as_secs_f32() * 1000.0,
+        elapsed_ms: started.ms(),
     }
 }
 
@@ -476,12 +479,6 @@ fn whole_card(
         }
     }
     best
-}
-
-/// A reader thread's answer. A panic in one is carried on to the caller rather than turned into
-/// "no read", so the session's guard reports it as the failure it is.
-fn joined<T>(h: std::thread::ScopedJoinHandle<'_, T>) -> T {
-    h.join().unwrap_or_else(|e| std::panic::resume_unwind(e))
 }
 
 fn tier(name: &str, survivors: usize, detail: impl Into<String>) -> TierView {

@@ -133,6 +133,35 @@ pub fn start_logging(conn: &Connection) -> rusqlite::Result<()> {
     put(conn, LOGGING_RESUMED, if resumed { "1" } else { "0" })
 }
 
+/// Whether this device is in its **first** generation: [`start_logging`] wrote that it did not
+/// resume, so when its capture last turned on it had never logged in a group and held no
+/// watermark. Every watermark it holds was therefore made reading its group's log forwards — a
+/// held cursor hands a page back, but nothing has ever sent it back to the first row with its
+/// watermarks kept, which is what leaving and joining again does. **Only the written `0` says
+/// so**: a device that joined under a build before the mark has none, and nothing can tell
+/// whether it left and came back in that time.
+pub fn first_generation(conn: &Connection) -> rusqlite::Result<bool> {
+    Ok(get(conn, LOGGING_RESUMED)?.as_deref() == Some("0"))
+}
+
+/// Whether the ledger holds an emission this device took from a device other than `emitter` — a
+/// record of one, or a generation taken. A claim that names its emission never raises
+/// `sync_peers`, so a device heard only through its emissions has no watermark to show for it;
+/// this is where it shows. **`carried@` is not asked**: it names the devices a taken emission's
+/// horizon named, which is what its *emitter* had heard, and that emitter's own record is here.
+pub fn heard_another(conn: &Connection, emitter: &str) -> rusqlite::Result<bool> {
+    let mut stmt = conn.prepare("SELECT key FROM sync_state WHERE key GLOB ?1 OR key GLOB ?2")?;
+    let keys = stmt.query_map([format!("{RECORDS}*"), format!("{TAKEN}*")], |r| {
+        r.get::<_, String>(0)
+    })?;
+    for key in keys {
+        if key?.split_once('@').map(|(_, device)| device) != Some(emitter) {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 /// Leaving a group: keep the generation so the next one resumes, writing `0:0` for a device that
 /// logged before this build and has none (§4).
 pub fn keep_logging_mark(conn: &Connection) -> rusqlite::Result<()> {
@@ -427,6 +456,18 @@ pub fn gap_open(conn: &Connection) -> rusqlite::Result<bool> {
 /// `Meta::table` for every synced table.
 pub fn retire(conn: &Connection, table: &str, uid: &str, survivor: &str) -> rusqlite::Result<()> {
     put(conn, &format!("{RETIRED}{table}/{uid}"), survivor)
+}
+
+/// Take [`retire`]'s mark back off `uid`: the row it was merged into has given its copies back
+/// and `uid` is a row of its own again, or is about to be. One caller, `apply`'s ledger of
+/// orphans: a row folded onto a twin because its parent was gone is un-folded when the parent
+/// comes back, and a claim naming it must build it then as any other.
+pub fn unretire(conn: &Connection, table: &str, uid: &str) -> rusqlite::Result<()> {
+    conn.execute(
+        "DELETE FROM sync_state WHERE key = ?1",
+        [format!("{RETIRED}{table}/{uid}")],
+    )
+    .map(|_| ())
 }
 
 /// Whether `uid` of `table` was merged here into another row ([`retire`]). Asked of every active
