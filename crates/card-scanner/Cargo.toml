@@ -138,6 +138,14 @@ name = "stacking"
 path = "src/bin/stacking.rs"
 required-features = ["builder"]
 
+# The frame bench's inputs (`bench/`, the light app's phase 7): a bundle, labels, models and
+# frames in one directory, from real files or invented. Behind `builder` for `synth` and the
+# corpus; the bench itself is a package of its own, with neither.
+[[bin]]
+name = "bench-prep"
+path = "src/bin/bench_prep.rs"
+required-features = ["builder"]
+
 [profile.release]
 opt-level = 3
 

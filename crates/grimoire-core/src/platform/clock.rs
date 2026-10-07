@@ -73,6 +73,22 @@ impl std::ops::Add<std::time::Duration> for Tick {
     }
 }
 
+/// Milliseconds on the monotonic clock, **counted from the first time anybody asked** — a
+/// [`Tick`] for a caller that can be handed a function and nothing else.
+///
+/// The card scanner's crate is that caller: it cannot depend on this one (this one depends on
+/// it), it times every stage of a frame, and `Instant::now()` — what it read until the light
+/// app's phase 7 — panics in a browser. `ScannerState::new` hands it this through
+/// `card_scanner::host::set_clock`, so its timings are a [`Tick`]'s on every host:
+/// `Instant` natively, as they always were, and `performance.now()` in a Worker.
+///
+/// A span between two readings is all it is good for. The origin is this process's own, so a
+/// reading says nothing about the date and nothing to another process.
+pub fn monotonic_ms() -> f64 {
+    static ORIGIN: std::sync::OnceLock<Tick> = std::sync::OnceLock::new();
+    ORIGIN.get_or_init(Tick::now).elapsed().as_secs_f64() * 1000.0
+}
+
 /// A moment on the wall clock that can be **written down and compared** — on a file as its
 /// modified time, against another moment read back months later.
 ///
@@ -294,6 +310,36 @@ mod tests {
         assert!(
             second >= std::time::Duration::from_millis(20),
             "a 20 ms pause measured as {second:?}"
+        );
+    }
+
+    /// The scanner's clock counts milliseconds, forwards, from an origin of its own — at least
+    /// the pause taken between two readings, no more than a tick taken around both, and nothing
+    /// like a date.
+    ///
+    /// **The unit is held from above by a tick and never by a number.** "Under twenty seconds"
+    /// would say the same of a 20 ms pause on a quiet machine and be a bound a stalled one can
+    /// miss; the two readings sit inside the tick's span however long that turns out to be.
+    #[test]
+    fn the_monotonic_reading_counts_milliseconds_from_its_first_asking() {
+        let around = Tick::now();
+        let first = monotonic_ms();
+        assert!(
+            (0.0..FLOOR_MS as f64).contains(&first),
+            "{first} is a date, not a span"
+        );
+        assert!(crate::platform::pause(std::time::Duration::from_millis(20)));
+        let second = monotonic_ms();
+        let outer = around.elapsed().as_secs_f64() * 1000.0;
+        assert!(
+            second - first >= 20.0,
+            "a 20 ms pause measured as {} ms",
+            second - first
+        );
+        assert!(
+            second - first <= outer,
+            "{} is not a millisecond count: a tick around it measured {outer} ms",
+            second - first
         );
     }
 
