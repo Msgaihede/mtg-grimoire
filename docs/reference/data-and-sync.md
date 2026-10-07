@@ -13,8 +13,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   header warns about, so it carries none now. Both halves are
   `grep -c '^\s*("[a-z_]*", Side::User),'` and the same with `Side::Corpus` over
   `schema.rs` (`crates/grimoire-core/src/` since 2026-10-02) — re-run 2026-09-27 at v54: **32**
-  and **25**; **a bare `grep -c 'Side::User'`
-  over-counts** — 37 against 32 at v54, because `mod tests` matches the enum by name five more
+  and **25**, and again 2026-10-07 at v60: **34** and **25** (v59's `deck_todo_lists` and v60's
+  `sync_orphans`); **a bare `grep -c 'Side::User'`
+  over-counts** — 37 against 32 at v54 and 39 against 34 at v60, because `mod tests` matches the
+  enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
   never add to a number written here; `src/lib/userTables.json` holds the same list and a Rust
   test holds the two equal.)
@@ -1324,7 +1326,63 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it drops the three `decks` capture triggers before its two `DROP COLUMN`s, because `sync_ins_decks` and `sync_upd_decks` read `NEW.todos` and
   `NEW.todos_open` on a fixture that ran `capture::install`, and it drops the columns in the reverse
   of the order the rung adds them. [decks-storage.md](decks-storage.md)'s *Deck to-dos* has the three
-  commands and the compare-and-set.
+  commands and the compare-and-set. (**v59**, `deck_todo_lists`, has no paragraph here: that
+  same section has its rung and its rewind.)
+  **v60 adds `sync_orphans`, one row per synced row whose parent was gone when another device's op
+  for it was applied** (2026-10-07; the gone-reversal the light app's step 6.5b found, PR #829,
+  which [sync.md](sync.md) carried under *What is still owed*). `sync_gone` (v54, above) says a
+  parent went; this says what `sync_engine::apply` then did with a child that named it — wrote it
+  at the root, folded it onto a twin, or built nothing — and keeps what it takes to redo that if
+  the parent comes back through add-wins. Until this rung nothing recorded the decision: it is made
+  behind the apply guard, so no op says it happened, and a binder a later push resurrected came
+  back without the copies that had been filed in it, while their sender kept them there. **One
+  table, `WITHOUT ROWID`, and three indexes** — `(tbl TEXT NOT NULL, uid TEXT NOT NULL, parent_tbl
+  TEXT NOT NULL, parent_uid TEXT NOT NULL, twin TEXT, alias TEXT, state TEXT NOT NULL, PRIMARY KEY
+  (tbl, uid))`, with `idx_sync_orphans_parent ON sync_orphans (parent_tbl, parent_uid)`,
+  `idx_sync_orphans_twin ON sync_orphans (tbl, twin) WHERE twin IS NOT NULL` and
+  `idx_sync_orphans_alias ON sync_orphans (tbl, alias) WHERE alias IS NOT NULL`. `(tbl, uid)` is
+  the child, one decision to a row; `(parent_tbl, parent_uid)` the gone parent it rests on;
+  `twin` the uid of the row a *folded* child is inside right now, NULL for one that was placed or
+  never built, and re-pointed by `apply` whenever that row is renamed; `alias` that row's own
+  uid — given up when a fold renamed it to a child's lower one, and held by the entry of
+  whichever child's uid the row is wearing — NULL otherwise; `state` JSON whose
+  shape is `apply`'s and is spelled nowhere in `schema.rs` (no `json_valid` CHECK). **One index to
+  each question the key cannot answer**, since the key leads with the child: a parent coming back
+  asks who was waiting on it; a renamed row asks who is lent to it (`WHERE tbl = ?1 AND twin =
+  ?2`); and every group that finds no row under its own uid asks whose old name that is (`WHERE
+  tbl = ?1 AND alias = ?2`) — which is every new row a pull brings, and unindexed walked the key's
+  `tbl` prefix: **2.25 s per 1,000 new rows over 20,000 entries**, measured in review of the
+  applier, which is what added the second and third index and the `twin` column to a rung first
+  written with one. **Those two are partial** because almost every row has neither a twin nor an
+  alias; ⚠️ a partial index serves only a query whose own terms rule a NULL out, which `= ?` does
+  and `IS ?` does not (checked through node:sqlite 3.53.0: the `=` form plans `SEARCH … USING
+  COVERING INDEX idx_sync_orphans_alias`, the `IS` form does not name the index), and
+  `the_orphan_table_holds_one_decision_to_a_child_and_finds_them_by_parent` asserts all three
+  plans. The composite key is the table, so it brings no autoindex: the figure in
+  `the_user_schema_is_byte_identical_to_what_the_ladder_builds` went **88 → 92** (34 tables, 55
+  indexes, 3 autoindexes), re-counted off `USER_SCHEMA_SQL` through node:sqlite rather than added.
+  **Not synced**, v54's rule: on no capture spec, with no `sync_uid`, off `SYNCED_TABLES` — which
+  decisions a device made while a parent was gone is a fact about that device. **Written and read
+  by `sync_engine::apply` alone, by hand — there is no trigger**, which is the one place it parts
+  from `sync_gone`, and no window draws a row of it. **The rung creates it empty: no backfill is
+  possible**, because a decision made before the upgrade was written down nowhere — the child is
+  at the root like any row the reader filed there, and nothing tells the two apart. It owes the
+  same eight things `sync_gone` did ([sync.md](sync.md) lists them): the rung, its
+  `USER_SCHEMA_SQL` lines, `schema::TABLES`, the mirror's decided-about list,
+  `changes::WRITTEN_BY_THE_APP` (the eighth `WITHOUT ROWID` user table), `src/lib/userTables.json`,
+  `TABLE_KEYS` as `sync_orphans: []`, and **`UNDO_V60` at the head of every rewind chain, ahead of
+  `UNDO_V59`** — `grep -c '{UNDO_V60}' crates/grimoire-core/src/schema.rs
+  src-tauri/src/schema/mod.rs` counts them (31 on the day: thirty chains and the rung test's own
+  rewind). `UNDO_V60` drops the three indexes and then the table and **has none of `UNDO_V54`'s
+  ⚠️**: with
+  no trigger naming the table, a fixture that ran `capture::install` rewinds it like any other.
+  One more site than `sync_gone` had on its day: **`archive::replace` clears it on a restore**,
+  beside `sync_gone` — once, at the top, since nothing refills it while the user tables are
+  emptied — because it describes the discarded database, by uids the restored rows may carry too.
+  It is not in an archive at all: `archive::tables()` leaves out every `sync_*` table.
+  ⚠️ **The rung moves `USER_SCHEMA_VERSION`, and sync stamps every op with it** — so, like every
+  rung, a v59 peer holds a v60 device's ops until it updates, and `npm run web:deploy-guard`
+  refuses a by-hand web deploy from a tree at 60 until a release carries it.
   **v25 makes the collection's folders the physical ledger of where every card sits.** It inserts
   the single `Recently removed` folder and one `deck` folder per deck (**archived decks
   included** — archiving is a flag and an archived deck still holds its cards), converts every

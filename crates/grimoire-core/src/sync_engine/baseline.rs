@@ -159,7 +159,7 @@ fn select_for(spec: &Spec) -> String {
 ///
 /// A BLOB is the one shape `json_object` refuses outright, and no column on any spec's field
 /// list is one; the arm is a fence rather than a case.
-fn json_of(v: rusqlite::types::ValueRef<'_>) -> serde_json::Value {
+pub(crate) fn json_of(v: rusqlite::types::ValueRef<'_>) -> serde_json::Value {
     use rusqlite::types::ValueRef;
     match v {
         ValueRef::Null | ValueRef::Blob(_) => serde_json::Value::Null,
