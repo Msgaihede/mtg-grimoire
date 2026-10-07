@@ -20,6 +20,7 @@
     "mobile:tauri": "tauri dev --config src-tauri/tauri.light.conf.json",
     "mobile:build": "tsc && vite build --config vite.mobile.config.ts",
     "mobile:scan-smoke": "node scripts/pairing-scan-smoke.mjs",
+    "mobile:scanner-smoke": "node scripts/phone-scanner-smoke.mjs",
     "tauri:light": "cd mobile && tauri",
     "mobile:android": "npm run tauri:light -- android dev",
     "web:wasm": "node scripts/build-wasm.mjs",

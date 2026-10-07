@@ -107,12 +107,27 @@ export interface TrayState {
    * actually goes out (it queues behind any tray write already on the wire), and once when it
    * answers, because the camera keeps running in between. A rejection keeps every row and is
    * the caller's to word.
+   *
+   * **`items` may be a function of the rows as they are when the write goes out**, and then a
+   * commit that finds nothing left to file sends nothing and answers `null`. That is what keeps
+   * one pile from being filed twice: a commit queues behind whatever is on the wire, and a second
+   * press made of the same rows — from a view that unmounted and came back while the first was
+   * waiting on a sync, or from the other face of the app across its 1024px floor — would otherwise
+   * carry lines built when it was pressed, for rows the first has since filed. Asked at send
+   * time, it sees they are gone. It is asked before `remaining`.
    */
-  commit: (
-    items: CollectionImportItem[],
-    folderId: number | null,
-    remaining: (latest: ScannerTrayRow[]) => ScannerTrayRow[],
-  ) => Promise<ImportCommitOutcome>;
+  commit: {
+    (
+      items: CollectionImportItem[],
+      folderId: number | null,
+      remaining: (latest: ScannerTrayRow[]) => ScannerTrayRow[],
+    ): Promise<ImportCommitOutcome>;
+    (
+      items: (sent: ScannerTrayRow[]) => CollectionImportItem[],
+      folderId: number | null,
+      remaining: (latest: ScannerTrayRow[]) => ScannerTrayRow[],
+    ): Promise<ImportCommitOutcome | null>;
+  };
 }
 
 /**
@@ -253,14 +268,17 @@ export function useTray(): TrayState {
 
   const commit = useCallback(
     (
-      items: CollectionImportItem[],
+      items: CollectionImportItem[] | ((sent: ScannerTrayRow[]) => CollectionImportItem[]),
       folderId: number | null,
       remaining: (latest: ScannerTrayRow[]) => ScannerTrayRow[],
     ) =>
       enqueue(async () => {
         const sent = latest();
+        // Lines asked for now rather than at the press: see `TrayState.commit`.
+        const lines = typeof items === "function" ? items(sent) : items;
+        if (typeof items === "function" && lines.length === 0) return null;
         const rest = remaining(sent);
-        const outcome = await ipc.scannerTrayCommit(items, folderId, rest);
+        const outcome = await ipc.scannerTrayCommit(lines, folderId, rest);
         // The store holds `rest` now, whole: whatever an earlier refused write left unsaved is
         // settled by it or carried by the write below.
         queueFor(qc).refused = false;
@@ -284,7 +302,7 @@ export function useTray(): TrayState {
         return outcome;
       }),
     [enqueue, latest, qc, setRows],
-  );
+  ) as TrayState["commit"];
 
   useEffect(
     () => () => {

@@ -38,9 +38,13 @@ import type {
 import { DURATION, PRESS, TRANSITION, seconds } from "@/lib/motion";
 import { cn } from "@/lib/utils";
 import {
-  NO_FINISHED_ROWS,
+  addLabel,
+  addRefusal,
+  deckRefusal,
+  EMPTY_REASON,
   needsDecision,
   needsFinishCount,
+  NEXT_DECISION_LABEL,
   nextDecisionKey,
   pickChoice,
   readyRows,
@@ -50,6 +54,10 @@ import {
   totalCopies,
   unresolvedCount,
 } from "./tray";
+
+// The Add button's words and the walk's name are `tray.ts`'s now — the light app's phone page says
+// the same ones — and are handed on from here for the importers that found them in this file.
+export { addLabel, NEXT_DECISION_LABEL };
 import { isKnownFinish, TRAY_FINISH_LABEL, UNKNOWN_FINISH } from "./trayFinish";
 import { useTrayPrices } from "./useTrayPrices";
 
@@ -90,10 +98,6 @@ export interface TrayPanelProps {
 /** The collection's own word for its top level — `AddToCollection`'s `rootLabel`, one tree over. */
 const ROOT_LABEL = "Collection";
 
-/** Why the add is out of reach, in the order a reader can do something about each. */
-const EMPTY_REASON = "Nothing scanned yet";
-const UNPICKED_REASON = "Pick a printing for every card first";
-
 /**
  * **Deliberately not through `sortOptions` — the order is the information.** A printing's finishes
  * read plain before the premium treatments everywhere in this app, and `Unknown` comes last because
@@ -104,21 +108,6 @@ const FINISH_OPTIONS: readonly DropdownOption[] = [...FINISHES, UNKNOWN_FINISH].
   value: f,
   label: TRAY_FINISH_LABEL[f],
 }));
-
-/**
- * The Add button's words: the copies it files, and — while there are any — the copies it leaves
- * behind for want of a finish. **One string, never a second element**: the name is computed from
- * the button's content and a span beside the count would fuse into `collection· 2` (`src/CLAUDE.md`,
- * the `Missing2` rule).
- */
-export function addLabel(ready: number, needsFinish: number): string {
-  const add = `Add ${ready} to collection`;
-  if (needsFinish === 0) return add;
-  return `${add} · ${needsFinish} ${needsFinish === 1 ? "needs" : "need"} a finish`;
-}
-
-/** The header's walk through the tray's open questions — the issue's words, and the press's name. */
-export const NEXT_DECISION_LABEL = "Next card needing a decision";
 
 /**
  * How far a row the walk lands on is kept from the scroller's top edge when it is too tall to
@@ -266,14 +255,8 @@ export function TrayPanel({
   const ready = totalCopies(readyRows(rows));
   const needsFinish = needsFinishCount(rows);
   // The order `commitPlan` refuses in, so the drawing and the press agree.
-  const refusal =
-    rows.length === 0
-      ? EMPTY_REASON
-      : waiting > 0
-        ? UNPICKED_REASON
-        : ready === 0
-          ? NO_FINISHED_ROWS
-          : null;
+  const refusal = addRefusal(rows);
+  const deckRefused = deckRefusal(rows);
   const refused = refusal !== null || committing;
   const deciding = rows.some(needsDecision);
 
@@ -464,16 +447,12 @@ export function TrayPanel({
         {onCreateDeck && (
           <button
             type="button"
-            aria-disabled={refusal !== null || needsFinish > 0 || committing || undefined}
+            aria-disabled={deckRefused !== null || committing || undefined}
             onClick={(e) => {
-              if (refusal !== null || needsFinish > 0 || committing) return;
+              if (deckRefused !== null || committing) return;
               onCreateDeck(e.currentTarget);
             }}
-            {...tip(
-              committing
-                ? null
-                : (refusal ?? (needsFinish > 0 ? "Choose a finish for every card first" : null)),
-            )}
+            {...tip(committing ? null : deckRefused)}
             className={cn(
               "inline-flex h-9 items-center rounded-md border border-border px-3 text-sm hover:border-accent hover:text-accent",
               PRESS,

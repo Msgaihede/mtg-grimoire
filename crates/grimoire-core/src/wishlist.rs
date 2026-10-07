@@ -1124,17 +1124,7 @@ pub(crate) fn set_printing_inner(
         .map_err(|e| e.to_string())?;
 
     if let Some((target, held)) = target {
-        conn.execute(
-            "UPDATE wishlist_entries SET
-                quantity = quantity + ?2,
-                notes = coalesce(notes, (SELECT notes FROM wishlist_entries WHERE id = ?3)),
-                updated_at = unixepoch()
-              WHERE id = ?1",
-            params![target, quantity, id],
-        )
-        .map_err(|e| e.to_string())?;
-        conn.execute("DELETE FROM wishlist_entries WHERE id = ?1", params![id])
-            .map_err(|e| e.to_string())?;
+        fold_wish(conn, target, id).map_err(|e| e.to_string())?;
         return Ok(EntryChange {
             id: target,
             quantity: held + quantity,
@@ -1162,6 +1152,34 @@ pub(crate) fn set_printing_inner(
         quantity,
         removed: false,
     })
+}
+
+/// Fold wish `source` into wish `target` and delete it — the wishlist's
+/// [`crate::collection::fold_entry`], and like it the crate's **one** copy: the quantities add,
+/// and the survivor takes the folded row's note only where it has none.
+///
+/// **Which row is in the way is the caller's to say**, and each asks its own question:
+/// [`set_printing_inner`] about the grain a re-pin lands on,
+/// `wishlist_folders::refile_wish` about the one a move lands on, `reconcile` about the one an
+/// upstream id merge lands on, and `sync_engine::apply` about the one a peer's edit lands on.
+/// Each of the first three spelled these two statements itself until the fourth needed them.
+///
+/// A `&Connection`, so any caller's handle fits; it commits nothing and records no
+/// [`crate::activity`] row, for `fold_entry`'s reasons.
+pub(crate) fn fold_wish(tx: &Connection, target: i64, source: i64) -> rusqlite::Result<()> {
+    tx.execute(
+        "UPDATE wishlist_entries SET
+            quantity = quantity + (SELECT quantity FROM wishlist_entries WHERE id = ?2),
+            notes = coalesce(notes, (SELECT notes FROM wishlist_entries WHERE id = ?2)),
+            updated_at = unixepoch()
+          WHERE id = ?1",
+        params![target, source],
+    )?;
+    tx.execute(
+        "DELETE FROM wishlist_entries WHERE id = ?1",
+        params![source],
+    )?;
+    Ok(())
 }
 
 /// How many copies of one oracle card the wishlist asks for, every wish for it together. `0`
