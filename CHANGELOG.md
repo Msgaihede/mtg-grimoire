@@ -30,6 +30,36 @@
   change is *for* — `reset::clear_decks` no longer sweeps a directory at all. `cache_clear` keeps
   its two (`data/images/`, `data/tmp/`) and is unchanged.
 
+## [0.43.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.42.0...v0.43.0) (2026-10-07)
+
+
+### Features
+
+* **android:** a launcher icon, a privacy policy and the Play listing kit ([#862](https://github.com/Msgaihede/mtg-grimoire/issues/862)) ([5460540](https://github.com/Msgaihede/mtg-grimoire/commit/5460540558ce8ef5b69c1e2ebfd8eb9e9c0555c3)), closes [#761](https://github.com/Msgaihede/mtg-grimoire/issues/761)
+* **android:** build and sign an app bundle for Google Play ([#857](https://github.com/Msgaihede/mtg-grimoire/issues/857)) ([9376a4f](https://github.com/Msgaihede/mtg-grimoire/commit/9376a4fbc96520b4ea1ac34316e45de9bc21de9a)), closes [#761](https://github.com/Msgaihede/mtg-grimoire/issues/761)
+* **android:** sync on the Android app turns on by pairing only ([72a691a](https://github.com/Msgaihede/mtg-grimoire/commit/72a691a92259e847d4737cb256d4b2d55d9ae8ee))
+* **android:** sync on the Android app turns on by pairing only ([3b7f43d](https://github.com/Msgaihede/mtg-grimoire/commit/3b7f43df04406a0d8cc47357b35ab00832f7c6de)), closes [#761](https://github.com/Msgaihede/mtg-grimoire/issues/761)
+* **light:** the phone's Scanner page ([67963ef](https://github.com/Msgaihede/mtg-grimoire/commit/67963efe134575e7f27c59d06abd8d8c9a4d9562))
+* **light:** the phone's Scanner page ([8328f4d](https://github.com/Msgaihede/mtg-grimoire/commit/8328f4de0e81c4d8e2cd2d5adf48785cc998820c))
+* **light:** the scanner in the web host ([f90aa1f](https://github.com/Msgaihede/mtg-grimoire/commit/f90aa1f8041e6fa18f070966f3156febb4e8f79f))
+* **light:** the scanner in the web host ([c5f4e1a](https://github.com/Msgaihede/mtg-grimoire/commit/c5f4e1a8b485faba152ca3a652beff09a08b5de4))
+* **scanner:** answer the scanner's commands from the core's table ([864d7e2](https://github.com/Msgaihede/mtg-grimoire/commit/864d7e219f9d978ab6531285af3bb92ffbbeea45))
+* **scanner:** answer the scanner's commands from the core's table ([dbd771b](https://github.com/Msgaihede/mtg-grimoire/commit/dbd771be29319515b86f9e6b6215d270dd5ac46f))
+* **scanner:** fetch the scanner's assets on first use ([33cb7ca](https://github.com/Msgaihede/mtg-grimoire/commit/33cb7ca67cc13a4eafd897605b4ede3ac8823a4b))
+* **scanner:** fetch the scanner's assets on first use ([51822a7](https://github.com/Msgaihede/mtg-grimoire/commit/51822a729a1d99ffbd4f4ab034a0bab01cd35773))
+* **scanner:** run the scanner's crate where there is no thread and no clock ([0bf0672](https://github.com/Msgaihede/mtg-grimoire/commit/0bf0672dbc7bff43ef90023992a7b3f079bdefe2))
+* **scanner:** run the scanner's crate where there is no thread and no clock ([c7a77e1](https://github.com/Msgaihede/mtg-grimoire/commit/c7a77e1028d5088eab6da13b98ea381ccd67b527))
+
+
+### Bug Fixes
+
+* hide the collection's Share where the light edition cannot publish ([912062b](https://github.com/Msgaihede/mtg-grimoire/commit/912062b6c4cf4d44d5f94f607794696538835ffb))
+* hide the collection's Share where the light edition cannot publish ([4ae1ce1](https://github.com/Msgaihede/mtg-grimoire/commit/4ae1ce1c4626dbb889cd9f30d9e5626ba5bb45e5))
+* **sync:** a copy edited onto one this device has not sent folds into it instead of being skipped ([#856](https://github.com/Msgaihede/mtg-grimoire/issues/856)) ([9b04035](https://github.com/Msgaihede/mtg-grimoire/commit/9b04035d013ff4d0017f14fd2c2bfb461df4c9d1))
+* **sync:** a copy moved onto one this device has not sent folds into it instead of being skipped ([#854](https://github.com/Msgaihede/mtg-grimoire/issues/854)) ([a0cc618](https://github.com/Msgaihede/mtg-grimoire/commit/a0cc6188c42d31d4e930f2d865888bedc60e44a3))
+* **sync:** an older build's baseline no longer costs a fresh install its rows ([#847](https://github.com/Msgaihede/mtg-grimoire/issues/847)) ([47733a1](https://github.com/Msgaihede/mtg-grimoire/commit/47733a16c0a2921d1bb809e063199054e639ac11)), closes [#843](https://github.com/Msgaihede/mtg-grimoire/issues/843)
+* **sync:** take back a decision made without a deleted parent when the parent returns ([#855](https://github.com/Msgaihede/mtg-grimoire/issues/855)) ([81b87a3](https://github.com/Msgaihede/mtg-grimoire/commit/81b87a36a2d3efd7f022341daff9092c131e828d)), closes [#841](https://github.com/Msgaihede/mtg-grimoire/issues/841)
+
 ## [0.42.0](https://github.com/Msgaihede/mtg-grimoire/compare/v0.41.0...v0.42.0) (2026-10-05)
 
 
