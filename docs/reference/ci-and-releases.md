@@ -503,7 +503,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `adb root`, which a `google_apis` image allows and a release build's `run-as` does not), a
   screenshot, and three cold starts after `force-stop` with their median. **It fails when there
   is no ingest figure** — a sync that failed, ran past 45 minutes, or never started within 60 s,
-  which it reports as *held — the emulator reported a metered network* (step 4.4's hold). The
+  which it reports as *held — the emulator reported a metered network* (step 4.4's hold). Since
+  2026-10-08 it first waits, up to 90 s, for the emulator's default network to be an unmetered
+  one, and reports the wait: a fast boot had launched the app while the cellular link was still
+  the default, and a healthy tree read *held* (light-app.md §8.5). The
   router sends a change to the workflow to `frontend`, beside `release.yml`, for the two tests
   that read every workflow; the script is `scripts/*`. **No run had happened when this was written** —
   the first is the pull request that adds it; [light-app.md](../reference/light-app.md)

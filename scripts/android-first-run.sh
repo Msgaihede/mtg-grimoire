@@ -5,7 +5,9 @@
 #
 #   bash scripts/android-first-run.sh <apk> <out-dir>
 #
-# It installs the APK and measures, in this order: the APK and its `.so`; the first launch, which
+# It installs the APK and measures, in this order: the APK and its `.so`; how long the emulator
+# took to make an unmetered network its default (waited for, since 2026-10-08, because a launch
+# on the cellular one is held); the first launch, which
 # also creates the databases; the first corpus ingest, from that launch until the host prints
 # `launch: card sync finished in N ms` (`apps/light/src-tauri/src/lib.rs`, `spawn_downloads`); the two
 # databases' size on the device; a screenshot of the phone face; three cold starts, each after a
@@ -32,6 +34,7 @@ ACTIVITY=$PKG/.MainActivity
 # `dataDir`, and the host opens `data/` under it (`lib.rs`, `data_dir`).
 DATA=/data/data/$PKG/data
 STARTED_WITHIN_S=60
+UNMETERED_WITHIN_S=90
 INGEST_TIMEOUT_S=$((45 * 60))
 SUMMARY=${GITHUB_STEP_SUMMARY:-/dev/stdout}
 
@@ -67,7 +70,6 @@ adb shell svc power stayon true
 adb shell settings put system screen_off_timeout 2147483647
 adb shell input keyevent KEYCODE_WAKEUP
 adb shell wm dismiss-keyguard || true
-adb shell dumpsys connectivity > "$OUT/connectivity.txt" 2>&1 || true
 
 t=$(now_ms)
 adb install -r "$APK" > /dev/null
@@ -90,6 +92,48 @@ private() {
   esac
 }
 
+# --- An unmetered network, before the first launch -----------------------------------------------
+# The launch holds its downloads while Android says the active network is metered
+# (`apps/light/src-tauri/src/downloads.rs`), and on this image the emulator's cellular link comes
+# up before its Wi-Fi: for some seconds after boot the default network is `MOBILE`, which is
+# metered, while the Wi-Fi one exists and is not validated yet. A first launch inside that window
+# is held, and this script — which exits non-zero with no ingest figure — then fails a run in
+# which nothing was wrong.
+#
+# **Measured 2026-10-08, the first time it happened** (run 37741433831, on a tree whose app was
+# the one `main` had measured an hour before): the emulator booted in 32 s where the run before
+# took 41, `dumpsys connectivity` showed `Active default network: 100`, network 100 as
+# `MOBILE[LTE]`, and the Wi-Fi network as `nascent` with no DNS, and the outcome read *held*. Both
+# databases were 4096 bytes. Until then the Wi-Fi had always won the race, which is what
+# "expected, not checked here" in light-app.md §8.5 was relying on.
+#
+# So the default network is waited for, and the wait is a figure in the report. If it never
+# becomes an unmetered one the run goes on: then *held* is the truth about the emulator.
+
+# Whether the default network in a `dumpsys connectivity` on stdin is an unmetered one: the id on
+# the `Active default network:` line, and `IS_UNMETERED` among that network's score policies.
+default_is_unmetered() {
+  tr -d '\r' | awk '
+    /^Active default network:/ { id = $NF }
+    id != "" && index($0, "NetworkAgentInfo{network{" id "}") {
+      hit = index($0, "IS_UNMETERED") > 0
+    }
+    END { exit hit ? 0 : 1 }'
+}
+
+network_wait_from=$(now_ms)
+unmetered=""
+for _ in $(seq 1 $((UNMETERED_WITHIN_S / 2))); do
+  if adb shell dumpsys connectivity 2> /dev/null | default_is_unmetered; then
+    unmetered=yes
+    break
+  fi
+  sleep 2
+done
+network_wait_ms=$(($(now_ms) - network_wait_from))
+# The network as the launch finds it, for the artifact.
+adb shell dumpsys connectivity > "$OUT/connectivity.txt" 2>&1 || true
+
 # --- The first launch and the first ingest -------------------------------------------------------
 adb logcat -c
 # Into a file from before the launch: logcat's ring buffer can turn over in 45 minutes, and the
@@ -111,10 +155,13 @@ ingest_ms=""
 ingest_wall_ms=""
 outcome=""
 if [ -z "$started" ]; then
-  if adb shell pidof "$PKG" > /dev/null 2>&1; then
-    outcome="held — the emulator reported a metered network"
-  else
+  if ! adb shell pidof "$PKG" > /dev/null 2>&1; then
     outcome="the app died before the card sync started"
+  elif [ -n "$unmetered" ]; then
+    # Not the hold: the network was an unmetered one before the launch, and still nothing started.
+    outcome="no card sync started within $STARTED_WITHIN_S s, on an unmetered network"
+  else
+    outcome="held — the emulator reported a metered network"
   fi
 else
   deadline=$(($(date +%s) + INGEST_TIMEOUT_S))
@@ -272,6 +319,8 @@ note "| --- | ---: |"
 note "| APK | $apk_bytes bytes ($(mib "$apk_bytes") MiB) |"
 note "| \`libgrimoire_light_lib.so\`, uncompressed | $(or_dash "$so_bytes") bytes ($(mib "$so_bytes") MiB) |"
 note "| \`adb install\` | $install_ms ms |"
+network_reached=$([ -n "$unmetered" ] && echo reached || echo "never, in $UNMETERED_WITHIN_S s")
+note "| An unmetered default network, waited for before the launch | $network_wait_ms ms ($network_reached) |"
 note "| First launch, \`TotalTime\` | $(or_dash "$first_launch_ms") ms |"
 note "| First corpus ingest, the host's own figure | $(or_dash "$ingest_ms") ms |"
 note "| First launch to the \`finished\` line, wall clock (±10 s) | $(or_dash "$ingest_wall_ms") ms |"
@@ -316,6 +365,7 @@ fi
 jq -n \
   --arg outcome "$outcome" \
   --arg apk "$apk_bytes" --arg so "$so_bytes" --arg install "$install_ms" \
+  --arg network_wait "$network_wait_ms" --arg unmetered "$unmetered" \
   --arg first "$first_launch_ms" --arg ingest "$ingest_ms" --arg wall "$ingest_wall_ms" \
   --arg corpus "$corpus_bytes" --arg user "$user_bytes" --arg app "$app_kib" \
   --arg c1 "${cold[0]}" --arg c2 "${cold[1]}" --arg c3 "${cold[2]}" --arg median "$cold_median" \
@@ -327,6 +377,7 @@ jq -n \
   'def n: if . == "" then null else tonumber end;
    def s: if . == "" then null else . end;
    { outcome: $outcome, apk_bytes: ($apk|n), so_bytes: ($so|n), install_ms: ($install|n),
+     network_wait_ms: ($network_wait|n), unmetered_at_launch: ($unmetered == "yes"),
      first_launch_ms: ($first|n), ingest_ms: ($ingest|n), ingest_wall_ms: ($wall|n),
      corpus_db_bytes: ($corpus|n), user_db_bytes: ($user|n), app_data_kib: ($app|n),
      cold_start_ms: [$c1, $c2, $c3 | n], cold_start_median_ms: ($median|n),
