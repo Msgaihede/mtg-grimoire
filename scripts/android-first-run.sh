@@ -7,7 +7,7 @@
 #
 # It installs the APK and measures, in this order: the APK and its `.so`; the first launch, which
 # also creates the databases; the first corpus ingest, from that launch until the host prints
-# `launch: card sync finished in N ms` (`mobile/src-tauri/src/lib.rs`, `spawn_downloads`); the two
+# `launch: card sync finished in N ms` (`apps/light/src-tauri/src/lib.rs`, `spawn_downloads`); the two
 # databases' size on the device; a screenshot of the phone face; three cold starts, each after a
 # `force-stop`; and then **leaving the app**, twice — by the back gesture from the start page, and
 # by the activity being destroyed — each watched in logcat for the teardown abort a phone showed

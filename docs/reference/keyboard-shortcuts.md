@@ -1,11 +1,11 @@
 # The keyboard shortcut map
 
-`src/lib/shortcuts.ts` and `src/components/KeyMap.tsx`, shipped 2026-09-03. The design is
+`packages/ui/lib/shortcuts.ts` and `packages/ui/components/KeyMap.tsx`, shipped 2026-09-03. The design is
 [2026-09-03-keyboard-shortcut-map-design.md](../superpowers/specs/2026-09-03-keyboard-shortcut-map-design.md);
 this page is the record of what shipped, with the reason at each site and the live pass that
 settled the one claim jsdom cannot. Every figure keeps the date and the build it was taken on.
 
-The short version: **a chord is written down in `src/lib/shortcuts.ts` and nowhere else**, because
+The short version: **a chord is written down in `packages/ui/lib/shortcuts.ts` and nowhere else**, because
 the panel that lists a chord and the handler that fires on it read the same object. A `Keyboard`
 button in the caption row — and `F1` — opens a popover listing what is live **on the page the
 reader is actually on**.
@@ -314,7 +314,7 @@ reverting to the unconditional `focus()` reddens the `F1` case alone, reverting 
 item creates a stacking context whatever its position** — the same sentence of the flexbox spec
 `LAYER.overlappingMark` already rests on. So everything drawn in that subtree, a `fixed` descendant
 included, paints at the caption's place in the app-wide order: above `gate` (`z-50`) and above
-`overlay` (`z-45`) with no number of its own. `src/lib/layers.ts` was not touched, and the panel's
+`overlay` (`z-45`) with no number of its own. `packages/ui/lib/layers.ts` was not touched, and the panel's
 computed `z-index` is `auto`.
 
 This is the one claim in the design that jsdom cannot check — jsdom paints nothing — so it was

@@ -6,8 +6,8 @@ import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
 import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
 import { CardToDeckProvider } from "@/features/card/cardMenu";
 import { installKeyboardModality } from "@/lib/keyboardModality";
-import { installWorld, type FakeParams, type FakeWorld } from "./fake/world";
-import { CARD_ART_DIR, setArtMode, setBundledArtRoot, type ArtMode } from "./fake/images";
+import { installWorld, type FakeParams, type FakeWorld } from "../packages/fake/world";
+import { CARD_ART_DIR, setArtMode, setBundledArtRoot, type ArtMode } from "../packages/fake/images";
 // The app's stylesheet *through* `preview.css`, never directly: that file adds `.storybook` as
 // a Tailwind source, which is the one thing the shipped bundle must not inherit. See its header.
 import "./preview.css";
@@ -38,7 +38,7 @@ installKeyboardModality(window);
  * and the app's own `useEffect`s run in the passive one. Neither call is conditional on
  * anything having changed; re-pointing at the world this story already had is free.
  *
- * `src/stories.test.tsx`'s `two stories with different seeds` block is what proves the order
+ * `packages/ui/stories.test.tsx`'s `two stories with different seeds` block is what proves the order
  * holds; it fails if this element is moved after `{children}`.
  */
 function Activate({ world }: { world: FakeWorld }) {
@@ -108,7 +108,7 @@ function FakeWorld({
  * pointed at the right one lives in `fake/scope.ts`, and what is in each world lives in
  * `fake/seeds.ts`.
  *
- * **One global the fake cannot make per-story: `src/lib/store.ts`.** zustand's `create` does
+ * **One global the fake cannot make per-story: `packages/ui/lib/store.ts`.** zustand's `create` does
  * not expose the initializer it was given, and the store's actions close over that one store's
  * `set`, so a second instance of it cannot be built from `.storybook/` — it would take an edit
  * to component source, which this branch does not have. So the store is reset per story on the
@@ -120,7 +120,7 @@ function FakeWorld({
  * **Which files those are is a grep and not a list here**, and that is a correction: this
  * paragraph named five of them and the naming rotted exactly the way the count below did —
  * `CardDetailPane` was on it until the docked card surface was deleted on 2026-09-03, and by
- * then the real set was more than twice as long. `grep -rl "useAppStore" src/ --include=*.stories.tsx`
+ * then the real set was more than twice as long. `grep -rl "useAppStore" packages/ui/ --include=*.stories.tsx`
  * is the question; every answer needs the parameter.
  *
  * **There is no longer a count here, and its deletion is the fix rather than a gap.** This
@@ -167,18 +167,18 @@ const withFake: Decorator = (Story, context) => {
     setBundledArtRoot(null);
     setArtMode(art === "live" ? "live" : "synthetic");
   }
-  // `<MotionConfig reducedMotion="user">` stands in for the one `src/App.tsx` mounts, because a
+  // `<MotionConfig reducedMotion="user">` stands in for the one `packages/ui/App.tsx` mounts, because a
   // story renders its component and never the app around it. Without it a workbench built to
   // check accessibility would be the one place in the project where reduced motion is ignored —
   // `motion`'s own default is `"never"`. It is a context provider and renders no DOM, so it
-  // costs a story nothing. `src/lib/tokens.test.ts` counts these only under `src/`; this is a
+  // costs a story nothing. `packages/ui/lib/tokens.test.ts` counts these only under `packages/ui/`; this is a
   // second mount of the same rule, not a second rule.
   //
   // The suite's other half of the story wiring — `MotionGlobalConfig.skipAnimations` — is
   // deliberately *not* here: this file is also the real Storybook browser, where the reader is
-  // meant to see the motion. It lives in `src/test-setup.ts`.
+  // meant to see the motion. It lives in `packages/ui/test-setup.ts`.
   //
-  // The two menu providers stand in for `src/App.tsx`'s the same way, and in its order —
+  // The two menu providers stand in for `packages/ui/App.tsx`'s the same way, and in its order —
   // `CardToDeckProvider` outside `ContextMenuProvider`, because that provider draws its panel as
   // a **sibling** of its children, so a card-to-deck context mounted inside it would be around
   // every view and around none of the menu's own rows. **Inside `FakeWorld`**, which is what
@@ -192,7 +192,7 @@ const withFake: Decorator = (Story, context) => {
   // `ContextMenu.stories.tsx` keeps its own local pair, which nests harmlessly and is that file's
   // actual subject.
   //
-  // `TooltipProvider` stands in for `src/App.tsx`'s the same way and sits outside both, for the
+  // `TooltipProvider` stands in for `packages/ui/App.tsx`'s the same way and sits outside both, for the
   // reason that file gives: the menu provider draws its rows as a sibling of its children, so a
   // tooltip context mounted inside it would not reach them.
   return (
@@ -222,7 +222,7 @@ const withFake: Decorator = (Story, context) => {
  * the preview and keeps the rest of the environment out of it. `vite/client`, listed in this
  * program's `tsconfig.json`, types the read — as an `any`, hence a comparison and never a cast.
  *
- * **`src/stories.test.tsx` sees synthetic, and has to**: it runs every story through
+ * **`packages/ui/stories.test.tsx` sees synthetic, and has to**: it runs every story through
  * `setProjectAnnotations` with this file, and nothing sets the variable for Vitest. `live` is
  * deliberately not honoured here — no build has a reason to open on the network.
  */

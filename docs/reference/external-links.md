@@ -4,7 +4,7 @@ Every card surface in this app offers the same ladder: **Scryfall, EDHREC, and t
 Settings selects**. It is the card modal's last three rail rows and the context menu's `Open on →`
 submenu, and the two are one row a reader has learnt the position of, drawn twice.
 
-Until 2026-09-09 **every marketplace row opened a name search**, and `src/lib/externalLinks.ts`
+Until 2026-09-09 **every marketplace row opened a name search**, and `packages/ui/lib/externalLinks.ts`
 said why: no priced site publishes a per-card URL this app could derive from what is in `cards`.
 That was wrong about TCGplayer, and this page is the record of the fix — what was measured, what
 the code concludes from it, and the ingest that was measured on the same day and deliberately not
@@ -305,12 +305,12 @@ forgotten.
 | file | what it owns |
 | --- | --- |
 | `crates/grimoire-core/src/card.rs` | `TcgplayerIds`, `tcgplayer_ids`, and the `card_tcgplayer_ids` command — both ids out of `cards.raw`, unread |
-| `src/lib/externalLinks.ts` | The *shapes*: `tcgplayerProductUrl`, `TcgplayerPrinting`, and `marketplaceSearchUrl` for the other four |
-| `src/features/card/openMarketplace.ts` | The decision table, `linkFinish`, and the fallback for both call sites |
-| `src/features/card/CardModalRail.tsx` | The modal's last rail row |
-| `src/features/card/CardDetailModal.tsx` | Which finish that row is handed — the fold, and the `View as …` press at the top of it |
-| `src/features/card/cardMenu.tsx` | The context menu's `Open on →` submenu |
-| `.storybook/fake/` | The workbench's answer — both ids as **fields on the fake row** |
+| `packages/ui/lib/externalLinks.ts` | The *shapes*: `tcgplayerProductUrl`, `TcgplayerPrinting`, and `marketplaceSearchUrl` for the other four |
+| `packages/ui/features/card/openMarketplace.ts` | The decision table, `linkFinish`, and the fallback for both call sites |
+| `packages/ui/features/card/CardModalRail.tsx` | The modal's last rail row |
+| `packages/ui/features/card/CardDetailModal.tsx` | Which finish that row is handed — the fold, and the `View as …` press at the top of it |
+| `packages/ui/features/card/cardMenu.tsx` | The context menu's `Open on →` submenu |
+| `packages/fake/` | The workbench's answer — both ids as **fields on the fake row** |
 
 **The split between `externalLinks.ts` and `openMarketplace.ts` is the one to hold on to.** The
 first builds strings and the second draws a conclusion; a helper in the former that asked Rust for
@@ -329,7 +329,7 @@ printing is sold in.
 the surfaces that build a menu target already carry both facts.
 
 **The fake's shape is the one row in that table that does not mirror the database, and it is right
-not to.** `.storybook/fake` stores `tcgplayerId` / `tcgplayerEtchedId` as plain fields because it
+not to.** `packages/fake` stores `tcgplayerId` / `tcgplayerEtchedId` as plain fields because it
 has no gzipped `raw` blob to inflate. The real `cards` table has no such columns and never will —
 the whole argument of this feature is that the ids were already in the blob — so do not read the
 fake's row as the schema.
@@ -403,9 +403,9 @@ language vocabulary is its own, so the decision table would need measuring rathe
 
 ## What is not fenced
 
-**`card.rs` is not among the files `src/lib/ipc.test.ts` reads with `?raw`**, so `TcgplayerIds` is
+**`card.rs` is not among the files `packages/ui/lib/ipc.test.ts` reads with `?raw`**, so `TcgplayerIds` is
 not on the mirror's named struct list — it sits with `MeldRelation`, `CardHoldings` and every
-other shape in that module, outside the fence. `src/CLAUDE.md` states the general rule and it
+other shape in that module, outside the fence. `packages/ui/CLAUDE.md` states the general rule and it
 applies here in full: *a struct on that table cannot drift; every struct that is on neither still
 can, silently.*
 

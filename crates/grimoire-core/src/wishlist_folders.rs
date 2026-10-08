@@ -64,7 +64,7 @@ const WISH_GONE: &str = "That wishlist entry is not there any more.";
 const MAX_FOLDER_DEPTH: usize = 64;
 
 /// One folder. Flat rows; the tree is the reader's to build from `parent_id`, the way
-/// `wishlist_folders` itself has no notion of depth. `src/lib/folderTree.ts` is the reader.
+/// `wishlist_folders` itself has no notion of depth. `packages/ui/lib/folderTree.ts` is the reader.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct WishlistFolder {
@@ -91,7 +91,7 @@ pub struct WishlistFolder {
 /// What one folder tile is drawn from — the four numbers, per folder, in one round trip.
 ///
 /// **Direct per folder, never recursive**, and that is the load-bearing decision. The tree
-/// builder on the TypeScript side (`src/lib/folderTree.ts`) already sums a node's children for
+/// builder on the TypeScript side (`packages/ui/lib/folderTree.ts`) already sums a node's children for
 /// the deck gallery and does it here for the same reason: SQL that walked the tree would be a
 /// second implementation of arithmetic that is already written, tested and drawn from.
 #[derive(Debug, Serialize)]
@@ -171,7 +171,7 @@ pub fn list_folders(conn: &Connection) -> Result<Vec<WishlistFolder>, String> {
 /// and with `PRAGMA foreign_keys` off — per-connection, so nothing in a signature promises it —
 /// came back as a sub-tree hanging off nothing and no error at all. [`move_folder`]'s doc named
 /// this write among the fenced for a year before it was, and
-/// `.storybook/fake/db.ts`'s `wishlist_folder_create` has refused all along with a comment
+/// `packages/fake/db.ts`'s `wishlist_folder_create` has refused all along with a comment
 /// saying the crate did not, which is the fake being *stricter* than the app and the direction
 /// of drift nobody watches for.
 ///
@@ -1091,7 +1091,7 @@ mod tests {
     /// to its `INSERT`: with `PRAGMA foreign_keys` on — which [`conn`] sets, so this test would
     /// have failed here rather than passed — a reader got `FOREIGN KEY constraint failed`, a
     /// sentence about a constraint; with it off, a folder parented to nothing and no error at
-    /// all. `.storybook/fake/db.ts` has refused it all along.
+    /// all. `packages/fake/db.ts` has refused it all along.
     ///
     /// **The control is what stops the first half passing vacuously.** A fence that refused
     /// every `Some(_)` would satisfy the refusal and the empty table and be wrong in the way
@@ -1210,7 +1210,7 @@ mod tests {
     /// [`set_wish_folder`] and [`crate::wishlist::add_wish`] all answer [`FOLDER_GONE`] to the
     /// same mistake and this does too — all four through [`require_folder`] since 2026-09-09,
     /// which is also the day the first of those four started answering it at all.
-    /// `.storybook/fake/db.ts` has always answered it, and the fake being kinder than the app
+    /// `packages/fake/db.ts` has always answered it, and the fake being kinder than the app
     /// is the drift that makes a story document a lie.
     #[test]
     fn move_folder_refuses_a_parent_that_is_not_there() {

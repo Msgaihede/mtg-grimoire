@@ -374,7 +374,7 @@ asked to go backwards.
    ```
 
    **`grep`/ripgrep will under-count it**, which is how the earlier census went wrong: ripgrep
-   calls `.storybook/fake/db.ts` binary and silently skips it, and that file carries one of them.
+   calls `packages/fake/db.ts` binary and silently skips it, and that file carries one of them.
 
    The lines this branch was already editing now say "thousands" and point at
    `docs/superpowers/research/2026-08-20-scryfall-art-tags.md`, which is where a dated count

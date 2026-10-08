@@ -1935,7 +1935,7 @@ mod tests {
         assert_eq!(unknown.total, 7, "an unknown finish is no filter at all");
     }
 
-    /// The frontend mirrors these names by hand in `src/lib/ipc.ts`; a rename here that is
+    /// The frontend mirrors these names by hand in `packages/ui/lib/ipc.ts`; a rename here that is
     /// not mirrored there is a silently `undefined` field in the UI. Whole-value equality,
     /// so a field added and never mirrored fails as loudly as a rename.
     #[test]

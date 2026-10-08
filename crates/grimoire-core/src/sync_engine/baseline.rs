@@ -32,7 +32,7 @@ use super::merge::{Emission, Horizon, Kind, Op};
 use rusqlite::{Connection, OptionalExtension};
 use std::collections::BTreeMap;
 
-/// The relay's tail, in seconds. Mirrors `relay/src/log.ts`'s `TAIL_MS`.
+/// The relay's tail, in seconds. Mirrors `infrastructure/relay/src/log.ts`'s `TAIL_MS`.
 ///
 /// The two are not held together by anything a build can check — the relay is TypeScript the
 /// reader deploys themselves — so the number is written twice on purpose and this comment is

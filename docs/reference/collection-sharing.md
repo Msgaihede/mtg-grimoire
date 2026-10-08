@@ -11,12 +11,12 @@ database.** Everything a viewer sees was true when the owner last pressed publis
 chooses what crosses, and nothing a viewer does can reach back. Every decision below is a
 consequence of that.
 
-It is **user schema v41**, **one new Cloudflare Worker** beside `relay/`, **one new D1 table** on
+It is **user schema v41**, **one new Cloudflare Worker** beside `infrastructure/relay/`, **one new D1 table** on
 the database the relay already owns, and **two viewers** — a public web page and a top-level view
 inside the app — reading **one format** written by **one Rust publisher**.
 
 ⚠️ **The spec says two D1 tables, twice, and one shipped.** Its header line and §5.2's own heading
-both say *two*; §5.2's body defines `shares` and two indexes, and `share-worker/schema.sql`
+both say *two*; §5.2's body defines `shares` and two indexes, and `infrastructure/share-worker/schema.sql`
 creates exactly that. Nothing is missing — the second table was designed away and the counts were
 not re-read. It is the failure this repository's own rule warns about: a prose-only edit routes to
 neither CI job, so nothing goes red when a count rots.
@@ -32,8 +32,8 @@ measured against a fake or a local `wrangler dev`, never against the deployed Wo
 
 **The Worker is live at `https://mtg-grimoire-share.denmark-east.workers.dev`**, first deployed
 2026-10-01 at 20:10 UTC (version `e32f3155`) from this branch at `e3198a44` — `main` at `2b845048`
-plus a docs commit, so `share-worker/`, `share/` and `src/` were `main`'s. That address is
-**`share::publish::SHARE_BASE`** and the `SHARE_BASE` var in `share-worker/wrangler.jsonc`: one
+plus a docs commit, so `infrastructure/share-worker/`, `apps/share/` and `packages/ui/` were `main`'s. That address is
+**`share::publish::SHARE_BASE`** and the `SHARE_BASE` var in `infrastructure/share-worker/wrangler.jsonc`: one
 value in two languages, and `share::publish::tests::the_share_base_is_the_workers_own` reads the
 Worker's config and asserts they agree byte for byte, so whoever changes one is asked about the
 other. Both were the placeholder `<set on first deploy>` until that day.
@@ -41,7 +41,7 @@ other. Both were the placeholder `<set on first deploy>` until that day.
 **The placeholder that could not be mistaken for an address was the point, and it held for the
 feature's first three weeks.** A plausible invented URL is worse than an obvious hole, because it
 is what gets copied into documentation and deployed against — the failure
-`relay/wrangler.jsonc`'s `database_id` comment already records happening. The address is the
+`infrastructure/relay/wrangler.jsonc`'s `database_id` comment already records happening. The address is the
 Worker's name and the account's subdomain and so was knowable in advance; it was still written
 into the two files only after the deploy printed it and a probe answered there.
 
@@ -64,13 +64,13 @@ exactly — it is what points a dev build at `wrangler dev --local`.
 | | State |
 | --- | --- |
 | The Worker | **deployed.** `GET /s/{16 chars}` answers the Worker's own **404 HTML page** with `noindex` and `cache-control: no-store` — a D1 read that found no share, where a missing `shares` table would be a 500; `/g/abc/shares` answers **401** JSON with no bearer, `/g/abc/share` **405** to a GET, `/g/abc/bogus` **404** JSON, and `/s/{id}/{hash}.json.gz` **404** JSON |
-| The viewer bundle | **served at the edge**: `GET /assets/share.js` answers 200 `text/javascript`, 507 153 bytes, 21 files uploaded from `dist-share/` |
+| The viewer bundle | **served at the edge**: `GET /assets/share.js` answers 200 `text/javascript`, 507 153 bytes, 21 files uploaded from `apps/share/dist-share/` |
 | `shares` in D1 | **applied 2026-10-01**, one statement per request and never `--file`: the table and both indexes, read back from `sqlite_master` with the `CHECK` and `shares_folder`'s `WHERE state <> 'revoked'` intact |
 | The R2 bucket | **`mtg-grimoire-shares` exists** (`WEUR`, Standard), created the same day once Markus had enabled R2 in the dashboard — until then the API answered `10042: Please enable R2 through the Cloudflare Dashboard`. Empty: nothing has been published |
 | The cron | `30 3 * * *` is registered on the script, beside the relay's `0 * * * *` — two of the free plan's five |
 | `RELAY_HMAC_KEY` on this Worker | **set at 20:15 UTC**, five minutes after the deploy. The relay's was rotated at 20:03 — Cloudflare never shows a secret back and the old value had not been kept — and `wrangler secret put` here could not stick before the Worker existed, so it was put a second time once it did. **The tell is a malformed bearer**: `GET /g/abc/shares` with `authorization: Bearer nonsense` answered **500** between the deploy and the secret, because `required()` throws before `verify` can refuse, and **401** after it. A bearer-less probe answers 401 either way and proves nothing. ⚠️ **What no probe can show is that the two Workers hold the _same_ value**: a different one also answers 401 — to every real publish — and only a token the relay minted can tell the two apart |
 | The relay's `dev` claim | **deployed 2026-10-01** — the gate's precondition, see [the Worker](#the-worker) |
-| `dist-share/` | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs). ⚠️ **In a worktree with no `node_modules` of its own, `npm run share:build` exits 0 and writes the wrong thing**: Node resolves the main checkout's Vite, a Vite 7 ignores `rolldownOptions`, and `dist-share/assets/` holds the *app's* `index-*.js` and no `share.js` — which `wrangler deploy` would upload happily and the shell would then link to nothing. Measured 2026-10-01; check that `dist-share/assets/share.js` exists before any deploy |
+| `apps/share/dist-share/` | built by no automated command — see [what nothing runs](#what-no-build-runs-and-what-that-costs). ⚠️ **In a worktree with no `node_modules` of its own, `npm run share:build` exits 0 and writes the wrong thing**: Node resolves the main checkout's Vite, a Vite 7 ignores `rolldownOptions`, and `apps/share/dist-share/assets/` holds the *app's* `index-*.js` and no `share.js` — which `wrangler deploy` would upload happily and the shell would then link to nothing. Measured 2026-10-01; check that `apps/share/dist-share/assets/share.js` exists before any deploy |
 
 **What only a real publish can settle, and none has been made:**
 
@@ -78,7 +78,7 @@ exactly — it is what points a dev build at `wrangler dev --local`.
 - **The two-step against real R2 and real D1**: the `PUT`'s compare-and-swap, `UPDATE … RETURNING`
   on revoke, and `shares_folder` refusing a second live share of one folder. `fakeD1` models none
   of the index.
-- **The blob's encoding at the edge** — `share-worker/README.md` step 5's `curl`s, cold and warm:
+- **The blob's encoding at the edge** — `infrastructure/share-worker/README.md` step 5's `curl`s, cold and warm:
   `encodeBody: "manual"` leaving the body gzipped once, and which `content-encoding` an
   `accept-encoding`-less client is handed.
 - **Whether `caches.default` does anything on `workers.dev`** — see
@@ -89,7 +89,7 @@ exactly — it is what points a dev build at `wrangler dev --local`.
 [hosted-relay-deploy.md](hosted-relay-deploy.md) opens with the rule and this feature inherits it:
 **ask the host, never a document.** Five files in this repository once agreed the relay was
 undeployed and all five were wrong within a day. A `curl -I` is the only sentence that cannot rot.
-`share-worker/README.md` carries the deploy runbook, and its step 0 is that same instruction.
+`infrastructure/share-worker/README.md` carries the deploy runbook, and its step 0 is that same instruction.
 
 **No agent may deploy unasked.** `wrangler deploy`, `wrangler d1 execute --remote` and
 `wrangler secret put` are the repo owner's; `wrangler dev --local` is the only wrangler command an
@@ -100,8 +100,8 @@ in so many words that day, and a secret's value is his to type whoever runs the 
 
 ## The format
 
-One JSON document, gzipped, versioned by `v` — `src-tauri/src/share/snapshot.rs` writes it and
-`src/lib/shareSnapshot.ts` is the reader both viewers come through. Spec §3 has the annotated
+One JSON document, gzipped, versioned by `v` — `apps/desktop/src-tauri/src/share/snapshot.rs` writes it and
+`packages/ui/lib/shareSnapshot.ts` is the reader both viewers come through. Spec §3 has the annotated
 example; what follows is what the shipped writer actually does with it.
 
 **Short keys on the card, because that struct repeats once per copy** and the snapshot is what
@@ -184,7 +184,7 @@ three, because that is the file both readers see.
 ⚠️ **Three implementations spelled that absence three ways, and one of them disagreed with the
 writer about arithmetic** (fixed 2026-09-08). `share::publish::meta_body` sends `totalValue: null`
 unless at least one card carried a price, on the stated grounds that *a `0.0` on a binder no feed
-quotes is the page claiming it is worth nothing* — and `share/SharePage.tsx` folded a missing `p`
+quotes is the page claiming it is worth nothing* — and `apps/share/SharePage.tsx` folded a missing `p`
 to zero, so a share published with `value` where the marketplace quotes nothing rendered **"Worth
 $0.00 at TCGplayer prices"** on the public page: the exact number the writer goes out of its way to
 refuse, mitigated by a `, with N unquoted` clause and still there. The page declines to state a
@@ -201,8 +201,8 @@ happen.
 
 ### The golden is the fence, and there are three implementations
 
-`src-tauri/src/share/__golden__/snapshot.json` is committed, the Rust writer asserts byte equality
-against it, and both TypeScript suites parse it. That is `src/features/transfer/__golden__/`'s
+`apps/desktop/src-tauri/src/share/__golden__/snapshot.json` is committed, the Rust writer asserts byte equality
+against it, and both TypeScript suites parse it. That is `packages/ui/features/transfer/__golden__/`'s
 argument one degree harder: **three implementations of one format rather than two**, so drift is a
 red build instead of a viewer that quietly disagrees with the publisher.
 
@@ -262,7 +262,7 @@ and the 41.3 B/card figure would have been measured over a document missing its 
 
 ## The publisher, and the two `collection.rs` traps
 
-`src-tauri/src/share/` reads SQLite and formats JSON; `publish.rs` is the one file of it that
+`apps/desktop/src-tauri/src/share/` reads SQLite and formats JSON; `publish.rs` is the one file of it that
 reaches the network.
 
 **A share does not ride on `collection::list_entries`, and that is the whole of its safety.** The
@@ -366,7 +366,7 @@ it is.
 ### The five commands
 
 `share_list`, `share_create`, `share_refresh`, `share_revoke`, `share_open` —
-`src-tauri/src/share/commands.rs`, mirrored in `src/lib/ipc.ts`, and the mirror is fenced by
+`apps/desktop/src-tauri/src/share/commands.rs`, mirrored in `packages/ui/lib/ipc.ts`, and the mirror is fenced by
 `ipc.test.ts`'s parsers over the Rust source rather than by two hand-typed lists.
 
 Three of the five are worth a sentence each:
@@ -430,7 +430,7 @@ older ones carry a rule:
 
 ⚠️ **v41 was this branch's guess.** Every open branch adding a rung guesses the same number; read
 *Schema rung collisions with main* before assuming the number here survived the merge.
-`src-tauri/CLAUDE.md`'s ladder record carries the rung's own paragraph, and **that record routes to
+`apps/desktop/src-tauri/CLAUDE.md`'s ladder record carries the rung's own paragraph, and **that record routes to
 neither CI job**, so a renumber on the way in rots it silently.
 
 **It is a cache and it is not synced.** No `sync_uid` column, no `SYNCED_TABLES` entry — the relay's
@@ -485,24 +485,24 @@ the same NULL reason — `folder_uid = ?` matches nothing at all for a whole-col
 
 ## The Worker
 
-`share-worker/` — a **second** Cloudflare Worker beside `relay/`, binding the same D1 database and
+`infrastructure/share-worker/` — a **second** Cloudflare Worker beside `infrastructure/relay/`, binding the same D1 database and
 the same `RELAY_HMAC_KEY` so it can verify a token the relay minted without a service binding.
-**`relay/`'s source and its deploy were untouched by this feature until 2026-10-01**, when issue
+**`infrastructure/relay/`'s source and its deploy were untouched by this feature until 2026-10-01**, when issue
 #548 added a `dev` claim to the token the relay mints: the share gate refuses a token minted before
 the group's newest rotation by a device that rotation's manifest omits, which closes the day a
-removed device's leftover token could still publish and withdraw. `share-worker/README.md` has the
+removed device's leftover token could still publish and withdraw. `infrastructure/share-worker/README.md` has the
 rule and what it leaves open; the relay has to be deployed first.
 
 **The reason is blast radius rather than tidiness.** Sync is a paid feature people depend on;
 sharing is new and will churn, and every deploy is done by hand by one person. One Worker carrying
 both means a bad share deploy is a sync outage.
 
-`share-worker/README.md` is the operational page — the routes, the deploy steps, the testing
+`infrastructure/share-worker/README.md` is the operational page — the routes, the deploy steps, the testing
 notes. What follows is the part that belongs in the record rather than in the runbook.
 
 ### The invariant that now has an exception
 
-`relay/src/index.ts` argues, correctly, that the relay can decrypt nothing it stores. **That
+`infrastructure/relay/src/index.ts` argues, correctly, that the relay can decrypt nothing it stores. **That
 argument does not extend to this Worker.** By decision 2 a share snapshot is stored **in the
 clear**, and Cloudflare — and Markus — can read it. What that buys is the OpenGraph card in
 Discord, a server-rendered landing page, and the freedom to page server-side later without
@@ -594,8 +594,8 @@ that a share was withdrawn or expired, not that they mistyped a link.
 > **`state` is a state and not a `revoked_at` stamp, and decision 5 is why: a lapsed membership
 > darkens a link and a membership that revives must light it again. A timestamp can only be set.**
 
-**Which pass moves it.** `share-worker/src/lapse.ts` is a daily cron on **this** Worker at
-`30 3 * * *` — `30` and not `0` because `relay/wrangler.jsonc` owns minute `0` (`0 3` daily until
+**Which pass moves it.** `infrastructure/share-worker/src/lapse.ts` is a daily cron on **this** Worker at
+`30 3 * * *` — `30` and not `0` because `infrastructure/relay/wrangler.jsonc` owns minute `0` (`0 3` daily until
 2026-09-28, hourly since), and a trigger here rather than a second job inside the relay's
 `reconcile` because §5.1 keeps the relay's source and deploy untouched. It is the account's second
 cron trigger of the free plan's five.
@@ -605,7 +605,7 @@ group whose subject is `dead` has its **live** shares darkened, and one that is 
 `grace` has its **lapsed** shares lit. `grace` **serves**: a declined card is a failed payment
 Patreon retries, not a cancellation the reader chose.
 
-**It reads the stored `status` and does not re-run `decide`.** `relay/src/claim.ts`'s `reconcile`
+**It reads the stored `status` and does not re-run `decide`.** `infrastructure/relay/src/claim.ts`'s `reconcile`
 is what moves a subject through `active → grace → dead` against Patreon, and a second opinion here
 would be one account with two answers to when a membership ended.
 
@@ -654,7 +654,7 @@ is an uncaught 500 for ever** — i.e. every Refresh of that folder after a revo
 why the regression test publishes **four** times around one revoke and pins the id from the second
 press on. Both folder-key reads now route through one `serving()` helper.
 
-**`relay/src/fakeD1.ts` cannot check any of this** — it models column keys, not expression indexes
+**`infrastructure/relay/src/fakeD1.ts` cannot check any of this** — it models column keys, not expression indexes
 and not partial ones — so both halves were driven against real SQLite with `node:sqlite` over the
 shipped `schema.sql`. That is the general shape: *an index the test double does not implement is an
 index the suite cannot fence.*
@@ -723,10 +723,10 @@ is a business decision rather than an engineering one.
 
 ## The two viewers
 
-### The public one — `share/`, built by `vite.share.config.ts`
+### The public one — `apps/share/`, built by `apps/share/vite.config.ts`
 
-A second Vite build importing from `src/` — the card tile, the image helpers, the design tokens —
-and importing **nothing** from `src/lib/core`, `src/lib/ipc`, `src/features` or `@tauri-apps/`.
+A second Vite build importing from `packages/ui/` — the card tile, the image helpers, the design tokens —
+and importing **nothing** from `packages/ui/lib/core`, `packages/ui/lib/ipc`, `packages/ui/features` or `@tauri-apps/`.
 **It has no core at all**: it fetches one
 JSON document and renders it. `SharePage.test.tsx` walks the real import graph — resolving `./foo`
 against the **importing file's** own directory, so relative-only modules are reachable — and
@@ -737,11 +737,11 @@ counts a side-effect and a dynamic import as imports.
 for `cardId` — a protocol this page has no Tauri behind it to answer. So the tile passes
 `cardId={null}` and `remoteSrc={card.img ?? null}`, **never bare `card.img`**: an absent
 `remoteSrc` means *the cache* and a present `null` means *no picture*, which `CardArt` draws as a
-named frame. No other `CardArt` in `src/` passes it. `vite.share.config.ts` merges the app's
+named frame. No other `CardArt` in `packages/ui/` passes it. `apps/share/vite.config.ts` merges the app's
 config and adds no `define` of its own.
 
-**Measured 2026-09-08** by `vite build --config vite.share.config.ts` on this branch:
-`dist-share/assets/share.js` is **486.74 kB, 141.49 kB gzipped**, one chunk, with the fonts as
+**Measured 2026-09-08** by `vite build --config apps/share/vite.config.ts` on this branch:
+`apps/share/dist-share/assets/share.js` is **486.74 kB, 141.49 kB gzipped**, one chunk, with the fonts as
 separate assets beside it. (It read **486.47 / 141.43** earlier the same day; the whole-branch
 review's guards — the total that declines to state itself, the `== null` absences — are the 0.27 kB
 between them. Re-measured rather than left standing, because `npm run share:build` answers it in
@@ -778,14 +778,14 @@ Five things a future editor needs:
   The current writer cannot produce one; **the viewer parses a document it did not write**, and
   `parseSnapshot` promises nothing about the folder graph by design. Deleting the rescue does not
   mis-nest a drawer — it removes **all** folder navigation, because the rail is gated on being
-  non-empty, so the failure is a missing landmark rather than a wrong one. `src/features/share/shareTree.ts`
+  non-empty, so the failure is a missing landmark rather than a wrong one. `packages/ui/features/share/shareTree.ts`
   is the same rule for the in-app viewer.
 
 Both live-found bugs above are **pinned**: reverting either fix reddens a named test. A bug found
 by hand and fixed without a fence comes back the next time somebody touches the file, which is the
 whole reason the live pass was worth doing.
 
-### The in-app one — `src/features/share/`
+### The in-app one — `packages/ui/features/share/`
 
 A new top-level view; `ViewId` gains `"shared"`, and the rail row appears only once the reader has
 opened at least one share (decision 6), so nobody who never uses the feature pays a rail slot for
@@ -795,7 +795,7 @@ it.
 and adding one is a separate piece of work.
 
 **The read-only guarantee is structural, and it has to be.** There is no read-only mode anywhere on
-this app's data path — `src/lib/writes.ts` is only about which mutation owns the error banner — so
+this app's data path — `packages/ui/lib/writes.ts` is only about which mutation owns the error banner — so
 a flag would be a claim rather than a fence.
 What this view has instead is that it renders a **fetched document**, and every command it names
 is enumerated in one file.
@@ -847,23 +847,23 @@ snapshot does not change on its own, and every refusal the crate returns is a se
 The view offers a *Check for an update* press, which is `refetch()`.
 
 ⚠️ **The blob fetch asks for gzip and then sniffs for it, and both halves are insurance against a
-question no document can settle.** `src-tauri/Cargo.toml` builds reqwest `default-features = false`
+question no document can settle.** `apps/desktop/src-tauri/Cargo.toml` builds reqwest `default-features = false`
 with **no `gzip` feature** — deliberately, because Scryfall's bulk data is a real `.gz` *file* and
 transparent decompression would corrupt it — so this client decodes nothing itself and, until
 2026-09-08, sent no `accept-encoding` either. The Worker stores a gzipped object and nails
-`content-encoding: gzip` on by hand (`share-worker/src/blob.ts`), and `parse_snapshot` ran
+`content-encoding: gzip` on by hand (`infrastructure/share-worker/src/blob.ts`), and `parse_snapshot` ran
 `GzDecoder` unconditionally. **An edge that answered an `accept-encoding`-less client with the
 identity body would therefore have failed every in-app open with a corruption sentence on a
 perfectly healthy share** — and whether Cloudflare does that on this deploy is a fact about the
 deploy. So `open` sends `accept-encoding: gzip` explicitly and `parse_snapshot` branches on the
 `1f 8b` magic, reading anything else as the JSON it may well be; either answer opens.
-`share-worker/README.md`'s step 5 is the two `curl`s (`-sI --compressed` and bare `-sI`) that say
+`infrastructure/share-worker/README.md`'s step 5 is the two `curl`s (`-sI --compressed` and bare `-sI`) that say
 which answer the deploy actually gives, and **nobody has run them**: the Worker is deployed since
 2026-10-01, and they need the URL of a published snapshot, which nothing has made yet.
 
 **The in-app viewer's field guards are the public page's, crossed** (2026-09-08). `parseSnapshotValue`
 guarantees three things — an object, a `v` that is not newer, and two arrays — and everything past
-that is `snapshot as ShareSnapshot`, a **cast rather than a strip**. `share/SharePage.tsx` built
+that is `snapshot as ShareSnapshot`, a **cast rather than a strip**. `apps/share/SharePage.tsx` built
 `asText`, a nullable `asOf` and an `Array.isArray(snapshot.fields)` check for exactly that and
 explains why in its own comment; none of it had crossed, so a body that parsed and omitted
 `currency` threw inside `snapshot.currency.toLowerCase()` **during render**. **The exposure is the
@@ -873,7 +873,7 @@ own Worker's blob, while this view opens whatever `shareLinkFrom` lets through �
 serving a gzipped `{"folders":[],"cards":[]}` reaches this render. (Any `https` page, since
 2026-09-28, serving that snapshot from its own origin — the section below — which narrows where the
 document can come from and not what it can say, so the boundary stands.) And `grep -rn
-"componentDidCatch\|getDerivedStateFromError" src/` answered **nothing**: a throw here unmounted the
+"componentDidCatch\|getDerivedStateFromError" packages/ui/` answered **nothing**: a throw here unmounted the
 whole app to a white window whose only recovery was restarting the program. `SharedBoundary` is the
 app's one error boundary, scoped to the one view whose document arrives from a pasted URL.
 
@@ -909,7 +909,7 @@ constants in `publish.rs`, not numbers to copy from here:
 | Cap | Constant | Chosen because |
 | --- | --- | --- |
 | The page | `MAX_PAGE_BYTES` | `page.ts` renders one template; the only publisher text in it is a title and a name at `MAX_TEXT_CHARS` each. A quarter of a megabyte is well over an order of magnitude above the largest shell the Worker can render and leaves a fork room for an inlined stylesheet. |
-| The snapshot, gzipped | `MAX_BLOB_BYTES` | **The Worker's own `MAX_BLOB_BYTES`**, which `blob.ts` refuses above at upload — so nothing larger can have come from a share. `the_blob_cap_is_the_workers_own` reads `share-worker/src/env.ts` and multiplies its expression out. |
+| The snapshot, gzipped | `MAX_BLOB_BYTES` | **The Worker's own `MAX_BLOB_BYTES`**, which `blob.ts` refuses above at upload — so nothing larger can have come from a share. `the_blob_cap_is_the_workers_own` reads `infrastructure/share-worker/src/env.ts` and multiplies its expression out. |
 | The snapshot, inflated — and a snapshot served as plain JSON | `MAX_SNAPSHOT_BYTES`, eight times the blob cap | [The sizing above](#size-measured) measured **6.6×** (273 B a card raw, 41.3 B gzipped) and calls the compressed figure a floor, so the ratio is a ceiling: a snapshot at the Worker's cap inflates to about 53 MiB, and eight times leaves a fifth to spare — roughly 245 000 cards at 273 B each. |
 
 **The snapshot's wire cap depends on what arrives**, and that is the sniff's own argument one step
@@ -993,14 +993,14 @@ Shared view no chord, and `Ctrl+6` reaches Scanner instead"*.
 **What it costs this view is nothing, and the paragraph above is why**: the route the chord had was
 a *fallback*, written when the app offered no first share at all, and the cabinet's control is the
 signpost it was standing in for. Once a share is open the rail row is the way back.
-`docs/reference/keyboard-shortcuts.md` carries the ruling; `src/App.tsx`'s dispatch comment claimed
+`docs/reference/keyboard-shortcuts.md` carries the ruling; `packages/ui/App.tsx`'s dispatch comment claimed
 the chord still worked until this pass, which is the **third** site on this branch to ship a comment
 contradicting its own code — `nav.ts`, `shortcuts.ts` and `AppShell.tsx` were all updated when the
 chord went and that one was not.
 
 ### The Share control
 
-`src/features/collection/ShareFolderMenu.tsx` — publish the level on screen, copy its link, update
+`packages/ui/features/collection/ShareFolderMenu.tsx` — publish the level on screen, copy its link, update
 it, withdraw it.
 
 * **Hidden, not greyed, for a reader who has connected nothing** (spec §9). A control whose only
@@ -1015,7 +1015,7 @@ it, withdraw it.
   §10). The next publish refuses, so the snapshot on the relay is frozen rather than wrong. A link
   in somebody's chat window going dead because its owner tidied a drawer would be the app taking a
   decision nobody asked it to take.
-* ⚠️ **`SUPPORTER_KEY` and `supporterState` belong in `src/lib/query.ts` beside `RELAY_KEY`, not
+* ⚠️ **`SUPPORTER_KEY` and `supporterState` belong in `packages/ui/lib/query.ts` beside `RELAY_KEY`, not
   in `SyncPanel`.** This control needs both — the membership decides whether it is drawn at all —
   and importing them from the panel is right by the one-prefix-one-spelling rule while dragging
   `QrScanner` and `jsqr` into the collection chunk behind them. **A query key imported from a
@@ -1134,18 +1134,18 @@ phone layout on 2026-09-27; the example stays because the rule does.)
 ## What no build runs, and what that costs
 
 * **`npm run share:build` is in neither `npm run verify` nor CI.** The type-checking half is
-  covered — `share/` is in the root `tsconfig.json`'s `include`, and `npm run build` also runs
-  `tsc -p tsconfig.share-worker.json` — and `vitest` collects both `share/**/*.test.{ts,tsx}` and
-  `share-worker/src/**/*.test.ts` through globs named in `vite.config.ts`. **What nothing runs is
-  the bundle**, so `dist-share/` existing at all is a manual step, and `wrangler deploy` fails
+  covered — `apps/share/` is in the root `tsconfig.json`'s `include`, and `npm run build` also runs
+  `tsc -p infrastructure/share-worker/tsconfig.json` — and `vitest` collects both `apps/share/**/*.test.{ts,tsx}` and
+  `infrastructure/share-worker/src/**/*.test.ts` through globs named in `vitest.config.ts`. **What nothing runs is
+  the bundle**, so `apps/share/dist-share/` existing at all is a manual step, and `wrangler deploy` fails
   naming that directory until it has been taken.
-* **`share/` and `share-worker/` match no arm of CI's `changes` router**, so they fall to the `*)`
+* **`apps/share/` and `infrastructure/share-worker/` match no arm of CI's `changes` router**, so they fall to the `*)`
   fail-safe and run **every** build job — frontend, rust and storybook. That is the cheap direction
   to be wrong in and it is deliberate design of that router; it does mean a Worker-only edit runs
   the whole clippy-and-test matrix on two platforms.
-* ⚠️ **A directory `vite.config.ts`'s test globs do not name is collected by nothing**, and
+* ⚠️ **A directory `vitest.config.ts`'s test globs do not name is collected by nothing**, and
   `vitest run` answers `No test files found` — which prints on stdout and is easy to read as a
-  pass. `share-worker/` was in that state for exactly one commit.
+  pass. `infrastructure/share-worker/` was in that state for exactly one commit.
 
 ---
 
@@ -1223,10 +1223,10 @@ and became the only wrong sentence of the pair — a **prose-only edit routes to
 which is what lets a note like this rot in place while every build stays green. Read the spec, not
 this line, for what §4.1 says.
 
-**A pre-existing landmine in `relay/src/fakeD1.ts`, found here and deliberately not fixed.** Its
+**A pre-existing landmine in `infrastructure/relay/src/fakeD1.ts`, found here and deliberately not fixed.** Its
 tokenizer has **no rule for `'`**, so `WHERE status = 'dead'` resolves `dead` as a *column*, yields
 NULL and matches nothing — **silently, never throwing**. `IN (SELECT …)` is not in its dialect at
-all. `relay/src/claim.ts` already contains such literals; nothing goes wrong today only because
+all. `infrastructure/relay/src/claim.ts` already contains such literals; nothing goes wrong today only because
 `claim.test.ts` never drives those handlers through the fake, and **the first test that does will
 pass vacuously.** Left alone because changing relay test infrastructure mid-feature is how a clean
 branch acquires an unrelated red.
@@ -1254,17 +1254,17 @@ branch acquires an unrelated red.
 
 | Path | Holds |
 | --- | --- |
-| `src-tauri/src/share/snapshot.rs` | `ShareSnapshot`, the subtree read, the gzip, the three refusals |
-| `src-tauri/src/share/cache.rs` | `collection_shares` reads, writes and `reconcile` |
-| `src-tauri/src/share/publish.rs` | The two-step upload, the sentences, and the viewer's bounded open |
-| `src-tauri/src/share/commands.rs` | The five commands and `ShareRow` |
-| `src-tauri/src/share/__golden__/` | The committed snapshot both TypeScript suites read |
-| `share-worker/` | The Worker — `index.ts` (router and gate), `shares.ts`, `blob.ts`, `page.ts`, `lapse.ts`, `env.ts`, `schema.sql`, `README.md` |
-| `share/` | The public viewer bundle; `vite.share.config.ts` builds it into `dist-share/` |
-| `src/features/share/` | The in-app view, the paste dialog, the want list, its hooks, the folder tree, the read-only sweep |
-| `src/features/collection/ShareFolderMenu.tsx` | The Share control and the entry point beside it |
-| `src/lib/shareSnapshot.ts` | The format, read — imports nothing, by requirement |
-| `src/lib/ipc.ts` | The five commands and `ShareRow`'s mirror |
+| `apps/desktop/src-tauri/src/share/snapshot.rs` | `ShareSnapshot`, the subtree read, the gzip, the three refusals |
+| `apps/desktop/src-tauri/src/share/cache.rs` | `collection_shares` reads, writes and `reconcile` |
+| `apps/desktop/src-tauri/src/share/publish.rs` | The two-step upload, the sentences, and the viewer's bounded open |
+| `apps/desktop/src-tauri/src/share/commands.rs` | The five commands and `ShareRow` |
+| `apps/desktop/src-tauri/src/share/__golden__/` | The committed snapshot both TypeScript suites read |
+| `infrastructure/share-worker/` | The Worker — `index.ts` (router and gate), `shares.ts`, `blob.ts`, `page.ts`, `lapse.ts`, `env.ts`, `schema.sql`, `README.md` |
+| `apps/share/` | The public viewer bundle; `apps/share/vite.config.ts` builds it into `apps/share/dist-share/` |
+| `packages/ui/features/share/` | The in-app view, the paste dialog, the want list, its hooks, the folder tree, the read-only sweep |
+| `packages/ui/features/collection/ShareFolderMenu.tsx` | The Share control and the entry point beside it |
+| `packages/ui/lib/shareSnapshot.ts` | The format, read — imports nothing, by requirement |
+| `packages/ui/lib/ipc.ts` | The five commands and `ShareRow`'s mirror |
 
 ## Further reading
 

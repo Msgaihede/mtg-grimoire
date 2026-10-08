@@ -1,0 +1,160 @@
+# The response headers of https://mtg-grimoire.app — Cloudflare's `_headers` format, read by
+# Workers static assets from the root of the uploaded directory. The web build copies this file
+# into `apps/light/dist-web/` and into no other bundle (`apps/light/vite.config.ts`, mode `web`); it is parsed at
+# deploy and is not itself served. `infrastructure/app-worker/src/headers.ts` reads it the same way for
+# `npm run web:preview`, and `infrastructure/app-worker/src/hosting.test.ts` holds every line below to the
+# engine's own constants.
+#
+# Every matching rule applies, in order, and a header two rules both set is JOINED WITH A COMMA.
+# So a narrower rule that replaces a value detaches the wider one first: `! Name`.
+#
+# These reach static-asset responses only. What the Worker's script answers itself — a 404 — carries
+# its own headers, set in `src/index.ts`.
+#
+# Live since 2026-10-04. A change to this file alone — a comment included — is a new build to the
+# service worker, which hashes this file into its build id: every reader is offered the update.
+
+# --- Everything ---------------------------------------------------------------------------------
+#
+# ONE policy on every response, the scripts included, and that is deliberate: a dedicated Worker
+# and a service worker are each governed by the policy on THEIR OWN script's response, not the
+# page's (measured in Chrome 154 — README, "The policy"). The engine is compiled inside the
+# database Worker, so `'wasm-unsafe-eval'` has to arrive on that chunk; the launch's downloads
+# leave from it, so `connect-src` does too. Sending the page one policy and the scripts another
+# would be two lists to keep equal.
+#
+#   script-src   `'wasm-unsafe-eval'` is what compiling a WebAssembly module asks for and all it
+#                grants. Never `'unsafe-eval'`, which grants `eval` with it.
+#   style-src    `'self'`, the desktop's rule: no runtime <style>. `packages/ui/CLAUDE.md` has what that
+#                forbids, and the same components run here.
+#   connect-src  EXACTLY the hosts the engine asks, each from a constant in `crates/grimoire-core`:
+#                  api.scryfall.com             launch.rs      SCRYFALL_API
+#                  data.scryfall.io             the bulk files — Scryfall's descriptor names the
+#                                               address, so this is their host and not our constant
+#                  cards.scryfall.io            image_uri.rs   IMAGE_HOST
+#                  json.commanderspellbook.com  combos.rs      FEED_URL
+#                  api.cardkingdom.com          marketplace_feed.rs, Card Kingdom's pricelist
+#                  mtg-grimoire-relay.denmark-east.workers.dev
+#                                               sync_engine/entitlement.rs  RELAY_BASE — the sync
+#                                               relay, which answers this origin by name: its CORS
+#                                               allow-list (`infrastructure/relay/src/cors.ts`, `APP_ORIGINS`) and
+#                                               this entry are one fact written in two deploys, and
+#                                               THE RELAY'S GOES FIRST (README, "The steps, in
+#                                               order"). NAMED TWICE, `https://` for its requests and
+#                                               `wss://` for the live socket, because to this
+#                                               directive they are two sources: with the first
+#                                               alone, Chrome 154 refused the socket ("Connecting
+#                                               to 'wss://…' violates … connect-src" — measured
+#                                               2026-10-04, README "The policy"). The second is
+#                                               the first under `platform/socket.rs`'s `ws_origin`,
+#                                               and `hosting.test.ts` derives it so: the one
+#                                               `wss://` source, and no other.
+#                NOT manapool.com: it sends no Access-Control-Allow-Origin, so a page cannot read
+#                it whatever this says.
+#   img-src      This origin and `data:`, and NOT cards.scryfall.io although every card picture
+#                comes from there. A picture is asked of this origin (`/mtgimg/…`) and answered by
+#                the service worker — which must hand back a response REBUILT FROM THE BYTES.
+#                Chrome checks the address of the response a service worker returns as well as
+#                the address the page asked: Scryfall's response passed along as it came, or out
+#                of Cache Storage, is refused by this line (measured, Chrome 154 — README). The
+#                host is in `connect-src`, which is what the service worker's own `fetch` needs.
+#   frame-ancestors, object-src, frame-src, base-uri, form-action — nothing embeds this app, and
+#                it embeds, rebases and posts nothing.
+#
+# `Referrer-Policy`: the origin and never a path. Scryfall asks an app to say who it is, and a
+# browser gives a page no User-Agent to say it with; what a shop behind an `Open on …` link learns
+# is the app's name and not which deck was open.
+#
+# `Cache-Control: no-cache` is the default for every address: the document (at `/` and at every
+# route the single-page fallback answers), the manifest, the favicon and `icons/*.png` — each is
+# revalidated before use, so a deploy is seen on the next load. The manifest's icons are in that
+# list on purpose: their names carry no hash, so a year for them would be a year an installed
+# app kept an old icon, and a revalidation is a 304. The two trees below are the exception.
+#
+# No `Strict-Transport-Security`: the whole `.app` top-level domain is on the browsers' HSTS
+# preload list. No `Cross-Origin-Opener-Policy` or `-Embedder-Policy`: the OPFS pool needs neither
+# (the August spike ran it both ways), and `require-corp` would refuse every card picture.
+/*
+  Content-Security-Policy: default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; style-src 'self'; style-src-attr 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:; connect-src 'self' https://api.scryfall.com https://data.scryfall.io https://cards.scryfall.io https://json.commanderspellbook.com https://api.cardkingdom.com https://mtg-grimoire-relay.denmark-east.workers.dev wss://mtg-grimoire-relay.denmark-east.workers.dev; manifest-src 'self'; object-src 'none'; frame-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'none'
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: strict-origin-when-cross-origin
+  Cache-Control: no-cache
+
+# --- Content-addressed: kept for a year, never asked about again ---------------------------------
+#
+# Vite names every file under `assets/` by a hash of its bytes, and the engine's two files sit in
+# a directory named by a hash of theirs (`packages/ui/lib/core/web/assets.ts`, `buildIdOf`) — as do the
+# card scanner's two, under `/wasm/<a hash of the scanner's own>/scanner/`. A changed byte is a
+# new address, so nothing at an old address is ever stale — with one exception, the two Workers'
+# own scripts, which have rules of their own below.
+/assets/*
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable
+
+/wasm/*
+  ! Cache-Control
+  Cache-Control: public, max-age=31536000, immutable
+
+# --- The one hashed file that is NOT kept: the engine's Worker ----------------------------------
+#
+# `assets/worker-<hash>.js` is content-addressed like its neighbours, and its BYTES are as
+# immutable as theirs. Its POLICY is not: a dedicated Worker runs under the
+# Content-Security-Policy on its own script's response (the block at the top of this file), and
+# that policy is this file's, not the chunk's. A deploy that changes only `_headers` — a host
+# added to `connect-src`, as the relay's was, or because Scryfall moved its bulk files — renames
+# nothing. Kept for a year, the chunk would never be asked for again, and a returning reader's
+# engine would go on running under the policy of the day they first came (measured, Chrome 154:
+# the script was not requested at all, and the old `connect-src` held).
+#
+# So it is revalidated: a few kilobytes, answered with a 304 — and a 304 carries these headers,
+# which is what replaces the policy the cache holds (measured the same way: a 304 WITH the new
+# policy took effect; one without it did not. Cloudflare attaches `_headers` to every asset
+# response, the 304 included — `handleRequest` in workers-sdk's asset-worker).
+#
+# The name is Vite's, from `packages/ui/lib/core/web/worker.ts`; `hosting.test.ts` reads the line that
+# constructs the Worker and fails if the file is ever called something this rule does not match.
+# After `/assets/*`, because rules apply in the file's order and the last word wins.
+/assets/worker-*
+  ! Cache-Control
+  Cache-Control: no-cache
+
+# --- And the card scanner's Worker, for the same reason -------------------------------------------
+#
+# `assets/scanWorker-<hash>.js` (`packages/ui/lib/core/web/scanWorker.ts`) compiles the scanner's module
+# inside itself, so `'wasm-unsafe-eval'` has to arrive on THIS chunk, and it loads that module
+# from this origin, so `connect-src 'self'` does too. Its policy is this file's and not the
+# chunk's, exactly as the engine's Worker's is — so it is revalidated, exactly as that is.
+# `hosting.test.ts` reads the line that constructs it (`packages/ui/lib/core/web/scanner.ts`) and fails
+# if the file is ever called something this rule does not match.
+/assets/scanWorker-*
+  ! Cache-Control
+  Cache-Control: no-cache
+
+# --- The card scanner's three files -------------------------------------------------------------
+#
+# `scanner-assets/card-hashes.bin`, the two `.rten` models and `manifest.json`
+# (`scripts/scanner-assets.mjs --web` fetches them; the web build copies them in). STABLE NAMES
+# WHOSE BYTES CHANGE: the bundle of card hashes is rebuilt with every set and shipped again at
+# each release under the name it always had. So they are revalidated and never kept by the HTTP
+# cache — the default's value, restated so that loosening `/*` cannot take this with it. The page
+# asks for them `no-store` in any case and keeps what it has checked in Cache Storage, by the
+# manifest's digest (`packages/ui/lib/core/web/scanStore.ts`); nothing asks for them before a reader
+# presses Download, and the service worker neither precaches nor answers them.
+/scanner-assets/*
+  ! Cache-Control
+  Cache-Control: no-cache
+
+# --- The service worker's script ----------------------------------------------------------------
+#
+# `sw.js` is the web build's last file (`apps/light/vite.sw.ts`, step 5.3), written at the root of `apps/light/dist-web/`
+# after everything else. This rule was written before it existed, because it is the one address
+# whose caching decides whether a deploy can ever be seen: a service worker script kept by the
+# HTTP cache is an update no reader is offered. The value is the default's, restated so that
+# loosening `/*` cannot take this with it. It must stay at the root and unhashed — a service
+# worker controls its own path and below — so it must never be given the year the two trees above
+# have. Its bytes carry a hash of every other file in the build, THIS ONE INCLUDED, so a deploy
+# that changes only this file is a new worker — which is how a changed policy reaches the shell
+# a returning reader's worker already holds in Cache Storage.
+/sw.js
+  ! Cache-Control
+  Cache-Control: no-cache

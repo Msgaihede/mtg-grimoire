@@ -8,25 +8,28 @@ web/public/
 
 # The web app (the light app's `web` mode): `npm run web:wasm` writes the engine — wasm-bindgen's
 # glue and the module — to `dist-wasm/`, and `npm run web:build` bundles the page into
-# `dist-web/` with a copy of it. `eslint.config.js` ignores both and `vite.watch.ts` keeps
+# `apps/light/dist-web/` with a copy of it. `eslint.config.js` ignores both and `vite.watch.ts` keeps
 # every dev server's watcher out of them.
-dist-web/
+apps/light/dist-web/
 dist-wasm/
 
-# The shared-collection viewer's bundle. `share-worker/wrangler.jsonc` declares an `assets`
+# The shared-collection viewer's bundle. `infrastructure/share-worker/wrangler.jsonc` declares an `assets`
 # binding over it, so a deploy needs it on disk and nothing needs it in the history.
-dist-share/
-dist-mobile/
+apps/share/dist-share/
+apps/light/dist-mobile/
 storybook-static/
-# `tsconfig.node.json` is `composite`, so anything that builds it as a *project* — `tsc -b`,
+# `apps/desktop/tsconfig.node.json` is `composite`, so anything that builds it as a *project* — `tsc -b`,
 # or an editor's TS server doing the same — drops a `.tsbuildinfo` beside it. `npm run build`
 # does not (plain `tsc` ignores `references`), which is why this arrives on a developer's
 # machine and never in CI, and why it is worth a line rather than a diagnosis.
 *.tsbuildinfo
-src-tauri/target/
-src-tauri/data/
+# The cargo workspace's build tree, at the root where cargo puts it by default and where
+# `.cargo/config.toml` pins it (the layout change of 2026-10-08 moved it from `src-tauri/target`).
+# Anchored: it is the workspace's alone, and `crates/*/target/` below names the standalone crates'.
+/target/
+apps/desktop/src-tauri/data/
 # `vitest run --coverage` writes here. The Rust side's equivalent lands under
-# `src-tauri/target/llvm-cov/`, which the line above already covers.
+# `target/llvm-cov/`, which the line above already covers.
 coverage/
 data/
 *.local
@@ -41,7 +44,7 @@ planned-features.txt
 # the authored entry barrel and tsconfig, NOTES.md, conventions.md and any owned previews or
 # adapter forks — because a re-sync replays every decision this repo has already made. What
 # is ignored is everything a run regenerates: the staged converter and its deps, the emitted
-# bundle, the reference storybook (minutes to build, megabytes, and derived from `src/`), and
+# bundle, the reference storybook (minutes to build, megabytes, and derived from `packages/ui/`), and
 # the per-run verification scratch. Verified state deliberately does NOT live in git: it
 # travels in the uploaded project's own `_ds_sync.json`, which is what lets a sync from a
 # second machine skip re-verifying what this one already proved.
@@ -59,12 +62,12 @@ ds-bundle/
 # (never pipe it), and one got committed by a `git add -A` before this rule existed.
 *.log
 
-# `wrangler`'s local working files under `relay/`, and the first of them is the one that matters.
+# `wrangler`'s local working files under `infrastructure/relay/`, and the first of them is the one that matters.
 # `.dev.vars` is wrangler's documented home for local secrets, which is exactly where
 # `PATREON_CLIENT_SECRET` and `RELAY_HMAC_KEY` land the first time anyone runs `wrangler dev` —
 # and this repo is public. `.wrangler/` is its local state directory (a miniflare D1 among other
 # things); it already exists on disk. Both are ignored everywhere rather than only under
-# `relay/`, because the habit here is `git add -A` and a secret only has to slip once.
+# `infrastructure/relay/`, because the habit here is `git add -A` and a secret only has to slip once.
 .dev.vars
 .dev.vars.*
 .wrangler/
@@ -89,7 +92,7 @@ key.properties
 devlog*.txt
 
 # The card scanner's standalone crate builds into its own target dir — it is not a member of
-# a cargo workspace, so `src-tauri/target/` above does not cover it.
+# a cargo workspace, so `/target/` above does not cover it.
 crates/*/target/
 
 # The frame bench's two modules — `npm run scanner:bench` runs `wasm-bindgen` into here, beside
@@ -111,8 +114,21 @@ crates/card-scanner/bench/target/
 # The three scanner files `build.rs` embeds, downloaded by `npm run scanner:assets` from a
 # GitHub release. The README stays tracked because it keeps the directory in existence, and a
 # `rerun-if-changed` on a missing directory would rerun `build.rs` on every build.
-src-tauri/scanner-assets/*
-!src-tauri/scanner-assets/README.md
+apps/desktop/src-tauri/scanner-assets/*
+!apps/desktop/src-tauri/scanner-assets/README.md
 
 # A vitest JSON reporter's output, when a run asks for one.
 .vitest/
+
+# What a checkout that predates the layout change of 2026-10-08 still holds on disk: `src-tauri/`
+# (the old build tree, `scanner-assets/`, `gen/schemas`), `mobile/` (`src-tauri/gen/schemas`) and
+# the bundles that sat at the root (`dist-web/`, `dist-mobile/`, `dist-share/`; the root `dist/` is
+# already covered by the unanchored line at the top). Nothing tracked lives in any of them any
+# more, so without these lines a pull leaves them as untracked files for `git add -A` to stage.
+# The owner deletes the folders once `src-tauri/target/debug/data` has moved to
+# `target/debug/data`; this block can go when no checkout has them.
+/src-tauri/
+/mobile/
+/dist-web/
+/dist-mobile/
+/dist-share/

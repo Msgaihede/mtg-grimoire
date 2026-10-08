@@ -1,0 +1,164 @@
+/**
+ * The wishlist as a destination — `CollectionPreview.tsx`'s twin, with the finish control alone.
+ *
+ * **No condition control.** A wish is a card the reader does not have yet; recording a grade for
+ * cardboard nobody owns is a question this list has never asked. The finish picker is the same
+ * store field the collection's own draws — `importDefaults.finish` — because "the shiny one" is
+ * an answer about the reader's taste that both lists share; `importDefaults.condition` exists for
+ * the collection alone and this preview never reads it.
+ */
+import { useMemo, useState, type JSX } from "react";
+import { Dropdown } from "@/components/Dropdown/Dropdown";
+import type { DropdownOption } from "@/components/Dropdown/types";
+import { offerUndo } from "@/lib/bulkUndo";
+import { count } from "@/lib/counts";
+import { ipc, ipcError, type DeckFinish, type TransferImportMode } from "@/lib/ipc";
+import { useAppStore } from "@/lib/store";
+import type { DestinationPreviewProps, ImportDestination, ImportModeOption } from "../destination";
+import { CommitBar, useImportCommit } from "../shared/CommitBar";
+import { ModeRadios } from "../shared/ModeRadios";
+import { ImportProblems } from "../shared/Problems";
+import { planWishlistImport, toWishlistImportItems } from "./wishlist";
+
+export const WISHLIST_MODES: readonly ImportModeOption[] = [
+  { key: "add", label: "Add to wishlist quantities", hint: "Quantities add to what you already want." },
+  { key: "set", label: "Set these quantities", hint: "Replaces your quantities with the file's." },
+];
+
+export function WishlistPreview({
+  list,
+  resolved,
+  onDone,
+  onBack,
+}: DestinationPreviewProps): JSX.Element {
+  // The same store field the collection reads, finish alone — see the file doc.
+  const defaults = useAppStore((s) => s.importDefaults);
+  const setDefaults = useAppStore((s) => s.setImportDefaults);
+  const [mode, setMode] = useState("add");
+
+  const plan = useMemo(
+    () => planWishlistImport(list, resolved, { finish: defaults.finish }),
+    [list, resolved, defaults.finish],
+  );
+
+  // `["wishlist"]` and `["cards", "search"]` — the same pair `WishlistPage`'s own `settle()`
+  // invalidates after a single wish write, since a wish write moves no copies: it files nothing
+  // into any folder, so neither the collection nor any deck's group — which since schema v25 is
+  // what a deck owns — can have moved. See `useImportCommit`'s own doc.
+  const commit = useImportCommit(
+    [["wishlist"], ["cards", "search"]],
+    () => ipc.wishlistImportCommit(toWishlistImportItems(plan.items), mode as TransferImportMode),
+  );
+
+  const runImport = () => {
+    if (plan.items.length === 0) return;
+    commit.mutate(undefined, {
+      onSuccess: (outcome) => {
+        // The collection preview's offer, over the other list — `WishlistPage` draws it. `?? null`
+        // for the same reason: an outcome that predates the ticket carries no `undoId` at all.
+        offerUndo(
+          "wishlist",
+          outcome.undoId ?? null,
+          mode === "set"
+            ? `Set wishlist quantities from a file of ${cards(plan.items.length)}.`
+            : `Imported ${cards(plan.totalCards)} into your wishlist.`,
+        );
+        onDone(`${outcome.added} added, ${outcome.updated} updated.`);
+      },
+    });
+  };
+
+  // Exempt from `sortOptions`: a printing's finishes run plain before the premium treatments
+  // (`packages/ui/CLAUDE.md`'s exemption rule) — alphabetising would put Etched first.
+  const finishOptions: readonly DropdownOption[] = [
+    { value: "", label: "No preference" },
+    { value: "foil", label: "Foil" },
+    { value: "etched", label: "Etched" },
+  ];
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        runImport();
+      }}
+      className="flex min-h-0 flex-1 flex-col"
+    >
+      <div className="min-h-0 flex-1 space-y-4 overflow-y-auto px-5 py-4">
+        {/* **Not "will be added" under `set`**, which is the collection preview's own bug in
+            this list's words (issue #555): a `set` lowers some wishes and removes others, and a
+            headline promising additions over it is wrong about what the button does. The
+            collection's sentence is counted by a dry run; the wishlist has none, so this one says
+            only what the file is — which is true whatever the rows already hold. */}
+        <p className="text-sm">
+          {mode === "set"
+            ? `Updates wishlist quantities for ${cards(plan.items.length)}.`
+            : `${cards(plan.totalCards)} will be added to your wishlist.`}
+        </p>
+
+        <div className="flex flex-wrap items-center gap-4 text-sm">
+          <div className="flex items-center gap-2">
+            {/* An id'd `<label>` plus `labelledBy`, not a wrapping one left to itself —
+                `CollectionPreview.tsx`'s own two carry the same pair, for the same reason: a
+                `<label>` does reach a `<button>`'s accessible name the same way it reaches a
+                `<select>`'s, `<button>` being labelable too, so `labelledBy` is not what makes
+                the connection. It states the name from this text outright rather than leaving it
+                to an association a later refactor could break, and `htmlFor` keeps a click on the
+                words opening the dropdown. */}
+            <label id="wishlist-import-finish-label" htmlFor="wishlist-import-finish">
+              Default finish
+            </label>
+            <Dropdown
+              id="wishlist-import-finish"
+              labelledBy="wishlist-import-finish-label"
+              size="sm"
+              value={defaults.finish ?? ""}
+              onChange={(v) =>
+                setDefaults({ ...defaults, finish: v === "" ? null : (v as DeckFinish) })
+              }
+              options={finishOptions}
+              className="bg-surface"
+            />
+          </div>
+        </div>
+
+        <ModeRadios
+          modes={WISHLIST_MODES}
+          value={mode}
+          onChange={setMode}
+          label="How to apply this file"
+        />
+
+        <ImportProblems
+          unmatched={plan.unmatched}
+          hintMisses={plan.hintMisses}
+          parseIssues={plan.parseIssues}
+        />
+      </div>
+
+      <CommitBar
+        label="Import"
+        pendingLabel="Importing…"
+        pending={commit.isPending}
+        disabled={plan.items.length === 0}
+        message={
+          commit.error === null ? "" : `Couldn't import the list — ${ipcError(commit.error)}`
+        }
+        failed={commit.error !== null}
+        onBack={onBack}
+      />
+    </form>
+  );
+}
+
+/** `1 card`, `3,000 cards` — the collection preview's own helper, kept local for the reason
+ *  `printingOf` is: one line is not worth an import across destinations. */
+function cards(n: number): string {
+  return `${count(n)} ${n === 1 ? "card" : "cards"}`;
+}
+
+export const wishlistDestination: ImportDestination = {
+  key: "wishlist",
+  label: "your wishlist",
+  Preview: WishlistPreview,
+};

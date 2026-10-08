@@ -70,13 +70,13 @@ export function relayAddress() {
 
 /** `wrangler.js`, or a sentence saying how to provide one. */
 function wranglerScript() {
-  const beside = join(ROOT, "app-worker/node_modules/wrangler/bin/wrangler.js");
+  const beside = join(ROOT, "infrastructure/app-worker/node_modules/wrangler/bin/wrangler.js");
   if (existsSync(beside)) return beside;
   const named = process.env.WRANGLER;
   if (named && existsSync(named)) return named;
   return fail(
     "no wrangler to run the relay with. Install app-worker's own " +
-      "(`npm ci --ignore-scripts --prefix app-worker`), " +
+      "(`npm ci --ignore-scripts --prefix infrastructure/app-worker`), " +
       "or set WRANGLER to a wrangler.js — for example the one `npx wrangler` keeps in npm's cache.",
   );
 }
@@ -124,20 +124,20 @@ function stopTree(child) {
  * wrangler's own process id, which workerd is a child of, and the port its DevTools inspector
  * listens on.
  *
- * **The state directory is under `relay/.wrangler/` and is named relatively.** wrangler 4.146 on
+ * **The state directory is under `infrastructure/relay/.wrangler/` and is named relatively.** wrangler 4.146 on
  * Windows turns an absolute `--persist-to` into `./C:\…` and its D1 then answers "internal
  * error" (measured 2026-10-04); a relative path works on every host. `.wrangler/` is ignored by
  * git everywhere, and the directory is removed when the run ends.
  */
 export async function startRelay(pageOrigin) {
   const script = wranglerScript();
-  const config = "relay/wrangler.jsonc";
-  const persist = `relay/.wrangler/sync-smoke-${process.pid}`;
+  const config = "infrastructure/relay/wrangler.jsonc";
+  const persist = `infrastructure/relay/.wrangler/sync-smoke-${process.pid}`;
   const env = { ...process.env, WRANGLER_SEND_METRICS: "false", NO_COLOR: "1", FORCE_COLOR: "0" };
   // What wrangler keeps beside the Worker while it runs: the bundle it built, in `tmp/`. A
   // wrangler told to stop removes its own; one stopped as Windows stops a process tree does
   // not, so whatever is there afterwards that was not there before is this run's, and goes.
-  const scratch = join(ROOT, "relay/.wrangler/tmp");
+  const scratch = join(ROOT, "infrastructure/relay/.wrangler/tmp");
   const before = new Set(existsSync(scratch) ? readdirSync(scratch) : []);
   const mine = () => [
     join(ROOT, persist),
@@ -178,7 +178,7 @@ export async function startRelay(pageOrigin) {
     if (ran.status !== 0) fail(`seeding the local D1 failed:\n${ran.stdout}\n${ran.stderr}`);
   };
   // `schema.sql` is for a database that has never been migrated, which this one is.
-  d1("--file", "relay/schema.sql");
+  d1("--file", "infrastructure/relay/schema.sql");
   const now = Date.now();
   // Two memberships, a claim code each: the group a run syncs through, and one a device can
   // found for itself.

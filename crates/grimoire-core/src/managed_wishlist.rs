@@ -33,7 +33,7 @@
 //! ## Derived per device, never synced
 //!
 //! The mode syncs — it is the reader's answer about a deck. The folder and its wishes do not:
-//! they are a function of `deck_cards`, which syncs, and `src-tauri/CLAUDE.md`'s rule is that a
+//! they are a function of `deck_cards`, which syncs, and `apps/desktop/src-tauri/CLAUDE.md`'s rule is that a
 //! write every device derives for itself must not be captured. Captured, two devices would each
 //! insert the same wish under two `sync_uid`s and the grain's upsert would sum them. So every
 //! write here runs inside [`crate::sync_engine::capture::suppressed`], and

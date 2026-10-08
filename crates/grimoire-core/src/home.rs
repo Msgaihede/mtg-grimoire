@@ -164,7 +164,7 @@ const NO_KIND: &str = "A widget needs a kind, and this layout has one without.";
 /// shape for the same reason. [`default_layout`] is what turns it into the document, and gives
 /// every entry the `span` [`legacy_span`] reads off its `w`.
 ///
-/// ⚠️ **This and `src/features/home/widgets.ts`'s `DEFAULT_LAYOUT` are one fact written in two
+/// ⚠️ **This and `packages/ui/features/home/widgets.ts`'s `DEFAULT_LAYOUT` are one fact written in two
 /// places, and this one is what a first launch actually gets** — [`stored`] answers it for a
 /// missing row long before the webview has loaded that file. Changing one means changing the
 /// other, id for id, kind for kind, cell for cell and in the same order;
@@ -416,7 +416,7 @@ mod tests {
         assert_eq!(back.widgets.len(), DEFAULT_WIDGET_COUNT);
     }
 
-    /// ⚠️ **The literal below is `src/features/home/widgets.ts`'s `DEFAULT_LAYOUT`, transcribed** —
+    /// ⚠️ **The literal below is `packages/ui/features/home/widgets.ts`'s `DEFAULT_LAYOUT`, transcribed** —
     /// as JSON, because the webview compares the document and not the Rust table. The two are one
     /// fact in two places and this one is what a first launch gets, so if this goes red the
     /// question is which of the two moved, not how to make the assertion pass.
@@ -515,7 +515,7 @@ mod tests {
     ///
     /// So an allow-list, a `match` on `kind` or an enum added to this module goes red here
     /// whichever side it is added on, which is what `docs/reference/home-page.md` §1 promises and
-    /// what `src/features/home/widgets.ts` is the other half of.
+    /// what `packages/ui/features/home/widgets.ts` is the other half of.
     #[test]
     fn a_kind_this_build_can_draw_reaches_no_vocabulary_in_this_module() {
         let c = conn();

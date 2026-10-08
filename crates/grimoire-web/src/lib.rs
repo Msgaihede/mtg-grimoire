@@ -1,7 +1,7 @@
 //! **The light app's web host** — the light-app spec §6, phase 5.
 //!
 //! `grimoire-core` compiled to WASM and loaded by one dedicated Worker, with the page talking
-//! to it through the `Core` seam (`src/lib/core`). It holds almost nothing of its own:
+//! to it through the `Core` seam (`packages/ui/lib/core`). It holds almost nothing of its own:
 //!
 //! - **`open(directory)`** — the OPFS pool, the two databases on one connection, the state;
 //! - **`call(name, args, body?)`** — every command, forwarded to `grimoire_core::dispatch`, so

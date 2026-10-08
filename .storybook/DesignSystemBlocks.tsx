@@ -34,7 +34,7 @@ import { RarityGem } from "@/components/RarityGem";
  *
  * The class is the app's own and is what a reader should copy; the inline value is the same
  * token read through `var()`, and it is what keeps a specimen on the app's ground even if this
- * directory were ever to fall out of the `@source` list in `src/index.css`.
+ * directory were ever to fall out of the `@source` list in `packages/ui/index.css`.
  */
 const GROUND = { background: "var(--color-bg)", color: "var(--color-text)" };
 const HAIRLINE = { borderColor: "var(--color-border)" };
@@ -72,12 +72,12 @@ interface ColorToken {
 /**
  * Every `--color-*` custom property the running stylesheet declares on `:root`.
  *
- * Walked out of `document.styleSheets` rather than listed, so a token added to `src/index.css`
+ * Walked out of `document.styleSheets` rather than listed, so a token added to `packages/ui/index.css`
  * shows up on this page without this file being edited. A hand-kept list is a second source of
  * truth that goes stale without anything failing, which is the whole failure this page exists
  * to avoid.
  *
- * The `@theme inline` block at the top of `src/index.css` is deliberately unrepresented:
+ * The `@theme inline` block at the top of `packages/ui/index.css` is deliberately unrepresented:
  * `inline` means Tailwind substitutes those values into the utilities instead of emitting a
  * custom property, so there is nothing on `:root` to read. Their targets — `--background`,
  * `--accent` and the rest of the shadcn names — live in the `:root` block, and every one of
@@ -124,7 +124,7 @@ function readColorTokens(): ColorToken[] {
 /**
  * Reading order inside a group, for the groups where order carries meaning.
  *
- * WUBRG is not a preference — it is the order the symbols are printed in (`src/lib/mana.ts`,
+ * WUBRG is not a preference — it is the order the symbols are printed in (`packages/ui/lib/mana.ts`,
  * line 20) — and a rarity ladder sorted alphabetically would run common, mythic, rare,
  * uncommon. Only the *order* is written down: a suffix this list does not know sorts to the end
  * of its group rather than vanishing from the page, because membership is still the live walk's
@@ -343,7 +343,7 @@ export function TypeSpecimen({
  * The live name beside the retired one.
  *
  * The retired class is assembled from two pieces rather than written out, exactly as
- * `src/lib/tokens.test.ts` does it: `src/index.css` lists `../.storybook` as a Tailwind source,
+ * `packages/ui/lib/tokens.test.ts` does it: `packages/ui/index.css` lists `../.storybook` as a Tailwind source,
  * so spelling it here would emit a live rule for it into the shipped app CSS. Documentation
  * must be free to name a class without shipping it.
  */

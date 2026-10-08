@@ -143,7 +143,7 @@ pub struct SyncStatus {
 /// produces them.
 ///
 /// Mirrored by hand on the other side of the IPC boundary — `SyncPhase` in
-/// `src/lib/ipc.ts`, and `PHASE_LABEL` in `src/lib/useSyncProgress.ts`, which must have an
+/// `packages/ui/lib/ipc.ts`, and `PHASE_LABEL` in `packages/ui/lib/useSyncProgress.ts`, which must have an
 /// entry for each or the mana line renders `undefined`. Pinned here by
 /// `the_progress_phases_are_the_ones_the_frontend_mirrors` and there by
 /// `useSyncProgress.test.ts`.

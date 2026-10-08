@@ -26,9 +26,9 @@ permissions:
 jobs:
   # Which jobs this change can possibly have broken. The decision is `scripts/ci-route.mjs`,
   # where every arm carries its reason; this job only finds the changed paths and hands them
-  # over. **The two halves do read each other's files** — frontend tests read `src-tauri/` and
-  # `crates/` sources as text, Rust tests read `src/lib/userTables.json`,
-  # `src/lib/syncedTables.json` and the transfer golden — so a crossing routes to both, and
+  # over. **The two halves do read each other's files** — frontend tests read `apps/desktop/src-tauri/` and
+  # `crates/` sources as text, Rust tests read `packages/ui/lib/userTables.json`,
+  # `packages/ui/lib/syncedTables.json` and the transfer golden — so a crossing routes to both, and
   # `scripts/ci-route.test.mjs` derives that census from the sources and fails when a crossing
   # routes to only one side.
   #
@@ -84,7 +84,7 @@ jobs:
             flags=$(node scripts/ci-route.mjs --all)
           else
             # `--no-renames` is load-bearing: with rename detection on (the default since
-            # git 2.9) a file moved out of `src/` into `src-tauri/` is reported as the
+            # git 2.9) a file moved out of `packages/ui/` into `apps/desktop/src-tauri/` is reported as the
             # destination path *only*, so the frontend job would skip a change that just
             # deleted one of its own files — a dangling import `tsc` would have caught.
             # Measured against a fixture repo: the move reports one path with detection on
@@ -168,7 +168,7 @@ jobs:
         if: ${{ matrix.shard }}
         run: npm run test:run -- --shard=${{ matrix.shard }}
 
-  # The only gate the `.mdx` catalogue page has. Stories are `.tsx` under `src/`, so `tsc` and
+  # The only gate the `.mdx` catalogue page has. Stories are `.tsx` under `packages/ui/`, so `tsc` and
   # ESLint already see them; `.storybook/DesignSystem.mdx` is seen by neither — `tsc` reads only
   # `.ts`/`.tsx`, and `eslint` reports "File ignored because no matching configuration was
   # supplied". It covers more than MDX: the Storybook build is also what compiles
@@ -176,8 +176,8 @@ jobs:
   #
   # **A job of its own since issue #559**, where it was the last step of `frontend` and a serial
   # minute or two on the critical path. It has its own `changes` output because it reads less
-  # than `frontend` does: no `src-tauri/` or `crates/` file (the fake's parity with
-  # `generate_handler!` is a vitest test, `.storybook/fake/parity.test.ts`, and runs in
+  # than `frontend` does: no `apps/desktop/src-tauri/` or `crates/` file (the fake's parity with
+  # `generate_handler!` is a vitest test, `packages/fake/parity.test.ts`, and runs in
   # `frontend`), and no `scripts/`. A job gated on a `changes` output belongs in every list of
   # jobs — `JOBS`, the classify check, `changes.outputs`, and `ci-ok`'s `needs` and loop.
   storybook:
@@ -229,37 +229,37 @@ jobs:
             libayatana-appindicator3-dev \
             librsvg2-dev
 
-      # tauri-build reads `frontendDist: "../dist"` and fails outright when the directory
+      # tauri-build reads `frontendDist: "../dist"` (`apps/desktop/dist`) and fails outright when the directory
       # is absent, so a Rust-only job cannot compile a fresh checkout. A stub keeps this
       # job parallel with `frontend` instead of serialized behind a full Vite build;
       # nothing under test reads it. It is also why this job is safe to run alone: the
       # frontend it "needs" is one file it writes itself.
       #
       # **Two bundles since the light app's Android host joined the workspace** (2026-10-03):
-      # `mobile/src-tauri` reads `frontendDist: "../../dist-mobile"` the same way.
+      # `apps/light/src-tauri` reads `frontendDist: "../dist-mobile"` (`apps/light/dist-mobile`) the same way.
       - name: Stub the frontend bundle
         shell: bash
         run: |
-          mkdir -p dist dist-mobile
-          echo '<!doctype html><title>ci stub</title>' > dist/index.html
-          echo '<!doctype html><title>ci stub</title>' > dist-mobile/index.html
+          mkdir -p apps/desktop/dist apps/light/dist-mobile
+          echo '<!doctype html><title>ci stub</title>' > apps/desktop/dist/index.html
+          echo '<!doctype html><title>ci stub</title>' > apps/light/dist-mobile/index.html
 
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
       - uses: ./.github/actions/rust-toolchain
 
       # The cargo workspace is rooted at the repository since 2026-10-02 and still builds into
-      # `src-tauri/target` — `.cargo/config.toml` pins it there — so the cache is told both
+      # `target` — `.cargo/config.toml` pins it there — so the cache is told both
       # halves: where the lockfile is, and where the artifacts are.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ". -> src-tauri/target"
+          workspaces: ". -> target"
 
       # Formatting has no platform split, so it runs once. Lints do: the source has
       # cfg-gated Windows paths that a Linux-only clippy pass never compiles.
       #
       # **All three run from the repository root, over every workspace member** (2026-10-02):
-      # the app in `src-tauri`, the engine in `crates/grimoire-core`, the light app's Android
-      # host in `mobile/src-tauri`, its web host in `crates/grimoire-web` and the browser's
+      # the app in `apps/desktop/src-tauri`, the engine in `crates/grimoire-core`, the light app's Android
+      # host in `apps/light/src-tauri`, its web host in `crates/grimoire-web` and the browser's
       # scanner in `crates/grimoire-scan`. This is the only job that runs the core's tests, and
       # the only one that compiles it for Windows — `core` below builds it for the other two
       # targets and runs nothing.
@@ -276,7 +276,7 @@ jobs:
         run: cargo clippy --workspace --all-targets --locked -- -D warnings
 
       # **The host as it ships, which nothing else in this job compiles** (2026-10-02). The
-      # step above and the one below both build test targets, and `src-tauri` asks for
+      # step above and the one below both build test targets, and `apps/desktop/src-tauri` asks for
       # `grimoire-core`'s `testing` feature under `[dev-dependencies]` — so in both, the
       # core's test scaffolding is switched on for the app's ordinary library too, and a
       # non-test use of `schema::memory_pair` or `scratch::path` would pass them and first
@@ -355,7 +355,7 @@ jobs:
       #
       # **`--target-dir` on every line, since the workspace** (2026-10-02). Cargo reads its config
       # from the working directory, never from `--manifest-path`, so run from the repository
-      # root these would follow `.cargo/config.toml` into `src-tauri/target` — the app's tree,
+      # root these would follow `.cargo/config.toml` into `target` — the workspace's tree,
       # and the one the cache above saves. The flag keeps this package building where it always
       # has; `crates/card-scanner/.cargo/config.toml` says the same to a run started inside it.
       #
@@ -439,8 +439,8 @@ jobs:
       # clang on `PATH` (or `cc-rs` reports `failed to find tool "clang"` while compiling
       # `libsqlite3-sys`), and an explicit linker (or `rustc` reports ``linker `cc` not found``).
       #
-      # **API 26 is the light host's `minSdkVersion`** (`mobile/src-tauri/tauri.conf.json`, held
-      # by `mobile/host.test.ts`): the first attempt's level, carried over and settled with the
+      # **API 26 is the light host's `minSdkVersion`** (`apps/light/src-tauri/tauri.conf.json`, held
+      # by `apps/light/host.test.ts`): the first attempt's level, carried over and settled with the
       # host in phase 4. This linker name moves with it.
       - name: Point cargo at the NDK toolchain
         if: matrix.target == 'aarch64-linux-android'
@@ -464,7 +464,7 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ". -> src-tauri/target"
+          workspaces: ". -> target"
           # A key per target: neither leg's artifacts are any use to the other or to the host
           # build, and one cache would thrash between them.
           key: core-${{ matrix.target }}
@@ -491,7 +491,7 @@ jobs:
 
   # **The light app's Android host, built into an APK** (phase 4, 2026-10-03). The `core` job
   # proves the engine *compiles* for `aarch64-linux-android`; this one links the host
-  # (`mobile/src-tauri`) for it, packs the light bundle and the `.so` into an APK through the
+  # (`apps/light/src-tauri`) for it, packs the light bundle and the `.so` into an APK through the
   # committed `gen/android` Gradle project, and reports its size — the first APK this repository
   # has produced. **It is the Android toolchain Markus's machine does not have yet**: the
   # session that built the host could not reach `dl.google.com`, and the Ubuntu runner ships the
@@ -549,23 +549,23 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ". -> src-tauri/target"
+          workspaces: ". -> target"
           key: android-aarch64
 
-      # From `mobile/`, so the CLI finds `mobile/src-tauri/tauri.conf.json` — from the repository
+      # From `apps/light/`, so the CLI finds `apps/light/src-tauri/tauri.conf.json` — from the repository
       # root it finds the desktop's. `beforeBuildCommand` builds the light bundle into
-      # `dist-mobile/` first. **One command, two outputs**: the APK, which is what installs on
+      # `apps/light/dist-mobile/` first. **One command, two outputs**: the APK, which is what installs on
       # a phone from this job's artifact, and the Android App Bundle, which is what Google Play
       # takes and what a release signs. `release.yml`'s `android` job runs this same line.
       - name: Build the APK and the bundle
-        working-directory: mobile
+        working-directory: apps/light
         run: npx tauri android build --apk --aab --target aarch64 --ci
 
       - name: Report the APK
         shell: bash
         run: |
           set -euo pipefail
-          apk=$(find mobile/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          apk=$(find apps/light/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
           [ -n "$apk" ] || { echo "the build produced no APK" >&2; exit 1; }
           bytes=$(stat -c %s "$apk")
           so=$(unzip -l "$apk" | awk '/lib\/arm64-v8a\/.*\.so$/ {print $1}' | head -1)
@@ -586,9 +586,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          VERSION=$(node -p "require('./mobile/src-tauri/tauri.conf.json').version")
+          VERSION=$(node -p "require('./apps/light/src-tauri/tauri.conf.json').version")
           bash scripts/android-release/check-version.sh "$VERSION"
-          aab=$(find mobile/src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' | head -1)
+          aab=$(find apps/light/src-tauri/gen/android/app/build/outputs/bundle -name '*.aab' | head -1)
           [ -n "$aab" ] || { echo "the build produced no bundle" >&2; exit 1; }
           bytes=$(stat -c %s "$aab")
           echo "bundle: $aab — $bytes bytes"
@@ -618,7 +618,7 @@ jobs:
   # **The light app's web host, built and opened in a browser** (phase 5, step 5.1). The `core`
   # job proves the engine *compiles* for `wasm32-unknown-unknown`; this one links the web host
   # (`crates/grimoire-web`) for it, runs `wasm-bindgen` over the result, bundles the light page
-  # around the module into `dist-web/`, serves that on `localhost` and has a headless Chrome
+  # around the module into `apps/light/dist-web/`, serves that on `localhost` and has a headless Chrome
   # load it — the first job here in which the engine runs anywhere but the runner's own triple.
   #
   # **What it proves is the smoke script's to say** (`scripts/web-smoke.mjs`): the module
@@ -674,7 +674,7 @@ jobs:
       # lockfile has not moved finds the CLI already there and `cargo install` has nothing to do.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ". -> src-tauri/target"
+          workspaces: ". -> target"
           key: web-wasm32
 
       # **The CLI's version is read from `Cargo.lock`, never typed here.** `wasm-bindgen` the
@@ -696,7 +696,7 @@ jobs:
       # is paid on a cold cache alone. No `--target-dir`: `cargo install` from a registry starts
       # its configuration at `$CARGO_HOME` and never reads this repository's
       # `.cargo/config.toml`, so the CLI builds in a temporary folder of cargo's own and not in
-      # `src-tauri/target`.
+      # `target`.
       - name: Install the wasm-bindgen CLI the lockfile resolves
         shell: bash
         run: |
@@ -739,7 +739,7 @@ jobs:
       - name: Clippy, the scanner's module for wasm32
         env:
           RUSTFLAGS: -C target-feature=+simd128
-        run: cargo clippy --lib -p grimoire-scan --locked --target wasm32-unknown-unknown --target-dir src-tauri/target/scanner-simd128 -- -D warnings
+        run: cargo clippy --lib -p grimoire-scan --locked --target wasm32-unknown-unknown --target-dir target/scanner-simd128 -- -D warnings
 
       # Both modules: `cargo build -p grimoire-web --lib --target wasm32-unknown-unknown
       # --profile wasm --locked` and the same for `grimoire-scan` with `simd128`, then
@@ -761,7 +761,7 @@ jobs:
         run: npm run scanner:assets -- --web
 
       # `tsc` over the page's program and the Worker's own, then the light entry in `web` mode
-      # into `dist-web/`, with the engine from `dist-wasm/` emitted under `dist-web/wasm/` in a
+      # into `apps/light/dist-web/`, with the engine from `dist-wasm/` emitted under `apps/light/dist-web/wasm/` in a
       # directory named for its build — which is why the module is built first: the config fails
       # a build whose engine is not there.
       - name: Build the page
@@ -778,26 +778,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mapfile -t modules < <(find dist-web -type f -name '*.wasm' | sort)
+          mapfile -t modules < <(find apps/light/dist-web -type f -name '*.wasm' | sort)
           if [ "${#modules[@]}" -eq 0 ]; then
-            echo "dist-web/ holds no .wasm, so the page has no engine to load" >&2
+            echo "apps/light/dist-web/ holds no .wasm, so the page has no engine to load" >&2
             exit 1
           fi
           mib() { awk "BEGIN {printf \"%.2f\", $1 / 1048576}"; }
-          total=$(du -sb dist-web | cut -f1)
-          files=$(find dist-web -type f | wc -l)
+          total=$(du -sb apps/light/dist-web | cut -f1)
+          files=$(find apps/light/dist-web -type f | wc -l)
           {
-            echo "### Light app, web build (\`dist-web/\`)"
+            echo "### Light app, web build (\`apps/light/dist-web/\`)"
             echo
             echo "| | bytes | MiB |"
             echo "| --- | ---: | ---: |"
             for module in "${modules[@]}"; do
               bytes=$(stat -c %s "$module")
               gz=$(gzip -9 -c "$module" | wc -c)
-              echo "| \`${module#dist-web/}\` | $bytes | $(mib "$bytes") |"
-              echo "| \`${module#dist-web/}\`, gzip -9 | $gz | $(mib "$gz") |"
+              echo "| \`${module#apps/light/dist-web/}\` | $bytes | $(mib "$bytes") |"
+              echo "| \`${module#apps/light/dist-web/}\`, gzip -9 | $gz | $(mib "$gz") |"
             done
-            echo "| \`dist-web/\`, $files files | $total | $(mib "$total") |"
+            echo "| \`apps/light/dist-web/\`, $files files | $total | $(mib "$total") |"
           } | tee -a "$GITHUB_STEP_SUMMARY"
 
       # **The image's own Google Chrome, by path**, handed to the smoke script as `CHROME`.
@@ -826,7 +826,7 @@ jobs:
             echo "The smoke test's browser: **$version** (\`$chrome\`, headless) on \`$RUNNER_OS\` \`${ImageOS:-?}\`."
           } >> "$GITHUB_STEP_SUMMARY"
 
-      # Serves `dist-web/` on `localhost` — a secure context, which OPFS and a module Worker
+      # Serves `apps/light/dist-web/` on `localhost` — a secure context, which OPFS and a module Worker
       # both ask for — opens it over CDP in the Chrome found above (`CHROME`, from the step's
       # `GITHUB_ENV` line) and checks the engine opened its database. **Bounded**, because the
       # failure this guards is a page that waits for ever, and a job has six hours to do it in.
@@ -859,26 +859,26 @@ jobs:
         run: npm run web:scanner-smoke
 
       # **Live sync, two browsers and the relay's own code** (phase 6, step 6.3):
-      # `scripts/web-sync-smoke.mjs` starts `relay/` under workerd (`wrangler dev --local`, a
+      # `scripts/web-sync-smoke.mjs` starts `infrastructure/relay/` under workerd (`wrangler dev --local`, a
       # local D1, a throwaway signing key handed over with `--var`), opens the same bundle in two
       # Chrome profiles that resolve the relay's real name to it, and walks a claim, a pairing and
       # a write on each device arriving on the other with nothing pressed — under the shipped
       # policy, so a `connect-src` that lost the relay's `wss://` source is red here.
       #
       # **The run needs wrangler, and wrangler is not one of the root package's dependencies.**
-      # It is installed from `app-worker/`'s own lockfile — the one tool that directory pins, at
+      # It is installed from `infrastructure/app-worker/`'s own lockfile — the one tool that directory pins, at
       # one exact version with every integrity hash, since the release rule's step (6.6) — and
       # with `--ignore-scripts`, as the deploy installs it: no dependency's lifecycle script runs
       # on the runner. Never `npx wrangler@…` here: that is a version nobody pinned, fetched at
       # run time. Nothing in either step reaches Cloudflare — no account, no token, no secret in
-      # the job, `--local` throughout; the script looks for wrangler under `app-worker/` and
+      # the job, `--local` throughout; the script looks for wrangler under `infrastructure/app-worker/` and
       # stops in a sentence when it is not there.
       #
       # ⚠️ **Written on Windows and first run on a runner by the pull request that added it**:
       # whether wrangler's self-signed TLS, workerd and two Chromes fit a runner is that run's to
       # say. **Bounded**, for the first smoke's reason.
       - name: Install wrangler from app-worker's lockfile
-        run: npm ci --ignore-scripts --prefix app-worker
+        run: npm ci --ignore-scripts --prefix infrastructure/app-worker
 
       - name: Pair two browsers through the local relay
         timeout-minutes: 10
@@ -891,7 +891,7 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         with:
           name: mtg-grimoire-web
-          path: dist-web/
+          path: apps/light/dist-web/
           retention-days: 14
           if-no-files-found: error
 

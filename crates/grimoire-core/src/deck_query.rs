@@ -3,7 +3,7 @@
 //!
 //! The box reads the same Scryfall-and-app syntax as every other card search box (`t:goblin`,
 //! `cmc>=3`, `-kw:flying`, `otag:removal`, `f:modern`), parsed by
-//! `src/features/search/queryLanguage.ts` into [`crate::filters::QueryPredicate`]s and resolved
+//! `packages/ui/features/search/queryLanguage.ts` into [`crate::filters::QueryPredicate`]s and resolved
 //! tag slugs. **Nothing here re-implements a single one of those terms**: the typed ones ride
 //! [`crate::filters::fts_match`] and [`crate::filters::push_card_filters`], the two functions the
 //! search, the collection and the wishlist already call, so `t:goblin` narrows a deck exactly as

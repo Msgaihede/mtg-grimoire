@@ -26,7 +26,8 @@ Also supports a light app (Android via Tauri, distributed through Google Play, a
 
 ### Reference Docs
 
-- [`docs/reference/README.md`](docs/reference/README.md) — Index of all 35 reference deep-dives, live measurements, and design rationale documents.
+- [`docs/reference/README.md`](docs/reference/README.md) — Index of all 36 reference deep-dives, live measurements, and design rationale documents.
+- [`docs/reference/repository-layout.md`](docs/reference/repository-layout.md) — The four code folders (`apps/`, `packages/`, `crates/`, `infrastructure/`), build outputs, and where every path was before 2026-10-08.
 
 ---
 
@@ -35,7 +36,7 @@ Also supports a light app (Android via Tauri, distributed through Google Play, a
 - `npm run verify` — Build + lint + `cargo fmt --check` + Clippy + Vitest + cargo test. **Run at the end of a feature before committing (not after every change).**
 - `npm run tauri dev` — Run the desktop app (Vite HMR + Rust rebuild). Takes the `app` lock (see `running-the-app` skill).
 - `npm run test` / `test:run` — Run frontend tests via Vitest.
-- `cargo test --workspace` — Run Rust tests across all crates (`src-tauri`, `crates/grimoire-core`, `mobile/src-tauri`, `crates/grimoire-web`, `crates/grimoire-scan`).
+- `cargo test --workspace` — Run Rust tests across all crates (`apps/desktop/src-tauri`, `crates/grimoire-core`, `apps/light/src-tauri`, `crates/grimoire-web`, `crates/grimoire-scan`).
 - `npm run storybook` / `build-storybook` — Component development workbench (`.storybook/`).
 - `npm run mobile:dev` / `mobile:tauri` — Run the light app in a browser fake or in a phone-sized Tauri window.
 - `npm run web:wasm` / `web:build` / `web:preview` — Build and preview the WASM web target.
@@ -52,10 +53,10 @@ _For complete command options, coverage caveats, and environment flags, see [`do
   - Keep this boundary clean: do not leak UI assumptions into Rust or storage plumbing into TypeScript.
 - **Crate Boundary (window awareness)**:
   - `crates/grimoire-core` is the engine with no window dependency. It contains schemas, database migrations, decks, collection, wishlist, search, and Scryfall clients. Compiles to native and WASM.
-  - `src-tauri` is the desktop application: windows, menus, native updater, IPC commands (`#[tauri::command]`), and filesystem mirror.
+  - `apps/desktop/src-tauri` is the desktop application: windows, menus, native updater, IPC commands (`#[tauri::command]`), and filesystem mirror.
 - **IPC Type Mirroring**:
-  - `src/lib/ipc.ts` is the hand-written TypeScript mirror of Rust structs.
-  - `src/lib/ipc.test.ts` asserts byte/field parity against the Rust source text to prevent schema drift.
+  - `packages/ui/lib/ipc.ts` is the hand-written TypeScript mirror of Rust structs.
+  - `packages/ui/lib/ipc.test.ts` asserts byte/field parity against the Rust source text to prevent schema drift.
 
 _For full architecture details and golden export fences, see [`docs/agent/ARCHITECTURE.md`](docs/agent/ARCHITECTURE.md)._
 
@@ -67,17 +68,17 @@ This file contains only global instructions. **The binding rules for any specifi
 
 | Area / File                                                          | Governs                                                                                                     |
 | -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| [`src-tauri/CLAUDE.md`](src-tauri/CLAUDE.md)                         | Desktop Rust host, window management, updater, desktop migrations, and `#[tauri::command]` IPC handlers     |
+| [`apps/desktop/src-tauri/CLAUDE.md`](apps/desktop/src-tauri/CLAUDE.md)                         | Desktop Rust host, window management, updater, desktop migrations, and `#[tauri::command]` IPC handlers     |
 | [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md)   | Shared headless engine (schema, decks, collection, wishlist, search, Scryfall client, platform abstraction) |
 | [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md)     | Web host — engine compiled to WASM module for browser execution                                             |
 | [`crates/grimoire-scan/CLAUDE.md`](crates/grimoire-scan/CLAUDE.md)   | Web host's scanner — `card-scanner` as a WASM module of its own, for a Worker of its own                    |
-| [`mobile/CLAUDE.md`](mobile/CLAUDE.md)                               | Light app — Android and web UI faces and responsive boundary                                                |
-| [`src/CLAUDE.md`](src/CLAUDE.md)                                     | React frontend, design tokens, `CardImage` rules, Storybook MCP usage                                       |
-| [`src/features/decks/CLAUDE.md`](src/features/decks/CLAUDE.md)       | Deck validation, categories, deck editor views, and drag-and-drop interactions                              |
-| [`src/features/transfer/CLAUDE.md`](src/features/transfer/CLAUDE.md) | Decklist import and export parsing, planning, and dialogs                                                   |
-| [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md)                       | Storybook workbench, mock database (`fake/db.ts`), seed fixtures, and fault simulation                      |
+| [`apps/light/CLAUDE.md`](apps/light/CLAUDE.md)                               | Light app — Android and web UI faces and responsive boundary                                                |
+| [`packages/ui/CLAUDE.md`](packages/ui/CLAUDE.md)                                     | React frontend, design tokens, `CardImage` rules, Storybook MCP usage                                       |
+| [`packages/ui/features/decks/CLAUDE.md`](packages/ui/features/decks/CLAUDE.md)       | Deck validation, categories, deck editor views, and drag-and-drop interactions                              |
+| [`packages/ui/features/transfer/CLAUDE.md`](packages/ui/features/transfer/CLAUDE.md) | Decklist import and export parsing, planning, and dialogs                                                   |
+| [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md)                       | Storybook workbench, mock database (`packages/fake/db.ts`), seed fixtures, and fault simulation                      |
 | [`.github/CLAUDE.md`](.github/CLAUDE.md)                             | CI workflows, path routers, and release-please configuration                                                |
-| [`app-worker/README.md`](app-worker/README.md)                       | Web app Cloudflare Worker hosting, headers, and deploy runbook                                              |
+| [`infrastructure/app-worker/README.md`](infrastructure/app-worker/README.md)                       | Web app Cloudflare Worker hosting, headers, and deploy runbook                                              |
 
 ---
 
@@ -98,7 +99,7 @@ Worktree and deployment workflows are managed by skills in `.claude/skills/`:
 - **Narrowest permissions**: When declaring Tauri plugin permissions, always request the narrowest required capability, never `:default`.
 - **`data/` is strictly local**: Never commit SQLite databases or test artifacts in `data/`. When seeding fixtures in tests, seed only user tables, never `cards` or `sync_meta`.
 - **Worker secrets are never committed**: Secrets (`PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET`, `RELAY_HMAC_KEY`) belong solely in Cloudflare Secret storage, never in repository files or `.dev.vars`.
-- **Deployments require explicit instruction**: No agent may deploy a Worker without explicit instruction from the user, and exactly one CI job deploys one: `release.yml`'s `web-deploy` puts the web app (`app-worker/`) on its origin at a release tag (the owner's decision, 2026-10-04 — the three hosts ship from one tag). So **merging the release PR is a deploy of the web app**, and an agent merges it only when asked to. The relay and the share Worker are deployed by no job; nothing else deploys without his ask.
+- **Deployments require explicit instruction**: No agent may deploy a Worker without explicit instruction from the user, and exactly one CI job deploys one: `release.yml`'s `web-deploy` puts the web app (`infrastructure/app-worker/`) on its origin at a release tag (the owner's decision, 2026-10-04 — the three hosts ship from one tag). So **merging the release PR is a deploy of the web app**, and an agent merges it only when asked to. The relay and the share Worker are deployed by no job; nothing else deploys without his ask.
 - **Domain vocabulary precision**: Strictly distinguish between Scryfall tags, user deck labels, card keyword abilities, and note types. Refer to [`docs/agent/DOMAIN_VOCABULARY.md`](docs/agent/DOMAIN_VOCABULARY.md).
 - **Live UI verification**: Drive real WebView2 windows over CDP (`scripts/cdp.mjs`) when verifying UI changes; tests alone cannot detect webview-specific rendering glitches.
 

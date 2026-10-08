@@ -3,7 +3,7 @@
 //! **A marketplace is a label; the currency is the axis everything downstream turns on.** No
 //! price query in this crate branches on an id: `cards.prices` draws exactly one distinction,
 //! USD against EUR, and every price surface already carries both. So all this module owns is
-//! one string in `app_meta` — Rust stores the fact, `src/lib/marketplace.ts` draws the
+//! one string in `app_meta` — Rust stores the fact, `packages/ui/lib/marketplace.ts` draws the
 //! conclusions (label, currency, whether this build can quote a price there at all).
 //!
 //! Two rules shape it:
@@ -22,7 +22,7 @@ use rusqlite::Connection;
 
 /// Every marketplace id this build recognises, in the order the picker lists them.
 ///
-/// The mirror of `MARKETPLACE_IDS` in `src/lib/marketplace.ts`. Deliberately a flat list of
+/// The mirror of `MARKETPLACE_IDS` in `packages/ui/lib/marketplace.ts`. Deliberately a flat list of
 /// strings and not an enum with labels and currencies: those are TypeScript's, and the only
 /// question Rust has to answer about an id is whether it is one of these.
 ///

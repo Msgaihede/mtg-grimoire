@@ -16,11 +16,11 @@ Five pieces, and the bridge is dark if any one is missing:
 
 | Piece | Where | Why |
 | --- | --- | --- |
-| `tauri-plugin-mcp-bridge = "0.12"` | `src-tauri/Cargo.toml` | the server half |
-| `Builder::new().bind_address("127.0.0.1").build()` | `src-tauri/src/desktop.rs`, under `#[cfg(debug_assertions)]` | opens the port |
+| `tauri-plugin-mcp-bridge = "0.12"` | `apps/desktop/src-tauri/Cargo.toml` | the server half |
+| `Builder::new().bind_address("127.0.0.1").build()` | `apps/desktop/src-tauri/src/desktop.rs`, under `#[cfg(debug_assertions)]` | opens the port |
 | **`MTG_GRIMOIRE_MCP_BRIDGE=1`** | the environment `npm run tauri dev` is launched from | since 2026-09-28 the registration is also inside an `if` on it — see below |
-| `"withGlobalTauri": true` | `src-tauri/tauri.conf.json` | `bridge.js` reaches IPC through `window.__TAURI__` |
-| three `mcp-bridge:` permissions | `src-tauri/capabilities/desktop.json` | the ACL gates the webview's half |
+| `"withGlobalTauri": true` | `apps/desktop/src-tauri/tauri.conf.json` | `bridge.js` reaches IPC through `window.__TAURI__` |
+| three `mcp-bridge:` permissions | `apps/desktop/src-tauri/capabilities/desktop.json` | the ACL gates the webview's half |
 
 (This table named `capabilities/default.json` until 2026-09-28; the file is `desktop.json`.)
 
@@ -127,6 +127,6 @@ went through it came back in full, tens of kilobytes of it. Filter it.
 
 ## Where else this is written down
 
-`src-tauri/CLAUDE.md` carries the binding rules — the permission set, the bind address, the
+`apps/desktop/src-tauri/CLAUDE.md` carries the binding rules — the permission set, the bind address, the
 environment gate, and what keeps `withGlobalTauri` honest in a release build. The
 `running-the-app` skill's launch snippet sets the variable.

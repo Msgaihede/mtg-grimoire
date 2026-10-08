@@ -10,10 +10,13 @@
 # workspace"), so without a workspace the core would have needed its own `Cargo.lock` and its own
 # multi-gigabyte `target/` beside this one, and two lockfiles for one engine drift.
 #
-# **`target/` did not move.** A workspace's build tree is `<root>/target` by default, and
-# `.cargo/config.toml` pins it back to `src-tauri/target` — where every script, skill and
-# reference doc in this repository, and every checkout's dev database
-# (`src-tauri/target/debug/data`), already expects it. That file has the argument.
+# **The build tree is `<root>/target`**, cargo's default for a workspace, since 2026-10-08. Until
+# then `.cargo/config.toml` pinned it to `src-tauri/target` so that the workspace conversion moved
+# nothing; the layout change moved the desktop host to `apps/desktop/src-tauri` and the pin now
+# says `target`. The file restates cargo's default on purpose: a nested worktree with no file of
+# its own reads the main checkout's, and builds into that tree — `.cargo/config.toml` has the
+# argument. A debug build keeps `data/` beside its executable, so a checkout's dev database is
+# `target/debug/data`.
 #
 # **`crates/card-scanner` is excluded on purpose**, and the `exclude` is not optional: a path
 # dependency that lives under the workspace root becomes a member automatically. It stays a
@@ -31,13 +34,14 @@
 #   command there stops on `current package believes it's in a workspace when it's not`. The
 #   fix is merging `main`, which brings that worktree its own root manifest. A worktree parked
 #   on an older commit on purpose (a release tag, a bisect) needs an empty `[workspace]` table
-#   added to its `src-tauri/Cargo.toml` by hand.
+#   added to its desktop host's `Cargo.toml` (`src-tauri/` on such a commit) by hand.
 # - **`crates/card-scanner` carries an empty `[workspace]` table for the same reason**: excluded
 #   here, cargo would walk on up to the main checkout's manifest from inside any worktree.
 # - **Never add `.claude` to `exclude` to "fix" a stale worktree.** It makes one build again —
-#   into the *main checkout's* `src-tauri/target`, because `.cargo/config.toml` is found by the
-#   same upward walk — so its app opens the main checkout's dev database and two checkouts
-#   share one build tree. A loud refusal is the better failure.
+#   into the *main checkout's* `target`, because `.cargo/config.toml` is found by the same
+#   upward walk (a worktree whose branch carries its own file is spared) — so its app opens the main
+#   checkout's dev database and two checkouts share one build tree. A loud refusal is the
+#   better failure.
 [workspace]
 # Explicit, because a virtual manifest has no `edition` to imply it: without this line cargo
 # falls back to resolver 1, which unifies features across targets — and the core's WASM build
@@ -50,8 +54,17 @@ resolver = "2"
 # `cargo build -p grimoire-scan` resolves the features of its own graph, while any build that
 # names the workspace unifies them with the engine's, which asks the scanner for `corpus` and
 # with it SQLite. `scripts/build-wasm.mjs` builds it with `-p`, in a build tree of its own.
-members = ["src-tauri", "crates/grimoire-core", "mobile/src-tauri", "crates/grimoire-web", "crates/grimoire-scan"]
+members = ["apps/desktop/src-tauri", "crates/grimoire-core", "apps/light/src-tauri", "crates/grimoire-web", "crates/grimoire-scan"]
 exclude = ["crates/card-scanner"]
+
+# One version, edition and license for the five members, which inherit each with
+# `<key>.workspace = true` (since 2026-10-08). **The version is release-please's to write**:
+# `release-please-config.json` bumps `$.workspace.package.version` here, where it used to bump
+# five manifests (and the lockfile). `crates/card-scanner` is not a member and keeps its own.
+[workspace.package]
+version = "0.43.0"
+edition = "2021"
+license = "AGPL-3.0-or-later"
 
 # **The scanner's crates at full optimisation in a debug build.** The `image`/`imageproc`
 # overrides live in `crates/card-scanner/Cargo.toml` too, and there they do nothing for this

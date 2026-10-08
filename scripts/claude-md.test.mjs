@@ -13,11 +13,11 @@ describe("CLAUDE.md size budget gate", () => {
         "crates/grimoire-core/CLAUDE.md",
         "crates/grimoire-scan/CLAUDE.md",
         "crates/grimoire-web/CLAUDE.md",
-        "mobile/CLAUDE.md",
-        "src-tauri/CLAUDE.md",
-        "src/CLAUDE.md",
-        "src/features/decks/CLAUDE.md",
-        "src/features/transfer/CLAUDE.md",
+        "apps/light/CLAUDE.md",
+        "apps/desktop/src-tauri/CLAUDE.md",
+        "packages/ui/CLAUDE.md",
+        "packages/ui/features/decks/CLAUDE.md",
+        "packages/ui/features/transfer/CLAUDE.md",
       ]),
     );
   });

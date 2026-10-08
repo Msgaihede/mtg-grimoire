@@ -19,7 +19,7 @@
 //! this module has that its model does not. Reset in the Appearance panel has to leave the reader
 //! in the state they were in before they ever chose, and a default hex written into the row is a
 //! different state: it freezes today's palette into the database, which is exactly the cost
-//! `src/features/decks/labelColors.ts` records for a stored label colour. A cleared key means
+//! `packages/ui/features/decks/labelColors.ts` records for a stored label colour. A cleared key means
 //! "the stylesheet decides", forever.
 //!
 //! **A write preserves entries this build does not understand**, [`crate::listview`]'s rule

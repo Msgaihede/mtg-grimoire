@@ -1,0 +1,758 @@
+/**
+ * The one place a view learns what its groups are.
+ *
+ * Four views draw a deck — the stack, the table, the text columns and the grid — and every
+ * one of them takes `CardGroup[]` and renders it. Nothing below this line knows about a
+ * category, a bucket or a sort; nothing above it re-derives one. That is what keeps four
+ * surfaces from answering "how many cards are in the Ramp column" four ways.
+ *
+ * **The rule that governs the whole file**, and the one the spec is most explicit about:
+ * *the switch decides whether a pile counts at all; the kind decides only whether the pile
+ * is played beside the deck or in it.* So an inactive category is never bucketed into
+ * somebody else's curve — and a card in one is never hidden, because the affordance for
+ * switching the pile back on is seeing what is in it. Under `manaValue`, `type` and `label` the
+ * derived groups are built from the **active** cards only, and every **inactive category**
+ * holding cards is then appended as itself, unchanged, in `sortOrder`. `deck` is the same rule
+ * with one heading instead of many, and one more pile kept whole — see {@link buildGroups}.
+ *
+ * **The command zones are the one exception, and they are the second half of that same
+ * sentence** — {@link COMMAND_ZONE_KINDS}. A commander is not a card in the curve; it is the card
+ * the curve was built *around*, played from a zone of its own before the deck is drawn from, and
+ * a companion is that same claim made from outside the deck. So under `manaValue` and `type` the
+ * `commander` and `companion` piles are never bucketed either: they are appended as themselves,
+ * exactly as {@link categoryGroup} builds them, and everything else buckets around them.
+ *
+ * **And they head the list in all three modes — `category` included — commander first and
+ * companion second.** Where a pile sits is otherwise the reader's own `sortOrder`, and this is
+ * the one place that is overruled, because these two are what the rest of the deck is read
+ * *against* rather than another pile of it. The order is the game's, not the seed's: the reader
+ * asked for commander above companion explicitly, and it is stated once — by
+ * {@link COMMAND_ZONE_KINDS}' own order — rather than spelled again in a comparator that could
+ * come to disagree with it. **A switched-off command zone is not in that run at all**: it counts
+ * toward nothing, so it is not what anything is read against, and it stays exactly where it is
+ * today — in the inactive tail under a derived grouping, in `sortOrder` under `category`. **An
+ * empty one is {@link drawsWhenEmpty}'s question and nobody else's**; the head run reorders the
+ * piles that are drawn and never decides which those are.
+ *
+ * **A pile holding cards always draws; an empty one is a question about who made it** —
+ * {@link drawsWhenEmpty}, which is the whole of that rule. It reads two facts the pile carries,
+ * its `kind` and its `isAuto`, plus the one fact a pile cannot know about itself: whether the
+ * deck's format has a command zone ({@link EmptyGroupRules}). Switched off and empty are two
+ * different questions and this file keeps answering them separately: `isActive` decides whether
+ * a pile *counts*, the cards under it decide whether it is *drawn*.
+ *
+ * The one thing above this line that is the *reader's* to decide is `separateX`: whether a
+ * spell printing `{X}` is counted at the mana value Scryfall gives it or gathered into a pile
+ * of its own at the tail of the curve. It is a preference about how a curve reads and says
+ * nothing about what is in the deck — which is why it is a per-deck column
+ * (`decks.separate_x_group`) rather than anything the validation engine has heard of.
+ */
+import type { CategoryKind, DeckCard, DeckCategory } from "@/lib/ipc";
+import { hasVariableCost } from "@/lib/mana";
+import { compareLabels } from "@/lib/options";
+import {
+  autoCategoryDisplayOrder,
+  autoCategoryFor,
+  PREDEFINED_CATEGORY_NAMES,
+} from "./autoCategory";
+import { sortCards, type SortBy } from "./sorting";
+import { THEORY_TIER_NAMES, theoryTier, type TheoryPlan, type TheoryTier } from "./theoryMatch";
+import { splitRail } from "./views/columns";
+
+/**
+ * What the headings are. `category` is the reader's own piles; `manaValue`, `type` and `label`
+ * are **derived** headings built from the active cards; `deck` is one heading over the whole
+ * deck — see {@link buildGroups} for what each of the last two leaves out and why. `theory` is
+ * a derived mode too, bucketing each card by how it matches the deck's plan (issue #502), and it
+ * exists only where there is a plan to match: the Actual list of a Theory + Actual deck.
+ *
+ * The words are stored verbatim in `decks.last_group_by`, so a value is spelled once and never
+ * renamed: a stored word this build does not know reopens the editor on the default.
+ */
+export type GroupBy = "category" | "manaValue" | "type" | "label" | "deck" | "theory";
+
+/** The toolbar's Group by select, so the modes are named in one place. **The order here is not
+ *  the order they are offered in** — a picker sorts by label (`packages/ui/lib/options.ts`), so this
+ *  array is free to read in whatever order explains the modes and a new entry may be
+ *  appended without deciding where it appears. */
+export const GROUP_BY_OPTIONS: readonly { value: GroupBy; label: string }[] = [
+  { value: "category", label: "Categories" },
+  { value: "manaValue", label: "Mana value" },
+  { value: "type", label: "Type" },
+  { value: "label", label: "Labels" },
+  { value: "deck", label: "Full deck" },
+  { value: "theory", label: "Matches theory" },
+];
+
+/**
+ * Whether the `Matches theory` grouping means anything here: only on the **Actual** list of a deck
+ * that keeps a plan. On the Theory tab every row *is* the plan, and a deck with no plan has
+ * nothing to match against — so the picker leaves the row out, and a remembered `theory` draws
+ * as {@link DEFAULT_GROUP_BY} without being overwritten, so the grouping comes back with the tab.
+ */
+export function theoryGroupable(theoryEnabled: boolean, variant: string): boolean {
+  return theoryEnabled && variant === "live";
+}
+
+/** What a deck is grouped by until somebody says otherwise — the editor's initial state, and
+ *  what a stored value this build cannot draw falls back to. */
+export const DEFAULT_GROUP_BY: GroupBy = "category";
+
+/** Derived from {@link GROUP_BY_OPTIONS} rather than written out a second time: a fourth
+ *  grouping added to that array is offered *and* accepted from storage in one edit. */
+const GROUP_BY_VALUES: ReadonlySet<string> = new Set(GROUP_BY_OPTIONS.map((o) => o.value));
+
+/**
+ * A stored `Group by` as a mode this build actually has, or {@link DEFAULT_GROUP_BY}.
+ *
+ * `DeckRow.lastGroupBy` arrives as a `string` on purpose — the vocabulary is this module's and
+ * a database outlives the app, so a row written by a newer build, or one holding a word this
+ * build has since dropped, is a value the wire has to carry rather than reject. What it must
+ * **not** do is reach the toolbar: a select holding a value that is in none of its own options
+ * is a control the reader cannot see their way out of. So an unknown word degrades to the
+ * default and the editor draws a mode it can also leave.
+ */
+export function asGroupBy(value: string): GroupBy {
+  return GROUP_BY_VALUES.has(value) ? (value as GroupBy) : DEFAULT_GROUP_BY;
+}
+
+/**
+ * One heading and the cards under it.
+ *
+ * Two kinds of group wear this one shape, and `categoryId` is what tells them apart:
+ *
+ * * a **category** group *is* a pile of the deck. It has an id, so a card can be dropped
+ *   into it, its heading renamed and its switch flipped. Whether it draws with nothing under
+ *   it is {@link drawsWhenEmpty}'s answer and not this shape's — a pile the reader made is a
+ *   *place*, and the exceptions are about the deck's format and about who made the pile, never
+ *   about what happens to be in it.
+ * * a **derived** group is a heading and nothing more — `categoryId`, `kind` `null`. Nothing
+ *   can be dropped into "Mana value 3", and an empty one does not exist at all.
+ */
+export interface CardGroup {
+  /** Stable across regroupings, so React keeps the rows rather than remounting them. */
+  key: string;
+  /** The heading, and the accessible name of the list under it. */
+  name: string;
+  /** The rules word, for a category group. `null` for a derived one, which has no rules
+   *  role at all. */
+  kind: CategoryKind | null;
+  /** `null` for a derived group — which is exactly the test for "can a card be dropped
+   *  here", since every deck write is addressed by a category id. */
+  categoryId: number | null;
+  /**
+   * Whether what is in here counts toward anything: size, copy limits, legality, the
+   * allocator's claims. A derived group is built from active cards, so it is always `true`.
+   */
+  isActive: boolean;
+  /**
+   * One of the four `schema::PREDEFINED_CATEGORIES` — cannot be renamed or deleted, and that is
+   * now the whole of what it is for: `CategoriesDialog` reads it to decide whether a row gets
+   * Rename and Delete affordances.
+   *
+   * **It decides nothing about whether a heading is drawn.** It was once the whole of
+   * {@link drawsWhenEmpty} — the four seeded zones drew empty and nothing else did — and then
+   * the survivor test while a filter was running. Both of those are gone: Sideboard and
+   * Maybeboard reach that function's last line and draw exactly as a pile of the reader's own
+   * does, because "always, until it is deleted" is one answer for both.
+   */
+  isPredefined: boolean;
+  /**
+   * The app made this pile while filing a card; the reader did not ask for it.
+   *
+   * `DeckCategory.origin === "auto"` and nothing else — never the name, which is the reader's to
+   * type and is exactly what an app-made "Ramp" and a reader-made "Ramp" have in common. An auto
+   * pile is the one class that does **not** draw empty: it arrives with its first card and goes
+   * with its last. `false` for a derived group and for a stray, neither of which can be empty in
+   * the first place.
+   */
+  isAuto: boolean;
+  /** In the order `sortBy` asked for, already applied. */
+  cards: DeckCard[];
+  /** **Copies**, not rows: four Bolts are four cards, and a deck is counted in cards. */
+  count: number;
+  /**
+   * `sum(unitPrice × quantity)` over the cards in this group that have a price, `null` when
+   * none of them does.
+   *
+   * A partial total rather than nothing, because the surface that draws it also carries the
+   * as-of sentence and a reader pricing a deck would rather know most of it. `null` rather
+   * than `0` when nothing is priced, because `$0.00` is a price nobody quoted.
+   *
+   * **Whose prices is not a question this file answers.** The rows arrived already priced at
+   * the marketplace their query named, so two marketplaces' totals over one pile are two
+   * honest sums rather than a conversion of each other — each leaves out the copies *it*
+   * cannot price.
+   */
+  totalPrice: number | null;
+}
+
+/**
+ * The X pile's key and heading, exported so no caller — a chart, a story, a test — re-spells
+ * either one. The key is a `CardGroup.key` like `mv-3` and shares its namespace deliberately:
+ * it is one more mana-value heading, not a category, and nothing can be dropped into it.
+ */
+export const X_GROUP_KEY = "mv-x";
+export const X_GROUP_NAME = "Mana value X";
+
+/**
+ * The heading for the cards that wear no label, under `groupBy: "label"`. Exported for
+ * {@link X_GROUP_KEY}'s reason. The words are the card modal's label picker's own unset row, so
+ * one state reads the same on both surfaces.
+ */
+export const NO_LABEL_GROUP_KEY = "label-none";
+export const NO_LABEL_GROUP_NAME = "No label";
+
+/**
+ * The `Matches theory` headings, one per tier and in the resolver's own order — this printing,
+ * then this card, then neither. The names are {@link THEORY_TIER_NAMES}, which is also what each
+ * card's mark says, so a heading and the marks under it cannot disagree.
+ */
+const THEORY_BUCKET_ORDER: Readonly<Record<TheoryTier, number>> = {
+  exact: 0,
+  name: 1,
+  unplanned: 2,
+};
+
+function theoryBucket(
+  plan: TheoryPlan,
+  card: Pick<DeckCard, "cardId" | "finish" | "finishes" | "name">,
+): { key: string; name: string; order: number } {
+  const tier = theoryTier(plan, card);
+  return { key: `theory-${tier}`, name: THEORY_TIER_NAMES[tier], order: THEORY_BUCKET_ORDER[tier] };
+}
+
+/** The one heading `groupBy: "deck"` draws over the deck itself. Its key is outside every other
+ *  namespace here, because it is not a bucket of anything — it is all of them. */
+export const FULL_DECK_GROUP_KEY = "deck-all";
+export const FULL_DECK_GROUP_NAME = "Full deck";
+
+/**
+ * The label heading a card files under: `No label` first, then one heading per label.
+ *
+ * **Keyed by the label's id and never by its name**, so a rename between two reads keeps the
+ * rows React already has. Labels after `No label` are ordered by name in {@link buildGroups}
+ * rather than by how many cards wear them — a use order would reshuffle the desk every time the
+ * reader labelled a card, which is moving the layout under the hand that is doing the labelling.
+ */
+function labelBucket(
+  card: Pick<DeckCard, "labelId" | "labelName">,
+): { key: string; name: string; order: number } {
+  if (card.labelId === null) return { key: NO_LABEL_GROUP_KEY, name: NO_LABEL_GROUP_NAME, order: 0 };
+  return { key: `label-${card.labelId}`, name: card.labelName ?? "", order: 1 };
+}
+
+/** The whole deck as one derived heading — `categoryId` `null`, so, like every derived group,
+ *  nothing can be dropped into it. */
+function fullDeckGroup(cards: DeckCard[]): CardGroup {
+  return {
+    key: FULL_DECK_GROUP_KEY,
+    name: FULL_DECK_GROUP_NAME,
+    kind: null,
+    categoryId: null,
+    isActive: true,
+    isPredefined: false,
+    isAuto: false,
+    cards,
+    ...totals(cards),
+  };
+}
+
+/**
+ * The mana-value buckets: 0–7 exactly, 8 open-ended, X, unknown last.
+ *
+ * `null` is *unknown* rather than zero — `cards.cmc` is nullable and an orphaned row has no
+ * mana value at all, so filing it under 0 would be a number this app made up, sitting at the
+ * head of the curve where a reader counts their cheapest spells.
+ *
+ * **`separateX` is the reader's own preference and the X test runs first.** A card printing
+ * `{X}` has a `cmc` — Scryfall counts the variable as 0, so Fireball is mana value 1 — and
+ * that number is honest about a spell nobody would cast for one mana. When the switch is on,
+ * such a card leaves its `cmc` bucket entirely; see {@link buildGroups} for why it cannot be
+ * in both. Running the test *before* the `null` check is the second half of the rule: an X in
+ * the printed cost is knowledge, and *unknown* is for a row that carries none.
+ *
+ * X takes order 9 and unknown moves to 10, so the curve reads `0 … 8 or more, X, unknown`.
+ * Like "8 or more", X is open-ended rather than a number, so it belongs at the tail rather
+ * than at the head where a reader counts their cheapest spells; unknown stays behind it
+ * because it is the absence of an answer rather than an answer.
+ */
+function manaValueBucket(
+  card: Pick<DeckCard, "cmc" | "manaCost">,
+  separateX: boolean,
+): { key: string; name: string; order: number } {
+  if (separateX && hasVariableCost(card.manaCost)) {
+    return { key: X_GROUP_KEY, name: X_GROUP_NAME, order: 9 };
+  }
+  if (card.cmc === null) return { key: "mv-unknown", name: "Mana value unknown", order: 10 };
+  const mv = Math.min(8, Math.max(0, Math.floor(card.cmc)));
+  return {
+    key: `mv-${mv}`,
+    name: mv === 8 ? "Mana value 8 or more" : `Mana value ${mv}`,
+    order: mv,
+  };
+}
+
+/** Copies and money, the two sums every group carries, computed once. An unpriced row is left
+ *  out of the sum rather than valued at anything: it is unpriced *at the marketplace the deck
+ *  was read at*, and there is no second number here to reach for. */
+function totals(cards: readonly DeckCard[]): { count: number; totalPrice: number | null } {
+  let count = 0;
+  let price = 0;
+  let priced = false;
+  for (const card of cards) {
+    count += card.quantity;
+    if (card.unitPrice !== null) {
+      price += card.unitPrice * card.quantity;
+      priced = true;
+    }
+  }
+  return { count, totalPrice: priced ? price : null };
+}
+
+/** A category, as the group that *is* it. */
+function categoryGroup(category: DeckCategory, cards: DeckCard[]): CardGroup {
+  return {
+    key: `cat-${category.id}`,
+    name: category.name,
+    kind: category.kind,
+    categoryId: category.id,
+    isActive: category.isActive,
+    // By kind and not by name: a user is free to call a pile of their own "Sideboard" —
+    // `DECK_CATEGORY_GRAIN` allows it, because the predefined Sideboard was never named by
+    // the user — and that one is theirs to rename and delete like any other.
+    isPredefined: category.kind !== "main" && PREDEFINED_CATEGORY_NAMES.includes(category.name),
+    // The row's own provenance, carried through unchanged. `category_for_name` finds before it
+    // creates, so a pile the reader made stays `user` for ever however many cards the app later
+    // files into it — which is the case a name list gets wrong and this gets right for free.
+    isAuto: category.origin === "auto",
+    cards,
+    ...totals(cards),
+  };
+}
+
+/**
+ * A row whose `categoryId` is in no category the read answered with, drawn under the name
+ * the row itself carries.
+ *
+ * It should not happen — `DeckDetail.categories` is *every* category of the deck — and it is
+ * handled anyway for `sortCards`' reason: a card the editor silently dropped is worse than a
+ * heading nobody expected, and this is the only branch where "drop it" was even available.
+ */
+function strayGroup(cards: DeckCard[]): CardGroup {
+  const first = cards[0];
+  return {
+    key: `cat-${first.categoryId}`,
+    name: first.categoryName,
+    kind: first.categoryKind,
+    categoryId: first.categoryId,
+    isActive: first.categoryActive,
+    isPredefined: false,
+    // A stray is built *from* rows, so it always holds at least one card and `drawsWhenEmpty` is
+    // never asked about it. `DeckCard` carries no origin to copy either — the row knows its
+    // category's name, kind and switch, and nothing more.
+    isAuto: false,
+    cards,
+    ...totals(cards),
+  };
+}
+
+/**
+ * What an empty pile's heading depends on that is not a fact about the pile.
+ *
+ * **One fact, and it is the deck's format**: which zones the game being built for even has. The
+ * other two things the rule reads — the pile's `kind` and whether the app made it — travel on
+ * the {@link CardGroup} itself, so they are not here. A format is the editor's to know, and this
+ * file has never heard of a format spec and must not start.
+ *
+ * **A second member lived here until the three classes replaced it, and it is worth saying what
+ * it decided.** `narrowed` reported whether a filter was running, and while one was, only the
+ * predefined zones drew empty — so that typing three letters could not answer with twenty
+ * headings over three cards. The wall it was aimed at was always made of *auto* piles (Removal,
+ * Ramp, Draw and the type buckets), and those now stay out whenever they are empty, filter or no
+ * filter, because a pile the filter emptied *is* empty. So a filter no longer decides anything
+ * about which headings exist; what it leaves on screen is the reader's own handful of deliberate
+ * piles, which is exactly what "always shown" asks for. There is nothing left for the editor to
+ * pass.
+ *
+ * A one-member object rather than a bare boolean, because the call site reads as a sentence and
+ * the next conditional zone lands here without touching a signature.
+ */
+export interface EmptyGroupRules {
+  /** `FormatSpec.requiresCommander` for the deck's own format. `false` while the specs are
+   *  still loading and for a deck whose format has left the seed, which is the deliberate
+   *  answer rather than a gap: a deck with no format opinion gets no empty command zone, and
+   *  the zone appears the moment it holds a card. */
+  requiresCommander: boolean;
+}
+
+/**
+ * What a caller that has not heard of a format gets: no command zone.
+ *
+ * Every empty pile of the reader's own draws under it and every empty auto pile stays out, which
+ * is the answer for a deck in any format bar the ones with a command zone — and the one a story,
+ * a chart or a test wants when it is asking about something else entirely.
+ */
+export const DEFAULT_EMPTY_GROUP_RULES: EmptyGroupRules = {
+  requiresCommander: false,
+};
+
+/**
+ * Whether a category still draws a heading when there is nothing under it.
+ *
+ * **It is asked about empty piles only, and that is the first half of the rule.** A pile
+ * *holding cards* draws whatever its kind — a Modern deck whose Commander pile still holds the
+ * card it was built around, because the reader re-formatted the deck, draws that pile. The
+ * editor never hides cardboard; a heading it left out would be ten copies missing from a deck
+ * with nothing on screen to say where they went. That is structural rather than a case to
+ * remember: the `cards.length > 0` arm in {@link buildGroups}' filter runs in front of this
+ * call, so no answer here can hide a card.
+ *
+ * **Three classes of pile, three answers, and the four lines below are that table.**
+ *
+ * * A **predefined** zone answers by what the deck's format has. Both conditional arms are here,
+ *   and each is conditional for its own reason (below). Sideboard and Maybeboard are not
+ *   conditional at all and fall through to the last line.
+ * * An **auto** pile — one the app made while filing a card, `isAuto` — **never draws empty**. It
+ *   arrives with its first card and goes with its last. Nobody asked for it, so there is nothing
+ *   to keep a place for: an empty `Ramp` the app would have invented is a heading about a card
+ *   the deck does not contain.
+ * * A pile the **reader** made always draws, until they delete it. A category typed by hand is
+ *   made with intent, and their empty `Ramp` is where they mean the next ramp spell to go — a
+ *   column that vanished with its last card would move the layout under their hand and take its
+ *   own drop target with it. Delete is the removal; there is no hide flag, and `isActive` is not
+ *   one.
+ *
+ * **The test is provenance, never the name**, which is the difference the two `Ramp`s above turn
+ * on. `DECK_CATEGORY_GRAIN` is `(deck_id, name)`, so a deck holds one pile per name: if the
+ * reader makes "Ramp" themselves and a ramp spell is filed later, `category_for_name` *finds*
+ * their pile rather than making one, and it stays `origin: 'user'`. Matching on a name list
+ * instead — "Ramp", "Draw", "Removal", "Lands" are exactly what a person calls their own piles —
+ * would silently start hiding the very pile the reader was most deliberate about. The standing
+ * law of this folder, applied: the name is the user's, and the rules read something else.
+ *
+ * **Each conditional zone, and why.** `commander` draws empty only where the format has a command
+ * zone: an empty command zone in a Commander deck is itself a fact about the deck's validity, the
+ * one heading the editor must never answer a question about by leaving it out — while in a
+ * Standard deck it is not a fact about that deck at all, but a zone the game it is being built
+ * for does not have. `companion` never draws empty, in any format: a companion is a card you
+ * either have or do not, and an empty pile there says nothing that its absence does not say more
+ * quietly.
+ *
+ * **A filter used to decide this and now decides nothing about it.** {@link EmptyGroupRules}
+ * carried a `narrowed` flag, and while the toolbar's text field or a label chip was running, only
+ * the predefined zones drew empty — because typing three letters otherwise answered with twenty
+ * headings over three cards. The auto rule subsumes it: that wall was always auto piles, and a
+ * pile the filter emptied is an empty pile, so they are out either way. What a filter leaves is
+ * the reader's own deliberate piles plus the fixed zones, which is the answer the rule wanted in
+ * the first place, and it is now the same answer as emptying a pile by hand. The cost that went
+ * with the old flag went with it: **an empty pile of the reader's own is a drop target under a
+ * filter again**, which matters because the per-card `Move…` select was removed on 2026-08-14
+ * and a drawn heading is the whole affordance for moving a card into an empty pile.
+ *
+ * **It reads `kind` and `isAuto` and could not read the name if it wanted to** — which is what
+ * the `Pick` is for. `deck_category_create` takes `(deck_id, name)` and no kind, so `commander`
+ * and `companion` can only ever be the two seeded zones; a pile a reader called "Sideboard" is a
+ * `main` like every other pile of theirs, and {@link categoryGroup} is the single place a name is
+ * consulted at all. {@link CardGroup.isPredefined} is deliberately **not** among the two: it says
+ * a row cannot be renamed or deleted, which is a question for the categories panel and not for a
+ * heading.
+ */
+export function drawsWhenEmpty(
+  group: Pick<CardGroup, "kind" | "isAuto">,
+  rules: EmptyGroupRules = DEFAULT_EMPTY_GROUP_RULES,
+): boolean {
+  if (group.kind === "companion") return false;
+  if (group.kind === "commander") return rules.requiresCommander;
+  return !group.isAuto;
+}
+
+/**
+ * The two zones a card is played **from** rather than **in**, in the order they are read.
+ *
+ * A commander is not a card in the curve — it is the card the curve was built around, on the
+ * table before the first draw — and a companion is the same claim made from outside the deck
+ * (CR 100.4a; EDH's companion is "effectively a 101st card"). So neither belongs in a heading
+ * derived from what the deck *contains*: a commander counted into `Mana value 4` is one more
+ * four-drop in the number the reader is using to decide whether they have too many, and it is
+ * the one card of the ninety-nine that is never drawn. Under `manaValue` and `type` these two
+ * piles are therefore appended as themselves, and under all three groupings they head the list.
+ *
+ * **The array's own order is the rule** — commander, then companion — and it is written here and
+ * nowhere else. {@link commandZoneRank} reads it by index, so the two facts this file needs
+ * about a kind (whether it is a command zone at all, and which of the two is read first) come
+ * out of one list rather than out of a set standing beside a comparator that could quietly stop
+ * agreeing with it.
+ *
+ * **It is deliberately not what {@link drawsWhenEmpty} branches on**, which is the near-miss
+ * worth naming: that function treats these same two kinds specially and gives them *opposite*
+ * answers — an empty commander pile draws where the format has a command zone, an empty
+ * companion pile never draws in any format — so a membership test there would fold two rules
+ * into one and lose the half that is about the format. Being played from a zone of its own is
+ * what these two share; what an *empty* one of them means is not.
+ */
+export const COMMAND_ZONE_KINDS: readonly CategoryKind[] = ["commander", "companion"];
+
+/**
+ * Whether a pile is played from a zone of its own — {@link COMMAND_ZONE_KINDS} membership,
+ * derived from that array rather than spelled a second time.
+ *
+ * It takes `CategoryKind | null` because both of the shapes this file asks about can be `null`:
+ * a derived group's `kind` (it has no rules role at all) and, in principle, nothing else — a
+ * `DeckCard` always carries its category's kind. `false` for `null` is the honest answer for
+ * both, since a heading over a mana value is not a zone anything is played from.
+ */
+export function isCommandZone(kind: CategoryKind | null): boolean {
+  return commandZoneRank(kind) >= 0;
+}
+
+/** Where a command zone sits among the command zones, and `-1` for a kind that is not one. It
+ *  is the index into {@link COMMAND_ZONE_KINDS}, which is the whole of why that array's order
+ *  *is* the commander-before-companion rule and there is no second place to correct. */
+function commandZoneRank(kind: CategoryKind | null): number {
+  return kind === null ? -1 : COMMAND_ZONE_KINDS.indexOf(kind);
+}
+
+/**
+ * The drawn piles, split into the run that heads the list and everything else.
+ *
+ * **Both of {@link buildGroups}' returns go through this**, which is the entire reason it is a
+ * function: the head rule is one rule in three grouping modes, and a second copy of it under
+ * `category` would be the mode that stopped agreeing the first time somebody adjusted the other.
+ *
+ * **Active only, and that is a rule rather than a convenience.** A switched-off command zone
+ * counts toward nothing — not size, not copy limits, not legality, not the allocator — so it is
+ * not what the rest of the deck is read against either, and it stays exactly where it was: in
+ * `sortOrder` under `category`, in the inactive tail under a derived grouping. That second half
+ * is worth stating at the tail's own site as well, and it is: the derived return filters its
+ * tail by `!isActive`, and nothing this function lifts out is inactive, so **the tail is
+ * unchanged by construction** rather than by two filters that happen to agree.
+ *
+ * **Stable, so `sortOrder` still breaks a tie.** The groups arrive in `sortOrder` and
+ * `Array.prototype.sort` has been stable since ES2019, so two piles of one kind would keep the
+ * reader's own order between them. Nothing can currently make a second one —
+ * `deck_category_create` takes `(deck_id, name)` and no kind, so `commander` and `companion` are
+ * only ever the two seeded zones — and the sort is written to survive the day that changes
+ * rather than to rely on it not having.
+ */
+function splitCommandZones(groups: readonly CardGroup[]): {
+  command: CardGroup[];
+  rest: CardGroup[];
+} {
+  const command: CardGroup[] = [];
+  const rest: CardGroup[] = [];
+  for (const group of groups) {
+    if (group.isActive && isCommandZone(group.kind)) command.push(group);
+    else rest.push(group);
+  }
+  return {
+    command: command.sort((a, b) => commandZoneRank(a.kind) - commandZoneRank(b.kind)),
+    rest,
+  };
+}
+
+/**
+ * The deck, as headings and rows.
+ *
+ * @param cards every row of the variant on screen, in the read's own order
+ * @param categories every category of the deck, in `sortOrder` and **not pre-filtered** — the
+ *   empty ones included, so that {@link drawsWhenEmpty} is the single place deciding which of
+ *   them are drawn. A caller that dropped its empty piles first would be a second copy of that
+ *   rule, and the two would part company silently.
+ * @param groupBy what the headings are
+ * @param sortBy the order inside each heading
+ * @param separateX the deck's own `separateXGroup` preference — see below. Defaults to
+ *   `false`, which is what this function answered before the switch existed, so every caller
+ *   that has not heard of it keeps the grouping it had.
+ * @param rules the one fact an empty pile's heading depends on that the pile itself cannot carry
+ *   — {@link EmptyGroupRules}. Defaults to {@link DEFAULT_EMPTY_GROUP_RULES}, and is last for
+ *   the same reason `separateX` is: no existing call site breaks.
+ * @param theoryPlan the deck's plan, for `groupBy: "theory"` alone. **Absent, that mode draws as
+ *   `category`** — the plan is a query, and a deck whose plan has not answered yet (or has none)
+ *   must still draw every card somewhere rather than filing all of them under `No Match`.
+ *
+ * **`theory` buckets by the tier the plan says, never by the deck's mark switches** —
+ * {@link theoryTier} rather than `theoryMatchMark`. A heading cannot go silent the way a mark can,
+ * so a card whose tier's mark is switched off still files under its tier.
+ *
+ * **There is no currency argument any more.** It took one while every row carried two prices,
+ * so that a heading's total and the `price` order under it could not be computed from
+ * different ones. Rust now answers a single `unitPrice` per row, at the marketplace the deck
+ * was read at, so the heading and its rows agree by construction and there is nothing to pass.
+ *
+ * **`separateX` is a `manaValue` rule and is inert everywhere else.** Under `category` the
+ * headings are the reader's own piles, and under `type` they are what a card *is*; neither is
+ * a curve, and an "X" column beside Creature would be a fourth grouping wearing the third
+ * one's name. It is passed through to {@link manaValueBucket}, which is called from the one
+ * `manaValue` arm, so the inertness is structural rather than a branch to keep in step.
+ *
+ * **`label` is a derived grouping like `type`**: `No label` first, then one heading per label by
+ * name. An active Sideboard's cards are bucketed with the rest, exactly as they are into a curve.
+ *
+ * **`deck` is one heading over the deck, and it is the one derived mode that keeps the Sideboard
+ * whole.** Issue #461 asked for it so a sort reads across the whole deck at once — the most
+ * expensive card, not the most expensive card per pile. What it holds is what `splitRail` would
+ * flow: the command zones still head the list, and the Sideboard, the Maybeboard and every
+ * switched-off pile are appended as themselves, so the column views still rail them. A heading
+ * called "Full deck" that also held the sideboard would be a count that disagrees with the
+ * deck's size for no reason on screen.
+ *
+ * **A card is in the X group or in its `cmc` bucket, never in both.** Every surface that draws
+ * these headings counts copies and sums prices per group — the editor's column captions, the
+ * curve, the stats strip — so a card counted twice makes the headings add up to more than the
+ * deck, and the reader has no way to see which pile lied.
+ *
+ * **The command zones head every one of the three returns, and under a derived grouping their
+ * cards are in no bucket** — {@link COMMAND_ZONE_KINDS} and {@link splitCommandZones}. The same
+ * counting argument runs the other way there: a commander bucketed into the curve is a four-drop
+ * in a number the reader is reading to decide how many four-drops they have, and it is the one
+ * card that is on the table before the deck is drawn from. Skipping it costs nothing, because
+ * its pile is appended whole — the card moves to a different heading rather than off the screen,
+ * which is the thing the inactive-card skip beside it must never do.
+ */
+export function buildGroups(
+  cards: readonly DeckCard[],
+  categories: readonly DeckCategory[],
+  groupBy: GroupBy,
+  sortBy: SortBy,
+  separateX = false,
+  rules: EmptyGroupRules = DEFAULT_EMPTY_GROUP_RULES,
+  theoryPlan?: TheoryPlan,
+): CardGroup[] {
+  const byCategory = new Map<number, DeckCard[]>();
+  for (const card of cards) {
+    const bucket = byCategory.get(card.categoryId);
+    if (bucket) bucket.push(card);
+    else byCategory.set(card.categoryId, [card]);
+  }
+
+  const ordered = [...categories].sort((a, b) => a.sortOrder - b.sortOrder || a.id - b.id);
+
+  // Every pile that has something in it — that arm first, so nothing below it can hide a card —
+  // plus the empty ones `drawsWhenEmpty` still calls places: the reader's own, the Sideboard and
+  // the Maybeboard, and a command zone where the format has one. Out go the empty auto piles the
+  // app made while filing cards, the Companion, and a command zone in a format with no such
+  // zone. That predicate is deliberately blind to the category's name; the emptiness test is
+  // `cards`, not `count`, because a row in a deck always carries at least one copy — zero is
+  // what removes it.
+  const categoryGroups = ordered
+    .map((category) =>
+      categoryGroup(category, sortCards(byCategory.get(category.id) ?? [], sortBy)),
+    )
+    .filter((group) => group.cards.length > 0 || drawsWhenEmpty(group, rules));
+
+  // Anything filed under a category the read did not answer with, after the real ones. No
+  // filter here and none needed: a stray group is built *from* rows, so an empty one cannot
+  // exist — the same reason a derived group never needs the test either.
+  const known = new Set(ordered.map((c) => c.id));
+  const strays = [...byCategory.entries()]
+    .filter(([id]) => !known.has(id))
+    .map(([, rows]) => strayGroup(sortCards(rows, sortBy)));
+
+  // The whole drawn list, with the active command zones lifted out of it and put in front in
+  // commander-then-companion order. Computed here rather than inside either arm because both
+  // returns below want it: under `category` the piles *are* the headings and this is the only
+  // thing that moves them; under a derived grouping it is also what keeps their cards out of
+  // the buckets, since a pile in `command` is a pile drawn whole.
+  const { command, rest } = splitCommandZones([...categoryGroups, ...strays]);
+
+  if (groupBy === "category" || (groupBy === "theory" && theoryPlan === undefined)) {
+    return [...command, ...rest];
+  }
+
+  // One heading over the deck — the piles `splitRail` would *flow* — and every other pile as
+  // itself: the command zones already lifted to the head, and the Sideboard, the Maybeboard and
+  // every switched-off pile after it, where the column views rail them. The test is `splitRail`
+  // itself rather than a second spelling of "played beside the deck", so the rail this mode
+  // leaves standing is exactly the rail every view draws. Unlike the derived modes below, an
+  // *active* Sideboard is kept whole rather than bucketed: a heading called "Full deck" that
+  // quietly held the sideboard would be a sum nobody could check against the deck's size.
+  // `rest` keeps its `sortOrder`, so the railed piles are filtered out of it rather than taken
+  // from `splitRail`'s reordered `rail`.
+  if (groupBy === "deck") {
+    const { flow } = splitRail(rest);
+    const inDeck = new Set(flow);
+    const deckCards = flow.flatMap((group) => group.cards);
+    return [
+      ...command,
+      // No cards, no heading — a derived group has never drawn empty, and this is one.
+      ...(deckCards.length > 0 ? [fullDeckGroup(sortCards(deckCards, sortBy))] : []),
+      ...rest.filter((group) => !inDeck.has(group)),
+    ];
+  }
+
+  // Derived: the active cards are bucketed, and every switched-off pile is appended as
+  // itself. Both halves are the rule. Bucketing an inactive card would count a Maybeboard
+  // card into the curve the reader is reading; dropping the pile would make ten cards vanish
+  // from the editor the moment the grouping changed, with no way to get them back.
+  const derived = new Map<string, { order: number; group: CardGroup }>();
+  for (const card of cards) {
+    if (!card.categoryActive) continue;
+    // The second skip, and it is not the first one's reason. That one is about *counting* — an
+    // inactive card counts toward nothing, so bucketing it would put a Maybeboard card in the
+    // reader's curve. This one is about what a command zone *is*: a commander is not a card in
+    // the curve, it is the card the curve was built around. Both are safe for the same reason —
+    // the pile itself is appended whole, in `command` above for this one and in the `!isActive`
+    // tail below for that one — so neither skip can take a card off the screen.
+    if (isCommandZone(card.categoryKind)) continue;
+    const bucket =
+      groupBy === "manaValue"
+        ? manaValueBucket(card, separateX)
+        : groupBy === "label"
+          ? labelBucket(card)
+          : groupBy === "theory" && theoryPlan !== undefined
+            ? theoryBucket(theoryPlan, card)
+            : (() => {
+            // What the card *is* comes from the matching order; where its heading *sits*
+            // comes from the reading order, which puts Land last. See `autoCategory.ts` for
+            // why those are two lists and must stay two.
+            const name = autoCategoryFor(card);
+            return { key: `type-${name}`, name, order: autoCategoryDisplayOrder(name) };
+          })();
+
+    const seen = derived.get(bucket.key);
+    if (seen) seen.group.cards.push(card);
+    else {
+      derived.set(bucket.key, {
+        order: bucket.order,
+        group: {
+          key: bucket.key,
+          name: bucket.name,
+          kind: null,
+          categoryId: null,
+          isActive: true,
+          isPredefined: false,
+          // A derived bucket is built *from* cards, so an empty one has never been expressible
+          // and `drawsWhenEmpty` is never asked about it. `false` is the honest value anyway:
+          // nothing made this pile, it is a heading over the cards that answered to it.
+          isAuto: false,
+          cards: [card],
+          count: 0,
+          totalPrice: null,
+        },
+      });
+    }
+  }
+
+  const derivedGroups = [...derived.values()]
+    // The name breaks a tie only for labels, whose headings all share one order past `No label`.
+    // Mana value and type are left on their order alone, where a tie keeps the order the cards
+    // arrived in exactly as it did before labels were a grouping.
+    .sort(
+      (a, b) =>
+        a.order - b.order ||
+        (groupBy === "label" ? compareLabels(a.group.name, b.group.name) : 0),
+    )
+    .map(({ group }) => ({
+      ...group,
+      cards: sortCards(group.cards, sortBy),
+      ...totals(group.cards),
+    }));
+
+  // The command zones, the buckets, then every switched-off pile as itself. **The tail is
+  // unchanged by construction rather than by agreement**: it is `!isActive`, and
+  // `splitCommandZones` lifts out only *active* piles, so nothing that reached `command` could
+  // ever have been in it — a switched-off Commander is in `rest`, is inactive, and is appended
+  // here exactly where it was before the head run existed.
+  return [...command, ...derivedGroups, ...rest.filter((group) => !group.isActive)];
+}

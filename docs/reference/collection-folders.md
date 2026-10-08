@@ -122,7 +122,7 @@ fire (see [the delete](#delete_folder-re-files-one-row-at-a-time)).
 
 Nesting was ported rather than flattened for a cost reason, not an aspirational one: the tree
 arithmetic, the cycle refusal and both cascade rules were already written and tested one table
-over, so nesting was cheaper than writing a flat version would have been. `src/lib/folderTree.ts`
+over, so nesting was cheaper than writing a flat version would have been. `packages/ui/lib/folderTree.ts`
 is reused **unchanged** — a `CollectionFolder` already answers `FolderLike` and a `CollectionRow`
 already answers `Filed`. **That held until v33**, and the correction belongs here rather than in a
 footnote: the module now carries one function that is this cabinet's alone, `lockedFolderIds`,
@@ -131,7 +131,7 @@ because `locked` is a column no other folder table has — see
 tree arithmetic does is still generic and still shared. Nothing new is named `folderTree.ts`: a
 case-insensitive filesystem
 resolves a second one against `FolderTree.tsx`, and `tsc` stays green while every test fails with
-"not a function" (`src/features/decks/folders.ts:17-30`).
+"not a function" (`packages/ui/features/decks/folders.ts:17-30`).
 
 ### The v24 step's four traps
 
@@ -486,7 +486,7 @@ duplicate-row check is what makes the walk converge where `UNION ALL` would run 
 `locked <> 0` rather than `locked = 1`, `folder_row`'s reading of the same column. Folder counts
 are tens, so none of this was worth measuring against the grain — and none of it has been.
 
-**On the TypeScript side it is `lockedFolderIds` in `src/lib/folderTree.ts`, and no call site may
+**On the TypeScript side it is `lockedFolderIds` in `packages/ui/lib/folderTree.ts`, and no call site may
 re-derive it.** `CollectionFolder.locked` is the folder's *own* flag and is never the answer: the
 badge, the greyed Lock/Unlock row, the greyed Delete and the drag confirmation are four surfaces
 about the **effective** lock, and one reading the raw field would draw an unmarked drawer inside a
@@ -775,7 +775,7 @@ written in those pairs and says so, and both marks were mutation-checked on the 
 when they are added to a deck" — and the code it names had been deleted before the issue was
 answered.** `addOwnedCopies` hunted the binder for a free copy when a card was added to a deck; it
 went on **2026-08-25** with the own/need pair that was its only way in, and
-`src/features/decks/useDeck.ts` carries its tombstone — the record is under
+`packages/ui/features/decks/useDeck.ts` carries its tombstone — the record is under
 [Collection Search](#collection-search-and-the-first-caller-collection_to_deck-ever-had). Today
 `deck::add_card` writes a `deck_cards` row and moves **no** `collection_entries` row at all, and
 there is no path left that files a copy into a deck's group without the reader pointing at that copy
@@ -1234,7 +1234,7 @@ whose tags are not in hand yet names no pile at all** — the type line's pile i
 that may turn out wrong — and its press reads the tags itself and files by the rule; a land is
 the exception, because the Land pin is decided before a tag is consulted.
 
-**A move is one deliberate press, so nothing here is optimistic.** `src/lib/query.ts` caches 30 s,
+**A move is one deliberate press, so nothing here is optimistic.** `packages/ui/lib/query.ts` caches 30 s,
 which means a mounted query merely *marked* stale never refetches — the collection list, the
 folder summary and the deck are each invalidated, not just their roots. PR 2 of this series
 shipped a ghost row by getting exactly that wrong.
@@ -1512,7 +1512,7 @@ count rows) stops being able to diverge, and the search facet's `owned` dimensio
 **The workbench held a row that contradicted this until 2026-09-08**
 ([issue #425](https://github.com/Msgaihede/mtg-grimoire/issues/425)), and it is worth reading as
 what the two simplifications above actually rest on. Neither reader checks the quantity; both are
-licensed by the *absence* of zero rows, maintained by a different module. `.storybook/fake/`'s
+licensed by the *absence* of zero rows, maintained by a different module. `packages/fake/`'s
 `starter` seed carried one anyway — from before this reversal, under a comment stating the old rule
 verbatim — so the fake and the crate disagreed wherever *owned* was asked as an existence question.
 What that cost was one screen contradicting itself about one card: the combo panel's
@@ -1747,7 +1747,7 @@ binder happens at the root, where `Recently removed` is a shelf beside the binde
 
 Issue #283 was reported against the wishlist and the cabinet here has exactly the same shape, so
 the tile is one component drawn by all three walls —
-`src/components/ParentFolderCard.tsx`, wrapped here by `CollectionParentFolderCard`, which holds
+`packages/ui/components/ParentFolderCard.tsx`, wrapped here by `CollectionParentFolderCard`, which holds
 the copy target and the folder target. The whole argument is in
 [wishlist-folders.md](wishlist-folders.md); what is worth writing down here is the two things this
 cabinet has that the wishlist's does not.
@@ -1792,7 +1792,7 @@ bordered strip under the breadcrumb — a box with its own edge, an input, `Crea
 the strip was about — and every piece of that re-established a context the wall on screen already
 carried. The name is typed on the line the folder's name will occupy instead, at the same track
 and the same footprint, so nothing above the wall opens and nothing in the wall reflows.
-`src/components/FolderNameField.tsx` is the shape, [frontend-design.md](frontend-design.md) is the
+`packages/ui/components/FolderNameField.tsx` is the shape, [frontend-design.md](frontend-design.md) is the
 whole argument, and the wishlist's cabinet took the same change on the same day
 ([wishlist-folders.md](wishlist-folders.md)). Four things belong here, because they are facts
 about this cabinet rather than about the field.
@@ -2028,12 +2028,12 @@ tile, the up-one-level tile, the pinned strip, Flatten) are the record, and each
 
 **Vocabulary, fixed by the spec so it cannot drift.** A **shelf** is one folder's section of the
 wall: its **heading** and the cards filed directly in it. **Not sorted** is the shelf of copies
-filed in no folder — `UNFILED_SHELF` in TypeScript (`src/lib/shelves.ts`), `0` on the wire — and
+filed in no folder — `UNFILED_SHELF` in TypeScript (`packages/ui/lib/shelves.ts`), `0` on the wire — and
 the only shelf that is not a folder. The button is **Add folder**, never "New folder".
 
 ### What the wall is
 
-`buildShelves` (`src/lib/shelves.ts`) decides the whole order, and it is TypeScript's:
+`buildShelves` (`packages/ui/lib/shelves.ts`) decides the whole order, and it is TypeScript's:
 
 - **At the root, Not sorted comes first, and it is drawn empty too** (`visibleShelves`, issue
   #597, 2026-09-28). The spec drew it only once the counts said it held something, and that made
@@ -2067,7 +2067,7 @@ the only shelf that is not a folder. The button is **Add folder**, never "New fo
   byte-identical afterwards.
 - **Indentation stops at three levels** (`MAX_SHELF_INDENT`); a deeper heading keeps the
   third level's indent and names its path from the ancestor on the cap. `SHELF_INDENT_PX` is 32 per
-  level on the grid and the table alike (`SHELF_INDENT_PX`, `src/lib/shelfLayout.ts`).
+  level on the grid and the table alike (`SHELF_INDENT_PX`, `packages/ui/lib/shelfLayout.ts`).
 - **An empty folder is a heading over a dashed drop box, and only a reader's folder or Not sorted
   with nothing drawn inside it gets one** (`layoutShelves`). A folder whose cards are
   all in its subfolders draws its heading and no box; a deck group and `Recently removed` never
@@ -2211,7 +2211,7 @@ decision 11). [The wall's grain](#the-walls-grain-is-the-printing-and-the-finish
 and the finish, and the folder was one of the terms that merged, so one tile could carry copies from
 a binder and from a deck's group at once. **A tile now belongs to one shelf.** Its key is
 `tileKeyOf(cardId, finish, folderId)`, spelled `` `${cardId}:${finish}@${folderId}` ``, where a copy
-filed nowhere reads `@unfiled` and `null` and `0` are one key (`src/lib/tileKey.ts`; the
+filed nowhere reads `@unfiled` and `null` and `0` are one key (`packages/ui/lib/tileKey.ts`; the
 `tiles` memo in `CollectionPage.tsx`). **The ring key is `tileKeyOf(cardId, finish)`, with
 no folder** (the tile's `ringKey`), compared by `CardGrid` against a `selectedId` the page builds
 the same way — so opening a card rings **every** tile of that printing on screen, one per shelf.
@@ -2245,7 +2245,7 @@ whole of what Flatten was for, and a second drawing of the same cards is a secon
 which copies a control reaches. **Deleted in `6fb98daa`**: `FilterBar`'s `flatten` prop, the store's
 `collectionFlattened` flag (it started `true` here and `false` on the wishlist),
 `useFlattenPersistence`, the `flatten_state` / `set_flatten_state` commands and the whole
-`src-tauri/src/flatten.rs` module. **The `app_meta` row they kept, `flatten`, is read by nothing now
+`apps/desktop/src-tauri/src/flatten.rs` module. **The `app_meta` row they kept, `flatten`, is read by nothing now
 and deleted by nothing either** — no rung was owed for a key nobody asks for. What survives is the
 wire: `CollectionQuery::root_only` and `WishlistQuery::flatten` stay fields, and the wishlist's
 *Export everything* still sends `flatten: true`.
@@ -2268,11 +2268,11 @@ that drag every shelf folds to its heading** (`foldedForDrag` in `collectionShel
 render-time override that writes nothing.
 
 **The carried heading stays under the pointer through the fold, the unfold and the drop, and the
-wall keeps it there rather than the page.** `useFoldAnchor` (`src/features/shelves/useFoldAnchor.ts`)
+wall keeps it there rather than the page.** `useFoldAnchor` (`packages/ui/features/shelves/useFoldAnchor.ts`)
 is the page's half: it records the press, the pointer and the fold into `shelfCarry`
-(`src/features/shelves/shelfCarry.ts`), which is module state because there is one pointer.
+(`packages/ui/features/shelves/shelfCarry.ts`), which is module state because there is one pointer.
 `CardGrid` is the wall's half. It answers each `ShelfAnchorRequest` from its own layout
-(`rowStartOf` and `anchorPlan`, in `src/lib/shelfLayout.ts`), keeps the carried heading's row drawn
+(`rowStartOf` and `anchorPlan`, in `packages/ui/lib/shelfLayout.ts`), keeps the carried heading's row drawn
 whatever its virtual window says, and adds temporary room where a folded wall is too short to put
 the heading at the pointer. After a drop it goes on re-anchoring the moved heading as the new order
 arrives, for up to `SETTLE_MS` (2 s); a wheel, a key or a press ends that sooner.
@@ -2353,7 +2353,7 @@ later paging mounted it and pulled the caret and the scroll with it.
 ### The banded table's focus, reveal and Top
 
 Four things about a table with a sticky band, all `VirtualTable`'s
-(`src/components/table/VirtualTable.tsx`) and all shared with the wishlist:
+(`packages/ui/components/table/VirtualTable.tsx`) and all shared with the wishlist:
 
 - **The tab stop is the element that scrolls.** A band holds buttons and a drop target, and a
   `role="table"` may own only rows and row groups, so with `stickyBand` the scroller becomes a
@@ -2381,7 +2381,7 @@ Four things about a table with a sticky band, all `VirtualTable`'s
 
 ### The grid: the sticky bar's room, Top, and a caret across a zoom
 
-- **The sticky bar's height is one number**, `SHELF_STICKY_HEIGHT` (36, `src/lib/shelfLayout.ts`).
+- **The sticky bar's height is one number**, `SHELF_STICKY_HEIGHT` (36, `packages/ui/lib/shelfLayout.ts`).
   `ShelfStickyBar` takes it as its inline height and a sectioned `CardGrid` reserves it as the
   virtualiser's `scrollPaddingStart`, so a revealed or walked-to row lands below the bar rather than
   half under it (the final review's S-M2). In re-check 2 (2026-09-27, debug build) the headings the
@@ -2452,7 +2452,7 @@ caret went to `<body>`.
 
 The contract has two halves, both shared with the wishlist:
 
-- **The page half is `useHeadingCaret`** (`src/features/shelves/useHeadingCaret.ts`), one machine
+- **The page half is `useHeadingCaret`** (`packages/ui/features/shelves/useHeadingCaret.ts`), one machine
   for both pages. It was two verbatim copies until the final review (C-M7 / W-M5), and they had
   already drifted once. The page records which heading's control is owed the caret as a
   `CaretBack`: the shelf, `"add"` or `"manage"`, the pressed element, and the level drawn, the level
@@ -2513,7 +2513,7 @@ kept the scroll too, with the new folder in view at 924–964.
 ### A card lands only where the pointer is
 
 **Every shelf target takes a drop only while the pointer is inside it** — headings, empty boxes and
-path segments — through `useDndDropTarget`'s `pointerOnly` (`src/lib/dndTarget.ts`, set by
+path segments — through `useDndDropTarget`'s `pointerOnly` (`packages/ui/lib/dndTarget.ts`, set by
 `useShelfDropTarget`). dnd-kit's default detector falls back to the carried card's *rectangle* when
 the pointer is in no target, which is right for a tall deck pile and wrong for a 40px heading laid
 between rows of tiles that are not targets at all. The first pass measured it (2026-09-26, debug
@@ -2539,7 +2539,7 @@ left still on `Binder`'s band when the scroll stopped, landed nothing.
 **The sidebar joined in the final review.** The re-check found the navigation rail's Wishlist entry
 taking a card whose pointer was on the wall's first tile column, and adding a wish at the root (new
 finding 1): the rail sits flush against the page's left edge. `useSidebarDropTarget`
-(`src/components/useSidebarDrops.ts`) now passes `pointerOnly`, which covers both drawings of the
+(`packages/ui/components/useSidebarDrops.ts`) now passes `pointerOnly`, which covers both drawings of the
 navigation. The deck editor's own targets keep the default detector. In re-check 2 (2026-09-27,
 debug build) a card held 1.2s on the wishlist's first tile, overlapping the Wishlist entry, left
 the target `null` and filed nothing, while a release on the entry itself still added a wish.
@@ -2662,7 +2662,7 @@ drop *registrations* did not move and could not: dnd-kit keeps one target per el
 `<li>` and the slot inside it are the two boxes the card drag and the folder drag are registered
 on and measured against. **`DROP_MARK_ROOM` stays on the scroller for `FOCUS`'s sake**, not the
 ring's — an inset ring cannot be clipped, a half-drawn focus indicator is a WCAG 2.4.7 failure.
-`src/lib/dropMarks.ts` carries the whole reasoning.
+`packages/ui/lib/dropMarks.ts` carries the whole reasoning.
 
 ## The wall's grain is the printing **and** the finish
 
@@ -2691,7 +2691,7 @@ folds rows in `CollectionPage`'s `tiles` memo; the deck editor's docked Collecti
 same rows in `collectionTiles.ts`'s `foldCopies`. They were written apart and keyed the same way, so
 splitting one alone would have made two drawings of one collection disagree about what a tile *is*.
 Both keyed on `` `${cardId}:${finish}` `` from 2026-08-26, through **one** `tileKeyOf`, in
-`src/lib/tileKey.ts`; since shelves the collection page passes the folder as that function's third
+`packages/ui/lib/tileKey.ts`; since shelves the collection page passes the folder as that function's third
 argument and `foldCopies` does not. Each wall builds the ring composite back out of the pane's card
 and finish with the two-part call, and each tile carries the same two-part string to be compared
 against it — the tile's key on the docked column, the tile's `ringKey` on the collection wall — so
@@ -2701,7 +2701,7 @@ tile rings nothing at all, silently and with nothing red. The `?? "nonfoil"` tha
 meet is spelled there once, for both walls.
 
 **It was written out twice before that module existed, byte for byte, each copy carrying a doc
-block arguing that the duplication is what must not happen.** `src/lib/` is where the survivor went
+block arguing that the duplication is what must not happen.** `packages/ui/lib/` is where the survivor went
 rather than either feature: an import between `features/collection` and `features/decks` would be a
 dependency in the wrong direction for one of the pair whichever way it pointed.
 
@@ -2852,7 +2852,7 @@ redundancy rather than a wrong answer.
 A copy in a deck's group is refused by `set_entry_folder` (`ENTRY_IN_A_DECK`) and says so; a copy
 already in the destination says that instead. The confirm button counts **copies, not rows**,
 because a reader is filing cardboard. It is a centred modal rather than an anchored panel for the
-reason `src/CLAUDE.md` gives for a consulted surface — and because it is the only shape both doors
+reason `packages/ui/CLAUDE.md` gives for a consulted surface — and because it is the only shape both doors
 can use: a drop has no opener element, and the menu's panel has already closed by the time a row's
 handler runs. **Both doors set the same state**, which is the point: this page's drag and its menu
 have already drifted once (the settle sets), and a second implementation of "which copies?" is that
@@ -2926,7 +2926,7 @@ then invalidating only the folder summary and the card search — so nothing eve
 it went, the folder card read `1 wish` while the folder's own contents read "Nothing filed here
 yet", and it cleared only on reload. A folder move is one deliberate press, not a held stepper, and
 an optimistic insert would have to guess the destination's sort position and page. Invalidate and
-re-read — and invalidate the **list itself**, not only its root: `src/lib/query.ts` caches 30 s, so
+re-read — and invalidate the **list itself**, not only its root: `packages/ui/lib/query.ts` caches 30 s, so
 a mounted query that is merely marked stale never refetches.
 
 **The app's own folders are a pinned, flat, fixed section, and every one of those three words is
@@ -2988,7 +2988,7 @@ through the four writes that cross the deck boundary — `collection_alloc.rs`'s
 `collection_set_folder`, the same command the drag writes through, so a drag and a menu press merge
 on a taken grain identically — and the menu exists because a drag-only affordance is half a
 feature, and it is the half a keyboard cannot use. **One command and, since the review of this
-branch, one mutation**: `useSetCollectionFolder` in `src/features/collection/useCollectionFolders.ts`
+branch, one mutation**: `useSetCollectionFolder` in `packages/ui/features/collection/useCollectionFolders.ts`
 owns the write and the keys it settles, and the two callers pass in nothing but what they do about a
 refusal (the page's banner, the menu's `CardMenuRefusal`). They were two mutations for a day and had
 already drifted — the menu's settled `["decks"]` and the drag's did not, so one gesture left a built
@@ -3242,29 +3242,29 @@ build, not a description of this one.
 | `crates/grimoire-core/src/deck.rs` | `owned_by_printing` (`owned_by_oracle` before 2026-09-07), `available_by_printing` (the plan's wider pool, 2026-09-09) and `attribute_owned` — a `live` row's owned/missing as a sum over the group, a `theory` row's over everything this deck could use, both keyed `(card_id, finish)`, with `get_deck` the one line that picks — `delete_deck`, which re-files into `Recently removed`, `release_unclaimed_copies` — the sweep `swap_printing` and `set_card_finish` each call after rewriting a row's identity — and `release_group_copies`, the crate's one walk over a group's rows — exact `(card_id, finish)` only since the oracle-grain fallback left it the same day — which `deck_to_collection` calls for its one row and `release_live_copies` loops for the four bulk sites (`clear_category`, `clear_variant`, `deck_meta::delete_category`'s cascade arm, `import::commit_import`'s `replace` arm), carrying the `live` fence for all of them |
 | `crates/grimoire-core/src/reset.rs` | `clear_collection` — entries, then folders |
 | `crates/grimoire-core/src/reconcile.rs` | `fold_into_existing`, which calls `fold_entry` as `merge_entry` does, and `collision_target`, the crate's other eleven-term probe |
-| `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, and `lockedFolderIds` — the one function there that is this cabinet's alone |
-| `src/features/collection/collectionDrag.ts` | Both payloads under their own keys, the row and the tile that offer them, the targets that take either |
-| `src/features/collection/PickCopies.tsx` | The question a drop asks when the art stands for more than one row |
-| `src/lib/tileKey.ts` | `tileKeyOf` — **the one place** `` `${cardId}:${finish}` `` is spelled, and the `?? "nonfoil"` the ring composite meets a tile's key on. Both folds and both walls call it. Its optional third argument, the folder, is the shelved wall's (2026-09-26) |
-| `src/features/collection/CollectionPage.tsx` | The `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own grain, keyed through `tileKeyOf` on the printing, the finish and, since shelves, the folder — and the wall's shelves, headings and path row |
-| `src/features/decks/collectionTiles.ts` | `foldCopies` — the *other* fold of the same rows, split the same way and keyed through the same `tileKeyOf` |
-| `src/features/search/CardGrid.tsx` | `GridCard.key` and `tileKey` — a tile's identity where it differs from its card's |
-| `src/features/collection/CollectionFolderCard.tsx` | `folderFace` and `CollectionFolderTotals` — the folder card's figures line, kept for the home page's Folders widget. The card itself went with the folder band on 2026-09-26 |
-| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` — drawn on a shelf heading since 2026-09-26 |
-| ~~`src/components/NewFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band. Add folder is `ShelfToolbar` and `ShelfHeading` |
-| `src/components/ParentFolderCard.tsx` | The up-one-level tile — drawn by no cabinet since 2026-09-26, with its stories kept; the deck gallery's `FolderCard` imports its words (`UP_ONE_LEVEL`, `upCardName`) |
-| `src/features/collection/PinnedFolders.tsx` | `DECK_KIND`, `REMOVED_KIND` and `pinnedFolders` — the vocabulary. The pinned strip it drew became the `Decks` shelves on 2026-09-26 |
-| `src/lib/shelves.ts` | `buildShelves`, `defaultCollapsed`, `shelvesToFetch`, `shelvesToCount`, `visibleShelves`, `UNFILED_SHELF` — the order, the folds and the two id lists, shared with the wishlist |
-| `src/lib/shelfLayout.ts` | `layoutShelves` — the shelves as heading, tile, label and empty rows at one column count — and the heights and indent constants |
-| `src/features/shelves/` | `ShelfHeading`, `ShelfStickyBar`, `EmptyShelf`, `ShelfLabel`, `ShelfToolbar`, `useShelfFolds`, `useShelfDrag`, `useFoldOnFolderDrag`, `useFoldAnchor` — shared by both pages |
-| `src/features/collection/collectionShelfModel.ts` | This cabinet's reading of the shelves: `shelfFolderOf`, `DRAFT_SHELF`, `rolledUp`, `shelfStat`, `foldAll`, `peekOf`, `keepShelf`, `foldedForDrag` |
-| `src/features/collection/CollectionShelfParts.tsx` | The heading, the empty box and the sticky bar, each wired to the drags this cabinet answers |
+| `packages/ui/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery and the wishlist, and `lockedFolderIds` — the one function there that is this cabinet's alone |
+| `packages/ui/features/collection/collectionDrag.ts` | Both payloads under their own keys, the row and the tile that offer them, the targets that take either |
+| `packages/ui/features/collection/PickCopies.tsx` | The question a drop asks when the art stands for more than one row |
+| `packages/ui/lib/tileKey.ts` | `tileKeyOf` — **the one place** `` `${cardId}:${finish}` `` is spelled, and the `?? "nonfoil"` the ring composite meets a tile's key on. Both folds and both walls call it. Its optional third argument, the folder, is the shelved wall's (2026-09-26) |
+| `packages/ui/features/collection/CollectionPage.tsx` | The `tiles` memo, `copiesByTile`, `entryIdsOf` — the wall's own grain, keyed through `tileKeyOf` on the printing, the finish and, since shelves, the folder — and the wall's shelves, headings and path row |
+| `packages/ui/features/decks/collectionTiles.ts` | `foldCopies` — the *other* fold of the same rows, split the same way and keyed through the same `tileKeyOf` |
+| `packages/ui/features/search/CardGrid.tsx` | `GridCard.key` and `tileKey` — a tile's identity where it differs from its card's |
+| `packages/ui/features/collection/CollectionFolderCard.tsx` | `folderFace` and `CollectionFolderTotals` — the folder card's figures line, kept for the home page's Folders widget. The card itself went with the folder band on 2026-09-26 |
+| `packages/ui/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` — drawn on a shelf heading since 2026-09-26 |
+| ~~`packages/ui/components/NewFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band. Add folder is `ShelfToolbar` and `ShelfHeading` |
+| `packages/ui/components/ParentFolderCard.tsx` | The up-one-level tile — drawn by no cabinet since 2026-09-26, with its stories kept; the deck gallery's `FolderCard` imports its words (`UP_ONE_LEVEL`, `upCardName`) |
+| `packages/ui/features/collection/PinnedFolders.tsx` | `DECK_KIND`, `REMOVED_KIND` and `pinnedFolders` — the vocabulary. The pinned strip it drew became the `Decks` shelves on 2026-09-26 |
+| `packages/ui/lib/shelves.ts` | `buildShelves`, `defaultCollapsed`, `shelvesToFetch`, `shelvesToCount`, `visibleShelves`, `UNFILED_SHELF` — the order, the folds and the two id lists, shared with the wishlist |
+| `packages/ui/lib/shelfLayout.ts` | `layoutShelves` — the shelves as heading, tile, label and empty rows at one column count — and the heights and indent constants |
+| `packages/ui/features/shelves/` | `ShelfHeading`, `ShelfStickyBar`, `EmptyShelf`, `ShelfLabel`, `ShelfToolbar`, `useShelfFolds`, `useShelfDrag`, `useFoldOnFolderDrag`, `useFoldAnchor` — shared by both pages |
+| `packages/ui/features/collection/collectionShelfModel.ts` | This cabinet's reading of the shelves: `shelfFolderOf`, `DRAFT_SHELF`, `rolledUp`, `shelfStat`, `foldAll`, `peekOf`, `keepShelf`, `foldedForDrag` |
+| `packages/ui/features/collection/CollectionShelfParts.tsx` | The heading, the empty box and the sticky bar, each wired to the drags this cabinet answers |
 | `crates/grimoire-core/src/shelffolds.rs` | The `shelf_folds` `app_meta` row — `shelf_folds` and `set_shelf_folds` |
-| `src/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |
-| `src/features/transfer/import/destinations/collection.ts` | `grainKey` — the importer's fold, now every grain term it can vary |
-| `src/lib/ipc.ts` | `MoveOutcome`, `collectionToDeck` and `deckToCollection`, and `CollectionQuery.allocation` — whose two words nothing sent until Collection Search |
-| `src/features/decks/DeckSearchPanel.tsx` | The two tabs, `DEFAULT_DECK_SEARCH_TAB` (`collection`) and `DECK_SEARCH_TAB_KEY` |
-| `src/features/decks/CollectionSearchTab.tsx` | The list, `landingCategory`, and the confirmation that names the other deck |
-| `src/features/decks/useCollectionSearch.ts` | `collection_list` with `allocation`, `CopySource`'s three answers, and the invalidation a move fires |
-| `src/features/decks/useDeck.ts` | `setQuantity`, which routes a **live** decrease through `deckToCollection`, and `invalidateCollection`, which fires only when the outcome says copies moved |
-| `src/features/decks/DeckEditor.tsx` | `setQuantityAt` — the app's one removal path, and where the `CutFrom` row is looked up |
+| `packages/ui/features/card/cardMenu.tsx` | `buildCollectionTargetItems` — `Add to → Collection`, and `Move to → folder` |
+| `packages/ui/features/transfer/import/destinations/collection.ts` | `grainKey` — the importer's fold, now every grain term it can vary |
+| `packages/ui/lib/ipc.ts` | `MoveOutcome`, `collectionToDeck` and `deckToCollection`, and `CollectionQuery.allocation` — whose two words nothing sent until Collection Search |
+| `packages/ui/features/decks/DeckSearchPanel.tsx` | The two tabs, `DEFAULT_DECK_SEARCH_TAB` (`collection`) and `DECK_SEARCH_TAB_KEY` |
+| `packages/ui/features/decks/CollectionSearchTab.tsx` | The list, `landingCategory`, and the confirmation that names the other deck |
+| `packages/ui/features/decks/useCollectionSearch.ts` | `collection_list` with `allocation`, `CopySource`'s three answers, and the invalidation a move fires |
+| `packages/ui/features/decks/useDeck.ts` | `setQuantity`, which routes a **live** decrease through `deckToCollection`, and `invalidateCollection`, which fires only when the outcome says copies moved |
+| `packages/ui/features/decks/DeckEditor.tsx` | `setQuantityAt` — the app's one removal path, and where the `CutFrom` row is looked up |

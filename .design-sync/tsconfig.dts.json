@@ -7,7 +7,7 @@
   // `[TITLE_UNMAPPED]` and the build writes zero components. The second is the payload — each
   // emitted `<Name>.d.ts` is the API contract the design agent codes against, extracted from
   // these declarations. `RibbonProps`, `SyncProgressProps`, `TableColumn<Row>` and
-  // `CardImageProps` are real interfaces in `src/`; without an emit they would be guesses.
+  // `CardImageProps` are real interfaces in `packages/ui/`; without an emit they would be guesses.
   //
   // Separate from the repo's own `tsconfig.json` because that one is `noEmit` and always will
   // be — this is an app, and `npm run build` type-checks rather than emits. Extending it keeps
@@ -18,11 +18,11 @@
     "noEmit": false,
     "declaration": true,
     "emitDeclarationOnly": true,
-    // `allowImportingTsExtensions` is legal under `emitDeclarationOnly`, but nothing in `src/`
+    // `allowImportingTsExtensions` is legal under `emitDeclarationOnly`, but nothing in `packages/ui/`
     // uses it and leaving it on would let one in unnoticed.
     "allowImportingTsExtensions": false,
     // Errors do not block the emit (`noEmitOnError` defaults false) — deliberately. This is a
-    // *view* of the source for a documentation tool; a type error in `src/` is `npm run verify`'s
+    // *view* of the source for a documentation tool; a type error in `packages/ui/` is `npm run verify`'s
     // to fail, not this file's, and half a declaration tree is worth more than none.
     "rootDir": "..",
     "declarationDir": "./dist",
@@ -30,12 +30,12 @@
     "composite": false,
     "incremental": false
   },
-  // `entry.ts` is the barrel; `../src` is everything it re-exports. `preview-runtime.tsx` is
+  // `entry.ts` is the barrel; `../packages/ui` is everything it re-exports. `preview-runtime.tsx` is
   // deliberately absent — it is the preview harness, not API, and a declaration for it would
   // put the fake backend into the surface the design agent reads.
-  "include": ["../src", "./entry.ts"],
+  "include": ["../packages/ui", "./entry.ts"],
   // Tests and stories are not API. They emit harmlessly, but they land in the same tree the
   // converter globs and every one of them is a file ts-morph then has to parse.
-  "exclude": ["../src/**/*.test.ts", "../src/**/*.test.tsx", "../src/**/*.stories.tsx"],
+  "exclude": ["../packages/ui/**/*.test.ts", "../packages/ui/**/*.test.tsx", "../packages/ui/**/*.stories.tsx"],
   "references": []
 }

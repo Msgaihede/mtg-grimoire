@@ -9,8 +9,8 @@ const IGNORED_DIRS = new Set([
   "node_modules",
   "target",
   "dist",
-  "dist-web",
-  "dist-share",
+  "apps/light/dist-web",
+  "apps/share/dist-share",
   "dist-wasm",
   "storybook-static",
 ]);

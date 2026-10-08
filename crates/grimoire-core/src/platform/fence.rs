@@ -13,7 +13,7 @@
 //! `platform::socket` — as `tokio_tungstenite` and as `tungstenite`, since a sweep for the word
 //! `tokio` reads straight past the first.
 //!
-//! **It reads code lines and skips comment lines**, where `mobile/phone/fence.test.ts` reads
+//! **It reads code lines and skips comment lines**, where `apps/light/phone/fence.test.ts` reads
 //! both: prose here has to be able to say why a rule exists, and the module docs name
 //! `SystemTime::now()` to do it. A line is a comment when it *starts* with `//`. So a trailing
 //! comment on a code line is read as code and a `/* … */` block is read as code — both wrong

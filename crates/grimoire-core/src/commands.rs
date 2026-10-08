@@ -23,7 +23,7 @@
 //! expression over the bound name that answers `Result<T, String>` for a `T` that serializes. The
 //! macro expands each line into an argument struct, an arm of [`dispatch`] and a row of [`TABLE`].
 //!
-//! **The arguments arrive camelCase**, as `src/lib/ipc.ts` sends them and as Tauri renames a
+//! **The arguments arrive camelCase**, as `packages/ui/lib/ipc.ts` sends them and as Tauri renames a
 //! wrapper's own: `card_ids` is `cardIds` on the wire. **A missing optional argument is `None`** —
 //! serde reads an absent `Option` field as `None`, which is what Tauri does with one and what
 //! `ipc.ts`, which omits an optional argument rather than sending `null`, relies on. A required
@@ -52,7 +52,7 @@
 //! **A `bytes` call's arguments are its headers.** A desktop frame is a raw request body with
 //! its JSON in request headers; a host of the table has no headers to send, so the page puts the
 //! same object where the arguments go — `{"x-scanner-options": "<json>", "x-scanner-detail":
-//! "<n>"}` beside the body (`src/lib/core/table.ts`, and the web host's `protocol.ts`). The arm
+//! "<n>"}` beside the body (`packages/ui/lib/core/table.ts`, and the web host's `protocol.ts`). The arm
 //! hands that object to the body as a [`Carried`], whole and unparsed, beside whatever named
 //! arguments the entry declares — the scanner's two declare none. **The body crosses as the
 //! host can carry it**: base64 in `core_call`'s `body` on Android, where Tauri takes no raw
@@ -1848,7 +1848,7 @@ mod tests {
     /// **On a host that asks as a page, the commands that reach the relay reach it** — request
     /// for request what a native host sends, with the relay's own answer read off the response.
     /// A page's requests are bound by CORS, which the relay answers for the origins it names
-    /// (`relay/src/cors.ts`); nothing in the engine stands between a press and the request.
+    /// (`infrastructure/relay/src/cors.ts`); nothing in the engine stands between a press and the request.
     ///
     /// The mock stands where the relay would, answers 500 to everything and counts. **The
     /// native walk is the control**: the same presses on a desktop's two connections and many

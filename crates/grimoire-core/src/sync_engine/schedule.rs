@@ -240,7 +240,7 @@ pub fn let_go(socket_group: &str, now: Membership<'_>) -> bool {
 /// The two closes with which the relay says a socket's group is no longer this device's.
 ///
 /// **Two codes because they are two events, read differently**, and a build that gave both one
-/// code got each wrong on somebody: see `relay/src/log.ts`'s `CLOSE_REMOVED`.
+/// code got each wrong on somebody: see `infrastructure/relay/src/log.ts`'s `CLOSE_REMOVED`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Gone {
     /// 4002 — a rotation's manifest no longer names this device.
@@ -250,10 +250,10 @@ pub enum Gone {
 }
 
 /// The close the relay sends one device when a rotation's manifest no longer names it —
-/// `relay/src/log.ts`'s `CLOSE_REMOVED`.
+/// `infrastructure/relay/src/log.ts`'s `CLOSE_REMOVED`.
 pub const CLOSE_REMOVED: u16 = 4002;
 
-/// The close the relay sends every socket of a group whose log it drops — `relay/src/log.ts`'s
+/// The close the relay sends every socket of a group whose log it drops — `infrastructure/relay/src/log.ts`'s
 /// `CLOSE_DROPPED`, and the only one of the two a released client has heard of.
 pub const CLOSE_DROPPED: u16 = 4001;
 
@@ -587,7 +587,7 @@ mod tests {
         // The numbers are the relay's, and it must be these two this way round: 4001 is the
         // only one a released client knows, and it reads it as "the group no longer exists".
         assert_eq!((CLOSE_REMOVED, CLOSE_DROPPED), (4002, 4001));
-        let relay = include_str!("../../../../relay/src/log.ts");
+        let relay = include_str!("../../../../infrastructure/relay/src/log.ts");
         assert!(relay.contains("export const CLOSE_REMOVED = 4002;"));
         assert!(relay.contains("export const CLOSE_DROPPED = 4001;"));
         for ordinary in [None, Some(1000), Some(1006), Some(4000), Some(4003)] {

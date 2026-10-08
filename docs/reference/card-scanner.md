@@ -42,11 +42,11 @@ ranked candidates. **It knows nothing about cameras** — where a frame came fro
 caller's business, which is what lets one implementation serve the CLI, the live debug page,
 and later the app's `getUserMedia` path with no second copy of the pipeline.
 
-**Deliberately not a cargo workspace member.** `src-tauri/Cargo.toml` is a standalone package
+**Deliberately not a cargo workspace member.** `apps/desktop/src-tauri/Cargo.toml` is a standalone package
 today and converting it to a workspace root moves `target/`, which is the last thing worth
 disturbing for a layout preference. `src-tauri` takes this crate as a plain `path` dependency
 when integration lands; that works fine across two standalone packages. The cost of the choice
-is one line in `.gitignore` (`crates/*/target/`), because `src-tauri/target/` does not cover
+is one line in `.gitignore` (`crates/*/target/`), because `target/` does not cover
 it.
 
 **A workspace did arrive, on 2026-10-02, and this crate is still outside it.** The repository
@@ -58,7 +58,7 @@ optional**: excluded from the root, cargo would otherwise keep walking up the pa
 directories for a workspace, and an agent worktree sits under the main checkout — whose root
 manifest knows nothing of a crate inside a worktree and refuses it (`current package believes
 it's in a workspace when it's not`; reproduced that day in a scratch copy of the layout).
-`target/` did not move either: the root's `.cargo/config.toml` pins the workspace's
+`target/` did not move either (it did on 2026-10-08, to the root, and the pin now reads `target`): the root's `.cargo/config.toml` pins the workspace's
 tree to `src-tauri/target`. **That pin reaches this crate too when cargo is run from the
 repository root**, because cargo reads config from the working directory and not from
 `--manifest-path` — measured that day, `cargo metadata --manifest-path
@@ -1610,7 +1610,7 @@ node crates/card-scanner/scripts/fetch-ocr-models.mjs      # 12.2 MB, into .scan
 
 cargo run --release --bin serve --features cli -- \
   --bundle    .scanner-bundle/card-hashes-v5.bin \
-  --corpus    src-tauri/target/debug/data/corpus.db \
+  --corpus    target/debug/data/corpus.db \
   --ocr-models .scanner-bundle/models
 ```
 
@@ -2028,7 +2028,7 @@ keep building into `crates/card-scanner/target/`. ("No workspace is created" sto
 `rusqlite = "0.40"`; `ocr` is the two readers.
 
 **The `[profile.dev.package.*]` overrides are repeated in the build root's manifest** — the
-workspace root's `Cargo.toml` since 2026-10-02, `src-tauri/Cargo.toml` before it. §1 already
+workspace root's `Cargo.toml` since 2026-10-02, `apps/desktop/src-tauri/Cargo.toml` before it. §1 already
 says a profile override in a *dependency* is ignored; cargo reads `[profile.*]` from the build
 root and nowhere else, so the moment `src-tauri` took this crate the crate's own overrides
 stopped applying to it. The measured reason is §7's release/debug table read from the other
@@ -2037,7 +2037,7 @@ side: rectify 2,022 ms against 48 ms, a 960 px JPEG decode 230 ms against 3–4,
 on the list is the manifest's own answer and is not copied here** — `image` and `imageproc` are
 the two the crate always needed, and everything beyond them was put there by the live pass
 rather than by a guess, each with its measurement in the comment above the block. Read
-`src-tauri/Cargo.toml`; a list restated in prose is one that goes stale the next time a profile
+`apps/desktop/src-tauri/Cargo.toml`; a list restated in prose is one that goes stale the next time a profile
 is measured.
 
 **`npm run verify` runs the crate's suite** as a step beside the `src-tauri` one, at
@@ -2087,7 +2087,7 @@ so a `j.`-only scrape yielded 20 keys without it and deleting `Verdict::ocr` wou
 green while blanking the page's OCR panel. `ocr` is therefore asserted for **by name** as the
 canary for the whole scrape.
 
-### `src-tauri/src/scanner.rs` — the first four commands
+### `apps/desktop/src-tauri/src/scanner.rs` — the first four commands
 
 `ScannerState` is `app.manage`d beside `AppState` in `.setup()`, not a field on it: the scanner
 is optional, and the only thing it shares with the rest of the app is the data directory and one
@@ -2095,7 +2095,7 @@ read of `corpus.db`.
 
 **Since 2026-10-03 that is history** (the light app's step 7,
 [light-app.md](light-app.md) §6.10): the session glue is `crates/grimoire-core/src/scanner.rs`,
-the state is the core's `State.scanner` — built empty, still lazy — and `src-tauri/src/scanner/mod.rs`
+the state is the core's `State.scanner` — built empty, still lazy — and `apps/desktop/src-tauri/src/scanner/mod.rs`
 keeps the embedded assets, the raw request body and the commands. Everything below about the
 load order, the lease, the prefs and the tray still holds, in the core's file.
 
@@ -2180,7 +2180,7 @@ app's own command is always callable. No `error_log` source: the page shows the 
 
 **Those four are the ones §9 shipped, and the module has more now** — the filters push, the prefs
 and tray pair with the tray's commit (§10), and the lease's two (below). **Do not count them from
-this page**: `grep '#\[tauri::command\]' src-tauri/src/scanner/mod.rs` answers it, and a count is a
+this page**: `grep '#\[tauri::command\]' apps/desktop/src-tauri/src/scanner/mod.rs` answers it, and a count is a
 fact about a tree that every open branch disagrees about.
 
 **One body shape: the JPEG raw, and what travels with it in a header.** `scanner_frame` takes
@@ -2244,8 +2244,8 @@ all. And the *options* header is weaker still: its case compares against plain
 those defaults are all-ASCII** — every value there is a number, a boolean, `"both"` or `"votes"`
 — so `x-scanner-options` is escaped by the same function and pinned by nothing that could tell
 if it stopped being. That is why the rule is written out in
-[`src/CLAUDE.md`](../../src/CLAUDE.md) and
-[`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) as well as here: the tests prove the capture
+[`packages/ui/CLAUDE.md`](../../packages/ui/CLAUDE.md) and
+[`apps/desktop/src-tauri/CLAUDE.md`](../../apps/desktop/src-tauri/CLAUDE.md) as well as here: the tests prove the capture
 header at each end, and the prose is what carries the rule to the next header somebody adds.
 
 `scanner_capture` writes `live-<epoch>.jpg` and its `.json` sidecar into `data/scanner/scans/`,
@@ -2359,7 +2359,7 @@ only the desktop's has request headers:
 | Host | The body | The three headers |
 | --- | --- | --- |
 | Desktop (`tauriCore`) | the raw IPC body, `InvokeBody::Raw` | request headers, read off Tauri's `HeaderMap` |
-| Android (`tableCore`, `src/lib/core/table.ts`) | base64 text in `core_call`'s `body` — Tauri takes no raw body on Android — decoded by the host | `core_call`'s `args`: `{"x-scanner-options": "<json>", "x-scanner-detail": "<n>"}` |
+| Android (`tableCore`, `packages/ui/lib/core/table.ts`) | base64 text in `core_call`'s `body` — Tauri takes no raw body on Android — decoded by the host | `core_call`'s `args`: `{"x-scanner-options": "<json>", "x-scanner-detail": "<n>"}` |
 | Web (`protocol.ts`) | a transferred buffer | the call message's `args`, the same object |
 
 On the last two the call is answered by the core's command table, where `scanner_frame` and
@@ -2372,7 +2372,7 @@ same sentences on every host. `asciiJson` still escapes both header JSONs for al
 the desktop's transport needs it, and one spelling is one thing to test.
 
 **In a browser the session's commands are answered on the page** (step 7.5, 2026-10-07), in
-front of the engine's table and in its shapes — `src/lib/core/web/scanner.ts`, which wraps the
+front of the engine's table and in its shapes — `packages/ui/lib/core/web/scanner.ts`, which wraps the
 web host's `Core` as `files.ts` wraps it for the two file dialogs:
 
 | Command | What the web host does with it |
@@ -2404,7 +2404,7 @@ is one of the entries a finished sync marks stale (`useSyncInvalidation`). The e
 **A host that has no scanner at all says so in a sentence the page stays quiet on.** The view
 matches a refused filter push against a closed list (`verdictText.ts`'s `scannerUnavailable`:
 the engine's sentence, pinned by `ipc.test.ts`, and the web host's two in
-`src/lib/core/hostScanner.ts` — a browser without WebAssembly SIMD, a build made without the
+`packages/ui/lib/core/hostScanner.ts` — a browser without WebAssembly SIMD, a build made without the
 scanner's files) so that it is not counted as an answer: `useScannerPrefs` reports
 `unavailable`, `loaded` never goes true, **no camera is asked for and no frame is sent**, and
 the sentence is drawn in the video box. Before 2026-10-07 the same view on a light host heard
@@ -2442,7 +2442,7 @@ the next generated write is one editor away.
 
 ### The view
 
-`src/features/scanner/`.
+`packages/ui/features/scanner/`.
 
 | File | Owns |
 | --- | --- |
@@ -2554,7 +2554,7 @@ store is the two `app_meta` rows (§10) — nothing here mirrors a table. The pa
 driven from fixtures directly. **`scanner_frame` answered the decided fixture on every frame
 until 2026-10-07**, whatever bytes it was handed, with a `decision_seq` of 1 — which is the
 baseline `useScanLoop` takes and never moves off, so over the fake a camera added nothing. It
-is a script now (`.storybook/fake/scannerScript.ts`; *On the phone face*, below). The fault
+is a script now (`packages/fake/scannerScript.ts`; *On the phone face*, below). The fault
 **`scannerMissing`** makes `scanner_status` answer every asset absent with its path, and the
 script find a card it can never name.
 
@@ -2682,7 +2682,7 @@ release that silently cannot scan is a regression nobody would see until a reade
 **So the first release after this lands fails on every leg unless `scanner-bundle` has been
 dispatched once on `main`** — and a dispatch button exists only once the workflow file is on `main`.
 
-**`scripts/scanner-assets.mjs`** fetches the three into `src-tauri/scanner-assets/`, which a developer
+**`scripts/scanner-assets.mjs`** fetches the three into `apps/desktop/src-tauri/scanner-assets/`, which a developer
 and the release job both do the same way. A download lands as `<name>.part` and is
 renamed only once whole, because `build.rs` embeds whatever is present and a truncated file would
 ship. A file whose size already equals the response's `content-length` is kept. **It sets
@@ -2695,10 +2695,10 @@ the repository is public.
 without its models, or the reverse, is a half-shipped scanner. `cargo:rustc-check-cfg` declares
 the name, so no build meets it as an unknown cfg. `rerun-if-changed` names the directory and each
 file present, and **never a path that does not exist**, which would rerun the script on every
-build; the tracked `src-tauri/scanner-assets/README.md` is what keeps the directory there
-(`.gitignore` takes `src-tauri/scanner-assets/*` and re-includes the README). Proven by running the
+build; the tracked `apps/desktop/src-tauri/scanner-assets/README.md` is what keeps the directory there
+(`.gitignore` takes `apps/desktop/src-tauri/scanner-assets/*` and re-includes the README). Proven by running the
 script with `tauri_build::build()` stubbed through none, two of three (no cfg) and all three.
-`scanner.rs` then `include_bytes!`s the three under the cfg — `src-tauri/src/scanner/mod.rs`
+`scanner.rs` then `include_bytes!`s the three under the cfg — `apps/desktop/src-tauri/src/scanner/mod.rs`
 since the session glue moved to the core, which hands what it embeds to `State.scanner.carry` as
 the app starts.
 
@@ -2732,7 +2732,7 @@ fetched until the reader presses.
 
 | Host | Where the three files come from | Asked at run time |
 | --- | --- | --- |
-| Desktop, release build | embedded by `build.rs` from `src-tauri/scanner-assets/`, which `npm run scanner:assets` fills from the release | nothing — it owes nothing, is offered nothing and makes no request |
+| Desktop, release build | embedded by `build.rs` from `apps/desktop/src-tauri/scanner-assets/`, which `npm run scanner:assets` fills from the release | nothing — it owes nothing, is offered nothing and makes no request |
 | Desktop, a build with nothing embedded | a file placed in `data/scanner/` by hand, or the download below | GitHub, on the reader's press |
 | Android | the download below, into `<app data>/data/scanner/` | GitHub, on the reader's press |
 | Web | the app's own origin, `/scanner-assets/` — the release's three files, copied into the web build (`npm run scanner:assets -- --web`), with a manifest of their lengths and digests; kept in Cache Storage | the app's own origin, on the reader's press |
@@ -2741,10 +2741,10 @@ fetched until the reader presses.
 header, so a page cannot read the place a native host fetches from; the web build serves the
 same three files itself. `scripts/scanner-assets.mjs --web` fetches them into
 `dist-wasm/scanner-assets/` and writes `manifest.json` beside them — each file's key, name,
-exact length and SHA-256, and the bundle's `FORMAT_VERSION` — and `vite.mobile.config.ts` holds
+exact length and SHA-256, and the bundle's `FORMAT_VERSION` — and `apps/light/vite.config.ts` holds
 the folder to that manifest before it emits a byte (CI's and the release's builds *require*
 it; a developer's build without it says the scanner's files are not part of it). The page's
-half is `src/lib/core/web/scanStore.ts`:
+half is `packages/ui/lib/core/web/scanStore.ts`:
 
 - **Owed is what the store does not hold as the manifest describes it, by digest** — so a
   release that rebuilt the bundle owes it again under the name it always had, and until the
@@ -2892,7 +2892,7 @@ anything landed before it failed — so the next scanner command loads a session
 it. No restart, which is the point: §9's *Loading is lazy and never happens again* is still true
 of a file placed by hand, and no longer of one fetched.
 
-**On the page** (`src/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`) the reader's
+**On the page** (`packages/ui/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`) the reader's
 view draws the offer under the camera, where the path-and-restart sentences were: *The scanner
 needs its card data — about 19 MB*, what each file is, and **Download**; then a bar with how far
 it has got; then, on a failure, the engine's sentence and **Retry**. **It is drawn from what
@@ -3535,7 +3535,7 @@ the tray's header beside the layout toggle and is refused — drawn greyed, neve
 empty tray and while a commit is in flight. A press is a *request* (`TrayPanel`'s `onClearAll`):
 the question is `ScannerPage`'s, a `ConfirmDialog` with no typed word, mounted as a sibling of the
 view's `@container/scan` box rather than inside it, because a container is the containing block for
-a `fixed` scrim ([`src/CLAUDE.md`](../../src/CLAUDE.md)'s `@container` rule). **It clears the rows
+a `fixed` scrim ([`packages/ui/CLAUDE.md`](../../packages/ui/CLAUDE.md)'s `@container` rule). **It clears the rows
 it asked about, not the tray at the moment of Confirm**: the camera keeps running behind the
 dialog, so the confirmed clear is the commit's own `withoutCommitted` against a snapshot taken
 when the dialog opened — a card that landed meanwhile stays, a bump keeps the copies added since.
@@ -3551,7 +3551,7 @@ spanning two columns with its candidates as whole cards. The column template gua
 a one-column grid. **Every tray picture is the whole card, never the `art` crop** — the list row's
 is the `thumb` variant in a 5:7 slot with `object-contain`. A crop has no printed frame and so no artist credit, a tray row carries no
 artist to name beside one, and the Scanner shows no other full card a reader could read the credit
-off — [`src/CLAUDE.md`](../../src/CLAUDE.md)'s art-credit rule, met by its second arm. The candidate
+off — [`packages/ui/CLAUDE.md`](../../packages/ui/CLAUDE.md)'s art-credit rule, met by its second arm. The candidate
 cards on an ambiguous row are whole cards for a second reason: reprints share art, and what tells two
 printings apart is the frame — the set symbol, the border, the treatment.
 
@@ -4312,7 +4312,7 @@ this before creation, and a successful creation opens the deck editor.
 
 The light app's phone face (below 1024px; [light-app.md](light-app.md)) has had a Scanner tab
 since phase 3 and a sentence behind it. Since 2026-10-07 it is the scanner:
-`mobile/phone/pages/ScannerPage.tsx` and `mobile/phone/scanner/`. **The desktop reader's parts
+`apps/light/phone/pages/ScannerPage.tsx` and `apps/light/phone/scanner/`. **The desktop reader's parts
 in the phone's idioms** — nothing about how a card is recognised, landed or filed is written a
 second time.
 
@@ -4379,7 +4379,7 @@ replaces the slot's body.
 
 ### The fake's session is a script
 
-`.storybook/fake/scannerScript.ts`. One card is thirteen frames — three with nothing in frame,
+`packages/fake/scannerScript.ts`. One card is thirteen frames — three with nothing in frame,
 four weighing (the bar filling to 7 of 8), the one that decides, five held with the same number —
 answered `FAKE_FRAME_MS` (110 ms) apart, so a card about every 1.4 s. The pile is five, in the
 Storybook corpus's own printings: Urza's Saga, Urza's Saga again (a bump to ×2), Ancient Tomb,

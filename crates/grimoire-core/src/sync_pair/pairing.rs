@@ -139,7 +139,7 @@ const STAGE_COMPLETE: &str = "complete";
 /// tick must not be stranded by that.
 const STAGE_EXPIRED: &str = "expired";
 
-/// Ten minutes, in milliseconds. Mirrors `relay/src/rendezvous.ts`'s `RENDEZVOUS_TTL_MS`.
+/// Ten minutes, in milliseconds. Mirrors `infrastructure/relay/src/rendezvous.ts`'s `RENDEZVOUS_TTL_MS`.
 ///
 /// **The two are not held together by anything a build can check** — the relay is TypeScript a
 /// reader deploys themselves — so the number is written twice on purpose and this comment is the
@@ -968,7 +968,7 @@ mod tests {
     //
     // `accept` and `confirm` are `async` now, and make a real `reqwest` call each — so every
     // test that drives them needs something answering at the other end. This is a tiny
-    // in-process stand-in for `relay/src/rendezvous.ts`'s two slots, wired to real HTTP (via
+    // in-process stand-in for `infrastructure/relay/src/rendezvous.ts`'s two slots, wired to real HTTP (via
     // httpmock's dynamic `respond_with`) so those calls exercise the real wire path rather than
     // a second hand-written substitute for it.
     // -----------------------------------------------------------------------------------

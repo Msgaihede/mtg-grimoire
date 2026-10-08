@@ -39,11 +39,11 @@ import { join, relative, sep } from "node:path";
  * `grimoire-core` — a hyphen is not an identifier — so the prefix cannot collide with one.
  */
 const MEMBERS = [
-  { src: "src-tauri/src", prefix: "" },
+  { src: "apps/desktop/src-tauri/src", prefix: "" },
   { src: "crates/grimoire-core/src", prefix: "grimoire-core/" },
 ];
-// Still under `src-tauri/target`: the workspace builds there (`.cargo/config.toml`).
-const LCOV = join("src-tauri", "target", "llvm-cov", "coverage.lcov");
+// Still under `target`: the workspace builds there (`.cargo/config.toml`).
+const LCOV = join("target", "llvm-cov", "coverage.lcov");
 
 const reportOnly = process.argv.includes("--report-only");
 
@@ -57,7 +57,7 @@ if (!reportOnly) {
   // members' tests, which is what `cargo test --workspace` runs in `verify` and in CI.
   // `crates/card-scanner` is not a member, so its own suite is not in this figure — it never
   // was — and whatever of it the app's tests execute is dropped below with the dependencies.
-  mkdirSync(join("src-tauri", "target", "llvm-cov"), { recursive: true });
+  mkdirSync(join("target", "llvm-cov"), { recursive: true });
   execFileSync("cargo", ["llvm-cov", "--workspace", "--locked", "--lcov", "--output-path", LCOV], {
     stdio: "inherit",
   });

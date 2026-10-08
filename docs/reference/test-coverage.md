@@ -26,7 +26,7 @@ denominators, and the Rust one has had a correction applied that the frontend on
 
 ```
 npm run test:coverage        # frontend; writes coverage/ and prints the table
-npm run test:coverage:rust   # Rust; writes src-tauri/target/llvm-cov/coverage.lcov
+npm run test:coverage:rust   # Rust; writes target/llvm-cov/coverage.lcov
 ```
 
 The Rust side needs a one-time `cargo install cargo-llvm-cov` plus
@@ -41,7 +41,7 @@ re-running anything.
 this page was taken that way.** The Rust engine is moving out of `src-tauri` into
 `crates/grimoire-core`, a module at a time, so a run over `src-tauri` alone would lose every
 module that has moved — `legalities.rs` and `index/bitset.rs` in the table below are two of the
-first. It now runs `cargo llvm-cov --workspace` and reads sources under both `src-tauri/src` and
+first. It now runs `cargo llvm-cov --workspace` and reads sources under both `apps/desktop/src-tauri/src` and
 `crates/grimoire-core/src`; an engine file is printed with a `grimoire-core/` prefix and an app
 file bare, as before. **The changed script has not been run against cargo** — it was checked
 with `--report-only` over a synthetic LCOV — so the first real run is also its first test, and
@@ -49,16 +49,16 @@ every number below is still the 2026-08-12 measurement of a single package.
 
 ## Frontend — what is in the denominator
 
-`vite.config.ts` sets `coverage.include` to `src/**/*.{ts,tsx}` explicitly. **In Vitest 4 that
+`vitest.config.ts` sets `coverage.include` to `packages/ui/**/*.{ts,tsx}` explicitly. **In Vitest 4 that
 line is what makes an untested file count as 0% rather than disappear.** Vitest 4 removed
 `coverage.all`, and with no `include` the report covers only the modules some test happened to
 import — which flatters the figure by exactly the files nobody tested. With the line in place the
-report holds **every source file under `src/`** — 107 of them on the day this was measured, and
+report holds **every source file under `packages/ui/`** — 107 of them on the day this was measured, and
 none at 0%. **The 107 is a fact about the tree on 2026-08-12 and not a property of the config**:
-`src/` has grown a long way past it since, and the only honest way to restate any figure on this
+`packages/ui/` has grown a long way past it since, and the only honest way to restate any figure on this
 page is to re-run the commands under **Reproducing it** above. Test _files_ never enter the
 denominator, so a new suite —
-`src/features/decks/decklists.test.ts`, say — moves the test count in the headline table and
+`packages/ui/features/decks/decklists.test.ts`, say — moves the test count in the headline table and
 nothing else here.
 
 Excluded, and why: `*.test.{ts,tsx}` and the two test-only helpers (`test-setup.ts`,
@@ -66,7 +66,7 @@ Excluded, and why: `*.test.{ts,tsx}` and the two test-only helpers (`test-setup.
 its coverage of itself would be circular; `vite-env.d.ts` (no statements) and `main.tsx` (a
 `createRoot` call that only ever runs in a browser).
 
-Stories still _run_ — `src/stories.test.tsx` composes every one of them and drives its `play` —
+Stories still _run_ — `packages/ui/stories.test.tsx` composes every one of them and drives its `play` —
 so the components they exercise are covered by them. Only the story files themselves are out.
 
 **`--testTimeout=30000` is in the script for a reason.** v8 instrumentation slows the story plays
@@ -169,11 +169,11 @@ test modules contain lines no test reaches, which is what the correction is supp
 
 | File                                  | Lines  | Missed |
 | ------------------------------------- | ------ | ------ |
-| `src/lib/useUpdate.ts`                | 65.62% | 22     |
-| `src/lib/useErrorLog.ts`              | 70.00% | 3      |
-| `src/lib/trapTab.ts`                  | 83.33% | 3      |
-| `src/features/decks/FolderTree.tsx`   | 87.21% | 17     |
-| `src/features/search/SetCombobox.tsx` | 88.60% | 9      |
+| `packages/ui/lib/useUpdate.ts`                | 65.62% | 22     |
+| `packages/ui/lib/useErrorLog.ts`              | 70.00% | 3      |
+| `packages/ui/lib/trapTab.ts`                  | 83.33% | 3      |
+| `packages/ui/features/decks/FolderTree.tsx`   | 87.21% | 17     |
+| `packages/ui/features/search/SetCombobox.tsx` | 88.60% | 9      |
 
 `useUpdate.ts` is the frontend half of the same updater that is thin on the Rust side, so the
 in-app update path is the least-covered feature in the repo end to end.

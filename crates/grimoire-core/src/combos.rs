@@ -1250,7 +1250,7 @@ fn temp_path(state: &State) -> PathBuf {
 
 /// What the UI needs to say whether this app has combo data and how old it is.
 ///
-/// Serialised `camelCase` to the shape `src/lib/ipc.ts` mirrors by hand.
+/// Serialised `camelCase` to the shape `packages/ui/lib/ipc.ts` mirrors by hand.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ComboStatus {
@@ -1377,7 +1377,7 @@ fn unix_now() -> i64 {
 
 /// One combo a deck holds every named card of.
 ///
-/// Serialised `camelCase` to the shape `src/lib/ipc.ts` mirrors by hand.
+/// Serialised `camelCase` to the shape `packages/ui/lib/ipc.ts` mirrors by hand.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DeckCombo {
@@ -1499,7 +1499,7 @@ pub const MAX_PAGE: i64 = 100;
 
 /// One card a combo names, with everything a panel needs to draw it.
 ///
-/// Serialised `camelCase` to the shape `src/lib/ipc.ts` mirrors by hand.
+/// Serialised `camelCase` to the shape `packages/ui/lib/ipc.ts` mirrors by hand.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct ComboPiece {
@@ -1534,7 +1534,7 @@ pub struct ComboPiece {
 /// no claim about the other pieces, and therefore has to say what each of them is and whether
 /// the reader has it.
 ///
-/// Serialised `camelCase` to the shape `src/lib/ipc.ts` mirrors by hand.
+/// Serialised `camelCase` to the shape `packages/ui/lib/ipc.ts` mirrors by hand.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct CardCombo {

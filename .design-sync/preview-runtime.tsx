@@ -11,7 +11,7 @@
  * its dispatch table, its listener map and its active-scope pointer in module scope. A story
  * that calls `emitFake` reaches the component's subscription only if both sides are looking at
  * the *same* module instance — and a preview compiles the story's imports from source unless
- * something redirects them. `cfg.storyImports.shim` redirects every `.storybook/fake/` import to
+ * something redirects them. `cfg.storyImports.shim` redirects every `packages/fake/` import to
  * `window.MtgGrimoire`, and these re-exports are what put the fakes there to be found. Drop them
  * and `SyncProgress`'s stories emit progress events into a second, unobserved listener map:
  * every panel renders its "before any event" state and the previews look plausibly wrong.
@@ -24,22 +24,22 @@
 import { useEffect, useLayoutEffect, useMemo, type ReactNode } from "react";
 
 import { QueryClientProvider } from "@tanstack/react-query";
-import { installWorld, type FakeParams } from "../.storybook/fake/world";
+import { installWorld, type FakeParams } from "../packages/fake/world";
 import { MotionConfig } from "motion/react";
-import { ContextMenuProvider } from "../src/components/menu/ContextMenuProvider";
-import { TooltipProvider } from "../src/components/tooltip/TooltipProvider";
-import { CardToDeckProvider } from "../src/features/card/cardMenu";
-import { installKeyboardModality } from "../src/lib/keyboardModality";
-import { bundledArtRootFor, setArtMode, setBundledArtRoot } from "../.storybook/fake/images";
+import { ContextMenuProvider } from "../packages/ui/components/menu/ContextMenuProvider";
+import { TooltipProvider } from "../packages/ui/components/tooltip/TooltipProvider";
+import { CardToDeckProvider } from "../packages/ui/features/card/cardMenu";
+import { installKeyboardModality } from "../packages/ui/lib/keyboardModality";
+import { bundledArtRootFor, setArtMode, setBundledArtRoot } from "../packages/fake/images";
 
-export * from "../.storybook/fake/core";
-export * from "../.storybook/fake/scope";
-export * from "../.storybook/fake/world";
-export * from "../.storybook/fake/images";
-export * from "../.storybook/fake/event";
-export * from "../.storybook/fake/window";
-export * from "../.storybook/fake/fixtures";
-export * from "../.storybook/fake/cards";
+export * from "../packages/fake/core";
+export * from "../packages/fake/scope";
+export * from "../packages/fake/world";
+export * from "../packages/fake/images";
+export * from "../packages/fake/event";
+export * from "../packages/fake/window";
+export * from "../packages/fake/fixtures";
+export * from "../packages/fake/cards";
 
 /**
  * Point the fake at this world before the story's own effects run.
@@ -81,7 +81,7 @@ export function GrimoireWorld({
   useEffect(() => world.mount(), [world]);
 
   // **The app's provider stack, mirrored from `.storybook/preview.tsx`'s `withFake`** — which
-  // mirrors `src/App.tsx` in turn. Four of these joined storybook after this file was written,
+  // mirrors `packages/ui/App.tsx` in turn. Four of these joined storybook after this file was written,
   // and their absence is not a soft degradation: `AppShell` calls `useCardToDeckRefusal`, which
   // throws "A card menu needs <CardToDeckProvider>" outright, so all eleven of its cells died and
   // the card rendered an empty root until this stack was restored.
@@ -89,7 +89,7 @@ export function GrimoireWorld({
   // Order is load-bearing and copied, not invented. `CardToDeckProvider` and `TooltipProvider`
   // sit ABOVE `ContextMenuProvider` because that provider draws its panel as a *sibling* of its
   // children: mounted inside it, a context reaches every view and none of the menu's own rows.
-  // Both files write the reasoning out at length; read `src/App.tsx` before reordering these.
+  // Both files write the reasoning out at length; read `packages/ui/App.tsx` before reordering these.
   //
   // Inside `QueryClientProvider` because `CardToDeckProvider` mounts `useDeck`, a query.
   return (
@@ -148,7 +148,7 @@ function useAppSurface(): void {
  * What `main.tsx` installs for the app and `.storybook/preview.tsx` for the workbench: the
  * `html[data-kbd]` attribute every focus ring in the app is gated on.
  *
- * `src/index.css` redefines the `focus-visible:` variant as `html[data-kbd] *:focus-visible` and
+ * `packages/ui/index.css` redefines the `focus-visible:` variant as `html[data-kbd] *:focus-visible` and
  * blanks `html:not([data-kbd]) :focus-visible`, so without this a design built from the bundle
  * shows **no keyboard focus ring anywhere** — Tab moves through it and nothing draws. Found on
  * 2026-09-27 grading `TooltipProvider`'s `OnFocus`, whose reference shows the ring.

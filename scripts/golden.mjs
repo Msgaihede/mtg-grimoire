@@ -2,8 +2,8 @@
  * Regenerates the golden files from the TypeScript writer, which is the behaviour of record.
  *
  * Run with `npm run golden`. Both suites then assert byte equality against what this wrote:
- * `src/features/transfer/golden.test.ts` for this writer, and (from Task 2 on) the Rust one's
- * own suite for `src-tauri/src/transfer/`. A change to either writer is a red suite, which is
+ * `packages/ui/features/transfer/golden.test.ts` for this writer, and (from Task 2 on) the Rust one's
+ * own suite for `apps/desktop/src-tauri/src/transfer/`. A change to either writer is a red suite, which is
  * the whole point — so **nothing here may massage the output**. If a golden file looks wrong,
  * the writer is what to argue with.
  *
@@ -17,7 +17,7 @@
  * like a flag that does something.
  *
  * **How the `.ts` imports run, decided by running it.** Plain `node scripts/golden.mjs` fails
- * with `ERR_MODULE_NOT_FOUND` on `src/features/transfer/export/format.ts`'s
+ * with `ERR_MODULE_NOT_FOUND` on `packages/ui/features/transfer/export/format.ts`'s
  * `import { csvRow } from "../csv"`: the app is written for a bundler and leaves the extension
  * off, and Node's ESM resolver requires one. `vite-node` is not installed, and driving Vite's
  * own `ssrLoadModule` pulls the whole app through `vite:dep-scan` for two pure modules. So the
@@ -30,7 +30,7 @@
  * *value* import from `@/lib/prices` when purchase prices got one parser, and `tsconfig.json`'s
  * `paths` alias means nothing to Node — so `npm run golden` failed on `Cannot find package '@/lib'`
  * from that commit until this one, with nothing red anywhere, because `npm run verify` does not
- * run this script. `@/x` becomes `src/x` and then takes the same `.ts` retry a relative path does.
+ * run this script. `@/x` becomes `packages/ui/x` and then takes the same `.ts` retry a relative path does.
  * A type-only `@/` import never reaches the hook: Node strips it with the rest of the types.
  */
 import { readFileSync, writeFileSync, readdirSync, unlinkSync } from "node:fs";
@@ -38,8 +38,8 @@ import { registerHooks } from "node:module";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-/** `tsconfig.json`'s `"@/*": ["./src/*"]`, as a URL the resolver can take. */
-const SRC = `${pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "..", "src")).href}/`;
+/** `tsconfig.json`'s `"@/*": ["./packages/ui/*"]`, as a URL the resolver can take. */
+const SRC = `${pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "..", "packages", "ui")).href}/`;
 
 registerHooks({
   resolve(specifier, context, nextResolve) {
@@ -58,13 +58,13 @@ registerHooks({
   },
 });
 
-const { formatExport } = await import("../src/features/transfer/export/format.ts");
+const { formatExport } = await import("../packages/ui/features/transfer/export/format.ts");
 const { availableFields, defaultFields, SURFACE_FIELDS } = await import(
-  "../src/features/transfer/fields.ts"
+  "../packages/ui/features/transfer/fields.ts"
 );
-const { EXPORT_FORMATS } = await import("../src/features/transfer/formats.ts");
+const { EXPORT_FORMATS } = await import("../packages/ui/features/transfer/formats.ts");
 
-const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "src/features/transfer/__golden__");
+const DIR = join(dirname(fileURLToPath(import.meta.url)), "..", "packages/ui/features/transfer/__golden__");
 const corpus = JSON.parse(readFileSync(join(DIR, "corpus.json"), "utf8"));
 
 for (const name of readdirSync(DIR)) if (name.endsWith(".txt")) unlinkSync(join(DIR, name));

@@ -23,7 +23,7 @@ use std::collections::HashMap;
 
 /// The NA condition scale, in descending order, with the **not-set sentinel in front of it**.
 /// The EU scale (`M/NM/EX/GD/LP/PL/PO`) is normalised into this one at the edge — see
-/// `src/lib/conditions.ts` — and the string it arrived as is kept in `condition_original`.
+/// `packages/ui/lib/conditions.ts` — and the string it arrived as is kept in `condition_original`.
 ///
 /// `NONE` leads the list because it is the *default* rather than a grade, and every dropdown
 /// built from this array opens on its first entry. It is deliberately not where it **sorts**:
@@ -2522,14 +2522,14 @@ pub struct CollectionRow {
     /// From the *card*, unlike [`Self::finish`] two fields up, and the two are read together:
     /// the entry says which copy the reader owns and this says what that copy is called, so a
     /// `foil` entry on a Surge Foil printing is a Surge Foil and a `nonfoil` one on the same
-    /// printing is not. `src/lib/treatment.ts` owns the naming.
+    /// printing is not. `packages/ui/lib/treatment.ts` owns the naming.
     pub promo_types: Option<String>,
     /// JSON, verbatim: this printing's `legalities` object, the same blob
     /// [`crate::deck::DeckCard::legalities`] carries and for the same reason — a fact, read by
     /// TypeScript, never a verdict decided here.
     ///
     /// **It rides here for the Arena export filter and nothing else on this screen.** The
-    /// collection view draws none of it; `src/features/transfer/export/arena.ts` is the one
+    /// collection view draws none of it; `packages/ui/features/transfer/export/arena.ts` is the one
     /// reader, and the export's paged sweep goes through this command like any other list. Its
     /// cost is on the record because it is the largest string on the row by some way — 483
     /// bytes on average and 528 at most, over the 116,712-printing corpus of 2026-08-22, where
@@ -3513,7 +3513,7 @@ mod tests {
     ///
     /// Issue #160: the entry says which copy the reader owns and this says what that copy is
     /// called, so the foil of a Surge Foil printing is a Surge Foil and the plain copy of the
-    /// same printing is not. That distinction is `src/lib/treatment.ts`' to draw; this test is
+    /// same printing is not. That distinction is `packages/ui/lib/treatment.ts`' to draw; this test is
     /// about the column arriving, and arriving at the right index.
     ///
     /// Appended after `c.oracle_id` on that field's own argument — every index above stays what
@@ -3563,7 +3563,7 @@ mod tests {
     /// column put it at.**
     ///
     /// Issue #192: the Arena export offers to leave out cards that are not in MTG Arena, and
-    /// this blob is the only fact that answers it — `src/features/transfer/export/arena.ts`
+    /// this blob is the only fact that answers it — `packages/ui/features/transfer/export/arena.ts`
     /// reads the key *names*, never a bit position. The verdict is TypeScript's; the column
     /// arriving is this test's.
     ///
@@ -5057,7 +5057,7 @@ mod tests {
         );
     }
 
-    /// The wire names `src/lib/ipc.ts`'s `ShelfCount` reads — `value` crosses as `null`, never as
+    /// The wire names `packages/ui/lib/ipc.ts`'s `ShelfCount` reads — `value` crosses as `null`, never as
     /// `0`, and `peek` as an array of card ids.
     #[test]
     fn a_shelf_count_serialises_under_the_names_the_page_reads() {
@@ -5245,7 +5245,7 @@ mod tests {
         assert_eq!(valid_condition(None), Ok("NONE"));
         assert!(
             valid_condition(Some("none")).is_err(),
-            "exact, like every other grade: `src/lib/conditions.ts` is where a reader's spelling \
+            "exact, like every other grade: `packages/ui/lib/conditions.ts` is where a reader's spelling \
              becomes a storage code, and this fence is what makes that the only door"
         );
     }
@@ -5679,7 +5679,7 @@ mod tests {
         );
     }
 
-    /// `src/lib/ipc.ts` mirrors this by hand and nothing checks that the two still agree.
+    /// `packages/ui/lib/ipc.ts` mirrors this by hand and nothing checks that the two still agree.
     #[test]
     fn entry_change_json_uses_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(EntryChange {
@@ -5722,7 +5722,7 @@ mod tests {
     /// unrecognised key is silently ignored, so a name that does not match — a `serialNo`
     /// for a `serialNumber`, a `rename_all` lost in a refactor — is not an error anywhere:
     /// it is a **dropped grain column**, and the card the user marked as serialised folds
-    /// into the row of the one they did not. `src/lib/ipc.ts` mirrors these by hand.
+    /// into the row of the one they did not. `packages/ui/lib/ipc.ts` mirrors these by hand.
     ///
     /// Two things give it teeth. Every value is non-default, so a field that quietly failed
     /// to arrive reads as its default and fails a line below. And the result is
@@ -7218,7 +7218,7 @@ mod tests {
     }
 
     /// The hand-mirrored wire contract, pinned whole so a field added on this side and
-    /// never mirrored in `src/lib/ipc.ts` fails here rather than rendering as `undefined`.
+    /// never mirrored in `packages/ui/lib/ipc.ts` fails here rather than rendering as `undefined`.
     #[test]
     fn collection_row_json_uses_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(CollectionRow {

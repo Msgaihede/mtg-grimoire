@@ -490,7 +490,7 @@ mod tests {
     }
 
     /// What the deck editor draws for one deck: `get_deck` (deck.rs:4914), then `deckStats`'
-    /// copies-and-money loop (src/features/decks/DeckStats.tsx:455-509) — active rows only,
+    /// copies-and-money loop (packages/ui/features/decks/DeckStats.tsx:455-509) — active rows only,
     /// `have = min(owned, quantity)`, a missing copy at its row's `unitPrice`, and the money
     /// `null` exactly when no counted row is priced. `unpriced_missing` is the missing copies of
     /// the unpriced rows, which is the contract's field and one step narrower than `unpriced`.

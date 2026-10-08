@@ -1,0 +1,799 @@
+/* `dnd-kit`'s cascade layer, declared here rather than where its rules are written, because a
+   layer takes its priority from where it is first *named* and this one has to be named before
+   Tailwind's. See the block at the foot of this file for what is in it and why any of it is
+   here at all; the whole of the reason it must come first is that the rules inside it reset a
+   dragged element's box, and a layer sorted after Tailwind's utilities would win against them.
+   A layer statement is one of the two things CSS allows above `@import`. */
+@layer dnd-kit;
+
+/* `source(none)` plus the one explicit source below, because Tailwind's automatic
+   detection scans the *whole repository* — and this repository keeps its plans, specs and
+   carryover notes in tracked Markdown that quotes component source. The scanner cannot tell
+   a class in a fenced code block from a class in a component, so `docs/` was emitting live
+   CSS rules: a retired utility went on being generated out of the plan that described
+   retiring it. Documentation must be free to name a class without shipping it.
+
+   Anything that holds classes has to be listed now, and what is listed *here* is this folder
+   alone — `packages/ui/`, the shared UI. Each program that draws with it imports this file
+   from a stylesheet of its own and names its own sources there: the desktop's shell and entry
+   in `apps/desktop/src/desktop.css` (the shell's line was here until 2026-10-08, when this
+   stopped being one app's sheet), the light app's in `apps/light/mobile.css`, the share
+   viewer's in `apps/share/share.css`. A new folder under none of them is a silently missing
+   style, so add it in the same commit.
+
+   `.storybook` is deliberately **not** listed, and does not become one of those missing
+   styles: `.storybook/preview.css` imports this file and declares that source itself, so
+   Storybook gets the classes and the shipped bundle does not. It was listed here once, and
+   the cost was measured — see that file's header. */
+@import "tailwindcss" source(none);
+@source "./";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+@import "@fontsource-variable/geist-mono";
+@import "@fontsource/cinzel/500.css";
+@import "@fontsource/cinzel/600.css";
+/* `mana-font` and `keyrune` are imported from `main.tsx`, not here: Tailwind inlines every
+   `@import` in this file before Vite sees it, which would hide their `@font-face` rules
+   from the `woff2IconFonts` plugin that strips four dead formats out of them. */
+
+@custom-variant dark (&:is(.dark *));
+
+/* A coarse pointer — a finger, a stylus — as a variant, so `coarse:min-h-[var(--target-min)]` is
+   how a control says it grows for touch.
+
+   **One spelling, for `layers.test.ts`'s reason.** A raw media query written in a component is a
+   second answer to a question the app should answer once, and the two drift the first time either
+   moves. `packages/ui/lib/touchTargets.test.ts` sweeps `packages/ui/` for the raw query and this file is the one
+   place exempt from it. It is also the shape `motion-reduce:` already has here — grep it, the
+   count is a fact about a tree — so the vocabulary is one a reader of this codebase already has.
+
+   `pointer`, not `any-pointer`: a laptop with a touchscreen has a fine pointer *and* a coarse one,
+   and the `any-` spelling would grow every control on it for a finger nobody is using.
+
+   The at-rule form is what Tailwind 4.3.3 accepts, and it was proved by building rather than by
+   reading: a `@custom-variant` this version does not understand emits **nothing**, silently, with
+   `tsc` and the suite both green. See `docs/reference/frontend-design.md` for the grep. */
+@custom-variant coarse (@media (pointer: coarse));
+
+/* **Tailwind's built-in `focus-visible` variant, redefined to require a keyboard.**
+
+   `:focus-visible` does not mean what its name promises. Chromium's heuristic is modality-based
+   rather than navigation-based: any `keydown` arms it and whatever *already* holds focus starts
+   matching, with the focus never moving. So a reader clicked a card, the dialog focused its own
+   `tabIndex={-1}` panel, they pressed `w` — and a gold outline appeared around the whole modal.
+   The measurement, four steps of it, is in `packages/ui/lib/keyboardModality.ts`.
+
+   That module publishes `data-kbd` on `<html>` when focus *moved* and the reader's last input was
+   a key. Gating the variant here rather than at the call sites is the whole leverage: **every
+   `focus-visible:` utility in `packages/ui/` is covered by this one line without changing, and so is
+   every one written after today.** The alternative — a new variant name spelled out at each of
+   the ~400 sites — is a rule that has to be remembered, and the site that forgets it is a focus
+   outline that flickers on for a keystroke that did nothing.
+
+   The `&:is(…)` shape is `dark`'s directly above, for the same reason: it keeps the whole
+   condition on the element being styled, so the variant composes with the others (`coarse`,
+   `dark`, `[&::-webkit-slider-thumb]`) instead of fighting them for the selector's front.
+
+   **Proved by building, never by reading**, which is `coarse`'s warning above and it applies
+   double to an *override* of a variant Tailwind already ships: a redefinition this version
+   ignores does not warn, it silently leaves the built-in in place — and the app then looks
+   exactly as it does today, with `tsc` and the whole suite green.
+   `packages/ui/lib/keyboardModality.test.ts` therefore compiles these declarations against the real
+   Tailwind and reads the selector back, so the check is a build's and not a reader's. */
+@custom-variant focus-visible (&:is(html[data-kbd] *):focus-visible);
+
+/* The same gate for the one control whose focus ring is not painted on the focusable box.
+
+   A range input's ring goes on `::-webkit-slider-thumb` — the input itself is a full-width track
+   with no edges a reader could make sense of, which is `PriceRange`'s own note. That made it the
+   single site in `packages/ui/` that spelled the pseudo-class inside an *arbitrary* variant, by hand and
+   in square brackets, where the redefinition above cannot reach it: Tailwind rewrites the variant
+   it owns by name, not a string a component wrote for itself.
+
+   So it gets a name of its own rather than a stack of two. Composing the gate and the
+   pseudo-element at the call site would work, and the reason not to is this file's standing one —
+   a variant Tailwind mis-parses emits nothing, silently, and a thumb whose outline quietly
+   stopped existing looks exactly like a thumb whose outline is correctly suppressed. One name,
+   compiled and asserted in `keyboardModality.test.ts`, cannot fail that way. That test also
+   sweeps `packages/ui/` so a second component cannot reintroduce the hand-spelled form — which is why
+   this paragraph describes the shape instead of quoting it. */
+@custom-variant focus-thumb (&:is(html[data-kbd] *):focus-visible::-webkit-slider-thumb);
+
+@theme inline {
+  /* The display face. Titles, the first-run hero, section headers — never body text and
+       never below 18px, which is the whole of Cinzel's brief. */
+  --font-heading: "Cinzel", Georgia, serif;
+  --font-sans: "Geist Variable", sans-serif;
+  /* Data: collector numbers, prices, counts. */
+  --font-mono: "Geist Mono Variable", ui-monospace, monospace;
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* The app is dark-only by design (spec §7). Every shadcn semantic variable below
+   resolves to an app-palette token from the @theme block at the bottom of this file,
+   so the two naming layers always agree on a colour.
+   :root and .dark carry identical values on purpose: the palette applies
+   unconditionally, and <html class="dark"> exists only to switch on Tailwind's
+   `dark:` variant that shadcn components ship with — never to select a second theme. */
+:root {
+  --background: var(--color-bg);
+  --foreground: var(--color-text);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-text);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-text);
+  --primary: var(--color-accent);
+  --primary-foreground: var(--color-accent-fg);
+  --secondary: var(--color-surface);
+  --secondary-foreground: var(--color-text);
+  /* The surface half of shadcn's pair; the palette's `--color-muted` now agrees with it. */
+  --muted: var(--color-surface);
+  --muted-foreground: var(--color-dim);
+  --accent: var(--color-accent);
+  --accent-foreground: var(--color-accent-fg);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-accent);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+  --sidebar: var(--color-surface);
+  --sidebar-foreground: var(--color-text);
+  --sidebar-primary: var(--color-accent);
+  --sidebar-primary-foreground: var(--color-accent-fg);
+  --sidebar-accent: var(--color-surface);
+  --sidebar-accent-foreground: var(--color-text);
+  --sidebar-border: var(--color-border);
+  --sidebar-ring: var(--color-accent);
+}
+
+.dark {
+  --background: var(--color-bg);
+  --foreground: var(--color-text);
+  --card: var(--color-surface);
+  --card-foreground: var(--color-text);
+  --popover: var(--color-surface);
+  --popover-foreground: var(--color-text);
+  --primary: var(--color-accent);
+  --primary-foreground: var(--color-accent-fg);
+  --secondary: var(--color-surface);
+  --secondary-foreground: var(--color-text);
+  /* The surface half of shadcn's pair; the palette's `--color-muted` now agrees with it. */
+  --muted: var(--color-surface);
+  --muted-foreground: var(--color-dim);
+  --accent: var(--color-accent);
+  --accent-foreground: var(--color-accent-fg);
+  --destructive: oklch(0.704 0.191 22.216);
+  --border: var(--color-border);
+  --input: var(--color-border);
+  --ring: var(--color-accent);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --sidebar: var(--color-surface);
+  --sidebar-foreground: var(--color-text);
+  --sidebar-primary: var(--color-accent);
+  --sidebar-primary-foreground: var(--color-accent-fg);
+  --sidebar-accent: var(--color-surface);
+  --sidebar-accent-foreground: var(--color-text);
+  --sidebar-border: var(--color-border);
+  --sidebar-ring: var(--color-accent);
+}
+
+/* Not the palette — which is why this is a `:root` block of its own and not one more line in the
+   one above. That block and `.dark` carry *identical* values on purpose, and this has no `.dark`
+   twin to carry: it is not a colour, and a second theme would not move it. */
+:root {
+  /* The smallest a control may be when a finger is aiming at it. WCAG 2.5.5 (AAA) asks 44×44 CSS
+     px; 2.5.8 (AA) asks 24×24, which this app already clears everywhere. 44 is the number because
+     the AA floor is a floor for a *pointer*, and the surfaces this token is for have no pointer at
+     all.
+
+     A plain custom property rather than a `@theme` entry: it is a minimum, not a step on the
+     spacing scale, and putting it in the spacing namespace would generate `p-target-min` and
+     `gap-target-min` — two utilities that mean nothing and one that means this.
+
+     It is read through the `coarse:` variant above, by the controls that grow for a finger —
+     grep `var(--target-min)` for which, since a list written here is a fact about one tree. */
+  --target-min: 44px;
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  /* **The browser's own focus ring, held to the same rule as ours.**
+
+     The variant at the head of this file gates every `focus-visible:` utility the app writes, but
+     it cannot reach the one rule the app did not write: the user agent's own
+     `:focus-visible { outline: auto }`, which runs off Chromium's heuristic and therefore paints
+     on the exact keystroke this whole change exists to ignore. Without this line the fix would
+     read as a *recolour* — the gold outline replaced by the platform's blue one, on the same
+     press, around the same modal.
+
+     In `base` so that any utility beats it: when `data-kbd` *is* set this selector does not match
+     at all, so the two can never both be live and there is nothing here for a real focus outline
+     to fight. `:where()` on the root keeps the specificity at a single pseudo-class, which is the
+     weakest thing that can still say "only while the reader is not on the keyboard".
+
+     The `::-webkit-slider-thumb` arm is `PriceRange`'s: a range input draws its ring on the thumb
+     pseudo-element rather than on the box, so the selector above sails straight past it. That
+     component gates its own thumb outline through `focus-thumb:` — this is the UA half of the same
+     control. */
+  html:not([data-kbd]) :focus-visible,
+  html:not([data-kbd]) :focus-visible::-webkit-slider-thumb {
+    outline: none;
+  }
+  html {
+    @apply font-sans;
+    /* The app is dark-only, and the controls the platform draws for itself — the format
+       filter's dropdown, scrollbars, the search box's clear button — read the scheme
+       rather than the palette. Without this the format picker opens a white list over a
+       dark table. */
+    color-scheme: dark;
+  }
+}
+
+/* App palette — the single source of truth for colour. The :root/.dark block above
+   maps every shadcn semantic variable onto these, so `border-border` (which reads the
+   literal below) and `var(--border)` are always the same colour.
+
+   One name is still shared with shadcn and this block wins: `accent` here means "gold",
+   not "a subtle surface". When vendoring a component, rewrite its `bg-accent` to
+   `bg-surface`; `text-accent-foreground` already resolves correctly and needs no change.
+   `bg-muted` no longer needs that rewrite — see `--color-dim` below for what changed. */
+@theme {
+  --color-bg: oklch(0.16 0.01 270);
+  --color-surface: oklch(0.21 0.012 270);
+  --color-border: oklch(0.3 0.01 270);
+  --color-text: oklch(0.93 0.005 90);
+  /* Dim text. Named `dim` rather than `muted` because shadcn's `muted` means a subtle
+     *surface*, Tailwind derives `bg-muted` and the matching text utility from that one
+     literal, and one token cannot be both. Renaming ours is what finally lets
+     `--color-muted` below mean what every vendored component expects it to.
+
+     (Spelled "the matching text utility" rather than written out, so that this file passes
+     the sweep in `packages/ui/lib/tokens.test.ts`. What keeps the retired class out of the
+     *build* is the `@source` narrowing at the top of this file — to this folder, and in each
+     app's own sheet to that app's — not this wording: a comment here is as much a class
+     source to Tailwind as a component is, but so was every mention of it in `docs/`, and only
+     narrowing the scan reaches those.) */
+  --color-dim: oklch(0.65 0.01 90);
+  /* shadcn's meaning, restored: `bg-muted` is now a subtle panel, as every generated
+     component assumes. Vendoring one no longer needs the `bg-muted` → `bg-surface`
+     rewrite CLAUDE.md used to require. */
+  --color-muted: var(--color-surface);
+  --color-accent: oklch(0.75 0.12 85); /* gold */
+  --color-accent-fg: oklch(0.2 0.02 85);
+
+  /* "Nothing to fix" — and the app's first success colour, added 2026-08-18 when the deck
+     check became a glyph and its two states had to be told apart without words.
+
+     The palette had no green a *reader* could be shown: `--color-mana-g` is Magic's green, the
+     colour that stands for green cards everywhere in this app. A check mark in it would be
+     saying "green cards" to the one reader who has learned what that colour means here. (A
+     second green, a saturated colour-identity deep, sat beside it until 2026-09-28, dark
+     enough on this background to read as grey at 16px; it was retired with the rest of its
+     family — see the mana block below.)
+
+     So it is a peer of `--destructive` rather than of the mana colours, and is tuned like
+     one: the same lightness (0.70–0.72 against an oklch(0.16) background), a chroma pulled
+     back from it so a legal deck is stated rather than celebrated, and — like the red — it
+     colours a *glyph* or a hairline, never a panel. */
+  --color-ok: oklch(0.72 0.14 152);
+
+  /* The five colours and colourless, as printed symbols are filled — and, since 2026-09-28,
+     the app's only palette for anything that stands for a Magic colour: chips, pips, the
+     line, chart fills, rails, count tags, and a glyph drawn in one on the dark ground alike.
+     Something printed *on* one of these is near-black, exactly like a real symbol; they are
+     all pale, so light text on one is illegible (`labelFgCss` answers dark for every one).
+
+     A second family, the saturated frame/pie deeps, stood beside these until that date and
+     was deleted outright rather than deprecated, so no utility built from it compiles any
+     more. `lib/tokens.test.ts` sweeps `packages/ui/` for the retired names. Gold has no mana
+     equivalent: a gold mark — the game changer's crown, a multicolour fill — is `--color-accent`. */
+  --color-mana-w: #fffbd5;
+  --color-mana-u: #aae0fa;
+  --color-mana-b: #cbc2bf;
+  --color-mana-r: #f9aa8f;
+  --color-mana-g: #9bd3ae;
+  --color-mana-c: #c8c4bf;
+
+  /* The deckbuilder's three theory marks (2026-09-07, a third added 2026-09-08). Green where a
+     live row is the printing the plan named, blue where it is the same card in a printing it did
+     not, red where the plan does not ask for the card at all.
+
+     Literal hexes rather than `var(--color-ok)` / a `var()` into the palette, for `LABEL_COLORS`'
+     reason one file over: these are the values a colour picker opens on and the values a reader's
+     own choice replaces, so they cannot be a reference to something the palette decides later.
+     `#56bd78` is `--color-ok`'s `oklch(0.72 0.14 152)` converted to sRGB — in gamut, so exact.
+     `#0e68ab` was the retired azure deep's value when it was copied here, and it stays: it is a
+     default a reader may already have compared their own choice against, not a palette entry.
+
+     `#e2484f` is `--destructive`'s own hue — `oklch(0.704 0.191 22.216)`, Tailwind's red-400,
+     which is outside sRGB and renders as `#ff6467` — with the chroma pulled into gamut and taken
+     a step deeper, so the unplanned mark is a red of its own rather than the app's *there is a
+     problem here* paint. It is not the Ember label's `#d3202a` either (the retired red deep, and
+     still stored on labels picked before 2026-09-28), which a reader may already have put on a
+     card in the same 27px strip. Its luma is under `labelFgCss`' 0.55 threshold, so the glyph on
+     it is `--color-text` like the other two.
+
+     The `-fg` pair is what is legible printed on each: the banner mark is a filled box with a
+     tick, an X or a signed number on it. `useMarkColors` overwrites all six when the reader has
+     chosen, computing each foreground with `labelFgCss`' luminance formula, so a pale custom
+     green does not swallow the tick.
+
+     Placed after the mana colours rather than among them because they are not a Magic colour:
+     they say what a mark *means*, and only three of the app's marks wear them. */
+  --color-theory-exact: #56bd78;
+  --color-theory-exact-fg: var(--color-text);
+  --color-theory-name: #0e68ab;
+  --color-theory-name-fg: var(--color-text);
+  --color-theory-unplanned: #e2484f;
+  --color-theory-unplanned-fg: var(--color-text);
+
+  /* The deck stats band's creature split (2026-09-28): the Mana curve's two-part bars, their
+     legend, and Card distribution's `Creatures vs noncreatures` band. One violet hue, a light
+     field for creatures and a deep one for everything else, so the split reads as one fact in
+     two parts rather than as two more colours.
+
+     **Violet because every other hue here already means something**: five are the colours of
+     Magic, gold is the accent, green is `--color-ok`, red is a rule break and blue is the theory
+     name tier. A creature is none of those. `-fg` is what is legible printed on the light field
+     (the counts inside the bar); on the deep field the text is `--color-text`. */
+  --color-creature: oklch(0.72 0.07 305);
+  --color-creature-fg: oklch(0.2 0.03 305);
+  --color-noncreature: oklch(0.5 0.08 305);
+
+  /* Rarity, as a gem dot or tinted text. Nothing bigger — a rarity is a footnote. */
+  --color-rarity-common: #9aa0a6;
+  --color-rarity-uncommon: #b3c7ce;
+  --color-rarity-rare: #bfa35a;
+  --color-rarity-mythic: #e86a33;
+
+  /* The five sticky-note fills (user schema v46). Deliberately low chroma and placed outside
+     the mana colours: a note's colour is the reader's own filing and carries no meaning the app
+     reads, so it must not be mistaken for a Magic colour or out-shout a mana pip.
+     Surfaces sit at L 26% against `--color-surface`'s 21%, so a note reads as paper raised
+     off the panel; the strip is the 3px edge across its top. */
+  --color-note-amber: oklch(0.26 0.04 85);
+  --color-note-amber-strip: oklch(0.62 0.1 85);
+  --color-note-jade: oklch(0.26 0.04 155);
+  --color-note-jade-strip: oklch(0.6 0.1 155);
+  --color-note-azure: oklch(0.26 0.04 250);
+  --color-note-azure-strip: oklch(0.62 0.1 250);
+  --color-note-rose: oklch(0.26 0.04 20);
+  --color-note-rose-strip: oklch(0.62 0.11 20);
+  --color-note-slate: oklch(0.26 0.008 270);
+  --color-note-slate-strip: oklch(0.55 0.015 270);
+  /* Secondary text ON a note. `--color-dim` measures about 4.3:1 against these L 26% fills,
+     under the 4.5:1 floor, so it is a contrast bug no test catches. `text-dim` stays correct
+     on the page background. */
+  --color-note-dim: oklch(0.73 0.012 90);
+  /* The reader's own prose on a note — a step below `--color-text`'s 93%, deliberately. A note
+     is paper laid on the page rather than more page, and ink at full strength makes it read as
+     a panel. Still far above the contrast floor against the L 26% fills. */
+  --color-note-body: oklch(0.88 0.005 90);
+
+  /* The mana line's sweep while a sync has no denominator — the app's one *repeating* loop,
+     and the only animation that runs without a reader having done anything. It used to be
+     described here as "the one animation in the app", which stopped being true the day
+     `packages/ui/lib/motion.ts` landed: enter and exit animations now run on drawers, dialogs,
+     popups, status lines and the deck stack. It was then "the only `@keyframes` in the file",
+     which stopped being true when `card-landed` arrived below. What is still true, and is the
+     part worth keeping, is that it is the only thing here that repeats. */
+  --animate-mana-sweep: mana-sweep 1.6s ease-in-out infinite;
+
+  /* How a deck card the reader has just added says so, and **the one timing in this app that
+     `packages/ui/lib/motion.ts` may not hold**. That module's whole discipline is a three-tier scale
+     capped at 260ms, and `motion.test.ts` walks its namespace and fails any duration off the
+     scale or over the cap — correctly, because those are *transitions*, things the pixels do
+     on the way between two states. This is not one. It is a mark that decays: five seconds is
+     how long a reader has to look up from the search panel, find where their card landed, and
+     still be told. So it lives here, and `LANDED_MS` in `features/decks/cardControl.tsx` is
+     the same five seconds spelled in TypeScript, because the mark is also *unmounted* when it
+     expires. `cardControl.test.ts` reads this file and fails if the two ever disagree.
+
+     **It was ten seconds until 2026-08-15**, halved in the same change that made the mark gold
+     and gave it a glow: the old parchment wash was quiet enough to need a long look, and a mark
+     the reader cannot miss does not have to stay on the card as long as one they might.
+
+     Held at full for the first **two fifths**, then linear to nothing. A fade that starts the
+     instant the card lands is most of the way down before the eye has arrived, and the two
+     seconds of hold are what make the remaining three readable as "this one, still" — so the
+     hold is the same **two seconds** it was at ten, because what it measures is the trip a
+     reader's eye makes and not a fraction of the total. `forwards` so the last frame sticks for
+     the few milliseconds between the animation ending and the mark leaving the DOM. */
+  --animate-card-landed: card-landed 5s linear forwards;
+}
+
+/* Motion, as tokens — the same four durations and three curves `packages/ui/lib/motion.ts` hands to
+   `motion`, written here so a CSS-only transition and a JS one cannot drift apart.
+   `packages/ui/lib/motion.test.ts` compares this block against that module and fails if they do.
+
+   **`@theme static`, and the keyword is load-bearing.** A plain `@theme` emits only the
+   variables something references, so a token read *only* through `var()` is tree-shaken out
+   and never reaches `:root` at all. Measured 2026-08-12 against tailwindcss 4.3.3 by
+   compiling this block both ways: under `@theme` the `--duration-*` lines are absent
+   from the output entirely, under `@theme static` they are in `:root`. It is a separate block
+   from the palette above for the same reason in reverse — the palette *should* keep being
+   shaken, and a colour nothing uses should not ship.
+
+   **What each half actually emits, also measured rather than assumed:**
+
+   * `--ease-*` **is** a Tailwind v4 theme namespace, so this block generates real utilities:
+     `ease-standard`, `ease-enter`, `ease-exit`. Use those. They do not collide with
+     Tailwind's own `ease-in` / `ease-out` / `ease-in-out`, which keep their default curves.
+   * `--duration-*` is **not** a namespace. Tailwind knows `duration-<number>` and
+     `duration-[…]` and nothing else, so there is no `duration-base` utility and there cannot
+     be one without a config file this project deliberately does not have. Write
+     `duration-[var(--duration-base)]`, or `var(--duration-base)` in a rule.
+
+   (Naming those classes here emits three of them, because Tailwind scans this comment exactly
+   as it scans a component — the trap the header of this file is about. Checked against the
+   built bundle 2026-08-12: `.ease-standard`, `.ease-enter` and `.ease-exit` are in it and the
+   bracketed `duration-` form above is not. It is the right trade and not a slip — those three
+   are the classes this vocabulary exists to have used, so the comment is a few hundred bytes
+   early rather than wrong.) */
+@theme static {
+  --duration-instant: 50ms;
+  --duration-fast: 120ms;
+  --duration-base: 180ms;
+  --duration-slow: 260ms;
+
+  --ease-standard: cubic-bezier(0.4, 0, 0.2, 1);
+  --ease-enter: cubic-bezier(0, 0, 0.2, 1);
+  --ease-exit: cubic-bezier(0.4, 0, 1, 1);
+}
+
+@keyframes mana-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(200%);
+  }
+}
+
+/* See `--animate-card-landed` above for the five seconds and the hold. Opacity only: the mark
+   is a wash, a hairline and a glow drawn over a card that is not moving, so there is nothing
+   here for `prefers-reduced-motion` to reduce — the consumer still writes
+   `motion-reduce:animate-none`, which leaves the mark at full strength for its five seconds and
+   then takes it away. Fading the whole overlay is also what fades the glow: an `inset`
+   box-shadow is painted by this element, so its opacity is this element's. */
+@keyframes card-landed {
+  0%,
+  40% {
+    opacity: 1;
+  }
+  100% {
+    opacity: 0;
+  }
+}
+
+body {
+  @apply bg-bg text-text antialiased;
+}
+
+/* ---------------------------------------------------------------------------------------
+   @dnd-kit's own drag rules, copied out of the library because the shipped CSP will not let
+   the library install them itself. Everything below is the library's, verbatim; nothing here
+   is a design decision, and none of it may be tuned.
+
+   **The library injects these at runtime and the packaged app refuses them.**
+   `@dnd-kit/dom`'s `StyleInjector` builds a `<style>` element, sets its `textContent` and
+   prepends it to `<head>` the moment a drag begins. The shipped policy in
+   `apps/desktop/src-tauri/tauri.conf.json` is `style-src 'self'`, which is exactly what an inline
+   stylesheet is not — measured in a built app on 2026-08-27, all twelve of the sheets it
+   injected during one folder drag came back with a null `sheet`, i.e. parsed by nobody, and a
+   `<style>` created at runtime in that window still reports `sheet === null` (re-checked
+   2026-08-28). `style-src-attr 'unsafe-inline'` does not cover them: that directive governs the
+   `style=` attribute and nothing else.
+
+   **It cannot be switched off, and it is not one of the plugins `dndManager.ts` filters.**
+   `StyleInjector` is a `CorePlugin`: `DragDropManager`'s constructor prepends it to the
+   plugin list ahead of whatever a caller passes, and the registry's setter skips past a
+   `CorePlugin` rather than unregistering it. Its documented escape is a CSP nonce, which
+   Tauri cannot supply — its policy is a static string in a config file and a nonce has to be
+   per response.
+
+   **So the rules come from the app's own bundled stylesheet instead, which `'self'` allows.**
+   The library goes on publishing `--dnd-*` as inline style *attributes*, which
+   `style-src-attr 'unsafe-inline'` already permits, so the custom properties still arrive;
+   what was missing was anything to read them. Without these rules the drag preview computes
+   `position: absolute` at `top: 0; left: 0` and sits in the window's top-left corner while
+   `--dnd-top: 344px` and `--dnd-left: 456px` are on the element with nothing reading them — so
+   the defect is a preview that does not follow the pointer rather than a broken gesture. The
+   drop still lands and still survives a reload.
+
+   **Two of them are scoped and the rest are the library's selectors unchanged.** `Cursor` and
+   `PreventSelection` register plain `*` rules, which the library can only do because it adds
+   and removes them around a single drag. A permanent copy of a grabbing cursor on `*` would
+   put a closed hand over the whole app forever, so those two — and only those two — hang off
+   `html[data-dragging]`, a mark `lib/dndManager.ts` sets between the library's own `dragstart`
+   and `dragend`. Their declarations are untouched.
+
+   **That fence was `:root:has([data-dnd-dragging])` for one commit, and it cost a shipped
+   test.** jsdom resolves style by matching every loaded rule against every element, and a rule
+   whose *subject* is `*` and whose ancestor part holds `:has()` turns each of those matches into
+   a scan of the whole document. Measured 2026-08-28 over a 400-element tree with a mutation
+   between reads — what a `userEvent` gesture produces — **4.1s with the attribute, 18.6s with the
+   `:has()`**; in the suite, `DeckEditor.stories.tsx > SwapFolds` went from 3.5s to just over the
+   15s test timeout, a play that never drags anything. A browser has no such problem, so this is
+   a jsdom cost paid for a browser convenience, and not worth it. An unrelated `:has()` is fine
+   and costs nothing measurable: it is the broad subject that is expensive.
+
+   **`lib/dndManager.test.ts` is what keeps this honest.** It starts a real drag in jsdom —
+   where nothing is blocked — captures the stylesheets the library injects, and fails unless
+   every selector and declaration in them is also here. An upgrade that changes one rule is a
+   red build rather than a preview that silently stops working in the packaged exe alone.
+   --------------------------------------------------------------------------------------- */
+
+:is(:root,:host) [data-dnd-dragging] {
+  position: fixed !important;
+  pointer-events: none !important;
+  touch-action: none;
+  z-index: calc(infinity);
+  will-change: translate;
+  top: var(--dnd-top, 0px) !important;
+  left: var(--dnd-left, 0px) !important;
+  right: unset !important;
+  bottom: unset !important;
+  width: var(--dnd-width, auto);
+  max-width: var(--dnd-width, auto);
+  height: var(--dnd-height, auto);
+  max-height: var(--dnd-height, auto);
+  transform: var(--dnd-transform, none) !important;
+  transition: var(--dnd-transition) !important;
+}
+
+:is(:root,:host) [data-dnd-placeholder] {
+  transition: none;
+}
+
+:is(:root,:host) [data-dnd-placeholder='hidden'] {
+  visibility: hidden;
+}
+
+[data-dnd-dragging] * {
+  pointer-events: none !important;
+}
+
+[data-dnd-dragging]:not([data-dnd-dropping]) {
+  translate: var(--dnd-translate) !important;
+}
+
+[data-dnd-dragging][style*='--dnd-scale'] {
+  scale: var(--dnd-scale) !important;
+  transform-origin: var(--dnd-transform-origin) !important;
+}
+
+@layer dnd-kit {
+  :where([data-dnd-dragging][popover]) {
+    overflow: visible;
+    background: unset;
+    border: unset;
+    margin: unset;
+    padding: unset;
+    color: inherit;
+
+    &:is(input, button) {
+      border: revert;
+      background: revert;
+    }
+  }
+}
+
+[data-dnd-dragging]::backdrop,
+[data-dnd-overlay]:not([data-dnd-dragging]) {
+  display: none;
+  visibility: hidden;
+}
+
+/* The library writes this one as a bare `*`, and registers it only for the length of a drag.
+   The fence is this copy's alone; the declaration is the library's. */
+html[data-dragging] * {
+  cursor: grabbing !important;
+}
+
+/* Likewise. Two rules rather than one merged block, so each still reads as the plugin it came
+   from — `Cursor` above, `PreventSelection` here. */
+html[data-dragging] * {
+  user-select: none !important;
+  -webkit-user-select: none !important;
+}
+
+/* ---------------------------------------------------------------------------------------
+   And this one is the app's, not the library's — the only rule in this region that dnd-kit does
+   not also write. Added 2026-09-03.
+
+   **The preview is a clone of the element the pointer went down on, drawn at full size and,
+   until now, at full opacity.** On a deck a card tile is ~293px of opaque art, and the thing it
+   covers is the thing the reader is aiming at: the heading they are filing into, the marks
+   saying which piles would take it, the tray at the foot of the window. An affordance the app
+   draws and then hides under the payload is one it may as well not draw.
+
+   **0.75, chosen against the two failures either side of it.** Much above it and a full card
+   tile still occludes what is under it, which is the defect; much below and dark card art goes
+   muddy against a dark window and the reader loses track of what they are carrying. At 0.75 the
+   structure underneath reads through and the card stays unambiguously itself.
+
+   **On the preview and nothing on the source.** The library already leaves a
+   `[data-dnd-placeholder]` behind in the flow, so where the card came *from* is answered; this
+   is only about what the pointer is carrying over everything else.
+
+   It deliberately keeps its own rule rather than joining the `[data-dnd-dragging]` block above,
+   which is a verbatim copy the fence in `lib/dndManager.test.ts` checks the library against. That
+   fence runs one way — every selector and declaration the library injects must appear here — so
+   an extra rule of the app's own is legal, and this is one the app can edit without it reading
+   as drift in a copy it does not own.
+   --------------------------------------------------------------------------------------- */
+
+[data-dnd-dragging] {
+  opacity: 0.75;
+}
+
+/* ---------------------------------------------------------------------------------------
+   A slim scrollbar, for a scroll area **inside** a panel.
+
+   The app draws no scrollbars of its own anywhere else: `color-scheme: dark` up in the base
+   layer is the whole of the treatment, because every other scroller in this app is a *page* or
+   a view filling the window, where the platform's own bar is the right one and a reader already
+   knows it. A column inside a dialog is the case that is not — 15px of opaque native gutter down
+   the side of a 329px list reads as a second window rather than as part of the panel.
+
+   **`::-webkit-scrollbar` rather than `scrollbar-width: thin`, and the two cannot be mixed:**
+   setting the standard property makes Chromium ignore the pseudo-elements entirely, so this
+   block deliberately sets neither `scrollbar-width` nor `scrollbar-color`. `thin` was measured in
+   this webview at **10px** (`packages/ui/features/decks/CLAUDE.md`, where it was rejected as a *width*
+   fix for the desk row's arithmetic) and it buys the narrower bar without the rounded thumb or
+   the transparent track — which is most of what makes a bar read as the panel's rather than the
+   platform's. This target is WebView2, so the pseudo-elements are not a progressive enhancement.
+
+   **The visible thumb is 6px inside a 10px track.** The track keeps the full width so the thumb
+   stays a real pointer target; the `border` is transparent and `background-clip: content-box` is
+   what turns the rest of it into breathing room rather than into a stripe. Nothing here reserves
+   space when there is nothing to scroll — an unscrollable box draws no bar at all, which is why
+   this carries no `scrollbar-gutter`.
+
+   Applied by name, at each scroller that wants it, rather than to everything inside a dialog:
+   which boxes scroll is a layout fact those files already state, and a descendant rule here
+   would be a second opinion about it living somewhere nobody reads.
+   --------------------------------------------------------------------------------------- */
+
+.scrollbar-slim::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+.scrollbar-slim::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-slim::-webkit-scrollbar-thumb {
+  background-color: var(--color-border);
+  border-radius: 9999px;
+  border: 2px solid transparent;
+  background-clip: content-box;
+}
+
+.scrollbar-slim::-webkit-scrollbar-thumb:hover {
+  background-color: var(--color-dim);
+}
+
+/* Where a vertical and a horizontal bar meet. Transparent, or it is a grey square in the
+   corner of a panel that has no other grey squares in it. */
+.scrollbar-slim::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+
+/* ---------------------------------------------------------------------------------------
+   The gold thumb, on the card modal's printings list — **and, since 2026-09-15, on the home
+   page's widget bodies and the widget catalogue**, which the grid redesign (`Widget Home.dc.html`)
+   specifies in as many words: "widget scrollers wear the app's slim bar and gold thumb". The
+   restriction argued below still holds everywhere else, and the home page does not break its
+   premise so much as sit at its edge: every body there cuts its content to whole rows against
+   the card it is drawn in, so a bar appears only on a card too small for what it holds — which
+   is exactly when a reader needs to find it.
+
+   Worn together with `.scrollbar-slim` above rather than instead of it — that block owns the
+   geometry (the 10px track, the 6px thumb inside a transparent border, the pill radius) and this
+   one owns nothing but colour. So a change to how slim a slim bar is reaches this one too, and
+   nothing here can drift into a second set of measurements.
+
+   **Only that list, and the restriction is the point.** Gold is this app's mark for *the
+   reader's own* — the owned badge, a deck line's count, `In your grimoire` — and a panel where
+   every scrollbar is gold spends the colour on furniture. The printings list is the one column
+   in the modal a reader is *working* down rather than glancing at, and it is the only scroller
+   in the panel that is routinely long enough to need the bar at all.
+
+   **`::-webkit-scrollbar-track` has to be restated here even though it changes only a colour**:
+   the block above sets it transparent, the two selectors have identical specificity, and this
+   one wins on source order alone. Same for the thumb's `:hover` — the slim block's hover carries
+   a `:hover` and would otherwise outrank this block's base rule on the one state a reader is
+   most likely to be in when they look at it.
+
+   The track is the border grey at just over half strength, so it reads as a channel the thumb
+   runs in rather than as a second border down the column — visible against the panel, and gone
+   the moment there is nothing to scroll, since an unscrollable box draws no bar.
+   --------------------------------------------------------------------------------------- */
+
+.scrollbar-accent::-webkit-scrollbar-track {
+  background-color: color-mix(in oklab, var(--color-border) 22%, transparent);
+  border-radius: 9999px;
+}
+
+/* **The channel comes up under the pointer, and it is the *area's* hover rather than the
+   track's.** `::-webkit-scrollbar-track:hover` fires only across the few pixels of the bar
+   itself, which is the one place a reader is already looking; what is worth answering is the
+   pointer arriving anywhere in the list, when they are about to reach for it. At rest the track
+   is barely a tint, so the gold thumb is the only thing the eye catches.
+
+   **22 → 30 → 36, which is a smaller ladder than it first shipped as.** It was 22 → 45 → 65, and
+   at those numbers the channel arriving under the pointer read as a second control appearing
+   rather than as the one that was already there becoming easier to aim at. The thumb is the
+   thing worth seeing; the track only has to stop being invisible. */
+.scrollbar-accent:hover::-webkit-scrollbar-track {
+  background-color: color-mix(in oklab, var(--color-border) 30%, transparent);
+}
+
+/* And a little further again once they are actually on the bar. */
+.scrollbar-accent::-webkit-scrollbar-track:hover {
+  background-color: color-mix(in oklab, var(--color-border) 36%, transparent);
+}
+
+.scrollbar-accent::-webkit-scrollbar-thumb {
+  background-color: var(--color-accent);
+}
+
+.scrollbar-accent::-webkit-scrollbar-thumb:hover {
+  background-color: color-mix(in oklab, var(--color-accent) 78%, var(--color-text));
+}

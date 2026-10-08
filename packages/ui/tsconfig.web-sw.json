@@ -1,0 +1,38 @@
+{
+  /* The web app's service worker — its own type-check program, for `tsconfig.web-worker.json`'s
+     reason beside this file: one program per runtime.
+
+     `packages/ui/lib/core/web/sw/sw.ts` runs in a `ServiceWorkerGlobalScope`. It needs the
+     `WebWorker` lib — `FetchEvent`, `clients`, `skipWaiting` — which declares `self` and the rest
+     over again, differently from the app's `DOM`. It is not the database Worker's program either,
+     although the lib is the same: that file declares `self` a `DedicatedWorkerGlobalScope` and
+     this one a `ServiceWorkerGlobalScope`, and a program is one global scope.
+
+     So the root `tsconfig.json` **excludes** that file and this program holds it. The modules it
+     imports — `serve.ts`, `shell.ts`, `pictures.ts` and `bridge.ts` beside it, and
+     `packages/ui/lib/images.ts` for the picture prefix and the variants — are followed from it
+     and so are checked twice, once under each lib, which is the point: they are what both the
+     page and the worker read, and may name no global only one of them has.
+
+     `vite/client` is listed for `import.meta.env`, which `images.ts` reads.
+
+     `npm run build` and `npm run web:build` both run it. */
+  "compilerOptions": {
+    "target": "ES2020",
+    /* No `DOM`: this is not a page. `ES2022.Error` for the root program's reason. */
+    "lib": ["ES2020", "ES2022.Error", "WebWorker"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
+    "types": ["vite/client"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["lib/core/web/sw/sw.ts"]
+}

@@ -106,7 +106,7 @@
     "shim": [
       "/components/FilterChips",
       "/lib/store",
-      ".storybook/fake/",
+      "packages/fake/",
       "@tanstack/react-query",
       "/components/tooltip/useTooltip",
       "/features/decks/CardMarks",

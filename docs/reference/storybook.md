@@ -39,16 +39,16 @@ it says `tags: ["autodocs"]`.
   font rendered a pixel differently on a different machine.
 - **`.storybook/main.ts` aliases four specifiers** — listed in `fake/aliases.ts`:
   `@tauri-apps/api/core`, `@tauri-apps/api/event`, `@tauri-apps/api/window` and `@/lib/images` —
-  to `.storybook/fake/`. **The fake sits _under_ `src/lib/ipc.ts` and `src/lib/window.ts`, not in place of them**,
+  to `packages/fake/`. **The fake sits _under_ `packages/ui/lib/ipc.ts` and `packages/ui/lib/window.ts`, not in place of them**,
   and that is the point: `ipc.ts` and `window.ts` are hand-written mirrors of backend contracts and are
   exactly what can drift, so a fake beneath them means every story exercises the mirror too.
-- **`fake/parity.test.ts` is the command fence** (issue #559): It reads `src-tauri/src/desktop.rs` as text,
+- **`fake/parity.test.ts` is the command fence** (issue #559): It reads `apps/desktop/src-tauri/src/desktop.rs` as text,
   extracts `generate_handler!` command names, and fails if a backend command lacks a fake handler or if a fake
   handler exists for a command Rust no longer registers. Commands deliberately left unimplemented must be
   declared with an explicit reason in the `ABSENT` map.
-- **The fake is shared with `npm run mobile:dev`** (`vite.mobile.config.ts`, port 5175): Both configs import
+- **The fake is shared with `npm run mobile:dev`** (`apps/light/vite.config.ts`, port 5175): Both configs import
   `fake/aliases.ts`, ensuring web and mobile mock behaviors stay identical. **`?seed=` and `?fault=` in that
-  server's address are a story's `parameters.fake`** (`mobile/fakeBoot.ts`, read once before React), so a state
+  server's address are a story's `parameters.fake`** (`apps/light/fakeBoot.ts`, read once before React), so a state
   a story reaches by seed or fault — `/settings?seed=paired&fault=lentStorage` — can be stood behind the whole
   light app at a phone's width; with no query it is the `starter` world.
 - **The fake stores table rows and derives DTOs** (`fake/db.ts`), because **`ownedQuantity`
@@ -164,15 +164,15 @@ it says `tags: ["autodocs"]`.
 - **A world belongs to a story, not to the module — because a docs page mounts every story on
   it at once.** The canvas hides this (Storybook unmounts one story before mounting the next),
   so a fake built on module globals looks right and answers all ten stories of a docs page as
-  whichever one installed itself last. The global stays — `src/lib/ipc.ts` imports `invoke` as
+  whichever one installed itself last. The global stays — `packages/ui/lib/ipc.ts` imports `invoke` as
   a bare function and no React context travels down an import — but it is a **pointer** at a
-  world now, and `.storybook/fake/scope.ts` owns the four ways it is kept right: a per-world
+  world now, and `packages/fake/scope.ts` owns the four ways it is kept right: a per-world
   `QueryClient` binding every `queryFn`/`mutationFn`, an `<Activate>` sibling rendered
   **before** the story so its effect lands first (React fires effects in fiber-completion
   order), `invoke` re-pointing on the way out so an awaited continuation stays put, and one
   `setTimeout` patch for `useSync`'s poll chain. Adding an entry point to the fake means asking
-  which of the four covers it. `src/stories.test.tsx` mounts two seeds **simultaneously** and
-  is the test that fails if any of this regresses; `.storybook/fake/world.test.ts` covers the
+  which of the four covers it. `packages/ui/stories.test.tsx` mounts two seeds **simultaneously** and
+  is the test that fails if any of this regresses; `packages/fake/world.test.ts` covers the
   three unit-testable layers, each proven by breaking it.
 - **`useAppStore` is the one global that cannot be made per-story from `.storybook/`** —
   zustand's `create` does not expose its initializer, and the actions close over that one
@@ -190,7 +190,7 @@ it says `tags: ["autodocs"]`.
   one on the per-section-zoom branch, and a number there would need re-counting every time it
   gains another.
   **Nine story files carry `inline: false`** — re-counted in source 2026-08-14 on the
-  per-section-zoom branch, sweeping `inline: false` under `src/**/*.stories.tsx`: **eight** frame
+  per-section-zoom branch, sweeping `inline: false` under `packages/ui/**/*.stories.tsx`: **eight** frame
   wholesale in a meta, four of them because they write `useAppStore` during render (`AppShell`,
   `CardDetailPane`, `CollectionPage`, `SearchPage`) and four because of the scrim (`DeckDialog`,
   `DeckSettingsDialog`, `CreateDeckDialog`, `import/ImportDialog`), and `CardZoomIndicator`
@@ -217,7 +217,7 @@ it says `tags: ["autodocs"]`.
   because the `large` seed mints ~5,200 synthetic printings that a module-load snapshot of
   `CARDS` cannot see — they all drew the "Unknown card" placeholder, which is the affordance
   for _no such printing_. Lookup is the union of the live worlds' cards over `CARDS`.
-- **A fixture more than one story file needs lives in `.storybook/fake/fixtures.ts`.** A CSF
+- **A fixture more than one story file needs lives in `packages/fake/fixtures.ts`.** A CSF
   file cannot own one — every non-default export is indexed as a story — but a non-CSF module
   can, and `printing()` had been written out eleven times before it had a home. Not in
   `cards.ts`: that file is generated wholesale and says so.
@@ -233,7 +233,7 @@ it says `tags: ["autodocs"]`.
   `process.env` in webview code and retypes `setTimeout` from `number` to `NodeJS.Timeout`.
   Its absence is the only fence; `.storybook/node-url.d.ts` shims the one function `main.ts`
   needs.
-- **`src/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`,
+- **`packages/ui/stories.test.tsx` runs every story's `play` under Vitest** through `composeStories`,
   which is what puts a story's own claim inside `npm run verify` — `build-storybook` compiles
   stories, it never plays them. `composeStories` **snapshots project annotations at call time**,
   so `setProjectAnnotations` must run before it, at module scope; after the scan it is a no-op
@@ -244,9 +244,9 @@ it says `tags: ["autodocs"]`.
   nothing about plays*. So a branch could rebuild, re-derive every story figure correctly off a
   fresh index, and leave a hand-grepped plays total untouched — which happened. If you want the
   number, `grep -rE "^\s+play:" src --include=*.stories.tsx | wc -l`, or read the runner's own
-  summary from `vitest run src/stories.test.tsx`.
+  summary from `vitest run packages/ui/stories.test.tsx`.
 - It `vi.mock`s two of the three aliases, and **the third (`@/lib/images`) must never be
-  mocked.** `vi.mock` matches the _resolved id_, so it resolves to the same `src/lib/images.ts`
+  mocked.** `vi.mock` matches the _resolved id_, so it resolves to the same `packages/ui/lib/images.ts`
   that the fake's own `export *` resolves to, and the factory imports the module it stands in
   for. **The symptom is a silent 300-second hang with no output and no failing test** — if the
   suite goes quiet, this is why.
@@ -261,17 +261,17 @@ it says `tags: ["autodocs"]`.
   mid-drag leaks pdnd's one global drag flag into the _next_ story, which is why one broken
   assertion reported two failures. Measured on `AppShell.stories.tsx`: **5 of 10 runs red
   before, 12 of 12 green after.**
-- **Storybook CSS is `.storybook/preview.css`, never `src/index.css` directly.** That file
+- **Storybook CSS is `.storybook/preview.css`, never `packages/ui/index.css` directly.** That file
   imports the app entry and declares `@source "../.storybook"` itself, because `@source`
-  resolves relative to the declaring file. Declaring it in `src/index.css` shipped Storybook's
+  resolves relative to the declaring file. Declaring it in `packages/ui/index.css` shipped Storybook's
   utilities to users: measured, `dist/assets/index-*.css` 119,935 → **119,126** bytes, 11 rules
   dropped and 0 added. Stories cannot be fenced off the same way and should not be — a
-  `.stories.tsx` is under `src/`, which `@source "../src"` must scan. **`@source "../mobile"` is
+  `.stories.tsx` is under `packages/ui/`, which `@source "../src"` must scan. **`@source "../mobile"` is
   the third line since phase 3**: the light app's phone UI is storied where it lives, and
-  `src/index.css` must not scan `mobile/` for the desktop bundle — `mobile/mobile.css` declares it
+  `packages/ui/index.css` must not scan `apps/light/` for the desktop bundle — `apps/light/mobile.css` declares it
   for the light build, and `preview.css` for the workbench.
 - **`npm run build-storybook` runs in CI's `storybook` job**, and it is the **only** gate the
-  `.mdx` page has. Stories are `.tsx` under `src/` or `mobile/`, so `tsc` and ESLint already see them;
+  `.mdx` page has. Stories are `.tsx` under `packages/ui/` or `apps/light/`, so `tsc` and ESLint already see them;
   `DesignSystem.mdx` is seen by neither — `tsc` reads only `.ts`/`.tsx` however the `include`
   glob is written, and `eslint` answers "File ignored because no matching configuration was
   supplied" (both measured 2026-08-10). Before this step the page could break and nothing would

@@ -1,0 +1,973 @@
+import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, userEvent, waitFor, within } from "storybook/test";
+import { emitFake } from "../../../fake/event";
+import { PAIR_ONLY_SENTENCE } from "../../../fake/world";
+import { SITE_DATA_WARNING } from "@/lib/core/web/storage";
+import { SyncPanel } from "./SyncPanel";
+
+const meta = {
+  title: "Settings/SyncPanel",
+  component: SyncPanel,
+  tags: ["autodocs"],
+  decorators: [
+    // The settings column's own width — `max-w-2xl` inside the 1280×800 window. The layout risk
+    // here is a 105-character code and a 176-character blob, both of which are one unbreakable
+    // word to a browser, and this is the width at which `break-all` either saves the row or does
+    // not.
+    (Story) => (
+      <div className="max-w-2xl p-2">
+        <Story />
+      </div>
+    ),
+  ],
+  parameters: {
+    docs: {
+      description: {
+        component:
+          "Two halves. **Devices** pairs two of them into one group with no account and no " +
+          "password: one device shows a code, the other reads it, and both then show the " +
+          "same six digits for the reader to compare. **Membership** is what pays for the " +
+          "server those devices hand changes through — a Patreon connection, a claim code " +
+          "pasted back, and one status line.\n\n" +
+          "**The six digits are the whole security argument** (spec §7.5 step 3), and the " +
+          "panel is built so that neither side can move past them without saying so: the " +
+          "offering device's *Codes match* button carries `aria-disabled` until the digits " +
+          "exist and its handler refuses the press until they do too, and the joining device " +
+          "draws no confirm button of its own at all — under a man-in-the-middle the two " +
+          "screens show different numbers, so the comparison is inherently a two-screen act, " +
+          "and the press that actually releases the group key is the offering device's alone. " +
+          "A panel that advanced on its own would look completely normal and defend nothing.\n\n" +
+          "**A relay carries the accept and the sealed key now, so only the invite is still " +
+          "hand-carried.** Two blobs a reader used to retype between the two screens — one of " +
+          "them 224 characters, one of them the hard phone→PC direction — are gone, and this " +
+          "panel learns both by polling instead of by waiting on a paste. **There is no " +
+          "cryptography in the workbench and these stories do not pretend there is.** The fake " +
+          "derives the six digits from the code with a plain hash — see `FakePairing` in " +
+          "`packages/fake/db.ts`. **The QR code is a real one, of a code with no key in " +
+          "it**: the 53-module symbol the app draws an invite as (`packages/fake/qr.ts`), so " +
+          "a phone held up to a story reads the invite's address, and " +
+          "`scripts/pairing-scan-smoke.mjs` points a headless browser's camera at it. " +
+          "What is real is everything a panel is drawn against: the invite carried by hand, " +
+          "the one number both readers compare, the poll that tells this panel where the " +
+          "ceremony has got to, the store that keeps a removed device the status command does " +
+          "not answer with, and every refusal in the crate's own words.\n\n" +
+          "**Nor is there a Patreon.** The fake mints a claim code's answer rather than " +
+          "exchanging one, so what these stories hold still is the thing that matters here: " +
+          "that *not connected*, *payment problem* and *membership ended* are three " +
+          "different sentences, and that only one of them takes sync away.\n\n" +
+          "**A membership belongs to the group and not to the device that paid for it** " +
+          "(spec §2.2). Every device in a group with a live membership mints its own relay " +
+          "token from the group key, holding nothing Patreon ever issued — so the second " +
+          "device reads *Supporting since …* with no Connect button, in either pairing order. " +
+          "`SupportingThroughTheGroup` is that state, and it is the one this panel drew wrong.",
+      },
+    },
+  },
+} satisfies Meta<typeof SyncPanel>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+/**
+ * A well-shaped pairing code: 105 Crockford characters, which is what the payload forces.
+ *
+ * 16-byte group id + 32-byte X25519 public key + 16-byte token = 64 bytes, at five bits a
+ * character, is 103 — plus a two-character checksum. The alphabet omits `I`, `L`, `O` and `U`,
+ * so this string is only made of characters a real code can contain.
+ */
+const A_CODE = "0123456789ABCDEFGHJKMNPQRSTVWXYZ".repeat(3) + "012345678";
+
+/**
+ * A device that has never paired — what every install opens on.
+ *
+ * Two presses and no roster: this device can offer a pairing, or read a code another device is
+ * offering. The paragraph above them is what says why the six digits exist, because a reader
+ * meeting them mid-flow has no time to be told.
+ */
+export const NotPaired: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /enter a code/i })).toBeInTheDocument();
+    // Nothing to compare and nothing to remove: the roster is not drawn at all rather than
+    // drawn empty, because an empty list of devices reads as a group that has lost them.
+    await expect(canvas.queryByRole("list")).not.toBeInTheDocument();
+    // **And nothing to leave.** `leave_group_now` refuses a device in no group in as many
+    // words, so the press is not drawn here — `DeviceRow`'s missing Remove one rung up, and the
+    // other end of the gate `LeavingSaysWhatItCosts` walks through.
+    await expect(canvas.queryByRole("button", { name: "Leave group" })).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * The offer, with nothing answered yet — **the state the whole security claim rests on**.
+ *
+ * The code is on screen in both forms and *Codes match* is already drawn, greyed, with the
+ * sentence saying why. That is deliberate: a button that appeared only once the digits arrived
+ * would teach a reader that the digits are a step the app inserts, rather than the step the
+ * pairing is for.
+ */
+export const OfferShown: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
+    await expect(await canvas.findByTestId("pairing-qr")).toBeInTheDocument();
+
+    const confirm = canvas.getByRole("button", { name: /codes match/i });
+    await expect(confirm).toHaveAttribute("aria-disabled", "true");
+    await expect(canvas.getByText(/available once the other device joins/i)).toBeInTheDocument();
+    await expect(canvas.queryByTestId("pairing-sas")).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **A — the offering device, from `waiting` to `compare`.** The relay carries the joiner's
+ * answer now, so what used to be a paste ("what the other device answered", "Read their
+ * answer") is the poll finding a peer instead: the fake's own `sync_pairing_poll` answers
+ * `"waiting"` on the first ask and computes the six digits on the second, 1.5 seconds later —
+ * this play waits out that real interval rather than a mocked one, because there is no faking a
+ * clock inside a story.
+ *
+ * Drawn at `text-3xl` with `tracking-[0.3em]` and `tabular-nums`, which is the one place in
+ * this app a number is set that large: the reader is comparing *characters* across two screens,
+ * and every one of those three choices is about making that a glance rather than a count. The
+ * QR and the typed code are gone the moment the digits arrive — the invite has done its one job.
+ */
+export const DigitsToCompare: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
+    await expect(await canvas.findByTestId("pairing-qr")).toBeInTheDocument();
+
+    const digits = await canvas.findByTestId("pairing-sas", {}, { timeout: 5000 });
+    await expect(digits.textContent).toMatch(/^\d{6}$/);
+    await expect(canvas.queryByTestId("pairing-qr")).not.toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /codes match/i })).toHaveAttribute(
+      "aria-disabled",
+      "false",
+    );
+  },
+};
+
+/**
+ * The joining half: read a code and see the digits at once — `sync_pairing_accept` answers them
+ * in the one step that used to only start the ceremony, because there is nothing left for a
+ * reader to carry back by hand.
+ *
+ * **No Codes match button here, and that is deliberate rather than missing.** Under a
+ * man-in-the-middle the two screens show different numbers, so the comparison is inherently a
+ * two-screen act; the press that matters is the one gating release of the group key, and that
+ * is the offering device's alone. This screen's whole job is to say where that press is.
+ */
+export const JoiningShowsItsOwnDigits: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /enter a code/i }));
+    // **Pasted rather than typed, which is also what a reader does.** 105 characters is 105
+    // keystrokes through `userEvent.type`, and the number is not incidental: it is what the
+    // payload forces, and it is exactly why §7.5 makes the QR the primary form.
+    await userEvent.click(await canvas.findByLabelText(/code shown on the other device/i));
+    await userEvent.paste(A_CODE);
+    await userEvent.click(canvas.getByRole("button", { name: /read the code/i }));
+
+    const digits = await canvas.findByTestId("pairing-sas");
+    await expect(digits.textContent).toMatch(/^\d{6}$/);
+    await expect(canvas.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
+    await expect(canvas.getByText(/click codes match on the other device/i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * The ceremony's own end, on the side that pressed Codes match — reached by riding out two real
+ * poll ticks, since a fake clock cannot stand in for `refetchInterval` inside a story.
+ *
+ * **The flow returns to `"idle"` rather than sitting on a "done" screen**, which is
+ * `SyncPanel`'s own doc comment on the render-time `if` that watches for `"complete"`: nothing
+ * is left to show once the group key has moved, so the panel goes back to offering the same two
+ * presses it started with, with one line saying what just happened.
+ */
+export const CeremonyCompletes: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
+    const confirm = await canvas.findByRole(
+      "button",
+      { name: /codes match/i },
+      { timeout: 5000 },
+    );
+    await waitFor(
+      async () => await expect(confirm).toHaveAttribute("aria-disabled", "false"),
+      { timeout: 5000 },
+    );
+    await userEvent.click(confirm);
+
+    const note = await canvas.findByText(
+      /paired\. the other device is now in this group/i,
+      {},
+      { timeout: 5000 },
+    );
+    await expect(note).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: /codes match/i })).not.toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+  },
+};
+
+/**
+ * The one refusal in this flow a reader cannot produce by typing.
+ *
+ * Every other way it can fail is a *shape* — a code of the wrong length, a character outside the
+ * alphabet, a step pressed out of order — and all of those are raised by the handler itself.
+ * What is left is the blob failing to open, which in the crate is an AEAD refusing to
+ * authenticate. So it is a fault, and it lands on this one step.
+ *
+ * ⚠️ **It lands on the offering device's *poll* now, not on a paste.** The fake's own
+ * `sync_pairing_poll` throws it on that device's second read — where `sync_pairing_respond` used
+ * to sit before a relay folded that step into the poll (see `db.ts`'s own comment on the fault).
+ * That read is a *query*, and until `1b2989f` a query's rejection reached the panel nowhere; this
+ * story could not be written at all for a while, because there was nothing on screen for a play
+ * to assert. `poll.error` joining `SyncPanel`'s `error` chain is what makes it visible again.
+ */
+export const AnswerUnreadable: Story = {
+  parameters: { fake: { fault: "pairingReadError" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
+    await expect(await canvas.findByTestId("pairing-qr")).toBeInTheDocument();
+
+    // The fault sits on the *second* poll — the first still answers `"waiting"` — so this waits
+    // out the same real 1.5 s tick `DigitsToCompare` does.
+    await expect(
+      await canvas.findByRole("alert", {}, { timeout: 5000 }),
+    ).toHaveTextContent(/could not be read/i);
+    // The code is still on screen and the offer is still live: a refusal here has changed
+    // nothing, and the reader's other device can still scan or type it.
+    await expect(canvas.getByTestId("pairing-qr")).toBeInTheDocument();
+    await expect(canvas.queryByTestId("pairing-sas")).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * A code of the wrong length, refused in the crate's own words.
+ *
+ * **This refusal is reachable from a keyboard, which is why it is not a fault.** Half a paste is
+ * the commonest thing that goes wrong with a 105-character code, and the sentence has to say
+ * *that* rather than "pairing failed" — a different sentence pointing at a different fix.
+ */
+export const CodeRefused: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /enter a code/i }));
+    await userEvent.type(await canvas.findByLabelText(/code shown on the other device/i), "ABC");
+    await userEvent.click(canvas.getByRole("button", { name: /read the code/i }));
+
+    await expect(await canvas.findByRole("alert")).toHaveTextContent(/105 characters/i);
+    await expect(canvas.queryByTestId("pairing-sas")).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * A group of three, one of them taken off — the state §7.6 is about.
+ *
+ * **The removed device is on the roster and off the screen.** The `paired` seed still holds it,
+ * because the backend still does — `add_device` clears the mark on a re-pair and the baseline
+ * trigger reads it — and this story is where that separation is asserted. The key version beside
+ * the group is `2` because the rotation *is* the removal, so the number is a count of them.
+ *
+ * **One mark per row, and it is `This device`** — orientation, the thing a reader scans a roster
+ * for, and the question a real machine name leaves open once the rows stop reading identically.
+ *
+ * The two names here are what a reader who has renamed their devices sees. What a fresh
+ * install mints is the machine itself — `MAIN-PC` on Windows, the hostname elsewhere — and
+ * `Rename` is the one press away from either.
+ */
+export const Paired: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText("Phone")).toBeInTheDocument();
+    // The removed device is on the roster the backend holds and off the list the panel draws.
+    // A reader who removed a device asked for it to be gone; the row survives only so a
+    // re-pair can clear the mark and so the baseline trigger skips a peer that will not answer.
+    await expect(canvas.queryByText("Old laptop")).not.toBeInTheDocument();
+    await expect(canvas.queryByText("Removed")).not.toBeInTheDocument();
+    // Two of three, and the key version is still 2 — the epoch counts rotations, and the
+    // rotation happened. The seed's third row is what stops the line above being vacuous.
+    await expect(canvas.getByText(/in a group of 2 devices/i)).toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("button", { name: /remove old laptop/i }),
+    ).not.toBeInTheDocument();
+    // This device offers no Remove either, because the backend refuses it.
+    await expect(canvas.queryByRole("button", { name: /remove desk/i })).not.toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /remove phone/i })).toBeInTheDocument();
+
+    // One pill, on one row, beside the name it belongs to — and never beside the buttons.
+    const pill = canvas.getByText("This device");
+    await expect(canvas.getAllByText("This device")).toHaveLength(1);
+    await expect(pill).toHaveClass("rounded-full");
+    const group = pill.parentElement as HTMLElement;
+    await expect(within(group).getByText("Desk")).toBeInTheDocument();
+    await expect(within(group).queryByRole("button")).not.toBeInTheDocument();
+
+    // A desktop keeps its database in a folder that is its own, so nothing here is said about
+    // a browser's site data — `PairedInABrowser` is the host that is told. The membership half
+    // has answered by this point, which is as long as the host's own answer takes.
+    await expect(await canvas.findByText(/not connected/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/site data/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **A hostname long enough to fight the row — and the press that gets a reader out of one.**
+ *
+ * Two things are being drawn here at once. The pill has to stay against the end of the name at
+ * every length: the name truncates and the group it shares with the pill takes the row's
+ * stretch, so a 26-character machine name shortens rather than shoving `This device` and both
+ * presses off the row. That failure is invisible to a screenshot of a short name, which is why
+ * this story exists beside `Paired` rather than instead of it.
+ *
+ * The other half is `Rename` itself. A minted name is the machine's own — on Windows frequently
+ * the owner's — and `sync_identity.name` is the copy every later pairing sends to every device
+ * in the group. So the escape hatch is one press, on this device's own row, and it stayed there
+ * when the pill arrived.
+ */
+export const ALongMachineNameStillFitsTheRow: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    // This device's own row still offers Rename — it is the first in the roster.
+    const renames = await canvas.findAllByRole("button", { name: "Rename" });
+    await userEvent.click(renames[0]);
+    const field = await canvas.findByLabelText(/name for desk/i);
+    await userEvent.clear(field);
+    await userEvent.type(field, "MARKUS-DESKTOP-WORKSTATION{Enter}");
+
+    const renamed = await canvas.findByText("MARKUS-DESKTOP-WORKSTATION");
+    await expect(renamed).toHaveClass("truncate");
+    // Still the name's sibling, and still ahead of the presses.
+    const pill = canvas.getByText("This device");
+    await expect(pill.parentElement).toBe(renamed.parentElement);
+    await expect(within(pill.parentElement as HTMLElement).queryByRole("button")).not
+      .toBeInTheDocument();
+  },
+};
+
+/**
+ * The sentence a removal owes, and the press behind it.
+ *
+ * §7.6: *"It cannot be un-told what it already knows."* Rotating the key stops the removed
+ * device reading anything **new**; nothing here can reach into it and take back what it already
+ * synced, and no server has a copy to delete. A dialog that said only "Remove" would imply a
+ * lost phone had been wiped, which is the opposite of what happens.
+ *
+ * It goes all the way down: the press rotates the fake's key and the panel re-reads it, so the
+ * version beside the group moves from 2 to 3 on screen and the row goes with it. **The row
+ * leaving is the assertion worth having**, because the backend still holds it — `sync_devices`
+ * keeps the stamp and `sync_pairing_status` filters it — so this is the one story where a
+ * removal is watched happening rather than read out of a fixture.
+ */
+export const RemovingSaysWhatItCannotDo: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The dialog draws at the app root, so its body is outside the panel's canvas.
+    const page = within(canvasElement.ownerDocument.body);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /remove phone/i }));
+    await expect(await page.findByText(/changes your sync key/i)).toBeInTheDocument();
+    await expect(page.getByText(/can't be wiped remotely/i)).toBeInTheDocument();
+
+    await userEvent.click(page.getByRole("button", { name: /remove device/i }));
+    await expect(await canvas.findByText(/in a group of 1 device./i)).toBeInTheDocument();
+    // The row is gone from the screen, and it is gone from the *panel* rather than from the
+    // store: the fake still holds the stamped row, exactly as `sync_devices` does.
+    await expect(canvas.queryByText("Phone")).not.toBeInTheDocument();
+    await expect(canvas.queryByText("Removed")).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **Leaving — the press `identity::CANNOT_REMOVE_SELF` has pointed at since before it existed.**
+ *
+ * *"This device cannot remove itself. Use Leave group instead."* was written for a control that
+ * was not there; this is it. Spec §2.1 makes the departure **always possible**: the command
+ * plans a rotation, publishes it best effort, and then clears this device's group **and its
+ * grant** whatever the relay answered. There is no relay in the workbench, so what this story
+ * drives is exactly the half that survives an unreachable one — which is, deliberately, every
+ * step that changes anything.
+ *
+ * **The dialog is the story.** Two facts a reader cannot guess sit in it, and each one is the
+ * difference between a reasonable press and a frightening one: that this device keeps its own
+ * collection — the reassurance `REMOVAL_WARNING` gives from the other side of the same act — and
+ * that a relay this device could not reach has not told anybody, so the other devices go on
+ * listing this one until somebody removes it there. That second sentence is the honest cost of
+ * *"always possible"*, and leaving it out would let a reader believe the group had closed behind
+ * them when it had not.
+ *
+ * It goes all the way down, `RemovingSaysWhatItCannotDo`'s way: the press empties the fake's
+ * group and roster and clears its grant, so the roster the story opened on is replaced by the
+ * pairing offer a device out of the box shows — and the press that opened the dialog goes with
+ * the group it was about.
+ */
+export const LeavingSaysWhatItCosts: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The dialog draws at the app root, so its body is outside the panel's canvas.
+    const page = within(canvasElement.ownerDocument.body);
+
+    await expect(await canvas.findByText(/in a group of 2 devices/i)).toBeInTheDocument();
+    await userEvent.click(canvas.getByRole("button", { name: "Leave group" }));
+
+    // 1. Nothing local is deleted. 2. The others may never hear.
+    const warning = await page.findByText(/your collection stays on this device/i);
+    await expect(warning).toHaveTextContent(/your collection stays on this device/i);
+    await expect(warning).toHaveTextContent(/relay can't be reached/i);
+    await expect(warning).toHaveTextContent(/may still list this one/i);
+
+    await userEvent.click(page.getByRole("button", { name: "Leave the group" }));
+
+    // Out. The roster is gone rather than emptied, and what is drawn in its place is the offer
+    // a device in no group opens on — which is the same read the panel makes on first launch.
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
+    await expect(canvas.queryByText("Phone")).not.toBeInTheDocument();
+    await expect(canvas.queryByRole("list")).not.toBeInTheDocument();
+    // And the press goes with the group it was about — the other end of the same gate
+    // `NotPaired` asserts from the start.
+    await expect(canvas.queryByRole("button", { name: "Leave group" })).not.toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+  },
+};
+
+/* -------------------------------------------------------------- a browser's storage ----- */
+
+/**
+ * **A paired browser, and the one thing about it a desktop has no word for.**
+ *
+ * The web app keeps its database in storage the browser lends it, and the browser's own *clear
+ * site data* takes it back — the device identity and its keys with everything else. The app
+ * then opens as a new device, and the old one is still on every other device's roster, holding
+ * one of the group's five places until somebody there removes it (the light-app spec §7:
+ * *"Clearing site data mints a new device and spends a slot. The panel says so before a reader
+ * presses anything that would"*).
+ *
+ * **No press in this app does that**, so there is no dialog for the sentence to live in. It
+ * stands under the roster instead, for as long as this device is in a group, with both ways out
+ * in the order they cost least: leave here first, or remove the old entry from another device
+ * afterwards.
+ *
+ * **The sentence is the host's, not the panel's.** The `lentStorage` fault is what makes this
+ * story a browser: the host answers `storage_group_warning` with the web host's own words
+ * (`packages/ui/lib/core/web/storage.ts`), a name a desktop and the Android host refuse — and the panel
+ * draws whatever sentence it is handed, knowing nothing of what kind of host said it. Every other
+ * story in this file is a desktop, and `Paired` asserts the warning's absence there.
+ *
+ * It goes all the way down: the press it names first is pressed, and the warning leaves with the
+ * group it was about.
+ */
+export const PairedInABrowser: Story = {
+  parameters: { fake: { seed: "paired", fault: "lentStorage" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const page = within(canvasElement.ownerDocument.body);
+
+    // The web host's sentence, word for word, from where that host keeps it.
+    const warning = await canvas.findByText(SITE_DATA_WARNING);
+    await expect(warning).toHaveTextContent(/clearing this browser's site data/i);
+    await expect(warning).toHaveTextContent(/still counts toward the group's five/i);
+    await expect(warning).toHaveTextContent(/leave the group here first/i);
+    // A standing paragraph and not an alert: nothing has gone wrong.
+    await expect(canvas.queryByRole("alert")).not.toBeInTheDocument();
+
+    // Under the roster it is about, above the press it names.
+    const roster = canvas.getByRole("list");
+    const leave = canvas.getByRole("button", { name: "Leave group" });
+    await expect(
+      roster.compareDocumentPosition(warning) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+    await expect(
+      warning.compareDocumentPosition(leave) & Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    await userEvent.click(leave);
+    await userEvent.click(await page.findByRole("button", { name: "Leave the group" }));
+
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/site data/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * A browser that has paired nothing — **and is told nothing about its storage.**
+ *
+ * The warning is about a place in a group, and this device has none to lose. Drawn here it would
+ * teach a reader who has not paired that there is something to worry about, which is
+ * `NotConnected`'s argument about the lapse reassurance one half down.
+ */
+export const NotPairedInABrowser: Story = {
+  parameters: { fake: { fault: "lentStorage" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
+    // The membership half has answered by now, so the host's answer has had as long to land.
+    await expect(await canvas.findByText(/not connected/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/site data/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **A host that offers no membership** — the light app's Tauri host, which Google Play
+ * distributes, though the panel is never told so. The `pairOnly` fault makes this story's host
+ * answer `membership_elsewhere` in that host's own words, read from its Rust source; the panel
+ * draws the sentence where the offer, the membership's status and the claim code would be.
+ * Every other story in this file is a host that refuses the name.
+ *
+ * Drive it at a phone's width with `npm run mobile:dev` at
+ * `http://localhost:5175/settings?fault=pairOnly`.
+ */
+export const OnAHostThatOffersNoMembership: Story = {
+  parameters: { fake: { fault: "pairOnly" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(PAIR_ONLY_SENTENCE)).toBeInTheDocument();
+    await expect(canvas.getByRole("heading", { name: "Relay" })).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    await expect(canvas.queryByLabelText(/claim code/i)).not.toBeInTheDocument();
+    await expect(canvasElement).not.toHaveTextContent(/patreon|membership|supporter|supporting|payment|pledge|subscri/i);
+    // Pairing is the way in, and it is still offered.
+    await expect(canvas.getByRole("button", { name: /pair a device/i })).toBeInTheDocument();
+  },
+};
+
+/**
+ * **The offer in a phone's width** — the light app's phone face draws this same panel, and it
+ * was first driven there on 2026-10-04.
+ *
+ * Two things were wrong and neither showed in the Settings column. The QR code was a fixed
+ * 288px square that refused to shrink, in a step with 268px inside it at a 360px window: it
+ * stood 20px past its own frame. And the typed code grew from nothing beside it with no floor,
+ * so at 412px the picture left it 20px and it ran two characters a line for 1 228px. Now the
+ * picture is as wide as its step up to 288, and the code takes the line under it wherever less
+ * than 8rem is left beside.
+ *
+ * The frame is 320px — the panel's width on a 352px phone, 8px inside the 360 the measurements
+ * were taken at, and a width the app already ships a class for (a one-off 328 would have put a
+ * utility in the built stylesheet for this story alone). **jsdom lays nothing out**, so what
+ * this play can hold is the classes that make the fold; `controls.test.ts` compiles them, the
+ * measurements are a browser's, and `npm run mobile:scan-smoke` takes them again against the
+ * light app.
+ */
+export const OfferInAPhonesWidth: Story = {
+  decorators: [
+    (Story) => (
+      <div className="w-80">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByRole("button", { name: /pair a device/i }));
+    const qr = await canvas.findByTestId("pairing-qr");
+    // The real symbol: 53 modules and the four of quiet zone either side.
+    await expect(qr).toHaveAttribute("viewBox", "0 0 61 61");
+    // As wide as its step and no wider, and square by its own ratio.
+    await expect(qr.classList.contains("max-w-full")).toBe(true);
+    await expect(qr.classList.contains("aspect-square")).toBe(true);
+    // The one surface that does not follow the theme: a camera reads dark on white.
+    await expect(qr.classList.contains("bg-white")).toBe(true);
+
+    const code = qr.nextElementSibling as HTMLElement;
+    await expect(code.textContent).toMatch(/^([0-9A-Z]{5}-){20}[0-9A-Z]{5}$/);
+    // A floor of its own, so a wrapping row has something to break before.
+    await expect(code.classList.contains("min-w-32")).toBe(true);
+  },
+};
+/* -------------------------------------------------------------- the membership ---------- */
+
+/**
+ * The claim code the relay's landing page shows, in the shape it shows it.
+ *
+ * Crockford base32 with a positional checksum, reusing `sync_pair::invite`'s alphabet — which
+ * omits `I`, `L`, `O` and `U` precisely because this string is copied between two screens by a
+ * person. Twelve characters in three groups is short enough to type and long enough to be
+ * one-time; the ten-minute expiry at the far end does the rest.
+ */
+const A_CLAIM_CODE = "PQRS-TVWX-YZ01";
+
+/**
+ * Nothing connected — **which is what every installation opens on.**
+ *
+ * Two presses and one field: open Patreon, then paste back what its landing page gives you.
+ * *Not connected* is a state and not a fault, so it is said plainly and the reassurance a lapse
+ * gets is deliberately absent — a reader who has never connected has lost nothing, and telling
+ * them their collection is safe teaches them there is something to worry about.
+ *
+ * There is no *Sync now* either. `sync_now` with no entitlement answers `null` rather than
+ * refusing, so the press would be harmless — and a control that can only ever report
+ * "there was nothing to do" is one a reader learns to distrust.
+ */
+export const NotConnected: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/not connected/i)).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /connect patreon/i })).toBeInTheDocument();
+    await expect(canvas.getByLabelText(/claim code/i)).toHaveValue("");
+    await expect(canvas.getByText(/sync is off/i)).toBeInTheDocument();
+    await expect(canvas.queryByRole("button", { name: /sync now/i })).not.toBeInTheDocument();
+    // The lapse copy belongs to a lapse. This reader has not had one.
+    await expect(canvas.queryByText(/stays on this device/i)).not.toBeInTheDocument();
+    // **The one warning that does belong here**, because it is about the press below it:
+    // connecting founds a group of one, and a device in a group can never join another.
+    await expect(canvas.getByText(/pair this one with them first/i)).toBeInTheDocument();
+    // **And the second, at the field rather than at the button** (spec §3). `/claim` *moves* a
+    // binding now rather than refusing one with a 409 — which is what un-strands the payer who
+    // has just left a group — and the price is paid by whoever is still in the old one: their
+    // relay log is dropped and they stop syncing with each other. A reader who simply pastes a
+    // fresh code on a second machine can do that to a working group by accident, and this
+    // paragraph is the only thing between them and it.
+    await expect(canvas.getByText(/one membership covers one group/i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * The claim, pasted back — and the membership it switches on.
+ *
+ * **The code is the whole of the hop back into the app.** Patreon's consent and the token
+ * exchange both happen where the `client_secret` can live, which is the relay; what returns to
+ * the reader is twelve characters on a page, and pasting them is the only step this window owns.
+ *
+ * Once it lands the block says *Supporting since …* with a date rather than "3 days ago": a
+ * start date is a fact about a subscription, where the app's relative-time rule is about
+ * freshness.
+ */
+export const Supporting: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByLabelText(/claim code/i));
+    await userEvent.paste(A_CLAIM_CODE);
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
+
+    await expect(await canvas.findByText(/supporting since/i)).toBeInTheDocument();
+    // Connected, so the two presses that were the whole block are gone and sync has one.
+    await expect(canvas.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
+    // ...and the advice about *which* device to connect on goes with the press it was about.
+    await expect(canvas.queryByText(/pair this one with them first/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * **The second device — supporting on somebody else's membership, and never asked to connect.**
+ *
+ * This is the reader's own bug report (2026-08-30) and spec §2.2's answer to it. A phone paired
+ * to a desktop whose reader pays holds **no refresh secret at all**: the pairing blob stopped
+ * carrying one, because a device that holds it could re-register the group auth and evict the
+ * devices that removed it. What it holds instead is the group key, and `crypto::relay_auth` is
+ * one-way from that — so `/token`'s second door mints this device a token of its own, and the
+ * answer carries `status` and `since` with it. Hence a **dated** *Supporting since …* rather
+ * than the dateless *Supporting. Thank you.* the old sealed grant left behind.
+ *
+ * **What this story exists to hold still is the button that is not there.** *Connect Patreon*
+ * drawn here is the whole of what the reader reported: a supporter told, on every device but
+ * the one they pressed it on, that they are not connected. The sentence alone would not catch
+ * it — the bug drew *Not connected* **and** the button, so a story asserting only the absence of
+ * the button, or only the presence of the sentence, would pass against half of it.
+ *
+ * **It is a fault rather than a press for `patreonLapsed`'s reason**: the entitlement is another
+ * device's and it reaches this one over a relay the workbench has not got. It differs from that
+ * lapse in exactly one stored field — `active` against `dead` — which is why `db.ts` derives
+ * `entitled` instead of storing it.
+ */
+export const SupportingThroughTheGroup: Story = {
+  parameters: { fake: { seed: "paired", fault: "patreonGroupEntitled" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/supporting since/i)).toBeInTheDocument();
+    // **The half the bug got wrong.** Both presses of the `offering` block are gone: the button
+    // and the field it sits above, because neither has anything to do on a device that is
+    // already covered.
+    await expect(canvas.queryByRole("button", { name: /connect patreon/i })).not.toBeInTheDocument();
+    await expect(canvas.queryByLabelText(/claim code/i)).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/not connected/i)).not.toBeInTheDocument();
+    // ...nor the lapse, which is the state this one is a single stored field away from.
+    await expect(canvas.queryByText(/membership ended/i)).not.toBeInTheDocument();
+    // And it can sync, which is what the group door was built to give it — the difference
+    // between a panel that merely reads right and a device that actually works.
+    await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
+    // The advice about which device to connect on goes with the press it was about.
+    await expect(canvas.queryByText(/pair this one with them first/i)).not.toBeInTheDocument();
+    // Still in the group it is entitled through, at the key version the removal left.
+    await expect(canvas.getByText(/in a group of [0-9]+ devices?./i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * A code that has already been spent, refused in the crate's own words.
+ *
+ * **This refusal is reachable by an ordinary reader, which is why it is not a fault.** A claim
+ * code is one-time and expires in ten minutes, so pasting yesterday's — or the same one twice
+ * after a reinstall — is the commonest thing that goes wrong here, and the sentence has to say
+ * *that* rather than "claim failed": a different sentence pointing at a different fix, which is
+ * pressing Connect Patreon again.
+ */
+export const ClaimCodeRefused: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.type(await canvas.findByLabelText(/claim code/i), "ABCD");
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
+
+    await expect(await canvas.findByRole("alert")).toHaveTextContent(/code/i);
+    // Refused, so the reader is still where they were — including the code still in the field,
+    // because a code that was mistyped is one keystroke from being right. Only a claim that
+    // *worked* clears it.
+    await expect(canvas.getByLabelText(/claim code/i)).toHaveValue("ABCD");
+    await expect(canvas.getByRole("button", { name: /connect patreon/i })).toBeInTheDocument();
+  },
+};
+
+/**
+ * A card Patreon is still retrying — **and sync that keeps working through it.**
+ *
+ * Spec §7.2: `declined_patron` is a failed card, not a decision. It opens a seven-day grace
+ * window in which tokens are still minted, so the one thing this story exists to hold is the
+ * *Sync now* button being on screen. Taking sync away here would punish a reader for something
+ * they did not choose, and the sentence would be teaching them to cancel.
+ *
+ * It must also not read as a cancellation: *Membership ended* is a different state with a
+ * different fix, and the two are one field apart in the answer this panel is drawn from.
+ */
+export const PaymentProblem: Story = {
+  parameters: { fake: { seed: "paired", fault: "patreonDeclined" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/payment problem/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/keeps working/i)).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /sync now/i })).toBeInTheDocument();
+    await expect(canvas.queryByText(/membership ended/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * The lapse — **the state this whole block is worth having for.**
+ *
+ * §7.1: cancelling drops the relay's log at once, and the relay's log is a transport buffer with
+ * a 30-day tail rather than anybody's collection. Every device already holds the whole thing in
+ * its own SQLite. So the panel says *Membership ended*, says in the next breath that nothing
+ * local was touched, and offers the connect button again.
+ *
+ * **What it must never say is that something went wrong.** "Could not reach the relay" points a
+ * reader at their network when the fix is their pledge, and a reader who lapses and reads it as
+ * data loss is the one failure in this design that cannot be undone by connecting again.
+ */
+export const MembershipEnded: Story = {
+  parameters: { fake: { seed: "paired", fault: "patreonLapsed" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/membership ended/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/stays on this device/i)).toBeInTheDocument();
+    await expect(canvas.getByRole("button", { name: /connect patreon/i })).toBeInTheDocument();
+    await expect(canvas.queryByText(/could not|failed|error/i)).not.toBeInTheDocument();
+    // The devices stay paired through a lapse, which is what makes reconnecting one press.
+    await expect(canvas.getByText(/in a group of [0-9]+ devices?./i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * Connecting before pairing — **which founds a group of one** (spec §6.3).
+ *
+ * `sync_patreon_claim` runs `ensure_group` before the request that has to name a group, so a
+ * reader who connects Patreon on a device that has never paired does not end up with an
+ * entitlement bound to nothing: they end up in a group of themselves, at key version 1, with a
+ * roster where the pairing offer was a moment ago.
+ *
+ * **That is why the panel's *nowhere to sync to yet* line is not what a new supporter sees.**
+ * `RelayStatus.paired` is `identity::group(conn).is_some()`, and a group of one satisfies it —
+ * so the sentence a fresh connection lands on is *Nothing has synced yet*, and the reader's next
+ * step is Pair a device rather than anything about the relay. The panel keeps the *unpaired*
+ * sentence for a state the shipped build can no longer reach; see this task's report.
+ */
+export const ConnectingBeforePairing: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/not paired yet/i)).toBeInTheDocument();
+
+    await userEvent.click(await canvas.findByLabelText(/claim code/i));
+    await userEvent.paste(A_CLAIM_CODE);
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
+
+    // A group of one, made by the claim rather than by a pairing press.
+    await expect(await canvas.findByText(/in a group of 1/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/nothing has synced yet/i)).toBeInTheDocument();
+    await expect(canvas.queryByText(/no other devices yet/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * A group, a membership, and one round trip.
+ *
+ * The `paired` world has **three changes written and never handed over**, which is where a
+ * reader stands after pairing and before connecting, so the *waiting* line has something true to
+ * say the moment the claim lands and the trip has something to send.
+ *
+ * There is no network in the workbench and this story does not pretend there is: what the fake
+ * models is the shape of the answer — everything waiting goes, nothing comes back, and the stamp
+ * moves. The two outcomes spec 7.4 surfaces are seeded rows in the `needsReview` world rather
+ * than something a press invents; see `Settings/ReviewPanel`.
+ *
+ * **This press is also this device's first exchange**, so the line carries the baseline's two
+ * sentences as well — which is not a leak between stories but the shape of the real thing: a
+ * reader's first press after connecting is both trips at once, and it is exactly the press the
+ * baseline clause exists to explain. `AFirstExchange` below is that half on its own, and takes
+ * the second press to show the ordinary trip after it.
+ */
+export const OneRoundTrip: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByLabelText(/claim code/i));
+    await userEvent.paste(A_CLAIM_CODE);
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
+    await expect(await canvas.findByText(/3 changes pending/i)).toBeInTheDocument();
+
+    await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
+
+    await expect(
+      await canvas.findByText(/sent 3 changes and received 0 changes/i),
+    ).toBeInTheDocument();
+    // The pile is empty and the stamp has moved, so both lines change together.
+    await expect(canvas.getByText(/no pending changes/i)).toBeInTheDocument();
+    await expect(canvas.getByText(/last synced just now/i)).toBeInTheDocument();
+  },
+};
+
+/**
+ * The first exchange with a device that had not heard from this one — and the ordinary trip
+ * right behind it.
+ *
+ * **A baseline is three orders of magnitude larger than the sync around it** (baseline spec §13:
+ * 1 069 rows against the four or nine a press usually carries), so a number that size with no
+ * sentence attached reads as a fault. The panel says what it is instead, and names the
+ * `deck_audit` rows on their own — §7's reason: history is the one synced table with no ceiling,
+ * so it is the part of the total that can surprise, and a reader told only the sum cannot tell a
+ * large collection from a long one.
+ *
+ * **The second press is the whole point of the first two clauses being conditional.** A baseline
+ * goes to each peer once, so every sync a reader ever makes but one says nothing about it — and
+ * a panel that kept the sentence would teach them the number was about this trip.
+ *
+ * There is no relay here and no peer to have never been heard from, so the fake stands the state
+ * up out of the one fact the world does hold: a device that has never completed a round trip.
+ * The counts are the world's own synced tables read back rather than figures written for
+ * the sentence, which is why nothing here asserts a particular one.
+ *
+ * **The number of those tables used to be in this sentence and has been taken out.** It said
+ * *eleven* and was already wrong before it was noticed — `device_names` had made the answer twelve
+ * at user schema v31 — and `deck_tokens` made it thirteen at v37. A count is a fact about a tree,
+ * every open branch has a different one, and `schema::SYNCED_TABLES` answers this one in a grep.
+ * A story comment is exactly the wrong place to keep a copy: a prose-only edit routes to neither
+ * CI job, so nothing here would ever have gone red for it.
+ */
+export const AFirstExchange: Story = {
+  parameters: { fake: { seed: "paired" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await userEvent.click(await canvas.findByLabelText(/claim code/i));
+    await userEvent.paste(A_CLAIM_CODE);
+    await userEvent.click(canvas.getByRole("button", { name: /^connect$/i }));
+    await userEvent.click(await canvas.findByRole("button", { name: /sync now/i }));
+
+    const line = await canvas.findByText(/first sync with a new device/i);
+    await expect(line).toHaveTextContent(/\d+ rows synced/i);
+    await expect(line).not.toHaveTextContent(/deck history/i);
+
+    await userEvent.click(canvas.getByRole("button", { name: /sync now/i }));
+
+    // The pile went with the first press, so the second is a trip with nothing in it — which is
+    // what makes the absence below an assertion about the clause rather than about the render.
+    await waitFor(async () => {
+      await expect(canvas.getByText(/sent 0 changes and received 0 changes/i)).toBeInTheDocument();
+    });
+    await expect(canvas.queryByText(/first sync with a new device/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * A sync holding the write connection — **and both of this block's reads refused at once.**
+ *
+ * `sync_relay_status` and `sync_supporter_status` each take `sync::with_write` in the crate, so
+ * both really do answer `BUSY` while a card update is in flight — the second by the crate's own
+ * choice, so that it cannot answer from beside a claim that has just written. They are two
+ * queries over one connection, so in practice they fail together.
+ *
+ * **What the panel must not do is guess.** Drawing the block empty would read exactly like a
+ * membership that has never been connected — *Not connected*, with a Connect Patreon button
+ * inviting a reader who is already a supporter to claim a second time — and drawing "Nothing is
+ * waiting to go" over an unanswered count would be the same mistake one line down. Both are
+ * withheld here, and the one sentence on screen is what is true: nobody knows yet.
+ */
+export const TheReadsAreRefused: Story = {
+  parameters: { fake: { seed: "paired", fault: "busy" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect((await canvas.findAllByText(/couldn't load/i)).length).toBeGreaterThan(0);
+    await expect(canvas.queryByText(/not connected/i)).not.toBeInTheDocument();
+    await expect(
+      canvas.queryByRole("button", { name: /connect patreon/i }),
+    ).not.toBeInTheDocument();
+    await expect(canvas.queryByText(/no pending changes/i)).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * The socket drops after a successful sync — the state automatic sync introduces and manual
+ * sync never had. `relayState`'s ladder has nothing to say about it: this device is still
+ * `synced` from its last round trip, and would go on reading that way for ever if the panel
+ * only asked *what happened last time* rather than *is anything listening right now*.
+ *
+ * **Nothing in the fake answers `sync_live_state` by default**, so `useDeviceSyncLive`'s own
+ * seed rejects here exactly as it does under a plain `vite dev` — swallowed, per its own doc — and the
+ * panel opens silent. What moves it is the same `sync:live` event the ribbon's marker
+ * subscribes to, driven by hand with `emitFake` the way `AppShell.stories.tsx`'s
+ * `FirstRunFailedMidRun` drives `sync:progress`.
+ */
+export const SocketDropsAfterASync: Story = {
+  parameters: { fake: { seed: "paired", fault: "patreonGroupEntitled" } },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+
+    await expect(await canvas.findByText(/supporting since/i)).toBeInTheDocument();
+    // A working socket is not news, and this is the panel's resting state until it drops.
+    await expect(canvas.queryByText(/not connected to the relay/i)).not.toBeInTheDocument();
+
+    emitFake("sync:live", { state: "offline" });
+
+    await expect(
+      await canvas.findByText(/not connected to the relay/i),
+    ).toBeInTheDocument();
+    // The one clause that matters: nothing was lost, only queued.
+    await expect(canvas.getByText(/changes will sync when it's back/i)).toBeInTheDocument();
+  },
+};

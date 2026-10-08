@@ -1,6 +1,6 @@
 //! How large the reader draws the card tiles on each wall — the setting, and nothing else.
 //!
-//! **The ladder is TypeScript's; the row is this crate's.** `src/lib/cardZoom.ts` owns the ten
+//! **The ladder is TypeScript's; the row is this crate's.** `packages/ui/lib/cardZoom.ts` owns the ten
 //! stops a zoom may land on, which of the app's walls zoom independently, and what a value off
 //! the ladder means. All Rust owns is one `app_meta` row holding a JSON object of section name →
 //! multiplier, and one bound on the number that may go in it. That is the split
@@ -42,7 +42,7 @@ use std::collections::BTreeMap;
 pub const K_CARD_ZOOM: &str = "card_zoom";
 
 /// The smallest multiplier this crate will store — the bottom of `ZOOM_STEPS` in
-/// `src/lib/cardZoom.ts`.
+/// `packages/ui/lib/cardZoom.ts`.
 ///
 /// **The one thing about the ladder Rust knows, and it knows it as a bound rather than as the ten
 /// stops.** Where the stops sit is a question about how a gesture feels and belongs wholly to the

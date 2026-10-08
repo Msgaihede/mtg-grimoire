@@ -55,7 +55,7 @@ use crate::sync_pair::identity;
 /// count.
 const OPERATION: &str = "live";
 
-/// What the frontend is told about the socket. Mirrored by `LiveState` in `src/lib/ipc.ts`.
+/// What the frontend is told about the socket. Mirrored by `LiveState` in `packages/ui/lib/ipc.ts`.
 ///
 /// `#[repr(u8)]` with explicit discriminants because [`current`] keeps this in an atomic; the
 /// numbers are private to this file and nothing off it may depend on them.
@@ -535,7 +535,7 @@ async fn connect_once(
     }
 }
 
-/// Tell the page. Shape matches `SyncLiveEvent` in `src/lib/ipc.ts`.
+/// Tell the page. Shape matches `SyncLiveEvent` in `packages/ui/lib/ipc.ts`.
 fn emit(sink: &dyn EventSink, state: LiveState) {
     crate::events::emit(sink, "sync:live", &serde_json::json!({ "state": state }));
 }

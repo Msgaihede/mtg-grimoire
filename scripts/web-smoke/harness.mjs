@@ -25,10 +25,10 @@ import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 // Plain TypeScript with nothing but erasable types, which Node strips as it loads: the host's own
 // reader of `_headers`, and the rule its script and both local servers tell a place by.
-import { headersFor, parseHeaders } from "../../app-worker/src/headers.ts";
-import { isNavigation } from "../../src/lib/core/web/assets.ts";
+import { headersFor, parseHeaders } from "../../infrastructure/app-worker/src/headers.ts";
+import { isNavigation } from "../../packages/ui/lib/core/web/assets.ts";
 
-export const DIST = resolve("dist-web");
+export const DIST = resolve("apps/light/dist-web");
 /** What the hosts answer with: this file's own folder, found whatever the working directory. */
 export const FIXTURES = dirname(fileURLToPath(import.meta.url));
 /**
@@ -207,9 +207,9 @@ const SPELLBOOK = "https://json.commanderspellbook.com/variants.json.gz";
 
 /** The four picture sizes the engine names an address for (`schema::IMAGE_VARIANTS`). */
 const PICTURE_VARIANTS = ["thumb", "grid", "display", "art"];
-/** Where the web app asks for a picture — its own origin (`src/lib/images.ts`). */
+/** Where the web app asks for a picture — its own origin (`packages/ui/lib/images.ts`). */
 const PICTURE_PREFIX = "/mtgimg";
-/** The service worker's two caches (`src/lib/core/web/sw/`): one shell per build, one of pictures. */
+/** The service worker's two caches (`packages/ui/lib/core/web/sw/`): one shell per build, one of pictures. */
 const SHELL_PREFIX = "grimoire-shell-";
 const PICTURE_CACHE = "grimoire-pictures-v1";
 
@@ -425,7 +425,7 @@ function preflightCost(request, userAgent) {
 // The server and the browser
 // ---------------------------------------------------------------------------------------------
 
-/** What the hosting Worker's script answers a miss with (`app-worker/src/index.ts`'s `REFUSAL`). */
+/** What the hosting Worker's script answers a miss with (`infrastructure/app-worker/src/index.ts`'s `REFUSAL`). */
 const NOT_FOUND = {
   "Content-Type": "text/plain; charset=utf-8",
   "X-Content-Type-Options": "nosniff",
@@ -433,11 +433,11 @@ const NOT_FOUND = {
 };
 
 /**
- * `dist-web/` on a port of the system's choosing, **answered as the production host answers
+ * `apps/light/dist-web/` on a port of the system's choosing, **answered as the production host answers
  * it** — and two things a check changes about that host while the run goes on (`site`).
  *
- * - **Every 200 carries what `dist-web/_headers` says that address is sent**, read by the
- *   hosting Worker's own reader (`app-worker/src/headers.ts`) and matched against the path the
+ * - **Every 200 carries what `apps/light/dist-web/_headers` says that address is sent**, read by the
+ *   hosting Worker's own reader (`infrastructure/app-worker/src/headers.ts`) and matched against the path the
  *   browser asked, never the file that answered it. So the Content-Security-Policy, `nosniff`
  *   and each tree's `Cache-Control` meet the app here, and not first on the day of a deploy.
  * - **A file is itself; a place is the document; everything else is the host's bare 404.**
@@ -463,10 +463,10 @@ const NOT_FOUND = {
  */
 async function serve() {
   if (!existsSync(join(DIST, "index.html"))) {
-    fail("dist-web/index.html is missing. Run `npm run web:wasm` and `npm run web:build` first.");
+    fail("apps/light/dist-web/index.html is missing. Run `npm run web:wasm` and `npm run web:build` first.");
   }
   if (!existsSync(join(DIST, "_headers"))) {
-    fail("dist-web/_headers is missing: the build did not emit the host's policy.");
+    fail("apps/light/dist-web/_headers is missing: the build did not emit the host's policy.");
   }
   const rules = parseHeaders(readFileSync(join(DIST, "_headers"), "utf8"));
   const site = { refusing: false, build: null, asked: [] };
@@ -904,7 +904,7 @@ async function openPage(browser, url, problems, policy, prepare) {
  */
 function coreChunk() {
   const name = readdirSync(join(DIST, "assets")).find((file) => /^web-[\w-]+\.js$/.test(file));
-  if (!name) fail("dist-web/assets has no web-*.js chunk — the built app's `Core` moved.");
+  if (!name) fail("apps/light/dist-web/assets has no web-*.js chunk — the built app's `Core` moved.");
   return `/assets/${name}`;
 }
 

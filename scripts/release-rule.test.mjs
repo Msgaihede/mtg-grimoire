@@ -20,16 +20,16 @@ import packageJson from "../package.json?raw";
 import packageLock from "../package-lock.json?raw";
 import workspaceToml from "../Cargo.toml?raw";
 import cargoLock from "../Cargo.lock?raw";
-import desktopToml from "../src-tauri/Cargo.toml?raw";
+import desktopToml from "../apps/desktop/src-tauri/Cargo.toml?raw";
 import coreToml from "../crates/grimoire-core/Cargo.toml?raw";
-import lightToml from "../mobile/src-tauri/Cargo.toml?raw";
+import lightToml from "../apps/light/src-tauri/Cargo.toml?raw";
 import webToml from "../crates/grimoire-web/Cargo.toml?raw";
 import scanToml from "../crates/grimoire-scan/Cargo.toml?raw";
-import desktopConf from "../src-tauri/tauri.conf.json?raw";
-import lightConf from "../mobile/src-tauri/tauri.conf.json?raw";
-import appGradle from "../mobile/src-tauri/gen/android/app/build.gradle.kts?raw";
-import appWorkerPackage from "../app-worker/package.json?raw";
-import appWorkerLock from "../app-worker/package-lock.json?raw";
+import desktopConf from "../apps/desktop/src-tauri/tauri.conf.json?raw";
+import lightConf from "../apps/light/src-tauri/tauri.conf.json?raw";
+import appGradle from "../apps/light/src-tauri/gen/android/app/build.gradle.kts?raw";
+import appWorkerPackage from "../infrastructure/app-worker/package.json?raw";
+import appWorkerLock from "../infrastructure/app-worker/package-lock.json?raw";
 import releaseYml from "../.github/workflows/release.yml?raw";
 import ciYml from "../.github/workflows/ci.yml?raw";
 import syncSmoke from "./web-sync-smoke.mjs?raw";
@@ -37,6 +37,7 @@ import smokeHarness from "./web-smoke/harness.mjs?raw";
 import syncHarness from "./web-smoke/sync-harness.mjs?raw";
 import syncPull from "./web-sync-pull.mjs?raw";
 import signProof from "./android-release/proof.sh?raw";
+import checkVersionSh from "./android-release/check-version.sh?raw";
 
 const WORKFLOWS = import.meta.glob("/.github/workflows/*.yml", {
   query: "?raw",
@@ -46,9 +47,9 @@ const WORKFLOWS = import.meta.glob("/.github/workflows/*.yml", {
 
 /** The cargo workspace's members: where each lives, its manifest, and whether it is a Tauri host. */
 const CRATES = [
-  { name: "mtg-grimoire", dir: "src-tauri", toml: desktopToml, conf: desktopConf },
+  { name: "mtg-grimoire", dir: "apps/desktop/src-tauri", toml: desktopToml, conf: desktopConf },
   { name: "grimoire-core", dir: "crates/grimoire-core", toml: coreToml, conf: null },
-  { name: "grimoire-light", dir: "mobile/src-tauri", toml: lightToml, conf: lightConf },
+  { name: "grimoire-light", dir: "apps/light/src-tauri", toml: lightToml, conf: lightConf },
   { name: "grimoire-web", dir: "crates/grimoire-web", toml: webToml, conf: null },
   // The browser's scanner: a module of its own, shipped beside the web host's from the same tag.
   { name: "grimoire-scan", dir: "crates/grimoire-scan", toml: scanToml, conf: null },
@@ -92,8 +93,9 @@ describe("one version in the tree", () => {
   });
 
   it("knows every member of the cargo workspace", () => {
-    // A sixth member owes a row above, and with it a manifest and a lockfile selector in the
-    // config: one the config does not name is not bumped, and ships a version behind the app.
+    // A sixth member owes a row above, and with it a lockfile selector in the config (its
+    // manifest inherits the workspace's version): one the config does not name is not bumped
+    // in the lockfile, and ships a version behind the app.
     const members = /^members = \[([^\]]*)\]$/m.exec(workspaceToml)?.[1];
     expect(members).toBeDefined();
     expect(
@@ -104,8 +106,17 @@ describe("one version in the tree", () => {
     ).toEqual(CRATES.map((crate) => crate.dir).sort());
   });
 
-  it.each(CRATES)("$name wears it, in its manifest and in the lockfile", ({ name, toml }) => {
-    expect(packageOf(toml)).toEqual({ name, version });
+  it("the workspace carries it", () => {
+    const table = workspaceToml.slice(workspaceToml.indexOf("[workspace.package]")).split(/^\[/m)[1] ?? "";
+    expect(/^version = "([^"]+)"$/m.exec(table)?.[1]).toBe(version);
+  });
+
+  it.each(CRATES)("$name inherits it, and the lockfile agrees", ({ name, toml }) => {
+    const body = toml.slice(toml.indexOf("[package]")).split(/^\[/m)[1] ?? "";
+    expect(/^name = "([^"]+)"$/m.exec(body)?.[1]).toBe(name);
+    // A literal here is a second version, and release-please no longer writes this file.
+    expect(body).toMatch(/^version\.workspace = true$/m);
+    expect(body).not.toMatch(/^version = /m);
     expect(lockedVersions(name)).toEqual([version]);
   });
 
@@ -116,23 +127,18 @@ describe("one version in the tree", () => {
     },
   );
 
-  it.each(CRATES)(
-    "release-please bumps $name's manifest and its lockfile entry",
-    ({ name, dir }) => {
-      expect(
-        names({ type: "toml", path: `${dir}/Cargo.toml`, jsonpath: "$.package.version" }),
-      ).toBe(true);
-      // `@.name.value`, never `@.name`: release-please parses TOML into tagged nodes, and the bare
-      // form matches nothing — as a warning, not an error.
-      expect(
-        names({
-          type: "toml",
-          path: "Cargo.lock",
-          jsonpath: `$.package[?(@.name.value=='${name}')].version`,
-        }),
-      ).toBe(true);
-    },
-  );
+  it("release-please bumps the workspace's version, in one manifest", () => {
+    expect(names({ type: "toml", path: "Cargo.toml", jsonpath: "$.workspace.package.version" })).toBe(true);
+    expect(extra.filter((entry) => /(^|\/)Cargo\.toml$/.test(entry.path))).toHaveLength(1);
+  });
+
+  it.each(CRATES)("release-please bumps $name's lockfile entry", ({ name }) => {
+    // `@.name.value`, never `@.name`: release-please parses TOML into tagged nodes, and the bare
+    // form matches nothing — as a warning, not an error.
+    expect(
+      names({ type: "toml", path: "Cargo.lock", jsonpath: `$.package[?(@.name.value=='${name}')].version` }),
+    ).toBe(true);
+  });
 
   it.each(CRATES.filter((crate) => crate.conf !== null))(
     "release-please bumps $name's tauri.conf.json",
@@ -145,7 +151,8 @@ describe("one version in the tree", () => {
 
   it("names nothing else, so this file is the whole list", () => {
     const tauriHosts = CRATES.filter((crate) => crate.conf !== null).length;
-    expect(extra).toHaveLength(CRATES.length * 2 + tauriHosts);
+    // The workspace's one manifest, each member's lockfile entry, each Tauri host's config.
+    expect(extra).toHaveLength(1 + CRATES.length + tauriHosts);
   });
 });
 
@@ -172,6 +179,14 @@ describe("the Android versionCode", () => {
     expect(appGradle).toContain(
       'versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()',
     );
+  });
+
+  it("is read back from where the light host's build writes it", () => {
+    // `ci.yml` and `release.yml` call the check with the version alone, so its default path is
+    // the one that runs. A folder that moved without it makes every Android build fail after the
+    // bundle is made: the file is not there to read. The folder comes from the table above.
+    const lightDir = CRATES.find((crate) => crate.name === "grimoire-light").dir;
+    expect(checkVersionSh).toContain(`PROPS=\${2:-${lightDir}/gen/android/app/tauri.properties}`);
   });
 
   it("rises with every bump the version can take", () => {
@@ -247,7 +262,7 @@ const secretRefs = (text) =>
  * What can run a program, as a word on a line: package runners, interpreters, build tools,
  * downloaders, `gh`. Lines that only *name* one — an action, the shell, the Node pin — are not
  * commands. (No `tauri`: its CLI is only ever reached through `npx`, `npm` or `cargo`, and the
- * word is in every path under `mobile/src-tauri/`.)
+ * word is in every path under `apps/light/src-tauri/`.)
  */
 const RUNS_SOMETHING =
   /\b(?:npx|npm|pnpm|yarn|bun|deno|node|cargo|rustc|gradle\w*|python\d*|pip\d*|curl|wget|bash|sh|pwsh|docker|gh|make|java|jarsigner|keytool)\b/;
@@ -276,7 +291,7 @@ const MAY_READ = {
 };
 const ON_A_RELEASE = "    if: needs.release-please.outputs.release_created == 'true'";
 /** The committed fingerprint of the upload certificate every release's bundle is signed with. */
-const SIGNER_PIN = "mobile/src-tauri/release-signer.sha256";
+const SIGNER_PIN = "apps/light/src-tauri/release-signer.sha256";
 
 describe("release.yml", () => {
   const jobs = jobsOf(releaseYml);
@@ -303,6 +318,14 @@ describe("release.yml", () => {
       "android-sign",
       "web-deploy",
     ]);
+  });
+
+  it("builds the desktop through the root's `tauri` script", () => {
+    // `tauri-action` runs `npm run tauri build` from the repository root, so a release depends on
+    // this script's text: it is what takes the build into the desktop host's folder. Moving the
+    // host without it builds nothing, or the wrong app. The light host's script is pinned in
+    // `apps/light/host.test.ts`.
+    expect(JSON.parse(packageJson).scripts.tauri).toBe("cd apps/desktop && tauri");
   });
 
   it("runs every job after release-please on a release, and on nothing looser", () => {
@@ -388,7 +411,7 @@ describe("release.yml", () => {
         // The lockfile's packages, no lifecycle script; then what that installed, or nothing.
         "run: npm ci --ignore-scripts",
         "run: npx --no-install wrangler deploy",
-        "run: node scripts/web-deploy-probe.mjs dist-web",
+        "run: node scripts/web-deploy-probe.mjs apps/light/dist-web",
       ],
     ],
   ])("%s builds nothing, and runs only what is listed here", (name, actions, commands) => {
@@ -542,7 +565,7 @@ describe("release.yml", () => {
       "name: web-bundle",
       "run: npm ci --ignore-scripts",
       "run: npx --no-install wrangler deploy",
-      "run: node scripts/web-deploy-probe.mjs dist-web",
+      "run: node scripts/web-deploy-probe.mjs apps/light/dist-web",
     ].map(step);
     expect(order[0]).toBeGreaterThan(-1);
     expect(order).toEqual([...order].sort((a, b) => a - b));
@@ -585,7 +608,7 @@ describe("deploys, across every workflow", () => {
   // **The one job that may deploy anything, and the one Worker it may deploy.** The relay holds
   // secrets and a D1 with real entitlements, and the share Worker a D1 and R2 of its own; their
   // deploys stay by hand (root CLAUDE.md, "Deployments").
-  it("runs wrangler once: `web-deploy`, the lockfile's, from app-worker/", () => {
+  it("runs wrangler once: `web-deploy`, the lockfile's, from infrastructure/app-worker/", () => {
     const wrangler = lines.filter(({ line }) => /\bwrangler\b/.test(line));
     expect(wrangler).toEqual([
       {
@@ -604,12 +627,12 @@ describe("deploys, across every workflow", () => {
     ]);
     const steps = stepsOf(jobsOf(releaseYml)["web-deploy"]);
     const at = steps.findIndex((s) => /\bwrangler\b/.test(s));
-    expect(steps[at]).toMatch(/^ {8}working-directory: app-worker$/m);
+    expect(steps[at]).toMatch(/^ {8}working-directory: infrastructure\/app-worker$/m);
     expect(secretsOf(steps[at])).toEqual(CLOUDFLARE_SECRETS);
     // The install is the step before it, in the same directory, and **nothing is in its
     // environment**: what it installs is not run until the token's step, and it runs no script.
     expect(steps[at - 1]).toMatch(/^ {8}run: npm ci --ignore-scripts$/m);
-    expect(steps[at - 1]).toMatch(/^ {8}working-directory: app-worker$/m);
+    expect(steps[at - 1]).toMatch(/^ {8}working-directory: infrastructure\/app-worker$/m);
     expect(steps[at - 1]).not.toMatch(/^ {8}env:/m);
     expect(secretRefs(steps[at - 1])).toEqual([]);
   });
@@ -650,7 +673,7 @@ describe("deploys, across every workflow", () => {
   it("installs wrangler in CI for a run that is local, start to finish", () => {
     const steps = stepsOf(jobsOf(ciYml).web);
     const install = steps.findIndex((s) => /\bwrangler\b/.test(s));
-    expect(steps[install]).toMatch(/^ {8}run: npm ci --ignore-scripts --prefix app-worker$/m);
+    expect(steps[install]).toMatch(/^ {8}run: npm ci --ignore-scripts --prefix infrastructure\/app-worker$/m);
     expect(steps[install]).not.toMatch(/^ {8}env:/m);
     expect(steps[install + 1]).toMatch(/^ {8}run: npm run web:sync-smoke$/m);
     expect(steps[install + 1]).not.toMatch(/^ {8}env:/m);
@@ -704,8 +727,8 @@ describe("deploys, across every workflow", () => {
     expect(imports(syncPull)).toEqual(["./web-smoke/harness.mjs", "./web-smoke/sync-harness.mjs"]);
     expect(imports(syncHarness)).toEqual(["./harness.mjs"]);
     expect(imports(smokeHarness)).toEqual([
-      "../../app-worker/src/headers.ts",
-      "../../src/lib/core/web/assets.ts",
+      "../../infrastructure/app-worker/src/headers.ts",
+      "../../packages/ui/lib/core/web/assets.ts",
     ]);
     for (const [name, source] of Object.entries({
       syncSmoke,

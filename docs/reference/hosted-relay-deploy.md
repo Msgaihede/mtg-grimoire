@@ -61,7 +61,7 @@ Patreon reconciliation runs **hourly** on a budget of twenty subjects queued by 
 It adds **one migration file** to step 2, run as two `--command`s, and no public route path —
 `/roster` is internal. The cron's move from `0 3 * * *` to `0 * * * *` is in `wrangler.jsonc`, so
 step 6 carries it with nothing else to do. **Its app and its relay ship in either order**; "The
-order" says why, and [relay/README.md](../../relay/README.md) holds the whole of what it changes.
+order" says why, and [infrastructure/relay/README.md](../../infrastructure/relay/README.md) holds the whole of what it changes.
 
 **A seventh half — issue #548's `dev` claim (`f5223fdf`) — was deployed 2026-10-01 at 19:17 UTC**,
 from `main` at `2b845048`, version `ca3dfd11`. `token.ts` stamps the presenting device into every
@@ -104,7 +104,7 @@ particular — and the desktop's live loop reconnects on its own backoff (`sync_
 answers no pre-flight has every request refused by its own browser, and the engine sees a network
 error with no status — not a 401 it could act on, not a 404 it could report. The relay first costs
 nothing: until a page asks, no request carries an `Origin` and the new code is never entered.
-`app-worker/README.md` is that deploy's runbook; "The order" below says the same thing where the
+`infrastructure/app-worker/README.md` is that deploy's runbook; "The order" below says the same thing where the
 order is decided.
 
 **A ninth half — a removed device is told (light app phase 6, step 6.3b) — is deployed.**
@@ -141,7 +141,7 @@ its old roster until *Sync now* is pressed, the relay answering is the old one. 
 taken that look at the deployed relay**: it is known to be live from the tree that was deployed.
 
 **Each side with the other's old build**, cell by cell. *Released* is v0.40.0's loop
-(`src-tauri/src/sync_engine/live.rs` at `daa70e12`), read, not driven: 4001 is `Removed` — a row
+(`apps/desktop/src-tauri/src/sync_engine/live.rs` at `daa70e12`), read, not driven: 4001 is `Removed` — a row
 saying *the relay says this device's sync group no longer exists*, and a backoff — and **any
 other close code is a plain close**: a backoff, and a row saying *the relay closed the socket*
 only when the socket had been up under a minute (a longer-lived one is forgiven, and writes
@@ -200,14 +200,14 @@ answer with no `more` as the last page — the unpaged pull exactly, with what i
 `limit` and is answered the same bytes (`group.test.ts` holds them to the old implementation's
 for a fixture log). So nothing breaks in either order; relay first was the order because until
 it was out, the web app's pull was the one §10.5 measured. The web app that pages followed
-eight minutes later (02:29:39 UTC, `app-worker/README.md`).
+eight minutes later (02:29:39 UTC, `infrastructure/app-worker/README.md`).
 
 **The streamed answer was asked of real workerd, as a released desktop asks it, before it went
 out — the review's condition for the deploy.** Its bytes had been held to the old
 implementation's only by `group.test.ts`, over a stand-in state and Node's `Response`; under
 workerd it had been read by Chrome, from a page, and its bytes compared with nothing. On
 2026-10-05, `wrangler dev --local` on the paging branch at `4fe47f3c`, a local
-D1 made from `relay/schema.sql`, tokens minted with a throwaway key, and **the request a
+D1 made from `infrastructure/relay/schema.sql`, tokens minted with a throwaway key, and **the request a
 released desktop makes**: `GET /g/{group}/pull?since=0&device=…` with a bearer, no `limit` and
 no `Origin`. Two logs, each interleaved between two devices with the tail the caller's own:
 40 rows of 20 000 characters, and 120 rows of 400 000.
@@ -270,14 +270,14 @@ the eighth half's deploy, the ninth and tenth's on 2026-10-05, and nothing after
 
 A device pointed at that host today reaches a relay that speaks the whole membership flow, the
 whole log, the key distribution, the device cap and the pairing rendezvous. **As of 2026-10-05,
-nothing `relay/` does is undeployed: the host runs `main` at `117827d2`, deployed that day at
-02:21:29 UTC** — and the one change to `relay/` since is a doc comment in `group.ts`, corrected
+nothing `infrastructure/relay/` does is undeployed: the host runs `main` at `117827d2`, deployed that day at
+02:21:29 UTC** — and the one change to `infrastructure/relay/` since is a doc comment in `group.ts`, corrected
 in the commit that wrote this, and no code. ⚠️ On 2026-10-04 this sentence named the browser's
 half as the one thing undeployed and the host as still running the 2026-10-01 22:09 UTC deploy —
 and **it went on saying so after that half went out at 17:22 UTC the same day**, through one
 more deploy, until it was read again on 2026-10-05. Before 2026-10-04
-it read "nothing in `relay/` is undeployed". It is the sentence on
-this page most certain to rot, because the next branch that touches `relay/` makes it false
+it read "nothing in `infrastructure/relay/` is undeployed". It is the sentence on
+this page most certain to rot, because the next branch that touches `infrastructure/relay/` makes it false
 without editing it — the last two that did each left it wrong, once in each direction, and the
 two since each edited it in the change that made it false. Step 0
 is the authority, not it; so is `deployments` on the script, which dates every deploy whether or
@@ -285,7 +285,7 @@ not anybody wrote one down.
 
 ⚠️ **The first two rows above were the opposite until 2026-08-30, in four files at once**, and no
 build could go red for any of it. The claim "the hosted Worker is not deployed" was written once
-and then repeated into `CLAUDE.md`, `src-tauri/CLAUDE.md` and `relay/README.md` — where it was read
+and then repeated into `CLAUDE.md`, `apps/desktop/src-tauri/CLAUDE.md` and `infrastructure/relay/README.md` — where it was read
 back as corroboration. Two `curl`s settled it in a second. ⚠️ **And then it happened again inside
 one day**: the group-key deploy landed, and the "both answer 404" row survived in this file and in
 the three others until somebody probed again. **That is what step 0 is for, and it is the reason
@@ -472,7 +472,7 @@ the streamed answer and compaction by length are what every existing device is s
      HTTP/2 and drop `Connection` and `Upgrade`. Header names print in whatever case the edge
      sends, so read them case-insensitively.
 1. **`npx wrangler d1 create mtg-grimoire-relay`**, then put the real `database_id` into
-   `relay/wrangler.jsonc`.
+   `infrastructure/relay/wrangler.jsonc`.
 2. **Apply the schema to an empty database**, and verify rather than trusting exit 0 —
    see [the CHECK trap](#the-check-constraints-are-a-one-shot) below.
    ```
@@ -515,7 +515,7 @@ the streamed answer and compaction by length are what every existing device is s
    `ALTER` is its own invocation so a `duplicate column name` — the correct answer on a database
    that already has it — costs nothing else.
 
-   ⚠️ **`reconciled_at` and its index (`relay/migrations/2026-09-28-reconciled-at.sql`) go in
+   ⚠️ **`reconciled_at` and its index (`infrastructure/relay/migrations/2026-09-28-reconciled-at.sql`) go in
    BEFORE the deploy that ships the budgeted `reconcile`, as two `--command`s in that order** — the
    index names the column — and never as `--file`, which on a database the `ALTER` has already
    reached would roll the index back with the duplicate-column error. **A Worker without the column
@@ -543,7 +543,7 @@ the streamed answer and compaction by length are what every existing device is s
    `/token`, `/rotate` and `/keys` answer normally. **The first pull after the deploy is the check**;
    see item 12 below.
 
-   ⚠️ **`refresh_device` (`relay/migrations/2026-09-26-refresh-device.sql`) must be applied BEFORE
+   ⚠️ **`refresh_device` (`infrastructure/relay/migrations/2026-09-26-refresh-device.sql`) must be applied BEFORE
    the deploy that reads it**, and a Worker without it fails quietly rather than loudly:
    `/claim`'s binding `UPDATE` throws, is caught as if it were the unique violation, and answers a
    misleading **409** *after* the claim code is spent; `/rotate` records the new epoch and then
@@ -561,7 +561,7 @@ the streamed answer and compaction by length are what every existing device is s
    `entitlement::refused_secret` answers silently by minting through the group door — the reason
    the app release comes first.
 
-   ⚠️ **`relay/migrations/2026-08-31-pairing-rendezvous.sql` is run as its own `--command`, never
+   ⚠️ **`infrastructure/relay/migrations/2026-08-31-pairing-rendezvous.sql` is run as its own `--command`, never
    through `--file`, even though the checked-in file holds only this one statement.** The file
    exists for the same reason the other two do — a readable record of the SQL — but this step's own
    opening paragraph is the reason not to point `--file` at it: an atomic multi-statement execute is
@@ -710,7 +710,7 @@ the streamed answer and compaction by length are what every existing device is s
    host whether a later deploy still has them. ⚠️ **This step said "add rate-limiting rules", and a rule is the one thing this host cannot
    have**: a WAF rate-limit rule belongs to a zone, and `workers.dev` is not one the account
    controls. What stands there instead is Cloudflare's rate-limit *binding* — three `ratelimits`
-   entries in `wrangler.jsonc`, asked by `relay/src/ratelimit.ts` after the method check and ahead
+   entries in `wrangler.jsonc`, asked by `infrastructure/relay/src/ratelimit.ts` after the method check and ahead
    of each handler:
 
    | Binding | Routes | Per client address, per 60 s | Heaviest honest use |
@@ -980,7 +980,7 @@ settle the CORS headers and the origin check from outside — **asked of the dep
 **the 101's sub-protocol and the pong below were settled under local workerd, not in production,
 and nothing in production has opened a socket from a browser yet.** These are what only a real
 browser, or
-the account's own dashboard, can say. `relay/src/cors.test.ts` and `ticket.test.ts` run the
+the account's own dashboard, can say. `infrastructure/relay/src/cors.test.ts` and `ticket.test.ts` run the
 router, and the real `Group` over stand-ins for three of workerd's globals — Node's `Response`
 refuses a status of 101 — so everything below is exactly what those suites could not reach.
 
@@ -993,7 +993,7 @@ two profiles of headless Chrome 154 reaching it by its real name):
 | The 101's `Sec-WebSocket-Protocol` reaches a browser | **yes** — both sockets read `grimoire.live.v1` and stayed open | not seen: it needs a real membership in a real browser, which is the owner's |
 | The text `ping` is answered `pong` | **yes** — every `ping` either device sent, the second 45 s after the first | not seen |
 | A page's requests pass CORS, refusals included | **yes** — a claim, a token, a pairing, pushes, pulls and acks, with no failed request | step 0's probes, from outside: **answered 2026-10-04 at 23:09 UTC** — `204` with the allow-origin line, `401` with it, `403` to a foreign origin. A page has asked since, by the owner's sentence below and no other reading |
-| The page's policy lets the socket through | only with the relay's `wss://` source in `connect-src` — `https://` alone is refused by Chrome | **in production's policy** since the web app's deploy of 2026-10-04 at 23:19 UTC (`app-worker/README.md`, probe 19) |
+| The page's policy lets the socket through | only with the relay's `wss://` source in `connect-src` — `https://` alone is refused by Chrome | **in production's policy** since the web app's deploy of 2026-10-04 at 23:19 UTC (`infrastructure/app-worker/README.md`, probe 19) |
 | What a keepalive is billed | nothing a local run can say | the one-hour check below |
 | The token in Workers Logs | nothing a local run can say | **decided, not measured**: accepted by the owner on 2026-10-04, `invocation_logs` stays on |
 | Safari, Firefox, a phone's browser | not driven | not driven |
@@ -1061,7 +1061,7 @@ two profiles of headless Chrome 154 reaching it by its real name):
 
 ### 14. The paged pull — a streamed body no released desktop has read, and a catch-up that is many requests
 
-Added 2026-10-05; **deployed that day at 02:21:29 UTC**. `relay/src/group.test.ts` runs the real `Group` over Node's
+Added 2026-10-05; **deployed that day at 02:21:29 UTC**. `infrastructure/relay/src/group.test.ts` runs the real `Group` over Node's
 SQLite behind the stand-in state `ticket.test.ts` already used, and `npm run web:sync-smoke` and
 `web:sync-pull` run the same code under workerd against Chrome. What neither reached:
 

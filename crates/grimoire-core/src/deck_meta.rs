@@ -2901,7 +2901,7 @@ mod tests {
     }
 
     /// The hand-mirrored wire contract for the category row, pinned so a field added here and
-    /// never mirrored in `src/lib/ipc.ts` fails the suite rather than rendering `undefined`.
+    /// never mirrored in `packages/ui/lib/ipc.ts` fails the suite rather than rendering `undefined`.
     #[test]
     fn category_row_json_uses_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(DeckCategoryRow {

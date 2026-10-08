@@ -50,13 +50,13 @@ still holds its `attached` line. Re-attach after any relaunch, and check the lin
   **The URL check below still works and answers about a *worktree*, not a window**: every
   window in one process serves the same frontend, so one target reading
   `http://localhost:1420/` means the whole process is that dev server's.
-- **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
-  `tauri build` binary.** `npm run tauri build` re-runs Vite, writes a new `dist/assets/
+- **A built app embeds `apps/desktop/dist/` at compile time, so a frontend-only edit does not reach a
+  `tauri build` binary.** `npm run tauri build` re-runs Vite, writes a new `apps/desktop/dist/assets/
 index-<hash>.js` — and then cargo sees no Rust source change, skips the crate, and **leaves
   the old bundle inside the old exe**. It exits 0. Measured 2026-08-11: a fix was verified
   "live" **twice** against a binary that did not contain it, and the tell is cheap —
   `[...document.querySelectorAll('script')].map(s => s.src)` in the window against
-  `ls dist/assets/*.js`, or just the exe's own mtime. `touch src-tauri/src/main.rs` first,
+  `ls apps/desktop/dist/assets/*.js`, or just the exe's own mtime. `touch apps/desktop/src-tauri/src/main.rs` first,
   which is the same rule this file already gives for `tauri.conf.json` and for the same reason.
   **`npm run tauri dev` does not have this problem** (Vite serves the frontend), which is
   exactly why it is the command above — a worktree pass that builds instead inherits the trap.
@@ -82,7 +82,7 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   window back, so read `innerWidth`/`innerHeight` before the first override and end the run
   with an explicit `size <those two numbers>`. **Read them; do not assume them.** Since
   2026-08-20 the app opens at the largest of 1920×1080 and 1280×720 the monitor's work area
-  holds (`src-tauri/src/window.rs`), so the natural size differs between desks — the
+  holds (`apps/desktop/src-tauri/src/window.rs`), so the natural size differs between desks — the
   `size 1280 800` this contract used to name is now nobody's window.
   **`innerWidth` is the right width to _restore_ and the wrong width to _position_ from.** It
   includes the classic vertical scrollbar and `document.documentElement.clientWidth` does not —
@@ -125,7 +125,7 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   WRY's own OLE drop target swallowing `dragover`/`drop` for its file-drop API.
   `"dragDropEnabled": false` in `tauri.conf.json` is load-bearing; re-enabling it kills all
   in-app drag-and-drop on Windows, invisibly to this harness. The config is embedded at
-  **compile time** — editing it needs a Rust rebuild (`touch src-tauri/src/main.rs`), not
+  **compile time** — editing it needs a Rust rebuild (`touch apps/desktop/src-tauri/src/main.rs`), not
   just a dev-server restart. **It cleans up after
   itself, including after a drag that never started** — which is the case worth naming,
   because that is the one that has already pressed the mouse button. A dying run otherwise
@@ -209,7 +209,7 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   started" is the strongest evidence that it did not. **The tell is the page target's URL and it
   costs one call**: `http://localhost:1420/` is
   a `tauri dev` window and yours; `http://tauri.localhost/` is a built binary serving its embedded
-  `dist/`. Check it before the first gesture, and ask which worktree the process came from —
+  `apps/desktop/dist/`. Check it before the first gesture, and ask which worktree the process came from —
   `Get-Process mtg-grimoire | Select-Object Id, Path` is enough, and `Get-CimInstance Win32_Process
   -Filter "Name='mtg-grimoire.exe'"` adds the command line. **Wait the other session out — never
   kill it**: it belongs to somebody else's task.
@@ -217,7 +217,11 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   stale dep-bundle hash with **504 Outdated Optimize Dep**, re-optimises, and forces a **full page
   reload** — which silently drops every `window.__*` the pass was holding, resets the app's
   zustand store to its default view, and kills the console recorder. Reach the app's own modules
-  by source path instead (`import('/src/lib/ipc.ts')`, `import('/src/features/…/fixtures.ts')`);
+  by source path instead (`import('/src/lib/ipc.ts')`, `import('/src/features/…/fixtures.ts')`
+  — **since 2026-10-08 each app's Vite root is its own folder**, so the desktop serves a shared
+  module at `/@fs/<absolute path of the checkout>/packages/ui/lib/ipc.ts`, and only `/src/main.tsx`
+  and the two boot screens are under `/src/`; the light dev server's page is `/index.html`, not
+  `/mobile/index.html`);
   under `tauri dev` Vite serves and transforms those, so bare specifiers inside them resolve and
   the module works — which is also the cheapest way to get `ipc` and a fixture into the page
   without quoting a 2 500-character string through PowerShell.
@@ -239,7 +243,7 @@ index-<hash>.js` — and then cargo sees no Rust source change, skips the crate,
   the variant tabs do it), and prefer taking the "after" reading from a state the component
   rendered itself. Measured 2026-08-21 on the theory tick's `clipPath` (issue #182).
 
-Seed and clean fixtures with `node:sqlite` straight into `src-tauri/target/debug/data/mtg.db`
+Seed and clean fixtures with `node:sqlite` straight into `target/debug/data/mtg.db`
 **while the app holds it** (WAL allows it). Delete every seeded row afterwards — `data/` is
 the user's, and it is never committed. Seed **user tables only**: `cards` and `sync_meta`
 belong to the sync, and a hand-written row in either makes every later measurement a fiction.

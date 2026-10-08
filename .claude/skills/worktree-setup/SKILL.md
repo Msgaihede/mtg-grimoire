@@ -6,7 +6,7 @@ description: Use when starting work in an mtg-grimoire git worktree under .claud
 # Worktree setup
 
 A worktree is a full second checkout. It shares the git object store with the main
-checkout and **almost nothing else** — not `node_modules`, not `src-tauri/target`, not
+checkout and **almost nothing else** — not `node_modules`, not `target`, not
 the database.
 
 **Dependencies and the branch are a hook now** — `.claude/hooks/worktree-deps.sh` at
@@ -33,17 +33,17 @@ every cargo command works again. If `src-tauri/Cargo.lock` conflicts in that mer
 root `Cargo.lock` and let cargo re-resolve.
 
 For a worktree parked on an older commit on purpose (a release tag, a bisect), add an empty
-`[workspace]` table to its `src-tauri/Cargo.toml` and do not commit it. **Never "fix" it by
+`[workspace]` table to its `src-tauri/Cargo.toml` (`apps/desktop/src-tauri/Cargo.toml` from 2026-10-08 on) and do not commit it. **Never "fix" it by
 adding `.claude` to the root manifest's `exclude`**: the worktree then builds into the main
-checkout's `src-tauri/target` and its app opens the main checkout's dev database.
+checkout's `target` and its app opens the main checkout's dev database.
 
 ## What is and is not shared
 
 | Per worktree | Shared with every worktree |
 | --- | --- |
 | `node_modules` | the git object store |
-| `src-tauri/target` (gigabytes) | **the stash stack** |
-| `src-tauri/target/debug/data/` — db **and** image cache | the lock dir, `<git common dir>/locks` |
+| `target` (gigabytes) | **the stash stack** |
+| `target/debug/data/` — db **and** image cache | the lock dir, `<git common dir>/locks` |
 
 A worktree's `.git` is a **file**, not a directory, so `ls .git/locks` fails here. The
 common dir is what every worktree shares:
@@ -70,6 +70,6 @@ Then, in order:
 - **Running the app, Storybook or a CDP pass** → the `running-the-app` skill first. Both
   locks are shared across every worktree and both collisions are silent.
 - **Running against real data** rather than an empty wall → `live-data.md`, beside this
-  file. Copying `src-tauri/target/debug/data` beats a 93-second sync, but only the whole
+  file. Copying `target/debug/data` beats a 93-second sync, but only the whole
   folder works and only with the app stopped.
 - **Work finished** → verify, commit the feature, push branch, and open PR.

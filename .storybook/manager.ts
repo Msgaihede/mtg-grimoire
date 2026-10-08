@@ -15,7 +15,7 @@ import { create } from "storybook/theming";
    about the version it came from. */
 
 /* Hex, because a manager theme is plain CSS values with no `@theme` block behind it and no
-   Tailwind to resolve a token — these are `src/index.css`'s own tokens converted from oklch,
+   Tailwind to resolve a token — these are `packages/ui/index.css`'s own tokens converted from oklch,
    and `logos/README.md` records the same three for the artwork so the mark and the chrome it
    sits in cannot drift apart:
 
@@ -27,11 +27,11 @@ import { create } from "storybook/theming";
      --color-border   oklch(0.3 0.01 270)     #2C2E33
 
    No `fontBase`/`fontCode` is set. The app's faces come from `@fontsource` imports in
-   `src/index.css`, which reaches the preview iframe through `preview.css` and never reaches
+   `packages/ui/index.css`, which reaches the preview iframe through `preview.css` and never reaches
    this document — naming Geist here would silently fall back to the system sans and only
    look like a decision was made. */
 const grimoire = create({
-  // Dark only, matching the app: `src/index.css` carries identical values on `:root` and
+  // Dark only, matching the app: `packages/ui/index.css` carries identical values on `:root` and
   // `.dark`, and `preview-head.html` explains why the class exists at all. There is no light
   // theme to offer the workbench because there is none to build a component against.
   base: "dark",

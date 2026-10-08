@@ -1,0 +1,11229 @@
+/**
+ * The only place the frontend names a Tauri command or an event.
+ *
+ * Every type here is a hand-written mirror of a `#[serde(rename_all = "camelCase")]`
+ * struct in `apps/desktop/src-tauri/src`, so the two can drift silently — a renamed field becomes an
+ * `undefined` the compiler is happy with. Rust pins its side in
+ * `sync::tests::dto_json_uses_the_camel_case_names_the_frontend_expects`; this side is
+ * pinned by `ipc.test.ts` for the argument names, which are the other half of the
+ * contract (`invoke` matches them by name, and a typo is a runtime rejection).
+ *
+ * Sources, verified field by field:
+ * `SearchRequest`/`CardSummary`/`SearchResponse`/`SetSummary` — `crates/grimoire-core/src/search.rs`
+ * `FacetResponse`                                 — `crates/grimoire-core/src/index/facets.rs`
+ * `CardFace`/`CardDetail`/`Printing`/`PrintingsResponse`/
+ * `FinishPrices`/`PrintingPrices`/`MeldRelation` — `crates/grimoire-core/src/card.rs`
+ * `SyncOutcome`/`SyncStatus`/`Progress`          — `crates/grimoire-core/src/sync.rs`
+ * `EntryInput`/`EntryPatch`/`EntryChange`/`CollectionQuery`/`CollectionRow`/
+ * `CollectionPage`/`CollectionSummary`/`BreakdownRow` — `crates/grimoire-core/src/collection.rs`
+ * `MoveOutcome`                                  — `crates/grimoire-core/src/collection_alloc.rs`
+ * `WishInput`/`WishlistQuery`/`WishRow`/`WishlistPage`/
+ * `WishlistSummary`                              — `crates/grimoire-core/src/wishlist.rs`
+ * `DeckInput`/`DeckPatch`/`DeckViewState`/`DeckRow`/`DeckCardRow`/`DeckDetail`/
+ * `FormatSpecRow`/`PipCost`/`DeckPipCosts`/
+ * `BracketCardRow`/`DeckBracketRead`/`DeckValue`   — `crates/grimoire-core/src/deck.rs`
+ * `ActivityEntry`                                — `crates/grimoire-core/src/activity.rs`
+ * `HomeWidget`/`HomeLayout`                      — `crates/grimoire-core/src/home.rs`
+ * `StickyNoteRow`                                — `crates/grimoire-core/src/sticky_notes.rs`
+ * `CardFilters`, flattened into both list queries — `crates/grimoire-core/src/filters.rs`
+ * `MarketplaceFeedStatus`                        — `crates/grimoire-core/src/marketplace_feed.rs`
+ * `CardTags`/`PrintingTags`                     — `crates/grimoire-core/src/tags/oracle.rs`
+ * `TagStatus`/`TagProgressEvent`                 — `crates/grimoire-core/src/tags/mod.rs`, aliased per
+ *                                                  dataset by `tags/oracle.rs`/`tags/art.rs`
+ * `TagHit`/`TagRef`                              — `crates/grimoire-core/src/tags/query.rs`
+ * `MutedTag`                                     — `crates/grimoire-core/src/tags/muted.rs`
+ * `ComboBracketTag`/`DeckCombo`/`ComboStatus`/
+ * `ComboProgress`/`ComboPiece`/`CardCombo`/
+ * `ComboCountBucket`/`CardCombosPage`            — `crates/grimoire-core/src/combos.rs`
+ * `MirrorStatus`                                 — `apps/desktop/src-tauri/src/mirror/settings.rs`
+ * `PassReport`                                   — `apps/desktop/src-tauri/src/mirror/run.rs`
+ * `TagTerms`                                     — `crates/grimoire-core/src/filters.rs`
+ * `PairingStatus`/`PairingOffer`/`PairingHandshake`/`PairingSealedKey`/
+ * `PairingProgress`/`QrMatrix`/`PairedDevice`      — `crates/grimoire-core/src/sync_pair/pairing.rs`,
+ *                                                  `.../identity.rs`, `.../invite.rs`
+ * `DeckFolderPane`                                — `crates/grimoire-core/src/deckpane.rs`
+ * `ShareRow`/`ShareFields`                        — `apps/desktop/src-tauri/src/share/commands.rs`
+ * `ScannerAsset`/`ScannerStatus`/`ScannerSidecar`/
+ * `ScannerCaptured`/`ScannerPrefs`/
+ * `ScannerTrayRow`/`ScannerTrayChoice`             — `crates/grimoire-core/src/scanner.rs`
+ * `ScannerAssetsOwed`/`ScannerAssetsProgress`      — `crates/grimoire-core/src/scanner_assets.rs`
+ * `ScannerAssetDue`                                — `crates/grimoire-core/src/downloads.rs`
+ * `ScannerOptions`/`ScannerVerdict`/`ScannerFrameSize`/
+ * `ScannerStages`/`ScannerStanding`/`ScannerTracked`/
+ * `ScannerCollectorTry`/`ScannerCollector`/`ScannerOcr`/
+ * `ScannerDecision`                                — `crates/card-scanner/src/session.rs`
+ * `ScannerFinishMark`/`ScannerMarkReading`         — `crates/card-scanner/src/ocr.rs`
+ * `ScannerChoice`/`ScannerTier`/`ScannerResolution` — `crates/card-scanner/src/resolve.rs`
+ * `ScanFilters`                                    — `crates/card-scanner/src/filters.rs`
+ * `ScannerLabel`/`ScannerCandidate`/`ScannerMatch`  — `crates/card-scanner/src/reference.rs`
+ * `ScannerLock`                                    — `crates/card-scanner/src/lock.rs`
+ * `ScannerScore`/`ScannerTimings`                  — `crates/card-scanner/src/detect.rs`
+ * `ScannerCardness`                                — `crates/card-scanner/src/cardness.rs`
+ * `ScannerTrim`                                    — `crates/card-scanner/src/trim.rs`
+ *
+ * **The scanner's shapes are the one block here that is _not_ camelCase**, and they are the
+ * exception rather than an oversight: the detector crate carries no
+ * `#[serde(rename_all = "camelCase")]`, because its JSON was the standalone debug page's before
+ * it was this app's and that page reads `decide_at` and `best_distance` by those names. The
+ * mirror keeps the Rust spelling verbatim; `ipc.test.ts`'s `snakeMirrors` is the table that
+ * compares them with no camel step. **Three of the block are camelCase after all** —
+ * `ScannerPrefs`, `ScannerTrayRow` and `ScannerTrayChoice` — because they are this app's stored
+ * rows rather than the detector's JSON, and they sit on `plainMirrors` with every other one.
+ *
+ * **The stored settings are one `app_meta` row each, and most of them carry no struct at all.**
+ * (The scanner's two rows, `scanner_prefs` and `scanner_tray`, carry structs; see
+ * {@link ScannerPrefs} and {@link ScannerTrayRow}.) Of the settings without one, some answer as a
+ * bare string — `getMarketplace`/`setMarketplace` (`crates/grimoire-core/src/marketplace.rs`),
+ * `printingGroupBy`/`setPrintingGroupBy` (`crates/grimoire-core/src/card.rs`),
+ * `deckSort`/`setDeckSort` (`crates/grimoire-core/src/decksort.rs`) and
+ * `startView`/`setStartView` (`crates/grimoire-core/src/startview.rs`) — some as a bare map,
+ * `cardZoom`/`setCardZoom` (`crates/grimoire-core/src/zoom.rs`), `listView`/`setListView`
+ * (`crates/grimoire-core/src/listview.rs`), `markColors`/`setMarkColor`
+ * (`crates/grimoire-core/src/markcolors.rs`) and `searchOpen`/`setSearchOpen`
+ * (`crates/grimoire-core/src/searchopen.rs`), and one as a bare `boolean`:
+ * `navCollapsed`/`setNavCollapsed` (`crates/grimoire-core/src/nav.rs`). The settings that do carry a struct
+ * are `deckFolderPane`, `homeLayout` and `shelfFolds`, below. Every one of them is the shape a
+ * stored preference has to have: the read falls back on its default for a row that is missing
+ * *or* holds a value this build does not recognise, and only the *write* refuses. **They are
+ * named here and never counted**: this paragraph said "eleven" after `shelfFolds` made the rows
+ * one more, because a count is a fact a build answers (`grep -rln "app_meta::" apps/desktop/src-tauri/src`)
+ * and a prose-only edit turns nothing red.
+ *
+ * All of those but the boolean are therefore typed loosely here rather than as their unions: the
+ * narrowing belongs to the module that owns the vocabulary (`@/lib/marketplace`,
+ * `@/features/card/printings`, `@/lib/cardZoom`, `@/lib/store` for its list-layout row,
+ * `@/features/decks/deckSort`, `@/lib/useMarkColors`, `@/features/search/useSearchOpen`,
+ * `@/features/home` for the start view), and a row a newer build wrote must reach this side as
+ * what it is. **The deck sort and the start view are where the *write* refuses nothing but a
+ * blank**, and they are the rule above meeting a vocabulary the backend does not have rather than
+ * an exception to it: some of the sort keys are computed on this side, so `deck_sort.rs` has no
+ * list to check a word against, and which views exist is a
+ * fact about this app's router, so `startview.rs` has none either — see {@link ipc.setDeckSort}
+ * and {@link ipc.setStartView}. **The one bare boolean left is the one with no narrowing to do**, and that is
+ * the same argument arriving at nothing rather than an exception to it: a boolean has no
+ * vocabulary for a later build to have widened, so there is no third state a row could come back
+ * in. Its far end folds a missing row, a junk row and an unreadable one alike into one
+ * default — `false` for the nav rail, which is expanded — and `boolean` here is the whole of the
+ * type, with nothing left for this
+ * side to decide. It stores `"1"`/`"0"` and reads anything else as that default, so a hand-edit
+ * or a spelling a future build invents is already collapsed before it reaches the wire.
+ *
+ * **There were two of those booleans until 2026-09-07**, and where the second one went says more
+ * about the split above than either paragraph does. `deckSearchOpen` was one row for one
+ * column; the collection and the wishlist growing the same docked search would have made it
+ * three rows, six commands, three query keys and three prefetches for one fact. It is
+ * {@link ipc.searchOpen} now, a map keyed by section — so the setting moved out of the boolean
+ * paragraph and into the map one without a word of either argument changing.
+ *
+ * **The folder pane is the first stored preference that carried a struct**: {@link DeckFolderPane}
+ * (`crates/grimoire-core/src/deckpane.rs`) is how wide the decks page's folder tree was dragged *and*
+ * whether it is folded to its rail, and the two are one row because they are one gesture's worth
+ * of state — a reader who folds a tree they had widened must come back to both facts, and two
+ * rows would be two writes that can half-land. **A struct rather than a map** for the reason
+ * {@link ipc.searchOpen} is a map rather than two rows, arrived at from the other end: the
+ * search-column row has one *kind* of value under keys this side invents, and this one has two
+ * *different* values under names both sides already know, so a `Record<string, unknown>` here
+ * would throw away the only thing worth checking. Being a struct is also what puts it on
+ * `ipc.test.ts`' mirror table, where the unstructured settings cannot be — a bare `boolean` has
+ * no fields to compare — so it is one of the stored settings whose *shape* cannot drift silently.
+ * **`width` is nullable and `collapsed` is not**, which is the same asymmetry the unstructured
+ * ones turn on: how wide is a number a reader has to have produced, so a database nobody has
+ * dragged has
+ * nothing honest to say and says `null`; folded-or-not has a default that is true of every
+ * database from the first launch. `@/features/decks/useFolderPane` is where the `null` becomes a
+ * pixel count, and `FolderTree` owns that number.
+ *
+ * **The home layout is the second, and it is a struct for the opposite reason.** {@link HomeLayout}
+ * (`crates/grimoire-core/src/home.rs`) is the home page's tiles — their order, their widths and whatever each
+ * one remembers — and where the folder pane is a struct because its two *known* fields must land
+ * together, this one is a struct because most of what it holds is **unknown to the backend
+ * entirely**: `kind` is a word this side invents and `config` is a shape only the widget that
+ * wrote it can read. So `markcolors.rs`' third rule is the one that governs it — a write preserves
+ * what this build does not understand — and a layout a newer build wrote survives a round trip
+ * through an older one rather than being flattened to what that one happens to know. Being a
+ * struct puts it on the same mirror table, which is what its two declared fields are worth
+ * checking for; nothing on this side can fence the rest, and nothing should try.
+ *
+ * **The shelf folds are the third, and the struct is the one vocabulary both sides spell.**
+ * {@link ShelfFolds} (`crates/grimoire-core/src/shelffolds.rs`, `shelfFolds`/`setShelfFolds`) is which
+ * shelves the reader folded away from their default, per page. The *pages* are named on both
+ * sides — {@link ShelfFoldPage} here and the Rust struct's fields there, held together by
+ * `ipc.test.ts` (and `shelffolds::PAGES` held to those fields by the crate's own test) — and
+ * under each page it is the search-column row's shape one level deeper:
+ * folder ids this side sends, mapped to plain booleans. Its write follows the rules above — it
+ * refuses an unknown page or a key that is not a folder id, keeps a page this build does not
+ * know — and a `null` takes an override back off rather than storing the default.
+ *
+ * The zoom row, the list-layout row, the mark-colour row and the search-column row are the
+ * unstructured settings whose *shape* is a map, and the difference is worth a sentence:
+ * none has a single default to fall back on, because each covers several walls, lists, search
+ * columns or marks, and each one of those has been touched or not. So
+ * the backend answers only what it has, and a section it says nothing about keeps the default the
+ * store was built with — which for the mark colours is the one `index.css` draws, a default this
+ * side does not hold as a value at all.
+ * **The search-column row is the one where the keys are a vocabulary and the values are not** —
+ * which pages carry a search column is `@/features/search/useSearchOpen`'s to say, while a `bool`
+ * has no junk state for a later build to have widened. So the key is narrowed on this side, and the
+ * only thing asked of the value is that it really is a boolean — a check on the *wire*, not on a
+ * vocabulary: this file's `boolean` is a claim about what the far end sends, and a row that has
+ * been hand-edited is exactly where a claim stops being true.
+ *
+ * **Every price field on this page is singular, and the marketplace is how it was chosen.**
+ * A query carries `marketplace`; what it answers with carries one `price` / `unitPrice` /
+ * `totalPrice` / `value`, already in that marketplace's money — or, where a *card* rather than
+ * a priced list is the answer, one {@link FinishPrices} triple in it. There is no twin field to
+ * pick between and no fallback across marketplaces — see `@/lib/marketplace`.
+ */
+import { core } from "@/lib/core";
+import type { CallArgs, CallOptions } from "@/lib/core";
+import type { Border } from "./border";
+import type { Condition } from "./conditions";
+import type { Finish } from "./finish";
+import type { MarketplaceId } from "./marketplace";
+import type { ImageVariant } from "./images";
+import type { SortSpec } from "./sort";
+
+/**
+ * What a subscription hands back: call it to stop listening.
+ *
+ * This app's own type now, rather than the one Tauri exported. It is **synchronous** because
+ * {@link Core} is — a React cleanup cannot await, and a component can unmount before the
+ * transport has finished subscribing, so the handle has to be callable immediately and still
+ * take effect later. `core/tauri.ts` is where that is arranged.
+ */
+export type Unlisten = () => void;
+
+/**
+ * The methods below are written as `invoke("name", { args })` and stay that way. (This read
+ * "~136" long after it stopped being true; count them in the file rather than here.)
+ * Only where the call goes has changed — {@link core} decides that.
+ *
+ * **Two parameters wider than that sentence since the scanner**, and both widenings serve the
+ * one call that cannot be `{ args }`: a camera frame is bytes with no fields to name, so `args`
+ * takes {@link CallArgs}' other arm, and whatever the bytes cannot say rides in
+ * {@link CallOptions}' headers. Every other wrapper passes a record and no options, which is
+ * what keeps `core.call`'s one- and two-argument forms — and the
+ * `toHaveBeenCalledWith("sync_status")` assertions that depend on them — unchanged.
+ */
+const invoke = <T,>(command: string, args?: CallArgs, options?: CallOptions): Promise<T> =>
+  core.call<T>(command, args, options);
+
+/**
+ * JSON with every non-ASCII character escaped, for the two scanner headers.
+ *
+ * **A header value is not a string, it is bytes, and three layers disagree about which bytes
+ * are allowed.** `JSON.stringify` leaves non-ASCII characters as themselves; a browser sends
+ * a header value's 0x80–0xFF as Latin-1 and throws a `TypeError` outright above that; and
+ * Rust's `HeaderValue::to_str` refuses anything outside visible ASCII. So `Æther Vial` in a
+ * `x-scanner-capture` either kills the call in the page or arrives as mojibake the far end
+ * rejects — and a scanner refusing exactly the cards whose names are worth reading is the
+ * failure this prevents. `\uXXXX` is the one spelling that survives all three hops, and it is
+ * still the same JSON: `JSON.parse` on the far side yields the original character.
+ *
+ * Used for **both** headers, so the two are symmetric even though only one has ever carried a
+ * card name.
+ *
+ * A surrogate pair escapes to its two code units, which is exactly what JSON asks for.
+ */
+function asciiJson(value: unknown): string {
+  return JSON.stringify(value).replace(
+    /[\u0080-\uffff]/g,
+    (c) => `\\u${c.charCodeAt(0).toString(16).padStart(4, "0")}`,
+  );
+}
+
+/**
+ * The search's sortable columns. Mirrors `SEARCH_SORTS` in `crates/grimoire-core/src/search.rs`; a key
+ * that is not there is dropped at the far end, which is a control that does nothing.
+ *
+ * The first five are the table's headers. `manaValue` and `released` have **no column to
+ * press** and are reachable only from the filter bar's sort picker — the trade the
+ * collection's `added` and `price` already made. There is no room for a column: the search
+ * table shares its squeeze between two flexible tracks and already reaches 1280px with the
+ * card pane open (see `columnsFor` in `SearchPage.tsx`), so a seventh and an eighth would come
+ * out of the Name column, which is what identifies a row.
+ */
+export type SearchSortKey = "name" | "set" | "type" | "rarity" | "price" | "manaValue" | "released";
+
+/**
+ * The collection's sortable columns.
+ *
+ * `value` and `price` are two questions about the one Value column: `value` is what the row
+ * is worth (unit × copies — the figure the cell prints, and what its header sorts by), and
+ * `price` what one copy costs. `added` has no column at all. Both of the latter are
+ * reachable only from the filter bar's select. Mirrors `COLLECTION_SORTS` in
+ * `crates/grimoire-core/src/collection.rs`.
+ */
+export type CollectionSortKey =
+  "name" | "set" | "finish" | "quantity" | "value" | "price" | "added";
+
+/**
+ * The wishlist's sortable columns.
+ *
+ * There is no `set`: an any-printing wish names no set, so the Printing column is not
+ * sortable at all. `cost` is what the wish costs — unit × copies wanted, which is the figure
+ * the Cost cell prints.
+ *
+ * **There is no `owned` either, since 2026-09-08.** It ordered by the copies the collection
+ * held against each wish, and the wishlist compares itself to the collection nowhere any more.
+ * Mirrors `WISHLIST_SORTS` in `crates/grimoire-core/src/wishlist.rs`.
+ */
+export type WishlistSortKey = "name" | "quantity" | "cost" | "price" | "added";
+
+/**
+ * A search as the UI asks for it.
+ *
+ * Rust carries `#[serde(default)]`, so *every* field is optional on the wire — but
+ * `limit`/`offset` stay required here on purpose: an omitted `limit` silently becomes
+ * the backend's default page size, which a pager that thinks it asked for 100 would
+ * then mis-count. Call sites say what they want.
+ */
+export interface SearchRequest {
+  /** Free text, prefix-matched against name, type line and oracle/face text. */
+  text?: string;
+  /** A `legalities` key (`"modern"`, `"vintage"`, …). `restricted` counts as playable. */
+  format?: string;
+  /**
+   * Colour identity, e.g. `"WU"`; `"C"` means colourless only.
+   *
+   * **Subset semantics unless {@link colorsStrict} says otherwise** — the default reads these
+   * letters as a ceiling, so `"WU"` answers mono-W, mono-U, WU and the colourless cards alike.
+   * That is the Commander question ("what may go in this deck"); strict is the other one
+   * ("what *is* this colour pair"), and the letters are the same on both.
+   */
+  colors?: string;
+  /**
+   * Read {@link colors} as an **exact** identity rather than a subset: `"RW"` answers the RW
+   * cards alone, not mono-R, mono-W, or the colourless cards that fit in any deck.
+   *
+   * Degenerate for `"C"`, which already means colourless-only in both modes. A `true` with no
+   * {@link colors} filters nothing — the chip is not drawn until a colour is picked.
+   */
+  colorsStrict?: boolean;
+  setCode?: string;
+  /**
+   * Every printing of one oracle card — the card, not the cardboard. Absent means unset,
+   * like every other filter here; it ANDs with the rest. Mirrors
+   * `CardFilters::oracle_id` in `crates/grimoire-core/src/filters.rs` and
+   * `SearchRequest::oracle_id` in `crates/grimoire-core/src/search.rs`.
+   */
+  oracleId?: string;
+  /** Set codes. ORed with each other, ANDed with every other filter. */
+  sets?: string[];
+  /** Mana-value chips: 0–7 match exactly, 8 means "8 or more". */
+  manaValues?: number[];
+  /**
+   * Also match printings whose printed cost names `{X}`. Rust: `mana_x: Option<bool>`.
+   *
+   * **One more chip in the mana-value group, ORed with the numbers beside it** — pressing X
+   * alone asks for the X spells, pressing X and `3` asks for both piles at once. And it is
+   * **additive rather than a re-filing**: an X card still matches its own mana value (Fireball
+   * is `{X}{R}`, mana value 1, and answers the `1` chip), so a reader who names both chips gets
+   * that card once, in one row, rather than a duplicate. The deck editor's
+   * `separateXGroup` is the *other* shape of this idea and deliberately not this one — there a
+   * card is in the X pile **instead of** its bucket, because a heading that counted it twice
+   * would make the columns add up to more than the deck.
+   */
+  manaX?: boolean;
+  rarity?: string;
+  /**
+   * Rarity chips: `["rare", "mythic"]` means "either". ORed with each other, ANDed with every
+   * other filter — {@link sets}' shape one dimension along.
+   *
+   * **A field beside {@link rarity} rather than a widening of it.** That one is single-valued
+   * and is what `PrintingsFilterBar`'s `<select>` sends; a multi-select has to be able to say
+   * "none picked", which for an array is `[]` and which a lone string cannot spell. Rust:
+   * `rarities: Option<Vec<String>>`.
+   */
+  rarities?: string[];
+  /**
+   * Card-type chips — `Artifact`/`Battle`/`Creature`/`Enchantment`/`Instant`/`Land`/
+   * `Planeswalker`/`Sorcery`. ORed with each other, ANDed with every other filter.
+   *
+   * **"Does this card have this type", not "which bucket is it in".** Dryad Arbor
+   * (`Land Creature — Forest Dryad`) answers both `Land` and `Creature`.
+   */
+  types?: string[];
+  /**
+   * Border chips — `regular`/`borderless`/`fullart` (`@/lib/border`). ORed with each other,
+   * ANDed with every other filter: the type chips' shape one dimension along. `regular` is a
+   * printing that is **neither** borderless nor full art; a borderless full-art printing
+   * answers both of the other two. Rust: `borders: Option<Vec<String>>`.
+   */
+  borders?: Border[];
+  /**
+   * Finish chips over the **printing** — "is this printing published in foil", Scryfall's
+   * `is:foil` — ORed with each other. Answered from `cards.finishes`, so a printing that exists
+   * in nonfoil and foil answers both chips.
+   *
+   * **Not the collection's {@link CollectionQuery.finishes}**, which is the finish one *copy*
+   * is in. The two share the tray's Finish cell and nothing else; the different name is what
+   * keeps them from colliding on the collection's flattened payload. Rust:
+   * `printed_finishes: Option<Vec<String>>`.
+   */
+  printedFinishes?: Finish[];
+  /**
+   * The price band, at {@link marketplace}. Inclusive at both ends, either half usable alone.
+   *
+   * **An unpriced printing matches neither bound** — a shop that does not list a card has not
+   * offered it at zero. So a range narrows away every printing the chosen marketplace is silent
+   * about, which on Card Kingdom and Mana Pool is most of the corpus until that feed has been
+   * fetched. Rust: `price_min`/`price_max`, applied in `run_search` over
+   * `sorting::printing_price_expr` — the same expression the Price column shows.
+   *
+   * **The facet counts ignore both**, and that is deliberate: `CardIndex` has no price
+   * dimension, so a bounded search is faceted over the unbounded corpus and every count reads
+   * high. Fails open, which is the rule the whole row is built on — an over-read count only
+   * ever leaves a control live that a real count would have greyed.
+   */
+  priceMin?: number;
+  priceMax?: number;
+  /** Omitted means true: digital-only printings are hidden unless asked for. */
+  paperOnly?: boolean;
+  /**
+   * `true` narrows to printings that are legal or restricted in **at least one** format —
+   * `cards.legal_mask != 0`, which is what hides art series, tokens, emblems, memorabilia
+   * and the acorn half of the un-sets.
+   *
+   * **Omitted means false**, the opposite of {@link paperOnly}: absent is what this command
+   * has always answered, so nothing changes for a caller that has not heard of it. The search
+   * view sends `true` on every row of its format select but the first, `Any card` — the one
+   * control that decides this flag and {@link format} together (`formatParams`).
+   */
+  playableOnly?: boolean;
+  /**
+   * Scryfall **art** tags — what the picture shows, which is what a Tags-page deck is built
+   * around. Matched against the closure on `cards.illustration_id`, so this is a fact about an
+   * *illustration*: a card printed with five arts matches under the one that holds the motif and
+   * not under the other four. See {@link TagTerms}.
+   */
+  artTags?: TagTerms;
+  /**
+   * Scryfall **oracle** tags — what the card does (`removal`, `ramp`, `recursion`). {@link
+   * artTags}' shape over the other taxonomy, matched on `cards.oracle_id`; the two AND with each
+   * other, so "a dog that ramps" is one request.
+   */
+  oracleTags?: TagTerms;
+  /**
+   * `"strong"` drops the art matches Scryfall called `weak`; absent or `"any"` keeps them.
+   * **Nothing else on this request is affected** — not {@link artTags}' excludes, and not
+   * {@link oracleTags}, whose closure has no weight at all. See {@link ArtWeightFloor}, which
+   * is also where the wording a control may not use is written down.
+   */
+  artWeightFloor?: ArtWeightFloor;
+  /**
+   * `true` narrows to printings the collection has an entry for, `false` to those it does
+   * not.
+   *
+   * **An entry, not a copy.** A card whose only entry holds no copies passes `owned: true`
+   * while its {@link CardSummary.ownedQuantity} reads `0`, and does *not* appear under
+   * `owned: false`. What this filter asks is whether the collection has *paperwork* for the
+   * printing, and the count beside it is what says how much.
+   *
+   * Rare since schema v24 — `collectionSetQuantity` deletes at zero now — but the rule is
+   * about what this filter asks rather than about what the collection happens to store, and
+   * `collectionUpdate` still keeps the row it is editing.
+   */
+  owned?: boolean;
+  /**
+   * The deck this search is being run **for** — the deck builder's card search tab and nothing
+   * else. Absent everywhere else, and absent means "every copy, wherever it is filed", which is
+   * what this command answered before the field existed.
+   *
+   * **Not a filter over cards.** It changes no row's presence and no row's order; it decides
+   * which of the reader's copies count as *available to this deck*, for {@link owned} and
+   * {@link CardSummary.ownedQuantity} together. A copy sleeved into another deck's group, or
+   * set aside in a locked drawer, stops counting; a copy in this deck's own group, on the desk,
+   * in a binder or in `Recently removed` still does.
+   *
+   * Why the deck builder is the one asker
+   * ([#349](https://github.com/Msgaihede/mtg-grimoire/issues/349)): a badge reading `×4` over a
+   * card whose four copies are all in other decks told the reader they had something they could
+   * not use, while the Collection tab in the same panel — which has sent
+   * `allocation: "unallocated"` since folders landed — showed none of them.
+   *
+   * **The two halves move together.** Narrowing the count and leaving the filter alone would
+   * put a card under the Owned chip wearing `×0`. `Availability` in
+   * `crates/grimoire-core/src/collection_source.rs` is the one place the arms are written.
+   */
+  availableForDeck?: number;
+  /**
+   * How to order the page: columns in priority order, the first deciding and the rest
+   * breaking its ties. Empty or absent is the default — relevance when `text` is set, name
+   * order when it is not.
+   */
+  sort?: SortSpec<SearchSortKey>;
+  /**
+   * Which marketplace every price on the page is quoted from — the source *and* the money, in
+   * one parameter. Absent means `tcgplayer`, which is what this command answered before the
+   * setting existed.
+   *
+   * **It decides the numbers, not just their order.** `price_expr(marketplace)` builds the one
+   * SQL fragment every price site reads: Scryfall's blob for TCGplayer and Cardmarket, a join
+   * against `marketplace_prices` for Card Kingdom and Mana Pool. So it subsumes the `currency`
+   * sort parameter this field replaced — a `price` sort orders by whatever this names, and a
+   * column cannot end up sorted in one marketplace's money while printing another's.
+   */
+  marketplace?: MarketplaceId;
+  /**
+   * Fold every printing of one card into a single row, represented by the newest printing.
+   *
+   * Absent means false, which is what this command has always answered. A **view mode**
+   * rather than a filter — see `useCardSearch`, where it is deliberately outside
+   * `activeFilterCount` and `resetAll`.
+   */
+  collapse?: boolean;
+  /**
+   * The Scryfall-syntax terms the box was parsed into — see {@link QueryPredicate}.
+   *
+   * **`typeLine` and `oracleText` ride {@link text}'s `MATCH` string rather than becoming SQL**,
+   * so they narrow the facet counts for free and a purely negative one (`-t:goblin`) becomes a
+   * `NOT IN` subquery of its own, FTS5's `NOT` being binary. Nothing here has to know that; it
+   * is why the list is read by `filters::fts_match` as well as by `push_card_filters`.
+   */
+  predicates?: QueryPredicate[];
+  /** Clamped to 200 by the backend; 0 means "use the default page size". */
+  limit: number;
+  offset: number;
+}
+
+/** One result row — the columns a card grid needs, not the whole card. */
+export interface CardSummary {
+  id: string;
+  name: string;
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  rarity: string | null;
+  typeLine: string | null;
+  manaCost: string | null;
+  /**
+   * The row's own price **in the marketplace the request named** — a display/sort fallback
+   * chain across finishes (nonfoil → foil → etched), never a per-finish figure.
+   *
+   * One field, because the marketplace is a query parameter: the backend has already decided
+   * whose price this is, and a cell renders it with `formatPrice(price, marketplace.currency)`.
+   * `null` is *unpriced at that marketplace* and is drawn as an em dash — never a reason to
+   * reach for another marketplace's number. It is `null` far more often on some than on
+   * others: there is no `eur_etched` key in Scryfall's data at all, so an etched-only printing
+   * is unpriced on Cardmarket, and a printing a feed has never listed is unpriced there.
+   */
+  price: number | null;
+  layout: string;
+  /**
+   * The oracle card this printing is of. `null` mirrors `cards.oracle_id`'s nullability and
+   * nothing more — no live row is null, reversible cards included (Scryfall omits only the
+   * *top-level* id and `card_row` falls back to `card_faces[0]`).
+   *
+   * Here so a result row can be wished for as *any* printing without opening the card first
+   * — a wishlist usually means the card rather than the cardboard.
+   */
+  oracleId: string | null;
+  /**
+   * JSON: the finishes this printing exists in (`["nonfoil","foil"]`). Parse it with
+   * `parseFinishes` from `@/lib/finish`; `null` means the column is empty, which is
+   * "unknown" rather than "nonfoil".
+   *
+   * A quick-add from a result row offers exactly these. Without them the grid and the table
+   * offered nonfoil for every card, and a foil-only printing took a nonfoil entry that then
+   * priced through a `usd` key its blob does not have.
+   */
+  finishes: string | null;
+  /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
+  /**
+   * One of the cards the Commander bracket system counts as a **game changer** — a crown on
+   * the tile and in the table's Name cell, beside the foil and etched marks.
+   *
+   * Mirrors `CardSummary::game_changer` in `crates/grimoire-core/src/search.rs`, which is `bool` and not
+   * `Option<bool>`: `cards.game_changer` is nullable, a NULL there means *not on the list*, and
+   * the backend reads it as an `Option` and flattens it rather than handing this side a third
+   * state every crown would have to fence.
+   *
+   * So this is a plain `boolean`, exactly like {@link ImportMatch.gameChanger} and **unlike**
+   * {@link DeckCard.gameChanger}, which is `boolean | null`. That difference is real rather than
+   * mirror drift: a deck row survives its printing leaving `cards`, and an orphan knows nothing
+   * about itself. A search row can never be one — a row that came back from `cards` is a card
+   * that is there.
+   *
+   * An **oracle-level** fact, not a property of the cardboard: every printing of a card agrees,
+   * so a collapsed row takes it from the representative printing and needs no aggregate.
+   */
+  gameChanger: boolean;
+  /**
+   * Copies the collection holds of **this printing, across every finish and condition** —
+   * a badge on a search result, and finish-*blind*.
+   *
+   * One of **three** fields in this file with this name, and only one of the other two asks
+   * the same question. {@link DeckCard.ownedQuantity} is what one deck's own collection group
+   * physically holds, matched to the row's exact `(card_id, finish)` since 2026-09-07 rather
+   * than to the oracle card. The third, {@link ImportMatch.ownedQuantity}, **is** this number:
+   * every copy of one printing, finish-blind, asked per decklist line instead of per search
+   * row. Read each against its own row.
+   *
+   * **`WishRow` carried a fourth until 2026-09-08** — copies counted against one wish,
+   * finish-aware, so a foil wish read `0` while the nonfoil sat in a binder. It is gone with
+   * every other comparison the wishlist made against the collection: that list is the reader's
+   * own, kept by hand, and a wish leaves it when they acquire the card rather than being
+   * quietly marked as filled.
+   *
+   * `0` rather than `null`: "you own none of these" is a fact, not an absence, and a badge
+   * that has to tell `null` from `0` is a badge with a bug waiting in it.
+   */
+  ownedQuantity: number;
+  /** Whether a wish covers this printing — pinned to it, or unpinned on its oracle card. */
+  wishlisted: boolean;
+  /**
+   * How many printings this row stands for — `1` when the search is not collapsed, because
+   * a row is a printing then.
+   *
+   * Collapsed, it counts the printings that **matched the filters** rather than every
+   * printing that exists: a search narrowed to one set reports the printings in that set.
+   */
+  printings: number;
+  /**
+   * Cheapest and dearest {@link CardSummary.price} among the printings this row stands for;
+   * both equal it when the search is not collapsed. Render a range only when the two differ —
+   * most cards have one printing, and `$2.15–$2.15` is noise.
+   *
+   * Unsuffixed, like every price on this page: the pair spans the printings that have a price
+   * **at the marketplace the request named**, so the same group's span legitimately differs
+   * between two marketplaces — or exists at one and not at another.
+   */
+  priceLow: number | null;
+  priceHigh: number | null;
+}
+
+/** A page of results plus the size of the whole match set, for the pager. */
+export interface SearchResponse {
+  items: CardSummary[];
+  /**
+   * Matches, counted no further than 5 000. Only meaningful together with
+   * `totalIsCapped` — an exact count of a 116 k-row browse cost a full table scan on
+   * every keystroke, so the backend stops early and says it did.
+   */
+  total: number;
+  /**
+   * The count hit its ceiling: there are `total` matches *or more*. A pager must keep
+   * asking for pages while this is true (and stop on the first short page instead), and
+   * a caption should read `5,000+`.
+   */
+  totalIsCapped: boolean;
+}
+
+/**
+ * Facet counts for one search — how many results each filter option would leave.
+ *
+ * Mirrors `crates/grimoire-core/src/index/facets.rs`. **`ready: false` means the index is still
+ * building**, not that everything is empty: the UI leaves every control live, because
+ * not-greyed has to mean "we don't know" rather than "this is empty".
+ *
+ * A **separate command** from {@link SearchResponse}'s, because these depend on neither the
+ * sort nor the offset — they must not be recomputed per page, and they must never delay
+ * page one.
+ */
+export interface FacetResponse {
+  /**
+   * Keyed `W`/`U`/`B`/`R`/`G`/`C`, and **the size of the result set after toggling that
+   * chip** rather than a count of cards carrying that colour. Compare against {@link total}.
+   *
+   * **Which direction a press moves in depends on {@link SearchRequest.colorsStrict}, which is
+   * why the number is "after the press" rather than "cards carrying this".** Loose, colours are
+   * subset semantics and pressing one with another already on *broadens*; strict, the same
+   * press *narrows*. The count is computed under whichever mode the request carried, so the
+   * rule that reads it — greying when a press would not change the result set — holds either
+   * way without knowing which mode it is in.
+   */
+  colors: Record<string, number>;
+  /** Keyed `"0"`–`"8"`, `8` meaning eight-or-more. Plain counts. */
+  manaValues: Record<string, number>;
+  /**
+   * How many printings name `{X}` in their printed cost — the X chip's count. Rust:
+   * `mana_x: i64`.
+   *
+   * **A field beside the map and not an `"x"` key inside it**, because that map is keyed *by
+   * mana value* and X is not one: every other key parses as a number and the chips above read
+   * it as one. A string key that only looks like the others is the kind of thing a
+   * `Number(key)` somewhere turns into `NaN` and files at the head of the curve. And it
+   * **overlaps** the map rather than carving a slice out of it: an X card is counted here *and*
+   * under its own mana value, matching {@link SearchRequest.manaX}'s additive semantics, so
+   * this number must never be added to the map's.
+   */
+  manaX: number;
+  /** Keyed by `legalities` key. Plain counts. */
+  formats: Record<string, number>;
+  /**
+   * Keyed `common`/`uncommon`/`rare`/`mythic`. Plain counts, and all four arrive on every
+   * **ready** response, zeros included — the chips grey a counted zero and stay live on an
+   * absent key, so a key that went missing would silently stop greying.
+   *
+   * **They do not sum to {@link total}.** The corpus also holds `special` and `bonus`
+   * printings, which no chip offers and nothing counts, so these four are a filter's
+   * vocabulary rather than a partition of the result set.
+   */
+  rarities: Record<string, number>;
+  /**
+   * Keyed by card type. Plain counts, and all eight are sent on every ready response, zeros
+   * included.
+   *
+   * **These do not sum to {@link total} and do not bound it** — the eight overlap (a card can
+   * be Artifact and Creature) and the corpus holds types no chip offers. The same reading
+   * {@link rarities} needs.
+   */
+  types: Record<string, number>;
+  /**
+   * Keyed `regular`/`borderless`/`fullart`. Plain counts, all three on every ready response,
+   * zeros included. **They overlap** — a borderless full-art printing is counted under both —
+   * so, like {@link types}, they do not sum to {@link total}. Rust: `borders`.
+   */
+  borders: Record<string, number>;
+  /**
+   * Keyed `nonfoil`/`foil`/`etched`: how many printings are **published** in each finish. Plain
+   * counts, all three on every ready response. They overlap (51,628 paper printings come in
+   * both nonfoil and foil), so they do not sum to {@link total}. Rust: `finishes`.
+   */
+  finishes: Record<string, number>;
+  /**
+   * Keyed by set code. Plain counts, and **every code in the corpus arrives, zeros
+   * included** — 1 047 keys on the live corpus, on every **ready** response, whatever the
+   * filters are. A cold one carries this map empty; that is what {@link ready} is for.
+   *
+   * **An absent key means "unknown", never zero.** The set picker's options come from a
+   * session-cached `list_sets()` and its counts come from the index, so the two sources can
+   * disagree — a set the corpus has since lost is a code the picker still offers and this
+   * map has never heard of, and it stays live rather than greying.
+   */
+  sets: Record<string, number>;
+  /**
+   * Both sides of the tri-state chip, for its tooltip. The chip is never disabled. Mirrors
+   * Rust's `OwnedFacets`, inline because nothing else here needs the name.
+   */
+  owned: { owned: number; missing: number };
+  /**
+   * The current result size, which a colour count is read against.
+   *
+   * **Printings, and not {@link SearchResponse.total}** — the two are different numbers
+   * under one name. `collapse` folds printings into cards for the *page*, and this count
+   * ignores it; `SearchResponse.total` also stops counting at 5 000 and says so in
+   * `totalIsCapped`, while this one is exact. The colour rule is only correct against this
+   * one.
+   */
+  total: number;
+  ready: boolean;
+}
+
+/** One physical side of a card. Empty for single-faced printings. */
+export interface CardFace {
+  /**
+   * `""` for a face whose blob carried no name. Rust defaults it rather than dropping the
+   * face, because a flip control addresses faces by *index* and a dropped face silently
+   * renumbers every face after it.
+   */
+  name: string;
+  typeLine: string | null;
+  oracleText: string | null;
+  /** Absent *and* empty both mean "no cost" — a transform's back sends `""`. */
+  manaCost: string | null;
+  /** Per face: a double-faced card's two sides are not always the same illustrator. */
+  artist: string | null;
+}
+
+/**
+ * What one printing costs per finish, **at the marketplace the request named**.
+ *
+ * Keyed by the `Finish` union's own three words, so a price cell is `finishPrices[finish]` and
+ * there is no table in between to get wrong. `null` is *unpriced at that marketplace* and draws
+ * as an em dash — never a reason to reach for another marketplace's number, and the holes are
+ * different at every one of them: Scryfall carries no `eur_etched` key at all, so etched is
+ * `null` on Cardmarket for every card in the game, while Mana Pool publishes real etched prices
+ * and either bulk feed can simply never have listed a printing.
+ *
+ * This replaced a raw `prices` blob on {@link CardDetail} and {@link Printing}. The blob is
+ * TCGplayer's six keys and Cardmarket's, and it is *structurally* blind to the two marketplaces
+ * whose prices live in `marketplace_prices` — a card pane reading it could only ever draw em
+ * dashes on half the picker.
+ */
+export interface FinishPrices {
+  nonfoil: number | null;
+  foil: number | null;
+  etched: number | null;
+}
+
+/**
+ * One printing's {@link FinishPrices}, keyed by its id — an entry of
+ * {@link ipc.printingPrices}' answer, and `PrintingPrices` in `card.rs`.
+ */
+export interface PrintingPrices {
+  cardId: string;
+  finishPrices: FinishPrices;
+}
+
+/** Everything the detail pane renders about one printing. */
+export interface CardDetail {
+  id: string;
+  oracleId: string | null;
+  name: string;
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  rarity: string | null;
+  layout: string;
+  lang: string;
+  manaCost: string | null;
+  cmc: number | null;
+  typeLine: string | null;
+  oracleText: string | null;
+  illustrationId: string | null;
+  /** Required by Scryfall's image policy wherever art is shown. */
+  artist: string | null;
+  releasedAt: string | null;
+  /** JSON: 23 legality keys and growing. Parse it, never index fixed fields. */
+  legalities: string | null;
+  /** Per finish, at the marketplace `cardDetail` was called with. See {@link FinishPrices}. */
+  finishPrices: FinishPrices;
+  finishes: string | null;
+  /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
+  imageStatus: string | null;
+  faces: CardFace[];
+}
+
+/** One row of the "all printings" list. */
+export interface Printing {
+  id: string;
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  releasedAt: string | null;
+  rarity: string | null;
+  /** Two printings differ in *art* iff this differs. `variation` is 0.09% true and useless. */
+  illustrationId: string | null;
+  artist: string | null;
+  /** Scryfall's two-letter code. Every language is listed; `en` is merely the common one. */
+  lang: string;
+  finishes: string | null;
+  /** Per finish, at the marketplace `cardPrintings` was called with — the figures a reader
+   *  compares printings by. See {@link FinishPrices}. */
+  finishPrices: FinishPrices;
+  promo: boolean;
+  /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
+  fullArt: boolean;
+  frameEffects: string | null;
+  borderColor: string | null;
+  layout: string;
+}
+
+/**
+ * One printing of **any** token or emblem in the game — `token_printings`' row, the read behind
+ * Add printing's `All tokens` (managed tokens spec §3.6).
+ *
+ * **A {@link Printing} with the token's own facts beside it**, and that is the shape on purpose:
+ * `deck_tokens::TokenPrinting` flattens `card::Printing` into itself (`#[serde(flatten)]`), so the
+ * picker's tile code — written against `card_printings`' rows — draws these with no branch, and the
+ * facts it groups and subtitles by ride alongside. They are the ones `DeckTokenRow` carries for
+ * `tokenSubtitle`, because a token's name does not identify it: the whole game's tokens include
+ * `Wurmcoil Engine`'s two `Wurm`s, separated only by their rules text.
+ *
+ * **No `layout` of its own**: {@link Printing.layout} is already on the flattened printing, and a
+ * second field would serialise the key twice — the Rust struct is pinned to one.
+ *
+ * `ipc.test.ts` holds the fields here to the Rust struct's own, less the flattened one.
+ */
+export interface TokenPrinting extends Printing {
+  /** The token — the grain every printing of it shares, and what the picker groups by. */
+  oracleId: string;
+  name: string;
+  /** The token's type line — {@link DeckTokenRow.typeLine}'s, so a row hands `tokenSubtitle`
+   *  the whole shape its parameter names, as a deck's token row does. */
+  typeLine: string | null;
+  /** Scryfall's colour letters, concatenated — {@link DeckTokenRow.colors}' form. */
+  colors: string | null;
+  /** Printed sizes, strings for {@link DeckTokenRow.power}'s reason (`*`, `1+*`). */
+  power: string | null;
+  toughness: string | null;
+  oracleText: string | null;
+}
+
+/**
+ * A page of printings and the size of the list it was taken from.
+ *
+ * `card::list_printings` caps the page at 400 rows, so `items.length < total` is the whole
+ * signal that a list was truncated — and the only thing standing between a caption reading
+ * "400 printings" and the 862 paper printings Forest actually has.
+ *
+ * No `totalIsCapped` twin of {@link SearchResponse}'s, deliberately: that count scans
+ * toward 116 k rows on every keystroke, while this one is narrowed by `idx_cards_oracle`
+ * to a single card's printings, so it is counted in full every time.
+ */
+export interface PrintingsResponse {
+  /** Newest first. Paper only — digital printings cannot be owned in paper and have no
+   *  paper price, so the backend filters them out and the count agrees with the page. */
+  items: Printing[];
+  total: number;
+}
+
+/**
+ * One of the *other* cards a `meld` printing is part of — the third card two halves make, or
+ * the two halves a melded card was made from.
+ *
+ * Read out of Scryfall's `all_parts` on the row's `raw` blob, which is why it is a command
+ * rather than a column: nothing in `cards` carries the relationship, and the blob is a gzip
+ * member the frontend has no copy of.
+ *
+ * **The card the question was asked about is excluded by _name_, not by id.** A meld row's
+ * `all_parts` can name a *different printing* of the same card — measured on
+ * `Brisela, Voice of Nightmares` id `0cd83c0e-…`, whose own `meld_result` entry is id
+ * `bbcd6747-…` — so an id-based exclusion leaves the open card in its own list of relatives.
+ */
+export interface MeldRelation {
+  id: string;
+  name: string;
+  /**
+   * Scryfall's `component`, verbatim: `"meld_part"` or `"meld_result"` — which side of the
+   * relationship this row is, and the only thing telling "the card this melds into" from "the
+   * halves this melded from". Handed over unread, like every other Scryfall vocabulary in this
+   * file.
+   */
+  component: string;
+  /**
+   * The illustrator of *that* card, carried on the relation rather than fetched with a second
+   * `cardDetail`: an orientation control swaps the **picture** to the melded card while the
+   * pane's facts stay those of the card the reader opened, and Scryfall's image policy requires
+   * the credit to name the illustrator whose art is on screen.
+   *
+   * `null` when the id names no row in `cards` — which no live row does: all 72 `meld` rows'
+   * references resolve (measured on the 116 590-row corpus).
+   */
+  artist: string | null;
+}
+
+/**
+ * What the reader holds of one card — the three figures the card pane's **In your grimoire**
+ * block states, in one read.
+ *
+ * **Every one of them is at the oracle grain**, because that is what "in your grimoire" means: a
+ * reader who owns the Alpha Bolt and opens the M10 one owns *Lightning Bolt*. The per-printing
+ * question — how many of *this* printing are in a binder, which is what the pane's stepper writes
+ * to — is a different one and is not answered here.
+ *
+ * **Facts, not a sentence.** Rust counts; what the block says about the counts, and whether it
+ * draws at all when all three are zero, is this side's. Three zeros is a real answer about a card
+ * nobody holds — never `null`, and never a rejection.
+ */
+export interface CardHoldings {
+  /**
+   * Copies in the collection — **every printing, every finish and every folder together**. A
+   * copy on a locked shelf or sleeved into a deck is still a copy the reader owns, which is the
+   * scope every surface outside the deck builder's own card search asks for.
+   *
+   * A copy whose printing the corpus has lost is **not** counted: the row joins `cards` to find
+   * its oracle card and an orphan joins nothing. That is the same figure `collectionList({
+   * oracleId })` answered before this command existed, so it is a limit rather than a change.
+   */
+  owned: number;
+  /**
+   * Copies the wishlist asks for, every wish for the card together. The wishlist's grain makes a
+   * foil wish and a nonfoil wish two rows for one card, so this is a sum across rows and not a
+   * row count — and it narrows by neither finish nor folder, because "how many are wished for"
+   * is a fact about the card.
+   */
+  wished: number;
+  /**
+   * How many **decks** play the card — decks, not copies: a deck playing four counts once, and so
+   * does a deck listing it in two piles.
+   *
+   * **Live lists only**, which is `deckIdsPlaying`'s own rule rather than a second one: a plan
+   * holds no cards, so a deck that has only *thought about* this card is not one that plays it.
+   * Archived decks count, for the same reason — that read has never had a deck filter.
+   */
+  decks: number;
+}
+
+/**
+ * The TCGplayer product ids Scryfall stores for one printing — both of them, unread.
+ *
+ * **Two ids because etched foil is a separate product on TCGplayer rather than an option on
+ * one.** The catalogue lists `484936 The Ur-Dragon (Foil Etched)` as its own product, whose own
+ * subtype is `Foil`; that is why Scryfall carries `tcgplayer_etched_id` beside `tcgplayer_id` at
+ * all. Measured on the corpus 2026-09-09: **892** printings carry only the etched id and **333**
+ * carry both, so neither field is derivable from the other and a single "the product id" would be
+ * wrong for 1 225 printings.
+ *
+ * **Both come over unread because only the caller knows the finish.** Rust supplies facts and TS
+ * draws conclusions (root `CLAUDE.md`), and the fact here is *which products exist*; the
+ * conclusion — which one a reader pressing "Open on TCGplayer" wants — needs the finish the
+ * surface named (a collection row's own, a deck row's, a wishlist preference), which no query
+ * against `cards` can see. `packages/ui/features/card/openMarketplace.ts` is where that conclusion is
+ * drawn, once, for both call sites.
+ *
+ * **Either field is `null` for a printing TCGplayer does not sell, and that is common enough to
+ * be the normal case rather than an error.** Coverage of `tcgplayer_id ?? tcgplayer_etched_id`,
+ * measured 2026-09-09: **98.38 %** of paper English non-token printings (99 885 rows), 93.90 % of
+ * all paper, 86.44 % of the whole corpus — and **0.04 %** of digital-only cards, which are not
+ * sold there at all. So a caller must have a fallback for two nulls; it is not a failure path.
+ */
+export interface TcgplayerIds {
+  /** Scryfall's `tcgplayer_id`: the ordinary product, sold as `Normal` and `Foil`. */
+  productId: number | null;
+  /** Scryfall's `tcgplayer_etched_id`: the etched product, which is sold as `Foil` only. */
+  etchedProductId: number | null;
+}
+
+/** One row of the set picker. */
+export interface SetSummary {
+  /** Lowercase, as `cards.set_code` stores it — this is what the filter sends back. */
+  code: string;
+  name: string;
+  setType: string | null;
+  releasedAt: string | null;
+  /**
+   * Paper printings of this set in the local database.
+   *
+   * `0` both for the sets `default_cards` omits entirely and for the Arena/MTGO ones the
+   * search's `paperOnly` default hides — the two are indistinguishable to a picker, and
+   * a row that can only ever return nothing should not be offered either way.
+   */
+  cardCount: number;
+}
+
+/**
+ * The filters that are a statement about a *card*, shared by every list that has cards in
+ * it — `filters::CardFilters`, which both list queries below `#[serde(flatten)]` into
+ * themselves, so these sit inline on the payload rather than under a key.
+ *
+ * {@link SearchRequest} declares the same fields itself rather than extending this, because
+ * Rust's `SearchRequest` does exactly that: it keeps them flat and hands a *copy* to the
+ * filter builder. Two mirrors of two structs, not one mirror doing double duty.
+ */
+export interface CardFilters {
+  /** Free text. The search prefix-matches it through FTS5; the wishlist `LIKE`s the name it
+   *  stored, because a wish may have no card row to index. */
+  text?: string;
+  format?: string;
+  /**
+   * Colour identity, e.g. `"WU"`; `"C"` means colourless only.
+   *
+   * **Subset semantics unless {@link colorsStrict} says otherwise** — see
+   * {@link SearchRequest.colors}, which is the same field on the same control. The default
+   * reads these letters as a ceiling; strict reads them as the whole identity.
+   */
+  colors?: string;
+  /**
+   * Read {@link colors} as an **exact** identity rather than a subset: `"RW"` answers the RW
+   * cards alone, not mono-R, mono-W, or the colourless cards that fit in any deck.
+   *
+   * Degenerate for `"C"`, which already means colourless-only in both modes. A `true` with no
+   * {@link colors} filters nothing — the chip is not drawn until a colour is picked.
+   *
+   * Declared here as well as on {@link SearchRequest} because `filters::push_card_filters`
+   * emits it for all three lists, exactly as {@link oracleId} below is. Rust:
+   * `colors_strict: Option<bool>`.
+   */
+  colorsStrict?: boolean;
+  setCode?: string;
+  /**
+   * Narrow to every printing of one oracle card — the card, not the cardboard.
+   *
+   * **Declared here as well as on {@link SearchRequest}, because `filters::push_card_filters`
+   * emits it for all three lists.** The collection's and the wishlist's queries flatten
+   * `filters::CardFilters`, which has carried `oracle_id` since the field was added, so a
+   * collection list can be narrowed to one card server-side — which is what the deck builder's
+   * `own` add does before it hunts for a free copy. This mirror said the opposite in a doc
+   * comment for one PR, and a caller wanting the field had to declare a local type to reach it.
+   *
+   * The exact-card filter `text` is not: that is FTS **prefix** matching, so a name query
+   * answers other cards too.
+   */
+  oracleId?: string;
+  sets?: string[];
+  /** 0–7 match exactly, 8 means "8 or more". */
+  manaValues?: number[];
+  /** Also match printings whose printed cost names `{X}` — see
+   *  {@link SearchRequest.manaX}, which is the same field on the same chip group: ORed with
+   *  the numbers above and additive, never a re-filing. Rust: `mana_x: Option<bool>`. */
+  manaX?: boolean;
+  rarity?: string;
+  /** Rarity chips, ORed with each other — see {@link SearchRequest.rarities}, which is the same
+   *  field on the same control. Declared here as well because `filters::push_card_filters` emits
+   *  it for all three lists, exactly as {@link oracleId} above is. Rust:
+   *  `rarities: Option<Vec<String>>`. */
+  rarities?: string[];
+  /**
+   * Card-type chips — `Artifact`/`Battle`/`Creature`/`Enchantment`/`Instant`/`Land`/
+   * `Planeswalker`/`Sorcery`. ORed with each other, ANDed with every other filter.
+   *
+   * **"Does this card have this type", not "which bucket is it in".** Dryad Arbor
+   * (`Land Creature — Forest Dryad`) answers both `Land` and `Creature`.
+   *
+   * Declared here as well as on {@link SearchRequest} for {@link rarities}' reason:
+   * `filters::push_card_filters` emits it for all three lists, so a binder or a wishlist can
+   * be narrowed to a type without a second filter path. Rust: `types: Option<Vec<String>>`.
+   */
+  types?: string[];
+  /** Border chips — see {@link SearchRequest.borders}, the same field on the same control.
+   *  Declared here as well because `filters::push_card_filters` emits it for all three lists, so
+   *  a binder and a wishlist narrow by the printing's frame too. Rust:
+   *  `borders: Option<Vec<String>>`. */
+  borders?: Border[];
+  /** The printing's published finishes — see {@link SearchRequest.printedFinishes}. On the
+   *  collection's payload this sits beside {@link CollectionQuery.finishes}, the copy's own
+   *  finish, which is a different question; nothing in the app sends this one there. Rust:
+   *  `printed_finishes: Option<Vec<String>>`. */
+  printedFinishes?: Finish[];
+  /** Omitted means true in the search and false in the collection: a search offers cards to
+   *  own, a collection lists cards that are owned. */
+  paperOnly?: boolean;
+  /** Omitted means **false** everywhere — see {@link SearchRequest.playableOnly}, which is
+   *  the only place anything sends it. A collection lists what the user owns, and an art
+   *  card in a binder is still in the binder. */
+  playableOnly?: boolean;
+  /**
+   * Scryfall art tags, on the closure keyed by `cards.illustration_id` — see
+   * {@link SearchRequest.artTags}.
+   *
+   * **Declared here as well as on the search, because `filters::push_card_filters` emits it for
+   * all three lists** — the collection's and the wishlist's queries flatten this struct, so an
+   * owned-cards wall can be narrowed to a motif without a second filter path. {@link oracleId}
+   * above is emitted for the same three and is here for the same reason; this comment claimed
+   * the opposite until 2026-08-23, and a mirror that says a field does not exist is a field
+   * nobody sends.
+   *
+   * **A tag is a claim only a card row can answer**, so unlike `setCode` there is no fallback to
+   * the row's own columns: an orphaned collection entry fails every `include` and passes every
+   * `exclude`, exactly as `cards.illustration_id` being NULL does (4 977 of 116 712 live
+   * printings, measured 2026-08-20).
+   */
+  artTags?: TagTerms;
+  /** Scryfall oracle tags, on the closure keyed by `cards.oracle_id` — see
+   *  {@link SearchRequest.oracleTags}. */
+  oracleTags?: TagTerms;
+  /** `"strong"` drops the `weak` art matches; absent or `"any"` keeps them. Art includes only —
+   *  see {@link ArtWeightFloor}. */
+  artWeightFloor?: ArtWeightFloor;
+  /**
+   * The Scryfall-syntax terms the search box was parsed into — see {@link QueryPredicate}.
+   *
+   * **Declared here as well as on {@link SearchRequest}, because `filters::push_card_filters`
+   * emits them for all three lists** — {@link oracleId} and {@link artTags} above are here for
+   * exactly that reason, and this is the same fact one field along. So `t:goblin cmc>=3`
+   * narrows a binder and a wishlist as well as the search wall, and Rust needed one edit for
+   * the three.
+   */
+  predicates?: QueryPredicate[];
+}
+
+/**
+ * What one {@link QueryPredicate} is a statement about — `filters::PredicateField`, whose
+ * variants carry `#[serde(rename_all = "camelCase")]`, so these strings are the wire.
+ *
+ * **`name`, `typeLine` and `oracleText` emit no SQL at all.** They travel in the same list as
+ * the other ten and are folded into the FTS5 `MATCH` string instead, because `LIKE` over either
+ * text column measured 80× to 250× slower on the real corpus. Nothing on this side has to know
+ * that — it is recorded because the three are the fields whose behaviour differs from their
+ * neighbours', and the difference is invisible in the payload. (The wishlist is the exception
+ * for `name`: it answers one from its own denormalised name column, as it does its free text.)
+ *
+ * `name` has no keyword: `queryLanguage.ts` sends it only for a leading `-` on free text —
+ * `-bolt`, `-"lightning bolt"` — so on the wire it is always negated.
+ */
+export type PredicateField =
+  | "name"
+  | "typeLine"
+  | "oracleText"
+  | "keyword"
+  | "artist"
+  | "colors"
+  | "colorIdentity"
+  | "cmc"
+  | "power"
+  | "toughness"
+  | "rarity"
+  | "setCode"
+  | "format";
+
+/**
+ * A {@link QueryPredicate}'s comparison — `filters::PredicateOp`, camelCase on the wire.
+ *
+ * **`"colon"` is Scryfall's `:` and means a different thing on each field**: `c:rg` is `c>=rg`
+ * and answers 676 cards, while `id:rg` is `id<=rg` and answers 13,399 (both measured on
+ * Scryfall, 2026-09-22). `queryLanguage.ts` resolves it per keyword before sending, so a
+ * `"colon"` on the wire is one of the four fields whose default really is `:` — and Rust
+ * resolves it the same way for anything else, rather than refusing.
+ */
+export type PredicateOp = "colon" | "eq" | "ne" | "gt" | "gte" | "lt" | "lte";
+
+/**
+ * One parsed term of a search box — `t:goblin`, `cmc>=3`, `-a:rebecca`. Rust:
+ * `filters::QueryPredicate`.
+ *
+ * **Parsing happens here and never in Rust.** `packages/ui/features/search/queryLanguage.ts` reads the
+ * box into free text, tag tokens and a list of these; the crate receives closed enums and emits
+ * SQL. Rust supplies facts, TypeScript draws conclusions, and a query grammar is a conclusion.
+ *
+ * **One list rather than ten fields on {@link CardFilters}**, because a list carries three
+ * things no field can spell: negation, repetition (`t:creature t:goblin` is two terms and both
+ * must hold) and an operator per term. Terms AND with each other and with every other filter;
+ * there is no `or` and no grouping.
+ */
+export interface QueryPredicate {
+  field: PredicateField;
+  op: PredicateOp;
+  /** Exactly what the reader typed, **unnormalised except for rarity**: `c:RG` and `s:NEO`
+   *  arrive with their case, and Rust folds it. Rarity is the one keyword the parser expands
+   *  and lower-cases first, so `r:c` is sent as `"common"`. */
+  value: string;
+  /** A leading `-` in the box. Rust reads an absent field as `false`. */
+  negated: boolean;
+}
+
+/**
+ * One quick-add, as the popup sends it.
+ *
+ * `lang`, `setCode` and `collectorNumber` are deliberately absent: they are properties of
+ * the printing, read from `cards` at write time, and letting a caller supply them would let
+ * a caller disagree with the card it named.
+ *
+ * Every field is `#[serde(default)]` on the Rust side, but the three that identify what is
+ * being added stay required here — an add with no card, no finish or no quantity is a write
+ * the backend refuses in words, and it should not compile.
+ */
+export interface EntryInput {
+  cardId: string;
+  finish: Finish;
+  /** Copies to add. Never `0`: adding nothing would conjure a row out of a card the user
+   *  never said they had. Zero is a state a row is *moved* to, by `collectionSetQuantity`. */
+  quantity: number;
+  /**
+   * Where a menu add files it. Absent — and `null` — is the root of the collection: nothing has
+   * to be filed for the collection to work, and this is the field that keeps that true for a
+   * reader who has never made a folder.
+   *
+   * It is part of the row's **storage grain** ({@link CollectionRow.folderId}), exactly the way
+   * {@link WishInput.folderId} is one table over: adding the same printing to two folders is two
+   * rows, never one row that moves. Moving one is {@link ipc.collectionSetFolder} and only that.
+   */
+  folderId?: number | null;
+  /** Defaults to `NONE` — *not set*. An add that names no grade records that nobody
+   *  named one, which is a fact; `NM` would be a guess dressed as one. */
+  condition?: Condition;
+  /** What the user's file called that condition, kept because the normalisation is lossy. */
+  conditionOriginal?: string;
+  tradelistQuantity?: number;
+  purchasePrice?: number;
+  purchaseCurrency?: string;
+  acquiredAt?: string;
+  acquisitionSource?: string;
+  serialNumber?: string;
+  altered?: boolean;
+  signed?: boolean;
+  proxy?: boolean;
+  misprint?: boolean;
+  /** `{"company":"PSA","grade":"10","cert":"12345678"}` as JSON text. The backend parses and
+   *  re-serialises it into canonical key order — two spellings of one slab would otherwise
+   *  be two rows at the storage grain. An unknown key is refused, not dropped. */
+  grading?: string;
+  /** A JSON array of strings. */
+  tags?: string;
+  notes?: string;
+}
+
+/**
+ * An edit to one existing row. Every field is optional: absent means "leave it".
+ *
+ * Absent and blank are *not* the same for most fields — but they are for
+ * {@link EntryPatch.grading}, whose empty string reads as "no slab" and is therefore a
+ * silent no-op rather than a clear. An entry editor that offers to remove a grading has
+ * nothing here to do it with.
+ */
+export interface EntryPatch {
+  finish?: Finish;
+  condition?: Condition;
+  /** Editable, because correcting a grade without correcting the record of what the file
+   *  said would leave the row disagreeing with its own provenance. */
+  conditionOriginal?: string;
+  quantity?: number;
+  tradelistQuantity?: number;
+  purchasePrice?: number;
+  purchaseCurrency?: string;
+  acquiredAt?: string;
+  acquisitionSource?: string;
+  serialNumber?: string;
+  altered?: boolean;
+  signed?: boolean;
+  proxy?: boolean;
+  misprint?: boolean;
+  grading?: string;
+  tags?: string;
+  notes?: string;
+}
+
+/**
+ * What a write did.
+ *
+ * `removed` is the difference between "you now have zero" and "that row is gone", which the
+ * list has to know to drop it. **Both tables now answer it the same way on the same input**:
+ * `collectionSetQuantity(id, 0)` and `wishlistSetQuantity(id, 0)` each delete and each report
+ * `removed: true`. The wishlist has always been that way — a wish for none of something is not
+ * a wish — and the collection joined it at schema v24, because with the folder in the grain a
+ * row holding no copies cannot be told from a row somebody filed and emptied. `collectionUpdate`
+ * is the one write left that answers `removed: false` at a quantity of zero, and deliberately:
+ * an edit form sends eight fields at once and must not delete the row being edited.
+ */
+export interface EntryChange {
+  id: number;
+  quantity: number;
+  removed: boolean;
+}
+
+/**
+ * What a bulk import writes into the collection or the wishlist. `add` folds onto the grain like
+ * a quick-add repeated per line; `set` writes each line's number as the truth rather than adding
+ * to what is already there. There is deliberately no `replace`: the deck's `replace` clears one
+ * variant of one deck, and the same word over a collection would empty a 3,000-card record from
+ * a 40-line paste with the file that caused it looking completely ordinary. An unknown mode is
+ * refused by the backend rather than defaulted.
+ */
+export type TransferImportMode = "add" | "set";
+
+/**
+ * One line of a bulk import, after this side has decided everything a *collection* decision is.
+ *
+ * `condition` is `undefined` rather than defaulted here: an absent one means the file said
+ * nothing, and the **dialog** is where the reader chose what that becomes. Defaulting it in two
+ * places is how the preview and the write come to disagree.
+ */
+export interface CollectionImportItem {
+  cardId: string;
+  quantity: number;
+  finish: Finish;
+  condition?: Condition;
+  conditionOriginal?: string;
+  /**
+   * The six grain columns beyond the printing, its finish and its grade —
+   * {@link EntryInput}'s spelling and its optionality, deliberately, because they say the same
+   * thing about the same row and a line of a file must be able to state everything a quick-add
+   * can.
+   *
+   * **They are here because the fold *is* the grain, and it was not.** A planner folding its
+   * lines on `(cardId, finish, condition)` while `idx_collection_grain` is eleven columns wide is
+   * wrong in two directions at once: two lines differing only in `signed` collapse into one
+   * before the write ever sees them, and — because `commit_import` had nothing to read for these
+   * six and hard-coded the defaults — a re-import could never land on a reader's altered or
+   * graded row. It wrote a second all-defaults entry beside it instead of adding to it, which is
+   * the half that costs the reader something: the copy they described is still there, and now it
+   * has an anonymous twin.
+   *
+   * **Absent is not `false` reaching the wire.** It means the file carried no such column, which
+   * the backend reads as the plain unmarked copy. That is why the four flags are optional rather
+   * than required: almost every import is a text file with three columns in it, and requiring
+   * them would make every caller write four `false`s in order to say nothing.
+   */
+  altered?: boolean;
+  signed?: boolean;
+  proxy?: boolean;
+  misprint?: boolean;
+  serialNumber?: string;
+  /** `{"company":"PSA","grade":"10","cert":"12345678"}` as JSON text — {@link EntryInput.grading}
+   *  verbatim, including that the backend re-serialises it into canonical key order and
+   *  **refuses** an unknown key rather than dropping it. Two spellings of one slab would
+   *  otherwise be two rows at the storage grain, which is the whole reason this field belongs in
+   *  the fold above. */
+  grading?: string;
+  purchasePrice?: number;
+  purchaseCurrency?: string;
+  acquiredAt?: string;
+  acquisitionSource?: string;
+  notes?: string;
+  /**
+   * How many of these copies the reader offers for trade — the export's `Tradelist quantity`
+   * column read back (issue #555). Absent is "the file said nothing", which an `add` leaves the
+   * row's own number alone for and a `set` leaves alone too; the backend clamps it to the row's
+   * quantity either way, because a tradelist bigger than the pile it is drawn from is not a
+   * promise anyone can keep.
+   */
+  tradelistQuantity?: number;
+  /**
+   * `collection_entries.tags` as the column holds it — a JSON array of strings, `["cube"]`
+   * (issue #555). The planner turns whatever the file said (this app's own JSON cell, or a
+   * comma-separated `cube, trade` from another app) into that one spelling. Absent is silence:
+   * an `add` onto an existing row **unions** the file's tags into the row's, a `set` **replaces**
+   * them, and neither touches a row's tags when the item carries none.
+   */
+  tags?: string;
+}
+
+/**
+ * What a bulk import did.
+ *
+ * **`removed` is populated by both commands since schema v24.** It was the wishlist's alone while
+ * a `set` of 0 left a zero-quantity collection row standing; the collection now deletes that row
+ * too, inside the same transaction, and counts it here. One shape still covers both commands, and
+ * `0` rather than absent still means "nothing was removed" rather than "this command cannot say".
+ *
+ * A caller that treats a non-zero `removed` as proof the file was a wishlist import is reading the
+ * old rule. What the number costs is the same on both tables and is worth stating: the deleted
+ * collection row takes its `condition`, `conditionOriginal`, purchase price and currency,
+ * acquired-at, acquisition source, notes and tags with it — the acquisition story the old
+ * zero-keeps behaviour existed to preserve.
+ *
+ * One line can also count in **two** of these at once: a `set` of 0 for a printing the reader does
+ * not own inserts the row and then deletes it, so it reads one `added` and one `removed`. Both
+ * numbers describe statements that really ran — and because that one item is then subtracted
+ * twice, `updated` is **clamped at zero** by both commands rather than allowed to go negative. No
+ * field here is ever below zero, so a caller may sum or compare them without a guard.
+ */
+export interface ImportCommitOutcome {
+  added: number;
+  updated: number;
+  /** Rows deleted: every wish `set` to 0, and — since schema v24 — every collection row `set` to
+   *  0 as well, with everything recorded on it. */
+  removed: number;
+  /** The net change in copies the write made (or, from {@link ipc.collectionImportPreview},
+   *  would make) — negative when a `set` file lowers more than it raises. */
+  copies: number;
+  /**
+   * **Collection `set` at the root only**; `0` everywhere else. Copies of a line's exact grain
+   * that are filed in folders, beyond what the file's number accounts for — left where they are,
+   * because a file says nothing about a reader's filing (issue #555).
+   *
+   * `set` counts the copies filed elsewhere toward the file's number and adjusts the **root**
+   * row by the difference, rather than writing the number into a second root row beside them —
+   * which is what doubled a reader's filed copies before. When the folders alone already hold
+   * more than the file says, the root goes to zero and the surplus is this number.
+   */
+  leftInFolders: number;
+  /** The ticket {@link ipc.bulkUndo} takes back, or `null` when nothing changed (and always from
+   *  {@link ipc.collectionImportPreview}, which changes nothing). Held in the backend's memory
+   *  for the session, so it does not survive a restart. */
+  undoId: number | null;
+}
+
+/**
+ * The text of a picked decklist and how its bytes were read (issue #555).
+ *
+ * `windows-1252` is the fallback for a file that is not valid UTF-8 — Excel's "CSV" on a Western
+ * European Windows — and it is the one the import dialog says out loud, because a file in some
+ * *other* legacy code page reads as mojibake under it and the reader is the only one who can
+ * tell. The two UTF-16 spellings are what a byte-order mark named, and are lossless.
+ */
+export interface ImportFile {
+  text: string;
+  encoding: "utf-8" | "utf-16le" | "utf-16be" | "windows-1252";
+}
+
+/** What `Remove from collection` over several entries did — one transaction (issue #555). */
+export interface BulkRemoveOutcome {
+  /** Entries deleted. An id that named nothing is skipped, `collection_remove`'s own rule. */
+  removed: number;
+  /** Copies those entries held. */
+  copies: number;
+  /** See {@link ImportCommitOutcome.undoId}. */
+  undoId: number | null;
+}
+
+/** What `Move to` over several entries did — one transaction (issue #555). */
+export interface BulkMoveOutcome {
+  /** One per id, in the order they were sent — each {@link EntryChange} says where that entry's
+   *  copies ended up, which after a merge is a different row's id. */
+  changes: EntryChange[];
+  /** See {@link ImportCommitOutcome.undoId}. */
+  undoId: number | null;
+}
+
+/** What {@link ipc.bulkUndo} put back. */
+export interface BulkUndoOutcome {
+  /** Which list the ticket was about, so the caller knows which roots to refetch. */
+  scope: "collection" | "wishlist";
+  /** Rows written back — restored, re-inserted or deleted again. */
+  restored: number;
+}
+
+/** A collection list, as the UI asks for it. */
+export interface CollectionQuery extends CardFilters {
+  /**
+   * Ignored, and present only because the shared filter struct carries it: the collection
+   * forces it off. The user owns what the user owns, and a paper test over a printing that
+   * has left `cards` would throw away exactly the rows this list exists to keep showing.
+   */
+  paperOnly?: boolean;
+  finishes?: Finish[];
+  conditions?: Condition[];
+  /** `true` narrows to the rows a Scryfall migration or a vanished printing flagged, `false`
+   *  to those it did not touch — the complement is where a reader goes once the flagged ones
+   *  are dealt with, so it is a real filter and reaches the wire as `false` rather than being
+   *  dropped the way a blank string is. Absent asks nothing. */
+  needsReview?: boolean;
+  /**
+   * Which folder the list is being read at. Absent — and `null`, which deserializes to the same
+   * `Option::None` — asks nothing about filing; {@link rootOnly} is what narrows to the root.
+   *
+   * Three states between the two fields, and this one wins wherever it names a folder:
+   * - `folderId: n` — that folder's **direct** members. Never what is filed in the folders
+   *   inside it, which is `collection_folders::folder_summary`'s rule. A `rootOnly` riding
+   *   along beside it is ignored rather than intersected, so a stale flag cannot empty the
+   *   drawer the reader opened.
+   * - `folderId` absent, `rootOnly: true` — `folder_id IS NULL`, the rows filed nowhere and
+   *   only those.
+   * - `folderId` absent, `rootOnly` absent or `false` — **every folder there is**, which is
+   *   what this query has always answered and what every caller written before folders existed
+   *   still asks by saying nothing: the plain-text mirror, the export sweep's "everything" arm,
+   *   the deck builder's collection panel and the importer's preview.
+   *
+   * **The same three states {@link WishlistQuery.flatten} carries, with the polarity reversed**,
+   * and the reversal is history rather than taste: there `null` is the root and `flatten` widens,
+   * because that query navigated into a folder from the start. Here the widest answer is what an
+   * absent field has always meant, so it is the *narrowing* that needed a second field — an
+   * unasked question keeps today's answer, and a caller nobody updated cannot silently lose rows.
+   */
+  folderId?: number | null;
+  /**
+   * `true` narrows an absent {@link folderId} to the root — the rows nobody has filed — where
+   * absent otherwise means every folder. Default `false`; ignored entirely when `folderId`
+   * names a folder.
+   *
+   * It exists for {@link WishlistQuery.flatten}'s reason read from the other end. A nullable
+   * `folderId` cannot carry three states on its own, and the value that would have to mean
+   * "the root and nothing else" is already spent: `null` and an omission are one
+   * `Option::None` on the wire. So the third state is a field rather than a sentinel — and it
+   * is the *narrow* one here because the wide one is what every existing caller already gets.
+   */
+  rootOnly?: boolean;
+  /**
+   * **The shelves to answer, in the order to answer them** — folder ids, `0` for Not sorted (the
+   * rows filed nowhere). A Shelves wall sends the ids it draws expanded, depth-first, for the list,
+   * and every shelf at and below its level for {@link ipc.collectionShelfCounts} and
+   * {@link ipc.collectionSummary}; `@/lib/shelves` builds both lists.
+   *
+   * **Sent, it replaces {@link folderId}, {@link rootOnly} and {@link excludeLocked}** — none of
+   * the three is read. Rows come back in list position, then {@link sort}, then id; `limit`,
+   * `offset` and `total` are unchanged. An id no folder answers to matches nothing and refuses
+   * nothing. **Absent is today's answer**, which the mirror, the export sweep and the importer all
+   * still ask by saying nothing.
+   */
+  shelves?: number[];
+  /**
+   * `true` drops the copies filed in a **locked** folder — a drawer the reader set aside
+   * ({@link CollectionFolder.locked}) — and in every folder underneath one, since the lock
+   * inherits down the tree. Default `false`; **ignored entirely when {@link folderId} names a
+   * folder**, which is what makes "except inside the folder" true: standing in a locked drawer,
+   * or in a sub-folder of one, names it, and a named folder is served whole.
+   *
+   * The default is {@link rootOnly}'s argument verbatim, and here it is the whole of the field's
+   * safety rather than a convenience. **The callers whose silence must go on meaning
+   * "everything" are the plain-text mirror and the export sweep**, both of which page through
+   * this query for a whole-collection backup — `mirror/read.rs` already says in words that such
+   * a read is the one that must never ask the narrowing question. A backup or a CSV that
+   * silently omitted the reader's locked cards, raising nothing, is the worst failure available
+   * in this feature, and an unasked question keeping today's answer is what forecloses it.
+   *
+   * Who sends it: the collection page, and the deck builder's Collection Search tab — that tab
+   * asks "what can I build with today", which is exactly the question a set-aside drawer is not
+   * part of. Who does not, and must not: the mirror, the export sweep and the importer's
+   * preview.
+   */
+  excludeLocked?: boolean;
+  /**
+   * Whether copies a deck has taken off the desk are part of the answer.
+   *
+   * `"all"` — the default, and what every caller written before folders existed sends by
+   * omission — is every row. `"unallocated"` drops the rows filed in a **`deck`** folder and
+   * nothing else: the root, a folder the reader made and `Recently removed` are all cards on
+   * their desk, and only a copy a deck is holding is spoken for.
+   *
+   * **The deck builder's Collection Search tab is the one sender** (2026-08-23), and it sends
+   * the field on *every* request including `"all"` — the two words are the two ends of a control
+   * the reader can see, so the payload says which end it is at rather than leaning on the
+   * backend's default for one of them. Every other caller of `collection_list` still omits it and
+   * still gets every row. The two spellings are `collection::Allocation`'s under
+   * `rename_all = "camelCase"`; `packages/ui/lib/ipc.test.ts` pins them, because a third word here is a
+   * serde error at runtime and a type error nowhere.
+   */
+  allocation?: "all" | "unallocated";
+  /**
+   * The band one **copy** has to cost, at {@link marketplace} — the deck builder's Collection
+   * Search tab is the one sender (2026-08-25).
+   *
+   * **The entry's own per-finish price, which is not {@link SearchRequest.priceMin}'s
+   * expression.** This is what the row already reports as {@link CollectionRow.unitPrice} and
+   * what the `price` sort orders by, so a copy inside the band is a copy the wall prices inside
+   * it; the search filters by the printing's `usd → usd_foil → usd_etched` fallback chain
+   * instead, which prices a plain copy at its foil's rate whenever that is the only listing.
+   *
+   * A copy that marketplace has no price for is `NULL` and fails both bounds, so it drops out of
+   * a banded list — the same statement the `NULLS LAST` sort and the summary's `unpriced` count
+   * make. Two independent bounds: sending only one asks nothing about the other end, and an
+   * inverted pair narrows to nothing rather than being reordered.
+   */
+  priceMin?: number;
+  priceMax?: number;
+  /** How to order the list, first column deciding. Empty or absent is name order. */
+  sort?: SortSpec<CollectionSortKey>;
+  /** Which marketplace every price is quoted from, and therefore what the `value` and `price`
+   *  orders rank by. Absent means `tcgplayer`; see {@link SearchRequest.marketplace}. */
+  marketplace?: MarketplaceId;
+  /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
+  limit: number;
+  offset: number;
+}
+
+/**
+ * One row of the collection table: the entry, plus whatever `cards` still knows about the
+ * printing it names.
+ *
+ * Every `cards`-derived field is nullable — a row whose printing has left the database is
+ * still a card the user owns. The entry's own columns (`setCode`, `collectorNumber`,
+ * `lang`) never are: they were copied onto the row at write time for exactly this case.
+ */
+export interface CollectionRow {
+  id: number;
+  cardId: string;
+  /**
+   * The {@link CollectionFolder} this copy is filed in, or `null` for the root of the collection
+   * — `collection_entries.folder_id`, answered on every row rather than made optional, because a
+   * copy is always filed *somewhere* and the backend always knows where. {@link WishRow.folderId}
+   * one table over, for its reasons.
+   *
+   * The same printing filed in two folders is **two rows** here with two different values of this
+   * field, never one row that moved: `folder_id` is the eleventh term of
+   * `schema::COLLECTION_GRAIN`, which is what makes "Add to → \<binder\>" an add and moving
+   * between folders an act of its own ({@link ipc.collectionSetFolder}).
+   */
+  folderId: number | null;
+  /**
+   * That folder's name, joined on for the reader — `null` at the root, and `null` for a folder
+   * that has left the cabinet between the two reads.
+   *
+   * On the row rather than looked up from {@link ipc.collectionFolderList} because a table cell
+   * has to draw it per row: the alternative is every collection surface holding the folder list
+   * and building the same map. **It is a display string and never an identity** —
+   * {@link folderId} is what a write names, and two sibling folders may share a name.
+   */
+  folderName: string | null;
+  name: string | null;
+  /**
+   * The oracle card this printing is of — read off `cards.oracle_id`, never denormalised
+   * onto the entry.
+   *
+   * **`null` means exactly one thing: this entry is orphaned.** No live `cards` row is ever
+   * null (0 of 116,590), so a healthy entry's card row always answers one — the fact the card
+   * menu's "View all printings" reads to tell "this printing has left the card database" from
+   * "the reader's copy is fine".
+   */
+  oracleId: string | null;
+  /** From the *entry*, not the card: this is what the user recorded owning. */
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  lang: string;
+  rarity: string | null;
+  manaCost: string | null;
+  typeLine: string | null;
+  layout: string | null;
+  finish: string;
+  /**
+   * What state the copy is in — `collection_entries.condition`, straight off the entry, and
+   * always one of {@link Condition}.
+   *
+   * **Not `| null`, because the column is `TEXT NOT NULL DEFAULT 'NONE'`** and no backend write
+   * can leave it unset — an absent condition becomes `NONE` before the insert. It carried
+   * `| null` for three releases as a fence around the wire, which cost every reader of the row a
+   * branch that could not be reached.
+   *
+   * **A reader who never stated a grade is now represented in the column itself**, as `NONE`,
+   * and that is what schema v35 is for. Until then this doc pointed at `conditionOriginal` being
+   * `null` as the only record of their silence — which was true, and which meant the silence
+   * could not be filtered, sorted or drawn, because it lived in a *provenance* field rather than
+   * in the grade. `conditionOriginal` still answers the question it was built for: what the
+   * reader's own file said before the normalisation flattened it.
+   */
+  condition: string;
+  quantity: number;
+  tradelistQuantity: number;
+  /**
+   * Per copy, per finish, at the marketplace the query named — never the derived `price_usd`
+   * column, which is a fallback chain and would price a plain copy at foil rates.
+   *
+   * `null` is unpriced *there*, and the holes are not the same at every marketplace:
+   * `eur_etched` does not exist in Scryfall's data, so an etched card is unpriced on
+   * Cardmarket; a printing a bulk feed has never listed is unpriced on that feed. Neither is
+   * ever filled in from another marketplace's number.
+   */
+  unitPrice: number | null;
+  purchasePrice: number | null;
+  purchaseCurrency: string | null;
+  acquiredAt: string | null;
+  acquisitionSource: string | null;
+  serialNumber: string | null;
+  altered: boolean;
+  signed: boolean;
+  proxy: boolean;
+  misprint: boolean;
+  grading: string | null;
+  /** A JSON array of strings, never null — the column defaults to `[]`. */
+  tags: string;
+  notes: string | null;
+  /** A sentence when this row needs the user's attention, `null` otherwise. */
+  needsReview: string | null;
+  /** Unix seconds. */
+  updatedAt: number;
+  /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
+  /**
+   * JSON: **this printing's** legality blob, the same shape {@link DeckCard.legalities}
+   * carries — 23 keys and growing, so parse it and never index fixed fields.
+   *
+   * **It rides here for one reader, the Arena export filter** — issue #192,
+   * `packages/ui/features/transfer/export/arena.ts`. Nothing the collection screen draws touches it.
+   * The blob rather than `cards.legal_mask`, which would have been 8 bytes against this
+   * field's 483-byte average (528 at most, over the 116,712-printing corpus of 2026-08-22,
+   * where `promoTypes` above averages 23): bit positions are stored data Rust owns and freezes
+   * — `crates/grimoire-core/src/legalities.rs` — and a copy of that order over here would be a second
+   * place for it to drift. Scryfall's key *names* are public vocabulary and cannot.
+   *
+   * `null` is an orphan — the printing this entry names has left `cards`.
+   */
+  legalities: string | null;
+}
+
+export interface CollectionPage {
+  items: CollectionRow[];
+  /** Rows matching the filters, counted in full — a collection is thousands of rows, not
+   *  the 116 k the search has to cap. No `totalIsCapped` twin, deliberately. */
+  total: number;
+}
+
+/** The aggregate header, over the same filters as the list it captions. */
+export interface CollectionSummary {
+  /** Copies, not rows: a row holding none contributes 0. */
+  totalCards: number;
+  /** Distinct printings **recorded**, not distinct printings currently held — a row holding no
+   *  copies is still on the screen this number captions. */
+  uniqueCards: number;
+  entries: number;
+  tradelistCards: number;
+  /** Summed at the marketplace the query named, over the copies it has a price for. */
+  value: number;
+  /** Copies with no price for their finish **at that marketplace**. Shown beside the value,
+   *  because a total that silently omits 400 cards is a number that lies by rounding down —
+   *  and the count travels with its own figure, since the two marketplaces do not have the
+   *  same holes. */
+  unpriced: number;
+  needsReview: number;
+}
+
+/**
+ * One shelf of a Shelves wall, counted — `collection::ShelfCount`, which `wishlist.rs` answers
+ * too. One row per **non-empty** shelf in the query's scope, ordered by folder id; a shelf with
+ * nothing in scope has no row at all. The four figures honour search and filters; {@link peek}
+ * does not.
+ */
+export interface ShelfCount {
+  /** The folder, or `0` for Not sorted. */
+  folderId: number;
+  /** What the wall draws: on the collection one per printing and finish on this shelf (two grades
+   *  of one printing are one tile), on the wishlist one per wish. */
+  tiles: number;
+  /** `sum(quantity)`. */
+  copies: number;
+  /** Priced at the query's marketplace; `null` when it prices nothing on the shelf — an em dash,
+   *  never `0.00`. */
+  value: number | null;
+  /** What the marketplace could not price, in the heading's own unit: on the collection
+   *  **copies** (the unit of its "n cards" and of {@link CollectionSummary.unpriced}), on the
+   *  wishlist **wishes** (the unit of its "n wishes"). */
+  unpriced: number;
+  /** Up to four card ids for a **collapsed** heading's thumbnails — the only source, because a
+   *  collapsed shelf's cards are never fetched. By card name then id, one id per card, each the
+   *  id that card's tile is drawn from (a wish's `artCardId`). **Unfiltered**: a filter opens
+   *  every shelf, so a peek is only drawn with none active. */
+  peek: string[];
+}
+
+/** The two pages that draw shelves — `shelffolds::PAGES`, and the keys of {@link ShelfFolds}. */
+export type ShelfFoldPage = "collection" | "wishlist";
+
+/**
+ * The shelves the reader folded away from their default, per page: folder id (decimal) →
+ * collapsed. **Only overrides** — a shelf with no entry is at its default, which is
+ * `@/lib/shelves`' `defaultCollapsed` to say. An id whose folder is gone is answered like any
+ * other and matches nothing.
+ */
+export type ShelfFolds = Record<ShelfFoldPage, Record<string, boolean>>;
+
+/**
+ * One bucket of a list, sliced along one dimension — the home page's two value widgets.
+ *
+ * **One struct for two commands**, and the two are deliberately not one: `collection.rs` owns the
+ * Rust definition and `wishlist.rs` imports it, because breaking a collection down by rarity and
+ * breaking a shopping list down by rarity are the same question asked of different rows. Which
+ * dimension a `key` is a value *of* is the caller's — it is whatever it asked for, and nothing on
+ * the row repeats it.
+ *
+ * **A breakdown sums to the summary above it, by construction.** Both sides group over the same
+ * `sorting::price_expr` fragment {@link CollectionSummary} totals, so a slice can never disagree
+ * with the figure it is a slice of, and the colour buckets partition rather than overlap — a card
+ * with two colours is in `multi` and a card with none is in `c`, so nothing is dropped and nothing
+ * is counted twice.
+ */
+export interface BreakdownRow {
+  /** The bucket, as its grouping column spells it: a rarity, a colour bucket (`"multi"` and
+   *  `"c"` included), a lowercase set code, or a finish — and for the wishlist's finish
+   *  dimension, `"any"` for a wish pinned to none. */
+  key: string;
+  /** A name to draw where the key is not one — the set name beside the set code. `null` for
+   *  every dimension whose key is already the word, which is three of the four. */
+  name: string | null;
+  /** Copies in the bucket, not rows. */
+  cards: number;
+  /**
+   * Summed at the marketplace the caller named, over the copies it has a price for.
+   *
+   * **`null` means the marketplace priced nothing in this bucket, and that is not zero** — it is
+   * the em dash every priced figure in this file falls back to, and a `?? 0` on this side would
+   * turn "we do not know" into "worth nothing" on a bucket of forty cards. Zero is a real answer
+   * beside it and means the feed priced these cards *at* nothing.
+   */
+  value: number | null;
+}
+
+/**
+ * One wish, as the UI sends it.
+ *
+ * Either identifier will do: `cardId` alone pins the wish to that printing and looks the
+ * oracle id and name up from it; `oracleId` alone means "any printing", and needs a `name`
+ * of its own when no printing of it is in the card database — a shopping list that cannot
+ * say what it is shopping for is not a list.
+ */
+export interface WishInput {
+  /** Absent means **any printing**, which is what a wishlist usually means. */
+  cardId?: string;
+  oracleId?: string;
+  name?: string;
+  quantity: number;
+  /** A wish *for the foil* is a different wish from one for the nonfoil, and is not filled
+   *  by it. Absent means no preference. */
+  preferredFinish?: Finish;
+  notes?: string;
+  /** Where a menu add files it. Absent is the root wishlist — nothing has to be filed for the
+   *  list to work, and this is the field that keeps that true for a fresh install. It is part
+   *  of the row's storage grain, the same way {@link WishInput.preferredFinish} is: adding the
+   *  same card to two different folders is two wishes, never one row that moves. */
+  folderId?: number | null;
+}
+
+/** One line of a bulk import, after this side has decided everything a *wishlist* decision is. */
+export interface WishlistImportItem {
+  oracleId?: string;
+  /** Absent is a wish for **any printing** — what a wishlist usually means, and what the
+   *  planner writes for a line that named no set. Not a looser version of a pinned wish: the
+   *  storage grain already treats the two as different rows. */
+  cardId?: string;
+  quantity: number;
+  preferredFinish?: Finish;
+  notes?: string;
+}
+
+export interface WishlistQuery extends CardFilters {
+  /** Ignored, exactly as {@link CollectionQuery.paperOnly} is, and for the same reason. */
+  paperOnly?: boolean;
+  /** `true` narrows to the wishes a Scryfall migration or a vanished printing flagged — the
+   *  reconciler walks this table too, so this is {@link CollectionQuery.needsReview}'s
+   *  question asked of the other list. */
+  needsReview?: boolean;
+  /**
+   * Which folder the list is being read at. `null` is the root wishlist — a real destination,
+   * the same folder every unfiled wish lands in, and not to be confused with "no folder
+   * filter" (that is {@link WishlistQuery.flatten}).
+   *
+   * This is navigation, not a filter: it is where the reader is standing rather than something
+   * they narrowed, so it plays no part in an active-filter count and a Reset leaves it alone.
+   */
+  folderId?: number | null;
+  /**
+   * `true` ignores {@link WishlistQuery.folderId} entirely and returns every wish regardless
+   * of filing. Default `false`.
+   *
+   * It exists because a nullable `folderId` cannot carry three states on its own: `null` is
+   * already spoken for as "the root wishlist", so there would be no value left to mean "no
+   * folder filter at all, show everything" — this flag is that third state, kept separate
+   * rather than smuggled into `folderId` as some other sentinel.
+   */
+  flatten?: boolean;
+  /**
+   * **The shelves to answer, in the order to answer them** — {@link CollectionQuery.shelves} one
+   * table over: folder ids, `0` for the root. **Sent, it replaces {@link folderId} and
+   * {@link flatten}**; rows come back in list position, then the sort, then id. Absent is today's
+   * answer — the root, or every wish when flattened.
+   */
+  shelves?: number[];
+  /** How to order the list, first column deciding. Empty or absent is name order. */
+  sort?: SortSpec<WishlistSortKey>;
+  /** Which marketplace every price is quoted from, and therefore what the `cost` and `price`
+   *  orders rank by. Absent means `tcgplayer`; see {@link SearchRequest.marketplace}. */
+  marketplace?: MarketplaceId;
+  /** Clamped to 500 by the backend; 0 means "use the default page size" (100). */
+  limit: number;
+  offset: number;
+}
+
+export interface WishRow {
+  id: number;
+  oracleId: string | null;
+  /** `null` = any printing. */
+  cardId: string | null;
+  /**
+   * The {@link WishlistFolder} this wish is filed in, or `null` for the root wishlist —
+   * `wishlist_entries.folder_id`, answered on every row rather than made optional, because a
+   * wish is always filed *somewhere* and the backend always knows where.
+   *
+   * A card added twice to two different folders is two rows here with two different values of
+   * this field, never one row that moved — {@link WishInput.folderId}'s grain rule, seen from
+   * the read side.
+   */
+  folderId: number | null;
+  /** Never null: a wish carries its own name, because it outlives the printing it was made
+   *  from and may never have had one. */
+  name: string;
+  setCode: string | null;
+  collectorNumber: string | null;
+  lang: string | null;
+  rarity: string | null;
+  manaCost: string | null;
+  /**
+   * The joined card's type line, for one reader: a **pinned wish dragged onto the sidebar's
+   * Decks entry**, which lands in a deck with no column to have been pointed at, so
+   * `autoCategoryFor` names the pile from this and nothing else.
+   *
+   * `null` only when the join found no card at all — an orphan. An *any-printing* wish does
+   * carry one, because the query coalesces to the newest printing of its oracle card, the same
+   * way `rarity` and `manaCost` beside it do. Nothing on the wishlist draws it.
+   */
+  typeLine: string | null;
+  /**
+   * The printing this wish is **drawn as** — what the wall puts a picture of on its tile.
+   *
+   * Not {@link WishRow.cardId} and never to be read as one: that is what the wish is *for* and
+   * is `null` for an any-printing wish, while this is answered for both kinds by the same join
+   * `rarity` and `manaCost` come off. A pinned wish resolves to its own printing; an unpinned
+   * one to the newest printing of its oracle card, so the tile has art while its caption goes
+   * on saying "Any printing".
+   *
+   * `null` is a genuine orphan — no printing in `cards`, no oracle match — and draws the
+   * no-art frame with the name.
+   */
+  artCardId: string | null;
+  quantity: number;
+  preferredFinish: string | null;
+  /** The cheapest way to satisfy this wish, per copy, at the marketplace the query named: the
+   *  preferred finish's price if one is named, else the nonfoil price of the printing (or of
+   *  any printing of the oracle card). `null` is unpriced there — {@link CollectionRow.unitPrice}
+   *  has the rule and the two ways a hole happens. */
+  unitPrice: number | null;
+  /**
+   * How many *other* wishes exist for the same oracle card — a correlated count, `0` on an
+   * orphan with no oracle id, answered on every row rather than made optional because it is
+   * cheap over a list that runs to tens of rows and is computed in SQL rather than in
+   * TypeScript for the reason {@link WishlistPage} is paged: a page cannot see the wishes it
+   * did not fetch, so a client-side count would only ever be honest about the page itself.
+   *
+   * This is the field that catches what filing makes possible: with `folderId` part of the
+   * storage grain, a card the reader has already filed in `Ordered` and a deck sweep re-adds
+   * gets a **second row at the root**, not a bump to the existing one. A non-zero `elsewhere`
+   * is what tells the reader that second row exists before they buy the same card twice — it
+   * counts the same oracle card, not the same printing, because two wishes for two different
+   * printings of one card are still two chances to order it twice over.
+   */
+  elsewhere: number;
+  notes: string | null;
+  needsReview: string | null;
+  /** Unix seconds. */
+  updatedAt: number;
+  /**
+   * JSON: the joined printing's legality blob — the fact the Arena export filter reads
+   * (issue #192), and its only reader. {@link CollectionRow.legalities} carries the argument
+   * for the blob over a mask.
+   *
+   * **An any-printing wish carries one**, the same way {@link WishRow.typeLine} and
+   * {@link WishRow.artCardId} beside it do: the join coalesces to the newest printing of the
+   * wish's oracle card. `null` is a genuine orphan — no pinned printing, no oracle match.
+   */
+  legalities: string | null;
+}
+
+export interface WishlistPage {
+  items: WishRow[];
+  total: number;
+}
+
+/**
+ * The whole wishlist as one aggregate — {@link CollectionSummary} one cabinet over, and
+ * deliberately not its twin: a shopping list has no condition, no tradelist and nothing to
+ * review.
+ *
+ * **It is the folder subtotals plus the root, which is the whole reason it is its own command.**
+ * {@link WishlistFolderSummary} comes from a query carrying `WHERE w.folder_id IS NOT NULL` —
+ * what keeps root-level wishes out of a folder tile — and a list total that inherited that clause
+ * would be wrong by exactly the root, silently and only for readers who file some of their wishes.
+ * Same expression, one clause fewer.
+ */
+export interface WishlistSummary {
+  /** Rows, not copies: how many distinct things the reader is shopping for. */
+  wishes: number;
+  /** Copies, summed over those rows. */
+  copies: number;
+  /**
+   * What they would cost at the marketplace the caller named, over the copies it has a price
+   * for. An **any-printing** wish is priced at its cheapest printing, the same join a folder
+   * tile uses — so the two figures are two readings of one expression rather than two opinions.
+   */
+  cost: number;
+  /** Copies with no price for their finish at that marketplace — {@link CollectionSummary.unpriced}'s
+   *  rule and its reason: a cost that silently omits them is a number that lies by rounding
+   *  down, and the count has to travel beside the figure because the two marketplaces do not
+   *  have the same holes. */
+  unpriced: number;
+}
+
+/**
+ * One printing in an optimise plan — either the one a wish is pinned to now, or the one the
+ * sweep would move it to.
+ *
+ * The three descriptive columns are `cards`', not the wish's: a plan is about printings that
+ * exist today, and the denormalised `setCode`/`collectorNumber`/`lang` a wish carries can
+ * describe a printing Scryfall has since removed. `from` is therefore read off the wish's
+ * printing **through `cards`** — a wish pinned to a vanished id is skipped entirely, because
+ * there is nothing to compare against.
+ */
+export interface OptimizePrinting {
+  cardId: string;
+  setCode: string;
+  collectorNumber: string;
+  lang: string;
+  /**
+   * Per copy, at the plan's marketplace and **at the wish's finish** —
+   * `sorting::row_price_expr` over `w.preferred_finish`, the same expression
+   * {@link WishRow.unitPrice} is. So a foil wish is compared foil-to-foil and never against a
+   * nonfoil rate nobody quoted.
+   *
+   * `null` is *unpriced there*, and it can only ever appear on {@link WishOptimizeMove.from}:
+   * a candidate with no price is not a candidate at all — issue #352's own sentence, "a card
+   * without a price should not be considered the cheapest printing" — so `to.price` is always
+   * a number.
+   */
+  price: number | null;
+}
+
+/**
+ * One row of the preview: a wish, where it is, and where one press would put it.
+ *
+ * **Only pinned wishes are ever here.** An any-printing wish is already drawn and priced at the
+ * cheapest printing of its oracle card by `list_wishes`' join, so there is no saving to find,
+ * and pinning it would take away the very flexibility that makes it cheap. It is counted in
+ * {@link WishlistOptimizePlan.alreadyCheapest} instead.
+ */
+export interface WishOptimizeMove {
+  wishId: number;
+  /** The wish's own name, as the list draws it. */
+  name: string;
+  quantity: number;
+  /** `null` is "the reader has not said", which prices through the `nonfoil → foil → etched`
+   *  chain rather than at the nonfoil rate. Never coalesced — see `row_price_expr`. */
+  preferredFinish: Finish | null;
+  /** Where the wish is filed, so a flattened preview can say which drawer each row is in.
+   *  `null` is the root. */
+  folderId: number | null;
+  from: OptimizePrinting;
+  to: OptimizePrinting;
+  /**
+   * `from.price - to.price`, per copy — and **`null` exactly when `from.price` is**.
+   *
+   * A wish whose current printing this marketplace does not list is still offered as a move,
+   * and counted as no saving: an unlisted printing may be cheap rather than dear, and a figure
+   * invented for it would inflate the headline. The preview draws that row `— → $2.00` and
+   * leaves it unticked.
+   */
+  savedPerCopy: number | null;
+  /** {@link savedPerCopy} times {@link quantity}, or `null` with it. */
+  saved: number | null;
+  /**
+   * The wish is filed in a deck's **managed wishlist** — the deck's own folder or its Tokens
+   * child ([issue #598](https://github.com/Msgaihede/mtg-grimoire/issues/598)). Only ever `true`
+   * on a plan asked for with `includeManaged`; `false` on every other.
+   *
+   * **Informational, never applicable.** The wish is the deck's printing, and repointing it is a
+   * hand edit the backend refuses (`managed_wishlist::MANAGED`) — which inside
+   * `wishlist_optimize_apply`'s one transaction would roll back every other row with it. So no
+   * surface sends one: the reader changes the printing in the deck, and the folder follows.
+   */
+  managed: boolean;
+}
+
+/**
+ * What `wishlist_optimize_plan` answers: every improvement available over **the rows the list is
+ * currently showing**, and an account of the ones it passed over.
+ *
+ * **The plan is taken over the whole query, not over the visible page.** It is handed the same
+ * {@link WishlistQuery} the list drew — folder, flatten switch and every active card filter —
+ * with `limit`/`offset` ignored, so `considered` equals the `total` in the page header and the
+ * preview cannot silently leave out a wish on page two.
+ *
+ * The three counts partition `considered`: `moves.length + alreadyCheapest + skipped`.
+ *
+ * **It does not echo the marketplace back, deliberately.** Every price here was quoted at the
+ * one the query carried, which came from `useMarketplace()`, which is also what the dialog
+ * renders with — and the query is in the caller's key, so a switch refetches rather than
+ * relabels. A second copy of that fact travelling in the answer is one more thing that can
+ * disagree with the hook, which is the rule `packages/ui/CLAUDE.md` states for every price surface.
+ */
+/**
+ * What `wishlist_optimize_plan` is asked: the list's own query, plus whether a deck's **managed
+ * wishlist** is in scope ([issue #598](https://github.com/Msgaihede/mtg-grimoire/issues/598)).
+ *
+ * `includeManaged` is a second command argument on the wire rather than a field of
+ * {@link WishlistQuery}, because nothing but the plan reads it: on the list query it would be a
+ * field `list_wishes` silently ignores. Absent is `false`, which is the Wishlist page's Optimise
+ * button — a sweep that offers only what it can apply. The home page's Wishlist savings widget is
+ * the caller that sends `true` (unless its reader switched it off), because a managed wish is
+ * still a wish and its saving is still money.
+ */
+export type OptimizePlanQuery = WishlistQuery & { includeManaged?: boolean };
+
+export interface WishlistOptimizePlan {
+  moves: WishOptimizeMove[];
+  /** How many wishes the sweep looked at — the list's own `total` for the same query. */
+  considered: number;
+  /** Already on the cheapest priced printing, plus every any-printing wish, which is cheapest
+   *  by construction. */
+  alreadyCheapest: number;
+  /** Passed over: a wish with no oracle id (nothing to find siblings by), a wish pinned to a
+   *  printing `cards` no longer has, and an oracle card **no** printing of which this
+   *  marketplace prices at this wish's finish. */
+  skipped: number;
+}
+
+/**
+ * One ticked row on its way to `wishlist_optimize_apply`.
+ *
+ * **`fromCardId` is a guard, not a description.** Between the preview and the press a sync can
+ * land, or another pane can repoint the same wish; applying regardless would move a printing the
+ * reader never saw. A wish whose `card_id` no longer matches is left exactly as it is and
+ * reported {@link WishOptimizeStatus} `"stale"`.
+ */
+export interface WishOptimizeApplyItem {
+  wishId: number;
+  fromCardId: string;
+  toCardId: string;
+}
+
+/**
+ * What became of one ticked row.
+ *
+ * * `changed` — repointed, the ordinary answer.
+ * * `merged` — the cheaper printing collided with a wish already in the same folder at the same
+ *   finish, so the two quantities summed into that row and this one was deleted.
+ *   {@link ipc.wishlistSetPrinting}'s documented rule rather than a failure, and the saving
+ *   still stands.
+ * * `stale` — the wish had moved on since the preview; nothing was written.
+ * * `missing` — the wish is not on the list any more; nothing was written.
+ */
+export type WishOptimizeStatus = "changed" | "merged" | "stale" | "missing";
+
+export interface WishOptimizeResult {
+  wishId: number;
+  status: WishOptimizeStatus;
+}
+
+/**
+ * The outcome of one press of Apply — **one result per item sent, in the order they were sent**,
+ * so the caller can sum the saving over exactly the rows that actually moved rather than over
+ * the rows it hoped would.
+ */
+export interface WishlistOptimizeOutcome {
+  results: WishOptimizeResult[];
+}
+
+/**
+ * What a deck category *is for* — `schema::CATEGORY_KINDS`, which `deck_categories.kind`'s
+ * own CHECK is built from.
+ *
+ * **This is not the category's name.** A category is a row the user makes, renames, reorders
+ * and switches off; its `kind` is the fixed word the rules read, and only four of the five
+ * are predefined (one `Commander`, one `Sideboard`, one `Companion`, one `Maybeboard` per
+ * deck). Every category a user makes is a `main` one, and a deck may own any number.
+ *
+ * **The governing rule, and the one sentence to read before writing anything that counts
+ * cards: the switch decides whether a pile counts *at all*; the kind decides only whether it
+ * is played *beside* the deck or *in* it — and only `side` and `companion` are beside it.**
+ * So a deck's size is every active category of kind `main`, `commander` or `maybe`, which
+ * reads odd until the alternative is written out: an active Maybeboard that was part of the
+ * card pool and part of the allocator's claims but not part of the size reported a singleton
+ * error under a count that still said 100.
+ *
+ * `maybe` therefore exists for exactly one reason — to name the predefined Maybeboard and
+ * seed it inactive. Nothing here says "counts toward nothing" any more;
+ * {@link DeckCategory.isActive} does.
+ */
+export type CategoryKind = "main" | "side" | "commander" | "companion" | "maybe";
+
+/**
+ * Who made a category — `deck_categories.origin`, schema v15.
+ *
+ * **Rust records the provenance as a fact; this layer draws the conclusion from it.** `'auto'`
+ * is written by `category_for_name`, the find-or-create the add and import paths file a card
+ * with; `'user'` by `create_category` (the panel's "New category" button) and by the four seeds
+ * in `ensure_predefined_categories`. `category_for_name` **finds before it creates**, so a pile
+ * the reader made keeps `'user'` for ever even once the app starts filing cards into it.
+ *
+ * That last sentence is the entire reason this is a column and not a name list. "Ramp", "Draw",
+ * "Removal" and "Lands" are exactly what a person calls their own piles, and
+ * `DECK_CATEGORY_GRAIN` is `(deck_id, variant, name)` — one pile per name per list — so a rule
+ * reading the *name* would quietly take over the pile a reader made deliberately. **The name is the
+ * user's; the kind is what the rules read**, and provenance is the same kind of fact as the
+ * kind.
+ *
+ * No CHECK behind it (`ALTER TABLE ADD COLUMN` cannot add one) and no Rust validation either,
+ * which is the deliberate difference from `decks.last_variant`: `origin` is never supplied by a
+ * caller, so there is no untrusted value to fence.
+ */
+export type CategoryOrigin = "user" | "auto";
+
+/**
+ * The two decks every deck secretly is — `schema::DECK_VARIANTS`.
+ *
+ * `live` is what is actually sleeved up: the gallery's card count, the deck's own collection
+ * group and every write that moves cardboard — the pull, the record, the "send missing to the
+ * wishlist" button — all read it and nothing else. `theory` is what the deck is being built
+ * toward — a plan, which holds no cardboard and appears on no tile. The two are separate rows
+ * of `deck_cards`, so a change tried out in Theory can never silently overwrite the deck as it
+ * stands.
+ *
+ * **The variant is also which pool an owned count is read from, since 2026-09-09** (issue
+ * #435). A plan holding no cardboard is a fact about *writes*; it stopped being a reason to
+ * report `0` owned on every row of one. See {@link DeckCard.ownedQuantity} for the two pools
+ * and why they differ.
+ */
+export type DeckVariant = "live" | "theory";
+
+/**
+ * Which object a deck row plays — `deck_cards.finish`, schema v18.
+ *
+ * **`null` is the regular copy, and `"nonfoil"` is not in this type.** Rust's
+ * `deck::normalise_finish` maps the word to NULL at the one command boundary and the column's
+ * CHECK makes any other path a hard error, because two spellings of "regular" would be two rows
+ * on `DECK_CARD_GRAIN` that draw identically on screen and sum apart. Narrowing it here means a
+ * surface cannot send the spelling that does not exist.
+ *
+ * It is the same shape `soleFinish` in `packages/ui/lib/finish.ts` already answers in, and for the same
+ * reason: nonfoil is the finish a price is assumed to be, so it is the one that needs no word.
+ *
+ * **This is part of a deck row's address, not just its content.** A foil copy and a regular copy
+ * of one printing in one pile are two rows, so every card command carries it.
+ */
+export type DeckFinish = Exclude<Finish, "nonfoil"> | null;
+
+/**
+ * One category of one deck: a named pile the user owns.
+ *
+ * Schema v8 replaced the fixed five-word zone with these. The four predefined ones
+ * (`schema::PREDEFINED_CATEGORIES`) are seeded with every list and cannot be renamed or
+ * deleted; everything else is the user's, and `kind` is `main`.
+ */
+export interface DeckCategory {
+  id: number;
+  deckId: number;
+  /**
+   * **Which of the deck's two lists this pile belongs to** — user schema v53 (issue #561).
+   *
+   * Until then a pile was the deck's and both lists shared one set, so a column made on Theory
+   * appeared on Actual and switching the Sideboard off on one switched it off on the other. The
+   * two lists are separate versions of the deck, and the theory diff is the only thing that
+   * joins them — so each list has its own piles, its own four predefined zones, its own names,
+   * order and switches, and a `deck_cards` row only ever points at a pile of its own list.
+   */
+  variant: DeckVariant;
+  /** As the user wrote it — a column heading, and what every refusal about a card in it says. */
+  name: string;
+  kind: CategoryKind;
+  /**
+   * Who made this pile — {@link CategoryOrigin} — and, beside `kind`, the only thing
+   * `grouping.ts`'s `drawsWhenEmpty` reads.
+   *
+   * `'auto'` means the app made it while filing a card and the reader never asked for it, so it
+   * is drawn only while it holds one: *Ramp* arrives with the first ramp spell and goes with
+   * the last. `'user'` is a pile made with intent — **including the four seeded zones**, which
+   * the schema writes as `user` because nobody wants the Sideboard disappearing — and it draws
+   * until the reader deletes it. There is no hide flag and none is wanted; delete is the
+   * removal, and {@link DeckCategory.isActive} still means "counts toward nothing" rather than
+   * "goes away".
+   *
+   * Rows that predate v15 were backfilled by a one-time name guess, which is the one place this
+   * field is not evidence: both ways of being wrong are mild and self-correcting.
+   */
+  origin: CategoryOrigin;
+  /**
+   * **`categoryActive` is the whole of what `maybe` used to mean.** A card in an inactive
+   * category counts toward no deck size, no copy limit and no legality check, and it is handed
+   * nothing out of the pool its list draws on — so its {@link DeckCard.ownedQuantity} is always
+   * `0`, **on both lists**. That survived 2026-09-09 (issue #435) untouched: a theory row reads
+   * a real owned count now, but a switched-off pile reads `0` in either variant, because
+   * `attribute_owned` checks `category_active` before the row is allowed to draw on anything.
+   * The Maybeboard is simply the one predefined category seeded inactive; a user category
+   * switched off behaves identically, and nothing in the engine or the stats needs to know
+   * which is which.
+   *
+   * Settable on **every** category, `commander` included: deactivating that one is a legal
+   * (if unwise) thing to do, and the validation engine reports a missing commander, which is
+   * the honest cost. The only kind-based refusal in the backend is against *renaming* and
+   * *deleting* a predefined category, and it never reaches this field.
+   */
+  isActive: boolean;
+  sortOrder: number;
+  /**
+   * Copies filed here **in the variant that was asked for** — `sum(quantity)`, not a row count.
+   * Two printings at 2 and 3 copies read 5.
+   *
+   * A pile holds cards of its own {@link DeckCategory.variant} only (issue #561), so this is
+   * every copy it holds — the number a list row draws **and** the number a delete confirmation
+   * quotes. Until v53 those were two numbers, because a pile was shared between the lists.
+   */
+  cardCount: number;
+  /** Nonfoil unit price × copies over the same variant, at the marketplace the read named;
+   *  `null` when nothing here has a price there. A partial sum rather than nothing, and two
+   *  marketplaces' totals over one pile are legitimately not a conversion of each other — each
+   *  omits the copies *it* cannot price. */
+  totalPrice: number | null;
+}
+
+/**
+ * A label's stored colour: `#rrggbb`, the colour itself.
+ *
+ * **It was a palette token — `gold`, `ember`, … — until 2026-08-20**, and rows written before
+ * then still hold one. `features/decks/labelColors.ts` owns both ends of that: what the picker
+ * writes, and the six retired words it still reads. Nothing here changed shape, because nothing
+ * here ever described one.
+ *
+ * **Deliberately `string` and not a union**, which is the one place this file declines to
+ * narrow a Rust `String`. `deck_labels.color` carries no CHECK — the backend validates only
+ * that it is non-empty, because picking what a colour *is* belongs to the webview
+ * (CLAUDE.md's Rust/TS boundary). A union here would make a colour written by a newer build a
+ * **type error at the read**, when the behaviour that was actually designed is a fallback:
+ * `labelColorCss` answers the default for any string it cannot read, so an unknown colour is a
+ * visible dot rather than a crash. The alias exists to say all of that at every field that
+ * holds one.
+ */
+export type LabelColor = string;
+
+/**
+ * One label **in use in one list of one deck** — a mark a card can carry, at most one per card.
+ *
+ * The "at most one" is the `deck_cards.label_id` column itself and nothing else — there is no
+ * join table and no constraint to relax if that ever changes.
+ *
+ * **It carried a `deckId` until schema v21 and no longer can**, because there is no such fact:
+ * a label is one app-wide row ({@link GlobalLabel}) and what a deck has is not a list of labels
+ * but a list of cards, some of which wear one. So this row is a label *and* a fact about the
+ * deck and variant it was read by — which is why `deckLabelList` cannot answer a label nothing
+ * is wearing, and why `deckLabelAll` exists.
+ */
+export interface DeckLabel {
+  id: number;
+  name: string;
+  color: LabelColor;
+  /** Copies carrying it, `sum(quantity)` like {@link DeckCategory.cardCount}, and scoped to
+   *  the same deck **and variant** the read asked by. Never zero: a zero would mean the row is
+   *  not in this list at all, and then it is not in the answer. */
+  cardCount: number;
+}
+
+/**
+ * One label as a thing in itself — every label there is, worn or not.
+ *
+ * **The whole list is app-wide, and that is the feature rather than a convenience.** A label
+ * was per-deck until schema v21: `Cut candidate` in four decks was four rows, four colours and
+ * four things to rename. It is one row now, so recolouring it recolours it everywhere, and a
+ * name a label already holds cannot be taken by a second one — compared with
+ * {@link labelNameKey}'s normalisation, not by the word.
+ *
+ * This replaced `TagSuggestion`, which had a name and a colour and no id, because picking one
+ * *copied* it into the deck you were in. Picking one now **uses** that very label. That name is
+ * left spelled as it was: the type was deleted at schema v21 and never carried the newer word,
+ * so `TagSuggestion` is what a reader digging for it in the history will actually find.
+ */
+export interface GlobalLabel {
+  id: number;
+  name: string;
+  color: LabelColor;
+  /** Copies wearing it anywhere — every deck, both variants. `0` for a label nothing wears,
+   *  which is a row this list can answer and {@link DeckLabel} never can. */
+  cardCount: number;
+  /** Decks with at least one card wearing it — what a delete confirmation quotes, because the
+   *  reach of that press is the app's and not the open deck's. */
+  deckCount: number;
+}
+
+/**
+ * One folder of the deck gallery's filing tree.
+ *
+ * **Flat rows; the tree is the reader's to build from `parentId`** — `deck_folders` has no
+ * notion of depth and `deck_folder_list` takes no deck id, because a folder belongs to no
+ * deck: it files them, the way a directory files files.
+ *
+ * Two cascades worth knowing before drawing a delete confirmation, and they point opposite
+ * ways. `deck_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so deleting a folder
+ * takes its sub-folders with it. `decks.folder_id` is `ON DELETE SET NULL`, so the decks
+ * inside surface at the root, filed nowhere, otherwise untouched. A confirmation that said
+ * "and everything in it" would be wrong about the half that matters.
+ */
+export interface DeckFolder {
+  id: number;
+  /** The folder this one sits inside, or `null` for the root of the tree. */
+  parentId: number | null;
+  name: string;
+  sortOrder: number;
+}
+
+/**
+ * One folder of the wishlist's own filing tree — `deck_folders`' shape ported onto
+ * `wishlist_folders`, because the tree arithmetic, the cycle refusal and the two cascade rules
+ * were already written and tested there and a wishlist folder needs exactly the same three.
+ *
+ * **Flat rows; the tree is the reader's to build from `parentId`**, {@link DeckFolder}'s rule
+ * verbatim — `wishlist_folder_list` takes no argument because a folder belongs to no wish, the
+ * way a directory belongs to no file.
+ *
+ * The two cascades point the same opposite ways {@link DeckFolder}'s do, and the wishlist's
+ * are the ones a delete confirmation has to quote: `wishlist_folders.parent_id` is
+ * `ON DELETE CASCADE` **on itself**, so deleting a folder takes its sub-folders with it.
+ * `wishlist_entries.folder_id` is `ON DELETE SET NULL`, so the wishes inside surface at the
+ * root — filed nowhere, otherwise untouched, and in particular **not deleted**. A folder is a
+ * filing decision the reader made about a wish, never a second list the wish could be lost
+ * inside.
+ */
+export interface WishlistFolder {
+  id: number;
+  /** The folder this one sits inside, or `null` for the root of the tree. */
+  parentId: number | null;
+  name: string;
+  sortOrder: number;
+  /**
+   * The deck this folder is the **managed wishlist** of, or `null` for a folder the reader made
+   * (user schema v48, [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512)).
+   *
+   * A managed folder holds exactly what that deck's Compare dialog lists — the theory list less
+   * the actual list — and Rust rewrites it after every write that changes the deck. It is the
+   * **deck's** rather than the reader's: every write that would file, rename, move, delete or
+   * edit a wish in it is refused by the backend, so a surface draws no such control for it.
+   * A root folder (`parentId` is `null`) — except its **Tokens** child, below — and never
+   * synced: each device derives its own from the deck, which is.
+   */
+  managedDeckId: number | null;
+  /**
+   * **The managed wishlist's Tokens subfolder** (user schema v55, managed tokens spec §3.8): the
+   * one child a managed folder can have, named `Tokens`, carrying the **same** `managedDeckId` and
+   * its parent's id in `parentId`, and holding the token printings that deck's plan is short of.
+   * `false` for every other folder — the reader's own and the managed folder itself. What tells
+   * one deck's `Tokens` from another's is the parent, never the name, so a list of managed folders
+   * by name leaves these out.
+   */
+  managedTokens: boolean;
+}
+
+/**
+ * The counts and subtotal a folder card is drawn from — `wishlist_folder_summary`'s row, one
+ * per folder that exists.
+ *
+ * **Every number here is direct, never recursive: what this folder holds itself, not what it
+ * and everything nested inside it hold together.** `wishlist_folder_list` builds the tree from
+ * flat rows and sums a node's children on the way up — {@link DeckFolder}'s `FolderNode.count`
+ * does the same arithmetic for decks — so a summary that already recursed would be a second,
+ * disagreeing implementation of that sum. Read one of these alone and a folder holding two
+ * sub-folders of six wishes each and none of its own reads as **empty**; that is correct for
+ * this row and wrong for a folder card, which has to add its children in before it draws.
+ */
+export interface WishlistFolderSummary {
+  folderId: number;
+  /** Wishes filed **directly** in this folder — not its sub-folders' wishes. */
+  wishes: number;
+  /** Copies wanted here — `sum(quantity)` over the wishes filed directly in this folder.
+   *
+   *  It was `sum(max(0, quantity - owned))` and was called `missing` until 2026-09-08. The
+   *  wishlist compares itself to the collection nowhere now, so there is no such thing as a copy
+   *  a wish no longer needs: what a drawer wants is what its wishes say they want. */
+  copies: number;
+  /** What those copies cost at the summary's own marketplace — the same `price_expr` the page
+   *  header prices its own total from, so a folder's figure and the root's can never disagree
+   *  about what one copy costs. Unpriced rows are left out of the sum entirely, never quoted at
+   *  another marketplace's rate. */
+  cost: number;
+  /** How many of this folder's own wishes the marketplace could not price — the folder card's
+   *  own version of the page header's unpriced note, so a dashed card whose total looks low
+   *  can say why. */
+  unpriced: number;
+}
+
+/**
+ * One folder of the **collection's** own filing cabinet — `collection_folders`, schema v24, and
+ * the third table to answer {@link DeckFolder}'s flat-rows-with-a-parent-id shape.
+ *
+ * **Flat rows; the tree is the reader's to build from `parentId`**, and `collection_folder_list`
+ * takes no argument because a folder belongs to no card: it files them. `null` **is** the root,
+ * so a reader who has never made a folder sees the collection they saw before the upgrade.
+ *
+ * # The one field the other two cabinets do not have
+ *
+ * **A folder here can belong to the app rather than to the reader**, which is what {@link kind}
+ * says. Only a `user` folder is the reader's to rename, move, delete or file a card into by hand
+ * — every write in `collection_folders.rs` refuses the other two in words, `FOLDER_NOT_YOURS` —
+ * so a surface offering folders as *destinations* filters on that word rather than listing what
+ * it was handed.
+ *
+ * The two cascades point the same opposite ways the wishlist's do:
+ * `collection_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so deleting a folder takes
+ * its sub-folders with it, while `collection_entries.folder_id` is `ON DELETE SET NULL` — the
+ * cards inside surface at the root, filed nowhere and in particular **not deleted**. A folder is
+ * a filing decision the reader made about copies they own, never a second collection a card can
+ * be lost inside.
+ */
+export interface CollectionFolder {
+  id: number;
+  /** The folder this one sits inside, or `null` for the root of the collection. */
+  parentId: number | null;
+  name: string;
+  /**
+   * Who the folder belongs to — one of `schema::COLLECTION_FOLDER_KINDS`.
+   *
+   * `"user"` is a drawer the reader made and named. `"deck"` is the one folder standing for a
+   * deck, and carries {@link deckId}. `"removed"` is the single folder copies go to when they
+   * leave the collection without leaving the database. **Nothing creates either of the latter
+   * two by hand**, and every folder write refuses to touch one — which is why a picker offers
+   * `"user"` and only `"user"`.
+   *
+   * A plain `string` rather than a union, deliberately: Rust stores the word, a fourth kind is a
+   * migration rather than a type error, and a reader that compares and falls through keeps
+   * working the day there is one.
+   */
+  kind: string;
+  /** The deck a `"deck"` folder stands for, and `null` on every other kind — the schema CHECKs
+   *  that pair, so the two can never be read apart. */
+  deckId: number | null;
+  sortOrder: number;
+  /**
+   * A drawer the reader has **set aside** — cards being held for a trade, a display case — so
+   * the app stops *offering* what is in it without ever stopping them reaching it.
+   *
+   * What that split means, concretely: the collection's own lists drop these copies when they
+   * ask ({@link CollectionQuery.excludeLocked}) and `owned_spare` stops counting them as
+   * something a deck could be built from, while every statement about what the reader *has* is
+   * untouched — the owned pip, both owned badges, the Owned/Missing facet, a wish's filled
+   * count and the folder's own tile all still see them. Deleting the folder is the one write
+   * refused, because it would re-file every card inside it to the root and silently undo the
+   * filing the lock was protecting. Moving a card in or out is always allowed.
+   *
+   * **This is the folder's own flag, not the effective answer — the lock inherits down the
+   * tree.** A folder inside a locked folder is locked, computed over ancestry rather than
+   * stored twice (two copies of one fact disagree the first time a folder is moved). Ask
+   * `lockedFolderIds` in `@/lib/folderTree` for the effective answer; it is the single place
+   * that walk is written, and a badge, a greyed menu row or a drag confirmation must never
+   * re-derive it from this field alone.
+   *
+   * **Not the sense `PinnedFolders.tsx` means by *fixed***: those are the app's own folders,
+   * with no rename, no delete, no move and no `⋯` at all. A folder locked here is still the
+   * reader's own drawer — still renameable, still movable, still a drop target both ways.
+   */
+  locked: boolean;
+  /**
+   * The folder's **cross-device** name — `collection_folders.sync_uid`.
+   *
+   * **On the wire because a share names a folder by it and can name it by nothing else.**
+   * {@link ipc.shareCreate} takes a `folderUid` and {@link ShareRow.folderUid} answers one,
+   * because a published share is a cross-device artifact: the link outlives the device that made
+   * it, another device in the group publishes updates to it, and {@link id} is a rowid that
+   * names a row in a database nobody else has ever seen. So a page needs this twice — to say
+   * *this drawer* when publishing, and to match a {@link ShareRow} back to a folder for the
+   * shared badge.
+   *
+   * **`null` is possible and means *not shareable yet*, not an error.** The column is nullable;
+   * a capture trigger mints a uid on insert and a migration swept the rows that predate it, so
+   * in practice every folder has one — but that is a fact about the database rather than about
+   * the type, so a surface greys the Share row for a `null` rather than sending it.
+   */
+  syncUid: string | null;
+}
+
+/**
+ * The two numbers one collection folder tile draws — `collection_folder_summary`'s row.
+ *
+ * **Direct per folder, never recursive**, {@link WishlistFolderSummary}'s rule and its warning:
+ * a folder holding two sub-folders of six cards each and none of its own reads as **empty**
+ * here, which is correct for this row and wrong for a tile. `buildFolderTree` sums a node's
+ * children on the way up, and that arithmetic is deliberately not repeated in SQL.
+ *
+ * **A folder holding nothing produces no row at all**, so a page cannot build its tree from
+ * this: {@link ipc.collectionFolderList} is the census and this is a lookup layered onto it.
+ */
+export interface CollectionFolderSummary {
+  folderId: number;
+  /** **Copies** filed directly in this folder, not rows — `sum(quantity)`, so a row holding none
+   *  contributes nothing. Rare since schema v24, because `collectionSetQuantity` deletes at zero
+   *  and only `collectionUpdate` still writes such a row, but summing is the right arithmetic
+   *  either way and counting rows would never have been. */
+  cards: number;
+  /**
+   * What those copies are worth at the query's marketplace.
+   *
+   * **`null` rather than `0` when the marketplace prices nothing in the folder**, which is where
+   * this parts company with the page header's `coalesce(…, 0.0)`: a tile is a small number
+   * beside a name with no room for the header's "n unpriced" note, so a folder of cards the feed
+   * has never heard of would otherwise read as a folder worth nothing. `null` draws an em dash,
+   * which is this app's answer for a price it does not have.
+   */
+  value: number | null;
+}
+
+/**
+ * Which pile a card is being filed into — `collection_alloc::Pile`, and the same choice
+ * `deckAddCard` spells as a `categoryId`/`categoryName` pair.
+ *
+ * **One of the two, and the type is what says so.** An id is a drop onto a column the reader
+ * pointed at; a name is the add path's "file it where this card belongs", found-or-created by
+ * the backend through `category_for_name` — which is the only write that marks an invented pile
+ * `origin: "auto"`, so it arrives with its first card and goes with its last. `deckAddCard` lets
+ * an id win when both arrive, because a drag genuinely carries both; nothing sends both here, so
+ * the command refuses that pair in words and this union makes it a type error before it can be
+ * sent. The `?: undefined` halves are what stop `{ id, name }` satisfying either member — a bare
+ * `{ id: number } | { name: string }` accepts an object carrying both, because excess-property
+ * checking against a union allows any property some member declares.
+ */
+export type DeckPile = { id: number; name?: undefined } | { name: string; id?: undefined };
+
+/**
+ * What a move across the deck boundary did — `collection_alloc::MoveOutcome`.
+ *
+ * The two writes it answers are the **only** pair in the crate that moves a collection row into
+ * or out of a deck's group, which is what makes "this deck holds this card" a fact about where
+ * the row sits rather than a sum somebody has to remember to compute. Everything a caller has to
+ * do afterwards is here, and none of it is guessable from the arguments that went in.
+ */
+export interface MoveOutcome {
+  /**
+   * The collection row the copies ended up in — **the destination's id, which is not the id the
+   * caller handed in whenever the write merged**, exactly like {@link EntryChange.id} off a
+   * refile. A caller holding the old id after a fold is holding a row that has been deleted.
+   *
+   * `null` when nothing moved, and that is an answer rather than a failure: a deck card nobody
+   * owned just goes away. A card added from search is an intention to buy — the reader never
+   * had it, so nothing lands on their desk when it is cut, and the group **is** the record of
+   * which is which.
+   */
+  entryId: number | null;
+  /**
+   * Set when the copies came out of **another deck**, so the UI can say which one it took them
+   * from after the fact as well as before it. Never set by {@link ipc.deckToCollection}, where
+   * the deck they came out of is the one the reader is looking at.
+   */
+  fromDeck: string | null;
+  /**
+   * The `deck_cards` row {@link ipc.collectionToDeck} wrote — the only thing a caller has to
+   * point at once the copies have landed.
+   *
+   * An owned add lands a row the editor has never seen, and the id is not derivable from the
+   * arguments either: the write folds into whatever pile already held the printing, so a second
+   * add of the same card into the same category answers the **first** row's id. Without it the
+   * landed glow has no subject and a press that worked reads as one that did nothing.
+   *
+   * **`null` from {@link ipc.deckToCollection}**, where the caller handed the id in and still
+   * holds it — and where a whole cut has deleted the row it named.
+   */
+  deckCardId: number | null;
+  /**
+   * How many copies actually **moved**, which is not always what was asked. Never more; less
+   * wherever the deck list wanted more than the group held — a list and a group can disagree,
+   * because an import writes a list without moving a single card.
+   *
+   * So this is the number a message quotes, never the argument that was sent.
+   */
+  quantity: number;
+}
+
+/**
+ * One printing the live list is short of, and every copy on the reader's desk that could fill
+ * it — `deck_pull::PullRow`, the read half of {@link ipc.deckPullPlan}.
+ *
+ * **The shortfall is folded to the printing, never to the pile.** The same card short in two
+ * categories is one row here for the sum, because what a reader is short of is *cardboard* and
+ * custody is a fact about the deck rather than about a column — {@link categories} names the
+ * piles for them to read and is never a term in the arithmetic. That is
+ * `deck_missing_to_wishlist`'s fold, one grain narrower.
+ *
+ * **A row with no candidate is left out entirely**, so {@link candidates} is never empty and a
+ * plan of zero rows means "nothing here can be filled". That is the ordinary answer rather than
+ * an error: the issue this feature came from says in as many words that not every card in a deck
+ * will have a collection option.
+ */
+export interface DeckPullRow {
+  /** The printing the deck lists. Every candidate matches it exactly — see {@link finish}. */
+  cardId: string;
+  /** The deck row's stored name, which is the one name an orphan still has. */
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  /**
+   * The finish the folded deck rows **play**, where `null` is nonfoil — `deck::normalise_finish`'s
+   * spelling, so this reads as {@link DeckCard.finish} does.
+   *
+   * **Played, not stored**: a row's stored finish, else the printing's sole finish — `playedFinish`
+   * on this side. The two differ only for a printing sold in one non-regular finish, where an
+   * unsaid row can be no other object: an unsaid row of a foil-only printing is a `"foil"` row
+   * here, and one held once unsaid and once as `"foil"` is **one** row. So a {@link DeckCard} is
+   * matched to a row by `pullPlan.ts`' `deckCardPullKey` and never by its stored finish, which
+   * would look for `null` and find nothing.
+   *
+   * **Candidates match it exactly, and that is the deliberate narrowing this feature took**
+   * (2026-09-03). A deck's owned count is attributed at the *oracle* grain — a LEA Bolt filed in
+   * the group makes an M10 line read as owned — so matching on the printing and the finish fills
+   * strictly fewer holes than the app itself would count. The trade is that nothing is ever
+   * pulled that is not the exact piece of cardboard the list names, and the dialog says so.
+   */
+  finish: DeckFinish;
+  /** Copies of this printing and finish the live list still wants, over its **active** piles. */
+  short: number;
+  /** The piles that are short, in the deck's own order. For the reader; never for the write. */
+  categories: string[];
+  /** Every copy that could fill it, best first — see {@link DeckPullCandidate}. Never empty. */
+  candidates: DeckPullCandidate[];
+}
+
+/**
+ * One collection row that could fill a hole — `deck_pull::PullCandidate`.
+ *
+ * **Nothing filed in a deck's group is ever a candidate**, which is the issue's "only pull cards
+ * that are not already in another deck folder" and is `collection::Allocation::Unallocated`'s
+ * rule verbatim rather than a second spelling of it: the root, a folder the reader made and
+ * `Recently removed` are all cards on their desk. This deck's own group is excluded by the same
+ * clause, and has to be — those copies are already counted in {@link DeckCard.ownedQuantity},
+ * so offering them would be offering to fill a hole with the thing already in it.
+ *
+ * **The order is the pre-pick, and it is chosen rather than incidental**: the root first, then
+ * `Recently removed`, then the reader's own folders in their `sortOrder`, and oldest row first
+ * inside each. It ranks by how little of the reader's filing a pull disturbs — the root is a
+ * decision nobody has made and the holding area is the app's own transient bin, where a named
+ * binder is a decision somebody made on purpose. The tiebreak is `take_copies`' own rule.
+ */
+export interface DeckPullCandidate {
+  /** The `collection_entries` row. What a {@link DeckPullPick} points at. */
+  entryId: number;
+  /** Copies this row holds, whole. A pick may take fewer, never more. */
+  quantity: number;
+  /** Where it sits, or `null` at the root. */
+  folderId: number | null;
+  /** What to call that place, or `null` at the root — which the UI words, not the backend. */
+  folderName: string | null;
+  /** `"user"` or `"removed"`; `null` at the root. Never `"deck"` — see this type's own doc. */
+  folderKind: string | null;
+  /** The copy's own facts, which are what tell two candidates of one printing apart. */
+  condition: string;
+  lang: string;
+  altered: boolean;
+  signed: boolean;
+  proxy: boolean;
+  misprint: boolean;
+  grading: string | null;
+  serialNumber: string | null;
+}
+
+/** Copies to take out of one collection row — `deck_pull::Pick`, the write's whole input. */
+export interface DeckPullPick {
+  entryId: number;
+  /** At least one, and never more than the row holds or the deck is short of. */
+  quantity: number;
+}
+
+/** What a pull moved — `deck_pull::PullOutcome`. */
+export interface DeckPullOutcome {
+  /** Copies that changed folder. */
+  copies: number;
+  /**
+   * Rows of the plan that got at least one copy — so **printings *and* finishes**, at
+   * {@link DeckPullRow}'s own grain, and not distinct printings.
+   *
+   * The distinction is only ever visible for a deck short of one printing in two finishes, which
+   * is two rows in the dialog and counts two here. It is spelled out because the three places
+   * that count this have to agree: the crate's own `wanted.len()`, the Storybook fake's handler,
+   * and `pullPlan.ts`'s `cards` — which is what the dialog's footer previews *before* the press.
+   * A grain mismatch between the preview and this outcome would show up only on that one deck,
+   * as a sentence quoting a number the reader had just been shown a different version of.
+   */
+  cards: number;
+}
+
+/**
+ * One wishlist line a quick add could take copies off — `deck_quick_add::QuickAddWish`, the whole
+ * of what {@link ipc.deckQuickAddWishes} answers.
+ *
+ * **Two reads answer this shape, and they match differently.** {@link ipc.deckQuickAddWishes}
+ * (`deck_quick_add::card_wishes`, issue #511) answers **every** wish for the card — another
+ * printing, another finish, or any printing at all — because the per-card press always opens a
+ * picker and the reader chooses which line the copies came off. {@link DeckMissingRow.wishes}
+ * (`deck_quick_add::wishes`) is the narrow read — the exact printing, and a finish the copies
+ * satisfy — because the deck-wide batch clears a lone match *without* asking.
+ *
+ * **The order is the pre-pick.** The wide read puts the pressed printing first and a satisfied
+ * finish second; both then rank the root first, the reader's own folders in their `sortOrder`,
+ * and the oldest row inside a tie. A dialog opens on the head of the list.
+ */
+export interface DeckQuickAddWish {
+  /** `wishlist_entries.id` — what {@link ipc.deckQuickAddToCollection}'s `wishId` points at. */
+  id: number;
+  /** Copies the wish asks for, whole. A press takes at most this many and deletes the row when
+   *  it takes them all. */
+  quantity: number;
+  /** Where it sits, or `null` at the root. */
+  folderId: number | null;
+  /** What to call that place, or `null` at the root — which the UI words, not the backend. */
+  folderName: string | null;
+  /** The printing the wish names, or `null` for a wish that takes any printing of the card. */
+  cardId: string | null;
+  /** The wish's stored name — the one name every wish has. */
+  name: string;
+  /** The printing's set code and collector number as the wish stored them, `null` on an
+   *  any-printing wish. */
+  setCode: string | null;
+  collectorNumber: string | null;
+  /** The finish the wish asks for in the **wishlist's** spelling, or `null` for any finish. */
+  preferredFinish: "nonfoil" | "foil" | "etched" | null;
+}
+
+/**
+ * What a quick add recorded — `deck_quick_add::QuickAddOutcome`.
+ *
+ * **What was written, never the argument that was sent**, which is {@link MoveOutcome}'s rule: a
+ * sentence quotes this. The two numbers are separate halves of one press and either can be zero
+ * without the other being wrong.
+ */
+export interface DeckQuickAddOutcome {
+  /** Copies recorded into the deck's own group. */
+  copies: number;
+  /**
+   * The `collection_entries` row they landed in, **after the grain fold** — so a second press on
+   * one line raises the row already in the group rather than making a second one, and both
+   * presses answer the same id.
+   */
+  entryId: number;
+  /** Copies taken off the wish, and `0` when the press named none. Never more than the wish
+   *  held. */
+  wishCopies: number;
+}
+
+/**
+ * One printing the live list is short of, and every wishlist line those copies could take down —
+ * `deck_missing::MissingRow`, the read half of {@link ipc.deckMissingPlan}.
+ *
+ * **The third answer to a shortfall, and the only one that _creates_ cardboard.**
+ * {@link ipc.deckPullFromCollection} moves copies the reader already owns and
+ * {@link ipc.deckMissingToWishlist} writes a shopping list; this one records copies they have
+ * just bought, so the `collection_entries` row behind it was never there.
+ *
+ * **The fold is {@link DeckPullRow}'s, term for term** — `(cardId, finish)`, the deck's own read
+ * order, inactive piles skipped, {@link categories} naming the piles for the reader and never a
+ * term in the arithmetic. Both rows come off one walk in the crate (`deck::live_shortfall`), so
+ * the two dialogs cannot come to disagree about what a deck is short of.
+ *
+ * **An orphaned printing is not in the plan at all, so this type has no "unrecordable" state.** A
+ * `cardId` with no `cards` row is exactly what the write must refuse — the backend reads the set,
+ * the collector number and the language off that row to file a copy — and a row the dialog could
+ * only draw as an apology is left out instead. That is {@link DeckPullRow}'s empty-candidates
+ * rule applied to a different reason for the same emptiness, and it is why an empty array is an
+ * ordinary answer here rather than an error: a deck whose whole shortfall is printings the corpus
+ * has dropped has nothing to record, which the dialog says in words.
+ */
+export interface DeckMissingRow {
+  /** The printing the deck lists, and half of what a {@link DeckMissingPick} names. */
+  cardId: string;
+  /** The deck row's stored name, which is the one name an orphan still has. */
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  /**
+   * The finish the folded deck rows **play**, where `null` is nonfoil — `deck::normalise_finish`'s
+   * spelling, so this reads as {@link DeckCard.finish} does. The word the copies are filed under
+   * is the collection's own `nonfoil`, and the backend does that translation.
+   *
+   * **Played, not stored** — {@link DeckPullRow.finish}'s rule, off the same walk: a row's stored
+   * finish, else the printing's sole finish. An unsaid row of a foil-only printing is a `"foil"`
+   * row here, and the same printing held once unsaid and once as `"foil"` is one row, so a
+   * {@link DeckCard} is matched to it by `pullPlan.ts`' `deckCardPullKey`.
+   *
+   * **It is the other half of the address, and that is the one structural difference from the
+   * pull**: a {@link DeckPullPick} points at a `collection_entries` row that exists, where a
+   * {@link DeckMissingPick} can only name the cardboard, because the row does not exist yet.
+   */
+  finish: DeckFinish;
+  /** Copies of this printing and finish the live list still wants, over its **active** piles. */
+  short: number;
+  /** The piles that are short, in the deck's own order. For the reader; never for the write. */
+  categories: string[];
+  /**
+   * Every wishlist line these copies could take down, best first —
+   * {@link ipc.deckQuickAddWishes}' answer for this printing and finish, verbatim, so the
+   * per-card menu and this dialog cannot come to disagree about what fills a wish. See
+   * {@link DeckQuickAddWish} for the predicate, which is deliberately narrower than what a reader
+   * might call a match. Empty is the ordinary answer: most cards a reader records are on no
+   * shopping list.
+   *
+   * **Only a row with exactly one entry has its wish cleared.** A deck-wide press over thirty
+   * rows cannot ask thirty questions, so the write re-reads this same predicate inside its own
+   * transaction and acts only on an unambiguous answer — none, or two or more, is left standing.
+   * That is why no wish id travels on {@link DeckMissingPick}: there is nothing for the reader to
+   * pick between. The dialog states which of the three shapes a row is *before* the press, so
+   * what did not happen is read rather than discovered.
+   */
+  wishes: DeckQuickAddWish[];
+}
+
+/**
+ * Copies of one printing to record — `deck_missing::MissingPick`, the write's whole input.
+ *
+ * **Addressed by `(cardId, finish)` and never by an entry id**, which follows from what the press
+ * is for: the row it creates has no id to name yet. That is the whole structural difference from
+ * {@link DeckPullPick}, and it means both fields are load-bearing — neither can be inferred from
+ * the other side of the wire.
+ *
+ * Duplicate picks for one address are summed by the backend and *then* checked against a re-plan,
+ * so two picks of 3 against a shortfall of 4 are one refusal rather than two accepted writes.
+ */
+export interface DeckMissingPick {
+  cardId: string;
+  /**
+   * The finish the deck row **plays**, `null` for nonfoil — {@link DeckMissingRow.finish}'s
+   * spelling and its reading, so a pick names the address the plan row it answers carries.
+   *
+   * **A `null` on a printing sold in one non-regular finish is resolved by the backend to that
+   * finish**, so `null` and `"foil"` on a foil-only printing are one pick either way. The frontend
+   * sends the played finish anyway (`pullPlan.ts`' `deckCardPlanFinish`), so the pick says what
+   * the plan says rather than relying on the other side to translate it.
+   */
+  finish: DeckFinish;
+  /** At least one, and never more than the deck is still short of at that address. */
+  quantity: number;
+}
+
+/**
+ * What a batch recorded — `deck_missing::MissingOutcome`.
+ *
+ * **What was written, never the argument that was sent**, which is {@link MoveOutcome}'s rule and
+ * {@link DeckQuickAddOutcome}'s: a sentence quotes this. All three numbers can be read on their
+ * own and any of them can be zero without the others being wrong.
+ */
+export interface DeckMissingOutcome {
+  /** Copies filed into the deck's own group. */
+  copies: number;
+  /**
+   * Rows of the plan that got at least one copy — so **printings *and* finishes**, at
+   * {@link DeckMissingRow}'s own grain, and not distinct printings.
+   *
+   * Spelled out for {@link DeckPullOutcome.cards}' reason exactly, because three places count it
+   * and they have to agree: the crate's own `wanted.len()`, the Storybook fake's handler, and
+   * `addMissingPlan.ts`'s `cards` — which is what the dialog's footer previews *before* the
+   * press. The distinction is only ever visible on a deck short of one printing in two finishes,
+   * which is two rows in the dialog and counts two here, so a grain mismatch would surface on
+   * that one deck as a sentence quoting a number the reader had just been shown another version
+   * of.
+   */
+  cards: number;
+  /**
+   * Copies taken off wishes, not a count of wish rows — {@link DeckQuickAddOutcome.wishCopies}'
+   * unit. `0` when the press was made with the wishlist half switched off, and `0` for every row
+   * whose match was ambiguous or absent, which is the design rather than a failure.
+   */
+  wishCopies: number;
+}
+
+/**
+ * One card the plan asks for — {@link ipc.deckTheorySlots}' row, and the whole input to the deck
+ * editor's theory tick.
+ *
+ * The hand-written mirror of `deck_theory::TheorySlot`. **Three fields since 2026-09-07, and the
+ * third is the name** — the mark grew a second tier and the loose one needs an identity that
+ * survives a different printing. What is still not here is every column the mark would have to be
+ * told to ignore: the set, the price, the pile.
+ *
+ * **This interface was declared twice in this file until 2026-09-07**, identically, and nothing
+ * went red: TypeScript *merges* two interfaces of one name rather than refusing them, so the
+ * duplicate cost the build nothing and the doc comment above it — which described
+ * {@link TheoryDiffRow}, not this — had drifted onto the wrong type. That is the hazard rather
+ * than the merge: a field added to one declaration lands on the merged type either way, so the
+ * comment a reader lands on need not be the one carrying the field, and the only thing merging
+ * refuses is the same member spelled with two different types.
+ */
+export interface TheorySlot {
+  /** `deck_theory.rs`'s own `group_key` — `` `${cardId}|${finish ?? ""}` ``, where the finish is
+   *  the one the row **plays** (its own, else the printing's sole finish — issue #563).
+   *  `features/decks/theoryMatch.ts` spells the same string for a **live** row and looks it up. */
+  key: string;
+  /**
+   * The card's printed name, exactly as `cards.name` holds it — `null` for an orphan whose
+   * printing has left the corpus and which therefore cannot be matched by name at all.
+   *
+   * **The second grain, and the loose tier's whole input.** {@link TheorySlot.key} above answers
+   * *is this the printing I planned*; this answers *is this the card I planned*, which is the
+   * question a reader holding a different Forest is asking. A name rather than an `oracleId`
+   * because Scryfall omits that field on reversible cards — and an identity with a fallback
+   * chain is two rules for the two sides of a comparison to disagree about.
+   *
+   * **Unfolded, and that is deliberate.** SQLite's `lower()` is ASCII-only and this side's
+   * `toLowerCase()` is not, so a name folded in SQL and a live row folded in JS would spell two
+   * keys for `Lim-Dûl's Vault` and the mark would go dark on exactly the cards whose absence is
+   * hardest to notice. `theoryNameKey` in `features/decks/theoryMatch.ts` folds both sides, in
+   * one language, and is the only place the rule is written.
+   *
+   * **`string | null` and never `string`**: an orphan is a real row of a real plan, so a mirror
+   * that promised a name here would put `.toLowerCase()` on `undefined` in the one case the
+   * feature exists to survive.
+   */
+  nameKey: string | null;
+  /** How many copies the plan asks for, summed across every active pile it filed them in. */
+  quantity: number;
+}
+
+/**
+ * One card the **theory** list wants more of than the live list has — a line of the plan's
+ * shopping list.
+ *
+ * **One direction only**, and that is the design rather than an omission: what live has and
+ * theory dropped is a cut the reader already made, and it needs no row. Inactive categories
+ * are excluded from *both* sides, so a card parked in either Maybeboard is neither wanted nor
+ * owned for this purpose.
+ *
+ * The comparison is on the **exact card — `(cardId, finish)`**, and it was the oracle card
+ * until 2026-08-20. A plan that names the foil retro-frame Sol Ring is a plan for that piece of
+ * cardboard: neither a different printing of it nor the regular copy in the live list answers
+ * it, and the two objects are separate lines here, priced apart. An orphan needs no special case
+ * under that rule — its `cardId` is its identity like everything else's.
+ *
+ * **Which pile a card is in is not compared at all.** Placement is not possession, so a card the
+ * two lists file differently is no difference, and each side is summed across its categories
+ * before they are subtracted — the row is captioned by the category the editor lists first
+ * purely so the shopping list reads.
+ *
+ * **So neither `cardId` nor `finish` is unique on its own**: a list is keyed by the pair.
+ */
+export interface TheoryDiffRow {
+  /** The printing **the theory row names**, which is the printing the reader would be buying.
+   *  When the same card is filed in two theory categories this is the first row's category.
+   *  **Not unique across the list** — pair it with {@link TheoryDiffRow.finish} to key a
+   *  render. */
+  cardId: string;
+  name: string;
+  /** The category the theory row is filed under — the pile this card is wanted *for*, which is
+   *  what makes a shopping list readable ("2 more Ramp, 1 more Removal"). */
+  categoryName: string;
+  /** How many more copies theory wants than live has. **Always positive**: a card live has as
+   *  many of is not on this list, and one it has more of is a cut rather than a purchase. */
+  quantity: number;
+  /** What one copy of this printing costs at the marketplace the read named —
+   *  {@link DeckCard.unitPrice}'s rule, so a foil-only printing is quoted at its foil rate
+   *  rather than reading as unpriced. Never `cards.price_usd`, the same chain precomputed for
+   *  the search's sort, which nothing here sums. */
+  unitPrice: number | null;
+  setCode: string;
+  collectorNumber: string;
+  /**
+   * Which **object** this line is for — the finish the theory row **plays**, so `null` is the
+   * regular copy. That is `deck_cards.finish` where the row stored one and the printing's sole
+   * finish where it did not: an unsaid row of a foil-only printing reads `foil` here, because it
+   * can be no other object (issue #563, `deck_theory::played_finish`).
+   *
+   * **Half of the row's identity**, with {@link TheoryDiffRow.cardId}: a foil Sol Ring and a
+   * regular one are two pieces of cardboard to go and find, two rows in `deck_cards`, and two
+   * different prices — {@link TheoryDiffRow.unitPrice} is already quoted per finish, so folding
+   * them would be one line charged at whichever of the two came first.
+   */
+  finish: DeckFinish;
+  /**
+   * Copies of **this printing, in this finish**, the collection holds that **no built deck has
+   * claimed** — the number that turns "I need two more of these" into "and one is in the box
+   * already". It answers on the row's whole identity because the comparison above does, which is
+   * also what keeps the strip's plain sum of this field honest: any wider answer counts one
+   * binder copy once per row that could have used it.
+   *
+   * **A display field, and never a term in an arithmetic.** It is deliberately not netted out
+   * of {@link TheoryDiffRow.quantity}, least of all by `deckTheoryMissingToWishlist`:
+   * `quantity` has already subtracted the live list and this number has not, so an unbuilt
+   * deck's own live copies read as spare here — right for a person, wrong for a subtraction.
+   *
+   * **It did _not_ follow {@link DeckCard.ownedQuantity} across on 2026-09-09** (issue #435),
+   * and the reason is that same subtraction. A theory *row* now counts every copy the deck
+   * could use, this deck's own group included, because nothing has been subtracted from it;
+   * `quantity` here is already `wanted − held`, so folding the group into this field would
+   * count the copies the live list is holding **twice** — once as gone from the shortfall and
+   * once as spare beside it. Two questions, two pools, and the shopping list keeps the narrower
+   * one on purpose.
+   */
+  ownedSpare: number;
+  /**
+   * How many of this row's {@link TheoryDiffRow.quantity} the **live list already plays as a
+   * different printing or finish of the same card** — the copies that are an upgrade rather
+   * than a hole.
+   *
+   * The diff compares the exact card, so a plan naming one Sol Ring against a deck sleeving
+   * another is a full row here and reads as a card the reader has not got. For buying, that is
+   * right — they would still have to find it. For *playing*, it is not: the deck runs. This
+   * field is the difference between the two readings, and it is what the dialog's
+   * `Missing` / `Different printing` filter is computed from.
+   *
+   * **Never greater than {@link TheoryDiffRow.quantity}, and 0 for an orphan.** Copies are
+   * claimed per oracle card, in the list's own reading order, out of a pool the backend sizes
+   * as *live copies of that card minus the ones an exact line already matched* — so one live
+   * Bolt cannot excuse two rows, and a row whose printing has left the card database has no
+   * oracle card to be matched by.
+   *
+   * A row can be **partly both**: theory 2× art A against live 1× art B is `quantity: 2`,
+   * `heldAsOtherPrinting: 1` — one copy to find, one already on the table. Such a row shows
+   * under both filters at its full quantity, because the full quantity is what a press writes.
+   */
+  heldAsOtherPrinting: number;
+  /**
+   * **A token the plan holds more of than the deck** rather than a card (managed tokens spec
+   * §3.7) — a `(card_id, finish)` of a token entry, the plan's entries (implicit rows included)
+   * less the deck's, at the card rows' own grain and by their own subtraction. Such a row is filed
+   * under **Tokens & Emblems**, `ownedSpare` counts that printing's loose copies, and
+   * `heldAsOtherPrinting` the deck's other printings of the same token.
+   *
+   * What Compare's views filter on: **Tokens** is these rows alone, **All** is every row, and
+   * **Missing** and **Different printing** are card rows only. A send to the wishlist files such a
+   * row as a wish pinned to its printing, its finish the preferred one.
+   *
+   * Required rather than optional, because an absent flag reads `undefined` — falsy — and would
+   * file every token row as a card row with nothing red anywhere; `ipc.test.ts` names it on both
+   * sides.
+   */
+  isToken: boolean;
+}
+
+/**
+ * What one `deck_audit` row says happened — `schema::AUDIT_KINDS`, narrowed.
+ *
+ * A `String` on the Rust struct and a CHECK constraint in SQL, a union here: the database
+ * is the enforcement and this is the mirror, which is the same arrangement
+ * {@link CategoryKind} and {@link DeckVariant} are in.
+ *
+ * The nine split three ways, and the split is why {@link DeckAuditEntry.cardId} is nullable:
+ * `add`/`remove`/`quantity`/`move`/`swap` are about **one card**; `category` and `folder` are
+ * about a pile or a filing cabinet; `deck` is about the deck itself.
+ *
+ * **`label` is on both sides of that line**, which is the trap: one kind covers a card wearing
+ * a label (`cardId` set) *and* the label itself being created, renamed or deleted (`cardId`
+ * `null`, plus an `action` verb in the payload). They share a kind because they share a
+ * subject. A renderer that could not see the verb reports "deleted the Cut candidate label" as
+ * "labelled as Cut candidate" — `auditText.ts` switches on `action` first for exactly that
+ * reason.
+ */
+export type DeckAuditKind =
+  "add" | "remove" | "quantity" | "move" | "swap" | "label" | "category" | "folder" | "deck";
+
+/**
+ * One line of a deck's history — **what happened, not how to say it.**
+ *
+ * The whole design of this table is in {@link DeckAuditEntry.payload}: Rust records the
+ * facts inside the transaction that made the change, and `features/decks/auditText.ts`
+ * turns them into the sentence a person reads. A row that stored the sentence would be a
+ * history that has to be migrated the day the wording changes, and one that could not be
+ * re-rendered in another language or at another length at all.
+ *
+ * Recorded **inside** the caller's transaction, always: an audit row that committed while
+ * the change it describes rolled back is a history that lies.
+ */
+/**
+ * What the deck editor's two reversal buttons would do — each the history row it would put
+ * back, or `null` when there is nothing there.
+ *
+ * The **entry** rather than a sentence, because a sentence is domain logic: `auditText.ts`
+ * words it, and the button reads "Undo — Removed 2 × Lightning Bolt" by asking that module the
+ * same question every row of the history drawer goes through.
+ *
+ * **The two halves are not symmetrical, and the asymmetry is the design.** `undo` is a fact
+ * about the deck: Rust stamps `deck_undo.undone_at`, so the cursor persists and undo carries on
+ * below where it stopped after a restart. `redo` is answered only for an id this webview hands
+ * *in* — the reader's position in a session, thrown away with the window.
+ */
+export interface DeckUndoState {
+  undo: DeckAuditEntry | null;
+  redo: DeckAuditEntry | null;
+}
+
+export interface DeckAuditEntry {
+  id: number;
+  deckId: number;
+  /** Unix **seconds**, like {@link DeckRow.updatedAt} — not milliseconds. `auditText`'s
+   *  day grouping multiplies by 1000 exactly once, where the `Date` is built. */
+  at: number;
+  /**
+   * Which of the deck's two lists the change was made to — **for the kinds that are about a
+   * list at all.** `deck_audit.variant` is `NOT NULL` with a CHECK over the two, so every row
+   * has to carry *something*, and for four kinds that something is filler.
+   *
+   * It is a fact for `add`/`remove`/`quantity`/`move`/`swap`, for the card-side half of
+   * `label`, and for the one `deck` row that records a theory copy (which deliberately says
+   * `theory`).
+   * It is **filler for the rest**: a category write, a folder filing, a label being created or
+   * deleted and every other `deck` field all record the column's DDL default, `live`, because
+   * none of them is a fact about one variant's cards. `deck_audit::DECK_LEVEL` is literally
+   * `DECK_VARIANTS[0]`.
+   *
+   * So **do not filter a history by variant** — a Theory reader who did would be shown every
+   * category rename and deck setting they had ever changed, and a Live reader would lose half
+   * their history to nothing more than a CHECK constraint. {@link DeckAuditEntry.cardId} draws
+   * the same line one field down, and for the same reason.
+   */
+  variant: DeckVariant;
+  kind: DeckAuditKind;
+  /**
+   * The card the change was about, **softly** referenced like every card id in a user table
+   * — and `null` for the three kinds that are about no card at all (`category`, `folder`,
+   * `deck`), and for the half of `label` that is about the label itself rather than a card
+   * wearing it.
+   */
+  cardId: string | null;
+  /** Denormalized at write time, for the reason `deck_cards.name` is: a history line still
+   *  names its card the day that printing leaves the card database. */
+  cardName: string | null;
+  /**
+   * **JSON text**, not an object — `payload TEXT NOT NULL CHECK (json_valid(payload))`, so
+   * it arrives as a string and is parsed by the one module that reads it.
+   *
+   * The shape depends entirely on {@link DeckAuditEntry.kind}, and the shapes are written out
+   * in `features/decks/auditText.ts`, which is the only place in the app that looks inside
+   * this string. It is deliberately schemaless here: adding a fact to one kind is a change to
+   * a sentence rather than a migration, which is what a log of "all changes" needs in order to
+   * survive being useful. Roughly, by kind:
+   *
+   * | kind | payload |
+   * |---|---|
+   * | `add` | `{ category, quantity }` |
+   * | `remove` | `{ category, quantity, reason }` |
+   * | `quantity` | `{ category, from, to }` |
+   * | `move` | `{ from, to }` — category **names**, not ids |
+   * | `swap` | `{ category, fromSet, toSet, folded }` |
+   * | `label` | `{ label, previous }` on a card; `{ action, label, previous }` on the label |
+   * | `category` | `{ action, name, previousName, cards }` |
+   * | `folder` | `{ action, folder }` — `folder` is `null` for the root |
+   * | `deck` | `{ field, from, to }` — and `{ field: "theory", copied }` from a writer since removed |
+   *
+   * **Read every field as optional, including the ones that table shows.** Several payloads
+   * are narrower than they look — a category `reorder` emits `{ action }` alone, because every
+   * pile moved and there is no one pile to name — and the writer is still growing: this build
+   * may be older *or* newer than the one that wrote a row, since a database outlives the app.
+   * `deck.field` today is `name | format | cover | notes | note | built | theory | description |
+   * archived`, and `cover` records the literal `"custom"` for an uploaded image rather than a
+   * card id. Parse defensively and be total over unknowns, which is what `auditText.ts` does
+   * and why nothing in it throws.
+   *
+   * **`notes` and `note` are two different words and neither may be folded into the other.**
+   * `notes` is the v8 column, written until schema v43 and **still on that list although
+   * nothing writes it any more** — audit rows are durable, so every history row from before v43
+   * still says it, and dropping the word would demote years of history to a default sentence.
+   * `note` is one row of the notes band ({@link DeckNote}), and its payload carries two keys the
+   * others do not: an `action` (`create | edit | delete | attach | detach`) and the note's
+   * `note` title, plus a `card` name on the two attachment actions and `null` otherwise. The
+   * body is never recorded, for the reason the old field's sentence gave: a note is a paragraph
+   * nobody wants in a one-line history.
+   *
+   * Values are recorded **as stored**: a set code inside a `swap` is the lowercase
+   * `cards.set_code` it came from, not the capitals a tile draws. Casing is the renderer's.
+   */
+  payload: string;
+  /**
+   * Signed **copies**, for the day header's `+7 / −6` roll-up: `+n` on an add, `−n` on a
+   * remove, the difference on a quantity change. `0` on everything else.
+   *
+   * **There used to be a fourth case, and it went with its writer.** A `deck` row of
+   * `{ field: "theory", copied }` carried `+copied` here — the theory list's copy-from-live
+   * command, which seeded the plan from the actual list and was the one exception to "card kinds
+   * move the number, deck kinds do not". It was removed on 2026-09-27 without ever having had a
+   * caller in the app, so no shipped database was given such a row; the roll-up sums whatever a
+   * row carries and `auditText.ts` still renders the payload, so one would read rather than break.
+   *
+   * Zero is the common case and means "this changed no card count", never "nothing
+   * happened" — a rename, a reorder, a move, a labelling and a printing swap all record `0`.
+   */
+  delta: number;
+}
+
+/**
+ * One line of the home page's activity feed — **what happened, not how to say it.**
+ *
+ * {@link DeckAuditEntry}'s design with a scope instead of a deck, and the sentence is drawn the
+ * same way: Rust records the facts inside the transaction that made the change, and
+ * `packages/ui/features/home/` turns them into the words a person reads. A row that stored the sentence
+ * would be a history to migrate the day the wording changes.
+ *
+ * **It is two tables read as one, and that is the shape of every field below.** The `collection`
+ * and `wishlist` rows come from `activity`; the `deck` rows come from `deck_audit` and are the
+ * same rows the deck history drawer draws — so a change that writes a deck audit row writes no
+ * `activity` row, and appears here exactly once rather than twice. The consequence worth writing
+ * down: **the `id`s collide across the two tables**. Nothing joins on them, and a key on this side
+ * is `scope` plus `id`.
+ */
+export interface ActivityEntry {
+  /** Unique **within its own table**, not across the feed — see above. */
+  id: number;
+  /** Unix **seconds**, like {@link DeckAuditEntry.at} — not milliseconds. The feed is ordered
+   *  `at DESC, id DESC`, because `unixepoch()` has one-second resolution and one press can write
+   *  two rows inside one second. */
+  at: number;
+  /**
+   * Which cabinet the change was made in — one of `"collection" | "wishlist" | "deck"`.
+   *
+   * A raw `string` rather than that union, for {@link ipc.getMarketplace}'s reason: **Rust stores
+   * strings and TypeScript owns the vocabulary**, so the narrowing lives in `packages/ui/features/home/`
+   * beside the renderer that switches on it, and a scope a newer build wrote reaches this side as
+   * what it is rather than as a parse error. {@link DeckAuditEntry.payload} makes the same trade
+   * one field over.
+   */
+  scope: string;
+  /**
+   * What was done — and **the vocabulary depends on the scope, so the two are not one list**. An
+   * `activity` row carries one of `add`, `remove`, `quantity`, `move`, `edit`, `folder`, `import`
+   * or `clear`; a `deck` row carries `deck_audit`'s own {@link DeckAuditKind}, which shares four
+   * of those words and adds five of its own. A renderer that switched on `kind` before `scope`
+   * would read a deck's `folder` as a collection's.
+   */
+  kind: string;
+  /** The deck the change was made to — **non-`null` only on a `deck`-scoped row**, which is to
+   *  say only on a row that came from `deck_audit`. Every `activity` row carries `null`, because
+   *  that table records changes made to no deck at all and the column is a `NULL` literal in the
+   *  half of the union that reads it. */
+  deckId: number | null;
+  /** The printing the change was about, softly referenced like every card id in a user table.
+   *  `null` wherever the change was about no one card — a folder rename, an import, a clear. */
+  cardId: string | null;
+  /** Denormalized at write time, for {@link DeckAuditEntry.cardName}'s reason: a feed line still
+   *  names its card the day that printing leaves the card database. */
+  cardName: string | null;
+  /** **JSON text**, not an object — {@link DeckAuditEntry.payload}'s contract verbatim, including
+   *  its instruction to read every field as optional and be total over unknowns. The shape
+   *  depends on `scope` and `kind`, and `packages/ui/features/home/` is the only place in the app that
+   *  looks inside this string. */
+  payload: string;
+  /** Signed **copies**, and `0` where the change is not about copies — an edit, a folder rename,
+   *  a move. {@link DeckAuditEntry.delta}'s rule: zero means "this changed no card count", never
+   *  "nothing happened". */
+  delta: number;
+}
+
+/**
+ * One new deck, as the "New deck" dialog sends it — **the whole deck, in one INSERT**.
+ *
+ * Rust carries `#[serde(default)]` so both strings are optional on the wire, but they stay
+ * required here: a deck with no name is refused in words (`"A deck needs a name."`), and a
+ * blank `formatKey` is not an error but a *decision* — it means `casual`, which is
+ * `decks.format_key`'s own DDL default. A call site that wants casual should say so.
+ *
+ * Everything below `formatKey` is a field the "New deck" dialog now offers, and they travel
+ * together on purpose: create-then-patch-then-file is three transactions and a half-made deck
+ * to unwind by hand when the second one fails — the trap {@link ipc.deckImportCommit} exists to
+ * avoid. One call, one row.
+ *
+ * **And one audit row.** A deck's birth stays the single `{field:"name", from:null, to:name}`
+ * however many fields it was born with. {@link ipc.deckUpdate} writes one row per changed field
+ * because each of those is an event; being born is one event.
+ *
+ * **Nothing here follows {@link DeckPatch}'s `coalesce` rule, because this is an INSERT.**
+ * There is no previous value to leave alone: an absent field means the column's own default,
+ * and for {@link DeckInput.folderId} that difference is the whole meaning of the field.
+ */
+export interface DeckInput {
+  name: string;
+  /** A `format_specs.key`. Validated against the table, not by a foreign key — see
+   *  {@link FormatSpec}. Blank means `"casual"`. */
+  formatKey: string;
+  /**
+   * Which platform the deck is for, or `"any"` for none in particular.
+   *
+   * Optional here and `#[serde(default)]` in Rust, so a caller that has not thought about it
+   * makes exactly the deck it always made: absent is blank is `"any"`, the column's own DDL
+   * default. **The format is not checked against it** — a Modern deck may say Arena, because
+   * the game narrows a *picker* and never the deck.
+   */
+  gameKey?: DeckGame;
+  /**
+   * The one-line blurb the gallery tile shows — **a caption, and the only prose a create
+   * carries**. The "New deck" dialog fills this now that it hosts the whole settings form;
+   * before that it sent name and format alone, and a blurb could only arrive afterwards
+   * through {@link ipc.deckUpdate}.
+   *
+   * **It used to be half a pair, and the other half is gone from here.** `decks.notes` was the
+   * deck's notebook and this its caption; schema v43 replaced that one column with rows —
+   * {@link DeckNote} — and no create can carry one. A note is written *after* the deck exists,
+   * one at a time, through {@link ipc.deckNoteCreate}; the deck's birth stays one INSERT.
+   */
+  description?: string;
+  /**
+   * Point the new deck's cover at a printing's art crop — **the whole of what a cover is**.
+   *
+   * `coverKind` is not settable here and does not need to be: it keeps its DDL default,
+   * `card_art`, which is the only kind there is. A deck born with this field already draws its
+   * cover and needs no follow-up, so a create is one call again — see {@link DeckCoverKind}
+   * for what the second call used to be and why it is gone.
+   *
+   * A soft reference like every card id in a user table: nothing checks the printing is in
+   * `cards`, and an orphaned cover heals on the next sync.
+   */
+  coverCardId?: string;
+  /**
+   * Which folder to file the new deck in — and **absent is the top level, deliberately**.
+   *
+   * **{@link DeckPatch.folderId}'s `coalesce` trap does not apply here, and a reader who knows
+   * that rule will assume it does.** A patch writes `coalesce(?n, folder_id)`, which reads a
+   * bound NULL as "leave it", so no patch can un-file a deck and {@link ipc.deckSetFolder} is
+   * the only command that reaches the root. This is an INSERT with nothing to leave: omitting
+   * `folderId` writes the root because that is what the caller asked for. Nothing about
+   * `deckSetFolder` changes — it is still the way to un-file a deck that already **exists**.
+   *
+   * Typed `number | undefined` rather than `number | null` for the same reason: there is one
+   * way to say the root here, which is to leave it out. A form whose draft holds
+   * `number | null` sends `folderId ?? undefined`.
+   *
+   * Fenced by a real foreign key — `decks.folder_id REFERENCES deck_folders(id)`, enforced
+   * because both are user tables — so a folder id that is not there is refused by SQLite
+   * rather than checked in Rust.
+   */
+  folderId?: number;
+  /**
+   * Whether the new deck keeps a theory list beside its live one.
+   *
+   * **At create this sets the column and moves nothing**, because a deck being born has no live
+   * cards to move. Contrast {@link DeckPatch.theoryEnabled}, where switching it on makes the
+   * deck the reader already has into the plan and leaves the live list empty — there is nothing
+   * here for that to move, so the two routes differ in what they *do* and agree exactly on what
+   * a new deck ends up with.
+   *
+   * Worth knowing one step further out: the patch acts on the **transition** off → on, so a deck
+   * born with theory already on has made that transition at birth and no later patch will ever
+   * move anything for it. Its plan fills through the ordinary card writes aimed at the `theory`
+   * variant, the same as any other list — there is no command that copies a live list built up
+   * afterwards into it. One existed, never had a caller, and was removed on 2026-09-27.
+   */
+  theoryEnabled?: boolean;
+  /**
+   * Whether the new deck is one the reader tracks without owning the cardboard. See
+   * {@link DeckRow.virtualOnly}, where the kind is argued in full.
+   *
+   * **At create this sets the column and releases nothing**, for {@link DeckInput.theoryEnabled}'s
+   * reason one field up: a deck being born holds no copies, so the transition work the patch
+   * does — filing the group's cardboard into `Recently removed` — has nothing to act on. What a
+   * create *does* skip is the deck group itself: a virtual deck is born without one, where the
+   * patch route has to take an existing one away.
+   *
+   * Sending it with `theoryEnabled: true` is a caller's bug and not a third kind. Rust writes
+   * the two columns so the pair can never both be set; there is no combination to spell here
+   * that {@link deckKind} cannot read back.
+   */
+  virtualOnly?: boolean;
+}
+
+/**
+ * An edit to one deck. Every field is optional: absent means "leave it"
+ * (`coalesce(?n, column)`, {@link EntryPatch}'s rule).
+ *
+ * **Absent is the only way to say "leave it", so `null` cannot say "clear it".** Every column
+ * below is written with `coalesce(?n, column)`, which reads a bound NULL as *unchanged* — so
+ * there is no patch that clears a cover, empties a description, or files a deck back at the
+ * **root** of the folder tree. The last of those is a thing the app actually needs, which is
+ * why {@link ipc.deckSetFolder} is a command of its own: it takes `folderId: number | null`
+ * and `null` there means the root. A reader looking for "un-file this deck" wants that
+ * command and will not find it here.
+ *
+ * Un-filing through a patch would need a double-`Option` (absent versus null) across this
+ * whole struct — a change to make once and deliberately, not as a side effect of adding a
+ * field.
+ *
+ * **The rule is this struct's, not the deck module's.** {@link DeckInput} carries the same
+ * field names and is an INSERT, where an absent `folderId` really does mean the top level —
+ * see {@link DeckInput.folderId}, which says so at the field.
+ */
+/**
+ * Which Compare view a deck's managed wishlist follows — `decks.managed_wishlist_mode` (user
+ * schema v49), and `managed_wishlist::MODES` in the crate. `other` is the dialog's
+ * `Different printing`. The words and their order are `features/decks/managedWishlist.ts`'s.
+ *
+ * **Four words, and tokens are not one of them since user schema v57** (issue #617). v55 made
+ * `tokens` a fifth mode and had All file the plan's tokens too, which tied two questions into one
+ * press: *which card copies does this folder want* and *does it want the tokens at all*. A reader
+ * who wanted Missing cards and the tokens had no word for it. The token half is its own switch
+ * now — {@link DeckRow.managedWishlistTokens} — and fills the `Tokens` subfolder under any of the
+ * three views; v57 turned every `tokens` deck into `missing` with that switch on, and every `all`
+ * deck kept its tokens by the same switch.
+ */
+export type ManagedWishlistMode = "off" | "all" | "missing" | "other";
+
+/**
+ * How a deck keeps its tokens — `decks.token_mode`, user schema v52, `NOT NULL DEFAULT
+ * 'managed'` and closed by a `CHECK` on exactly these three words.
+ *
+ * `managed` and `collection` draw the Tokens & Emblems pile in the four deck views; `hidden`
+ * takes it out of all four (the band stays, so the mode can be changed back). **PR 2's control
+ * draws `managed` and `hidden` only** — `collection` is in the `CHECK` from the start so PR 3
+ * adds a button and a behaviour and no rung, and a Collection button that behaved exactly like
+ * Managed would be a control that lies about what it does.
+ */
+export type TokenMode = "managed" | "collection" | "hidden";
+
+export interface DeckPatch {
+  name?: string;
+  formatKey?: string;
+  /** Which platform the deck is for. `"any"` is a value like any other and is written like
+   *  one — absent still means "leave it", which is why the column is not nullable. Setting it
+   *  moves no format, and setting a format moves no game. */
+  gameKey?: DeckGame;
+  /** The one-line blurb the gallery tile shows — a caption, and since schema v43 the **only**
+   *  prose on this patch: the deck's notebook is rows now ({@link DeckNote}) and is written
+   *  through the eight note commands rather than through here. Both dialogs write this one: the
+   *  "New deck" one through {@link DeckInput.description} at birth, the settings one through
+   *  here. */
+  description?: string;
+  /** Point the cover at a printing's art crop — the one way a cover is set. Sending it also
+   *  writes `coverKind` as `card_art`, which is what it already was: see
+   *  {@link DeckCoverKind} for why that write is a leftover rather than a branch. */
+  coverCardId?: string;
+  /** Filed away: sorted last in the gallery, never deleted. This is what a gallery's
+   *  "remove" should reach for — `deckDelete` really deletes. */
+  archived?: boolean;
+  /**
+   * Which folder the deck is filed in.
+   *
+   * **This field can file a deck, and cannot un-file one** — by the rule above, `null` here
+   * means "leave it". {@link ipc.deckSetFolder} is the command that reaches the root.
+   */
+  folderId?: number;
+  /**
+   * Whether this deck keeps a theory list beside its live one.
+   *
+   * **Switching it on _moves_ the live list into theory**, in the same transaction: the deck
+   * the reader has built becomes the plan, and the live list starts **empty**. A plan is what a
+   * deck is being built toward, and the honest starting point for one is the deck as it stands
+   * — so the cards go there rather than being duplicated into two lists that then drift apart.
+   * The deck's {@link DeckRow.lastVariant} is left at `"theory"` with them, so the editor opens
+   * on the list the cards are now in.
+   *
+   * It used to *copy*, and no longer does; nothing in the backend copies one list into the
+   * other now. The explicit copy command that outlived the switch never had a caller and was
+   * removed on 2026-09-27.
+   *
+   * Switching it off **keeps every row** — it hides a switch, it does not delete a list, and
+   * nothing in the backend ever deletes a `theory` row except the ordinary card writes the
+   * reader makes against it.
+   *
+   * **Setting it clears {@link DeckPatch.virtualOnly} in the same write**, because the two are
+   * one three-way choice wearing two columns — see {@link DeckRow.virtualOnly}.
+   */
+  theoryEnabled?: boolean;
+  /**
+   * Whether this deck is one the reader tracks without owning the cardboard. See
+   * {@link DeckRow.virtualOnly}, where the kind is argued in full.
+   *
+   * **Switching it on files the copies the deck's group holds into `Recently removed` and takes
+   * the group away**, in the same transaction. Unlike {@link DeckPatch.theoryEnabled} above it
+   * moves not one `deck_cards` row — every card stays in the list and the variant it was in,
+   * which is the whole reason a reader may press this and press it back. What moves is the
+   * *cardboard*: a deck that has stopped counting what it owns must not go on holding copies
+   * that are then invisible on the Collection page and unavailable to every other deck.
+   *
+   * **Switching it off gives the deck its group back, empty.** The copies are not fetched from
+   * `Recently removed` — that is the reader's own filing to redo, exactly where
+   * `Clear actual list…` leaves it — because nothing recorded which of them came from here.
+   *
+   * **It clears {@link DeckPatch.theoryEnabled} in the same write**, for the reason above.
+   */
+  virtualOnly?: boolean;
+  /**
+   * Whether this deck draws the **green** theory mark — the live row that is the printing the
+   * plan named. See {@link DeckRow.theoryMarkExact}, where the whole rule is written.
+   *
+   * `decks.theory_mark_exact`, schema v38, and a **reading** preference like
+   * {@link DeckPatch.separateXGroup} below: switching it writes one column and touches not one
+   * `deck_cards` row. Unlike {@link DeckPatch.theoryEnabled} above it moves nothing at all —
+   * every card stays in the list it was in, and only what is drawn over them changes.
+   *
+   * `coalesce(?n, column)` like every other key here, so absent means "leave it" and there is no
+   * third state to spell. A `boolean` has nothing to clear, so unlike
+   * {@link DeckPatch.folderId} that costs this field nothing.
+   */
+  theoryMarkExact?: boolean;
+  /** Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
+   *  not name. See {@link DeckRow.theoryMarkName}, and {@link DeckPatch.theoryMarkExact} above
+   *  for why the two are separate fields here rather than one three-valued one. */
+  theoryMarkName?: boolean;
+  /** Whether this deck draws the **red** theory mark — a live row the plan does not ask for at
+   *  all. See {@link DeckRow.theoryMarkUnplanned}, and {@link DeckPatch.theoryMarkExact} above
+   *  for the rules all three share. `decks.theory_mark_unplanned`, schema v39. */
+  theoryMarkUnplanned?: boolean;
+  /** Which Compare view this deck's **managed wishlist** follows, or `"off"`. See
+   *  {@link DeckRow.managedWishlist}; `decks.managed_wishlist_mode`, schema v49. A word outside the
+   *  four is refused by name. */
+  managedWishlist?: ManagedWishlistMode;
+  /** Whether this deck's managed wishlist also files the plan's **tokens**, in a `Tokens`
+   *  subfolder. See {@link DeckRow.managedWishlistTokens}; `decks.managed_wishlist_tokens`,
+   *  schema v57. Absent leaves it, as every field here does — and it is written whatever the mode,
+   *  so a deck whose mode is `off` can hold it on for the day a view is picked again. */
+  managedWishlistTokens?: boolean;
+  /**
+   * Gather this deck's `{X}` spells under a heading of their own instead of counting each at
+   * the mana value Scryfall gives it. See {@link DeckRow.separateXGroup} — a **reading**
+   * preference, so switching it writes one column and touches not one `deck_cards` row.
+   */
+  separateXGroup?: boolean;
+  /**
+   * Whether the editor's **Tokens & Emblems** area is expanded. See
+   * {@link DeckRow.tokensOpen} — a per-deck reading preference, so switching it writes one
+   * column and touches not one `deck_cards` row.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, which is the shape
+   * `separate_x_group` is in and not the one the three `last*` columns are in, even though this
+   * column sits beside all four. The two commands differ in what a write *costs*: this one moves
+   * `updated_at` and writes a history line, and that one deliberately does neither. So the choice
+   * is worth stating rather than inheriting — a disclosure a reader opens once and leaves open is
+   * a handful of audited writes over a deck's life, where the tab, the grouping and the sort are
+   * written on every press and would fill the history with how somebody was looking at the page.
+   */
+  tokensOpen?: boolean;
+  /**
+   * Whether the editor's **Deck stats** band is expanded. See {@link DeckRow.statsOpen} — a
+   * per-deck reading preference, so switching it writes one column and touches not one
+   * `deck_cards` row.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, for the argument spelled out on
+   * {@link tokensOpen} beside it: the two commands differ in what a write *costs*, and a
+   * disclosure a reader opens once and leaves open is a handful of audited writes over a deck's
+   * life, where a tab or a sort is written on every press.
+   */
+  statsOpen?: boolean;
+  /**
+   * Whether the editor's **Notes** band is expanded. See {@link DeckRow.notesOpen} — a per-deck
+   * reading preference, so switching it writes one column and touches neither a `deck_cards`
+   * row nor a `deck_notes` one.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, for the argument spelled out
+   * on {@link tokensOpen} two fields up, and it is the third disclosure to take that answer.
+   *
+   * **Opening the band is not reading the notes and writing one is not opening the band.** This
+   * boolean says whether the section is unfolded; the notes themselves are rows, written by the
+   * eight `deckNote*` commands and never by a patch. A caller that reached for this to save a
+   * note is reaching for {@link ipc.deckNoteCreate}.
+   */
+  notesOpen?: boolean;
+  /**
+   * Whether the Deck stats band's **Mana curve** splits its bars into creatures and
+   * noncreatures. See {@link DeckRow.curveCreatures} — a per-deck reading preference, so the
+   * `Creatures` toggle writes one column and touches not one `deck_cards` row.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, for the argument spelled out
+   * on {@link tokensOpen}: a toggle a reader sets once and leaves is a handful of writes over a
+   * deck's life, where a tab or a sort is written on every press.
+   */
+  curveCreatures?: boolean;
+  /**
+   * Whether the editor's **To-do** band is expanded. See {@link DeckRow.todosOpen} — a per-deck
+   * reading preference, so switching it writes one column and touches neither a `deck_cards` row
+   * nor the checklist itself.
+   *
+   * **It rides this patch and not {@link ipc.deckSetViewState}**, for the argument spelled out
+   * on {@link tokensOpen}, and it takes {@link notesOpen}'s answer one band down.
+   *
+   * **Opening the band is not writing a list, and writing a list is not opening the band.** The
+   * lists are rows of `deck_todo_lists` (user schema v59, which replaced #672's single
+   * `decks.todos` column), written by {@link ipc.deckTodoListCreate} and
+   * {@link ipc.deckTodoListUpdate} and never by a patch — a caller that reached for this to save a
+   * to-do is reaching for those. The home widget's deck heading is the one caller that sends this
+   * from outside the editor: it opens a deck with its band expanded, and sends `true` only when
+   * {@link DeckTodoListEntry.todosOpen} says it is shut.
+   */
+  todosOpen?: boolean;
+  /**
+   * How the deck keeps its tokens. See {@link DeckRow.tokenMode} — `decks.token_mode`, user
+   * schema v52, which replaced v47's `token_stack` switch. Writing it touches no `deck_cards`,
+   * `deck_tokens` or `deck_token_printings` row, and in PR 2 no collection row either.
+   *
+   * **It writes a history row and an undo step, which `tokenStack` never did** — Rust records
+   * `field: "tokenMode"` with the two words, and `deck_undo::DECK_FIELDS` names the column so
+   * Ctrl+Z puts the mode back. A mode is an arrangement the reader chose, the footing
+   * {@link tokenRailIndex} below stands on, rather than a disclosure. A word outside
+   * {@link TokenMode} is refused in words.
+   */
+  tokenMode?: TokenMode;
+  /**
+   * Where the **Tokens & Emblems** pile sits in the rail. See {@link DeckRow.tokenRailIndex} —
+   * `decks.token_rail_index`, user schema v51.
+   *
+   * **`-1` is a value and not an absence**, which is `defaultCategoryId`'s footing and the reason
+   * the column is `NOT NULL DEFAULT -1` rather than nullable: this patch reads an absent key as
+   * *leave it* (`coalesce(?n, column)`), so a nullable "last" could never be written back once
+   * the reader had moved the pile. Moving it to the last slot sends `-1`; the top is `0`.
+   *
+   * **Like {@link tokenMode} one field up, it writes a history row and an undo step** — Rust
+   * records `field: "tokenRail"` when the index moves — because a pile dragged to a new slot is
+   * an arrangement the reader made, like a category's `sortOrder`, and Ctrl+Z puts it back.
+   */
+  tokenRailIndex?: number;
+  /**
+   * Which of this deck's categories an add that names none lands in. See
+   * {@link DeckRow.defaultCategoryId} — `0` is `AUTO_CATEGORY` and is a **value**, not an
+   * absence: sending it puts the deck back on "by what the card does".
+   *
+   * That is the one thing to know about this field against the rest of the patch. Every other
+   * key here reads absent as "leave it" (`coalesce(?n, column)`) and has no way to say "clear
+   * it" — {@link ipc.deckSetFolder} exists because `folderId` cannot. This column needs no such
+   * command, because its cleared state is a number.
+   *
+   * A non-zero id must name a category **of this deck's live list**; Rust refuses anything else
+   * by name, a theory pile included, since no foreign key says so.
+   */
+  defaultCategoryId?: number;
+  /**
+   * Which bracket the reader says this deck is — `1`–`5`, or {@link AUTO_BRACKET} (`0`) to hand
+   * the question back to the estimate. See {@link DeckRow.bracket}.
+   *
+   * **`0` is a value here, not an absence**, exactly as `defaultCategoryId`'s is one field up:
+   * absent means "leave it" (`coalesce(?n, column)`, this struct's rule), so sending `0` is the
+   * only way to say "back to Auto" — and, like that field, this one needs no
+   * {@link ipc.deckSetFolder}-shaped escape command, because its cleared state is a number.
+   *
+   * Rust refuses anything outside `0..=5` **by name** rather than clamping it. A `6` is a
+   * caller's bug or a hand-written IPC call, and quietly storing `5` for it would put a bracket
+   * on the deck header that nobody chose.
+   */
+  bracket?: number;
+}
+
+/**
+ * `decks.cover_kind` — **a column with one live value, kept as a union because the column's
+ * own CHECK still has two.**
+ *
+ * `card_art` means {@link DeckRow.coverCardId}'s art crop, and it is the whole of what a cover
+ * is. `custom` meant a picture the reader picked off disk, re-encoded beside the database and
+ * served by the image protocol at `<origin>/cover/<deckId>`; **that half is deleted** — the
+ * command, the route, the encoder and the directory are all gone, and a migration flips every
+ * surviving `custom` row to `card_art`.
+ *
+ * **Why the word is still in the type.** The mirror's job is to say what can come back out of
+ * the row: `cover_kind`'s CHECK is `IN ('card_art','custom')` and is not rewritten by the
+ * migration, and `cover_kind` is a synced field, so a device still on an older rung can put
+ * the retired word on the wire. Narrowing this to a single-member union would make that arrival
+ * a type error rather than a value nothing branches on, which is the wrong shape for a
+ * hand-written mirror that nothing type-checks against the crate.
+ *
+ * **Nothing in the app may branch on it, and that is the deletion's whole point.** A tile, a
+ * preview and a picker each drew one of two pictures off this field; they draw the card's art
+ * crop unconditionally now, which is what every *receiving* device already drew — the file
+ * never survived a sync, because the path was stored absolute. So a `custom` row that reaches
+ * this build from an old one draws its card art, which is the same picture that device's
+ * neighbours were already showing it.
+ */
+export type DeckCoverKind = "card_art" | "custom";
+
+/**
+ * Where a card can be played, as Scryfall spells it — `schema::GAMES`, and the vocabulary of a
+ * {@link FormatSpec.games} entry.
+ *
+ * Three words and not four: these are Scryfall's own, `cards.games` already carries them, and a
+ * fourth platform is a word no card in this database holds.
+ */
+export type Game = "paper" | "arena" | "mtgo";
+
+/**
+ * What a deck's own game answer may be — {@link Game}, plus the word for a deck that has not
+ * been pinned to a platform. `schema::DECK_GAMES`.
+ *
+ * **`"any"` is a stored value and not an absence**, which is why `decks.game_key` is `NOT NULL`
+ * with a `DEFAULT 'any'` rather than nullable: {@link DeckPatch} is written with
+ * `coalesce(?n, column)`, so a bound NULL means *leave it* and could never have said "back to
+ * Any". `decks.default_category_id`'s sentinel argument, one column over.
+ */
+export type DeckGame = Game | "any";
+
+/**
+ * The stored answer meaning **the estimate stands** — {@link DeckRow.bracket} on a deck whose
+ * reader has not answered the bracket question themselves, and the one entry in a bracket picker
+ * that is not a bracket.
+ *
+ * `0`, because the Commander Format Panel numbers its brackets `1`–`5` and a sixth number can
+ * never collide with one of them. That is `AUTO_CATEGORY`'s argument
+ * (`features/decks/autoCategory.ts`) made against a different table — there the sentinel is safe
+ * because `deck_categories.id` is an `INTEGER PRIMARY KEY` and rowids start at 1 — and it lands
+ * the same way: **a sentinel of `0` can never be mistaken for a real value**, so the column can
+ * carry "nobody has said" as a number rather than as an absence.
+ *
+ * **It is a value, not an absence**, and that is the whole reason `decks.bracket` is
+ * `INTEGER NOT NULL DEFAULT 0` (schema v26) rather than nullable. {@link DeckPatch} is written
+ * with `coalesce(?n, column)`, so a bound NULL reads as *unchanged* — a nullable column would
+ * have made "put it back to Auto" unreachable through the patch without a double-`Option` across
+ * the whole struct. `decks.default_category_id` and `decks.game_key` are the same decision on
+ * either side of it; `decks.folder_id` is the column that did **not** make it, and
+ * {@link ipc.deckSetFolder} is what that costs — a whole command whose only job is to reach a
+ * state the patch cannot spell.
+ *
+ * Rust spells the same number `deck::AUTO_BRACKET`, and the two are one vocabulary on purpose: a
+ * sentinel that meant "unset" on one side of the IPC and "auto" on the other is exactly the
+ * mismatch that once filed every quick add on a fresh deck into the seeded Commander pile.
+ *
+ * **It is not the estimate and never becomes one.** The estimate is drawn on this side from the
+ * deck's own cards (`features/decks/validation/bracket.ts`) and is stored nowhere; this column
+ * says only whether the reader has overruled it.
+ */
+export const AUTO_BRACKET = 0;
+
+/** One deck as the gallery shows it. */
+export interface DeckRow {
+  id: number;
+  name: string;
+  formatKey: string;
+  /** From `format_specs`, so the gallery never re-derives a display name. `null` when the
+   *  key is one the seeded table no longer carries — a LEFT JOIN, so the deck still lists. */
+  formatName: string | null;
+  /**
+   * Which platform the deck is for — `"any"` on every deck that predates schema v18 or has
+   * never been asked.
+   *
+   * **No `gameName` beside it, unlike {@link DeckRow.formatName}**: a format's display name is
+   * a seeded cell the gallery would otherwise re-derive, while a game's is four words in a
+   * picker's own list (`GAME_OPTIONS`). There is no table to read one from.
+   */
+  gameKey: DeckGame;
+  description: string | null;
+  coverCardId: string | null;
+  /**
+   * `card_art` on every deck this build can produce. See {@link DeckCoverKind}: the second
+   * word survives in the column's CHECK and on the sync wire, and **nothing may branch on
+   * it** — a cover is {@link DeckRow.coverCardId}'s art crop and nothing else.
+   */
+  coverKind: DeckCoverKind;
+  /**
+   * The cover printing's illustrator, `null` when `cards` has no row for it.
+   *
+   * Read here so a tile can obey Scryfall's image policy: an `art` crop has no printed
+   * frame, so wherever one is shown the artist must be credited. Task 11's ruling is that a
+   * cover with no artist is **not drawn** — an orphaned cover heals on the next sync.
+   *
+   * It is about {@link DeckRow.coverCardId} and only that — the backend's
+   * `LEFT JOIN cards c ON c.id = d.cover_card_id` — so it is `null` exactly when a cover
+   * cannot be drawn, and the credit and the picture are one condition rather than two that
+   * have to be kept in step. They were two while a deck could wear a file instead.
+   */
+  coverArtist: string | null;
+  archived: boolean;
+  /**
+   * `live` copies in **active** categories of kind `main`, `commander` or `maybe` — what "a
+   * 60-card deck" means in a caption, and the **same cards the validation engine sizes a deck
+   * by**: `SIZE_KINDS` in `features/decks/validation/engine.ts`. One definition, so a tile and
+   * the format check beside it never answer the same question with two numbers. The kind list
+   * here and that constant are the same three words, and a change to one is a change to both.
+   *
+   * Three exclusions, and they are {@link CategoryKind}'s governing rule applied. The
+   * sideboard and the companion are *beside* the deck rather than in it (CR 100.4a; EDH calls
+   * a companion "effectively a 101st card", which is exactly the card a 100-card caption must
+   * not add). A **theory** row is a plan and appears on no tile. And an **inactive** category
+   * counts toward nothing whatever its kind, which is how a switched-off Maybeboard stays out
+   * without `maybe` being excluded — a Maybeboard switched *on* counts like any other pile.
+   */
+  cardCount: number;
+  /** Unix seconds. The gallery's sort key, and every card write moves it — including a
+   *  removal that found nothing to remove. */
+  updatedAt: number;
+  /** Which folder the deck is filed in, or `null` for the root of the tree. Filing is
+   *  {@link ipc.deckSetFolder}, which is the only write that can put it back at `null`. */
+  folderId: number | null;
+  /**
+   * Whether this deck keeps a theory list beside its live one.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, because a switch the app can
+   * set and never see is a switch nothing can draw: the editor's Live/Theory control **is**
+   * this boolean. Without it every reader would have to guess from whether one of the two
+   * lists happens to be empty — and an empty list says nothing at all here, since enabling the
+   * switch *moves* the live list into theory and quite deliberately leaves live empty.
+   */
+  theoryEnabled: boolean;
+  /**
+   * Whether this deck is one the reader tracks **without owning the cardboard** — an MTGO or
+   * Arena list, a proxy pile, a deck they are only reading about. `decks.virtual_only INTEGER
+   * NOT NULL DEFAULT 0`, schema v40, and `false` on every deck that predates it, which is the
+   * state every existing deck is in.
+   *
+   * **It is the third deck kind, and the three are two booleans rather than an enum.** Regular
+   * is `theoryEnabled: false, virtualOnly: false`; Theory + Actual is `true, false`; Virtual is
+   * `false, true`. Rust refuses the fourth combination by writing the other column in the same
+   * patch, so `true, true` is unrepresentable — see `deckKind` in
+   * `features/decks/deckKind.ts`, which is the one place that folds the pair into a word and
+   * the only thing any surface should branch on.
+   *
+   * **A virtual deck keeps one `live` list, and that is deliberate rather than incidental.** It
+   * reads as "a plan with no actual version" — no variant switch is drawn, so the reader never
+   * meets the word *Actual* — but the rows stay in the variant every other read already counts.
+   * {@link DeckRow.cardCount} and the gallery's colour bar both count `variant = 'live'`, so a
+   * virtual deck whose cards sat in `theory` would report **0 cards under an empty bar on every
+   * tile, forever**. This is the same rule that kept `live` as the stored word when the tab was
+   * renamed `Actual`: the label moved and the value did not.
+   *
+   * **What it turns off is every reading of the collection and the wishlist**, which is the
+   * whole of the feature. There is no owned count, no missing count, no shortage mark, no
+   * `Pull from collection`, no `Add missing`, no `Send missing to wishlist`, no Collection tab
+   * in the deck's own search panel. Rust refuses each of those writes by name
+   * (`deck::VIRTUAL_HOLDS_NOTHING`) rather than answering an empty list, because an empty
+   * shortfall and a deck that owns nothing by definition are the same JSON and very different
+   * sentences.
+   *
+   * **A virtual deck has no `collection_folders` group**, and that is where the isolation
+   * actually comes from rather than from a branch at each reader: `owned_by_printing` joins the
+   * deck's group, so with none there every owned figure is `0` with nothing asking why.
+   * Switching a deck to virtual files the copies its group held into `Recently removed` first —
+   * the reader still owns the cardboard, it is simply no longer filed under a deck that has
+   * stopped counting it.
+   */
+  virtualOnly: boolean;
+  /**
+   * Whether this deck draws the **green** theory mark — the live row that is the printing the
+   * plan named.
+   *
+   * `decks.theory_mark_exact INTEGER NOT NULL DEFAULT 1`, schema v38. Per **deck**, which is
+   * {@link DeckRow.separateXGroup}'s argument below and {@link DeckRow.theoryEnabled}'s above:
+   * whether a substitute printing is worth a mark is a statement about how *this* deck is being
+   * built, so two decks may disagree and a duplicate must carry the answer across.
+   *
+   * **Off does not mean unmarked.** An exact row on a deck with this off is re-resolved as a
+   * loose one and draws blue, with blue's own number — `features/decks/theoryMatch.ts` carries
+   * that rule, because which mark a row earns is a *conclusion* and conclusions are this side's.
+   * Turning the strict mark off is a reader asking for less precision, not for less information.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, for
+   * {@link DeckRow.theoryEnabled}'s reason exactly: a switch the app can set and never see is a
+   * switch nothing can draw.
+   */
+  theoryMarkExact: boolean;
+  /**
+   * Whether this deck draws the **blue** theory mark — the same card in a printing the plan did
+   * not name. See {@link DeckRow.theoryMarkExact}, whose every rule this shares.
+   *
+   * **Three booleans rather than one many-valued field**, which is the schema's own argument
+   * carried onto the wire: a ladder cannot spell blue *without* green, and blue
+   * without green is a real answer — a reader who cares that a card is present and not which
+   * printing it is.
+   *
+   * **All off is a real answer too, and is not a spelling of {@link DeckRow.theoryEnabled}
+   * being off.** A deck with a plan and no marks at all is a reader who wants the two lists side
+   * by side and no colour on either; a deck with no plan has no second list to compare against.
+   */
+  theoryMarkName: boolean;
+  /**
+   * Whether this deck draws the **red** mark on a Live card the plan does not ask for at all —
+   * a stand-in, a spare or an experiment. `decks.theory_mark_unplanned`, schema v39.
+   *
+   * **The third of three independent switches**; see {@link DeckRow.theoryMarkExact} for the
+   * rules all three share, and {@link DeckRow.theoryMarkName} for why they are three fields.
+   *
+   * **It is the one mark with no number.** Green and blue count a live row against what the
+   * plan asks for; here the plan asks for nothing, so there is no count to draw and the mark is
+   * an X. Which mark a row earns is still a *conclusion* and stays on this side —
+   * `features/decks/theoryMatch.ts` — and this boolean is only whether the deck draws it.
+   */
+  theoryMarkUnplanned: boolean;
+  /**
+   * Which of the deck's two lists the editor was last reading — the tab the reader left this
+   * deck on, restored when they open it again.
+   *
+   * Written by {@link ipc.deckSetViewState} and by nothing else, which is what keeps it honest:
+   * **looking at a tab is not editing a deck**, so that command moves no `updatedAt`, writes no
+   * history row and reallocates nothing. `deckUpdate(id, { theoryEnabled: true })` leaves it at
+   * `"theory"`, because that write moves the deck's cards there.
+   *
+   * A deck whose {@link DeckRow.theoryEnabled} is `false` can still carry `"theory"` here — the
+   * switch being turned off does not rewrite it — so a reader is put back on **Live** whatever
+   * this says when the deck keeps no plan. There is no list to get back from otherwise.
+   */
+  lastVariant: DeckVariant;
+  /**
+   * The editor's `Group by` as the reader left it: `GroupBy`'s vocabulary
+   * (`category | manaValue | type`), and `"category"` on a deck nobody has changed it on.
+   *
+   * **Typed `string` and deliberately not narrowed on the wire**, unlike
+   * {@link DeckRow.lastVariant} beside it. The vocabulary is TypeScript's — `GroupBy` lives in
+   * `features/decks/grouping.ts`, and this file may not import from `features/` — and, more to
+   * the point, a database outlives the app: a word a *future* build stops offering has to
+   * degrade to the default rather than putting the editor in a mode nothing can leave. The
+   * narrowing is `asGroupBy`, which answers `"category"` for anything it has not heard of. The
+   * same arrangement `getMarketplace` and `printingGroupBy` are in — see this file's header.
+   */
+  lastGroupBy: string;
+  /**
+   * The editor's `Sort` as the reader left it: `SortBy`'s vocabulary
+   * (`alphabetical | manaCost | price | type`), and `"alphabetical"` by default.
+   *
+   * `string` for {@link DeckRow.lastGroupBy}'s reason, and narrowed the same way — `asSortBy` in
+   * `features/decks/sorting.ts`, which answers `"alphabetical"` for a word this build does not
+   * offer.
+   */
+  lastSortBy: string;
+  /**
+   * Whether this deck's curve gathers the `{X}` spells under a heading of their own.
+   *
+   * `decks.separate_x_group INTEGER NOT NULL DEFAULT 0`, schema v13 — per **deck**, because it
+   * is an answer about a particular curve: a storm list where half the spells are `{X}` reads
+   * quite differently from an aggro deck with one Fireball in it, and a single app-wide setting
+   * would make the reader re-decide every time they opened a different deck.
+   *
+   * **It is a reading preference and changes nothing about what is in the deck.** It moves a
+   * card between two headings — `buildGroups`' `separateX` and the curve the stats strip counts
+   * — and reaches no rule: not size, not copies, not legality, not the allocator. Nothing in
+   * `validation/` has heard of it and nothing there should.
+   *
+   * It is not one of the three `last*` fields above, and the split is the point: those are how
+   * the reader was *looking* at this deck a moment ago, written by a command that moves no
+   * `updatedAt`, while this is an answer about the deck's own curve and rides the ordinary
+   * {@link ipc.deckUpdate} with the rename and the format.
+   */
+  separateXGroup: boolean;
+  /**
+   * Whether the editor's **Tokens & Emblems** area is expanded — `decks.tokens_open INTEGER NOT
+   * NULL DEFAULT 0`, schema v35, and `false` on every deck that has never been opened, which is
+   * the state every existing deck is in.
+   *
+   * **Per deck rather than app-wide**, because whether a reader wants the token wall in front of
+   * them is an answer about a particular deck: a Commander list built on Treasure and Wurms
+   * wants it open, and the Modern deck that makes nothing at all cannot use it. A single setting
+   * would make them re-decide every time they changed deck.
+   *
+   * **Collapsed by default is the whole of what the column buys.** The area resolves its list on
+   * every deck open whether or not it is drawn, so this decides one thing: whether a reader who
+   * never sleeves tokens pays one header row for the feature or a wall of them.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, for {@link theoryEnabled}'s
+   * reason — a setting the app can write and never see is a setting nothing can draw.
+   */
+  tokensOpen: boolean;
+  /**
+   * Whether the editor's **Deck stats** band is expanded — `decks.stats_open INTEGER NOT NULL
+   * DEFAULT 1`.
+   *
+   * **The default is the one place this does not mirror {@link tokensOpen}, and the difference is
+   * the whole reason to state it.** The token wall was new when its column landed, so a collapsed
+   * default cost no reader anything they already had. The stats band has been on screen for every
+   * deck since 2026-08-14 with **no control that hides it** — so a `DEFAULT 0` here would not be a
+   * default, it would be a feature silently removed from every deck in the database on upgrade.
+   * `1` is today's behaviour exactly, and the disclosure is purely additive: what a reader gains
+   * is the ability to put two screens of charts away, which is what the band's own history says
+   * they wanted when it was a 280px aside with a toggle.
+   *
+   * **Per deck rather than app-wide**, for {@link tokensOpen}'s reason one column over: whether a
+   * reader wants four charts in front of them is an answer about a particular deck — a list being
+   * tuned wants them, a finished one does not — and a single setting would make them re-decide on
+   * every deck they opened.
+   *
+   * Read on the row as well as written through {@link DeckPatch}: a setting the app can write and
+   * never see is a setting nothing can draw.
+   */
+  statsOpen: boolean;
+  /**
+   * Whether the editor's **Notes** band is expanded — `decks.notes_open INTEGER NOT NULL
+   * DEFAULT 0`, schema v43, and `false` on every deck that predates it, which is the state
+   * every existing deck is in.
+   *
+   * **The default is v37's answer and not v42's, and the two rungs asked the same question.**
+   * {@link statsOpen} above took `DEFAULT 1` because the stats band was already on screen for
+   * every deck on every disk, so a `0` would have hidden something a reader had been looking at
+   * for months. The Notes band is **new** — no deck has ever drawn one — so a collapsed default
+   * takes nothing from anybody, and {@link tokensOpen} is the precedent character for
+   * character.
+   *
+   * **Per deck rather than app-wide**, for {@link tokensOpen}'s reason two columns over:
+   * whether a reader wants a deck's prose in front of them is an answer about a particular deck.
+   *
+   * Read on the row as well as written through {@link DeckPatch}: a setting the app can write
+   * and never see is a setting nothing can draw.
+   *
+   * **This is the whole of what `decks` still says about notes.** The v8 `notes` column is gone
+   * at v43 and its paragraph was discarded rather than migrated — the notes themselves are rows
+   * now ({@link DeckNote}), read with {@link ipc.deckNotes} and never carried on this row,
+   * because a deck's tile and its gallery read want a row and not a notebook.
+   */
+  notesOpen: boolean;
+  /**
+   * Whether the Deck stats band's **Mana curve** splits each bar into creatures and noncreatures
+   * — `decks.curve_creatures INTEGER NOT NULL DEFAULT 0`, user schema v56, and `false` on every
+   * deck that predates it.
+   *
+   * **The default is {@link notesOpen}'s answer and not {@link statsOpen}'s**: the split is new,
+   * so off is exactly the chart every deck already draws and the upgrade changes nothing on
+   * screen. **Per deck**, for {@link statsOpen}'s reason — whether a reader wants the curve
+   * broken down is an answer about a particular list. What counts as a creature, and how a split
+   * bar draws, are the page's (`DeckStats`); Rust stores the one bit.
+   *
+   * Read on the row as well as written through {@link DeckPatch}: a setting the app can write
+   * and never see is a setting nothing can draw.
+   */
+  curveCreatures: boolean;
+  /**
+   * Whether the editor's **To-do** band is expanded — `decks.todos_open INTEGER NOT NULL
+   * DEFAULT 0`, user schema v58, and `false` on every deck that predates it.
+   *
+   * **{@link notesOpen}'s twin one band down, and `DEFAULT 0` for its reason**: the band is new,
+   * so a collapsed default takes nothing from anybody. **Per deck**, for {@link tokensOpen}'s
+   * reason — whether a reader wants a deck's checklist in front of them is an answer about a
+   * particular deck.
+   *
+   * Read on the row as well as written through {@link DeckPatch}: a setting the app can write
+   * and never see is a setting nothing can draw.
+   *
+   * **The lists themselves are not on this row, and that is the point of the split.** They are
+   * rows of `deck_todo_lists`, many to a deck since user schema v59 — #672's single `decks.todos`
+   * column was converted into one row titled `To-do` and dropped — and a gallery tile or a deck
+   * menu has no use for bodies it would carry on every read. They travel only through
+   * {@link ipc.deckTodoLists} and {@link ipc.everyDeckTodoList} — which is {@link notesOpen}'s
+   * arrangement for the notes, where the row says whether the band is open and never what is
+   * written in it.
+   */
+  todosOpen: boolean;
+  /**
+   * Which of the Compare dialog's three views this deck's **managed wishlist** follows — `all`,
+   * `missing` or `other` (Different printing) — or `off` for no folder
+   * (`decks.managed_wishlist_mode`, user schema v49, `DEFAULT 'off'` —
+   * [issue #512](https://github.com/Msgaihede/mtg-grimoire/issues/512)). The folder is rewritten
+   * by Rust after every change to the deck.
+   *
+   * **It only does anything on a `Theory + Actual` deck**: a regular deck has no plan to be
+   * short of and a virtual one owns no cardboard, so the column is read but ignored for both
+   * and a deck switched to either loses its folder. Always one of the four words: Rust reads a
+   * word it does not know as `off`.
+   */
+  managedWishlist: ManagedWishlistMode;
+  /**
+   * Whether this deck's managed wishlist files the plan's **tokens** as well as its cards —
+   * `decks.managed_wishlist_tokens INTEGER NOT NULL DEFAULT 0`, user schema v57
+   * ([issue #617](https://github.com/Msgaihede/mtg-grimoire/issues/617)). On, every token row the
+   * Compare dialog's Tokens view lists is a wish in a **`Tokens` subfolder** inside the deck's
+   * folder, at its whole quantity, **whichever of the three views {@link managedWishlist}
+   * names**; off, the deck's folder holds card wishes and nothing else.
+   *
+   * **It is a switch beside the mode and not a fifth mode**, which is what it was from v55 to v56:
+   * the card view and the tokens are two answers a reader gives separately, and one word could only
+   * give both at once. **A mode of `off` makes no folder whatever this says**, and the column is
+   * kept rather than cleared, so picking a view again brings the tokens back as they were. v57
+   * set it on for every `all` deck (All used to carry tokens) and every `tokens` one (which
+   * became `missing`); a new deck starts with it off.
+   */
+  managedWishlistTokens: boolean;
+  /**
+   * How this deck keeps its tokens — `decks.token_mode TEXT NOT NULL DEFAULT 'managed'`, user
+   * schema v52, closed by a `CHECK` on the three words of {@link TokenMode}. It replaced v47's
+   * `token_stack` boolean in the same rung.
+   *
+   * **`hidden` takes the Tokens & Emblems pile out of all four views** (Stacks, Grid, Text and
+   * Table); `managed` and `collection` draw it. The band is drawn in every mode, so a reader can
+   * always switch back. **Every deck starts on `managed`** — the ones whose stack was off before
+   * the upgrade included, which was the reader's own answer — so after v52 every deck that makes
+   * tokens shows a token pile in its rail.
+   *
+   * The pile is drawn in the view layer from the same answer the band draws and never enters
+   * `deck.cards`, so it counts toward nothing — size, piles, stats or validation. Carried by
+   * `deck_duplicate`, synced with the rest of the row, audited as `tokenMode` and undoable — see
+   * {@link DeckPatch.tokenMode}.
+   */
+  tokenMode: TokenMode;
+  /**
+   * Where the **Tokens & Emblems** pile sits in the rail — `decks.token_rail_index INTEGER NOT
+   * NULL DEFAULT -1`, user schema v51 — as **the number of rail piles drawn above it**.
+   *
+   * **`-1` is last**, which is where the pile has always been drawn and where every deck that
+   * predates the column keeps it. So is any value the rail no longer reaches: a count stored when
+   * the rail held four piles means nothing once two of them are switched back on, and the pile
+   * draws last rather than nowhere or at a stale slot. That clamp is the view layer's conclusion
+   * on read and never a write — the stored number is a fact, not a promise about today's rail.
+   *
+   * **A count rather than an anchor pile**, because an anchor would be a category id on a synced
+   * row (needing the sync's `sync_uid` translation), and switching the anchor pile on would move
+   * the tokens somewhere the reader cannot account for. Carried by `deck_duplicate`, synced with
+   * the rest of the row, audited as `tokenRail` and undoable — see
+   * {@link DeckPatch.tokenRailIndex}.
+   */
+  tokenRailIndex: number;
+  /**
+   * Which of this deck's categories an add that names no pile lands in — `decks.default_category_id`,
+   * schema v16, and **`AUTO_CATEGORY` (`0`) for "let the card's own text decide"**.
+   *
+   * Read on the row for {@link theoryEnabled}'s reason — a setting the app can write and never
+   * see is a setting nothing can draw — and it is the deck editor's "Add to" answer: the docked
+   * search panel's Add button and the quick-add field both file by it. It is chosen in **deck
+   * settings** and nowhere else; it was a `useState` in `DeckEditor` until then, which is why a
+   * reader who set it lost it the moment they closed the deck.
+   *
+   * Zero can never collide with a real pile — `deck_categories.id` is an `INTEGER PRIMARY KEY`,
+   * so rowids start at 1 — and Rust spells the same sentinel `deck::AUTO_CATEGORY`.
+   *
+   * **It names a _live_ pile** — Deck settings offers the live list's — and since user schema
+   * v53 (issue #561) the plan has piles of its own, so on the Theory tab the editor carries it
+   * across **by name** to the plan's pile of that name (`defaultCategory.ts`), else Auto.
+   *
+   * **An id the list's `categories` does not carry, and no name carries across, reads as Auto**,
+   * and no writer has to arrange that: deleting a pile puts every deck filing by it back to zero
+   * in the same transaction, and a duplicate is remapped onto its own copy of the pile.
+   */
+  defaultCategoryId: number;
+  /**
+   * Which bracket the reader has told this deck it is — `decks.bracket INTEGER NOT NULL
+   * DEFAULT 0`, schema v26, and {@link AUTO_BRACKET} (`0`) on every deck that has never been
+   * asked, which is the state every deck is born in.
+   *
+   * **A Commander bracket is a self-declaration**, so this column is the reader's own answer and
+   * not a measurement. The estimate is a separate thing that lives entirely on this side —
+   * `features/decks/validation/bracket.ts` reads the deck's cards and is stored in no column —
+   * and what the two are for *together* is the mismatch: an estimate is a **floor**, since every
+   * bracket restriction is "not allowed below bracket N", so a set bracket **under** that floor
+   * is the one thing worth saying out loud on a deck header.
+   *
+   * Read on the row as well as written through {@link DeckPatch}, for {@link theoryEnabled}'s and
+   * {@link defaultCategoryId}'s reason — a setting the app can write and never see is a setting
+   * nothing can draw. The bracket control on the deck header **is** this number, and without it a
+   * reader who set one would find the header still showing the estimate.
+   *
+   * It is not one of the three `last*` fields above, and the split is {@link separateXGroup}'s:
+   * those are how the reader was *looking* at this deck a moment ago, written by
+   * {@link ipc.deckSetViewState}, which moves no `updatedAt`; this is an answer **about the
+   * deck** and rides the ordinary {@link ipc.deckUpdate} with the rename and the format. That is
+   * also why {@link ipc.deckDuplicate} carries it across — a copy of a bracket-3 deck is a
+   * bracket-3 deck, where a copy of a deck someone last read on the Theory tab is not a deck
+   * anybody has read at all.
+   */
+  bracket: number;
+}
+
+/**
+ * What one deck's cards are worth, at the marketplace the caller named.
+ *
+ * **Every deck at once, and one argument** — {@link ipc.deckPipCosts}' shape and its reason: the
+ * caller is drawing a gallery, and a per-deck read would be a round trip per tile for one figure.
+ * `deck_get` prices a deck properly and rolls up every category, and none of that is this.
+ *
+ * **Every deck gets a row**, archived and empty ones included — the one difference from
+ * {@link DeckPipCosts}, which is absent for a deck with nothing to say. A `LEFT JOIN` rather than
+ * a `GROUP BY` over the cards, so the caller can index by id with no missing-key branch and decide
+ * for itself what an archived deck is worth drawing.
+ */
+export interface DeckValue {
+  deckId: number;
+  /**
+   * Summed over the copies the marketplace has a price for — **`null` when that is none of them**,
+   * which is {@link BreakdownRow.value}'s rule and not a zero: a deck of unpriced cards is an em
+   * dash, and a deck of tokens really is worth nothing.
+   *
+   * The pile is {@link DeckRow.cardCount}'s exactly, so the value and the count on the tile beside
+   * it are two readings of one list: the **live** variant, in **active** categories of kind
+   * `main`, `commander` or `maybe`. A sideboard, a companion, a theory row and every pile the
+   * reader switched off are outside it.
+   */
+  value: number | null;
+  /** Copies in that pile with no price for their finish — {@link CollectionSummary.unpriced}'s
+   *  rule: the figure above is worth less than it looks wherever this is not zero, and the two
+   *  travel together. */
+  unpriced: number;
+}
+
+/**
+ * One distinct printed cost in one deck, and how many copies are paying it.
+ *
+ * **A cost *string*, not a counted pip, and that is the Rust/TypeScript boundary rather than a
+ * shortcut.** What a `{W/U}` is worth to a colour bar is a display decision — a hybrid is one
+ * pip of each half here because the bar answers *what does this deck want*, and a build that
+ * decided otherwise would be changing a picture rather than a fact — so the counting lives in
+ * `@/lib/mana`'s `countPips`, over the one `{…}` tokeniser this app already has. Rust supplies
+ * the facts; TypeScript draws the conclusions, and a cost string is the fact.
+ *
+ * It is also the cheaper wire. The costs in a deck repeat heavily (every basic is the same
+ * empty cost, every Sol Ring the same `{1}`), so folding by the string before it crosses turns a
+ * row per card into a row per *distinct* cost: 90 rows for the whole of the dev database's four
+ * decks, measured 2026-09-07.
+ */
+export interface PipCost {
+  /**
+   * The printed cost as `cards.mana_cost` holds it — `"{1}{R}"`, `"{2/W}"`, and for a split or
+   * double-faced card the whole one-string form `"{1}{R} // {1}{U}"`, which `countPips` reads
+   * end to end.
+   *
+   * **Never null and never empty**: a cost with no symbols in it is a **land**, it can
+   * contribute no pip, and there is no reason to ship one row per basic. An **orphaned** deck
+   * row is absent for a second reason — the read joins `cards` inwards, so a printing that has
+   * left the corpus has no cost to report and contributes nothing rather than a blank.
+   */
+  cost: string;
+  /** How many copies of cards printing this cost the deck's pile holds, summed — the weight the
+   *  bar gives it. `deck_cards.quantity`, not a row count, so four Lightning Bolts are four red
+   *  pips rather than one. */
+  copies: number;
+}
+
+/**
+ * Every deck's colour bar, in one read — {@link ipc.deckPipCosts}' per-deck entry.
+ *
+ * The pile is `DeckRow.cardCount`'s exactly: the **live** variant, in **active** categories of
+ * kind `main`, `commander` or `maybe`. So the bar and the card count on the tile beside it are
+ * two readings of one list, and a deck the reader has left on **Theory** shows its plan in the
+ * editor and its live list here — the tile is a fact about the deck, the editor a fact about
+ * what is on screen.
+ *
+ * **A deck with nothing to say is absent from the answer rather than present and empty**, which
+ * is what a `GROUP BY` gives and what the caller must be written for: an all-lands pile and a
+ * deck that has never been filled read alike, and both draw no bar at all rather than an empty
+ * rule.
+ */
+export interface DeckPipCosts {
+  deckId: number;
+  /** Folded by cost string with the copies summed, so a cost appears once. Order is the
+   *  backend's and nothing downstream may depend on it — the bar sums the whole list before it
+   *  draws anything. */
+  costs: PipCost[];
+}
+
+/**
+ * One card of a deck, as the bracket estimator needs it and no wider.
+ *
+ * `estimateBracket` (`features/decks/validation/bracket.ts`) reads exactly five fields off a
+ * card and takes the combos as a second argument, so this shape is the *whole* of its input —
+ * which is what makes a gallery-wide bracket affordable at all. The alternative is `deck_get`
+ * per deck, the heaviest read in the feature, for a number that fits in a caption.
+ */
+export interface BracketCardRow {
+  /**
+   * What the estimator dedupes on and what it *names* — a game changer, a mass-land-denial card
+   * or an extra-turn card is disclosed to the reader by this string, because a reader who
+   * disagrees with the estimate has to be able to see which card caused it.
+   *
+   * **`deck_cards.name`, the row's own denormalized column, and not `cards.name`** — the same
+   * one {@link DeckCard.name} carries. Two reasons, and the second is why it matters here: it is
+   * the only name an *orphaned* row has at all, and the editor's own panel dedupes on that same
+   * column, so a gallery reading the live `cards` row would fold a re-worded printing
+   * differently from the editor looking at the same deck.
+   */
+  name: string;
+  /**
+   * `cards.game_changer` — the Commander Format Panel's own list, delivered by a sync and
+   * hardcoded nowhere on this side.
+   *
+   * **A plain `boolean` where {@link DeckCard.gameChanger} is nullable**, because the read
+   * coalesces: a `deck_cards` row whose printing has left the corpus knows nothing about itself,
+   * and "nothing known" and "not a game changer" are the same answer to the only question asked
+   * of this field. The estimator tests `=== true` either way.
+   */
+  gameChanger: boolean;
+  /** The front face's rules text, which the mass-land-denial and extra-turn greps read. `null`
+   *  for an orphaned row, exactly as {@link DeckCard.oracleText} is. */
+  oracleText: string | null;
+  /** `cards.faces`, the raw JSON array — the *back* faces' rules text, which the same two greps
+   *  read after parsing it. A card whose extra turn is printed on face two is still an
+   *  extra-turn card. `null` for a single-faced card and for an orphan alike. */
+  faces: string | null;
+  /**
+   * Whether the pile this row sits in is switched on — and it is **always `true`** on these
+   * rows, because the read filters `cat.is_active = 1` before they cross.
+   *
+   * Carried all the same, because {@link BracketCardRow} is what `estimateBracket`'s
+   * `BracketCardFacts` asks for and that type's first act is to filter on this field. A row
+   * that omitted it would be a *different* type, needing a second shape and an adapter between
+   * them, in exchange for one boolean per card.
+   */
+  categoryActive: boolean;
+}
+
+/**
+ * One deck's whole bracket input — {@link ipc.deckBracketReads}' per-deck entry.
+ *
+ * The pile is **wider than {@link DeckPipCosts}'** and deliberately so: `variant = 'live'` and
+ * `cat.is_active = 1`, in **every** category kind. That is what `DeckBracket` hands the
+ * estimator today, filtered the same way, and the same ids it hands `combos_for_cards` — a
+ * sideboard card is still a card the bracket rules see. (Commander has no sideboard, so a reader
+ * who has filed cards there has filed them somewhere the estimate still has to look.)
+ *
+ * **One entry per requested id, in request order**, which is the half {@link DeckPipCosts} does
+ * *not* share: that read is a `GROUP BY` and omits a deck with nothing to say, this one was
+ * asked about particular decks and answers about each of them. An id with no deck behind it
+ * answers an empty read rather than being dropped — a caller zipping the answer against the ids
+ * it sent must not have the two come apart.
+ */
+export interface DeckBracketRead {
+  deckId: number;
+  /** `DISTINCT` over the pile, so a card in two piles of one deck is one row — which changes
+   *  nothing, because the estimator dedupes by name anyway, and costs a deck's worth of
+   *  duplicate oracle text on the wire. */
+  cards: BracketCardRow[];
+  /** Every combo the deck fully contains, already matched against the same cards — the fourth
+   *  signal, and the one no amount of reading a card's own text could find. Empty on a database
+   *  that has never fetched Commander Spellbook's file, which is a supported state: the estimate
+   *  reads three signals instead of four. See {@link DeckCombo} and {@link ipc.combosForCards}. */
+  combos: DeckCombo[];
+}
+
+/**
+ * How a deck is being read, as the editor asks for it to be remembered: the tab, the grouping
+ * and the sort.
+ *
+ * **Every field is optional and absent means "leave it"** ({@link DeckPatch}'s rule, one command
+ * over). The editor writes the single control that moved, so pressing Sort can never write back
+ * a stale grouping — and the three controls do not have to be read together at the call site.
+ *
+ * `groupBy` and `sortBy` are `string` rather than the unions that produce them, for the reason
+ * {@link DeckRow.lastGroupBy} gives: the vocabularies belong to `features/decks`, and the round
+ * trip has to survive a build that no longer offers one of their words.
+ */
+export interface DeckViewState {
+  variant?: DeckVariant;
+  groupBy?: string;
+  sortBy?: string;
+}
+
+/**
+ * One card in one category of one deck: what it is, what the validation engine needs to judge
+ * it, and how much of it the user actually has.
+ *
+ * Three groups of fields, and the split is the design:
+ *
+ * * **The row's own identity** (`name`, `setCode`, `collectorNumber`, `lang`) — copied from
+ *   `cards` at write time and never null since. A deck whose printing left the card database
+ *   still says what it is holding.
+ * * **The card facts**, every one nullable: `deck_cards LEFT JOIN cards`, so an orphaned row
+ *   is listed with nulls rather than dropped — {@link CollectionRow}'s discipline, for its
+ *   reason.
+ * * **The availability numbers**, computed at read time and stored on no row.
+ */
+export interface DeckCard {
+  /** `deck_cards.id`. Answered by the writes, but **never** what addresses one: every card
+   *  command takes `(deckId, cardId, categoryId, variant, finish)`, the grain the unique index
+   *  is on. */
+  id: number;
+  cardId: string;
+  categoryId: number;
+  /** The category's own name, denormalized into the read so a row can be drawn without a
+   *  second lookup. */
+  categoryName: string;
+  /** **What the rules read.** The name is the user's and can be anything; this is the fixed
+   *  word the engine sizes a deck, counts copies and judges a commander by. */
+  categoryKind: CategoryKind;
+  /** {@link DeckCategory.isActive}, copied onto the row — `false` means this card counts
+   *  toward nothing at all. */
+  categoryActive: boolean;
+  /** Which of the deck's two lists this row is in. Every row of one read carries the same
+   *  value; it is here so a caller holding a row can write it back. */
+  variant: DeckVariant;
+  /** The one label this row carries, resolved so a row can be drawn without a second lookup.
+   *  All three are `null` together — deleting a label unlabels its cards rather than deleting
+   *  them. */
+  labelId: number | null;
+  labelName: string | null;
+  labelColor: LabelColor | null;
+  quantity: number;
+  /** Denormalized at write time, and the one name an orphaned row still has. */
+  name: string;
+  setCode: string;
+  /**
+   * The set's printed name, for a surface that shows the three-letter code and has room to say
+   * what it stands for on hover — `PF26` is not a word anybody knows.
+   *
+   * **From `cards`, so `null` for an orphan**, unlike `setCode` beside it: the code, the
+   * collector number and the name are denormalized onto `deck_cards` precisely so a printing
+   * that has left the corpus is still listed and counted, and a set name is not part of that
+   * promise. Draw the code alone when this is `null` rather than inventing one.
+   */
+  setName: string | null;
+  collectorNumber: string;
+  lang: string;
+  /**
+   * Which object this row plays — {@link DeckFinish}, so `null` is the regular copy.
+   *
+   * **Part of the row's address, not just its content.** A foil copy and a regular copy of one
+   * printing in one pile are two rows since schema v18, so every card write carries it and a
+   * write aimed at one must never find the other.
+   *
+   * What a surface draws is `card.finish ?? soleFinish(card.finishes)` — the reader's own
+   * statement first, the printing's second. `soleFinish` says what the *object* is (a foil-only
+   * printing) and deliberately says nothing about a printing sold in both; this says what the
+   * deck plays, and it is the reader's.
+   */
+  finish: DeckFinish;
+  /** A sentence when a sync could not keep this row's printing, `null` otherwise — the
+   *  reconciler walks `deck_cards` too. */
+  needsReview: string | null;
+  oracleId: string | null;
+  manaCost: string | null;
+  cmc: number | null;
+  typeLine: string | null;
+  oracleText: string | null;
+  /**
+   * The card's colours as **concatenated letters** — `"WU"`, not `["W","U"]`. This is not
+   * JSON and `JSON.parse` will throw on it: `card_row` stores the letters, so the letters
+   * are what comes back. Read it a character at a time.
+   */
+  colors: string | null;
+  /**
+   * Scryfall's precomputed `color_identity`, in the same letter form — `"WU"`, again not
+   * JSON. Precomputed is the point: it already folds in DFC backs, adventures, colour
+   * indicators and basic land types, so one subset check answers CR 903.5c and 903.5d
+   * together.
+   */
+  colorIdentity: string | null;
+  /**
+   * Which colours of mana this card can **make** — Scryfall's `produced_mana`, in the same
+   * concatenated-letter form as the two fields above and equally not JSON. A Command Tower is
+   * `"WUBRG"`, an Island `"U"`, a Sol Ring `"C"`.
+   *
+   * **This is the only field in the deck read that answers what a card _makes_ rather than what
+   * it costs**, and the two are what the stats band's Mana pips tile sets against each other: a
+   * deck whose costs are 47% red and whose sources are 34% red is a deck that stumbles, and no
+   * amount of reading `manaCost` or `colors` can see it. `colorIdentity` is not a substitute —
+   * a Bojuka Bog's identity is black and it taps for black, but an Ancient Tomb's identity is
+   * colourless and so is its mana, while a Dryad Arbor's identity is green because of a *land
+   * type* rather than because of anything it produces.
+   *
+   * **Three values, and `""` and `null` are emphatically not the same answer.**
+   * * `"WU"` — this card makes white or blue.
+   * * `""` — this card makes **no** mana. Scryfall omits the key entirely for a Lightning Bolt;
+   *   the ingest writes an empty string so that this case is a fact rather than a gap.
+   * * `null` — **this row predates the column**, which is every row of a database that has not
+   *   re-ingested since the corpus rung landed. The corpus is dropped and rebuilt by every sync
+   *   and Scryfall regenerates the bulk file daily, so the state is short-lived — but it is a
+   *   state, and a reader in it must be told the sources half is unanswered rather than shown a
+   *   chart of zeroes. `deck::fill_unknown_produced_mana` narrows the window further by
+   *   gunzipping `cards.raw` for exactly the null rows at read time; what survives that is a row
+   *   whose printing has left the corpus, and an orphan has no answer to give.
+   */
+  producedMana: string | null;
+  /**
+   * JSON: **this printing's** legality blob, not the oracle card's. That is what makes Old
+   * School come out right with no special case — `oldschool` is the one printing-sensitive
+   * key (Serra Angel is legal from `lea` and not from `8ed`), and a deck card names a
+   * printing.
+   */
+  legalities: string | null;
+  /**
+   * The printed power, **as text**, because that is what it is: `"*"`, `"1+*"` and a printed
+   * `"0"` all ship in real data.
+   *
+   * `power` and `toughness` both `null` means *unknown*, never "no P/T box" — and CR 903.3
+   * turns on exactly that difference. The backend repairs what it can before answering (it
+   * gunzips `raw` for the rows that are missing a P/T *and* could have one), so a null pair
+   * here is a card nothing could recover it for.
+   */
+  power: string | null;
+  toughness: string | null;
+  layout: string | null;
+  rarity: string | null;
+  /** JSON: the `card_faces` array verbatim. Per-face mana cost, MV and P/T live only here —
+   *  Tiny Leaders' per-face MV cap and DFC commander fronts both read them. */
+  faces: string | null;
+  gameChanger: boolean | null;
+  /**
+   * JSON: the finishes this printing exists in (`["nonfoil","foil"]`), or `null` for an
+   * orphan.
+   *
+   * A deck names a *printing* and never a finish, so this is **not** "which finish is in the
+   * deck" — the model has no such concept, and `deck_cards` stores none. It answers the
+   * narrower question a row's art can honestly carry: whether the printing itself leaves no
+   * choice. Read it with `soleFinish` from `@/lib/finish`.
+   */
+  finishes: string | null;
+  /**
+   * JSON: Scryfall's `promo_types` — the column the **kind** of foil lives in, or `null`.
+   *
+   * `finishes` has three words for how shiny a copy is and no way to say *which* shiny; this
+   * is what tells a Surge Foil from a Halo Foil from an ordinary one (issue #160). Read it
+   * with `cardTreatments` / `finishTreatments` from `@/lib/treatment`, which owns the naming
+   * — Rust hands the column over unread.
+   *
+   * `null` on four fifths of the corpus and open-ended by construction: 113 distinct members
+   * are live and Scryfall adds more without asking, so an unrecognised one is dropped rather
+   * than shown raw.
+   */
+  promoTypes: string | null;
+  /** Printed at uncommon on **any** printing of this oracle card, which is what makes a
+   *  Pauper Commander commander eligible. Computed, not read: the `paupercommander` legality
+   *  key answers a different question (the 99). `false` for an orphan — nothing is known
+   *  about a card that is not there. */
+  everUncommon: boolean;
+  /**
+   * What one copy of this printing costs at the marketplace the read named.
+   *
+   * **The row's own finish where it names one** (schema v18), at that finish and no other —
+   * the reader has said which object is in the sleeve, and quoting the plain copy's rate against
+   * a foil row would be a price nobody published.
+   *
+   * **The printing's own figure where it does not**, which is every row that predates v18 and
+   * every row a reader has not spoken about: the first finish that marketplace quotes it in,
+   * `nonfoil → foil → etched`. Both arms are `sorting::deck_card_price_expr`.
+   *
+   * **It was the flat nonfoil rate until 2026-08-15, and that was a bug with a reader-visible
+   * shape.** 13 515 foil-only and 892 etched-only printings have no nonfoil price at *any*
+   * marketplace, so an Invocation, a Secret Lair or a set promo drew an em dash on its card
+   * foot, was skipped by its pile's heading total and by the deck's, and did all of that beside
+   * a search panel quoting the same printing.
+   *
+   * Still never `cards.price_usd`: that is this chain precomputed for the search's `ORDER BY`,
+   * the numbers agree, and the column is the one nothing here may sum. A `null` is still the
+   * answer and never a reason to reach for another marketplace's figure — an etched-only
+   * printing has no euro price at all, because Scryfall has no `eur_etched` key.
+   */
+  unitPrice: number | null;
+  /**
+   * Copies of this exact printing and finish **this row can draw on**, attributed to it in the
+   * read's own order.
+   *
+   * **Which copies those are is the _variant's_ question, and that is what changed on
+   * 2026-09-09** ([issue #435](https://github.com/Msgaihede/mtg-grimoire/issues/435)). Two
+   * pools, one field:
+   *
+   * * a **`live`** row draws on the deck's **own group and nothing else** — the
+   *   `collection_entries` filed in the `collection_folders` row with `kind = 'deck'` and this
+   *   deck's id. That is *custody*: what is in this box. Unchanged, and it is what every write
+   *   in the editor still reads.
+   * * a **`theory`** row draws on `collection_source::Availability::ForDeck(deckId)` — the very
+   *   pool the deck builder's card search already counts by ({@link
+   *   SearchRequest.availableForDeck}, issue #349). Every copy the reader owns that *this deck
+   *   could use*: the collection root, **or** this deck's own group, **or** anywhere else that
+   *   is neither *another* deck's group nor an **effectively locked** folder. `Recently
+   *   removed` counts.
+   *
+   * **The two pools differ because the two lists are asked different questions.** A live list
+   * is cardboard, so *what is in this box* is the honest question and custody is the honest
+   * answer. A plan holds no cardboard and never will, so *what does this plan hold* has exactly
+   * one answer — `0` — which is what this field said on every card of every plan until
+   * 2026-09-09, and why a hundred-card plan with sixty-two of its cards already sleeved into
+   * the deck's box read **100 of 100 missing** rather than *38 of 100*. The question worth
+   * answering about a plan is *which of the copies I own could this plan use*, and the app
+   * already knew how to compute that pool for the wall docked beside the deck.
+   *
+   * **Counting changed; writing did not.** A plan still holds no cardboard, so
+   * `deck_pull_plan`, `deck_missing_plan` and `deck_missing_to_wishlist` all still read `live`
+   * only, `collection_to_deck` still refuses a theory row, and the editor still draws no pull,
+   * no record and no wishlist press on that tab. A truthful count is not a claim that there is
+   * anything to move.
+   *
+   * **Both pools are scarce and both are spent down the read's order** — `min(remaining,
+   * quantity)` per `(card_id, finish)` in `attribute_owned` — so two rows of one printing
+   * cannot each claim the same copy, and the number a row shows must not depend on how a list
+   * was displayed.
+   *
+   * **A sum over rows, and no longer a claim.** Schema v25 deleted `deck_allocations` and the
+   * allocator with it: a card is in a deck because its `collection_entries` row sits in that
+   * deck's `kind = 'deck'` folder. **Since 2026-09-07 the match is the printing, not the oracle
+   * card**: `sum(quantity)` per `(card_id, finish)`. There is nothing to clamp any more and
+   * nothing that can be out of date, which is what the old `min(claim, row)` existed for.
+   *
+   * **An orphaned printing counts now, where the oracle-grained version read it as 0.** A
+   * `collection_entries` row whose `card_id` is not in `cards` has no oracle id to be grouped
+   * by, so the old map dropped it; at the printing grain there is nothing to look up — the
+   * pool's row and this deck's row name the same `card_id` — so the copy counts.
+   *
+   * The only one of this file's `ownedQuantity` fields that is about **this deck** rather
+   * than about the reader's shelves as a whole: {@link CardSummary.ownedQuantity} is every
+   * copy of one printing, {@link ImportMatch.ownedQuantity} is that same count taken per
+   * decklist line (a wish carried a fourth until 2026-09-08 and no longer does), and this
+   * one is what is in *this box* (live) or what *this box could be filled from* (theory) —
+   * printing-grained (`(card_id, finish)`, not the oracle card — no more "a Bolt is a Bolt"
+   * here), finish-**aware**, still condition-blind.
+   *
+   * Three things about the edges, and the middle one reverses what stood here:
+   *
+   * * a row whose `categoryActive` is `false` always reads `0`, **on both lists** — a
+   *   switched-off pile is handed nothing out of either pool, so no "owned" badge belongs on
+   *   that pile at all. That guard is untouched by any of the above;
+   * * **a `theory` row is no longer zeroed.** This list used to say *a `theory` row always
+   *   reads `0` too: a plan holds no cards, and `attribute_owned` zeroes every theory row
+   *   explicitly rather than by luck*. That was the rule and it is history: the explicit zero
+   *   is gone and the second pool stands in its place. The half of it that survives is why the
+   *   conclusion is drawn in the read at all — a group is not scoped to a variant, so nothing
+   *   about a table's shape was ever going to answer this;
+   * * **live rows cannot double-count across decks; theory rows deliberately can.** A copy sits
+   *   in exactly one folder, so it counts for exactly one deck's live list — which reverses the
+   *   allocator era, where two decks sharing a card each carried their own claim and the claims
+   *   could overlap. Two *plans* may each count the same loose copy, and that is right rather
+   *   than a leak: neither is holding it, and each is honestly answering *this deck could use
+   *   it*. What is left is the honest cost of custody on the live side: it is **as accurate as
+   *   the reader's filing** — an unfiled collection reads as a deck full of red until they drag.
+   */
+  ownedQuantity: number;
+}
+
+/**
+ * One deck and everything in it.
+ *
+ * One command rather than four, because the editor and the validation engine ask the same
+ * question — *what is in this deck* — and a screen that draws a curve from one query, a
+ * legality panel from another, an owned badge from a third and its column headings from a
+ * fourth is a screen whose answers can disagree.
+ */
+export interface DeckDetail {
+  deck: DeckRow;
+  /** Category `sortOrder`, then the name the row carries, then row id. The read's own order,
+   *  not the caller's: `ownedQuantity` is attributed along it, so the number a row shows must
+   *  not depend on how a list was displayed. */
+  cards: DeckCard[];
+  /**
+   * **Every** category of the deck, in `sortOrder`, never filtered by what happens to be in
+   * it: an empty one still draws a column — that is where the next card goes — and an
+   * inactive one always draws, which is the affordance for switching it back on.
+   *
+   * The counts are scoped to the variant that was asked for; the list itself is not, so
+   * switching between Live and Theory changes what is in the columns and never which columns
+   * there are.
+   */
+  categories: DeckCategory[];
+  /** Every label of the deck, alphabetically — the palette a row's mark is picked from, which
+   *  exists whether or not any row is wearing it. */
+  labels: DeckLabel[];
+}
+
+/**
+ * A token's own state — `deck_tokens.state`, **shared by both lists** since user schema v52
+ * split the printings out into `deck_token_printings`: a dismissal is "not in this deck" and a
+ * hand-added token is the deck's, whichever list the reader is looking at.
+ *
+ * The vocabulary is closed by a `CHECK` on the column rather than by convention, so this union
+ * is the whole of it: `auto` is a token the deck derives, and `manual` is drawn whether anything
+ * derives it or not — a token added by hand, which a cut can never take away because no card
+ * made it.
+ *
+ * **`hidden` is still a word the wire can carry, and nothing on this side reads it** (managed
+ * tokens spec §3.3). Dismiss is gone and a launch pass (`deck_tokens::retire_hidden`) turns every
+ * dismissed token back into an ordinary one at 0 — but a peer on an older build can still write
+ * the word, and one it syncs in after that pass has run arrives here before the next launch
+ * retires it. Until then it is drawn like any other token: `deckTokens.ts` filters on nothing,
+ * because a token that vanished with no control left to bring it back is worse than a stale word.
+ */
+export type DeckTokenState = "auto" | "hidden" | "manual";
+
+/**
+ * A deck card that makes a token — the answer to *why is this here*.
+ *
+ * A printing (`cardId`) rather than an oracle id, because that is what the deck holds and what
+ * a surface has to draw or scroll to.
+ */
+export interface TokenSource {
+  cardId: string;
+  name: string;
+}
+
+/**
+ * One entry of a token list, addressed by the two facts that are its grain beside the deck,
+ * the list and the token — `(card_id, finish)`. What {@link ipc.deckTokenSetQuantity},
+ * {@link ipc.deckTokenSwap} and {@link ipc.deckTokenRemove} name, with `null` standing for the
+ * token's **implicit** entry in the first two (the third deletes a stored entry, and takes none).
+ */
+export interface TokenEntryKey {
+  cardId: string;
+  finish: Finish;
+}
+
+/**
+ * An entry as it travels — **the grain's two fields and nothing else**, `null` kept as `null`.
+ *
+ * Rebuilt rather than forwarded because the natural thing to hand a token write is the view's
+ * own `TokenEntryRef`, which also carries `oracleId` and `implicit`: serde would ignore the
+ * extras, but a payload that says more than the command reads is a payload a later reader
+ * trusts for the wrong fields.
+ */
+function tokenEntryArg(entry: TokenEntryKey | null): TokenEntryKey | null {
+  return entry === null ? null : { cardId: entry.cardId, finish: entry.finish };
+}
+
+/**
+ * One **entry** of a token or emblem a deck needs — one printing, in one finish, of one token,
+ * in the list the read named (user schema v52, token stacks spec §4.2).
+ *
+ * **The token list is derived on every deck open and stored nowhere** — Rust inflates the `raw`
+ * blob of each distinct card in the deck's *active* categories and reads `all_parts`. What the
+ * reader stores is two tables: `deck_tokens` holds the token-level {@link state}, shared by both
+ * lists, and `deck_token_printings` holds each list's entries.
+ *
+ * **A token with entries in the list answers one row per entry; a token with none answers one
+ * _implicit_ row** — {@link implicit} `true`, {@link cardId} the resolver's default printing in
+ * its default finish, {@link quantity} the legacy `deck_tokens.quantity ?? 0` (0 since managed
+ * tokens spec §3.1: a token is something the reader starts to use). So every row is already the
+ * effective answer, and Rust resolves it: a view that fell back from one field to another here
+ * would be a second, stale copy of spec §4.2's rule 1. **A token nothing derives is the
+ * exception** (spec §3.4): it has no default printing to stand for, so it answers rows only in a
+ * list that holds an entry of it, and none — not even an implicit one — in a list that does not.
+ *
+ * **The rows of one token carry the same token facts** (name, type line, subtitle facts,
+ * sources, state) and differ in the entry's own: the printing, the finish, the quantity, the
+ * picture, the chin and the price. `deckTokenViews` sorts them together.
+ *
+ * `defaultCardId` is never null for a derived row and is **deterministic**: the printing the
+ * most deck cards point at, ties broken by the same `released_at DESC, set_code ASC,
+ * collector_number ASC, id ASC` tail `card_printings` orders by. Without that, one deck draws
+ * different art on two opens — and an implicit entry is exactly that printing.
+ */
+export interface DeckTokenRow {
+  /** The token — **the oracle card and not a printing**, which is what `deck_tokens` is grained
+   *  on and what groups a token's entries. An entry's printing is {@link cardId}. */
+  oracleId: string;
+  name: string;
+  typeLine: string | null;
+  /** The resolved `cards` row's layout — `token`, `emblem` or `double_faced_token`. **This is
+   *  what says an emblem is an emblem**, not the type line: the layout is a column and the type
+   *  line is prose. */
+  layout: string;
+  /**
+   * The four disambiguation fields. **A token's name does not identify it**: 104 token/emblem
+   * names are shared by more than one `oracle_id` (measured 2026-09-07, debug corpus) —
+   * `Elemental` by 31, `Spirit` by 22, `Soldier` by 13 — and `Wurmcoil Engine` alone makes two
+   * tokens both called `Wurm 3/3`, separated only by Deathtouch against Lifelink. Without these
+   * the panel draws indistinguishable tiles carrying identical accessible names, which is the
+   * one bug a wall of tokens can have that neither suite can see.
+   *
+   * Power and toughness told 8 of 8 apart in both sampled names once colours and the oracle
+   * text were beside them, so all four travel rather than a chosen one.
+   *
+   * **`power` and `toughness` are strings and not numbers**: Scryfall writes `*`, `1+*` and `∞`,
+   * and a mirror that typed them numeric would read `NaN` for every such token.
+   */
+  power: string | null;
+  toughness: string | null;
+  /** The token's colours as **concatenated letters** — `"WU"`, not `["W","U"]` — which is
+   *  {@link DeckCard.colors}' form and for its reason: `card_row` stores the letters, so the
+   *  letters are what comes back, and `JSON.parse` throws on them. `""` is a colourless token,
+   *  which most of them are. */
+  colors: string | null;
+  /** The rules text, which is what separates two same-named, same-statted tokens — the pair
+   *  `Wurmcoil Engine` makes differ in this field and in nothing else a tile could draw. */
+  oracleText: string | null;
+  /** The printing the resolver names. Never null for a derived row. */
+  defaultCardId: string;
+  /** The deck cards that make it. **Empty for a `manual` row nothing derives** — which is the
+   *  state a token is in after the card that produced it was cut. */
+  sources: TokenSource[];
+  /** `false` for a `manual` row this deck's cards produce nothing for. */
+  derived: boolean;
+  /**
+   * The token's **effective** state, shared by both lists — `deck_tokens.state`, or `auto` where
+   * the reader has stored none. Never `null` since v52: Rust resolves the absence, because an
+   * entry row with no state would be a second spelling of the untouched token.
+   */
+  state: DeckTokenState;
+  /**
+   * **This entry's printing.** For an {@link implicit} entry it is {@link defaultCardId} — the
+   * printing the resolver names — and for a stored one it is the printing the reader put in the
+   * list. Every fact below the picture (the chin, the price) is this printing's.
+   */
+  cardId: string;
+  /**
+   * **This entry's finish** — `deck_token_printings.finish`, the collection's own three words and
+   * never `null`: the column is `NOT NULL` on purpose, because SQLite's unique index treats every
+   * `NULL` as distinct and a nullable finish would let one list hold one regular printing twice.
+   * An implicit entry's is its printing's default, `deck_tokens::default_finish`: the **first**
+   * finish the printing is sold in, in `FINISHES` order — `nonfoil` wherever it is sold that way,
+   * `foil` for one sold only in foil and etched — and `nonfoil` where the corpus lists none. It is
+   * what the chin names, what the sheen is drawn for and what {@link unitPrice} is read at.
+   */
+  finish: Finish;
+  /**
+   * How many copies of this entry the list wants — **effective**, resolved by Rust: a stored
+   * entry's own `quantity`, or for an implicit entry the legacy `deck_tokens.quantity ?? 0`.
+   * **`0` is a value** — rule 3 keeps a token's last entry at 0 rather than deleting it, so the
+   * implicit default does not reappear under a reader who zeroed the only printing they had.
+   */
+  quantity: number;
+  /**
+   * `true` when this list holds **no entry** of the token and this row is the one Rust drew for
+   * it — spec §4.2's rule 1. A write aimed at an implicit entry names it as `null`
+   * ({@link ipc.deckTokenSetQuantity}, {@link ipc.deckTokenSwap}), and Rust materialises it in
+   * this list only (rule 2).
+   */
+  implicit: boolean;
+  /**
+   * **This entry's printing's** chin — {@link cardId}, the same printing the pile draws the
+   * picture of — so the token pile can draw the deck card's own foot: set · `#number` · finish ·
+   * price (user schema v51's token pile, `deck_tokens.rs`).
+   *
+   * **All six are `null` together for a printing gone from the corpus**, which a stored entry
+   * can outlive: the row still names its oracle card, and a chin with nothing to say is the
+   * honest drawing of that. The finish the entry is held in is {@link finish}, a fact of the
+   * entry rather than of the printing; `finishes` is what the printing is *sold* in.
+   */
+  setCode: string | null;
+  collectorNumber: string | null;
+  setName: string | null;
+  rarity: string | null;
+  /** The printing's finishes as **the JSON text `cards.finishes` stores** —
+   *  `'["nonfoil","foil"]'` — for {@link DeckTokenRow.colors}' reason: it is what the column
+   *  holds, and `parseFinishes` in `@/lib/finish` is the one reader of it on this side. */
+  finishes: string | null;
+  /**
+   * What one copy of this entry costs at the marketplace {@link ipc.deckTokens} was asked for,
+   * **at the entry's own {@link finish}** (user schema v52) — `sorting::price_expr` at that
+   * finish, the set arm of {@link DeckCard.unitPrice}'s rule, with **no fallback across
+   * finishes**: a foil Treasure quoted at the nonfoil rate is a price nobody published. That
+   * reverses v51, when a token row stored no finish and was priced by the unsaid arm's
+   * `nonfoil → foil → etched` chain; an implicit entry of a foil-only printing is `foil` by its
+   * default finish, so the case that chain existed for still reads its foil price.
+   *
+   * `null` is **the em dash** — this marketplace does not quote this printing in this finish —
+   * and never `0`. **Token prices never reach the deck's own totals**: a token is not a
+   * `deck_cards` row, so the only sum this enters is the token pile's own heading.
+   */
+  unitPrice: number | null;
+}
+
+/**
+ * One of a deck's notes — schema v43, and the row that replaced the single `decks.notes`
+ * column.
+ *
+ * **A note belongs to a *deck*, and a card it names is a pointer it holds rather than a place it
+ * lives.** That is the whole shape and it is what the issue asked for: attachments hang off the
+ * note, so {@link ipc.deckNotes} is the complete list by construction and a note cannot become
+ * invisible by acquiring a card. There is no per-card notes table to go looking for, and
+ * {@link ipc.cardNotes} answers the card's question by reading these same rows from the other
+ * end.
+ *
+ * **Attachments are by `oracleId`, never by a printing id** — `deck_tokens`' argument verbatim: a
+ * printing id means nothing on the far device's shelf and an oracle id is Scryfall's. So a note
+ * survives the reader swapping printings, a note written against the Theory list shows on the
+ * Live one, and one note naming Lightning Bolt names it once however many copies the deck holds.
+ *
+ * Not on {@link DeckDetail} and not on {@link DeckRow}: a deck's read carries its cards, its
+ * categories and its labels, and a notebook is neither a card fact nor something a gallery tile
+ * draws.
+ */
+export interface DeckNote {
+  id: number;
+  /** The deck this note belongs to. `deck_notes.deck_id`, `ON DELETE CASCADE` — deleting a deck
+   *  takes its notes and their attachments with it. */
+  deckId: number;
+  /**
+   * The note's own heading, as the reader typed it — **one line, and legally empty**.
+   *
+   * Not to be confused with {@link DeckNote.body} below: this is what the band's row, the card
+   * menu's submenu and the card modal's list can print without rendering anything, and it is
+   * the *stored* string rather than the one drawn. **A blank title is an ordinary state**, and
+   * what a reader sees for one is `noteTitle`'s conclusion in
+   * `features/decks/deckNotes.ts` — the body's first line, or `Untitled note`. That derivation
+   * is computed at render and stored nowhere: a stored one would go stale the moment the body
+   * was edited, with no writer able to notice.
+   */
+  title: string;
+  /**
+   * The note itself — **CommonMark text**, in the narrowed dialect `features/decks/noteMarkdown.ts`
+   * pins. Never HTML and never ProseMirror JSON.
+   *
+   * Not to be confused with {@link DeckNote.title} above: that is a line, this is the prose, and
+   * nothing derives one from the other on this side of the wire. **It arrives as source, never
+   * as markup** — the shipped CSP is `script-src 'self'` with no `dangerouslySetInnerHTML`
+   * anywhere in `packages/ui/`, so a renderer that answered an HTML string could not be used at all.
+   * `parseNoteBody` reads it into blocks for the three read-only surfaces, and the editor is
+   * the only thing in the app that writes it.
+   */
+  body: string;
+  /** Where the note sits in its deck's list. The reader's own arrangement, written by
+   *  {@link ipc.deckNoteReorder} — {@link ipc.deckNotes} answers in this order, so no caller
+   *  sorts. */
+  sortOrder: number;
+  /**
+   * The cards this note names, each with the name to print — so a submenu or a chip needs no
+   * second round trip for a word.
+   *
+   * **Empty is the ordinary case and says nothing is attached**, never that the read failed: a
+   * note about the mana base names no card at all, which is exactly the note this feature exists
+   * for. The marks a deck draws are `notedOracleIds`' `Set` built from these lists in
+   * TypeScript, because the band already holds every note and a second command would be a
+   * second source of truth for a fact already in hand.
+   */
+  cards: DeckNoteCard[];
+  /** Unix seconds. */
+  createdAt: number;
+  /** Unix seconds. Moves on an edit, an attach and a detach alike. */
+  updatedAt: number;
+}
+
+/**
+ * One card a note names: the identity, and the word to print for it.
+ *
+ * `oracleId` is the card **across every printing of it**, which is what a note attaches by —
+ * see {@link DeckNote}. `name` is a convenience the backend joins from `cards`, and **it falls
+ * back to the oracle id itself** where the corpus has no row for one: a note must not disappear
+ * from a deck because a card left the reader's copy of Scryfall's data.
+ *
+ * `cardId` is a **representative printing**, resolved at read time so a note card can draw a
+ * picture of what it names — the deck's own printing where the deck holds one, and any printing
+ * the corpus has otherwise. It is never matched on, written, or synced, and the same row read
+ * twice may honestly name two different printings. `cardId: null` is the orphan, and it draws the
+ * empty frame rather than a broken image.
+ */
+export interface DeckNoteCard {
+  oracleId: string;
+  name: string;
+  cardId: string | null;
+}
+
+/**
+ * A note seen **from a card**, rather than from the deck that owns it — what
+ * {@link ipc.cardNotes} answers.
+ *
+ * **The same rows as {@link DeckNote}, asking the opposite question.** A `DeckNote` answers
+ * *what has this deck written*, and carries the cards it names; a `CardNote` answers *what has
+ * been written about this card, anywhere*, and carries the **deck** it was found in instead —
+ * which is the field that would otherwise be missing, since a card opened from the collection or
+ * from search has no deck in hand at all. Nothing about the note differs between the two shapes;
+ * what differs is which end of the join the caller already holds.
+ *
+ * It carries no `cards`, deliberately: the caller asked about one card and already knows which.
+ * And no `sortOrder` — an order within one deck is meaningless in a list spanning several.
+ */
+export interface CardNote {
+  id: number;
+  /** The deck the note belongs to — the row the card modal's list opens. */
+  deckId: number;
+  /** That deck's name at the time of the read. The one field {@link DeckNote} has no use for,
+   *  and the whole reason this is a second shape: a card can be in five decks and a bare id
+   *  names none of them to a reader. */
+  deckName: string;
+  /** The stored heading, blank included — {@link DeckNote.title}'s rules and `noteTitle`'s
+   *  fallback apply unchanged. */
+  title: string;
+  /** The CommonMark source — {@link DeckNote.body}'s rules apply unchanged, `parseNoteBody`
+   *  included. */
+  body: string;
+}
+
+/**
+ * One of a deck's **to-do lists** — a row of `deck_todo_lists` (user schema v59, issue #688), as
+ * {@link ipc.deckTodoLists} answers them for the editor's To-do band and
+ * {@link ipc.deckTodoListCreate} answers the one it made.
+ *
+ * ⚠️ **A to-do list is still not a note**, and it now has exactly the shape a deck note has — a
+ * title, a body, a card in a grid of cards — which makes the warning sharper rather than weaker.
+ * A {@link DeckNote} attaches cards, is drag-reordered and is saved by a button; a to-do list
+ * attaches nothing, autosaves, and its boxes tick in place on the band. They share `NoteEditor`,
+ * the inline dialect and a card's *look*, and no table.
+ *
+ * **What it replaced.** #672 (user schema v58) kept one checklist per deck in one column,
+ * `decks.todos`, with no id and no title — `deckId` was the whole of its address. v59 converted
+ * every non-empty column into one row titled `To-do` and dropped the column, so a deck has many
+ * lists now and a list is addressed by its own `id`. A single **to-do** is still a line of a
+ * body and not a row anywhere: a tick names one by its source line in the `body` it read, and the
+ * compare-and-set on {@link ipc.deckTodoListUpdate} is what makes that name safe to act on.
+ */
+export interface DeckTodoList {
+  id: number;
+  deckId: number;
+  /** The reader's heading, stored as typed — `""` included, which draws as `Untitled list`
+   *  (`todoMarkdown.ts`' `listTitle`) and is never stored as those words. */
+  title: string;
+  /**
+   * The to-do document — headings, paragraphs and `- [ ]` / `- [x]` task lists, blocks separated
+   * by one blank line, in the dialect `features/decks/todoMarkdown.ts` reads. `""` is a list with
+   * nothing in it yet, which a list created with only a title is.
+   *
+   * It arrives as **source**, for {@link DeckNote.body}'s reason, and it is also the `expected` a
+   * tick hands back to {@link ipc.deckTodoListUpdate} — so it must travel untouched: a caller that
+   * trimmed it would be refused on every press.
+   */
+  body: string;
+  /** Where the list sits among the deck's own, ascending — `max + 1` for a new one, so new lists
+   *  go at the end. Nothing reorders lists yet; the column exists so a later reorder is a command
+   *  rather than a rung. */
+  sortOrder: number;
+  /** Unix seconds. */
+  createdAt: number;
+  /** Unix seconds — the list's own, moved by a write that changed its title or body. */
+  updatedAt: number;
+}
+
+/**
+ * One deck to-do list as the home page's `deckTodos` widget reads it — what
+ * {@link ipc.everyDeckTodoList} answers: **every list in every deck whose body is not empty**,
+ * most recently edited first.
+ *
+ * A second shape rather than {@link DeckTodoList} with a deck attached, `CardNote`'s reason: the
+ * widget draws deck → list → to-dos across every deck at once, so it needs the deck's `name`,
+ * `archived` and `todosOpen` beside each list and has no use for `sortOrder` or `createdAt`. With
+ * them here it needs no second read to head a deck, to leave an archived deck's lists out, or to
+ * decide whether pressing a heading must open the band first.
+ */
+export interface DeckTodoListEntry {
+  /** The list's own id — what a tick from the widget writes through. */
+  id: number;
+  deckId: number;
+  /** The deck's name at the time of the read — the widget's heading for the deck. */
+  deckName: string;
+  /** Whether the deck is archived. **Answered, not filtered**: an archived deck's to-dos are still
+   *  the reader's, and whether the widget draws them is its own `Include archived decks` switch. */
+  archived: boolean;
+  /** {@link DeckRow.todosOpen}, carried here so the widget's heading press writes the disclosure
+   *  only when it is shut — a deck whose band is already open costs no `deckUpdate` at all. */
+  todosOpen: boolean;
+  /** {@link DeckTodoList.title}, stored as typed. */
+  title: string;
+  /** {@link DeckTodoList.body} — **never empty here**, and the `expected` a widget tick sends back,
+   *  so it must travel untouched. */
+  body: string;
+  /** {@link DeckTodoList.sortOrder} — the band's order, so the widget draws a deck's lists in the
+   *  order the reader sees them on the deck rather than in the order they were last edited. */
+  sortOrder: number;
+  /** Unix seconds — the list's own `updated_at`. The widget's `Last edited` order dates a deck by
+   *  its newest list. */
+  updatedAt: number;
+}
+
+/**
+ * What a printing swap answers: where the copies ended up, and whether they had company.
+ *
+ * The reason the swap has a return type of its own rather than the `EntryChange` its
+ * neighbours share: two rows can become one. A category holds a printing at most once per
+ * variant (the grain is `(deck, variant, category, card)`), so swapping onto a printing the
+ * category already has *folds* — and a deck list that silently loses a line reads like a bug
+ * unless something says so.
+ */
+export interface SwapResult {
+  /** The target category already held that printing, so the two rows became one. */
+  folded: boolean;
+  /** What the row the copies now live in holds — the **sum**, when `folded`. */
+  quantity: number;
+}
+
+/**
+ * One line of a parsed decklist, on its way to be turned into a printing.
+ *
+ * **The quantity is deliberately not here.** {@link ipc.importResolve} answers *which
+ * printing a name means* — the one question this side cannot answer, because it is a question
+ * about 116 k rows of card data — and how many copies the line asked for is this side's
+ * arithmetic all the way to {@link ImportItem}. Both hints are optional because most decklist
+ * formats carry neither.
+ *
+ * A blank hint costs nothing: the backend trims and reads `""` or `"   "` as *absent*, which is
+ * what a trailing tab in a pasted export leaves behind and would otherwise turn every line of
+ * that paste into a missed hint.
+ */
+export interface ImportResolveLine {
+  /** As the line wrote it. Case and diacritics are both survivable — the backend folds a name
+   *  that no exact rule matched — and so is a double-faced card written as its front face only,
+   *  which is the commonest way a decklist writes one. */
+  name: string;
+  /** The set code in any case: the backend lower-cases it, because 0 of the corpus's 116 695
+   *  rows carry a set code in any other case while a parser that upper-cases `(MH2)` is the
+   *  ordinary source of one. */
+  setCode: string | null;
+  /** Only ever *narrows* a set — a collector number is not unique across sets — so one arriving
+   *  with no `setCode` beside it is reported as a missed hint without being tried at all. */
+  collectorNumber: string | null;
+  /**
+   * The language the line said its copy is in, as a Scryfall code (`ja`, `de`, `zhs`) — issue
+   * #555. **A preference and never a filter**: a printing in that language outranks every other
+   * where the corpus holds one, and a line still resolves when it holds none (which is most of
+   * the time — Scryfall's default bulk data carries a non-English printing only where there is
+   * no English one). Absent or `null` is today's order. `@/lib/languages`' `languageCode` is
+   * what turns a file's `Japanese` into `ja`.
+   */
+  lang?: string | null;
+}
+
+/**
+ * The printing a decklist line resolved to, and every fact the preview and the validation engine
+ * need about it.
+ *
+ * **The card fields are {@link DeckCard}'s less its money, deliberately**, so an imported card
+ * and a card already in a deck are described by the same *judgeable* facts: a preview that
+ * judged legality on a narrower set of columns than the editor would show a legal deck the
+ * editor then refuses. Four differences, named here so a reader diffing the two does not have to
+ * guess which are drift — `finishes` is absent (it says which finishes a printing is *sold* in,
+ * which is what the editor's foil marking reads; a line's own finish rides on
+ * {@link ImportItem.finish} instead, off the file's `*F*` marker), **`unitPriceUsd`/`unitPriceEur`
+ * are both absent**,
+ * {@link ImportMatch.gameChanger} is a plain boolean where `DeckCard`'s is nullable, and
+ * `ownedQuantity`/`printingCount` are the import's own.
+ *
+ * **No price rides here on purpose.** This interface carried `unitPriceUsd` alone while
+ * `DeckCard` still did too; the marketplace work gave `DeckCard` its euro twin and left this one
+ * a currency behind, which is the drift "the card fields are `DeckCard`'s" was written to
+ * prevent. It is removed rather than paired up because nothing reads it — swept 2026-08-12,
+ * every `unitPriceUsd` on an `ImportMatch` was a fixture writing `null` — and because a lone
+ * dollar figure is now wrong by rule: money is drawn with `formatPrice(value, currency)` off
+ * `useMarketplace()`, so a DTO carrying one currency can only be used incorrectly. A field that
+ * does not exist cannot drift; a preview that one day prices a line adds the pair.
+ */
+export interface ImportMatch {
+  cardId: string;
+  /** **The whole printed name**, so a double-faced card resolved from its front face comes back
+   *  as `"A // B"` — what `deck_cards.name` denormalizes and what the reader is shown. A
+   *  preview that echoed the line's own name would hide the one case worth checking. */
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  lang: string;
+  oracleId: string | null;
+  manaCost: string | null;
+  cmc: number | null;
+  typeLine: string | null;
+  oracleText: string | null;
+  /** Concatenated letters — `"WU"`, not `["W","U"]`, and not JSON. {@link DeckCard.colors}. */
+  colors: string | null;
+  /** The same letter form, precomputed by Scryfall — DFC backs, adventures, colour indicators
+   *  and basic land types already folded in. {@link DeckCard.colorIdentity}. */
+  colorIdentity: string | null;
+  /** JSON: **this printing's** blob, not the oracle card's, which is what makes `oldschool`
+   *  come out right with no special case. {@link DeckCard.legalities}. */
+  legalities: string | null;
+  /** Printed power **as text** — `"*"`, `"1+*"` and a printed `"0"` all ship in real data. Both
+   *  `null` means *unknown*, never "no P/T box", and CR 903.3 turns on that difference. */
+  power: string | null;
+  toughness: string | null;
+  layout: string | null;
+  rarity: string | null;
+  /** JSON: the `card_faces` array verbatim. {@link DeckCard.faces}. */
+  faces: string | null;
+  /**
+   * On Wizards' Game Changer list.
+   *
+   * **A plain boolean where {@link DeckCard.gameChanger} is `boolean | null`**, and the
+   * difference is real rather than a mirror slip: `cards.game_changer` is nullable and a NULL
+   * means *not on the list*, so the backend flattens it here rather than handing this side a
+   * third state to fence. A resolved line always names a card that exists, which is the state
+   * `DeckCard`'s `null` is reserved for.
+   *
+   * One of **three** fields in this file with this name, and the split is two-to-one:
+   * {@link CardSummary.gameChanger} is flattened for the same reason this one is — a search row
+   * is a card that is there — and `DeckCard`'s is the only nullable one.
+   */
+  gameChanger: boolean;
+  /** Printed at uncommon on **any** printing of this oracle card — what makes a Pauper Commander
+   *  commander eligible. Computed; the `paupercommander` legality key answers the 99. */
+  everUncommon: boolean;
+  /**
+   * Every copy of **this printing** the collection holds, finish-blind — and the reason this
+   * printing won: a printing you own beats a newer one you do not, then the newest wins, then
+   * the id (which is what makes the same list pasted twice build the same deck).
+   *
+   * The same question {@link CardSummary.ownedQuantity} answers, asked per decklist line rather
+   * than per search row. Not {@link DeckCard.ownedQuantity}, which is a deck's *claim* — nothing
+   * has been allocated at resolve time, and nothing will be until
+   * {@link ipc.deckImportCommit} runs.
+   */
+  ownedQuantity: number;
+  /**
+   * **How many rows the rule that matched this line found** — not how many printings the card
+   * has, which is a different number and one nothing computes.
+   *
+   * It is per *matching arm*, and the backend has **six**, so this field means six things:
+   * through a set-and-collector-number hint it is how many printings that pair named (1, in a
+   * corpus with no duplicates); through a set-scoped name, that name's printings **within that
+   * set**, and through a set-scoped front face, that set's printings whose front face is the
+   * name; through a bare name, that name's paper printings corpus-wide, and through a bare
+   * front face, the paper printings whose front face is the name; through the fold arm, how many
+   * candidates survived the fold comparison.
+   *
+   * So "how many printings is the reader choosing between" is only what it means on a line that
+   * carried **no hint** — which is most of a pasted list, and the only case an affordance built
+   * on this number may claim to be about the card. Even there it counts *paper* printings of
+   * that exact name, so it is not what Scryfall would list. On a hinted line it describes the
+   * hint. Stated this narrowly on purpose: a true per-name count would cost a second query per
+   * line, and the arms are one indexed lookup each precisely because they do not do that.
+   */
+  printingCount: number;
+}
+
+/**
+ * One resolved line. `matched` is `null` for a name no printing bears — **not an error**: the
+ * preview quotes it and the import proceeds without it.
+ *
+ * `hintMissed` says the line carried a `(SET) 123` this app has no printing for, and that the
+ * name rule answered instead. Both can be true at once: a missed hint whose name also matched
+ * nothing comes back `matched: null, hintMissed: true`.
+ */
+export interface ImportResolveRow {
+  /** **The caller's index**, not a row number — the list that was sent is the only thing that
+   *  knows what line 34 said. The two are the same today, and a filter between them would make
+   *  them differ silently, which is why it rides along rather than being inferred. */
+  index: number;
+  matched: ImportMatch | null;
+  /** *Some part of what the reader wrote about the printing was not used.* So a collector number
+   *  that named nothing sets it even when the set and name then answer, and a collector number
+   *  with no set beside it sets it without being tried. Never a reason to lose the card. */
+  hintMissed: boolean;
+}
+
+/**
+ * What an import does to the variant it lands in.
+ *
+ * `merge` folds onto the deck-card grain — the same printing in the same category becomes one
+ * row with the sum, so a list naming a card on two lines lands as one row. `replace` clears
+ * that variant's **cards** first and leaves its **categories**: a category is the reader's
+ * filing, not the list's, and a replace that swept them would delete piles somebody named,
+ * reordered and switched off to import a file that mentions none of that.
+ *
+ * It clears **one variant**. Replacing the plan never touches what is sleeved up, and the other
+ * way round — the reason `variant` is part of the grain at all.
+ *
+ * Spelled out here rather than derived from anything: the backend validates against its own
+ * list and quotes it back in the refusal, so a third mode is a Rust change first.
+ */
+export type ImportMode = "merge" | "replace";
+
+/**
+ * One line of a decklist after this side has decided everything a *deck* decision is.
+ *
+ * The first three fields are the three answers the backend cannot compute for itself: which
+ * printing (resolved by {@link ipc.importResolve}, and perhaps overridden in the preview),
+ * how many, and which pile.
+ */
+export interface ImportItem {
+  cardId: string;
+  /** Copies, and it must be **positive**. Zero is refused rather than read as a removal — and it
+   *  is refused for the whole import, because one line that cannot land rolls the transaction
+   *  back. */
+  quantity: number;
+  /**
+   * The line's `*F*` / `*E*` marker, as {@link DeckFinish} — `null` where it carried neither.
+   *
+   * Part of the grain, so a list naming the same printing foil on one line and plain on another
+   * lands as **two rows** rather than one summed. `parse.ts` reads the marker, `plan.ts` carries
+   * it here, and nothing in between makes a decision about it: a finish is a fact about the
+   * line, not a filing decision.
+   *
+   * **Optional, exactly as {@link ImportItem.inactive} is and for its reason.** Rust takes it
+   * `#[serde(default)]`, and an absent field means the regular copy — which is what an import
+   * has always made. It is the same call `useDeck.addCard`'s optional `finish` makes and the
+   * opposite of the one `Slot` makes: this creates a row, where a default is the honest answer,
+   * rather than addressing one, where a default steps the wrong card.
+   */
+  finish?: DeckFinish;
+  /**
+   * **A name, not an id**, which is the one place this command's shape differs from
+   * {@link ipc.deckAddCard}'s id arm and the difference is deliberate: an imported list names
+   * sections the deck may not have yet, and the word itself is `autoCategoryFor`'s to compute,
+   * because which pile a Sol Ring belongs in is domain logic.
+   *
+   * Found-or-created, matched **by name alone**, so a `Sideboard` section lands on the deck's
+   * seeded `side` category rather than making a second pile with the same word on it. Trimmed
+   * before it is keyed, so `Ramp` and `  Ramp  ` are one pile and count as one creation.
+   */
+  categoryName: string;
+  /**
+   * The file said this pile counts toward nothing — Archidekt's `{noDeck}`, which is this app's
+   * `is_active = 0`.
+   *
+   * **Applied only to a pile the import creates.** A name the reader already has keeps whatever
+   * they set; an import must not reach into filing somebody did by hand.
+   *
+   * Optional because absent has always meant "an ordinary, counted pile" and the backend reads it
+   * that way (`#[serde(default)]`) — so every caller written before Archidekt's maybeboard existed
+   * is unchanged, the Storybook fake's literals included.
+   */
+  inactive?: boolean;
+  /**
+   * The label to put on this card — Archidekt's `^Keeper,#4aab08^`, name half.
+   *
+   * **A name, not an id**, for {@link ImportItem.categoryName}'s reason exactly: an imported list
+   * names labels the app may not have yet. Found-or-created by `schema::label_name_key`, which is
+   * `deck_labels.name_key`'s own grain — so `keeper` and `Keeper` are one row and the reader's
+   * capitals win, because the row that is already there is not renamed.
+   *
+   * **Absent is "say nothing about this card's label"**, and that is load-bearing rather than an
+   * encoding detail. It is what an unticked label sends, and it is what makes a `merge` onto a
+   * card the reader already labelled by hand keep their label: the write is
+   * `label_id = coalesce(deck_cards.label_id, excluded.label_id)`, so a row that has one keeps it
+   * and a row that has none takes the file's.
+   */
+  labelName?: string;
+  /**
+   * That label's colour, `#rrggbb`. Ignored unless the import has to **make** the row.
+   *
+   * A name the app already knows keeps the colour the reader gave it — {@link ImportItem.inactive}'s
+   * rule over a different table, and for the same reason: an import must not reach into a
+   * decision somebody made by hand. `deck_labels.color` has held hex rather than a palette token
+   * since 2026-08-20 (`features/decks/labelColors.ts`), which is what lets Archidekt's own colour
+   * be stored verbatim instead of snapped to a palette of six.
+   *
+   * Required by the backend whenever {@link ImportItem.labelName} is present, since
+   * `deck_labels.color` is `NOT NULL` and `valid_color` refuses a blank. `toImportItems` sends
+   * the two together or neither.
+   */
+  labelColor?: string;
+}
+
+/**
+ * What an import did, in the three numbers the "Imported 117 cards" report is written from.
+ *
+ * `added` and `removed` are **copies, not rows** — a reader counts cards — and `added` is what
+ * the list asked for rather than what the deck landed on, so a merge that folded 3 onto an
+ * existing 2 reports 3 and the row now holds 5.
+ */
+export interface ImportOutcome {
+  added: number;
+  /** Copies cleared before the list went in. Always `0` on a `merge`; `0` on a `replace` over an
+   *  empty variant too, which is also when no `remove` row is written to the history. */
+  removed: number;
+  /** The piles the import had to make — the part of the outcome a reader could not have
+   *  predicted from the file. A section name their deck already had costs nothing. */
+  categoriesCreated: number;
+  /**
+   * The labels the import had to make — {@link ImportOutcome.categoriesCreated}'s question over
+   * `deck_labels`, and a number the reader is owed for a sharper reason than that one: a label is
+   * **app-wide**, so an import that invents three of them has changed a list every other deck of
+   * theirs reads from.
+   *
+   * A name they already had costs nothing and is not counted, which is the same sentence the
+   * picker on the import step prints before the press.
+   */
+  labelsCreated: number;
+}
+
+/**
+ * One row of `format_specs` — the rules as data (spec §6), handed to the TS engine whole.
+ *
+ * A new format is a seeded row rather than a code branch, and that is only true if nothing
+ * decides here which cells matter. Seeded by the migration and by nothing else: a sync
+ * cannot change this table, which is why it is not in `SYNC_INVALIDATED`.
+ */
+export interface FormatSpec {
+  key: string;
+  displayName: string;
+  /** Whether the "New deck" picker offers it. `future` is the one row that is off — a
+   *  format you can test against but not build for. */
+  enabledInPicker: boolean;
+  deckMin: number;
+  /** `null` is CR 100.5: a 60-card format has a minimum and no maximum. */
+  deckMax: number | null;
+  /** `null` means unlimited — the two pseudo-formats (`casual`, `limited`) only. */
+  maxCopies: number | null;
+  /** `0` means *no sideboard*; `null` means *uncapped* — the two pseudo-formats, `casual` and
+   *  `limited`, where Limited plays the rest of its pool and Casual caps nothing at all. */
+  sideboardMax: number | null;
+  singleton: boolean;
+  requiresCommander: boolean;
+  /** Which eligibility rule the commander zone is judged by, `null` for the formats that
+   *  have no such zone. Two formats may share one rule (`predh` carries `edh`) — this is a
+   *  rule name, not a format name. */
+  commanderRule: "edh" | "brawl" | "oathbreaker" | "pdh" | "duel" | "tlr" | null;
+  life: number;
+  /**
+   * What Scryfall's `"restricted"` legality means **in this format**, and it is never
+   * inferred from the key: max one copy in vintage/timeless/oldschool, and *banned as
+   * commander* in the two singleton formats that use it (duel, tlr), where "max one" would
+   * be no restriction at all.
+   */
+  restrictedSemantic: "max_one" | "banned_as_commander";
+  /** Whether `cards.legalities` carries a key for this format. `false` for `casual` and
+   *  `limited`, which are not judged against a card pool at all. */
+  hasLegalityData: boolean;
+  /** A per-card mana-value ceiling. Only Tiny Leaders: Reborn has one (`3`). */
+  maxManaValue: number | null;
+  allowsCompanion: boolean;
+  /** The order a picker shows them in — `format_specs` is read `ORDER BY sort_order`. */
+  sortOrder: number;
+  /**
+   * Which platforms the format is playable on (schema v18) — an **array**, split by Rust out
+   * of the one comma-joined cell `format_specs.games` stores.
+   *
+   * **Never empty**: a spec naming no platform would be a format no filtered picker could ever
+   * offer, and the seed writes all 25 rows. It is the only input `pickerFormats`' game filter
+   * reads, and it is a *fact* — which formats a picker then offers is the conclusion.
+   */
+  games: Game[];
+}
+
+/**
+ * Result of a sync run.
+ *
+ * `updatedAt` is not a companion of `updated`: Scryfall can serve a bulk listing with
+ * no `updated_at` at all, which is stored as absent and comes back `null` even though
+ * cards were ingested. Read the two independently.
+ */
+export interface SyncOutcome {
+  updated: boolean;
+  cardCount: number;
+  updatedAt: string | null;
+}
+
+/**
+ * What the UI polls.
+ *
+ * `dataDir`, `syncing` and `imageStoreFailures` are always answered — none of them needs
+ * the database. The five database-derived fields are `null` only when the read-only
+ * connection could not be used at all; an ingest no longer blanks them. `null` there means
+ * "not readable right now", never "zero" and never "cleared": a UI that renders it
+ * literally reports an empty collection and throws away an error banner the user has not
+ * read yet. See `mergeStatus` in `useSync.ts`, which is the one place that resolves this.
+ */
+export interface SyncStatus {
+  cardCount: number | null;
+  /** Unix seconds, as a string. */
+  lastCheckAt: string | null;
+  /** Scryfall's timestamp for the ingested bulk file, ISO-8601. */
+  bulkUpdatedAt: string | null;
+  /** Why the last run failed, still readable long after its event was dropped. */
+  lastError: string | null;
+  /**
+   * Lines the last ingest could not read as cards (spec §8 requires the count be
+   * surfaced, not swallowed). `null` before any ingest has run — which is not the same
+   * as `0`, "the last ingest skipped nothing".
+   */
+  lastIngestSkipped: number | null;
+  dataDir: string;
+  syncing: boolean;
+  /**
+   * Card images this process fetched and then could not write to the cache — a read-only
+   * data folder, a full disk. A number, never `null`: it is a counter in memory rather
+   * than a database read, and the disk that would make the rest unreadable is the very
+   * thing it reports on. Resets with the app.
+   *
+   * Non-zero is worth telling the reader about because nothing else shows it: the images
+   * still display (the bytes were in hand), they are simply never cached, so the only
+   * visible symptom is a grid that re-downloads itself forever.
+   */
+  imageStoreFailures: number;
+}
+
+/**
+ * How far the native side has got with opening the data folder — the answer to
+ * `startup_status` and the payload of `startup:changed`.
+ *
+ * Opening and migrating the two databases runs on a background thread so the window can paint
+ * and the taskbar can draw its icon, and until it finishes the shared state every other command
+ * reads is not there — so every other command errors. That is why `boot/DesktopBoot` asks this
+ * before it mounts anything that queries.
+ *
+ * It only ever moves `loading → ready` or `loading → failed`, never back. `message` is a
+ * human-written, multi-line sentence naming the folder that would not open, meant to be shown
+ * as it is.
+ *
+ * **One host makes one more move, `ready → failed`, once**: the web host, when its engine's
+ * Worker dies under a page that had opened (`core/web/index.ts`). Still never back — nothing
+ * returns to `ready` — and never from a native host, whose engine cannot stop while its window
+ * lives. `boot/useStartup.ts` keeps its listener after `ready` for exactly this.
+ *
+ * **`reload` is a host saying that starting again can cure the failure** — and only a host that
+ * can mean it sends it. The web host does, for a second tab (the first tab holds the database, and
+ * may since have closed) and for an engine that never loaded; neither native host does, because a
+ * data folder that would not open will not open the second time either. The light app's boot
+ * screen offers the way out it names (`apps/light/BootScreen.tsx`); the desktop's draws the message
+ * and nothing else, as it always has.
+ */
+export type StartupStatus =
+  | { state: "loading" }
+  | { state: "ready" }
+  | { state: "failed"; message: string; reload?: true };
+
+/** The phases `sync.rs` emits, and the only values `SyncProgressEvent.phase` takes. */
+export type SyncPhase =
+  | "checking"
+  | "downloading"
+  | "ingesting"
+  | "reclaiming"
+  | "sets"
+  | "compacting"
+  | "done"
+  | "error";
+
+/**
+ * Payload of the `sync:progress` event.
+ *
+ * Not a complete account of a sync: a run throttled by the 24 h check window emits
+ * nothing at all, and events emitted before the webview registered its listener are
+ * dropped by Tauri. Progress is the fast path; `SyncStatus` is the reliable one.
+ */
+export interface SyncProgressEvent {
+  phase: SyncPhase;
+  done: number;
+  total: number;
+  message: string | null;
+}
+
+/**
+ * What the relay socket is doing. Mirrors `LiveState` in
+ * `crates/grimoire-core/src/sync_engine/live.rs`.
+ *
+ * `"off"` is not a failure — it is every installation that has connected no membership and
+ * paired no device, which is all of them until somebody does.
+ */
+export type LiveState = "off" | "connecting" | "live" | "offline";
+
+/** Payload of the `sync:live` event. */
+export interface SyncLiveEvent {
+  state: LiveState;
+}
+
+/**
+ * Payload of `collection:reconciled` — what one pass of Scryfall's id-migration log did to
+ * the user's own rows (`sync::reconcile_ids`, from `reconcile::ReconcileStats`).
+ *
+ * Emitted **only when something moved**: a pass that skipped every already-applied
+ * migration, which is every pass after the first, is silent. So the event's arrival is the
+ * fact worth acting on, and the three numbers are for a message about it.
+ */
+export interface ReconciledEvent {
+  /** Rows whose `card_id` was moved to the id Scryfall merged the old one into. */
+  repointed: number;
+  /** Rows that collided with an existing one at the new id and became one row. */
+  folded: number;
+  /** Rows that could be neither repointed nor folded, and now carry a sentence. */
+  flagged: number;
+}
+
+/**
+ * How this copy of the app was installed, which decides what an update can do to it.
+ * Mirrors `update::InstallKind`.
+ *
+ * `other` is an MSI install, any Linux build, or anything unrecognised — it hears about a
+ * new release and is offered the release page, never an in-app install. Nobody has ever run
+ * a Linux build of this app, and an MSI major upgrade is unverified; guessing at either is
+ * how a user ends up with two copies.
+ */
+export type InstallKind = "portable" | "nsis" | "other";
+
+/** One downloadable file on a GitHub release. Mirrors `update::Asset`. */
+export interface UpdateAsset {
+  name: string;
+  url: string;
+  size: number;
+  /**
+   * GitHub's own `sha256:<hex>`, and the whole of this updater's integrity story — there is
+   * no signing keypair behind it. `null` means the release published no checksum, which the
+   * backend treats as un-installable rather than installable-unverified.
+   */
+  digest: string | null;
+}
+
+/** A release newer than the running build. Mirrors `update::ReleaseInfo`. */
+export interface ReleaseInfo {
+  /** `tag_name` without its leading `v` — `0.3.0`. */
+  version: string;
+  tag: string;
+  /** The release body **verbatim**, markdown and all. Rust interprets none of it;
+   *  `packages/ui/lib/releaseNotes.ts` reads it and the settings panel draws the result. */
+  notes: string;
+  publishedAt: string | null;
+  htmlUrl: string;
+  assets: UpdateAsset[];
+}
+
+/**
+ * One entry in the version history. Mirrors `update::ReleaseNote`.
+ *
+ * {@link ReleaseInfo} without its `assets`, and the subtraction is deliberate: the history is
+ * up to thirty releases, each of which carries five assets with a URL and a 64-character
+ * digest, and a changelog can use none of it. Only the release the app might install needs an
+ * asset list.
+ */
+export interface ReleaseNote {
+  version: string;
+  tag: string;
+  /** Verbatim, for {@link ReleaseInfo.notes}'s reason. */
+  notes: string;
+  publishedAt: string | null;
+  htmlUrl: string;
+}
+
+/**
+ * What the ribbon polls. Mirrors `update::UpdateStatus`.
+ *
+ * `available` is `null` both for "up to date" and for "never checked" — `lastCheckAt` is
+ * what tells those apart, and a panel that renders "you're up to date" before the first
+ * check has answered is claiming something it does not know.
+ */
+export interface UpdateStatus {
+  currentVersion: string;
+  installKind: InstallKind;
+  available: ReleaseInfo | null;
+  /** The asset this install kind would download, already picked by the backend. `null` when
+   *  there is no update, or when the release carries nothing this install can use. */
+  asset: UpdateAsset | null;
+  /** Unix seconds, as a string — `SyncStatus.lastCheckAt`'s shape. */
+  lastCheckAt: string | null;
+  busy: boolean;
+  /** A verified build is on disk and one restart away. */
+  staged: boolean;
+}
+
+/** Payload of `update:progress`. One phase, and it is "downloading". */
+export interface UpdateProgressEvent {
+  done: number;
+  total: number;
+}
+
+/**
+ * Which of the app's dealings with the outside world a failure belongs to.
+ *
+ * Mirrors `errors::Source` and the `CHECK` on `error_log.source`. A closed union, so a new
+ * arm on the Rust side is a type error here rather than a blank badge.
+ */
+export type ErrorSource =
+  | "scryfall_api"
+  | "scryfall_image"
+  | "github_update"
+  | "database"
+  | "image_store"
+  | "relay";
+
+/** The shape of a failure. Mirrors `errors::Kind` and the `CHECK` on `error_log.kind`. */
+export type ErrorKind = "rate_limited" | "timeout" | "http" | "io" | "parse" | "other";
+
+/**
+ * What one downloaded price feed's table looks like right now — `marketplace_feed_meta`, plus
+ * a row for a feed that has never been fetched.
+ *
+ * Only the **feed-backed** marketplaces have one of these. TCGplayer and Cardmarket arrive
+ * with the card data and have no refresh of their own, so their freshness is the sync's and is
+ * already on the ribbon; Card trader has nothing to fetch at all.
+ *
+ * `fetchedAt` is `null` exactly when the feed has never been pulled — the table's own column is
+ * `NOT NULL`, so a null here means "no row", which is the state a first selection acts on. The
+ * three fields answer three different questions and a reader needs all three: `fetchedAt` is
+ * when *this app* asked, {@link MarketplaceFeedStatus.feedBuiltAt} is when the *feed* was made,
+ * and `rowCount` is how much of it landed.
+ */
+export interface MarketplaceFeedStatus {
+  marketplace: MarketplaceId;
+  /** Unix **seconds**, when this app last pulled the feed. `null` = never. */
+  fetchedAt: number | null;
+  /**
+   * The feed's own stamp, as it published it — Card Kingdom's `meta.created_at`, which reads
+   * `2026-08-11 21:07:02`. `null` for a feed that publishes none, which is Mana Pool: there is
+   * nothing to show and no reason to invent one out of `fetchedAt`.
+   */
+  feedBuiltAt: string | null;
+  /** Rows stored for this feed, as of `fetchedAt`. **`null` when never fetched** — not `0`, so
+   *  "nothing downloaded" and "a fetch that landed nothing" stay two states. */
+  rowCount: number | null;
+  /**
+   * Older than the backend's refresh interval (24 h), **or never fetched at all**.
+   *
+   * Computed there rather than here, and read rather than re-derived: `REFRESH_INTERVAL_SECS`
+   * is the one definition of how long a price stays believable, and a second copy of the
+   * arithmetic on this side would be a second place for it to drift. A stamp in the future — a
+   * clock that moved — counts as stale rather than underflowing.
+   */
+  stale: boolean;
+  /**
+   * A refresh is in flight **right now**, whoever started it.
+   *
+   * The authoritative answer, and the reason it exists: the backend refreshes the selected feed
+   * at start-up when its rows are stale or absent, so a fetch can be running before this window
+   * has mounted anything. It is one of *three* sources `useMarketplace` reconciles, because
+   * this one is only as fresh as the last status read.
+   */
+  refreshing: boolean;
+  /**
+   * Whether **this host** can ask the feed at all.
+   *
+   * `false` for a feed its host has no way to request — Mana Pool in a browser, whose endpoint
+   * sends no cross-origin permission, so a page's `fetch` is refused before it leaves (the
+   * light-app spec §4; measured in light-app.md §9.1). `true` otherwise, and on every native
+   * host always.
+   *
+   * **A fact about the host and not about the feed's rows**, which is why it is its own field
+   * rather than a sixth {@link FeedState}: the picker greys the row and says why, and
+   * `useMarketplace` quotes another marketplace instead of drawing a window of em dashes — both
+   * from this answer and from nothing a page could find out about where it runs.
+   */
+  reachable: boolean;
+}
+
+/** The phases `marketplace_feed.rs` emits. Four, against `SyncPhase`'s eight: a feed is one
+ *  file, so there is no check, no set list and nothing to reclaim. */
+export type FeedPhase = "downloading" | "ingesting" | "done" | "error";
+
+/**
+ * Payload of the `marketplace:progress` event.
+ *
+ * **Its own event rather than a new `SyncPhase`**, and that is a decision worth keeping:
+ * {@link SyncPhase} is a closed union with a *total* `PHASE_LABEL` map behind it, so a ninth
+ * phase arriving from Rust would render `undefined` on the ribbon rather than fail anywhere a
+ * test could see. This follows `update:progress`'s precedent instead — a second event with a
+ * payload of its own, and a label map that only has to be total over four words.
+ *
+ * `marketplace` is on the payload because two feeds exist and either can be the one running.
+ * Not a complete account of a fetch, for {@link SyncProgressEvent}'s reasons: Tauri drops
+ * events emitted before the webview registered its listener, and the **startup refresh can
+ * begin before this window has one**. `marketplaceFeedStatus` is the reliable half of the pair.
+ */
+export interface FeedProgressEvent {
+  marketplace: MarketplaceId;
+  phase: FeedPhase;
+  done: number;
+  total: number;
+}
+
+/**
+ * A card's Oracle tags, keyed by the **oracle** id — Scryfall Tagger's answer to "what does
+ * this card *do*", which is what `autoCategoryFor` files a deck add by.
+ *
+ * `slugs` carries the card's own tags **and every ancestor of them**, already expanded by
+ * `oracle_tags::ancestor_closures` and sorted. That expansion is the fact; picking which of
+ * them names a pile is the conclusion, and it stays in `features/decks/autoCategory.ts`. Rust
+ * knows nothing about "Removal" or the order the piles are tried in, deliberately.
+ *
+ * **An empty `slugs` is an answer, not a miss**, and the two are indistinguishable on purpose:
+ * an untagged card, a card id that is not in `cards`, and a printing whose `oracle_id` is NULL
+ * all come back empty, because the rule's response to all three is the same — fall back to the
+ * type line. Nothing about categorising a card may fail an add.
+ */
+export interface CardTags {
+  oracleId: string;
+  slugs: string[];
+}
+
+/**
+ * The same answer keyed by a **printing** id (`cards.id`), for the callers that hold one.
+ *
+ * Almost every categorising call site does: a drag payload, `useDeck.addCard` and
+ * `import_resolve`'s rows all name a printing. A separate DTO rather than reusing
+ * {@link CardTags} because a printing id in a field called `oracleId` would be a lie, and this
+ * mirror is the one place that lie would never be caught.
+ */
+export interface PrintingTags {
+  cardId: string;
+  slugs: string[];
+}
+
+/**
+ * One tag taxonomy's own freshness — its `*_tag_meta` row, plus the shape of a database that
+ * has never fetched the file.
+ *
+ * **Every field is nullable and `null` means "never ingested"**, which is a real state and not
+ * an error: each taxonomy is a separate bulk dataset with its own weekly refresh, and the app
+ * works without either — an untagged deck add simply files by card type, and a Tags page with
+ * no art taxonomy says it has nothing yet.
+ *
+ * `checkedAt` and `ingestedAt` are separate because a 304 moves only the former. Collapsing
+ * them would make an up-to-date taxonomy read as due on every launch and cost one API call per
+ * start.
+ *
+ * **One interface for both datasets because Rust has one struct for both** — `tags::TagStatus`,
+ * which `tags/oracle.rs` and `tags/art.rs` each re-export under their own name. Two hand-copied
+ * mirrors of one struct is the drift this whole file is written to avoid, and it would be a
+ * drift nothing could catch: the two shapes would stay compatible for as long as they were
+ * identical and part in silence the day one gained a field.
+ */
+export interface TagStatus {
+  /** Scryfall's own stamp for the file these rows came from. */
+  updatedAt: string | null;
+  /** Unix **seconds**. `null` = the taxonomy has never been ingested. */
+  ingestedAt: number | null;
+  /** Unix **seconds**. Moves on a 304; `ingestedAt` does not. */
+  checkedAt: number | null;
+  tagCount: number | null;
+  taggingCount: number | null;
+  stale: boolean;
+  /** A refresh **of this dataset** is in flight right now. The two taxonomies are separate
+   *  files on separate schedules, so either may be refreshing while the other is. */
+  refreshing: boolean;
+}
+
+/** `tags::oracle::OracleTagStatus` — what a card *does*. {@link TagStatus} under the name the
+ *  command answering it carries. */
+export type OracleTagStatus = TagStatus;
+
+/** `tags::art::ArtTagStatus` — what an illustration *depicts*. The same shape again, and the
+ *  larger of the two files: ~12.5 MB gzipped against the oracle taxonomy's ~5.85 MB. */
+export type ArtTagStatus = TagStatus;
+
+/** `tags::PHASES` — the five a taxonomy refresh emits, against `SyncPhase`'s eight. */
+export type TagPhase = "checking" | "downloading" | "ingesting" | "done" | "error";
+
+/** {@link TagPhase} under the name callers spelled before the art taxonomy existed. Both
+ *  datasets emit the same five, because they are one `PHASES` in the crate. */
+export type OracleTagPhase = TagPhase;
+
+/**
+ * Payload of a taxonomy's progress event — `tags::TagProgress`.
+ *
+ * A progress event of its own rather than a ninth `SyncPhase`, following `marketplace:progress`'
+ * precedent for the same reason: the card sync's phase list is a closed union mirrored by hand
+ * on this page, and a dataset with its own schedule has no business widening it.
+ *
+ * **Each taxonomy has its own channel** — `oracle-tags:progress` and `art-tags:progress`. One
+ * shared line would have the two fighting over it, since either may refresh while the other is.
+ */
+export interface TagProgressEvent {
+  phase: TagPhase;
+  done: number;
+  total: number;
+}
+
+/** Payload of `oracle-tags:progress`. */
+export type OracleTagProgressEvent = TagProgressEvent;
+
+/** Payload of `art-tags:progress`. */
+export type ArtTagProgressEvent = TagProgressEvent;
+
+/**
+ * Which taxonomy a tag came from — `tags::query`'s `namespace`, as a hit carries it.
+ *
+ * **Never `"both"`.** That is an *input*: `tagSearch` and `tagChildren` accept it and mean
+ * "ask each of them", and a hit always came from exactly one. The two are separate files with
+ * separate id spaces that share plenty of slugs — `dog` is in both and they mean different
+ * things by it — so a stored mute names one namespace and a breadcrumb that lost this field
+ * would climb the wrong tree.
+ */
+export type TagNamespace = "art" | "oracle";
+
+/**
+ * How strong an art match has to be — `filters::CardFilters::art_weight_floor`.
+ *
+ * `"strong"` drops the closure rows Scryfall called `weak`, which their docs define as "the
+ * subject is a minor detail or background element". **It is a floor and not a narrowing to
+ * strong matches**: the predicate is `weight <> 'weak'`, so `median` — 462 008 of 475 163 art
+ * taggings, measured 2026-08-20 — is admitted. Any control built on this must say it excludes
+ * background detail; "strong matches only" would be a promise the query does not keep.
+ *
+ * Anything else, this union's `"any"` included, is no floor at all: an unrecognised value fails
+ * **open**, showing more rather than hiding cards nobody would report missing.
+ *
+ * **The art side only, and the include side only.** `oracle_tag_cards` carries no `weight`
+ * column at all — oracle taggings are 99.7 % `median` — and "not a dog" means not a dog at all,
+ * so a floor on an *exclude* would let weak dogs back into a result the reader asked to have
+ * none in.
+ */
+export type ArtWeightFloor = "any" | "strong";
+
+/**
+ * One taxonomy's tag chips: the tags a row must carry, and the tags it must not.
+ *
+ * **`include` INTERSECTS.** A themed deck asks for dogs AND snow, so each included slug is its
+ * own `EXISTS` rather than one `slug IN (…)` — which is the union, and would answer a superset
+ * that looks plausible. `exclude` is the same subquery under `NOT EXISTS`, and the two lists AND
+ * with each other and with every other filter.
+ *
+ * Both lists are `#[serde(default)]` on the Rust side, so naming one omits the other, and an
+ * absent `artTags`/`oracleTags` adds no SQL at all. Blanks are dropped and the rest sorted and
+ * deduplicated (`filters::picked_tags`), so an empty list means "no filter" and never "match
+ * nothing".
+ *
+ * **Both taxonomies are matched through their pre-flattened closure**, so a query for a parent
+ * tag answers the cards tagged only with its children — `dog` is directly tagged on 137
+ * illustrations and reaches 439, and `removal` has *zero* direct taggings while answering 6 686
+ * cards (both measured 2026-08-20).
+ */
+export interface TagTerms {
+  include?: string[];
+  exclude?: string[];
+}
+
+/**
+ * A tag named from somewhere else — enough to draw a breadcrumb and to ask about it again.
+ * `tags::query::TagRef`.
+ */
+export interface TagRef {
+  slug: string;
+  label: string;
+  namespace: TagNamespace;
+}
+
+/**
+ * One tag a reader named in a card search box — `tags::query::TagLookup`, the ask half of
+ * {@link ipc.tagResolve}.
+ *
+ * `queryLanguage.ts`'s token minus what is the *box's* business: where the term sat in the string,
+ * and whether it was negated. Resolution answers "is there such a tag"; which of
+ * {@link TagTerms}' two lists the slug lands in is decided in TypeScript, because that is a
+ * conclusion rather than a fact.
+ */
+export interface TagLookup {
+  /** **Never `"both"`**, unlike {@link ipc.tagSearch}'s: a typed `o:` names one taxonomy, and
+   *  answering across both would let `otag:dog` filter by the picture. */
+  namespace: TagNamespace;
+  /** What the reader typed after the keyword. Normalised by Rust, never here — two copies of
+   *  that rule would leave both halves self-consistent and the search matching nothing. */
+  value: string;
+}
+
+/**
+ * One tag, as the Tags page draws it — `tags::query::TagHit`.
+ *
+ * Answered by both {@link ipc.tagSearch} and {@link ipc.tagChildren}, and a muted tag is absent
+ * from both, from `childCount` and from anyone's `parents`. Muting hides a *tag*; it never hides
+ * a card, and nothing in the card filters consults the mute table.
+ */
+export interface TagHit {
+  slug: string;
+  /**
+   * Scryfall's stable uuid, and **the only thing a mute may be keyed on** — their docs say "do
+   * not treat tag slugs or labels as permanent identifiers". A mute keyed on a slug un-mutes
+   * itself the week the tag is renamed, which is exactly the week it mattered.
+   *
+   * **`""` is a real value**: `oracle_tags.id` was added by an `ALTER TABLE` that could not add
+   * a `NOT NULL` column without a default, so every row that predates a refresh by a build new
+   * enough to write ids still carries the empty string. Such a tag is *unmutable* — {@link
+   * ipc.tagMute} refuses it in words — and the next refresh repairs it. That refusal is
+   * deliberate: one stored mute with a blank id would otherwise equal every one of those rows
+   * and take the whole taxonomy off the page with nothing logged.
+   */
+  id: string;
+  label: string;
+  /** Never `"both"` — see {@link TagNamespace}. */
+  namespace: TagNamespace;
+  description: string | null;
+  /**
+   * How many subjects the tag reaches **through the closure** — illustrations for the art
+   * taxonomy, oracle ids for the oracle one, and in neither case a count of *printings*.
+   *
+   * The direct taggings are the wrong number and they look right: a category tag has none of
+   * its own, so counting them would report `dog: 137` where the closure reaches 439, and
+   * `removal: 0` where it answers 6 686.
+   */
+  cardCount: number;
+  /** Direct children that are not muted, so a disclosure triangle drawn from this never opens
+   *  onto nothing. */
+  childCount: number;
+  /**
+   * Every parent, not the first one — **43 % of art tags have more than one** (4 970 of 11 531,
+   * measured 2026-08-20), so a tag reached through one branch of the rail routinely sits under
+   * another as well and a single-parent breadcrumb would be wrong for two tags in five.
+   */
+  parents: TagRef[];
+}
+
+/**
+ * One muted tag, as Settings lists it — `tags::muted::MutedTag`.
+ *
+ * Every field is stored rather than joined, which is the point of the table: a taxonomy that has
+ * been rebuilt since — or never fetched on this machine at all — must still be able to show the
+ * reader what they hid and offer to give it back.
+ */
+export interface MutedTag {
+  /** The two taxonomies are separate files with separate id spaces, so one uuid appearing in
+   *  both is two mutes. */
+  namespace: TagNamespace;
+  /** Scryfall's stable uuid — the key, with the namespace. */
+  tagId: string;
+  /** The slug as it read when the mute was made. Display only, and possibly stale by design. */
+  slug: string;
+  /** Unix **seconds**. */
+  mutedAt: number;
+}
+
+/**
+ * Which bracket a two-card infinite combo belongs to, as **Commander Spellbook's own editors
+ * classified it** — `BracketTagEnum` in their schema, carried through the ingest unchanged and
+ * stored in `combos.bracket_tag`.
+ *
+ * Seven letters, with Spellbook's own wording for each and the bracket floor it implies here:
+ *
+ * * `E` — **Exhibition**, "for any deck". Raises nothing.
+ * * `C` — **Core**, "for unoptimized decks in bracket 2+". Floor 2.
+ * * `O` — **Oddball**, "probably 2 or 3, but hard to classify". Floor 2.
+ * * `P` — **Powerful**, "for strong decks in bracket 3+". Floor 3.
+ * * `S` — **Spicy**, "probably 3 or 4, but hard to classify". Floor 3.
+ * * `R` — **Ruthless**, "for competitive decks at brackets 4+". Floor 4.
+ * * `B` — **Banned**, "not legal in Commander". Raises nothing, because it is a *legality*
+ *   finding and the validation engine already reports it from the banned list.
+ *
+ * **That letter is why this app never has to decide what "an intentional early-game two-card
+ * infinite combo" is.** Wizards' bracket table restricts combos in exactly those words, which no
+ * card list answers and no oracle-text grep can be written for — it is a fact about an
+ * *interaction* rather than about a card. Spellbook's editors have already made the judgement
+ * per combo; the ingest carries their letter through and the estimator turns it into a floor.
+ *
+ * A closed union, like {@link ErrorSource}: an eighth letter arriving from Rust is a type error
+ * here rather than a combo that silently raises nothing.
+ */
+export type ComboBracketTag = "R" | "S" | "P" | "O" | "C" | "E" | "B";
+
+/**
+ * One combo a deck contains — every named card of it is in the deck, and this is what the
+ * bracket advisory lists.
+ *
+ * "Contains" is the whole of what the match query answers, and it is deliberately narrow: the
+ * cards are all there, in the piles TypeScript chose to count (see {@link ipc.combosForCards}).
+ * Nothing here checks that they can be *cast* together, that the colours line up, or that a piece
+ * the feed marks `must_be_commander` really is this deck's commander — that column is stored by
+ * the ingest and surfaced on no field of this shape, so nothing reads it.
+ */
+export interface DeckCombo {
+  /** Commander Spellbook's variant id, e.g. `"1957-4050-7918--204"`. Stable, and the key the
+   *  ingest stores rows under. */
+  id: string;
+  /** Which bracket this combo is for — {@link ComboBracketTag}, and the whole of what it
+   *  contributes to the estimate. */
+  bracketTag: ComboBracketTag;
+  /**
+   * The combo's card names, in the order the feed listed them — display only. The deck holds
+   * every one of them, matched by **oracle** id rather than by this string, so a name here is
+   * what to print beside the combo and never what to look a card up by.
+   */
+  cards: string[];
+  /**
+   * How many *templates* the combo also asks for — Spellbook's `requires[]`, which are
+   * descriptions ("a creature with flying") rather than cards and resolve to no card id at all.
+   *
+   * **`0` is a combo the deck definitely has.** Above zero is one whose named cards are all
+   * present and whose remaining requirement this app cannot check, so it is shown as *possible*
+   * and kept out of the bracket arithmetic entirely — a combo that might not be there may not
+   * raise a floor, and hiding it would be worse still, since the reader can look at their own
+   * deck and answer the question this app cannot.
+   */
+  templateCount: number;
+  /** What the combo does — Spellbook's feature names, one per line (`"Infinite lifegain"`).
+   *  Joined at the ingest rather than sent as an array, because nothing here does anything to
+   *  them but print them. */
+  produces: string;
+  /** How many decks Spellbook has seen it in, or `null` where the feed gives no figure. A
+   *  sort key and a rough "how well known is this", nothing more. */
+  popularity: number | null;
+}
+
+/**
+ * One named card a combo asks for, and whether the reader holds it — a row of the card-side
+ * read, {@link CardCombosPage}.
+ *
+ * **{@link DeckCombo} carries `cards: string[]` for the same idea and that is not an oversight
+ * on either side.** The deck advisory has already established that every named card is in the
+ * deck, so a name is the whole of what it has left to print. This read establishes nothing of
+ * the sort: it answers every combo that *names* the open card, most of which the reader owns no
+ * other piece of, so each piece has to say what it is, what it looks like and whether it is in
+ * the binder. Widening the deck's shape to this one would put six fields and a picture URL on
+ * every combo of every deck in the gallery to draw a list of names.
+ */
+export interface ComboPiece {
+  /**
+   * The piece's **oracle** id — what a combo is really about, and the id everything in this feed
+   * is matched by ({@link ipc.combosForCards} states the same rule from the deck's end).
+   *
+   * All four Lightning Bolts are one piece here, which is why `owned` below can be a sum across
+   * printings without anything having to decide which printing was meant.
+   */
+  oracleId: string;
+  /**
+   * The card's name **as the feed spells it**, and the one field that survives a card this
+   * database has never heard of.
+   *
+   * Spellbook's corpus and the reader's `cards` table are two downloads on two schedules, so a
+   * combo can name a card a stale corpus does not carry — a new set's card in a combo published
+   * the week it was spoiled. That piece has `cardId: null`, no picture and `owned: 0`, and this
+   * string is the whole of what the row can draw. **Never look a card up by it**: the name is
+   * for the eye and the oracle id is the address.
+   */
+  name: string;
+  /** How many copies the combo asks for. `1` for almost every piece; above one is a combo that
+   *  really does want two of a card, and drawing it as `1` would be a lie about what to buy. */
+  quantity: number;
+  /**
+   * The combo wants this piece **in the command zone**, not merely in the ninety-nine —
+   * Spellbook's `must_be_commander`.
+   *
+   * The ingest has stored this column since the feed first landed and no shape carried it until
+   * now; {@link DeckCombo}'s own doc says so, and this is the field that ends that sentence.
+   * **It is display only.** Nothing here checks that the piece really is the reader's commander,
+   * because this read has no deck in front of it at all — it answers about a card.
+   */
+  mustBeCommander: boolean;
+  /**
+   * A printing to address the piece by — the default one — or `null` when the corpus has never
+   * synced the card.
+   *
+   * This is what a press opens and what a picture is fetched for, so `null` is the row that can
+   * be read and not clicked. It is a *printing* id where {@link ComboPiece.oracleId} is the
+   * card, and the two must not be swapped: a printing id in an oracle position matches nothing
+   * and produces an empty answer rather than an error.
+   */
+  cardId: string | null;
+  /**
+   * How many copies of this card the reader owns, **across every printing and every finish** —
+   * the sum the oracle key above makes possible.
+   *
+   * **`0` is an answer and not a blank.** A combo listing three pieces the reader owns none of
+   * is exactly what this read exists to show, so a row rendering `0` as an em dash would hide
+   * the ordinary case. It is also what `ownedOnly` filters on, and the filter is applied in SQL
+   * — see {@link CardCombosQuery.ownedOnly} for why that matters to the caller.
+   */
+  owned: number;
+}
+
+/**
+ * One combo that **names** the open card — the card-side read, and the opposite question to
+ * {@link ipc.combosForCards}.
+ *
+ * That one asks *which of these combos does a pile of cards fully contain*; this one asks *what
+ * is this card part of*, and makes no claim whatever about the other pieces. A reader looking at
+ * Thassa's Oracle wants the second question answered, and the first would answer `[]` for every
+ * card they own two thirds of a combo for.
+ *
+ * **So every field the deck advisory did not need is here**, because the deck's list is read
+ * beside the deck itself and this one is read beside a single card with nothing around it: the
+ * steps, the prerequisites, the mana, and one {@link ComboPiece} per named card.
+ */
+export interface CardCombo {
+  /** Commander Spellbook's variant id, e.g. `"1957-4050-7918--204"` — {@link DeckCombo.id}, the
+   *  same string and the same rows. */
+  id: string;
+  /**
+   * Which bracket the combo is for — {@link ComboBracketTag}.
+   *
+   * **A closed union, and this is that argument's second reader.** An eighth letter arriving
+   * from Spellbook is a Rust-side *skip* (the ingest drops the combo) rather than an
+   * `undefined` reaching a total label map on this side, which is what a widened union would
+   * cost: every map over the seven letters would have to grow a "some letter we do not know"
+   * arm, on a screen whose whole job is to say what a combo is for. See {@link ComboBracketTag}.
+   */
+  bracketTag: ComboBracketTag;
+  /**
+   * How many **named cards** the combo asks for — the length of {@link CardCombo.pieces}, sent
+   * rather than derived because it is also the filter key and the bucket key.
+   *
+   * A reader narrowing to two-card combos is asking about this number, and
+   * {@link CardCombosPage.byCardCount} is a census of it over the **searched** set — the set
+   * {@link CardCombosQuery.search} leaves standing, before this filter and `ownedOnly` are
+   * applied. Neither of which the page in hand could answer, because the page is a slice.
+   */
+  cardCount: number;
+  /**
+   * How many *templates* the combo also asks for — Spellbook's `requires[]`, descriptions
+   * ("a creature with flying") that resolve to no card id at all. `0` is a combo whose every
+   * requirement is a named card.
+   *
+   * {@link DeckCombo.templateCount}'s rule is a *deck* rule — above zero keeps the combo out of
+   * the bracket arithmetic, because a combo that might not be there may not raise a floor — and
+   * it does not follow here. Nothing on this screen is estimating anything; a template is one
+   * more thing the combo needs, said in words, and the honest drawing is to say so.
+   */
+  templateCount: number;
+  /** The combo's colour identity as the feed publishes it — WUBRG letters, `""` for colourless.
+   *  A string rather than an array because nothing here does anything to it but draw pips. */
+  identity: string;
+  /** What the combo does — Spellbook's feature names, one per line (`"Infinite lifegain"`).
+   *  {@link DeckCombo.produces}, joined at the ingest for its reason: nothing on either side
+   *  does anything to them but print them. */
+  produces: string;
+  /** The numbered steps, `"\n"`-separated — how the combo is actually executed. `""` when the
+   *  feed carries none, which is a real state for a combo whose editors have not written one up
+   *  yet, and not a reason to hide the row. */
+  description: string;
+  /** Set-up the combo assumes and Spellbook considers trivial ("all permanents are untapped").
+   *  `""` when there are none. */
+  easyPrerequisites: string;
+  /** Set-up the combo assumes and Spellbook considers worth stating ("Frodo is your commander").
+   *  `""` when there are none. This is the pair's *interesting* half and the one worth drawing
+   *  first where only one fits. */
+  notablePrerequisites: string;
+  /** What it costs to go off, in mana symbols (`"{6}"`). `""` when the feed names no cost, which
+   *  is not the same as free — it is the feed saying nothing. */
+  manaNeeded: string;
+  /** How many decks Spellbook has seen it in, or `null` where the feed gives no figure —
+   *  {@link DeckCombo.popularity}, and the sort this list arrives in. */
+  popularity: number | null;
+  /**
+   * Every named card of the combo, **in the feed's order** — including the card being read
+   * about, which is deliberately not filtered out: a combo is a list of pieces and one of them
+   * being the open card is a fact about where it sits in the list, not a row to delete.
+   *
+   * The order is the feed's because Spellbook's editors write the steps against it, so
+   * resorting the pieces (by owned, by name) would leave {@link CardCombo.description}
+   * referring to a sequence the reader is no longer looking at.
+   */
+  pieces: ComboPiece[];
+}
+
+/**
+ * How many combos name this card at each combo size — one bar of the size census.
+ *
+ * **Computed over the *searched* set**, so the numbers hold still while the reader picks a size
+ * or turns the owned box on, and move the moment they type. A text search changes the *subject*
+ * — "only combos with Thassa in them" — and a size is a **facet** of whatever subject is in
+ * force; see {@link CardCombosPage.byCardCount} for the whole argument.
+ */
+export interface ComboCountBucket {
+  /** The combo size — {@link CardCombo.cardCount}, and the value to pass back as
+   *  {@link CardCombosQuery.cardCount} to narrow to it. */
+  cards: number;
+  /** How many combos of that size name this card. Never `0`: a size nothing matches has no
+   *  bucket at all, which is what makes the list drawable as it stands. */
+  combos: number;
+}
+
+/**
+ * One page of the combos that name a card, plus the three totals a caption needs.
+ *
+ * **Three counts rather than one, because the page cannot answer any of them.** `combos` below
+ * is a slice — up to `limit` rows — so a caption counting it would say "20 combos" for a card
+ * with six hundred, and a filter chip counting it would say the same thing twice.
+ *
+ * **The three are taken over three different sets, and that is the shape rather than an
+ * inconsistency** (2026-09-08, when {@link CardCombosQuery.search} landed). A text search is the
+ * reader changing **the subject** — *only combos with Thassa in them* — where the size chips and
+ * the owned toggle are **facets of that subject**. A facet's count has to predict what pressing
+ * it yields, so `byCardCount` and `ownedTotal` are censuses of the **searched** set: otherwise
+ * every chip is a lie the moment somebody types, offering a size the searched list does not
+ * contain and an owned count drawn from combos the search has already excluded. `total` stays the
+ * card's own census, because it answers a question the search does not change — *how many combos
+ * is this card in* — and it is what the heading is about and what `ownedTotal` used to be a share
+ * of. Nothing about `matching` moved: it was always the whole filter stack, and the stack grew a
+ * rung.
+ *
+ * The shape did not change with any of that. **`total` and `matching` mean exactly what they
+ * meant and `byCardCount` and `ownedTotal` do not**, which is the drift a type cannot catch — a
+ * caller that goes on treating `ownedTotal` as a share of `total` compiles, draws a number that
+ * is never out of range, and is quietly wrong in one direction: the searched set is a *subset* of
+ * `total`, so the fraction can only ever read **too low**, and it reads lowest exactly when the
+ * search has done the most work. A ratio that overflowed would at least be visible.
+ */
+export interface CardCombosPage {
+  /**
+   * Combos naming this card with **no filter applied at all** — including no search. The number
+   * the screen's heading is about.
+   *
+   * **It is no longer the denominator {@link CardCombosPage.ownedTotal} is a share of**, which
+   * this line said until the search landed: that count is over the searched set now, so
+   * `ownedTotal / total` is a fraction of two different questions. It cannot go out of range —
+   * the searched set is a subset of this one — which is precisely what makes it a bad way to be
+   * wrong: it simply reads low, and lowest on the searches that narrowed the most.
+   */
+  total: number;
+  /** Combos matching after **every** filter — {@link CardCombosQuery.search},
+   *  {@link CardCombosQuery.cardCount} *and* `ownedOnly`. This is what the pager pages through,
+   *  so it is the one to compare `offset` against and never {@link CardCombosPage.total}. */
+  matching: number;
+  /**
+   * How many of the **searched** combos the reader owns **every piece** of — the `ownedOnly`
+   * filter's own count, answered whether or not that filter is on, so the checkbox can say what
+   * pressing it would leave.
+   *
+   * **A share of the searched set and not of {@link CardCombosPage.total}** — changed with the
+   * search box, and it is the toggle's own promise: a checkbox saying *42* over a searched list
+   * of nine would be predicting something the press cannot produce. With no search term the two
+   * sets are the same one, which is why an unsearched screen reads exactly as it did before.
+   */
+  ownedTotal: number;
+  /**
+   * The size census — one {@link ComboCountBucket} per combo size that matches at all, ascending
+   * by `cards`.
+   *
+   * **Over the searched set, and over nothing narrower.** A census recomputed under the *whole*
+   * filter stack would zero every bucket but the selected one the moment a reader picked a size,
+   * leaving them no way back and no way to see that the card has forty three-card combos as well:
+   * it is a menu of what is available, not a description of what is shown. The search is the one
+   * narrowing that belongs in it, because it is not a facet of the same question but a different
+   * question to take facets of — a chip reading *2 (12)* under a search that leaves no two-card
+   * combo at all is a control that answers `[]`.
+   */
+  byCardCount: ComboCountBucket[];
+  /** This page — at most {@link CardCombosQuery.limit} rows, starting at
+   *  {@link CardCombosQuery.offset}, in the order the backend sorts them. */
+  combos: CardCombo[];
+}
+
+/**
+ * The six arguments {@link ipc.combosForCard} takes, bundled.
+ *
+ * **Not a mirror of anything.** `combos_for_card` declares six flat parameters, so this object
+ * exists on this side alone — it is what the wrapper spreads and what a query key is built from,
+ * so the call site and `cardCombosKey` cannot disagree about what was asked. The header's list
+ * of mirrored structs deliberately does not name it, and `ipc.test.ts`'s field-parity table
+ * cannot either: there is no Rust struct to compare it with.
+ *
+ * **The fields are declared in the command's own parameter order** — `oracleId`, `search`,
+ * `cardCount`, `ownedOnly`, `limit`, `offset` — and `cardCombosKey` takes its first four in the
+ * same order for the same reason: three files describe one call, and an order that agrees is the
+ * cheapest way for a reader to check they are all talking about the same thing.
+ */
+export interface CardCombosQuery {
+  /** Which card — the **oracle** id, never a printing id. {@link ComboPiece.oracleId}'s rule,
+   *  and the reason `cardCombosKey` keys on it: a combo is a fact about a card, so stepping
+   *  between two printings of it must not miss the cache. */
+  oracleId: string;
+  /**
+   * A case-insensitive substring matched against **any piece's name** in the combo — the
+   * asked-about card's own included — or `null` for no search.
+   *
+   * `Option<String>` on the Rust side, and **`null` and `""` are the same request**: the empty
+   * string is what a cleared search box produces, and a backend that treated it as a substring
+   * would match everything anyway. That equivalence is why this field travels verbatim — the
+   * wrapper below sends whatever it is handed, and `""` is folded into `null` by `cardCombosKey`
+   * in `lib/query.ts`, where the difference is the only thing it can cost: two cache entries for
+   * one question. **Do not fold it a second time in the wrapper** — that would be the same rule
+   * written twice, and both copies would look right. A *caller* normalising further is a
+   * different matter and is allowed: `CombosDialog` trims, which decides what gets sent rather
+   * than what gets filed, and it does so before the key is built.
+   *
+   * It matches **names and nothing else** — not the steps, not the produced results, not the
+   * prerequisites. A reader narrowing 6 044 combos is naming a card they want in them, and a
+   * search that also hit `description` would answer with combos that merely *mention* a word.
+   *
+   * **It narrows in SQL, before the page is cut**, like the two filters below, and it moves two
+   * of the answer's counts with it — {@link CardCombosPage.byCardCount} and
+   * {@link CardCombosPage.ownedTotal} are censuses of the set this leaves standing. See
+   * {@link CardCombosPage} for why the facets follow the subject.
+   */
+  search: string | null;
+  /**
+   * An exact combo size, or `null` for every size — the value comes from a
+   * {@link ComboCountBucket}, so it is always a size that matched something *when the census was
+   * taken*. **Since the census is over the searched set, a size held across a change to
+   * `search` can name a bucket that no longer exists**, and the answer is an empty page rather
+   * than an error; whether the reader keeps the chip or loses it is the surface's decision, not
+   * this shape's.
+   *
+   * `Option<i64>` on the Rust side, and `null` is how `None` is spelled on the wire: the key
+   * has to travel even when there is no filter, because Tauri fills parameters by name and an
+   * absent one is a rejection rather than a default. `ipc.test.ts` pins exactly that, for this
+   * field and for {@link CardCombosQuery.search} beside it.
+   */
+  cardCount: number | null;
+  /**
+   * Only combos the reader owns every piece of.
+   *
+   * **Narrowed in SQL, before the page is cut** — which is what makes it a filter and not
+   * something a caller could do to the rows it already has. See `cardCombosKey` in
+   * `lib/query.ts` for what a client-side version of this would show a reader.
+   *
+   * Its own count, {@link CardCombosPage.ownedTotal}, is taken over the searched set — so the
+   * number the checkbox advertises is what pressing it would leave *given what is on screen*.
+   */
+  ownedOnly: boolean;
+  /** Page size. */
+  limit: number;
+  /** Rows to skip — compared against {@link CardCombosPage.matching}, never `total`. */
+  offset: number;
+}
+
+/**
+ * The combo table's own freshness — `combo_meta`, plus the shape of a database that has never
+ * fetched the file.
+ *
+ * The **fourth** optional bulk feed, after the two price feeds and the two tagger datasets — and
+ * optional the way the *tagger* pair is rather than the way the price feeds are: a launch fetches
+ * it uninvited and keeps it current, a failed fetch leaves the previous rows standing, and a
+ * database that never got it works, on three bracket signals instead of four. **That changed on
+ * 2026-09-08**, and the sentence it replaces is worth carrying because so much prose was written
+ * on it: until then nothing downloaded until a reader pressed Refresh in a Settings panel, which
+ * made "never fetched" the state every install *stayed* in rather than one it passes through.
+ * The panel is gone and so is the wait. It is not Scryfall — Commander
+ * Spellbook's `variants.json.gz`, 27.5 MB compressed, measured 2026-08-27 — so it takes no share
+ * of the Scryfall rate-limit budget and has no place in the 429 penalty state.
+ */
+export interface ComboStatus {
+  /** Rows in `combos` — combos kept, which is the published, Commander-legal subset. `0` before
+   *  the first ingest. */
+  combos: number;
+  /**
+   * **Distinct cards** across every kept combo — `count(DISTINCT oracle_id)` over `combo_cards`,
+   * not that table's row count.
+   *
+   * A card that appears in three combos is one card here, which is what makes the figure
+   * legible beside {@link ComboStatus.combos}: "105 478 combos, naming 7 310 cards between
+   * them" is a sentence about the corpus, where a slot count would just be a bigger number with
+   * no meaning of its own. Counted from the table rather than read off `combo_meta`, because a
+   * watermark can outlive the rows it describes.
+   */
+  cards: number;
+  /** The feed's own `timestamp`, as it published it (`"2026-08-27T03:12:44Z"`). `null` before the
+   *  first ingest. The file rotates continuously, so this is the honest as-of line — not
+   *  {@link ComboStatus.fetchedAt}, which is when *this app* asked. */
+  stamp: string | null;
+  /**
+   * Unix **seconds** when the rows last changed, and **`null` on a database that has never
+   * ingested the file**.
+   *
+   * That distinction is the whole reason this is nullable rather than `0`: never ingested is a
+   * **supported state**, not a failure. It is what an install is until its first launch fetch
+   * lands, what a machine that cannot reach Spellbook stays in, and what
+   * {@link ipc.combosClear} puts a database back into on purpose — and what it costs is one
+   * signal: the bracket estimate then reads three (Game Changers, mass land denial, extra turns)
+   * instead of four. Nothing about it may empty a deck's advisory or fail a check.
+   *
+   * It is the pair {@link TagStatus} already draws, for its reason: a 304 moves
+   * {@link ComboStatus.checkedAt} and not this, so collapsing the two would make an up-to-date
+   * table read as due on every launch and cost a request per start.
+   */
+  fetchedAt: number | null;
+  /** Unix **seconds** when the feed was last *asked*, whatever the answer. Moves on a 304;
+   *  `fetchedAt` does not. `null` before the first check. */
+  checkedAt: number | null;
+  /**
+   * Older than the backend's weekly refresh interval, **or never fetched at all**.
+   *
+   * Computed there and read rather than re-derived, {@link MarketplaceFeedStatus.stale}'s rule:
+   * one definition of how long the table stays believable, and a second copy of the arithmetic on
+   * this side would be a second place for it to drift.
+   */
+  stale: boolean;
+}
+
+/** The five phases a combo refresh emits — {@link TagPhase}'s list, because the shape of the job
+ *  is the same one: ask, download, ingest, and two ways to stop. */
+export type ComboPhase = "checking" | "downloading" | "ingesting" | "done" | "error";
+
+/**
+ * Payload of the `combos:progress` event.
+ *
+ * A channel of its own rather than a phase bolted onto something else, following
+ * `marketplace:progress` and the two tag channels for their reason: {@link SyncPhase} is a closed
+ * union with a *total* label map behind it, and a dataset with its own schedule has no business
+ * widening it.
+ *
+ * **Not a complete account of a refresh**, like every other progress event here: Tauri drops
+ * events emitted before the webview registered its listener, so a refresh that began before this
+ * window mounted a listener is invisible on this channel. {@link ipc.combosStatus} is the
+ * reliable half of the pair.
+ *
+ * `done`/`total` are read **against the phase and never across it** — bytes while downloading,
+ * variants while ingesting — so a bar that carried one scale from `downloading` into `ingesting`
+ * would jump. Two counts of two different things, on one pair of fields, exactly as
+ * {@link FeedProgressEvent} and {@link TagProgressEvent} already carry.
+ */
+export interface ComboProgress {
+  phase: ComboPhase;
+  done: number;
+  total: number;
+}
+
+/**
+ * One row of the error log.
+ *
+ * `operation` is deliberately *not* a union: the Rust column has no `CHECK`, because a new
+ * call site must not need a migration before it is allowed to report that it failed.
+ */
+export interface ErrorEntry {
+  id: number;
+  /** Unix **seconds**. A pair, because "started an hour ago and is still going" and
+   *  "happened once, an hour ago" are different stories one stamp cannot tell apart. */
+  firstAt: number;
+  lastAt: number;
+  source: ErrorSource;
+  operation: string;
+  kind: ErrorKind;
+  message: string;
+  /** The URL, card id or path. Outside the folding grain, so the most recent one wins. */
+  detail: string | null;
+  /** How many times this exact failure has happened. `1` unless it repeated. */
+  count: number;
+}
+
+/**
+ * What emptying the collection took with it — `crates/grimoire-core/src/reset.rs`.
+ *
+ * A shape rather than a bare count so the panel's sentence has somewhere to grow, and because
+ * the command has always answered an object. The decks themselves stay: a deck is a list of
+ * cards, not a list of *your* cards.
+ */
+export interface CollectionCleared {
+  entries: number;
+}
+
+/**
+ * What emptying the decks took with it.
+ *
+ * `folders` is its own number because the schema keeps folders their own thing —
+ * `decks.folder_id` is `ON DELETE SET NULL`, so clearing them is a second statement the
+ * backend takes deliberately.
+ *
+ * **It carried a third field, `covers`, and losing it is `reset.rs`'s only shape change**: that
+ * number counted *files* beside the database rather than rows, and it went with the custom
+ * cover on 2026-08-31. A deck is rows now, so the clear is a `DELETE` and nothing else. Two
+ * numbers, and this mirror is hand-written with nothing checking it against the crate — a field
+ * left here would have arrived `undefined` and read as zero, which is a sentence quietly
+ * dropping a count rather than anything going red.
+ */
+export interface DecksCleared {
+  decks: number;
+  folders: number;
+}
+
+/**
+ * What the cache sweep freed.
+ *
+ * `failed` is not an error: a file another thread holds open cannot be deleted on Windows, and
+ * the honest answer is the count that went plus the count that would not. The panel says the
+ * second number only when it is non-zero.
+ */
+export interface CacheCleared {
+  files: number;
+  bytes: number;
+  /** `image_cache` rows dropped — the bookkeeping that vouched for those pictures. */
+  rows: number;
+  failed: number;
+}
+
+/**
+ * What one pass of the plain-text mirror did — `apps/desktop/src-tauri/src/mirror/run.rs`.
+ *
+ * Five counts and no list of names, because the numbers are what a panel says and the names
+ * are what the folder says. **`failed` is not an error**, exactly as {@link CacheCleared}'s is
+ * not: a file the mirror could not write is one file, the pass carried on past it, and the
+ * honest answer is the count that landed beside the count that would not.
+ *
+ * `unchanged` is the number this whole design rests on. The pass hashes every file it would
+ * write against what it last wrote and opens nothing for a match, so a mirror that is already
+ * correct costs a read per file and no writes at all — which is why the summary says both
+ * numbers rather than only the one that moved.
+ */
+export interface PassReport {
+  written: number;
+  unchanged: number;
+  /**
+   * Files the mirror left alone **because they are not its own** — in practice a `README.txt`
+   * that was already in the folder the reader chose.
+   *
+   * A different fact from every other count here, which is why it is a count of its own:
+   * `unchanged` says the bytes on disk are already the bytes we would write, and `failed` says
+   * we tried and could not. Neither is true of a file we declined to touch. The backup root is
+   * user-choosable — a synced folder, a Dropbox, a stick with a decade of somebody's notes on
+   * it — and the manifest is the only authority on which files in it are ours.
+   */
+  skipped: number;
+  /** Files this app would itself have written that it no longer would — a renamed deck's old
+   *  folder. Never a file the reader put there; see the spec's pruning rule. */
+  pruned: number;
+  failed: number;
+}
+
+/**
+ * Everything the Settings panel draws about the mirror — `apps/desktop/src-tauri/src/mirror/settings.rs`.
+ *
+ * Two of the five fields are stored settings and three are facts about *this process run*: a
+ * pass records what it did in memory, because the numbers describe a folder that may not
+ * survive a restart and a count read back after one would be a claim about a disk nobody has
+ * looked at since.
+ */
+export interface MirrorStatus {
+  enabled: boolean;
+  /** An absolute path. Never blank — a missing or unusable setting reads as `data/export`. */
+  root: string;
+  /**
+   * Unix **seconds as a string**, or `null` when no pass has finished this session.
+   *
+   * A string for {@link SyncStatus.lastCheckAt}'s reason: a JSON number is an `f64` on this
+   * side, and seconds-since-epoch is not a value to round-trip through one.
+   *
+   * **`null` is an answer and the panel has a sentence for it.** A fresh app has run no pass,
+   * and a panel that drew {@link MirrorStatus.lastReport}'s zeroes instead would claim a pass
+   * happened and wrote nothing — which is the one thing that cannot be told from a mirror that
+   * is already up to date.
+   */
+  lastRunAt: string | null;
+  lastReport: PassReport | null;
+  /** The sentence to show when the last pass could not write, or `null` when it went fine. */
+  lastError: string | null;
+}
+
+/**
+ * A QR code as a grid, row-major, `width * width` long. `true` is a dark module.
+ *
+ * **A fact rather than a picture, which is why it crosses the boundary in this shape.** Rust
+ * answers what the encoder produced; this side decides the colour, the module size and the
+ * quiet zone, because all three are questions about a screen.
+ */
+export interface QrMatrix {
+  width: number;
+  modules: boolean[];
+}
+
+/** One device on the pairing roster. The public key is deliberately not sent. */
+export interface PairedDevice {
+  deviceId: string;
+  name: string;
+  addedAt: number;
+  /**
+   * A stamp means this device was removed.
+   *
+   * **The row is kept and the panel does not draw it.** `add_device` clears the stamp on a
+   * re-pair and `baseline::peers_needing` reads it to skip a peer that will never answer, so the
+   * roster keeps the mark for the crate's sake — not so a reader can be shown history they asked
+   * to be rid of. It stays on this type because the column is still on the wire.
+   */
+  revokedAt: number | null;
+}
+
+/** What Settings draws when no pairing is in flight. `groupId` is null on an unpaired device. */
+export interface PairingStatus {
+  deviceId: string;
+  deviceName: string;
+  groupId: string | null;
+  epoch: number | null;
+  devices: PairedDevice[];
+}
+
+/** The invite, in both forms. */
+export interface PairingOffer {
+  code: string;
+  qr: QrMatrix;
+}
+
+/**
+ * The six digits to compare.
+ *
+ * **The digits are what the reader compares and the whole of what defeats a man in the middle**
+ * (spec §7.5 step 3), so the panel must never auto-advance past them.
+ */
+export interface PairingHandshake {
+  sas: string;
+}
+
+/** The wrapped group key, for the reader to carry to the joining device. */
+export interface PairingSealedKey {
+  sealedKey: string;
+}
+
+/** What `sync_pairing_poll` answers. `stage` drives the panel and nothing else does. */
+export interface PairingProgress {
+  /**
+   * `"idle" | "waiting" | "compare" | "complete" | "expired"`
+   *
+   * **`"expired"` is an answer and not an error**, which is what makes the ten-minute timeout
+   * reach the reader at all: the command clears its pending offer as it answers, so a refusal
+   * would have been one call long and this query's `retry: 1` overwrote it with the next call's
+   * `"idle"`. See `SyncPanel`'s `EXPIRED_NOTE`.
+   */
+  stage: string;
+  /** The six digits, once both sides have them. */
+  sas: string | null;
+}
+
+/**
+ * What the Sync panel draws about the relay.
+ *
+ * **There is no `relayUrl` here and there is no longer a field to type one into.** The relay is
+ * one hosted Worker whose address is compiled into the crate, so "sync is off" stopped being
+ * *no URL* and became *no entitlement* — {@link SupporterStatus} is the field that answers it,
+ * and this struct is only ever about what is waiting and how the last trip went.
+ *
+ * **There is no last-failure field either, and its absence is the change rather than an
+ * omission.** It carried the newest `error_log` row with `source = 'relay'` — a row the Errors
+ * panel further down the same page already draws — so one failure was rendered twice, in two
+ * registers, under two headings. The record is untouched: the crate still logs every relay
+ * failure, and this struct simply stops answering for it.
+ */
+export interface RelayStatus {
+  paired: boolean;
+  /** Changes this device has written and not yet handed over. */
+  pending: number;
+  /** Unix seconds, or null when no round trip has ever finished. */
+  lastSyncAt: number | null;
+  /** Rows carrying a `needs_review` sentence, across all six tables that can hold one. */
+  reviewCount: number;
+  /**
+   * Whether a pull is stuck, and on what — the `sync_state` key `pull_hold` read back for the
+   * panel. `"newer"` is a peer running a build ahead of this one: it stamped an op with a
+   * `schema` this device's own `USER_SCHEMA_VERSION` cannot clear, so nothing releases it but an
+   * update, however many pulls or how much time pass. `"waiting"` is a peer's own ordinary
+   * ordering — an op arrived before the parent it names, which a later pull carrying that parent
+   * clears on its own, or is skipped after the bound (three pulls and ten minutes on the same
+   * blocks) when that parent never comes — and `null` is the ordinary case, where nothing is held
+   * at all, and always the answer on a device in no group. `"clock"` is a peer whose clock runs
+   * ahead: it stamped ops more than a day (`hlc::MAX_AHEAD_MS`) past this device's wall clock, and
+   * applying them would drag this device's hybrid logical clock into that future for good — so
+   * they wait, with the cursor, until this device's own clock comes within a day of them. Like
+   * `"newer"` it is the reader's to fix, on whichever device has the wrong date.
+   */
+  pullHeld: "newer" | "waiting" | "clock" | null;
+}
+
+/**
+ * The membership that unlocks the relay, as this device last heard it.
+ *
+ * **`entitled` and `status` are two different questions and the panel must never fold them
+ * into one.** `entitled` says the relay will mint this device a token; `status` is the relay's
+ * own last word about the membership behind it. A device that has never connected and a reader
+ * whose pledge has ended are both `entitled: false, status: "dead"`, and they get different
+ * sentences: *Not connected* points at a button, *Membership ended* points at a
+ * renewal and has to say that nothing local was touched (spec §7.1).
+ *
+ * **`groupBound` is what tells them apart, and `since` cannot.** `entitlement::revoke` deletes the
+ * start date along with the refresh secret, so a lapsed membership and a device out of the box
+ * both read `since: null` — the field that survives a lapse is `groupBound`, which says an
+ * entitlement was once bound to this device's group. `supporterState` therefore asks `entitled`
+ * first and `groupBound` second, and a build that keyed the two silences on `since` showed every
+ * lapsed reader *Not connected*.
+ *
+ * ⚠️ **This interface is hand-written and nothing type-checks it against the crate**, which is
+ * exactly how the rename below arrived as a runtime bug rather than a red build: the field was
+ * called `connected` until spec §2.5, and a build that kept the old spelling compiled, passed
+ * every test, read `undefined` in the shipped window and drew *Connect Patreon* at a paid-up
+ * supporter on every device but one. Assert the field **by name** — `toEqual` over the whole
+ * object, never `toMatchObject` on the fields that did not move.
+ *
+ * **`grace` is a third thing again, not a softer `dead`** (spec §7.2): a card Patreon is still
+ * retrying, where tokens are still minted and sync keeps working. Drawing it as a cancellation
+ * would punish a reader for something they did not decide.
+ */
+export interface SupporterStatus {
+  /**
+   * **The relay will mint this device a token** — spec §2.5, and the field was `connected`
+   * until then.
+   *
+   * Renamed rather than redefined, because it stopped being one device's fact. "Connected"
+   * meant *this device holds a refresh secret*; entitlement is the **group's**, since any
+   * device in a group with a live membership can mint through `/token`'s group door holding no
+   * Patreon-side secret at all. So the crate answers this as that secret **or** a stored
+   * `SUPPORTER_STATUS` of `active`/`grace`, which is the relay having answered this device's
+   * group auth.
+   */
+  entitled: boolean;
+  /** `"active"`, `"grace"` or `"dead"`, as the relay last answered. */
+  status: string;
+  /** Unix **seconds** the membership began; null for never having been told one **and for one
+   *  that has ended**, because `revoke` deletes the date with the secret. */
+  since: number | null;
+  /** An entitlement was bound to this device's pairing group — and it outlives a lapse, which
+   *  is what makes it and not `since` the discriminator above. */
+  groupBound: boolean;
+}
+
+/**
+ * What one round trip did.
+ *
+ * The five counts after `unreadable` are `ApplyReport`'s, so a page can invalidate the right
+ * query keys once rather than per op. `deferred` is the one worth reading twice, and its meaning
+ * widened with the two holds below it: it is every op **held for re-delivery** — a newer-schema
+ * group's held ops and their collateral, plus an ordinary peer's ops still waiting on a parent
+ * that has not arrived — so `deferred - heldNewer` is the waiting half alone.
+ *
+ * `heldNewer` and `dropped` are new — a newer device's held ops named apart from `deferred`
+ * because they have **no bound**: a waiting hold self-heals once its parent's pull arrives, where
+ * a newer hold clears only when this device updates, however many pulls or how much time pass.
+ * `dropped` is neither: an op consumed because it can never apply (its group is recorded once in
+ * the error log, in the committed pass), which is a third and permanent outcome distinct from
+ * both a hold that might still clear and `unreadable`'s envelope that never opened.
+ *
+ * The last two are the **first-contact baseline** (baseline spec §13). They are not part of
+ * `pushed`: a baseline is built in memory and posted without ever entering `sync_ops`, so the
+ * outbox count cannot see it. Both are zero on every sync after the first with a given peer,
+ * which is every sync a reader ever presses but one.
+ */
+export interface RelayOutcome {
+  pushed: number;
+  pulled: number;
+  unreadable: number;
+  applied: number;
+  resurrected: number;
+  cyclesBroken: number;
+  skipped: number;
+  deferred: number;
+  /**
+   * Ops in groups held because a newer schema wrote them — this device cannot parse them yet.
+   * Counted separately from the rest of {@link RelayOutcome.deferred} because it has no bound:
+   * nothing releases it but updating this device, where the waiting half of `deferred` clears on
+   * its own once the parent it is missing arrives on a later pull, or is skipped after the bound.
+   */
+  heldNewer: number;
+  /**
+   * Ops consumed because they could never apply — a table this build does not sync, a row it
+   * cannot build, or a released wait — each group recorded once in the error log rather than
+   * silently discarded. Distinct from `unreadable` (an envelope that failed to open), from a
+   * hold (which might still clear), and from a moot child of a parent deleted here, which is
+   * consumed too but neither counted here nor recorded: the delete took it.
+   */
+  dropped: number;
+  /**
+   * Ops consumed because they name a parent a delete has already taken — and a row this device
+   * held under such an op's uid is deleted with it, so a trip can change what a screen shows while
+   * {@link RelayOutcome.applied} stays at nought.
+   */
+  moot: number;
+  /**
+   * Whether this trip changed a row a screen reads: it applied or mooted an op, brought a row back,
+   * broke a folder cycle, or one of the conversions that run behind a pull wrote a row. `false` for
+   * a trip that only pushed, skipped, held or dropped. `useDeviceSyncInvalidation` gates its wide
+   * refresh on this and not on `pulled`, which missed the moot arm's deletes and the conversions.
+   */
+  changed: boolean;
+  /**
+   * Rows handed to a device that had not heard from this one before.
+   *
+   * Larger than any other number here by orders of magnitude — 1 069 on the measured pair —
+   * which is why the panel says what it is rather than letting it read as a hang.
+   */
+  baselineOps: number;
+  /**
+   * The `deck_audit` rows among {@link RelayOutcome.baselineOps}, named separately.
+   *
+   * Baseline spec §7: history is the one synced table with no ceiling, so it is the part of a
+   * first exchange that can surprise. A reader who is told only the total has no way to tell a
+   * large collection from a long one.
+   */
+  baselineHistory: number;
+  /**
+   * How many pages this trip's pull asked the relay for: one for an ordinary sync, and for a
+   * relay that does not page; one a half-mebibyte of log for a device catching up.
+   */
+  pullPages: number;
+  /**
+   * Whether the pull evaluated everything it fetched as one answer, because a baseline from a
+   * build before v0.40.0 was in it — the cost of the unpaged pull, for that catch-up only. No
+   * face reads it; it is what says, in a measurement or a bug report, which way a catch-up was
+   * applied.
+   */
+  pullWhole: boolean;
+}
+
+/**
+ * `changes::DbChanged` — which user tables a commit wrote. Sent to every window, and only while
+ * two or more are open; `useCrossWindowRefresh` turns it into invalidations.
+ */
+export interface DbChanged {
+  tables: string[];
+}
+
+/**
+ * The six tables that can hold a `needs_review` sentence.
+ *
+ * A closed union, like {@link ErrorSource} and for the same reason: `Record<ReviewTable, string>`
+ * in `ReviewPanel.tsx` is total, so a seventh table added on the Rust side is a **type error**
+ * here rather than a heading nobody wrote. The crate's own
+ * `no_table_with_the_column_is_missing_from_the_list` catches a table the *crate* forgot; this
+ * catches one the crate remembered and the page did not.
+ */
+export type ReviewTable =
+  | "collection_entries"
+  | "deck_cards"
+  | "wishlist_entries"
+  | "collection_folders"
+  | "deck_folders"
+  | "wishlist_folders";
+
+/**
+ * One row asking to be looked at — spec §7.4's two surfaced outcomes, plus whatever the
+ * reconciler has already written about a printing that left Scryfall.
+ *
+ * `sentence` is shown **verbatim**. It was written in Rust, which is `reconcile.rs`'s
+ * convention for this column and deliberately not `deck_audit`'s: one column with two
+ * conventions is worse than either.
+ */
+export interface ReviewRow {
+  /** Which table it is in. The panel groups by this and clearing needs it. */
+  table: ReviewTable;
+  /** The row's `sync_uid`, never a rowid — a rowid means nothing on the other device. */
+  uid: string;
+  title: string;
+  sentence: string;
+}
+
+/**
+ * How the decks page's folder tree was last left — one `app_meta` row, and the only stored
+ * preference in this file that carries a struct.
+ *
+ * Two fields because they are one gesture's worth of state and not two settings that happen to be
+ * about the same sidebar: a reader who widens the tree and then folds it has said two things about
+ * one column, and a build that stored them in two rows would have two writes that can half-land —
+ * a fold remembered against a width that was not, or the reverse. See this file's header for why
+ * that makes it a struct rather than {@link searchOpen}'s map.
+ *
+ * **Neither field is clamped here and neither should be.** The drag's own floor and ceiling are
+ * `FolderTree`'s and `useDeskWidth`'s, and they are a fact about the window this row was *not*
+ * written in — a narrow session that stored its own squeeze would be a reader's width thrown away
+ * by a window they resized once. The crate refuses a width that could never be a width at all and
+ * takes every other number as typed; `@/features/decks/useFolderPane` is where it becomes the
+ * pixel count the tree is drawn at.
+ */
+export interface DeckFolderPane {
+  /** How wide the reader dragged the folder tree, in px — `null` on a database nobody has dragged. */
+  width: number | null;
+  /** Whether the tree is folded to its rail. `false` on a database nobody has folded it in. */
+  collapsed: boolean;
+}
+
+/**
+ * One tile on the home page — **a document the backend stores and does not understand**.
+ *
+ * `kind` is a `string` and `config` is `unknown` on purpose, and it is the strongest version of
+ * {@link ipc.deckSort}'s split rather than an exception to it: the widget vocabulary is
+ * TypeScript's, it appears in no Rust file, and the union that narrows it is a **different type**
+ * — `WidgetKind` in `packages/ui/features/home/widgets.ts`. Naming the kinds here as a union would make a
+ * layout a *newer* build wrote unparseable by an older one, and a portable app that a reader runs
+ * two versions of is exactly where that happens. Rust validates that both words are non-empty and
+ * nothing else; this side draws what it knows and carries the rest through untouched.
+ */
+export interface HomeWidget {
+  /** Stable across a move — the key a drag moves and the row a `config` belongs to. */
+  id: string;
+  /** Which tile this is. See above: **not** `WidgetKind`, deliberately. */
+  kind: string;
+  /**
+   * Where the tile sits on the page's square-cell grid, in cells from the top-left corner, and how
+   * many cells it covers — layout document **version 2**. Rust bounds each by value and knows
+   * nothing about how many columns a window has: `layout.ts`'s `normalise` is what brings a
+   * document inside the grid it is about to be drawn on.
+   *
+   * A version-1 document carries none of the four, and Rust answers `0` for each; `parseLayout`
+   * reads `w === 0` as "never placed" and lays the widget out from {@link span}.
+   */
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+  /**
+   * The version-1 width — `1` a column, `2` the whole row. **Written on every version-2 document
+   * and read by nothing in this build except the upgrade from version 1.** It is there for an
+   * *older* build: that one's `home.rs` requires the field, so a document without it would read as
+   * the default layout there, and the reader's next Customize in the old build would overwrite
+   * this build's page. With it, the old build draws the widgets in a row and refuses to save a
+   * version it does not write — the round trip this document has always promised.
+   */
+  span?: number;
+  /** Whatever that kind of tile remembers — a dimension, a title, a density, a row count.
+   *  `unknown` rather than a union of every widget's shape for `kind`'s reason: a build that
+   *  cannot read a config must still write it back the way it found it. */
+  config: unknown;
+}
+
+/**
+ * The whole home page, as one `app_meta` row — the **eleventh** stored setting and the second that
+ * carries a struct, after {@link DeckFolderPane}.
+ *
+ * A document rather than a row per tile for that struct's reason, arrived at from the other end: a
+ * reorder changes every widget's place at once, so one write is the only shape that cannot half
+ * land. `markcolors.rs`'s four rules govern it — reading can never fail, writing validates, **a
+ * write preserves what this build does not understand**, and no migration, because `app_meta` is
+ * schema v6's table.
+ *
+ * **An empty `widgets` is a layout, not a missing row.** A reader who removed every tile has said
+ * something, and handing them the default back on the next launch would be the app arguing with
+ * them; only a row that is *absent* or unparseable falls back to the six the crate seeds.
+ */
+export interface HomeLayout {
+  /** `2` since the cell grid. Rust **refuses** a write carrying anything else rather than
+   *  downgrading it, so a document from a future build survives an older one untouched. */
+  version: number;
+  widgets: HomeWidget[];
+}
+
+/**
+ * One card the reader opened recently — `recent_cards.rs`'s `RecentCard`.
+ *
+ * The ids are this device's memory, one `app_meta` row, and the name and set are joined off the
+ * corpus at read time: a printing the corpus no longer holds is skipped rather than drawn as a
+ * frame with nothing in it.
+ */
+export interface RecentCard {
+  cardId: string;
+  name: string;
+  setCode: string;
+  /** Unix seconds of the most recent open. */
+  viewedAt: number;
+}
+
+/**
+ * How much of one set the reader owns — `set_completion.rs`'s `SetCompletion`.
+ *
+ * `owned` counts **distinct collector numbers** the collection holds any copy of, in any finish
+ * or language, inside `1..=size`. `size` is Scryfall's `printed_size` and is `null` for a set the
+ * corpus has no printed size for — a corpus that has not synced since the column arrived, or a
+ * set Scryfall publishes none for — in which case `owned` counts every collector number held.
+ * Only sets holding at least one owned card are answered.
+ */
+export interface SetCompletion {
+  setCode: string;
+  name: string;
+  /** `YYYY-MM-DD`, or `null` where Scryfall published none. */
+  releasedAt: string | null;
+  owned: number;
+  size: number | null;
+}
+
+/** Which baseline {@link ipc.priceMovers} measures against. `all` is the oldest snapshot kept. */
+export type PriceMoverWindow = "7d" | "30d" | "all";
+
+/** Which way a mover went. `both` ranks gainers and losers together by the size of the move. */
+export type PriceMoverDirection = "both" | "up" | "down";
+
+/** One owned printing whose price moved — `price_history.rs`'s `PriceMover`. */
+export interface PriceMover {
+  cardId: string;
+  name: string;
+  setCode: string;
+  /** `null` for a printing whose set left the corpus. */
+  setName: string | null;
+  finish: Finish;
+  /** Today's price at the asked marketplace, through `sorting::price_expr`. */
+  now: number;
+  /** The price in the baseline snapshot. */
+  then: number;
+  /** `now - then`, signed. Never `0` — a printing that did not move is not a mover. */
+  delta: number;
+}
+
+/**
+ * The movers, and what they were measured against — `price_history.rs`'s `PriceMovers`.
+ *
+ * `since` is the Unix seconds of the baseline snapshot actually used, `null` when there is no
+ * snapshot old enough to compare against at all. `days` is how many distinct days of snapshots
+ * this marketplace holds, which is what lets the widget tell *nothing moved* from *there is no
+ * history yet* — two sentences a reader must never confuse.
+ */
+export interface PriceMovers {
+  movers: PriceMover[];
+  since: number | null;
+  days: number;
+}
+
+/** One day of one printing's price — `price_history.rs`'s `PricePoint`. */
+export interface PricePoint {
+  /** Unix seconds of that day's UTC midnight — the day the snapshot was taken, not its instant. */
+  day: number;
+  price: number;
+}
+
+/**
+ * One printing's price over time at one marketplace — `price_history.rs`'s `PriceHistory`.
+ *
+ * **`points` stops before today**, oldest first and one per day: today's figure is `now`, read
+ * live through `sorting::price_expr` — the same number {@link PriceMover}'s `now` is — so the
+ * popup's latest figure is the price the widget row showed rather than a snapshot that can lag it
+ * by a feed. `now` is `null` when this marketplace has no price for the printing today, which
+ * is an answer and never a reason to reach for another marketplace's. `today` is the database's
+ * own `unixepoch(date('now'))`, so the page places the last point without a clock of its own —
+ * one clock for the whole answer, and a test that can pin it.
+ */
+export interface PriceHistory {
+  points: PricePoint[];
+  now: number | null;
+  today: number;
+}
+
+/**
+ * How {@link ipc.collectionValueHistory} cuts the collection's value — `value_history.rs`'s
+ * `split` word. `total` is one line and no buckets; the other three put every copy in exactly one
+ * bucket, so a point's bucket values always sum to its total.
+ *
+ * A word the crate does not know is **refused**, in `value_history::NOT_A_SPLIT`'s words — not
+ * read as `total`. Where `price_movers` degrades an unknown window to the default, a graph drawn
+ * under a heading that says *by colour* over a single total line would be the chart lying about
+ * its own subject.
+ */
+export type ValueSplit = "total" | "type" | "color" | "set";
+
+/**
+ * One line of the Collection value graph — `value_history.rs`'s `ValueBucket`.
+ *
+ * `key` is the crate's word and the three splits spell it three ways, none of them this side's to
+ * reword. **`type`** is lowercase — `creature` … `land`, or `other` — and its precedence is
+ * `features/decks/deckBuckets.ts`'s `typeBucket` exactly, on the front face, so a reader meets one
+ * answer to "what type is this card" on the deck editor and on the home page. **`color`** is
+ * `collection_breakdown`'s own vocabulary: `W` `U` `B` `R` `G` as the stored uppercase letter,
+ * beside the two lowercase words `c` and `multi`. **`set`** is the set code, or `other` for a
+ * printing that has left the corpus and for every set past the crate's cap.
+ *
+ * `name` is the set's name for `set` and `null` everywhere else — for the other three splits, for
+ * `other`, and for a set the corpus no longer knows the name of. It is not a label: the words a
+ * reader sees are TypeScript's, and `null` here is a fact about the database.
+ */
+export interface ValueBucket {
+  key: string;
+  name: string | null;
+}
+
+/**
+ * One point of the Collection value graph — `value_history.rs`'s `ValuePoint`.
+ *
+ * **`moved` is the price-only part of the step from the previous point, and the rest is the
+ * reader's own doing.** For every printing held at both points it is `copies_before ×
+ * (price_now − price_before)`, so `total − previous.total − moved` is what was added or taken
+ * away in that step — a figure this side derives rather than the crate sending a second number
+ * that could come to disagree with the first two. `null` on the first point, where there is no
+ * step: **`null` and never `0`**, because *no step* and *a step in which no price moved* are two
+ * different sentences on the readout.
+ */
+export interface ValuePoint {
+  /** Unix seconds of the period's UTC midnight. A weekly period answers its **latest** day. */
+  day: number;
+  /** Σ copies × price over the period's priced rows. Never an em dash: an unpriced copy adds 0. */
+  total: number;
+  /** One value per {@link ValueHistory.buckets}, in the same order; empty for `total`. */
+  values: number[];
+  /** The price-only part of `total − previous.total` — see above. */
+  moved: number | null;
+  /**
+   * True on the last point only: **today**, computed live from `collection_entries` at today's
+   * price the way `collection_summary` computes the collection's value — so the graph's last point
+   * is exactly the figure the Collection value widget prints beside it.
+   */
+  live: boolean;
+}
+
+/**
+ * The collection's value over time at one marketplace — `value_history.rs`'s `ValueHistory`.
+ *
+ * **`points` is every kept snapshot period before today plus a live point for today**, oldest
+ * first: one point a day inside `price_history::DAILY_DAYS` and one per seven-day bucket beyond
+ * it, the table's own thinning applied again at read time so a printing sold mid-week cannot make
+ * a point of its own. **Only rows written from user schema v50 on are read** — `price_snapshots`
+ * learned how many copies it was pricing at that rung, and a row from before it has a price and
+ * no holding — so a database upgraded today answers the live point alone, which is the widget's
+ * *the line starts tomorrow* state rather than a line drawn out of NULLs. **An empty collection
+ * answers no points at all**, not a live point at zero.
+ *
+ * `buckets` is empty for `total`. For `color` it is fixed `W U B R G c multi` order, holding only
+ * the buckets that are non-zero somewhere; for `type` and `set` it is today's value descending with
+ * `other` last and **at most eight named buckets** — which to fold further, and into what words, is
+ * the widget's. `today` is the database's own `unixepoch(date('now'))`, {@link PriceHistory}'s
+ * device, so the page places the range without a clock of its own.
+ */
+export interface ValueHistory {
+  buckets: ValueBucket[];
+  points: ValuePoint[];
+  today: number;
+}
+
+/**
+ * One of the reader's own sticky notes — `sticky_notes.rs`'s `StickyNoteRow` (user schema v46).
+ *
+ * **It hangs off nothing**, which is what separates it from {@link DeckNote}: no deck, no card,
+ * no scope. The home page's `stickyNotes` widget is its only reader.
+ *
+ * Two fields carry no vocabulary on this side of the wire and both are deliberate. `title` may be
+ * empty, and what a note is *called* is computed at render rather than stored — a stored
+ * derivation would go stale the moment the body was edited and no writer could notice. `color` is
+ * one of five words the page knows, and the column carries **no CHECK**: the table is synced, so a
+ * build that adds a sixth colour must be able to emit rows this build can still draw.
+ * `features/home/stickyNotes.ts`'s `noteColor` reads an unknown word as `slate`.
+ *
+ * `body` is CommonMark in the dialect `features/decks/noteMarkdown.ts` pins — never HTML and never
+ * ProseMirror JSON, which is what keeps a renderer out of the crate.
+ */
+export interface StickyNote {
+  id: number;
+  /** May be empty. See the note above: the drawn heading is derived, never this field alone. */
+  title: string;
+  body: string;
+  color: string;
+  pinned: boolean;
+  /** The reader's own arrangement, renumbered by {@link ipc.stickyNoteReorder}. */
+  sortOrder: number;
+  /** Unix seconds. Neither timestamp is synced — two answers to "when" is one too many. */
+  createdAt: number;
+  updatedAt: number;
+}
+
+/**
+ * What {@link ipc.stickyNoteUpdate} changes — **absent means leave it**, and `""` really empties.
+ *
+ * Rust's `coalesce(?n, col)` is the whole of that rule, so an omitted key and a key set to
+ * `undefined` are the same thing on the wire and neither can blank a field by accident.
+ */
+export interface StickyNotePatch {
+  title?: string;
+  body?: string;
+  color?: string;
+  pinned?: boolean;
+}
+
+/**
+ * One deck holding the card a {@link NewPrinting} is a reprint of — `new_printings.rs`'s
+ * `NewPrintingDeck`.
+ *
+ * `quantity` is summed across the deck's categories, so a deck holding the card in both a live
+ * and a theory pile is **one** entry with the total rather than two entries that look like two
+ * decks. `variant` is then the *lower* of the two words it was folded from — `live` wins over
+ * `theory`, because a deck that has sleeved the card up is holding it whatever else it plans.
+ */
+export interface NewPrintingDeck {
+  deckId: number;
+  name: string;
+  quantity: number;
+  variant: "live" | "theory";
+  virtualOnly: boolean;
+}
+
+/**
+ * One reprinted printing and the decks that hold the card — `new_printings.rs`'s `NewPrinting`.
+ *
+ * **`releasedAt` is never null here**, unlike `Printing.releasedAt` one command over: a printing
+ * with no date cannot be placed in a day group, so the query drops it rather than the page
+ * inventing an *Undated* bucket.
+ */
+export interface NewPrinting {
+  printingId: string;
+  oracleId: string;
+  name: string;
+  setCode: string;
+  setName: string | null;
+  collectorNumber: string;
+  /** `YYYY-MM-DD`. Never null — see above. */
+  releasedAt: string;
+  rarity: string | null;
+  /** JSON, verbatim — read with `packages/ui/lib/treatment.ts`, as on {@link Printing}. */
+  promoTypes: string | null;
+  finishes: string | null;
+  /**
+   * Which language this printing is — `cards.lang`.
+   *
+   * **On the wire because a row has to be able to say it.** A reader who asks for every language
+   * gets one row per language of a reprint, which is what they asked for — and without this those
+   * rows are identical on screen and the list reads as duplicated rather than complete.
+   */
+  lang: string;
+  decks: readonly NewPrintingDeck[];
+}
+
+/**
+ * The feed, and the four facts that travel beside it — `new_printings.rs`'s `NewPrintings`.
+ *
+ * **An empty list means one of three different things and a count of zero cannot tell them
+ * apart**: no deck is watched, nothing was reprinted inside this window, or the window is
+ * shorter than the card data goes back. `decksWatched`, `since` and `oldest` are what let the
+ * page pick its sentence — `PriceMovers`' `days`/`since` device, one widget over.
+ */
+export interface NewPrintings {
+  printings: readonly NewPrinting[];
+  /** How many decks the scope resolved to. **`0` is a real answer** with a sentence of its own. */
+  decksWatched: number;
+  /** The window's far edge, `YYYY-MM-DD`. */
+  since: string;
+  /** The oldest printing actually in the answer, or `null` when there are none. */
+  oldest: string | null;
+  /**
+   * When this device last saw a non-empty feed, in Unix seconds — `app_meta.new_printings_seen`,
+   * and deliberately **not** a `config` key: a config round-trips through older builds, and a
+   * cursor an older build rewrites is a cursor that lies. `null` is *never*, which marks every
+   * row as unseen.
+   */
+  seenAt: number | null;
+}
+
+/**
+ * Which comparison the Deck completion widget asks for — `deck_completion.rs`'s `Compare`, sent as
+ * the word. **Anything Rust does not recognise reads as `collection`**, `Marketplace`'s forgiving
+ * shape, so a word a newer build wrote measures the default rather than refusing.
+ *
+ * * `collection` — every deck that is not virtual, its **actual** (live) list against the copies
+ *   the collection files in that deck's own group: the editor's `Actual` tab, owned for owned.
+ * * `theory` — every deck that keeps a plan, virtual ones included, its **actual** list against
+ *   its **theory** list: how much of the plan is already sleeved, in the exact printing and finish.
+ *   `theory_diff`'s arithmetic, so the missing copies are the Compare dialog's own lines.
+ */
+export type DeckCompletionCompare = "collection" | "theory";
+
+/**
+ * How far one deck is along — `deck_completion.rs`'s `DeckCompletion`, one row per deck the
+ * {@link DeckCompletionCompare} asked about (archived ones included; which decks to draw is the
+ * widget's decision).
+ *
+ * **Counted exactly as the deck editor counts**, which is the whole point of the read: a widget
+ * saying "4 missing" about a deck that opens saying "6 missing" is a bug report. Every active pile
+ * counts — sideboard and companion included, unlike {@link DeckValue}'s narrower pile — and a copy
+ * matches on exact printing and finish.
+ */
+export interface DeckCompletion {
+  deckId: number;
+  /** Which list the figure is a fraction *of* — `live` under `collection`, measured against the
+   *  deck's own group, and `theory` under `theory`, measured against the actual list. */
+  list: "live" | "theory";
+  /** Copies the measured list asks for, over every active pile. */
+  wanted: number;
+  /** Of those, copies the pool covers — the group's copies, or the actual list's. Never more than
+   *  `wanted`. */
+  owned: number;
+  /** `wanted − owned`. Never negative. */
+  missing: number;
+  /**
+   * What the missing copies cost at the marketplace asked for. **`null` when nothing counted in
+   * the list is priced there** — `DeckStats`' `missingPrice` rule — so a complete deck whose cards
+   * are priced answers `0`, and `null` always draws an em dash rather than `$0.00`. A deck whose
+   * only missing copies are unpriced also answers `0`, beside a non-zero
+   * {@link DeckCompletion.unpricedMissing}.
+   */
+  missingCost: number | null;
+  /** Missing **copies** this marketplace has no price for — counted beside the cost, never summed
+   *  into it as zero. */
+  unpricedMissing: number;
+}
+
+/** One set with printings still to come — `upcoming_sets.rs`'s `UpcomingSet`. */
+export interface UpcomingSet {
+  code: string;
+  /** `cards.set_name`, or the code where no card in the window carries one. */
+  name: string;
+  /** The set's **earliest** card date in the window, `YYYY-MM-DD` — cards of one set can carry
+   *  different dates. */
+  releasedAt: string;
+  /** The number the search draws for the set's chip on `Any card` — its paper printings, **one per
+   *  card** (`search.rs`' `COLLAPSE_KEY`), whatever their date — so a showcase, a borderless or a
+   *  second language of one card is not a second card, and a row agrees with the page it opens. */
+  previewed: number;
+  /** Distinct oracle cards in it that the reader's non-virtual decks hold, live or theory, basic
+   *  lands left out — `new_printings`' defaults. */
+  inDecks: number;
+}
+
+/**
+ * The upcoming sets, and the day they were counted from — `upcoming_sets.rs`'s `UpcomingSets`.
+ *
+ * **Read over `cards`, not `sets`**, because the crate drops token, promo, memorabilia and
+ * minigame sets from `sets`. Tokens, emblems, art
+ * cards and front cards are never counted, and **a set any of whose paper cards has already
+ * released is not coming soon at all** — The List and its kind gain future-dated printings, and a
+ * card date alone would announce a set from 2020.
+ */
+export interface UpcomingSets {
+  /** SQLite's `date('now')`, UTC — the day *in N days* is counted from, so the page carries no
+   *  clock of its own. */
+  today: string;
+  /** Soonest first, then by code. */
+  sets: UpcomingSet[];
+}
+
+/**
+ * Which edge detector runs — `Method` in `crates/card-scanner/src/session.rs`, whose
+ * `#[serde(rename_all = "lowercase")]` is the whole of the mapping.
+ */
+export type ScannerMethod = "canny" | "otsu" | "both";
+
+/**
+ * How accumulated evidence becomes an answer — `CommitRule` in
+ * `crates/card-scanner/src/track.rs`. Votes toward a bar, or the decayed two-way contest.
+ */
+export type ScannerRule = "votes" | "confidence";
+
+/**
+ * How the scanner judges a card — `ScanMode` in `session.rs`, lowercased by serde.
+ *
+ * `fast` is the vote rule over hash matches, with a title read only after a leaderless stretch;
+ * `exact` runs the tier pipeline once per steady card and can answer with a choice of printings.
+ * Switching resets the tracker, so a card half-voted in one mode is not decided in the other.
+ */
+export type ScanMode = "fast" | "exact";
+
+/**
+ * Which printings the scanner may answer with — `ScanFilters` in
+ * `crates/card-scanner/src/filters.rs`. **Snake case**, like every scanner struct.
+ *
+ * Sets and a release-date range, and nothing else — no language, by decision. An empty `sets`
+ * and two `null` dates is no filter at all. Dates are `YYYY-MM-DD`, both ends inclusive.
+ */
+export interface ScanFilters {
+  /** Set codes, compared case-insensitively. Empty is any set. */
+  sets: string[];
+  released_from: string | null;
+  released_to: string | null;
+}
+
+/**
+ * Everything a caller can change between frames — `FrameOptions` in `session.rs`.
+ *
+ * Every field has a Rust-side default and the struct is `#[serde(default)]`, so a partial
+ * object parses; this side sends every field regardless, because the page owns a control for
+ * each and a field it omitted would silently be the crate's default rather than the reader's.
+ */
+export interface ScannerOptions {
+  work_long_edge: number;
+  method: ScannerMethod;
+  canny_low: number;
+  canny_high: number;
+  aspect_tolerance: number;
+  min_cardness: number;
+  /** The binary and contour images as well as the quad. Roughly doubles the response time. */
+  stages: boolean;
+  /**
+   * The rectified card's preview and its display hash. Nothing but the developer panels draws
+   * either, so the page sets this only while the Developer switch is on.
+   */
+  previews: boolean;
+  rule: ScannerRule;
+  decide_at: number;
+  lead_margin: number;
+  /** Rides the same `x-scanner-options` header as the sliders — no header of its own. */
+  mode: ScanMode;
+}
+
+/**
+ * Where an asset came from — `AssetSource` in `crates/grimoire-core/src/scanner.rs`, lowercased.
+ *
+ * The load order, first hit wins: a file in `data/scanner/`, then the copy compiled into the
+ * binary, then nothing. `file` also covers a file that is there and did not parse.
+ *
+ * **`store` is a host with no folder** — the web host, which keeps what it downloaded in the
+ * browser's own storage and says `store` of all three assets, one it has not fetched yet
+ * included: `absent` promises a path a reader could put a file at, and a page has none. So a
+ * `store` asset is never told to be placed anywhere (`verdictText.ts`).
+ */
+export type ScannerAssetSource = "file" | "embedded" | "absent" | "store";
+
+/** One file the scanner needs, and whether it is there — `Asset` in `crates/grimoire-core/src/scanner.rs`. */
+export interface ScannerAsset {
+  /**
+   * The file the load looked at in `data/scanner/` — named even for an embedded or absent one.
+   * For a `store` asset, the address the host fetches it from.
+   */
+  path: string;
+  /** Something to load was there: the file, or for `embedded` the binary's copy. */
+  present: boolean;
+  loaded: boolean;
+  error: string | null;
+  source: ScannerAssetSource;
+}
+
+/**
+ * What `scanner_status` answers — `ScannerStatus` in `crates/grimoire-core/src/scanner.rs`.
+ *
+ * The three assets are separate because they fail separately and the sentences differ: no
+ * bundle means nothing can be named, no models mean the OCR tiers stand down and the
+ * appearance match carries the frame alone.
+ */
+export interface ScannerStatus {
+  bundle: ScannerAsset;
+  detection_model: ScannerAsset;
+  recognition_model: ScannerAsset;
+  labels: number;
+  scans_dir: string;
+  /**
+   * **The reader's filters are not in force**, in the sentence the loaded session refused them
+   * with — or `null`, which is every session that searches under what the popover shows.
+   *
+   * Only ever set after the engine reloaded the session (`ScannerState::forget`, for assets
+   * that arrive after the first load) and the new one could not take the filters the old one
+   * held — it had no card names to build the mask from. The page cannot learn this from its own
+   * pushes, which went to the session that was dropped. The engine keeps the filters owed and
+   * offers them to the next reload; an accepted `scanner_set_filters` settles it too.
+   */
+  unapplied_filters: string | null;
+}
+
+/**
+ * One of the scanner's files this install lacks — `Due` in
+ * `crates/grimoire-core/src/downloads.rs`, the row every offer of a download is made of.
+ *
+ * **camelCase, unlike the status above**: this is the app's own answer, not the detector's JSON.
+ * `bytes` is exact for a model and a measurement for the bundle, which is rebuilt weekly — so the
+ * page says *about*.
+ */
+export interface ScannerAssetDue {
+  /** `bundle`, `detectionModel` or `recognitionModel` — what {@link ScannerAssetsProgress.file} names. */
+  key: string;
+  /** What the reader is told it is. */
+  label: string;
+  bytes: number;
+}
+
+/**
+ * What `scanner_assets` and `scanner_assets_fetch` answer — `Owed` in
+ * `crates/grimoire-core/src/scanner_assets.rs`.
+ *
+ * `owed` is empty on a host whose binary carries the files (every desktop release) and on any
+ * host once they have landed, and that is the page's whole rule: no rows, no offer. A host that
+ * cannot fetch them at all refuses the command instead, which draws the same nothing.
+ */
+export interface ScannerAssetsOwed {
+  owed: ScannerAssetDue[];
+  /** All of `owed`, added up. */
+  bytes: number;
+  /** A fetch is running now — started here, or by a view that has since been left. */
+  fetching: boolean;
+}
+
+/** Where a fetch of the scanner's files has got to — {@link ScannerAssetsProgress.phase}. */
+export type ScannerAssetsPhase = "downloading" | "checking" | "done" | "error";
+
+/**
+ * The `scanner:assets` payload — `Progress` in `crates/grimoire-core/src/scanner_assets.rs`.
+ *
+ * `done` and `total` count bytes across every file the run fetches, so one bar covers the whole
+ * of it. `file` is the {@link ScannerAssetDue.key} in hand, and `message` the sentence a failed
+ * run ends on — the same one the command rejects with.
+ */
+export interface ScannerAssetsProgress {
+  phase: ScannerAssetsPhase;
+  file: string | null;
+  done: number;
+  total: number;
+  message: string | null;
+}
+
+/**
+ * What a captured frame is filed with — `Sidecar` in `crates/grimoire-core/src/scanner.rs`.
+ *
+ * Every field is a **string** rather than the number it reads as: this is a note written
+ * beside a JPEG for a person grading the dataset later, and a missing figure is an empty
+ * string there rather than a `null` something downstream has to render.
+ */
+export interface ScannerSidecar {
+  expected: string;
+  reported: string;
+  confidence: string;
+  votes: string;
+  distance: string;
+}
+
+/** Where the capture landed — `Captured` in `crates/grimoire-core/src/scanner.rs`. */
+export interface ScannerCaptured {
+  saved: string;
+}
+
+/** The decoded frame's own size — `FrameSize` in `session.rs`. */
+export interface ScannerFrameSize {
+  w: number;
+  h: number;
+}
+
+/** `Phase` in `crates/card-scanner/src/lock.rs`, lowercased by serde. */
+export type ScannerLockPhase = "idle" | "acquiring" | "locked";
+
+/**
+ * The quad lock across frames — `LockState` in `lock.rs`.
+ *
+ * **Three fields and not four**: the Rust struct's `quad` is `#[serde(skip)]`, so it is not on
+ * the wire at all. The smoothed quad an overlay draws is {@link ScannerVerdict.quad}.
+ */
+export interface ScannerLock {
+  phase: ScannerLockPhase;
+  /** Consecutive agreeing frames. */
+  agree: number;
+  misses: number;
+}
+
+/**
+ * One corner, in the frame's own pixels. Rust's `(f32, f32)` — a tuple, so it arrives as a
+ * two-element array rather than as an `{ x, y }`.
+ */
+export type ScannerCorner = [number, number];
+
+/** How card-shaped the chosen quad is — `QuadScore` in `crates/card-scanner/src/detect.rs`. */
+export interface ScannerScore {
+  /** `QuadSource`: which contour route produced it. */
+  via: string;
+  /** How far from a parallelogram. 0 is face-on. */
+  skew: number;
+  aspect: number;
+  area_frac: number;
+  /** Worst deviation from 90° at any corner, in degrees. */
+  max_angle_error: number;
+  total: number;
+}
+
+/** Where the detection's time went — `DetectTimings` in `detect.rs`. */
+export interface ScannerTimings {
+  resize_ms: number;
+  mask_ms: number;
+  contour_ms: number;
+  rectify_ms: number;
+  total_ms: number;
+}
+
+/** How card-like the rectification is — `Cardness` in `crates/card-scanner/src/cardness.rs`. */
+export interface ScannerCardness {
+  title: number;
+  type_line: number;
+  full_width_rows: number;
+  /** Combined, 0..1. Higher is more card-like. */
+  score: number;
+}
+
+/**
+ * Background cut off the rectification, per side, in pixels — `Margin` in
+ * `crates/card-scanner/src/trim.rs`.
+ */
+export interface ScannerTrim {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+/**
+ * The pipeline's intermediate images, as data URLs — `Stages` in `session.rs`. Present only
+ * where {@link ScannerOptions.stages} asked for them.
+ */
+export interface ScannerStages {
+  binary: string | null;
+  contours: string | null;
+  quad: string | null;
+}
+
+/** What a printing is called — `Label` in `crates/card-scanner/src/reference.rs`. */
+export interface ScannerLabel {
+  name: string;
+  set: string;
+  number: string;
+  lang: string;
+  released: string;
+}
+
+/** One ranked answer — `Candidate` in `reference.rs`. */
+export interface ScannerCandidate {
+  id: string;
+  distance: number;
+  /** Distance over the descriptor's width, so a threshold means the same at 128 and 256 bits. */
+  normalized: number;
+  /** `None` where no corpus is loaded, or the bundle names an id this corpus does not. */
+  label: ScannerLabel | null;
+  /** How many printings share this artwork — why an art hit cannot name a printing alone. */
+  printings: number | null;
+}
+
+/** One frame's match against one section — `MatchReport` in `reference.rs`. */
+export interface ScannerMatch {
+  /** `Section`: which part of the card was hashed. */
+  section: string;
+  /**
+   * Whether the 180°-rotated rectification won. A card is symmetric, so both are hashed until a
+   * stretch has matched plainly one way up; after that, only the held one.
+   */
+  rotated: boolean;
+  view: number;
+  views: number;
+  /** Descriptors computed — one per framing and orientation searched. What the match costs. */
+  hashes: number;
+  candidates: ScannerCandidate[];
+  hash_ms: number;
+  /** Bits between the best and second-best answer. */
+  margin: number | null;
+  search_ms: number;
+}
+
+/** One accumulated candidate with its label resolved — `StandingView` in `session.rs`. */
+export interface ScannerStanding {
+  id: string;
+  evidence: number;
+  share: number;
+  seen: number;
+  label: ScannerLabel | null;
+  best_distance: number;
+}
+
+/** What the tracker has come to across the stream — `TrackedView` in `session.rs`. */
+export interface ScannerTracked {
+  committed: boolean;
+  confidence: number;
+  rule: ScannerRule;
+  decide_at: number;
+  lead: number | null;
+  frozen: boolean;
+  /** Fast decided on a run of clear frames before the tally reached `decide_at`. */
+  early: boolean;
+  streak: number;
+  frames: number;
+  misses: number;
+  standings: ScannerStanding[];
+}
+
+/** One set/number pair the collector line was read as — `CollectorTry` in `session.rs`. */
+export interface ScannerCollectorTry {
+  set: string;
+  number: string;
+  matched: string | null;
+}
+
+/**
+ * What a band was read from — `BandOrigin` in `ocr.rs`. The answer to "was that read at full
+ * resolution?", which the crop cannot give: every band is warped to the same size.
+ */
+export interface ScannerBandOrigin {
+  /** A camera frame (the detail frame when one came), rather than the 488×680 rectification. */
+  frame: boolean;
+  width: number;
+  height: number;
+  /** The band's own extent in that image's pixels. */
+  span_width: number;
+  span_height: number;
+}
+
+/**
+ * What the collector line's separator says about the finish — `MarkReading` in `ocr.rs`,
+ * snake-cased by serde. A foil prints a ★ between the set code and the language and a non-foil a
+ * •; `unknown` is no separator found, or one that measured between the two.
+ *
+ * **Two finishes and never three**: the mark knows star from dot and nothing else, so no reading
+ * here is ever `etched`.
+ */
+export type ScannerMarkReading = "foil" | "nonfoil" | "unknown";
+
+/**
+ * The separator, measured — `FinishMark` in `ocr.rs`. Every figure is `null` when no mark was
+ * found at all, which is a different fact from a mark that was found and measured ambiguous.
+ */
+export interface ScannerFinishMark {
+  reading: ScannerMarkReading;
+  /** The mark's height over the line's letter height. */
+  height: number | null;
+  /** The mark's area over the letter height squared. */
+  area: number | null;
+  /** The mark's area over its convex hull's — near 1 for a dot, lower for a star's points. */
+  solidity: number | null;
+}
+
+/** The collector-line tier — `CollectorView` in `session.rs`. */
+export interface ScannerCollector {
+  raw: string;
+  rotated: boolean;
+  elapsed_ms: number;
+  pairings: number;
+  tried: ScannerCollectorTry[];
+  more: number;
+  /** The crop the recogniser read, at the size it read it. */
+  band: string | null;
+  origin: ScannerBandOrigin | null;
+  matched: string | null;
+  /** The separator measured on this read's band; `null` when there was none to measure. */
+  mark: ScannerFinishMark | null;
+}
+
+/** The title-band tier — `OcrView` in `session.rs`. */
+export interface ScannerOcr {
+  raw: string;
+  /** What the name lookup actually compares: punctuation and case stripped from both sides. */
+  normalized: string;
+  rotated: boolean;
+  elapsed_ms: number;
+  band: string | null;
+  matched: string | null;
+  edits: number | null;
+}
+
+/**
+ * How a resolve or a decision came out — `Outcome` in `crates/card-scanner/src/resolve.rs`,
+ * snake-cased by serde.
+ */
+export type ScannerOutcome = "resolved" | "ambiguous" | "not_found";
+
+/** One printing a resolve could be — `ChoiceView` in `resolve.rs`. */
+export interface ScannerChoice {
+  id: string;
+  /** The corpus's oracle id for the printing; `null` where the corpus has none — never the
+   *  printing id standing in for one. */
+  oracle_id: string | null;
+  label: ScannerLabel | null;
+  /** The best normalized distance the burst reached; `null` for a printing only a name read found. */
+  distance: number | null;
+  /** The finishes the printing exists in, from the corpus; empty when it did not say. */
+  finishes: string[];
+}
+
+/**
+ * The card the session has decided on — `DecisionView` in `session.rs`, on every committed frame.
+ *
+ * In Fast it is the tracker's printing, `resolved`, with no choices. In Exact it is the last
+ * resolve's first choice, and `ambiguous` carries the rest. The page adds a tray row when
+ * {@link ScannerVerdict.decision_seq} moves, and reads this to build it.
+ */
+export interface ScannerDecision {
+  printing: string;
+  oracle_id: string | null;
+  label: ScannerLabel | null;
+  outcome: ScannerOutcome;
+  choices: ScannerChoice[];
+  /**
+   * A second opinion on the card the previous decision named, not a second copy of it: the same
+   * oracle card (or the same printing when neither has an Oracle ID), with the quad lock trusted
+   * throughout — a switch to Exact to pin the printing, or
+   * a filter change, with one card on the mat. The tray **replaces** its newest row rather than
+   * adding one. `false` after the card left the frame, so a second copy still adds.
+   */
+  replaces_previous: boolean;
+  /**
+   * The decided printing's finishes, from the corpus — `["nonfoil", "foil"]`, `["foil"]`,
+   * `["nonfoil", "foil", "etched"]` — as Scryfall spells them. **Empty when the corpus did not
+   * say**, which is not the same as a printing that exists in no finish: the page reads an empty
+   * list as "no constraint", never as "nothing is possible".
+   *
+   * A `string[]` rather than `Finish[]` for {@link CollectionFolder.kind}'s reason: the words come
+   * from Scryfall through the corpus, and a fourth finish is a word the page compares and falls
+   * through on rather than a type error.
+   */
+  finishes: string[];
+  /** The separator reading for the decided printing, or `null` when no collector band was read
+   *  for it. `reader/trayFinish.ts` is what turns this and {@link finishes} into a row's finish. */
+  finish_mark: ScannerFinishMark | null;
+}
+
+/** One tier of an Exact resolve and what it left — `TierView` in `resolve.rs`. */
+export interface ScannerTier {
+  tier: "filters" | "whole_card" | "title" | "collector" | "re_rank" | "classifier";
+  survivors: number;
+  /** The tier's own words: the read name, the collector pairing, a conflict, the margin. */
+  detail: string;
+}
+
+/** What an Exact resolve came to, on the frame it ran — `ResolutionView` in `resolve.rs`. */
+export interface ScannerResolution {
+  outcome: ScannerOutcome;
+  /** Best first, at most twelve. */
+  choices: ScannerChoice[];
+  /** All six tiers, in order. */
+  tiers: ScannerTier[];
+  elapsed_ms: number;
+}
+
+/**
+ * What one frame came to — `Verdict` in `session.rs`, and the whole of what the page draws.
+ *
+ * `error` is the one optional field, because Rust's is `skip_serializing_if`: a frame that went
+ * fine carries no key at all rather than a `null`.
+ */
+export interface ScannerVerdict {
+  /** Which mode judged this frame. */
+  mode: ScanMode;
+  /** Moves once per new decision and never otherwise — what makes "one add per card" the
+   *  session's property rather than the page's timing. */
+  decision_seq: number;
+  /** The decided card, on every committed frame; `null` otherwise. */
+  decision: ScannerDecision | null;
+  /** Only on the frame an Exact resolve ran. */
+  resolution: ScannerResolution | null;
+  ok: boolean;
+  error?: string;
+  frame: ScannerFrameSize;
+  decode_ms: number;
+  /** Whether a bundle is loaded at all — "no bundle" and "no card in this frame" differ. */
+  matcher: boolean;
+  lock: ScannerLock | null;
+  /** The lock's *smoothed* quad, which is what an overlay draws. */
+  quad: ScannerCorner[] | null;
+  /** This frame's own quad, for showing the jitter the smoothing removes. */
+  quad_raw: ScannerCorner[] | null;
+  method: string | null;
+  cardness: ScannerCardness | null;
+  rejected_cardness: ScannerCardness | null;
+  trim: ScannerTrim | null;
+  /** Whether this frame's card came from the lock's quad rather than its own. */
+  from_lock: boolean;
+  /**
+   * Where the detector looked: `window` is the one mask that found the card, around a trusted
+   * lock's quad; `full` is every method over the whole frame — every frame before a lock, a
+   * window's miss, and every ninth locked frame.
+   */
+  search: "full" | "window";
+  score: ScannerScore | null;
+  /** The primary view's 256-bit dHash, for display. `null` unless the frame asked for `previews`. */
+  hash: string | null;
+  /** The rectified card as a data URL. `null` unless the frame asked for `previews`. */
+  rectified: string | null;
+  timings: ScannerTimings | null;
+  candidates_examined: number | null;
+  stages: ScannerStages | null;
+  match: ScannerMatch | null;
+  tracked: ScannerTracked | null;
+  collector: ScannerCollector | null;
+  ocr: ScannerOcr | null;
+  /**
+   * The **next** frame should carry a detail image — the same video frame at the camera's own
+   * resolution, for the title and collector reads (issue #708). True only on a frame after which
+   * the session expects to read; the loop latches it and pays for the full-size encode on that
+   * one frame, never on every frame.
+   */
+  wants_detail: boolean;
+  /**
+   * The size of the detail image this frame's readers warped their bands from, when one was sent
+   * **and used**. `null` on a frame that read nothing, and on one that read from the 960 px frame
+   * because no detail came or it was not the same frame — so a panel can tell a full-resolution
+   * read from a fallback one.
+   */
+  detail: ScannerFrameSize | null;
+}
+
+/**
+ * How the reader last left the scanner — `ScannerPrefs` in `crates/grimoire-core/src/scanner.rs`, one
+ * `app_meta` row. **camelCase**, unlike every scanner struct above it: it is this app's stored
+ * preference and not the detector's JSON, so it follows the rest of this file. `filters` keeps
+ * the crate's snake case inside it.
+ *
+ * `finish`, `condition` and `folderId` are what a new tray row is born with. There is no
+ * language, by decision. A row that does not parse reads as the defaults on the far side.
+ */
+export interface ScannerPrefs {
+  mode: ScanMode;
+  filters: ScanFilters;
+  /** A fixed finish every new row takes, or `detect` — the default — for the scanner's own read.
+   *  See {@link ScannerFinishPref}. */
+  finish: ScannerFinishPref;
+  condition: Condition;
+  /** The folder a commit files into; `null` is the collection's root. */
+  folderId: number | null;
+  /** Whether the developer panels are showing. */
+  developer: boolean;
+  /**
+   * The camera the reader picked, as the webview's `deviceId`; `null` is whichever camera the
+   * platform offers first. Per computer — `app_meta` does not sync — and a stored id whose camera
+   * has gone opens the default without clearing the choice.
+   */
+  cameraId: string | null;
+  /**
+   * How the review tray lays out its cards. `string` on the wire, because Rust stores it verbatim;
+   * read it through `trayLayoutOf`, which takes a word it does not know as the grid.
+   */
+  trayLayout: string;
+}
+
+/**
+ * What the Defaults popover's finish can say: one of the collection's three finishes, stamped on
+ * every new row as it lands, or **`detect`** — `scanner::DETECT_FINISH` — which asks the scanner.
+ *
+ * `detect` is a *policy* and never a finish, so it can never reach a tray row or the collection:
+ * `reader/trayFinish.ts` turns it into a {@link ScannerTrayFinish} per card, and a stored row
+ * written before it existed keeps the fixed finish it holds.
+ */
+export type ScannerFinishPref = Finish | "detect";
+
+/**
+ * A tray row's finish: one of the collection's three, or **`unknown`** — a card the scanner could
+ * not read the finish of, waiting for the reader. An `unknown` row stays in the tray when the rest
+ * commits; the collection never sees the word.
+ */
+export type ScannerTrayFinish = Finish | "unknown";
+
+/** The review tray's two layouts — a wall of cards, or a line per card. */
+export type ScannerTrayLayout = "grid" | "list";
+
+/** One printing a tray row could be — `ScannerTrayChoice` in `scanner.rs`. */
+export interface ScannerTrayChoice {
+  cardId: string;
+  oracleId: string | null;
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  /**
+   * The finishes the printing exists in — what settles an Unknown row's finish when the reader
+   * picks this printing. Absent from a printing picked through *More printings…*, whose dialog
+   * does not carry them, and from a tray written before the field existed.
+   */
+  finishes?: string[];
+}
+
+/**
+ * One card waiting in the review tray — `ScannerTrayRow` in `scanner.rs`, stored whole in one
+ * `app_meta` row and handed back as the page wrote it.
+ *
+ * `key` is the page's own stable id for the row. `choices` is non-empty only while the row is
+ * still a choice to make. `addedAt` is the page's clock, in milliseconds. The write refuses a
+ * `quantity` below one and a tray longer than 5,000 rows, in words. `finish` may be `unknown`
+ * ({@link ScannerTrayFinish}); the store keeps it as a string and checks nothing about it.
+ */
+export interface ScannerTrayRow {
+  key: string;
+  cardId: string;
+  oracleId: string | null;
+  name: string;
+  setCode: string;
+  collectorNumber: string;
+  finish: ScannerTrayFinish;
+  quantity: number;
+  choices: ScannerTrayChoice[];
+  addedAt: number;
+}
+
+/**
+ * One published share, as the list draws it — `collection_shares`' row, `share/commands.rs`.
+ *
+ * **The cache is the app's copy of the relay's list and is deliberately not a synced table**, so
+ * every field here is either the reader's own answer or the relay's, written down at publish
+ * time. Two of them look derivable and are not, which is the thing to know before reaching for a
+ * shortcut:
+ *
+ * * {@link url} is built by the Worker from its own `SHARE_BASE` binding, so this side stores
+ *   the link rather than rebuilding it. A share list with no links is not a share list, and it
+ *   has to be drawable with no network.
+ * * {@link ownerName} is what the *next* device in the group publishes under (spec §4.3). The
+ *   device that pressed Share already knows the name it typed; a second device inherits it from
+ *   `GET /g/{group}/shares` rather than asking the reader to type it again, which is a question
+ *   nothing else on this row could answer.
+ */
+export interface ShareRow {
+  /** The share id — and the last path segment of {@link url}. */
+  id: string;
+  /** `collection_folders.sync_uid`, and `null` for a whole-collection share. **A folder's sync
+   *  uid rather than its local id**, because a share outlives the device that made it and a row
+   *  id names a row in a database no other device has seen. */
+  folderUid: string | null;
+  /** The folder's own name, or `Collection` for a whole-collection share — the title the
+   *  snapshot carries and the viewer draws. */
+  title: string;
+  /** What the owner typed, never anything Patreon supplied. See this interface's header. */
+  ownerName: string;
+  /** The link to hand somebody. **Stored, never rebuilt** — see this interface's header. */
+  url: string;
+  /**
+   * Which optional columns this share answers — some of `condition`, `lang`, `value`, and the
+   * wire form of the three switches {@link ShareFields} sends.
+   *
+   * ⚠️ **Not a promise that every card in the snapshot carries them**, which is a rule about the
+   * format rather than about this row: `@/lib/shareSnapshot`'s header is where it is written
+   * down, and any viewer of a snapshot has to have read it.
+   *
+   * A `string[]` rather than a union for {@link CollectionFolder.kind}'s reason: Rust stores the
+   * words, a fourth column is a migration rather than a type error, and a reader that compares
+   * and falls through keeps working the day there is one.
+   */
+  fields: string[];
+  /**
+   * `live`, `lapsed` or `revoked`.
+   *
+   * The middle one is the relay's daily pass talking — a membership that stopped paying, whose
+   * shares stop answering — and is the one a reader must be told about before their friends tell
+   * them. `revoked` is the reader's own press and is terminal.
+   *
+   * A plain `string` rather than a union, {@link CollectionFolder.kind}'s rule again and with a
+   * sharper edge here: the word can arrive from the *relay* rather than from this build, so a
+   * union would be a claim about a vocabulary neither side of this file owns.
+   */
+  state: string;
+  /**
+   * When **this device** last uploaded a snapshot, in seconds — and `null` for a device that
+   * never has.
+   *
+   * The relay knows nothing about it. `null` is what a second device in the group reads before
+   * it offers *Update* rather than *Share*, so it is a fact about this machine sitting on a row
+   * that otherwise describes the group's.
+   */
+  published: number | null;
+  /** When the row itself last changed, in seconds. */
+  updatedAt: number;
+}
+
+/**
+ * The three switches the publish dialog offers — `ShareFieldsArg` on the Rust side.
+ *
+ * **A struct of three booleans and not a list of names**, deliberately: a list would let the page
+ * invent a fourth field by spelling one, where an unknown *key* is simply dropped. There is no
+ * default here for the same reason the crate declines to give its own type one — spec §3 lists
+ * six columns that are absent from the format rather than switched off in it, so "none ticked"
+ * is a share of names, quantities and printings and is a legitimate answer rather than a
+ * degenerate one.
+ *
+ * ⚠️ **Each field is `#[serde(default)]` on the far side, so a misspelling here is not a
+ * refusal.** It arrives `false`, the publish succeeds, and the column the reader ticked is
+ * missing from every card in the snapshot — which is why `ipc.test.ts` pins all three by name.
+ */
+/**
+ * Which rows of a loaded search to re-read the badges of — mirrors `search::MarksRequest`.
+ *
+ * `collapse` and `availableForDeck` are the loaded search's own, because they decide the grain
+ * and the scope {@link CardSummary.ownedQuantity} was counted at; the ids stand in for every
+ * filter, which decided which rows a page holds and nothing about what a row's badge reads.
+ */
+export interface MarksRequest {
+  ids: string[];
+  collapse?: boolean;
+  availableForDeck?: number;
+}
+
+/** One row's badges, re-read — mirrors `search::CardMarks`. */
+export interface CardMarks {
+  id: string;
+  ownedQuantity: number;
+  wishlisted: boolean;
+}
+
+export interface ShareFields {
+  /** The grade each copy is in, `NM` and friends. An **ungraded** copy still carries nothing —
+   *  see `@/lib/shareSnapshot`'s header. */
+  condition: boolean;
+  /** The language each copy is in. */
+  lang: boolean;
+  /** What each copy is worth, at the publisher's own marketplace and in its currency. */
+  value: boolean;
+}
+
+export const ipc = {
+  searchCards: (req: SearchRequest) => invoke<SearchResponse>("search_cards", { req }),
+  /**
+   * The two badges of rows a search already holds, re-read after a write — what
+   * `@/lib/searchMarks` patches into the cached pages instead of refetching every one of them
+   * (issue #552). An id the corpus no longer holds is left out of the answer.
+   */
+  searchMarks: (req: MarksRequest) => invoke<CardMarks[]>("search_marks", { req }),
+  /**
+   * Facet counts for one search — the same request shape as `searchCards`, whose `sort`,
+   * `offset` and `limit` are ignored. Its own command so a page turn does not recompute
+   * them and so they never delay page one; key it on the filter half of the search alone.
+   */
+  facetCards: (req: SearchRequest) => invoke<FacetResponse>("facet_cards", { req }),
+  /** Every set, newest first. Cached for the session — it changes once a sync, at most. */
+  listSets: () => invoke<SetSummary[]>("list_sets"),
+  /**
+   * One printing in full, or `null` when no row has that id.
+   *
+   * `marketplace` decides {@link CardDetail.finishPrices} and nothing else about the answer —
+   * but it decides them completely, so it belongs in the caller's query key like every other
+   * priced read. The backend's fallback for an unknown id is `tcgplayer`.
+   */
+  cardDetail: (id: string, marketplace: MarketplaceId) =>
+    invoke<CardDetail | null>("card_detail", { id, marketplace }),
+  /**
+   * Every paper printing of the oracle card, newest first, with a full count.
+   *
+   * `marketplace` prices every row per finish — the figures a reader is choosing a printing by.
+   *
+   * `limit` is the page size, and **absent is the card pane's 400** — `MAX_PRINTINGS`, exactly
+   * what this command answered before the argument existed, so the pane's query and its cache
+   * key are unchanged by it. The printings modal names the backend's ceiling instead, because it
+   * **filters client-side**: a filter over a truncated list lies, and narrowing to a set that
+   * fell outside the newest 400 would draw an empty wall that reads as an answer rather than as
+   * a truncation. Rust clamps whatever it is sent into `1..=MAX_PRINTINGS_HARD` (1000, chosen
+   * against the corpus — Forest, the most-printed card, has 862), so the number here is a
+   * request rather than a promise, and a zero or a negative falls back to the default instead of
+   * answering "this card has no printings".
+   *
+   * `total` stays uncapped either way, so a caption can always tell a truncation from a filter.
+   */
+  cardPrintings: (oracleId: string, marketplace: MarketplaceId, limit?: number) =>
+    invoke<PrintingsResponse>("card_printings", { oracleId, marketplace, limit }),
+  /**
+   * Every printing in `cardIds` priced per finish at `marketplace`, in one round trip — the
+   * scanner tray's read, whose rows are printings no priced list has carried yet.
+   *
+   * **An id the corpus does not hold is absent from the answer**, not an entry of nulls, and a
+   * repeated id answers once; the caller reads a missing entry as unpriced.
+   */
+  printingPrices: (cardIds: string[], marketplace: MarketplaceId) =>
+    invoke<PrintingPrices[]>("printing_prices", { cardIds, marketplace }),
+  /**
+   * The cards this printing melds with — see {@link MeldRelation}.
+   *
+   * **`[]` is the answer for almost every card in the game, and it never rejects.** Every layout
+   * that is not `meld`, an unknown id, and a `meld` row whose `raw` carries no `all_parts` all
+   * come back empty: a card the reader opened must not fail to open because the relationship
+   * behind an orientation control could not be read. 72 of the 116 590 live rows are `meld` — 48
+   * parts and 24 results — and every meld id they name resolves to a row in `cards` (0 missing).
+   *
+   * **No `marketplace`, unlike every other card read on this object.** This is a relationship
+   * rather than a price, so nothing about the answer moves when the setting does, and putting it
+   * in a priced query key would refetch a fixed fact on every switch.
+   */
+  cardMeldParts: (id: string) => invoke<MeldRelation[]>("card_meld_parts", { id }),
+  /**
+   * The TCGplayer product ids for one printing — see {@link TcgplayerIds}.
+   *
+   * **Two `null`s is the answer and it never rejects**, which is `cardMeldParts`' rule one command
+   * over: an unknown id, an unreadable `raw` blob and a row carrying neither field all come back
+   * `{ productId: null, etchedProductId: null }`. A press that leaves the app must never fail to
+   * do *something*, and the something here is the marketplace's name search — the shape this row
+   * opened before the ids existed. `openMarketplaceForCard` owns that fallback.
+   *
+   * **Resolved on the press rather than with the card**, so it is a command and not a field on
+   * {@link CardDetail}: `externalLinks.ts`'s doctrine is that a menu merely *offering* to open a
+   * marketplace has visited nothing, and a card opened is a card whose menu was never used far
+   * more often than not. One id lookup on a keyed index costs less than carrying two integers
+   * through every printing of every wall.
+   *
+   * **No `marketplace`**, unlike every other card read here — these are TCGplayer's own ids, so
+   * the setting decides *whether* this is called at all and never what it answers.
+   */
+  cardTcgplayerIds: (id: string) => invoke<TcgplayerIds>("card_tcgplayer_ids", { id }),
+  /**
+   * What the reader holds of one oracle card — see {@link CardHoldings}.
+   *
+   * **One read where the pane made three.** The card modal's "In your grimoire" block used to
+   * fire `collectionList({ oracleId })`, `wishlistList({ oracleId })` and `deckIdsPlaying` on
+   * every card open, and summed two pages of rows in the webview to draw two numbers. Rust sums
+   * them, through the same three rules those reads use, so a figure here cannot disagree with the
+   * list it sits beside.
+   *
+   * **It answers counts and nothing addressable**, which is the line between this and the reads it
+   * replaces: a surface that needs a *row* to write to — the stepper, the wishlist's edit — still
+   * asks for the rows. This is for the block that only ever states numbers.
+   *
+   * **No `marketplace`**, unlike every other card read on this object: these are counts, and
+   * nothing about them moves when the setting does. Keying it on the marketplace would refetch a
+   * fixed fact on every switch.
+   *
+   * A blank `oracleId` answers three zeros rather than rejecting — a card with no oracle id is a
+   * card nothing can be held *of*, and a pane must not fail to fill a block over it.
+   */
+  cardHoldings: (oracleId: string) => invoke<CardHoldings>("card_holdings", { oracleId }),
+  /**
+   * Warm the image cache for a page of results. Fire-and-forget: it resolves as soon as
+   * the work is queued, and an image that fails to prefetch simply fetches when it is
+   * rendered. The backend takes the front face only and caps the batch at 100.
+   */
+  prefetchImages: (cardIds: string[], variant: ImageVariant) =>
+    invoke<void>("prefetch_images", { cardIds, variant }),
+  /**
+   * Warm the image cache for every card in the collection and the wishlist, so what the
+   * user owns browses without a network (spec §5). Fire-and-forget like `prefetchImages`,
+   * and it answers how many images were *queued*, not fetched.
+   *
+   * Resumable by construction and therefore cheap to repeat: a key already on disk is not
+   * selected, so a second call after a full pass queues nothing.
+   */
+  prewarmCollection: () => invoke<number>("prewarm_collection"),
+  /** Add copies. The same printing, finish and condition twice is one row with a bigger
+   *  number — the backend upserts on the grain. */
+  collectionAdd: (entry: EntryInput) => invoke<EntryChange>("collection_add", { entry }),
+  /** An absolute quantity. `0` **deletes** the row since schema v24 and says so in
+   *  `removed: true`. **Name what that costs**, because keeping it was the whole of the old rule:
+   *  the row's `condition`, `conditionOriginal`, purchase price and currency, acquired-at,
+   *  acquisition source, notes and tags go with it. The folder grain made it unavoidable — a row
+   *  holding no copies cannot be told from a row somebody filed and emptied — and
+   *  {@link ipc.collectionUpdate} is where a reader who wants that record kept steps the quantity
+   *  instead. A second press on the same id is refused as gone, which is the asymmetry with
+   *  `collectionRemove`: that one is the unconditional delete and a stale id there is a
+   *  success. */
+  collectionSetQuantity: (id: number, quantity: number) =>
+    invoke<EntryChange>("collection_set_quantity", { id, quantity }),
+  collectionUpdate: (id: number, patch: EntryPatch) =>
+    invoke<EntryChange>("collection_update", { id, patch }),
+  /**
+   * Move one row's copies onto another printing of the same card — the one write that reaches
+   * `collection_entries.card_id` after the row exists (issue #564). `set_code`,
+   * `collector_number` and `lang` follow from `cards`, because they describe the printing.
+   *
+   * **Merges rather than fails on a collision**, {@link ipc.collectionUpdate}'s rule: a row
+   * already holding the new printing at the same finish, condition and folder takes these copies,
+   * and the answer's `id` names *that* row — so a caller following the edit reads the id off the
+   * answer and never keeps the one it sent. A printing of a different card is refused.
+   */
+  collectionSetPrinting: (id: number, cardId: string) =>
+    invoke<EntryChange>("collection_set_printing", { id, cardId }),
+  collectionRemove: (id: number) => invoke<EntryChange>("collection_remove", { id }),
+  collectionList: (query: CollectionQuery) => invoke<CollectionPage>("collection_list", { query }),
+  /** The aggregate header, over the same filters as the list it captions. */
+  collectionSummary: (query: CollectionQuery) =>
+    invoke<CollectionSummary>("collection_summary", { query }),
+  /**
+   * One {@link ShelfCount} per non-empty shelf, over the **same** query the list and the summary
+   * take — send `shelves` as every shelf at and below the level, collapsed ones too. `sort`,
+   * `limit` and `offset` are read by nothing on the far side.
+   */
+  collectionShelfCounts: (query: CollectionQuery) =>
+    invoke<ShelfCount[]>("collection_shelf_counts", { query }),
+  /**
+   * The whole collection sliced along one dimension — `rarity`, `color`, `set` or `finish`.
+   *
+   * **The whole collection, and no query**: this is the home page's figure, not the wall's, so it
+   * takes no filters and cannot be narrowed. What it can be is priced, and the `marketplace`
+   * decides every `value` in the answer — so it belongs in the caller's query key like every other
+   * priced read.
+   *
+   * `dimension` is a `string` here and **four `match` arms in Rust**, which is the one place the
+   * usual split runs the other way: the arms are a fact about which SQL columns exist, not a
+   * vocabulary about widgets, so the backend really does own this list and refuses a fifth word in
+   * a sentence. `BreakdownDimension` in `packages/ui/features/home/` is the same four words on this side,
+   * and a caller should send one of them.
+   */
+  collectionBreakdown: (dimension: string, marketplace: MarketplaceId) =>
+    invoke<BreakdownRow[]>("collection_breakdown", { dimension, marketplace }),
+  /**
+   * One transaction for a whole imported file, rather than one `collectionAdd` per line — a
+   * 500-row CSV would otherwise be 500 transactions, and a failure halfway through would leave
+   * a collection nobody can reason about. A refusal rolls the whole file back.
+   *
+   * **`folderId` files the whole file into one folder, and absent — the default — is the root.**
+   * A file says nothing about a reader's filing, so the collection's own import step sends
+   * nothing and lands every row at the top level exactly as it always has. The **deck** arm of
+   * the import dialog is the one caller that names a folder: it sends the group of the deck the
+   * same press just wrote a list into, so the decklist and the group agree the moment the dialog
+   * closes and the copies are out of every other deck's reach. Ticking that box while the copies
+   * stopped at the root left the deck reading *missing* on every line the reader had just said
+   * they own.
+   *
+   * `collection::IMPORT_FOLDERS` is the fence: the reader's own folders and a **deck** group.
+   * `Recently removed` and an id nothing answers to are refused in words, before anything is
+   * written.
+   */
+  collectionImportCommit: (
+    items: CollectionImportItem[],
+    mode: TransferImportMode,
+    folderId: number | null = null,
+  ) => invoke<ImportCommitOutcome>("collection_import_commit", { items, mode, folderId }),
+  /**
+   * What {@link ipc.collectionImportCommit} **would** do with the same three arguments, without
+   * writing anything (issue #555) — the numbers the preview's sentence is built from, so a `set`
+   * file stops promising "N cards will be added" over a press that lowers some quantities and
+   * leaves others alone. Read-only; `undoId` is always `null`.
+   */
+  collectionImportPreview: (
+    items: CollectionImportItem[],
+    mode: TransferImportMode,
+    folderId: number | null = null,
+  ) => invoke<ImportCommitOutcome>("collection_import_preview", { items, mode, folderId }),
+  /**
+   * `Remove from collection` over several entries — **one transaction and one activity row**
+   * (issue #555), where it used to be one {@link ipc.collectionRemove} per id: N transactions, N
+   * feed rows, and a refusal part-way left the press half applied. An id that names nothing is
+   * skipped, as `collection_remove` skips it.
+   */
+  collectionRemoveMany: (ids: readonly number[]) =>
+    invoke<BulkRemoveOutcome>("collection_remove_many", { ids }),
+  /**
+   * `Move to` over several entries — {@link ipc.collectionSetFolder}'s merge rule per entry, in
+   * **one transaction with one activity row** (issue #555). Any refusal rolls the whole press
+   * back, so a move never lands half-filed.
+   */
+  collectionSetFolderMany: (ids: readonly number[], folderId: number | null) =>
+    invoke<BulkMoveOutcome>("collection_set_folder_many", { ids, folderId }),
+  /**
+   * Put back what one bulk write did — an import into the collection or the wishlist, a bulk
+   * remove, a bulk move (issue #555). The ticket is an outcome's `undoId`, held in the backend's
+   * memory for the session. **Refused rather than applied blindly** when a row the write touched
+   * has changed since, and refused when the ticket is unknown (a restart, or evicted); either
+   * refusal retires the ticket, so a second press answers the same way.
+   */
+  bulkUndo: (undoId: number) => invoke<BulkUndoOutcome>("bulk_undo", { undoId }),
+  /** Every folder there is, flat — {@link ipc.wishlistFolderList}'s rule verbatim, ported: the
+   *  tree is the reader's to build from `parentId`, and no card id scopes it because a folder
+   *  belongs to no card. **Unfiltered by kind**: a deck's folder and the removed-cards folder
+   *  are places cards are, so a page that could not see them would draw a tree the collection
+   *  does not have. Offering one as a *destination* is what filters on
+   *  {@link CollectionFolder.kind}. */
+  collectionFolderList: () => invoke<CollectionFolder[]>("collection_folder_list"),
+  /** A new folder, at the root with `parentId: null` or inside another one. Always a `user`
+   *  folder — nothing here makes the two the app owns — and a `parentId` naming one of those is
+   *  refused in words. */
+  collectionFolderCreate: (parentId: number | null, name: string) =>
+    invoke<CollectionFolder>("collection_folder_create", { parentId, name }),
+  /** Rename a folder the reader made. A deck's folder is named after its deck and the
+   *  removed-cards folder after what it is for, so neither is renameable. */
+  collectionFolderRename: (id: number, name: string) =>
+    invoke<CollectionFolder>("collection_folder_rename", { id, name }),
+  /**
+   * Re-parent a folder — `parentId: null` moves it back to the root.
+   *
+   * Refuses a move into itself or into one of its own descendants, {@link ipc.wishlistFolderMove}'s
+   * guard and for the same reason: `collection_folders.parent_id` is `ON DELETE CASCADE` **on
+   * itself**, so a cycle is a graph SQLite's recursive cascade would walk forever the day the
+   * folder is deleted.
+   */
+  collectionFolderMove: (id: number, parentId: number | null) =>
+    invoke<CollectionFolder>("collection_folder_move", { id, parentId }),
+  /**
+   * Place a whole level. **`ids` is the full new list of `parentId`'s children, in the order they
+   * are to sit in** — this is the first of the three folder reorders and the one the other two
+   * point at, so the contract is written out once, here.
+   *
+   * Two things follow from that sentence, and neither is legible from the name:
+   *
+   * * **It is the order, not a move.** `sort_order` is written from each id's *position*, so the
+   *   caller sends every child of that level — {@link ipc.deckCategoryReorder}'s rule, ported.
+   *   There is no way to say "put folder 7 third" without also saying what the rest of the level
+   *   is, because position is the only thing this command reads.
+   * * **`parent_id` is written from `parentId` in the same transaction.** An id in the list that
+   *   was living somewhere else is re-parented *and* placed by the one call, which is what a drag
+   *   actually is: a folder lifted out of one drawer and dropped third inside another says both
+   *   things at once. Spelling it as {@link ipc.collectionFolderMove} followed by a reorder would
+   *   be two transactions with a state between them a reader can see — the folder at the end of
+   *   its new level, or, if the second call never lands, filed somewhere they did not drop it.
+   *
+   * Writing `parent_id` is what makes {@link ipc.collectionFolderMove}'s cycle refusal this
+   * command's too, and for that comment's reason: `collection_folders.parent_id` is
+   * `ON DELETE CASCADE` **on itself**.
+   *
+   * **Every folder named is fenced to the reader's own, on both sides** — the destination and
+   * every id — so a deck's group or `Recently removed` in `ids` is refused in words. This is the
+   * one of the three cabinets with that fence, because it is the only one whose folders can
+   * belong to the app ({@link CollectionFolder.kind}); `deck_folders` and `wishlist_folders`
+   * carry no such column, so their reorders have nothing to refuse.
+   *
+   * Answers the **whole cabinet**, flat — `collection_folders::reorder_folders` ends in the same
+   * `list_folders` {@link ipc.collectionFolderList} calls, not in a read of the level it just
+   * wrote. Worth knowing rather than assuming from the argument: a re-parent moves a folder
+   * *between* levels, so an answer scoped to `parentId` could not describe the level the folder
+   * left. The three hooks still settle by invalidating the folder list rather than seeding the
+   * cache from this, which is the shape every other folder write here has.
+   */
+  collectionFolderReorder: (parentId: number | null, ids: number[]) =>
+    invoke<CollectionFolder[]>("collection_folder_reorder", { parentId, ids }),
+  /**
+   * Delete a folder. **Its cards are not deleted** — they surface at the root, filed nowhere and
+   * otherwise exactly as they were, and the backend re-files them by hand before the row goes so
+   * two copies of one printing landing at the root merge instead of colliding on the grain.
+   * Sub-folders *do* go with it. An id that resolves to nothing is a success.
+   *
+   * **A locked folder is refused in words** (`collection_folders::FOLDER_IS_LOCKED`), on the
+   * **effective** lock — so a sub-folder of a locked one is refused too — and so is a folder with
+   * a locked one anywhere beneath it (`FOLDER_HOLDS_LOCKED`), which the same press would re-file.
+   * Re-filing a set-aside drawer's cards to the root is exactly the undoing the lock exists to
+   * prevent; a caller draws the row greyed with its reason rather than letting the press reach
+   * here.
+   */
+  collectionFolderDelete: (id: number) => invoke<void>("collection_folder_delete", { id }),
+  /**
+   * Empty `Recently removed` — delete every entry filed in the one removed-cards folder — and
+   * answer how many **entries** went (issue #506). The folder stays; nothing else is touched —
+   * not the root, not a folder the reader made, not a deck's group, and never a deck's list.
+   *
+   * **The one folder write that throws cards away**, where {@link ipc.collectionFolderDelete}
+   * re-files every card it finds: what sits in the holding area has already left the collection,
+   * and this is the reader deciding it is not coming back. No argument, because there is exactly
+   * one such folder. A database without one is **refused in words**
+   * (`collection_alloc::NO_REMOVED_FOLDER`) rather than answered with a `0` that would claim a pile
+   * was emptied. The count is rows, not copies; the feed's line carries the copies.
+   */
+  collectionRemovedClear: () => invoke<number>("collection_removed_clear"),
+  /**
+   * Set or clear a folder's own lock — a drawer set aside, {@link CollectionFolder.locked}.
+   *
+   * `rename_folder`'s shape exactly: one scalar, fenced to the reader's own folders, answering
+   * the folder re-read. The app's own two — a deck's group and `Recently removed` — are refused
+   * in words, because a group is already fixed and a holding area is not something to set aside.
+   *
+   * **It writes the folder's own flag and nothing else.** The lock inherits down the tree, so
+   * unlocking a folder whose parent is locked changes what this row says and not what the reader
+   * sees; that is why a caller greys the row rather than offering a press that reports success
+   * over an unmoved badge.
+   */
+  collectionFolderSetLocked: (id: number, locked: boolean) =>
+    invoke<CollectionFolder>("collection_folder_set_locked", { id, locked }),
+  /**
+   * Move one owned row into a folder — `folderId: null` is the root of the collection, a real
+   * destination and not an omission.
+   *
+   * **A command of its own, because filing is not adding**: `folder_id` is part of the storage
+   * grain ({@link CollectionRow.folderId}), so an add can never silently move a row the reader
+   * filed last week and moving one has to be something they say out loud.
+   *
+   * **Merges rather than fails on a collision**, {@link ipc.wishlistSetFolder}'s rule: moving a
+   * copy into a folder that already holds the same printing at the same grain sums the two
+   * quantities into the destination row, deletes the source, and answers the **destination's**
+   * id and quantity — so the `id` that comes back is not always the `id` that went in. Any deck
+   * claims on the row that folds move with it.
+   *
+   * **The destination is fenced**: a `deck` folder and the removed-cards folder are the app's own
+   * and are refused in words. Copies reach those through the app's own writes, never by hand.
+   */
+  collectionSetFolder: (id: number, folderId: number | null) =>
+    invoke<EntryChange>("collection_set_folder", { id, folderId }),
+  /**
+   * The two numbers each collection folder tile is drawn from, one
+   * {@link CollectionFolderSummary} per folder that holds at least one card — **direct per
+   * folder, never recursive**, and **no row at all for an empty folder**. Read that interface
+   * before drawing anything from this.
+   *
+   * Priced at the named marketplace, off the same `price_expr` the collection header's own total
+   * comes from, so a folder's figure and the whole collection's can never disagree about what one
+   * copy costs.
+   */
+  collectionFolderSummary: (marketplace: MarketplaceId) =>
+    invoke<CollectionFolderSummary[]>("collection_folder_summary", { marketplace }),
+  /**
+   * Take `quantity` copies out of a collection row, put them in a deck's group, and write the
+   * `deck_cards` row that says the deck plays them — **one transaction**, so mid-move the copies
+   * are in both places or in neither.
+   *
+   * **Its one caller is the deck builder's Collection Search tab**
+   * (`features/decks/useCollectionSearch.ts`), which landed on 2026-08-23. This note said
+   * "nothing in `packages/ui/` calls this yet" for one PR, while the wrapper existed only so that
+   * {@link ipc.deckToCollection} beside it was not a mirror with one half missing.
+   *
+   * **The copies may be coming out of another deck**, which is the case this command exists to
+   * get right: the source row sits in that deck's group, so taking it decrements that deck's
+   * *live* list by the same quantity and reports its name in {@link MoveOutcome.fromDeck}. The
+   * copies are custody and not a reservation — a deck that loses them loses the card — so a UI
+   * confirms that before pressing, because the side effect lands on a deck the reader is not
+   * looking at.
+   *
+   * **The pile is a {@link DeckPile} — an id or a name, never both.** Naming one is what makes
+   * an owned add file a card the way every other add does: the backend resolves the word through
+   * `category_for_name`, inside the move's own transaction, so a pile it has to invent is marked
+   * `origin: "auto"` and goes with its last card. Resolving the name here instead — which is
+   * what this had to do while the command took only an id — went through
+   * {@link ipc.deckCategoryCreate} and left the reader an empty heading marked as *theirs*,
+   * which nothing but a manual delete removes.
+   *
+   * Refused in words, never as a constraint failure: a quantity below one, more copies than the
+   * row holds, a category belonging to another deck, a deck with no group, and copies already in
+   * the deck they were pointed at (which would write a second `deck_cards` row against copies
+   * the group already holds).
+   */
+  collectionToDeck: (entryId: number, deckId: number, pile: DeckPile, quantity: number) =>
+    invoke<MoveOutcome>("collection_to_deck", {
+      entryId,
+      deckId,
+      // The command's two nullable fields, which is the shape `deckAddCard` sends and the shape
+      // an older build's `categoryId`-only payload already fits. Rust refuses both-at-once in
+      // words; {@link DeckPile} is what stops a caller here ever producing that call.
+      //
+      // **The value, never `"id" in pile`.** Both members of the union *declare* `id`, one of
+      // them as `?: undefined`, so `{ name: "Ramp", id: undefined }` — legal, and what a caller
+      // spreading a partial object produces — satisfies the name member and still answers the
+      // presence test true. That sends `categoryId: undefined, categoryName: null`, which
+      // deserialises to two `None`s and is refused as `NO_CATEGORY`: a filing by name that
+      // reports "a card goes in a pile" instead of going in one.
+      categoryId: pile.id !== undefined ? pile.id : null,
+      categoryName: pile.id !== undefined ? null : pile.name,
+      quantity,
+    }),
+  /**
+   * Cut `quantity` copies from a deck card and file whatever the deck's group holds for that
+   * printing into `Recently removed` — the write that makes issue #209's holding area true.
+   *
+   * **This replaces `deckSetCardQuantity` for a decrease on a `live` list**, rather than
+   * accompanying it: it decrements the `deck_cards` row itself, so calling both takes the copies
+   * off the list twice. It addresses `deck_cards.id`, which is the one deck command that does —
+   * every other one takes the grain.
+   *
+   * **A theory row is refused** ("A theory list is a plan, and a plan holds no cards."), so the
+   * caller must not ask: a plan holds nothing in any folder, and a press that reported success
+   * and moved nothing would read as a card that vanished.
+   *
+   * **A deck card with no backing copies just goes away**, answering
+   * {@link MoveOutcome.quantity} `0` and {@link MoveOutcome.entryId} `null`. Read the outcome
+   * rather than the argument: what moved is what the reader now has on their desk, and it is
+   * less than was asked wherever the list claimed more than the group held.
+   */
+  deckToCollection: (deckCardId: number, quantity: number) =>
+    invoke<MoveOutcome>("deck_to_collection", { deckCardId, quantity }),
+  wishlistAdd: (wish: WishInput) => invoke<EntryChange>("wishlist_add", { wish }),
+  /** An absolute quantity — and `0` *removes* the row, because a wish holds nothing worth
+   *  keeping once it is emptied. This was the opposite of the collection's rule until schema
+   *  v24, when the collection joined it for a different reason: a wish has no acquisition story
+   *  to lose, while a collection row does and loses it anyway. Same answer, two arguments. */
+  wishlistSetQuantity: (id: number, quantity: number) =>
+    invoke<EntryChange>("wishlist_set_quantity", { id, quantity }),
+  wishlistRemove: (id: number) => invoke<EntryChange>("wishlist_remove", { id }),
+  wishlistList: (query: WishlistQuery) => invoke<WishlistPage>("wishlist_list", { query }),
+  /** {@link collectionShelfCounts} one table over: a tile is a wish, and summed over every shelf
+   *  the counts are the wishlist header's Total cost. */
+  wishlistShelfCounts: (query: WishlistQuery) =>
+    invoke<ShelfCount[]>("wishlist_shelf_counts", { query }),
+  /**
+   * The whole wishlist as one aggregate — see {@link WishlistSummary}, where the reason it is not
+   * a folder subtotal is written out.
+   *
+   * **The whole list, and no query**, {@link ipc.collectionBreakdown}'s rule: this is the home
+   * page's figure rather than the wall's, and the `marketplace` decides every number in it.
+   */
+  wishlistSummary: (marketplace: MarketplaceId) =>
+    invoke<WishlistSummary>("wishlist_summary", { marketplace }),
+  /** The wishlist sliced along one dimension — {@link ipc.collectionBreakdown}'s contract
+   *  verbatim, one cabinet over, and the same {@link BreakdownRow} back. The `finish` dimension
+   *  groups on `preferred_finish`, where an any-printing wish lands in a bucket keyed `"any"`. */
+  wishlistBreakdown: (dimension: string, marketplace: MarketplaceId) =>
+    invoke<BreakdownRow[]>("wishlist_breakdown", { dimension, marketplace }),
+  /**
+   * One transaction for a whole imported file — {@link ipc.collectionImportCommit}'s rule. The
+   * `set` arm reaches its row through `add_wish` first and corrects the quantity after, so a
+   * `set` of 0 **deletes** the wish rather than leaving an empty one.
+   */
+  wishlistImportCommit: (items: WishlistImportItem[], mode: TransferImportMode) =>
+    invoke<ImportCommitOutcome>("wishlist_import_commit", { items, mode }),
+  /** Every folder there is, flat — {@link ipc.deckFolderList}'s rule verbatim, ported: the
+   *  tree is the reader's to build from `parentId`, and no wish id scopes it because a folder
+   *  belongs to no wish. */
+  wishlistFolderList: () => invoke<WishlistFolder[]>("wishlist_folder_list"),
+  /** A new folder, at the root with `parentId: null` or inside another one. */
+  wishlistFolderCreate: (parentId: number | null, name: string) =>
+    invoke<WishlistFolder>("wishlist_folder_create", { parentId, name }),
+  wishlistFolderRename: (id: number, name: string) =>
+    invoke<WishlistFolder>("wishlist_folder_rename", { id, name }),
+  /**
+   * Re-parent a folder — `parentId: null` moves it back to the root.
+   *
+   * Refuses a move into itself or into one of its own descendants, {@link ipc.deckFolderMove}'s
+   * guard verbatim and for the same reason: `wishlist_folders.parent_id` is `ON DELETE CASCADE`
+   * **on itself**, so a cycle is a graph SQLite's recursive cascade would walk forever the day
+   * the folder is deleted.
+   */
+  wishlistFolderMove: (id: number, parentId: number | null) =>
+    invoke<WishlistFolder>("wishlist_folder_move", { id, parentId }),
+  /**
+   * Place a whole level — **{@link ipc.collectionFolderReorder}'s contract verbatim, and read that
+   * one before calling this**: `ids` is the *full* new list of `parentId`'s children in order, and
+   * one transaction writes both `sort_order` (from position) and `parent_id` (from `parentId`), so
+   * a drag that re-parents *and* places is never seen half done. Sending only the folder that
+   * moved is the mistake the name invites.
+   */
+  wishlistFolderReorder: (parentId: number | null, ids: number[]) =>
+    invoke<WishlistFolder[]>("wishlist_folder_reorder", { parentId, ids }),
+  /**
+   * Delete a folder. **Its wishes are not deleted** — `wishlist_entries.folder_id` is
+   * `ON DELETE SET NULL`, so they surface at the root, filed nowhere and otherwise exactly as
+   * they were. Sub-folders *do* go with it. An id that resolves to nothing is a success.
+   */
+  wishlistFolderDelete: (id: number) => invoke<void>("wishlist_folder_delete", { id }),
+  /**
+   * Delete {@link ipc.wishlistFolderDelete}'s whole reach **and the wishes in it** — the folder,
+   * every folder inside it, and every wish filed anywhere in that sub-tree. Answers how many
+   * wishes went. A folder that is gone is **refused** in words, unlike its sibling's success: the
+   * likeliest way it went is the plain delete, which left its wishes at the root.
+   */
+  wishlistFolderDeleteWithWishes: (id: number) =>
+    invoke<number>("wishlist_folder_delete_with_wishes", { id }),
+  /**
+   * Empty a folder of the wishes filed **directly** in it, and keep the folder. Its sub-folders
+   * and every wish in them are untouched — this is the level the reader is looking at, not the
+   * tree under it. Answers how many wishes went; a folder that is gone is refused in words.
+   */
+  wishlistFolderClear: (id: number) => invoke<number>("wishlist_folder_clear", { id }),
+  /**
+   * Move a wish to a folder — `folderId: null` is the root wishlist, a real destination and
+   * not an omission.
+   *
+   * **Merges rather than fails on a collision.** Moving a wish into a folder that already
+   * holds a wish for the same `(oracleId, cardId, preferredFinish)` would otherwise violate the
+   * storage grain {@link WishInput.folderId} put `folderId` into; instead the two quantities
+   * are summed into the destination row, the source row is deleted, and this answers the
+   * **destination's** id and quantity. The alternative — a `UNIQUE constraint failed` reaching
+   * the reader — would be the app telling them off for filing a card twice.
+   */
+  wishlistSetFolder: (id: number, folderId: number | null) =>
+    invoke<EntryChange>("wishlist_set_folder", { id, folderId }),
+  /**
+   * The counts and subtotal every folder card on the wishlist page is drawn from, one
+   * {@link WishlistFolderSummary} per folder — **direct per folder, never recursive**; see that
+   * interface before drawing anything from this, because a caller that assumes recursion draws
+   * a folder card reading `0` over a sub-folder holding twelve.
+   *
+   * Priced at the named marketplace, off the same `price_expr` the page header's own total
+   * comes from, so a folder's figure and the whole list's can never disagree about what one
+   * copy costs.
+   */
+  wishlistFolderSummary: (marketplace: MarketplaceId) =>
+    invoke<WishlistFolderSummary[]>("wishlist_folder_summary", { marketplace }),
+  /**
+   * Change which printing a wish is for — the write `wishlist_entries.card_id` has never had
+   * before, on a column that has always meant "any printing" when `null`.
+   *
+   * `cardId` pins the wish to that printing and refreshes its denormalised set, collector
+   * number and language from the card database; an id the card database does not have is
+   * refused, {@link ipc.wishlistAdd}'s words. `cardId: null` is the way back to **any
+   * printing** — set, collector number and language all clear with it — and is refused when the
+   * wish has no `oracleId` either, because a wish naming neither would be a shopping list item
+   * that cannot say what it is shopping for.
+   *
+   * **Merges rather than fails on a collision**, {@link ipc.wishlistSetFolder}'s rule verbatim:
+   * repointing a wish onto a printing (or onto "any printing") that collides with a wish
+   * already sitting in the same folder sums the two into one row rather than raising a unique
+   * constraint. Clears `needsReview`, because choosing the printing by hand *is* the review a
+   * flagged wish was waiting for.
+   */
+  wishlistSetPrinting: (id: number, cardId: string | null) =>
+    invoke<EntryChange>("wishlist_set_printing", { id, cardId }),
+  /**
+   * What re-pricing the list on screen would change, and **nothing is written** — issue #352's
+   * "preview you can verify before committing", which is the whole reason this is two commands
+   * and not one.
+   *
+   * Takes the query the list is currently drawn from, so the folder, the flatten switch and
+   * every active card filter scope the sweep; `limit` and `offset` are ignored, because a
+   * preview that stopped at the end of page one would quietly leave wishes un-optimised.
+   *
+   * The **`marketplace` on the query decides every figure in the answer**, so it belongs in the
+   * caller's query key like every other priced read — see {@link WishlistOptimizePlan}.
+   *
+   * `includeManaged` travels as its own argument — {@link OptimizePlanQuery} has why — and puts
+   * the decks' managed wishlists in scope, each of their moves marked `managed`.
+   */
+  wishlistOptimizePlan: ({ includeManaged = false, ...query }: OptimizePlanQuery) =>
+    invoke<WishlistOptimizePlan>("wishlist_optimize_plan", { query, includeManaged }),
+  /**
+   * Commit the ticked rows of a plan — **one transaction**, {@link ipc.wishlistImportCommit}'s
+   * rule: a sweep seen half done is a shopping list nobody can reason about.
+   *
+   * Each item names the printing it is coming *from* as well as the one it is going to, and a
+   * wish that has moved since the preview is skipped rather than repointed. Every item gets a
+   * {@link WishOptimizeResult}, in order.
+   */
+  wishlistOptimizeApply: (items: WishOptimizeApplyItem[]) =>
+    invoke<WishlistOptimizeOutcome>("wishlist_optimize_apply", { items }),
+  /** The gallery: every deck, archived last, most recently touched first. */
+  deckList: () => invoke<DeckRow[]>("deck_list"),
+  /**
+   * Every deck's worth at once — see {@link DeckValue}, including which cards it counts and why
+   * `null` is not zero.
+   *
+   * **Not on {@link DeckRow}**, deliberately: a price is a fact about a marketplace and a deck row
+   * is not, so folding it in would make the gallery's own read change its answer with a setting
+   * and invalidate on every marketplace switch. Its own command, its own query key, and a caller
+   * that draws the tiles before the figures arrive.
+   */
+  deckValues: (marketplace: MarketplaceId) => invoke<DeckValue[]>("deck_values", { marketplace }),
+  /**
+   * Every deck's printed mana costs at once — the colour bar's facts, and the whole of them.
+   *
+   * **No argument, because the gallery draws every tile at once.** A per-deck read would be one
+   * round trip per tile for a bar 4px high, which is the shape `deck_get` already has and the
+   * reason this is not that command: `deck_get` prices every row and rolls up every category,
+   * and none of it is a colour.
+   *
+   * **Cost strings rather than counted pips** — see {@link PipCost}, where the whole argument
+   * is. In one sentence: what a `{W/U}` is worth to a bar is a display decision, so it belongs
+   * on this side with the rest of them, and `@/lib/mana`'s `countPips` is where it is made.
+   *
+   * The pile is {@link DeckRow.cardCount}'s: the **live** variant, active `main|commander|maybe`
+   * categories. So the bar and the count beside it can never disagree, and a deck left on Theory
+   * reads its plan in the editor and its live list on the tile — see {@link DeckPipCosts}.
+   */
+  deckPipCosts: () => invoke<DeckPipCosts[]>("deck_pip_costs"),
+  /**
+   * The bracket estimate's facts, for the decks the caller names.
+   *
+   * **It takes deck ids rather than filtering to Commander in SQL, and that is the boundary
+   * again.** Which formats have a command zone is `format_specs.commanderRule` — a TypeScript
+   * question, asked through `useFormatSpecs` — so a `WHERE format_key = 'commander'` in the
+   * backend would be a second opinion about a table this side is already reading, and it would
+   * be wrong the day a format with a command zone is seeded. The caller decides which decks have
+   * a bracket to estimate and asks about those.
+   *
+   * It is also what keeps the read proportional: 397 distinct cards and 59 KB of oracle text
+   * across the dev database's four decks (measured 2026-09-07), and the gallery asks only about
+   * the tiles that will draw a number.
+   *
+   * Every field `estimateBracket` reads and nothing else — see {@link BracketCardRow} for the
+   * five, and {@link DeckBracketRead} for the pile, which is wider than the colour bar's.
+   */
+  deckBracketReads: (deckIds: number[]) =>
+    invoke<DeckBracketRead[]>("deck_bracket_reads", { deckIds }),
+  /**
+   * One deck and everything in it, or `null` when no deck has that id — a gallery that has
+   * not refreshed since another view deleted it asks for a deck that is not there.
+   *
+   * `variant` scopes the **cards, the categories, and the two counts on every label row** — it
+   * is threaded into all three reads. Since user schema v53 (issue #561) each list has piles of
+   * its own, so switching between the two lists can change the columns as well as the numbers in
+   * them; which *labels* come back does not depend on it, only how many copies wear each.
+   *
+   * `marketplace` decides every price in the answer — each card's {@link DeckCard.unitPrice}
+   * and each category's {@link DeckCategory.totalPrice} — so it is part of the question rather
+   * than of the presentation, and it belongs in the caller's query key.
+   */
+  deckGet: (id: number, variant: DeckVariant, marketplace: MarketplaceId) =>
+    invoke<DeckDetail | null>("deck_get", { id, variant, marketplace }),
+  /**
+   * Every token and emblem the deck's cards make — **one row per entry** since user schema v52,
+   * and one implicit row for a token this list holds no entry of. See {@link DeckTokenRow}.
+   *
+   * **The token list is derived on every call and stored nowhere** — the backend inflates the
+   * `raw` blob of each distinct card in the deck's *active* categories and reads `all_parts`,
+   * which is ~5 ms for a 100-card deck. A stored list would need reconciling on every deck edit
+   * *and* would go stale when a Scryfall sync changed a card's `all_parts`, with nothing to
+   * notice.
+   *
+   * `variant` scopes it the way it scopes every other deck read, and **since v52 it scopes the
+   * entries too**: each list has its own printings and counts (`deck_token_printings` is grained
+   * on `(deckId, variant, cardId, finish)`), so a plan asking for a foil Treasure and a live list
+   * holding a nonfoil one answer differently. The token's **state** is not scoped by it — a
+   * dismissal is "not in this deck", whichever list the reader is looking at.
+   *
+   * **`[]` is an answer three times over** and never a failure: a deck whose cards make
+   * nothing, a deck with no cards, and every failure shape behind the blob — an unknown id, a
+   * `raw` that will not inflate or parse, a missing or non-array `all_parts`. A deck must not
+   * fail to open over an area most decks use lightly.
+   *
+   * `marketplace` prices each row's effective printing — {@link DeckTokenRow.unitPrice} — so it
+   * is part of the question, and it belongs in the caller's query key for {@link deckGet}'s
+   * reason. It is `card_printings`' argument under the same name, so the art picker's grid and
+   * the pile's chin quote one number for one printing.
+   */
+  deckTokens: (deckId: number, variant: DeckVariant, marketplace: MarketplaceId) =>
+    invoke<DeckTokenRow[]>("deck_tokens", { deckId, variant, marketplace }),
+  /**
+   * **How many copies of one entry this list wants** — the stepper (spec §4.2 rules 2 and 3).
+   *
+   * `entry` is the entry's `(cardId, finish)`, or **`null` for the token's implicit entry**,
+   * which Rust materialises in this list only — the resolver's default printing, inserted at
+   * `quantity` — so a step on an untouched Treasure in the plan never touches the live list.
+   * **`0` deletes the entry, unless it is the token's last one in this list**, which stays at 0:
+   * the implicit default must not reappear under a reader who zeroed the only printing they had.
+   *
+   * Like every token write since v52 it files **one history row** (`deck` kind, `field: "token"`,
+   * `action: "quantity"`) and **one undo step**, and touches no collection row.
+   *
+   * `entry` travels as an explicit key, `null` included — Tauri fills parameters by name and an
+   * absent one is a refusal — and it is rebuilt from its two fields rather than forwarded, so a
+   * caller handing in a wider object (a view's `TokenEntryRef`) sends only the grain.
+   */
+  deckTokenSetQuantity: (
+    deckId: number,
+    variant: DeckVariant,
+    oracleId: string,
+    entry: TokenEntryKey | null,
+    quantity: number,
+  ) =>
+    invoke<void>("deck_token_set_quantity", {
+      deckId,
+      variant,
+      oracleId,
+      entry: tokenEntryArg(entry),
+      quantity,
+    }),
+  /**
+   * **Swap one entry to another printing and/or finish** — the art picker's press (rule 4).
+   *
+   * `from` is the entry being changed, or `null` for the implicit entry — which is never stored,
+   * so the swap *is* its materialisation, **at the destination** and at its effective quantity,
+   * rather than a stored default then moved; `to` is where it lands. Swapping an entry onto its
+   * own printing and finish writes nothing. **Swapping onto a printing and finish this
+   * list already holds folds the two**, quantities summed, on the grain — one tile, never two
+   * rows that draw identically. The token's other entries are untouched: adding art B keeps
+   * art A, and swapping A never reaches B.
+   */
+  deckTokenSwap: (
+    deckId: number,
+    variant: DeckVariant,
+    oracleId: string,
+    from: TokenEntryKey | null,
+    to: TokenEntryKey,
+  ) =>
+    invoke<void>("deck_token_swap", {
+      deckId,
+      variant,
+      oracleId,
+      from: tokenEntryArg(from),
+      to: tokenEntryArg(to),
+    }),
+  /**
+   * **Add one copy of a printing, in a finish, to this list** — the band's *Add printing* picker
+   * (rule 5), and the one token write that names a printing rather than a token: Rust resolves
+   * the oracle id from it.
+   *
+   * A new printing-and-finish lands at quantity 1; one the list already holds steps up by 1. A
+   * token whose entries were implicit is **materialised first** (rule 2), which is what makes
+   * adding art B keep art A. **A token nothing in the deck makes becomes `manual`**, so it stays
+   * on the wall whether or not a card ever derives it.
+   */
+  deckTokenAddPrinting: (deckId: number, variant: DeckVariant, cardId: string, finish: Finish) =>
+    invoke<void>("deck_token_add_printing", { deckId, variant, cardId, finish }),
+  /**
+   * **Remove printing** — one stored entry of one token in this list, deleted unconditionally
+   * (managed tokens spec §3.4). The one thing no other write does: a step to 0 keeps a token's
+   * last entry (rule 3), and the command that took them all, `deck_token_reset`, is retired along
+   * with Dismiss's `deck_token_state`.
+   *
+   * - **A derived token** whose last entry in this list goes falls back to its implicit entry,
+   *   the resolver's printing at 0 — what Reset printings did.
+   * - **A hand-added token** is drawn only in a list that holds an entry of it, so its last entry
+   *   here takes it off this list's band; when neither list holds one its state returns to `auto`
+   *   and it leaves the deck.
+   *
+   * **`entry` is never `null`**: an implicit entry is not stored, so there is nothing to delete
+   * and the band draws no Remove on one. An entry this list does not hold is refused in words
+   * (`ENTRY_GONE`). Journalled like every token write — one history row, *Removed Treasure's TMOM
+   * #12 printing*, and one undo step that puts it back.
+   */
+  deckTokenRemove: (
+    deckId: number,
+    variant: DeckVariant,
+    oracleId: string,
+    entry: TokenEntryKey,
+  ) =>
+    invoke<void>("deck_token_remove", {
+      deckId,
+      variant,
+      oracleId,
+      entry: tokenEntryArg(entry),
+    }),
+  /**
+   * **Every paper token and emblem printing in the game** — Add printing's `All tokens` (managed
+   * tokens spec §3.6). See {@link TokenPrinting}: the `card_printings` row the picker already
+   * draws, priced per finish at `marketplace`, with the token's own facts beside it.
+   *
+   * One statement over `cards` with `is_token_printing`'s predicate in SQL and **no index behind
+   * it**, which is a decision rather than an omission: it runs on a press of the toggle, never per
+   * keystroke — the picker narrows the answer it holds. The corpus answers ~3 245 printings over
+   * ~1 078 tokens (measured on the debug corpus when the token feature landed), so the picker
+   * lets the browser skip the groups off screen rather than drawing every one.
+   */
+  tokenPrintings: (marketplace: MarketplaceId) =>
+    invoke<TokenPrinting[]>("token_printings", { marketplace }),
+  /**
+   * Every note on the deck, in the reader's own order, each with the cards it names.
+   *
+   * **The complete list, and that is the feature rather than an implementation detail.** A note
+   * that names a card is still one of these rows — attachments hang off the note, so acquiring a
+   * card cannot file a note away somewhere the band does not look. See {@link DeckNote}.
+   *
+   * **`[]` is an answer and never a failure**: a deck nobody has written about yet. It is also
+   * the state this screen is hardest for, which is why the band puts its add field first.
+   *
+   * **Not scoped by {@link DeckVariant}**, unlike every other deck read here. A note attaches by
+   * `oracleId`, and the Live list and the Theory list hold the same oracle ids — so a note
+   * written against the plan is a note about the deck, and scoping it would make the same
+   * sentence appear and disappear as the reader flipped a toggle.
+   */
+  deckNotes: (deckId: number) => invoke<DeckNote[]>("deck_notes", { deckId }),
+  /**
+   * Write a new note, with however many cards it names — **in one transaction**, so a note is
+   * never briefly in the list without the card it was written about.
+   *
+   * `oracleIds` travels as an explicit key even when empty, `deckIdsPlaying`'s rule: Tauri fills
+   * parameters by name and an absent one is a refusal rather than a default. An empty array is
+   * the ordinary case — a note about the mana base names no card.
+   *
+   * Both strings may be `""`. A blank `title` is legal and is what the reader gets when they
+   * type a body and no heading; what is *drawn* for one is `noteTitle`'s conclusion, never a
+   * value stored here. See {@link DeckNote.title}.
+   */
+  deckNoteCreate: (deckId: number, title: string, body: string, oracleIds: string[]) =>
+    invoke<DeckNote>("deck_note_create", { deckId, title, body, oracleIds }),
+  /**
+   * Edit a note's heading, its prose, or both — and **absent means "leave it"**, which is
+   * {@link DeckPatch}'s rule one table over.
+   *
+   * **Both keys travel on every call, `null` included** — the rule the retired `deck_token_set`
+   * was written to: Tauri fills parameters by name, so `undefined` is folded to `null` here —
+   * with `??` and never `||`, because `""` is a **title the reader deliberately cleared** and
+   * `||` would send it as "leave it alone". That is this command's `quantity: 0`.
+   *
+   * It does not touch the note's cards. Attaching and detaching are the two commands below,
+   * because a set has no patch shape and a caller changing one card would otherwise have to
+   * send the rest back unchanged.
+   */
+  deckNoteUpdate: (deckId: number, id: number, patch: { title?: string; body?: string }) =>
+    invoke<DeckNote>("deck_note_update", {
+      deckId,
+      id,
+      title: patch.title ?? null,
+      body: patch.body ?? null,
+    }),
+  /** **This one really deletes** — the note and its attachments, by cascade. There is no
+   *  archive here and no `coalesce` to hide behind: the old `decks.notes` column could never be
+   *  emptied by a patch at all, so a multi-note model owns this path itself. The press is a
+   *  destructive confirm, and the step is on the deck's undo stack. */
+  deckNoteDelete: (deckId: number, id: number) =>
+    invoke<void>("deck_note_delete", { deckId, id }),
+  /**
+   * Name one more card on a note. Answers the **whole updated note**, so the band redraws from
+   * one round trip.
+   *
+   * **Attaching a card the note already names is a success that adds no row** —
+   * `idx_deck_note_cards_grain` is `(note_id, oracle_id)`, and the caller wanted that card
+   * named. Two devices doing it converge on one row for the same reason.
+   *
+   * `oracleId` and not a printing id: see {@link DeckNote}. The picker offers the deck's own
+   * cards, and the row **survives the card leaving the deck**, which is deliberate — a note
+   * about a card you cut is the note most worth keeping.
+   */
+  deckNoteAttach: (deckId: number, noteId: number, oracleId: string) =>
+    invoke<DeckNote>("deck_note_attach", { deckId, noteId, oracleId }),
+  /** Stop naming a card on a note — the row goes, **the note stays**. That is the issue's
+   *  central sentence read from the other end: a card is a pointer the note holds, so taking the
+   *  last one away leaves an ordinary note with no cards rather than nothing. An oracle id the
+   *  note does not name is a success: the caller wanted it unnamed. */
+  deckNoteDetach: (deckId: number, noteId: number, oracleId: string) =>
+    invoke<DeckNote>("deck_note_detach", { deckId, noteId, oracleId }),
+  /** Rearrange the deck's notes: `ids` is the whole list in the order the reader put it, and
+   *  `sort_order` is rewritten to match. Answers nothing — the caller has the order, since it is
+   *  what it just sent. */
+  deckNoteReorder: (deckId: number, ids: number[]) =>
+    invoke<void>("deck_note_reorder", { deckId, ids }),
+  /**
+   * Every note naming this card, **in every deck** — the card modal's `Notes` row.
+   *
+   * **The one note read that is not deck-scoped**, and that is what it is for: a card opened
+   * from the collection, from search or from another deck still answers *what have I written
+   * about this card*, which is the question the modal exists to answer completely. Each row
+   * carries the deck it was found in — see {@link CardNote}, and note that it is a different
+   * shape from {@link DeckNote} rather than the same one twice.
+   *
+   * **`[]` is an answer and not a failure, and a caller may not draw it as silence.** No notes
+   * for this card, the read in flight and the read *failed* are three different states that all
+   * look like an empty list, which is `combosForCard`'s rule beside it on the same rail.
+   */
+  cardNotes: (oracleId: string) => invoke<CardNote[]>("card_notes", { oracleId }),
+  /**
+   * One deck's to-do lists, in `sort_order, id` — the To-do band's read. `[]` for a deck with none,
+   * and for a deck that is not there, which the band draws the same way. **Refuses rather than
+   * answering `[]` when the read fails**, because the band's dialogs autosave and must never write
+   * over lists nobody could read.
+   */
+  deckTodoLists: (deckId: number): Promise<DeckTodoList[]> =>
+    invoke("deck_todo_lists", { deckId }),
+  /**
+   * Make a list at the end of the deck's own (`max(sort_order) + 1`) and answer it — the dialog's
+   * first real change on a **New to-do list**, which is why a list opened and closed untouched is
+   * never made. Refused with `deck::DECK_GONE` for a deck that is not there.
+   */
+  deckTodoListCreate: (deckId: number, title: string, body: string): Promise<DeckTodoList> =>
+    invoke("deck_todo_list_create", { deckId, title, body }),
+  /**
+   * Change one list's title, body or both. **Every key is sent, `null` meaning _leave it_**, so a
+   * change that names only the body is `title: null` on the wire — `??` and never `||`, or a blank
+   * title the reader typed would travel as "leave it" and the old heading would come back.
+   *
+   * `expected` is a compare-and-set on the **body**: a tick passes the body it read and a moved
+   * list is refused with `deck_todos::TODOS_CHANGED`; the dialog's autosave passes `null`. The
+   * other refusals are `TODO_LIST_GONE` and `TODO_LIST_WRONG_DECK`, in that order, and a change
+   * equal to what is stored writes nothing at all.
+   */
+  deckTodoListUpdate: (
+    deckId: number,
+    id: number,
+    change: { title?: string | null; body?: string | null; expected?: string | null },
+  ): Promise<void> =>
+    invoke("deck_todo_list_update", {
+      deckId,
+      id,
+      title: change.title ?? null,
+      body: change.body ?? null,
+      expected: change.expected ?? null,
+    }),
+  /** Delete one list, its to-dos with it. Idempotent: a list already gone is a success, since the
+   *  caller wanted it gone. */
+  deckTodoListDelete: (deckId: number, id: number): Promise<void> =>
+    invoke("deck_todo_list_delete", { deckId, id }),
+  /** Every list in every deck whose body is not empty, most recently edited first — the home
+   *  widget's one read. Takes **no arguments at all**: see the case in `ipc.test.ts`. */
+  everyDeckTodoList: (): Promise<DeckTodoListEntry[]> => invoke("every_deck_todo_list"),
+  /**
+   * The format the last deck made on this install was given — or `null` where no deck has ever
+   * been made.
+   *
+   * **One `app_meta` row, written by `deck_create` and by nothing else.** That is what makes it
+   * true of *every* way of making a deck rather than of one dialog's: the gallery's New deck
+   * panel and the import dialog's into-a-new-deck arm both go through that command, so neither
+   * has to remember to record anything and no third route can be added that forgets to. It
+   * moves on a **create** and not on a re-format: the question it answers is what a reader
+   * *starts* a deck on, which is a different fact from what their decks currently are.
+   *
+   * A bare `string` rather than a narrowed format key — the same shape, for the same reason, as
+   * {@link getMarketplace} and {@link printingGroupBy} above. This is the **stored fact,
+   * unvalidated**: `decks.format_key` is deliberately not a foreign key and `format_specs` is
+   * re-seeded by migrations, so a key this build no longer offers really can come back out of
+   * the row, and a row a newer build wrote must reach this side as the string it is. The
+   * narrowing belongs to the module that owns the vocabulary, and here that vocabulary is
+   * `format_specs` and that module is `@/features/decks/useNewDeckFormat` — whose
+   * `newDeckFormat` tests the key against the picker and falls back rather than refusing.
+   *
+   * `null` is an answer and not a failure: it is the same sentence as "this reader has never
+   * made a deck", which is precisely the case the default exists for.
+   */
+  deckLastFormat: () => invoke<string | null>("deck_last_format"),
+  /**
+   * Every card the deck's **live** list plays, as the keys a copy is matched against — the read
+   * behind the rule that a copy may only be filed into a deck's own collection folder when that
+   * deck already plays it.
+   *
+   * **A key is `coalesce(cards.oracle_id, deck_cards.card_id)`: the oracle card, with the
+   * printing as the fallback for a row the card database has never heard of.** The oracle id is
+   * what makes the rule mean what a reader means — a deck plays *Sol Ring*, not the Commander
+   * 2019 printing of one — so a copy from any set is answered by a deck holding any other.
+   * `cards.oracle_id` is nullable and a `deck_cards` row outlives a printing leaving the corpus,
+   * so the fallback is what keeps an orphaned row addressable at all: matched printing to
+   * printing, which is the strictest thing that can honestly be said about a card whose identity
+   * nothing knows.
+   *
+   * **Build the same key on this side with `playKey`** from `@/features/decks/useDeckPlays` —
+   * every DTO a filing surface holds carries both halves ({@link DeckCard},
+   * {@link CollectionRow}, {@link CardDetail}), and a second spelling of the coalesce is one
+   * rule two files would have to go on agreeing about.
+   *
+   * **The live list, and there is no `variant` argument on purpose.** A theory list is what a
+   * deck is being built *toward* and holds no copies at all, so filing the reader's cardboard
+   * into a group on the strength of a plan would put a physical card in a deck that does not
+   * play it yet.
+   *
+   * `DISTINCT` and sorted by the key, so two runs over one deck answer in one order — a card
+   * sitting in two piles is one entry, and the question is membership rather than a count.
+   * **`[]` is an answer twice over**: a deck with an empty live list reads it, and so does a
+   * `deckId` with no deck behind it — this is a fact about rows, and {@link ipc.deckGet} is
+   * where "is there a deck" is asked.
+   */
+  deckPlayedKeys: (deckId: number) => invoke<string[]>("deck_played_keys", { deckId }),
+  /**
+   * Which decks play **every** one of these cards — {@link ipc.deckPlayedKeys} asked from the
+   * other end, for a menu that has to grey the deck groups a selection may not be filed into.
+   *
+   * **`AND`, never `OR`, and that is the half a caller gets wrong.** A reader with four cards
+   * picked is asking *which group can take this selection*, so a deck playing three of the four
+   * must not offer a row that would refuse half the press. With one key the conjunction is
+   * invisible, which is exactly why it is written down here.
+   *
+   * `keys` are {@link ipc.deckPlayedKeys}' own keys, built by `playKey`. **Sort and dedupe
+   * before calling, and that is a caching rule rather than a correctness one** — the backend
+   * dedupes for itself and the answer does not depend on the order, so what an unsorted list
+   * costs is a second cache entry and a second round trip for one question
+   * (`combosForCardsKey` in `lib/query.ts` states the same rule for the same reason).
+   * `useDecksPlaying` does both for its callers.
+   *
+   * **An empty `keys` answers `[]` rather than every deck**, and that arm is the one worth
+   * holding on to: a conjunction over nothing is vacuously true, so "every deck plays all of no
+   * cards" is the tidy answer and precisely the wrong one for a menu — it would offer every
+   * group for a selection there is nothing to check.
+   */
+  deckIdsPlaying: (keys: readonly string[]) => invoke<number[]>("deck_ids_playing", { keys }),
+  /**
+   * Make a deck — **the whole deck, in one INSERT**, with its four predefined categories and
+   * its one birth row of history in the same transaction. Every field of {@link DeckInput}
+   * travels in this one call rather than as a create followed by a patch and a filing, which
+   * would be three transactions with a half-made deck to unwind between them.
+   *
+   * **There is nothing left that it cannot do.** A cover used to be the exception — a picture
+   * off disk needed the id this call answers with, so the create dialog made the deck and then
+   * uploaded, which is a two-step write with a deck-exists-but-has-no-picture state in the
+   * middle. A cover is {@link DeckInput.coverCardId} now, a string, and it travels here.
+   */
+  deckCreate: (deck: DeckInput) => invoke<DeckRow>("deck_create", { deck }),
+  /** Rename, re-format, cover and archive all arrive here. */
+  deckUpdate: (id: number, patch: DeckPatch) => invoke<DeckRow>("deck_update", { id, patch }),
+  /** **This one really deletes** — the deck, its cards and its claims, by cascade. Archiving
+   *  is `deckUpdate(id, { archived: true })`, and it is what a gallery's "remove" wants.
+   *  An id that resolves to nothing is a success: the caller wanted that deck gone. */
+  deckDelete: (id: number) => invoke<void>("deck_delete", { id }),
+  /** Copy the deck: its categories and labels as new rows, its cards in **both** variants
+   *  remapped onto them — never `archived`. A copy is a draft. */
+  deckDuplicate: (id: number) => invoke<DeckRow>("deck_duplicate", { id }),
+  /**
+   * File the deck under a folder — or, with `folderId: null`, back at the **root** of the
+   * tree.
+   *
+   * **The one thing {@link DeckPatch} cannot express, and the reason this is a command rather
+   * than a field.** A patch writes every column with `coalesce(?n, column)`, which reads a
+   * bound NULL as "leave it": there is no patch that un-files a deck. Here `null` is an
+   * argument with a meaning, and it must travel as an explicit key — Tauri fills parameters by
+   * name and an absent one is a refusal, not a default.
+   */
+  deckSetFolder: (deckId: number, folderId: number | null) =>
+    invoke<DeckRow>("deck_set_folder", { deckId, folderId }),
+  /**
+   * Remember how this deck is being read: which of its two lists, which `Group by`, which
+   * `Sort`. Absent fields are left alone — see {@link DeckViewState}.
+   *
+   * **A third deck write that is not a {@link DeckPatch}, and for a reason of its own: looking
+   * at a tab is not editing a deck.** It writes the three columns it was given and nothing
+   * else — no `updatedAt`, so a deck the reader only *read* does not climb to the top of a
+   * gallery sorted by when it was touched; **no history row**, because a `deck_audit` full of
+   * "changed the sort to Price" is a history nobody can read the edits out of; and no
+   * reallocation, because no card moved. A deck id that resolves to nothing is refused by name,
+   * like every other deck write.
+   *
+   * Answers nothing. What it stored is on the next {@link DeckRow} — `lastVariant`,
+   * `lastGroupBy`, `lastSortBy` — and the editor is already showing it, which is why nothing
+   * here invalidates (`useDeck`'s `rememberView` says why at length).
+   */
+  deckSetViewState: (deckId: number, viewState: DeckViewState) =>
+    invoke<void>("deck_set_view_state", { deckId, viewState }),
+  /**
+   * A deck's categories on their own — the same list `deckGet` already carries, for a panel
+   * that wants it without the cards.
+   *
+   * `variant` picks **which list's piles** come back — each list has its own since user schema
+   * v53 (issue #561), so a pile made on Theory is not a column on Actual — and scopes nothing
+   * else, because a pile's counts are already its own list's. `marketplace` decides what
+   * {@link DeckCategory.totalPrice} is a total *of*.
+   */
+  deckCategoryList: (deckId: number, variant: DeckVariant, marketplace: MarketplaceId) =>
+    invoke<DeckCategory[]>("deck_category_list", { deckId, variant, marketplace }),
+  /** A new category in **one of the deck's two lists**, always `kind: "main"` and always active,
+   *  appended after that list's last one. Refuses a name the list already has — the grain is
+   *  `(deckId, variant, name)`, so Theory and Actual may each hold a "Ramp" of their own. */
+  deckCategoryCreate: (deckId: number, variant: DeckVariant, name: string) =>
+    invoke<DeckCategory>("deck_category_create", { deckId, variant, name }),
+  /**
+   * Rename one category — `id`, not `deckId`, because a category names its own deck.
+   *
+   * **Refused for the four predefined ones** (`Commander`, `Sideboard`, `Companion`,
+   * `Maybeboard`), and that refusal is what guarantees they still read those words: the rules
+   * role is `kind`, but every heading, every refusal sentence and every payload in the history
+   * quotes the *name*.
+   */
+  deckCategoryRename: (id: number, name: string) =>
+    invoke<DeckCategory>("deck_category_rename", { id, name }),
+  /**
+   * Switch a pile on or off — {@link DeckCategory.isActive}, which is the whole of "counts
+   * toward nothing".
+   *
+   * **Allowed on every kind**, the Commander included: the backend's predefined guard is
+   * about renaming and deleting and never reaches this. It reallocates in the same
+   * transaction, because an inactive category claims no copies — so this changes what the deck
+   * has reserved without touching a single card.
+   */
+  deckCategorySetActive: (id: number, isActive: boolean) =>
+    invoke<DeckCategory>("deck_category_set_active", { id, isActive }),
+  /**
+   * Write `sortOrder` from position in `ids`, and answer the whole list back in its new order.
+   *
+   * An id that is not this deck's — stale, or gone — is **silently skipped** rather than
+   * failing the reorder over one entry, so a list that raced a delete still lands. Send every
+   * id **of one list**: this is the order of that list's piles, not a move, and a list mixing
+   * Actual's piles with Theory's is refused (issue #561).
+   */
+  deckCategoryReorder: (deckId: number, ids: number[]) =>
+    invoke<DeckCategory[]>("deck_category_reorder", { deckId, ids }),
+  /**
+   * Delete a `main` category, with or without keeping its cards.
+   *
+   * **`moveToCategoryId` is the whole of the difference, and `null` is destructive**: an id
+   * moves the cards first, in the same transaction, folding into whatever the target already
+   * holds — `null` lets `ON DELETE CASCADE` take the cards with the category, which is what a
+   * confirm dialog has to say out loud. One command for both, because a caller doing the move
+   * and the delete as two round trips could lose the cards between them.
+   *
+   * A pile holds one list's cards (issue #561), so the move stays inside that list: the target
+   * must be a pile of the same deck **and the same variant**. Refuses a predefined category, a
+   * target belonging to another deck or the other list, and a move into itself.
+   */
+  deckCategoryDelete: (id: number, moveToCategoryId: number | null) =>
+    invoke<void>("deck_category_delete", { id, moveToCategoryId }),
+  /** The labels **this deck's list is wearing**, most-used first — `deckGet` carries the same
+   *  list. `variant` scopes membership as well as the counts, because the live list and the
+   *  theory list are treated as separate decks where labels are concerned. */
+  deckLabelList: (deckId: number, variant: DeckVariant) =>
+    invoke<DeckLabel[]>("deck_label_list", { deckId, variant }),
+  /**
+   * A new label, **app-wide**. Refuses a name any label already holds; the colour is `#rrggbb`
+   * and the backend checks only that it is non-empty — see {@link LabelColor}.
+   *
+   * **`deckId` is nullable, and `null` is Settings' Appearance panel.** A label has been one
+   * app-wide row since v21, so the deck was never what is being written — it is only what the
+   * *side effects* need: the deck's `updated_at` and its entry in the history drawer. A call
+   * from a page with no deck open has no deck to name, so it makes the label and records no
+   * history and no undo step, which is the honest account of an edit that reaches every deck
+   * wearing it.
+   *
+   * **Every existing caller passes a number and is unchanged** — `number` widens into
+   * `number | null`, so this is the rare wire change with no call site to follow it.
+   */
+  deckLabelCreate: (deckId: number | null, name: string, color: LabelColor) =>
+    invoke<GlobalLabel>("deck_label_create", { deckId, name, color }),
+  /** Rename **and** recolour, **in every deck at once**: one command, both arguments required.
+   *  There is no patch shape here, so a caller changing one sends the other back unchanged.
+   *  `deckId` is nullable for {@link ipc.deckLabelCreate}'s reason — a rename made from Settings
+   *  names no deck and writes no history. */
+  deckLabelUpdate: (deckId: number | null, id: number, name: string, color: LabelColor) =>
+    invoke<GlobalLabel>("deck_label_update", { deckId, id, name, color }),
+  /** Delete a label **from the whole app**. It **unlabels its cards rather than deleting them**
+   *  — `deck_cards.label_id` is `ON DELETE SET NULL` — in every deck wearing it, which is what
+   *  {@link GlobalLabel.deckCount} exists for a confirm dialog to say first. `deckId` is
+   *  nullable for {@link ipc.deckLabelCreate}'s reason, and a deckless delete still un-labels
+   *  every card: what it costs is the history row, never the write. */
+  deckLabelDelete: (deckId: number | null, id: number) =>
+    invoke<void>("deck_label_delete", { deckId, id }),
+  /** Take a label off **this deck's cards in one list**, leaving the label itself alone —
+   *  the row-level act the app-wide list needed and the per-deck one never did. Answers how
+   *  many rows lost it; zero is a success. */
+  deckLabelRemoveFromDeck: (deckId: number, labelId: number, variant: DeckVariant) =>
+    invoke<number>("deck_label_remove_from_deck", { deckId, labelId, variant }),
+  /** Every label there is, most-used first — the only list that can answer a label no card is
+   *  wearing. Takes no deck id at all; see {@link GlobalLabel}. */
+  deckLabelAll: () => invoke<GlobalLabel[]>("deck_label_all"),
+  /**
+   * Put the one label a deck card carries on it, or take it off with `labelId: null`.
+   *
+   * A **card** write wearing a label command's name: it addresses the slot by the full grain
+   * `(deckId, cardId, categoryId, variant, finish)` like every other card write, and answers
+   * "that card is not in this deck's category any more" for a row that has since moved, folded
+   * or been stepped to zero. A `labelId` belonging to another deck is refused before anything
+   * is written.
+   *
+   * **`finish` is the fifth term and was sent here for months without arriving.** The command
+   * declared no such parameter, Tauri drops a payload field a command does not name, and the
+   * writer behind it addressed the row without one — so no foil or etched row in any deck could
+   * be labelled at all. Fixed 2026-09-03; `ipc.test.ts` now pins the crate's parameter list
+   * against the keys sent from here, which is the only place the two spellings meet.
+   */
+  deckCardSetLabel: (
+    deckId: number,
+    cardId: string,
+    categoryId: number,
+    variant: DeckVariant,
+    finish: DeckFinish,
+    labelId: number | null,
+  ) =>
+    invoke<void>("deck_card_set_label", { deckId, cardId, categoryId, variant, finish, labelId }),
+  /** Every folder there is, flat — the tree is the reader's to build from `parentId`. No deck
+   *  scoping, because a folder belongs to no deck: it files them. */
+  deckFolderList: () => invoke<DeckFolder[]>("deck_folder_list"),
+  /** A new folder, at the root with `parentId: null` or inside another one. */
+  deckFolderCreate: (parentId: number | null, name: string) =>
+    invoke<DeckFolder>("deck_folder_create", { parentId, name }),
+  deckFolderRename: (id: number, name: string) =>
+    invoke<DeckFolder>("deck_folder_rename", { id, name }),
+  /**
+   * Re-parent a folder — `parentId: null` moves it back to the root.
+   *
+   * Refuses a move into itself or into one of its own descendants, and that guard is not
+   * cosmetic: `deck_folders.parent_id` is `ON DELETE CASCADE` **on itself**, so a cycle is a
+   * graph SQLite's recursive cascade would walk forever the day the folder is deleted.
+   */
+  deckFolderMove: (id: number, parentId: number | null) =>
+    invoke<DeckFolder>("deck_folder_move", { id, parentId }),
+  /**
+   * Place a whole level — **{@link ipc.collectionFolderReorder}'s contract verbatim, and read that
+   * one before calling this**: `ids` is the *full* new list of `parentId`'s children in order, and
+   * one transaction writes both `sort_order` (from position) and `parent_id` (from `parentId`), so
+   * a drag that re-parents *and* places is never seen half done. Sending only the folder that
+   * moved is the mistake the name invites.
+   */
+  deckFolderReorder: (parentId: number | null, ids: number[]) =>
+    invoke<DeckFolder[]>("deck_folder_reorder", { parentId, ids }),
+  /**
+   * Delete a folder. **Its decks are not deleted** — `decks.folder_id` is `ON DELETE SET
+   * NULL`, so they surface at the root, filed nowhere and otherwise exactly as they were.
+   * Sub-folders *do* go with it. An id that resolves to nothing is a success.
+   */
+  deckFolderDelete: (id: number) => invoke<void>("deck_folder_delete", { id }),
+  /**
+   * One deck's history, newest first — `at DESC, id DESC`, because `unixepoch()` has
+   * one-second resolution and a single click can write two rows inside one second.
+   *
+   * `limit` is **required and clamped into `1..=500`** by the backend: a cap rather than a
+   * page cursor, because this table grows by one row per edit and a built deck is hundreds of
+   * rows, not millions. The clamp is also what stops a `0` or a negative from meaning *no
+   * limit at all*, which is exactly how SQLite reads a negative `LIMIT`.
+   *
+   * A deck that is not there answers an **empty list**, not an error: the history of a deck
+   * that does not exist is nothing, and the rows cascade with it.
+   */
+  deckAuditList: (deckId: number, limit: number) =>
+    invoke<DeckAuditEntry[]>("deck_audit_list", { deckId, limit }),
+  /**
+   * The home page's feed — every cabinet's recent changes, newest first, `at DESC, id DESC` like
+   * the history above it.
+   *
+   * **It reads {@link ipc.deckAuditList}'s table as one half of itself**, which is why it sits
+   * here: a `UNION ALL` over `activity` and `deck_audit`, so a deck edit appears once — in the
+   * drawer *and* in the feed — rather than being logged twice. See {@link ActivityEntry} for what
+   * that costs (colliding `id`s, and a `kind` vocabulary that depends on the `scope`).
+   *
+   * `limit` is **required and clamped into `1..=500`** by the backend, {@link ipc.deckAuditList}'s
+   * rule and its reason: the clamp is what stops a `0` or a negative from meaning *no limit at
+   * all*, which is exactly how SQLite reads a negative `LIMIT`.
+   */
+  activityRecent: (limit: number) => invoke<ActivityEntry[]>("activity_recent", { limit }),
+  /**
+   * What the deck editor's Undo and Redo buttons would do — see {@link DeckUndoState}.
+   *
+   * **`redoId` is the caller's**, because the redo stack lives in this webview and dies with
+   * the window. Rust stamps `undone_at` so *undo* survives a restart and carries on where it
+   * stopped; which of those undone changes the reader could still put back is their position
+   * in a session, not a fact about the deck, and a database-backed redo would offer to
+   * resurrect a fortnight-old branch of edits they had forgotten making.
+   */
+  deckUndoState: (deckId: number, redoId: number | null) =>
+    invoke<DeckUndoState>("deck_undo_state", { deckId, redoId }),
+  /**
+   * Undo one change. `auditId` must be the deck's cursor — the id `deckUndoState` handed back
+   * — or the call is refused in words rather than undoing something else.
+   *
+   * A deck write like any other: it moves `updated_at`, records its own history row and
+   * reallocates. What it does *not* record is a step of its own, so pressing Ctrl+Z twice goes
+   * back two changes rather than toggling one.
+   */
+  deckUndoApply: (deckId: number, auditId: number) =>
+    invoke<void>("deck_undo_apply", { deckId, auditId }),
+  /** Put back a change that was undone. Refused in words if it was not. */
+  deckRedoApply: (deckId: number, auditId: number) =>
+    invoke<void>("deck_redo_apply", { deckId, auditId }),
+  /** What the plan wants and the deck does not have — see {@link TheoryDiffRow}. One
+   *  direction only, on the exact card (printing **and** finish), categories not compared,
+   *  inactive ones excluded from both sides. `marketplace` prices the shopping list, which is
+   *  the whole point of drawing one. */
+  deckTheoryDiff: (deckId: number, marketplace: MarketplaceId) =>
+    invoke<TheoryDiffRow[]>("deck_theory_diff", { deckId, marketplace }),
+  /**
+   * Every card the plan asks for, as a {@link TheorySlot} each — `deck_theory.rs`'s own
+   * `group_key` string and how many copies the plan wants, in no particular order and **one row
+   * per planned card** (the piles are summed in the SQL).
+   *
+   * The deck editor's theory tick, and **the one question about the pair that
+   * {@link ipc.deckTheoryDiff} cannot answer**: a card the reader has fully acquired is absent
+   * from the diff and is still in the plan. See `features/decks/theoryMatch.ts`, which builds
+   * the same string for a live row and looks it up.
+   *
+   * **Not a `deckGet` of the other variant**, deliberately: that read prices every row and rolls
+   * up allocations, and `DeckEditor.test.tsx` pins that nothing may call it for the list the
+   * reader is not looking at. This is three columns of one indexed scan and no marketplace.
+   *
+   * Inactive categories are excluded, which is `deck_theory_diff`'s rule and the same reasoning:
+   * a card parked in the theory Maybeboard is not something the reader has decided to play.
+   */
+  deckTheorySlots: (deckId: number) => invoke<TheorySlot[]>("deck_theory_slots", { deckId }),
+  /**
+   * The printings of one deck, in either list, that answer every typed term of the editor's
+   * `Filter this deck` box — `t:goblin`, `cmc>=3`, `-kw:flying`, a resolved `otag:` slug
+   * (issue #621). Sorted, deduplicated card ids; a deck that is not there answers `[]`.
+   *
+   * **The terms and nothing else**: the box's free text is matched in the webview as it always
+   * was, so there is deliberately no `text` here and Rust would ignore one. The filters are the
+   * search's own (`filters::push_card_filters`, `filters::fts_match`), which is the whole reason
+   * this is a round trip rather than a test over `DeckCard` — a deck row carries no keywords, no
+   * artist and no tags, and a second implementation of the thirteen fields would drift.
+   */
+  deckQueryCards: (
+    deckId: number,
+    filters: Pick<CardFilters, "predicates" | "oracleTags" | "artTags">,
+  ) => invoke<string[]>("deck_query_cards", { deckId, filters }),
+  /**
+   * Everything the **plan** is short of, onto the wishlist. Answers how many wishes were
+   * touched, like its live twin.
+   *
+   * A second command rather than a variant argument on `deckMissingToWishlist`, because the
+   * two are different questions: that one reads `live` and only `live` — what the deck as it
+   * stands is short of — while this one reads the difference between the plan and the deck.
+   * Neither nets out {@link TheoryDiffRow.ownedSpare}: it is a display field, and subtracting
+   * it here would count the live list twice.
+   *
+   * **`only` narrows it to the rows the reader ticked** — `deck_theory.rs`'s own `group_key`
+   * strings, `` `${cardId}|${finish ?? ""}` ``, which is the same spelling
+   * {@link ipc.deckTheorySlots} answers in and `theoryMatch.ts` builds. Absent means the whole
+   * difference, so the footer's untouched press and every older caller mean what they always
+   * did. A key naming no row of the current difference writes nothing rather than refusing:
+   * the diff is re-read inside the write, so a row the reader ticked and then acquired in
+   * another window is simply not short any more.
+   *
+   * **An include list rather than an exclude list**, though the gesture it serves is exclusion.
+   * The two differ only for rows that appeared between the read and the press — and those are
+   * rows the reader never saw, so sending them would be the dialog acting on its own.
+   *
+   * **The wish is pinned to the printing the plan names** (2026-08-22), carrying its `foil` or
+   * `etched` finish with it, which is the same rule the comparison itself has followed since
+   * 2026-08-20: a plan naming a printing is a plan for that cardboard, and answering it with a
+   * wish for any printing hands the reader back the substitution they were tracking. The
+   * regular copy pins no finish — `null` is the unmarked case in `deck_cards`, and writing
+   * `nonfoil` would split this wish from every other one the app makes for that card.
+   *
+   * Because a pinned wish and an any-printing one are **different rows** on the wishlist grain
+   * `(oracleId, cardId, preferredFinish, folderId)`, a reader who pressed this before that
+   * change keeps their old any-printing line and gains a pinned one. Nothing is lost or
+   * double-counted; the upsert folds each into its own row. (**That grain has had four terms
+   * since schema v23 and this sentence named three until 2026-09-09** — an omission that read
+   * as harmless only while every wish this command wrote went to the same place, and a wrong
+   * description of exactly the term `folderId` below turns on.)
+   *
+   * **`folderId` files the whole difference into one wishlist folder, and absent — or `null` —
+   * is the root** (issue #437). The root is where every wish this command has ever written
+   * landed, so a caller that passes nothing means precisely what it always did; what changed is
+   * that the root is now a destination the reader *picked* rather than the only one there was.
+   * `null` and absent are the same answer here on purpose: {@link WishInput.folderId} is
+   * `number | null`, Rust takes `Option<i64>`, and a caller holding a nullable folder id should
+   * be able to forward it without first turning it into `undefined`.
+   *
+   * **The fourth term of the grain is what makes this an _add_ and not a move**, and it is the
+   * whole licence for offering a destination at all. `WISHLIST_GRAIN`'s `coalesce(folder_id, 0)`
+   * means a card the reader already wants *somewhere else* gets a **second wish**, in the folder
+   * this press named, with the old line untouched. Without that term the same press would land
+   * on the wish they filed into `Ordered` last week and raise its quantity — the wish would
+   * appear to move, and a filing decision made deliberately would be undone by a press about
+   * shopping. Moving a wish between folders stays its own explicit act,
+   * {@link ipc.wishlistSetFolder}, which is the distinction this argument must never blur.
+   *
+   * **A folder id naming nothing is refused in words ahead of the diff** — `FOLDER_GONE`, *That
+   * folder is not there any more.* — which is the third of this command's three refusals, behind
+   * "that deck is gone" and "that deck keeps no cardboard", because all three are different
+   * mistakes and each is owed its own sentence. Up front rather than at the write, so a plan
+   * that is short of nothing still refuses instead of answering `0`: `add_wish` fences the
+   * column per row and a press that reaches it not once would otherwise report a success. A
+   * dialog cannot tell "the folder you picked was deleted in another window" from "you already
+   * own all of it" any other way, and those are two very different things to tell somebody who
+   * has just pressed a button.
+   */
+  deckTheoryMissingToWishlist: (
+    deckId: number,
+    only?: readonly string[],
+    folderId?: number | null,
+  ) => invoke<number>("deck_theory_missing_to_wishlist", { deckId, only, folderId }),
+  /**
+   * Put copies into a category, folding on `(deck, variant, category, card)` — the drag-in
+   * and the click-to-add write, and **not** the stepper's.
+   *
+   * **`categoryId` or `categoryName`, and at least one.** An id is a drop onto a column the
+   * reader pointed at; a name is "file it where this card belongs", found-or-created — the
+   * word being `autoCategoryFor`'s to compute, because which pile a Sol Ring goes in is
+   * domain logic. Passing both uses the id. Passing neither is refused in words.
+   *
+   * It reads `cards` to denormalize the printing onto the new row, so it refuses a card the
+   * database does not have: an orphaned deck row can be stepped and moved but never
+   * re-added. `quantity` must be positive; zero is refused rather than treated as a removal.
+   */
+  deckAddCard: (
+    deckId: number,
+    cardId: string,
+    categoryId: number | null,
+    categoryName: string | null,
+    variant: DeckVariant,
+    finish: DeckFinish,
+    quantity: number,
+  ) =>
+    invoke<EntryChange>("deck_add_card", {
+      deckId,
+      cardId,
+      categoryId,
+      categoryName,
+      variant,
+      finish,
+      quantity,
+    }),
+  /**
+   * Put copies of one printing and finish into the deck's **other** list — the card menu's
+   * `Add to actual` / `Add to theory` (issue #592) — filed in the pile there that stands for the
+   * one the card is in now.
+   *
+   * **`variant` is the list the card goes _into_, and `fromCategoryId` is the pile it is in
+   * _now_**, in the other list: the caller names the source and Rust finds the target through
+   * `deck_meta::counterpart_in` — a zone by its kind, any other pile by its name, and a missing
+   * one made there as a copy of the source. So the matching rule is written once, and the page
+   * never guesses a pile of a list it is not drawing.
+   *
+   * Refuses in words where {@link ipc.deckAddCard} would, and three more: a deck that keeps no
+   * plan (there is no other list), a pile that is not this deck's, and a pile already in the
+   * list the card is going to. Otherwise it folds on the grain exactly as that command does.
+   */
+  deckAddCardToOtherList: (
+    deckId: number,
+    cardId: string,
+    fromCategoryId: number,
+    variant: DeckVariant,
+    finish: DeckFinish,
+    quantity: number,
+  ) =>
+    invoke<EntryChange>("deck_add_card_to_other_list", {
+      deckId,
+      cardId,
+      fromCategoryId,
+      variant,
+      finish,
+      quantity,
+    }),
+  /**
+   * An absolute quantity — **the stepper's write**, and the one that works on a row whose
+   * printing has left the card database.
+   *
+   * `0` *removes* the row, which is now what all three lists do — the collection's row survived a
+   * zero until schema v24 and no longer does — and here it needs no argument at all: a category
+   * slot holds an intention and nothing else, and an intention stepped down to none of is
+   * withdrawn. The answer then reads `removed: true` with `id: 0` when there was no row to
+   * remove in the first place.
+   *
+   * Adjusts what is there; it does not create. Putting a card into a category is
+   * `deckAddCard`.
+   */
+  deckSetCardQuantity: (
+    deckId: number,
+    cardId: string,
+    categoryId: number,
+    variant: DeckVariant,
+    finish: DeckFinish,
+    quantity: number,
+  ) =>
+    invoke<EntryChange>("deck_set_card_quantity", {
+      deckId,
+      cardId,
+      categoryId,
+      variant,
+      finish,
+      quantity,
+    }),
+  /**
+   * Empty one category of one variant — a pile's right-click **Clear stack** — and answer the
+   * **copies** it removed.
+   *
+   * One command rather than a `deckSetCardQuantity(…, 0)` per row, and the arithmetic is
+   * `deckImportCommit`'s: a loop over a forty-card pile is forty transactions, forty history
+   * rows and forty invalidations. This is one of each.
+   *
+   * **This variant only** — which, since a pile belongs to one list (user schema v53, issue
+   * #561), is every copy the pile holds — `variant` is the pile's own. A clear leaves the pile
+   * standing, so what it empties is the list the reader is looking at, and the confirmation says
+   * so.
+   *
+   * An empty pile answers `0` and writes nothing at all: no history row, no `updated_at`, and
+   * not one collection row moved.
+   */
+  deckCategoryClear: (deckId: number, categoryId: number, variant: DeckVariant) =>
+    invoke<number>("deck_category_clear", { deckId, categoryId, variant }),
+  /**
+   * Empty **one whole list of one deck** — Deck settings' **Clear actual list…** and
+   * **Clear theory list…** — and answer the
+   * **copies** it removed: `sum(quantity)`, never a count of `deck_cards` rows.
+   *
+   * `deckCategoryClear` one grain wider, and it makes that command's arithmetic argument more
+   * loudly rather than differently: a hundred-card deck emptied a pile at a time is a
+   * transaction, a history row and an invalidation *per pile*, and one emptied a row at a time
+   * through `deckSetCardQuantity(…, 0)` is a hundred of each. This is one of each.
+   *
+   * **The piles survive.** `deck_categories` is untouched, so every column the reader arranged
+   * is still on the desk when the deck is empty — which is the whole difference between this and
+   * a sweep of `deckCategoryDelete`, and what makes the press an *emptying* rather than a
+   * demolition. It is also why nothing here cascades into the other list: a category is not
+   * variant-scoped, and this command is.
+   *
+   * **This variant only, and the argument is the whole of what says which.** On `live` it is a
+   * collection write too — the reader's owned copies are released back into `Recently removed`,
+   * through the same walk a cut goes through — where a `theory` clear moves nothing at all,
+   * because a plan holds no copies to release.
+   *
+   * An already-empty list answers `0`.
+   */
+  deckClear: (deckId: number, variant: DeckVariant) =>
+    invoke<number>("deck_clear", { deckId, variant }),
+  /**
+   * Move every copy from one category to another **within one variant**, folding into whatever
+   * the target already holds. The identity travels from the moved row, so an orphan can be
+   * tidied out of the scratchpad like anything else.
+   *
+   * **Either `toCategoryId` or `toCategoryName`, and at least one** — `deckAddCard`'s two-arm
+   * target, and the id wins when both arrive. An id is a drop onto a column the reader pointed
+   * at; a **name** is the quick zones' `Auto`, found-or-created in the same transaction by
+   * `category_for_name`, which is what makes a pile the app invents come out `origin: 'auto'`
+   * and therefore stop being drawn once its last card leaves. The word is `autoCategoryFor`'s
+   * and is computed here, never in Rust.
+   *
+   * Answers **the category the copies are now in**, which is the only way the name arm's caller
+   * learns what was found or made — the caret follows a moved card to its new pile, so that id
+   * is load-bearing rather than a convenience. A name that resolves to the pile the card is
+   * already in writes nothing at all, answers that pile, and does not bump `updated_at`.
+   */
+  deckMoveCard: (
+    deckId: number,
+    cardId: string,
+    fromCategoryId: number,
+    toCategoryId: number | null,
+    toCategoryName: string | null,
+    variant: DeckVariant,
+    finish: DeckFinish,
+  ) =>
+    invoke<number>("deck_move_card", {
+      deckId,
+      cardId,
+      fromCategoryId,
+      toCategoryId,
+      toCategoryName,
+      variant,
+      finish,
+    }),
+  /**
+   * Swap a deck card to **another printing of the same card**: same category, same variant,
+   * same copies, folding into whatever that category already holds of the printing swapped
+   * to. The card pane's "Use this printing".
+   *
+   * The one card write whose identity comes from a fresh `cards` lookup rather than from the
+   * row being changed — a move keeps a printing the reader already chose, a swap *is* the
+   * reader choosing a new one — so a `toCardId` that no longer resolves is answered as a sync
+   * that raced the click, not as an orphan to preserve. The backend refuses two printings of
+   * different cards outright; an orphaned `fromCardId` is the exception, because a printing
+   * the database has lost has no oracle id to compare and is exactly the row a swap has to be
+   * able to rescue.
+   */
+  deckSwapPrinting: (
+    deckId: number,
+    fromCardId: string,
+    toCardId: string,
+    categoryId: number,
+    variant: DeckVariant,
+    finish: DeckFinish,
+  ) =>
+    invoke<SwapResult>("deck_swap_printing", {
+      deckId,
+      fromCardId,
+      toCardId,
+      categoryId,
+      variant,
+      finish,
+    }),
+  /**
+   * Change **which object** a deck row plays — the regular copy, the foil or the etched one.
+   *
+   * `deckSwapPrinting` one axis over, and the same shape for the same reason: the deck plays a
+   * different physical object of the same card. It **folds** the same way, so setting a row to
+   * a finish the pile already holds adds the quantities and takes the row that moved away, and
+   * `SwapResult.quantity` is the sum.
+   *
+   * Refused in words for three things: a finish the row already is (`nonfoil` and `null` are
+   * the same finish, so that pair is refused too), a finish the printing is not **sold** in,
+   * and a row that is not in that pile.
+   */
+  deckSetCardFinish: (
+    deckId: number,
+    cardId: string,
+    categoryId: number,
+    variant: DeckVariant,
+    fromFinish: DeckFinish,
+    toFinish: DeckFinish,
+  ) =>
+    invoke<SwapResult>("deck_set_card_finish", {
+      deckId,
+      cardId,
+      categoryId,
+      variant,
+      fromFinish,
+      toFinish,
+    }),
+  /**
+   * Everything this deck is short of, onto the wishlist. Answers how many **wishes were
+   * touched** — one per oracle card, so the same card short in two categories is one wish for
+   * the sum, and pressing twice raises a line rather than making a second one.
+   *
+   * Reads the `live` variant and skips inactive categories: a plan is not a shopping list,
+   * and neither is a pile the reader switched off.
+   *
+   * `deckId`, where the four commands above take `id`: the odd one out, and Tauri matches by
+   * name. It reallocates before counting — a button that shopped for cards already bought
+   * would be worse than no button.
+   *
+   * **`folderId` files the whole shortfall into one wishlist folder, and absent — or `null` —
+   * is the root** (issue #437). Every wish this command has written since it existed landed at
+   * the root, so a caller that passes nothing is unchanged in meaning as well as in spelling;
+   * the root is simply an option now rather than the absence of one. `null` and absent say the
+   * same thing deliberately — {@link WishInput.folderId} is `number | null` and Rust takes
+   * `Option<i64>`, so a caller holding a nullable folder id forwards it as it stands.
+   *
+   * **It is an add into that folder, never a move of a wish filed elsewhere**, and the reason is
+   * the wishlist's storage grain rather than anything this command does: `(oracleId, cardId,
+   * preferredFinish, folderId)`, whose fourth term arrived with schema v23. A card the reader
+   * already wants in another folder gains a **second wish** here and keeps the first one at its
+   * own quantity. Without that term this argument could not exist — the press would land on the
+   * existing row and the wish would appear to migrate into whichever folder the reader happened
+   * to name, undoing a filing decision as a side effect of shopping. The deliberate move is
+   * {@link ipc.wishlistSetFolder} and stays a separate gesture.
+   *
+   * **A folder id naming nothing is refused in words up front** — `FOLDER_GONE`, *That folder is
+   * not there any more.* — checked before the shortfall is walked and behind the virtual deck's
+   * own refusal, so a deck that is short of nothing refuses rather than answering `0`.
+   * `add_wish` fences the column too, but per row, and a press that never reaches it would
+   * otherwise report a success: "the folder went away" and "you own it all already" would arrive
+   * as the same silent `0`, and only one of them is good news.
+   */
+  deckMissingToWishlist: (deckId: number, folderId?: number | null) =>
+    invoke<number>("deck_missing_to_wishlist", { deckId, folderId }),
+  /**
+   * What this deck is short of that the reader **already owns** — the read half of the pull, and
+   * the mirror of {@link ipc.deckMissingToWishlist}'s question one grain narrower.
+   *
+   * The two are the same idea read in two directions: what you have not got goes on a shopping
+   * list, what you have got is sitting in a binder and can be moved. Read-only, so it may be
+   * asked whenever a dialog is open and re-asked after any write; it takes no variant and reads
+   * the `live` list only, for that command's reason — a plan holds no cards.
+   *
+   * **An empty array is the ordinary answer**, not an error: a deck that is short of nothing, and
+   * a deck whose shortfall is all cards the reader has never owned, are both zero rows.
+   */
+  deckPullPlan: (deckId: number) => invoke<DeckPullRow[]>("deck_pull_plan", { deckId }),
+  /**
+   * Move owned copies into this deck's group, filling holes the list already has.
+   *
+   * **It writes no `deck_cards` row, and that is the whole difference from
+   * {@link ipc.collectionToDeck}.** That command is "add this card to the deck", so it folds the
+   * quantity into the list (`quantity = quantity + excluded.quantity`) as well as moving the
+   * cardboard — pointing it at a 4-copy line the reader is 3 short of would make the line 7.
+   * This one changes only *where the copies sit*, which is the only half a shortfall is about.
+   *
+   * **All-or-nothing.** One pick the backend re-reads and disagrees with — an entry that has
+   * since moved into a deck, been folded away, or a hole another window has already filled —
+   * refuses the whole batch in words and moves nothing. A half-applied pull is the state worth
+   * refusing over: the copies would be somewhere other than either place the reader was looking
+   * at, and this write files no undo step (see below), so there is no press that takes it back.
+   *
+   * **No undo step, for {@link ipc.deckToCollection}'s reason exactly.** `take_copies` files the
+   * copies *through the merge*, so a source row may have been folded into whatever the group
+   * already held and no longer exists to restore. The way back is the deck editor's Collection
+   * Search tab, a card at a time — and the deck's history says the pull happened, which is what
+   * makes the absence visible rather than silent.
+   *
+   * Answers what actually moved, which is what a sentence should quote.
+   */
+  deckPullFromCollection: (deckId: number, picks: DeckPullPick[]) =>
+    invoke<DeckPullOutcome>("deck_pull_from_collection", { deckId, picks }),
+  /**
+   * Every wishlist line for this printing's **card** — any printing, any finish — that a quick
+   * add could take copies off: the read half of {@link ipc.deckQuickAddToCollection}'s second arm
+   * (issue #511).
+   *
+   * **It names no deck**, and that is the shape rather than an omission: a wish is a fact about
+   * the reader's shopping list and about a printing, never about which deck the press came from.
+   * The deck is what the *write* files the copies into.
+   *
+   * **Fetched imperatively at the press, not by a mounted hook.** A right-click that fired a
+   * wishlist read per menu open would ask this question once per card the reader hovered past;
+   * `useDeck`'s `quickAddWishesQuery` is the options factory both the press and any test build
+   * the key from, so the two cannot disagree about it.
+   *
+   * **An empty array is the ordinary answer** — most cards a reader records are on no shopping
+   * list. One row or more opens the picker, because which line a purchase settles is the
+   * reader's call. See {@link DeckQuickAddWish} for the predicate and the order.
+   */
+  deckQuickAddWishes: (cardId: string, finish: DeckFinish) =>
+    invoke<DeckQuickAddWish[]>("deck_quick_add_wishes", { cardId, finish }),
+  /**
+   * Record the copies a deck row is short of, filed straight into that deck's own group — and,
+   * where `wishId` names one, take them off that wish in the same transaction.
+   *
+   * **The first of the five deck-boundary crossings that _creates_ cardboard rather than moving
+   * it.** `collection_to_deck`, `deck_to_collection` and {@link ipc.deckPullFromCollection} all
+   * move a row that already exists; this one writes a `collection_entries` row that was never
+   * there, and {@link ipc.deckMissingToCollection} is the deck-wide form of the same press. That is the whole reason its caller takes `query.ts`'s `OWNED_WRITE_KEYS` rather than
+   * the narrower collection root the three movers share: `CardSummary.ownedQuantity` moves from
+   * 0 to N on the very tile the press was made on.
+   *
+   * **`collection_add` refuses a `deck` folder outright and must go on refusing.** Filing into a
+   * group asserts *this deck holds these copies*, which only a write that can answer for the
+   * `deck_cards` row behind them may say — so this command is fenced on the deck playing the
+   * card (`NOT_IN_DECK`) and passes `collection::DECK_WRITE_FOLDERS` to the private door the
+   * deck importer already uses.
+   *
+   * **The live list only.** A plan holds no cards, so a theory row is refused with no fence of
+   * its own to explain it — the menu greys the row instead, which is where a reader can read the
+   * reason.
+   *
+   * **`finish` is the deck row's** — `null` is the regular copy, {@link DeckFinish}'s
+   * translation — and the collection word it is recorded under is `nonfoil`. `condition` is the
+   * one decision this press makes for the reader — or rather the one it now declines to make,
+   * because `MENU_CONDITION` is *not set*. Passed as that constant rather than as a second
+   * spelling of whatever it currently holds.
+   *
+   * **One transaction, so a wish that has moved on rolls the copies back too.** The backend
+   * re-reads the named wish against the same predicate {@link ipc.deckQuickAddWishes} used —
+   * the dialog's answer is a round trip old — and refuses in words (`WISH_GONE`,
+   * `WISH_WRONG_CARD`) rather than recording copies against a wish it could not find.
+   */
+  deckQuickAddToCollection: (
+    deckId: number,
+    cardId: string,
+    finish: DeckFinish,
+    condition: string,
+    quantity: number,
+    wishId: number | null,
+  ) =>
+    invoke<DeckQuickAddOutcome>("deck_quick_add_to_collection", {
+      deckId,
+      cardId,
+      finish,
+      condition,
+      quantity,
+      wishId,
+    }),
+  /**
+   * What this deck is short of that could be **recorded** — the read half of the deck-wide add,
+   * and the third answer to the question {@link ipc.deckPullPlan} and
+   * {@link ipc.deckMissingToWishlist} answer the other two ways: own it, just bought it, have not
+   * bought it.
+   *
+   * Read-only, so it may be asked whenever the dialog is open and re-asked after any write. It
+   * takes no variant and reads the `live` list only, for those commands' reason — a plan holds no
+   * cards — and no marketplace either, because nothing in the answer is priced.
+   *
+   * **An empty array is the ordinary answer**, not an error, and it means something specific
+   * here: the button that opens the dialog is drawn only where the deck is short of something, so
+   * zero rows is a shortfall made entirely of printings that have left the card database. See
+   * {@link DeckMissingRow} for that filter, which is the write's own precondition rather than a
+   * second opinion, and the dialog words it rather than drawing a blank panel.
+   */
+  deckMissingPlan: (deckId: number) => invoke<DeckMissingRow[]>("deck_missing_plan", { deckId }),
+  /**
+   * Record the copies this deck is short of into its own group, and take the unambiguous wishlist
+   * lines down with them — the deck-wide form of {@link ipc.deckQuickAddToCollection}.
+   *
+   * **It _creates_ cardboard**, which is what separates it from
+   * {@link ipc.deckPullFromCollection} standing beside it in the same band: a pull moves rows
+   * that already exist, and a copy bought this morning is a `collection_entries` row that was
+   * never there. The two presses overlap on purpose and the reader chooses — nothing is dropped
+   * from either plan because the other could have filled it.
+   *
+   * **All-or-nothing**, {@link ipc.deckPullFromCollection}'s rule and for its reason: this write
+   * files no `deck_undo` step, so a half-applied batch has no press that takes it back. The
+   * backend re-plans inside its own transaction and refuses the lot in words — the dialog's
+   * answer is a round trip old, and nothing the caller sent is trusted.
+   *
+   * **`clearWishes` is the whole of the wishlist half, and there is no wish id.** On, every row
+   * with *exactly one* matching line has copies taken off it; none and two-or-more are left
+   * standing, because a press over thirty rows cannot ask thirty questions. So this write has no
+   * stale-wish refusal at all: a line that vanished under the dialog is simply not among the
+   * matches and the press carries on, which is the opposite of
+   * {@link ipc.deckQuickAddToCollection}'s `WISH_GONE`. See {@link DeckMissingRow.wishes}.
+   *
+   * Answers what was actually written, which is what a sentence should quote — and the deck's
+   * history gets **one** row for the press rather than one per card, because the reader did one
+   * thing.
+   */
+  deckMissingToCollection: (deckId: number, picks: DeckMissingPick[], clearWishes: boolean) =>
+    invoke<DeckMissingOutcome>("deck_missing_to_collection", { deckId, picks, clearWishes }),
+  /**
+   * Every name in a decklist, resolved to a printing this app has. **Read-only**, and one call
+   * for the whole list rather than one per line — ~100 names is six prepared statements and a
+   * few hundred index lookups (11.6 ms for a 105-line commander list, measured over the live
+   * corpus), where a call per line would be a hundred IPC hops for the same work.
+   *
+   * **A name no printing bears is a row, never a rejection**: 99 good lines must not be lost to
+   * one bad one, so `matched: null` is the ordinary answer for a typo and the preview quotes it.
+   * The rows come back in the order the lines went out and carry
+   * {@link ImportResolveRow.index} besides.
+   */
+  importResolve: (lines: ImportResolveLine[]) =>
+    invoke<ImportResolveRow[]>("import_resolve", { lines }),
+  /**
+   * A whole decklist into one deck: one transaction, one allocation, one or two history rows.
+   *
+   * **This command exists for the allocator.** Looping {@link ipc.deckAddCard} would be correct
+   * in every other respect and would rebuild the deck's claims once per line — a hundred
+   * delete-and-rebuild passes for one import. Here it runs once, at the end, over the finished
+   * deck.
+   *
+   * All-or-nothing: a line naming a printing the card database has not got refuses the import
+   * and leaves the deck — including the one a `replace` was about to clear — exactly as it was,
+   * with no history row and no half-made category behind it. An empty `items` is refused in
+   * words, and a `replace` most of all: it would clear the deck and put nothing back.
+   *
+   * The history it writes is **one row per effect, never one per card** — an import of 117 cards
+   * would otherwise bury every other event of that day in the drawer.
+   */
+  deckImportCommit: (deckId: number, variant: DeckVariant, mode: ImportMode, items: ImportItem[]) =>
+    invoke<ImportOutcome>("deck_import_commit", { deckId, variant, mode, items }),
+  /**
+   * Let the reader choose a decklist file, and answer its text — or `null` for Cancel, which is
+   * not a failure.
+   *
+   * **Takes no path, and that is the contract** (issue #545). Rust opens the OS dialog, modal to
+   * the calling window, and reads what it answered, so the path never reaches this side and
+   * nothing here can name one. It used to be `import_read_file(path)`, taking the path the
+   * plugin's `open()` answered — which any script in the page could call with any path at all.
+   * The webview is granted no `dialog:` and no `fs:` permission.
+   *
+   * **Two failures, and the rejection says which**: the file picker could not be opened, or the
+   * file would not read (missing, refused, over 1 MB). Frame it with words true of both.
+   *
+   * **Never refused for its bytes** (issue #555): valid UTF-8 is read as such, a UTF-16
+   * byte-order mark is honoured, and anything else is decoded as Windows-1252 — Excel's CSV on a
+   * Western European Windows — rather than lossily, which used to turn every `é` in a cp1252 file
+   * into `U+FFFD`. {@link ImportFile.encoding} says which, so the dialog can say so. Parsing the
+   * text is this side's, exactly as it is for a paste.
+   */
+  importPickFile: () => invoke<ImportFile | null>("import_pick_file"),
+  /** The format rules as data, in picker order. Seeded by the migration, so this changes at
+   *  most once per app version — cached for the session by `useFormatSpecs`. */
+  formatSpecs: () => invoke<FormatSpec[]>("format_specs_list"),
+  /** `force` skips the 24 h throttle. Rejects if a sync is already running. */
+  syncRun: (force: boolean) => invoke<SyncOutcome>("sync_run", { force }),
+  syncStatus: () => invoke<SyncStatus>("sync_status"),
+  onSyncProgress: (cb: (e: SyncProgressEvent) => void): Unlisten =>
+    core.listen<SyncProgressEvent>("sync:progress", cb),
+  /**
+   * Whether the data folder has finished opening. Answerable before every other command is —
+   * it reads no database — so it is the one thing `boot/DesktopBoot` may ask while the rest
+   * would error.
+   */
+  startupStatus: () => invoke<StartupStatus>("startup_status"),
+  /**
+   * `startup_status`'s fast path: emitted once, when the state leaves `loading`. **Never the
+   * only half** — `listen` registers asynchronously, so an emit that lands between the first
+   * `startupStatus()` and the registration is dropped, and the poll is what catches it.
+   */
+  onStartupChanged: (cb: (e: StartupStatus) => void): Unlisten =>
+    core.listen<StartupStatus>("startup:changed", cb),
+  /** A device sync applied or sent something. Call this once — see `useSyncProgress`. */
+  onSyncApplied: (cb: (e: RelayOutcome) => void): Unlisten =>
+    core.listen<RelayOutcome>("sync:applied", cb),
+  /** `changes::DB_CHANGED`. Call this once — `useCrossWindowRefresh` does. */
+  onDbChanged: (cb: (e: DbChanged) => void): Unlisten => core.listen<DbChanged>("db:changed", cb),
+  /** `desktop::window_new` — open another window beside this one (Ctrl+Shift+N). Desktop only. */
+  windowNew: () => invoke<void>("window_new"),
+  /** `desktop::window_count` — how many windows are open. */
+  windowCount: () => invoke<number>("window_count"),
+  /**
+   * `scanner::scanner_elsewhere` — whether another window holds the scanner's lease. Takes
+   * nothing; only the session commands take it.
+   */
+  scannerElsewhere: () => invoke<boolean>("scanner_elsewhere"),
+  /**
+   * `scanner::scanner_hold` — take or renew this window's scanner lease, and nothing else. The
+   * mounted Scanner view's heartbeat, sent on mount and every `SCANNER_ELSEWHERE_POLL_MS` while it
+   * stays, so the view holds the scanner whatever its camera is doing. Refuses with
+   * `SCANNER_OPEN_ELSEWHERE` when another window holds it.
+   */
+  scannerHold: () => invoke<void>("scanner_hold"),
+  /** The relay socket's state. Call this once. */
+  onSyncLive: (cb: (e: SyncLiveEvent) => void): Unlisten =>
+    core.listen<SyncLiveEvent>("sync:live", cb),
+  /** What is already known about a newer release. Reads `app_meta`; makes no network call. */
+  /**
+   * The error log, newest first. Repeats are folded, so a row's `count` is how many times
+   * that exact failure happened rather than how many rows it wrote.
+   *
+   * `limit` is clamped to `1..=200` by the backend — the low end load-bearing, since SQLite
+   * reads a negative `LIMIT` as no limit at all.
+   */
+  errorLogList: (limit: number) => invoke<ErrorEntry[]>("error_log_list", { limit }),
+  /** Empty the log. Answers how many rows went. */
+  errorLogClear: () => invoke<number>("error_log_clear"),
+  /**
+   * The four Settings can throw away — `crates/grimoire-core/src/reset.rs`.
+   *
+   * **The first three are irreversible and write no history**, which is not an oversight: the
+   * deck audit log is per-deck and cascades away with the decks it describes, so there is
+   * nowhere for a wipe to be recorded. The typed confirmation in `ConfirmDialog` is the whole
+   * of the safety, and it is this side's — the backend takes no `confirm` argument, because a
+   * fence the caller passes is a fence the caller can forget.
+   *
+   * Every one of them is a **table**, not a row: none takes an id, and none can be scoped.
+   */
+  collectionClear: () => invoke<CollectionCleared>("collection_clear"),
+  wishlistClear: () => invoke<number>("wishlist_clear"),
+  decksClear: () => invoke<DecksCleared>("decks_clear"),
+  /**
+   * The fourth, and the one that is not destructive: `data/images/` and `data/tmp/`, both of
+   * which the app refetches on demand, and never a table but `image_cache`. (It used to name
+   * a third directory it deliberately spared, `data/covers/`; there is no such directory any
+   * more — a cover is a card id, so there is no file to spare.)
+   *
+   * **Rejects while a sync is running**, in a sentence meant to be shown: the corpus download
+   * puts 77 MB in `data/tmp/` and reads it back, so a sweep landing between the two fails a
+   * job the reader is watching a progress bar for.
+   */
+  cacheClear: () => invoke<CacheCleared>("cache_clear"),
+  updateStatus: () => invoke<UpdateStatus>("update_status"),
+  /**
+   * Every release the last check saw, newest first — the version history.
+   *
+   * **Reads a cache and never the network.** `update_check` fetches one page of
+   * `/repos/…/releases` to decide whether an update exists and writes the whole page to
+   * `app_meta`, so expanding the history costs nothing out of GitHub's 60 requests an hour.
+   * An install that has never checked answers `[]`, which the panel says out loud rather
+   * than drawing an app with no past.
+   */
+  updateHistory: () => invoke<ReleaseNote[]>("update_history"),
+  /** Ask GitHub. `force` skips the 24 h throttle, which is what the Check now button sends. */
+  updateCheck: (force: boolean) => invoke<UpdateStatus>("update_check", { force }),
+  /**
+   * Download the update, verify it against the release's checksum, and stage it.
+   *
+   * Changes nothing about the running app — it resolves with the window still open and one
+   * more file on disk. Installing is a separate, deliberate call.
+   */
+  updateDownload: () => invoke<UpdateStatus>("update_download"),
+  /** Install what was staged and restart. The window closes moments after this resolves. */
+  updateApply: () => invoke<void>("update_apply"),
+  /** Open the release on github.com — what an install kind that cannot update itself gets. */
+  updateOpenReleasePage: () => invoke<void>("update_open_release_page"),
+  onUpdateProgress: (cb: (e: UpdateProgressEvent) => void): Unlisten =>
+    core.listen<UpdateProgressEvent>("update:progress", cb),
+  /** A reconcile pass that moved user rows. See {@link ReconciledEvent}. */
+  onCollectionReconciled: (cb: (e: ReconciledEvent) => void): Unlisten =>
+    core.listen<ReconciledEvent>("collection:reconciled", cb),
+  /**
+   * The marketplace whose prices the app quotes, as a stored id.
+   *
+   * A raw string rather than a `MarketplaceId`: the value came out of the database and may
+   * have been written by a different build, so narrowing it is `resolveMarketplace`'s job on
+   * this side of the wire. The backend answers the default for a missing row.
+   */
+  getMarketplace: () => invoke<string>("get_marketplace"),
+  /** Choose one. Rejects an id the backend does not know, so `app_meta` cannot collect junk. */
+  setMarketplace: (id: MarketplaceId) => invoke<void>("set_marketplace", { id }),
+  /**
+   * How the card pane groups its printings list — `artist` | `released` | `price` | `set`,
+   * stored so the choice survives a restart.
+   *
+   * A raw string rather than a `PrintingGroupBy`, for {@link getMarketplace}'s reason and it is
+   * the same reason: the value came out of `app_meta` and may have been written by a build that
+   * offered a mode this one does not, so narrowing it is `isPrintingGroupBy`'s job in
+   * `@/features/card/printings` on this side of the wire. The backend answers `artist` for a
+   * missing row **and for an unrecognised one** — a stale preference costs the reader their
+   * grouping, never the pane.
+   */
+  printingGroupBy: () => invoke<string>("printing_group_by"),
+  /**
+   * Choose one. Rejects a mode the backend does not know, so `app_meta` cannot collect junk —
+   * which matters more here than it looks, because the read side discards an unknown mode in
+   * silence and an unchecked write would read back as `artist` forever.
+   */
+  setPrintingGroupBy: (mode: string) => invoke<void>("set_printing_group_by", { mode }),
+  /**
+   * How large each wall of cards was last left drawn, as section name → multiplier.
+   *
+   * The third `app_meta` setting and the **first** whose shape is a map — see this file's header,
+   * and {@link listView} and {@link markColors}, each of which copies the
+   * contract below.
+   * **A section is absent rather than defaulted**: the ladder's stops are this side's
+   * (`@/lib/cardZoom`), so a missing entry means the reader has never zoomed that wall, and the
+   * backend does not invent a number it does not own. A whole unreadable row answers `{}`.
+   *
+   * Raw `Record<string, number>` rather than `Record<ZoomSection, number>`, for
+   * {@link getMarketplace}'s reason a third time: the keys are whatever some build of this app
+   * wrote, so `isZoomSection` narrows them here and `snapZoom` puts each value back on the
+   * ladder.
+   */
+  cardZoom: () => invoke<Record<string, number>>("card_zoom"),
+  /**
+   * Remember one wall's zoom, leaving the other entries in the row alone.
+   *
+   * Two arguments where its neighbours take one, and Tauri matches by name. Rejects a blank
+   * section and a multiplier outside 0.5–2, so `app_meta` cannot collect entries every later read
+   * would discard — but the *ladder* is not checked at the far end, deliberately: the backend
+   * bounds the number and this side owns where the stops are.
+   */
+  setCardZoom: (section: string, zoom: number) =>
+    invoke<void>("set_card_zoom", { section, zoom }),
+  /**
+   * Whether the reader has collapsed the global navigation rail, stored so it opens the way
+   * they left it.
+   *
+   * The **fourth** `app_meta` setting and the first that is a bare `boolean` — see this file's
+   * header. It is also the one that needs no narrowing on this side: the other eight carry
+   * a vocabulary a newer build could have widened, and `true`/`false` has none, so there is no
+   * third state to fall back from. **The far end is infallible**: a missing row, a row holding
+   * something that is not a boolean, and a row that cannot be read at all all answer `false` —
+   * the rail expanded, which is what a reader who has never touched the control sees.
+   */
+  navCollapsed: () => invoke<boolean>("nav_collapsed"),
+  /**
+   * Remember the rail's state. Answers `collection::BUSY` under a running sync, like every
+   * other write — and the caller deliberately does not undo the rail when it does, because the
+   * setting is worth less than the reader's hand: `@/lib/useNavCollapsed` has the argument.
+   */
+  setNavCollapsed: (collapsed: boolean) => invoke<void>("set_nav_collapsed", { collapsed }),
+  /**
+   * How each list of cards was last left drawn, as section name → `"grid"` or `"table"`.
+   *
+   * The **sixth** `app_meta` setting and the second whose shape is a map — see this file's
+   * header, and {@link cardZoom} beside it, whose contract this copies whole. **A section is
+   * absent rather than defaulted**: which layout a page opens on is this side's (`@/lib/store`),
+   * so a missing entry means the reader has never switched that list, and the backend does not
+   * invent a preference it does not own. A whole unreadable row answers `{}`.
+   *
+   * Raw `Record<string, string>` rather than `Record<ListSection, SearchView>`, for
+   * {@link cardZoom}'s reason: the keys *and* the values are whatever some build of this app
+   * wrote, so `isListSection` and `isSearchView` narrow both in `@/lib/store`.
+   */
+  listView: () => invoke<Record<string, string>>("list_view"),
+  /**
+   * Remember one list's layout, leaving the other entries in the row alone.
+   *
+   * Two arguments where its neighbours take one, and Tauri matches by name. Rejects a blank
+   * section and a word that is neither `"grid"` nor `"table"`, so `app_meta` cannot collect
+   * entries every later read would discard — but *which* sections exist is not checked at the far
+   * end, deliberately: the backend owns the two words and this side owns the list of lists.
+   *
+   * Answers `collection::BUSY` under a running sync, like every other write, and the caller
+   * deliberately does not undo the layout when it does — {@link setNavCollapsed}'s trade, for its
+   * reason.
+   */
+  setListView: (section: string, view: string) =>
+    invoke<void>("set_list_view", { section, view }),
+  /**
+   * What colour the reader has each card mark drawn in, as mark name → `#rrggbb`.
+   *
+   * The **ninth** `app_meta` setting and the fourth whose shape is a map — see this file's
+   * header, and {@link listView} beside it, whose contract this copies whole. **A mark is absent
+   * rather than defaulted**: what an uncustomised mark is drawn in lives in `index.css`, so a
+   * missing entry means the reader has never chosen and the backend does not invent a colour the
+   * stylesheet owns. **Infallible by signature** — a whole unreadable row answers `{}`, and a
+   * single hand-edited entry costs that one mark its colour and leaves the others standing.
+   *
+   * `Record<string, string>` and not a keyed record, for {@link listView}'s reason on the key
+   * half: which marks are customisable is this side's vocabulary, so `isMarkColorKey` narrows it
+   * in `@/lib/useMarkColors`. The **values** are checked at the far end, which is where a hex has
+   * a shape worth refusing — the split `markcolors.rs` states as "the frontend owns which marks
+   * exist and this crate owns only the shape a colour may have".
+   *
+   * `app_meta` is not a synced table, so these colours are **this device's** — which is the
+   * whole family's rule and not this row's exception.
+   */
+  markColors: () => invoke<Record<string, string>>("mark_colors"),
+  /**
+   * Remember one mark's colour — or, with `null`, **forget it**, which is what Reset means.
+   *
+   * `null` rather than writing the default hex, deliberately: a reader who has never chosen and
+   * one who has reset must end in the same state, and a default written into the row would freeze
+   * today's palette into the database — the cost `features/decks/labelColors.ts` records for a
+   * stored label colour, paid for no reason.
+   *
+   * Two arguments where most of its neighbours take one, and Tauri matches by name: **`mark` and
+   * `color`**, not `key` and `value`. Rejects a blank mark and anything that is not `#rrggbb` —
+   * six digits and a hash, with no shorthand, because `markcolors.rs` expects
+   * `features/decks/labelColors.ts`' `normalizeLabelColor` to have expanded `#f00` on this side
+   * first. So `app_meta` cannot collect entries every later read would discard. Uppercase is
+   * accepted and stored folded, so one colour has one spelling in the row.
+   *
+   * **Unlike its neighbours a refusal here is worth surfacing.** {@link setNavCollapsed} and
+   * {@link setListView} swallow a BUSY because the reader cannot see what was lost until the next
+   * launch; here they are standing in front of a swatch, so the panel says the write did not land
+   * rather than leaving them to discover it at the next launch.
+   */
+  setMarkColor: (mark: string, color: string | null) =>
+    invoke<void>("set_mark_color", { mark, color }),
+  /**
+   * Whether each of the app's docked card-search columns was last left open, as section name →
+   * open.
+   *
+   * It stands exactly where `deckSearchOpen` stood, having replaced it on 2026-09-07, and its
+   * shape is a map. See this file's header,
+   * and {@link listView}, whose contract this copies with a `boolean` where the word is.
+   * **A section is absent rather than defaulted**: which pages have a search column at all is
+   * this side's (`@/features/search/useSearchOpen`), so a missing entry means the reader has
+   * never touched that disclosure and the backend does not invent a preference it does not own.
+   * **Infallible by signature** — a whole unreadable row answers `{}`, which is every column
+   * drawn the way `DEFAULT_SEARCH_OPEN` says.
+   *
+   * **What it replaced was a bare `boolean` for the deck editor alone**, and the swap is the
+   * header's paragraph in one line: one row, one command pair and one query key now answer for
+   * three columns. The deck's old `deck_search_open` row is carried across by `searchopen.rs`'s
+   * *read* rather than by a schema rung, so nothing on this side has ever heard of it.
+   *
+   * `Record<string, boolean>` and not `Record<SearchSection, boolean>`, for {@link listView}'s
+   * reason on the key half only: the keys are whatever some build of this app wrote, so
+   * `useSearchOpen` narrows them. The **values** have no vocabulary to narrow, which is why the
+   * type says `boolean` — and that hook still checks it, because the word is a promise about
+   * the far end rather than a fact about the row.
+   */
+  searchOpen: () => invoke<Record<string, boolean>>("search_open"),
+  /**
+   * Remember one column's disclosure, leaving the other entries in the row alone.
+   *
+   * Two arguments where some of its neighbours take one, and Tauri matches by name. Rejects a
+   * blank section and nothing else: a `bool` off the IPC boundary has no junk state for a
+   * validation to catch, so unlike {@link setListView} there is no word to refuse —
+   * {@link setNavCollapsed}'s asymmetry, on a row whose *keys* belong to this side.
+   *
+   * Answers `collection::BUSY` under a running sync, like every other write, and the caller
+   * deliberately does not put the column back when it does — {@link setNavCollapsed}'s trade,
+   * for its reason: a refusal costs the reader nothing they can see this session and only the
+   * next launch's starting state for that column.
+   */
+  setSearchOpen: (section: string, open: boolean) =>
+    invoke<void>("set_search_open", { section, open }),
+  /**
+   * The folded-shelf overrides on both pages. {@link searchOpen}'s contract one level deeper:
+   * **infallible by signature** — an unreadable row answers both pages empty, which is every
+   * shelf at its default.
+   */
+  shelfFolds: () => invoke<ShelfFolds>("shelf_folds"),
+  /**
+   * Set (`true`/`false`) or remove (`null`) overrides on one page, leaving every other entry
+   * alone. Refuses a page with no shelves and a key that is not a folder id; answers
+   * `collection::BUSY` under a running sync, which the caller swallows — {@link setSearchOpen}'s
+   * trade.
+   */
+  setShelfFolds: (page: ShelfFoldPage, changes: Record<string, boolean | null>) =>
+    invoke<void>("set_shelf_folds", { page, changes }),
+  /**
+   * The category ids of the stacks the reader hid in one deck's Stacks view, ascending (issue
+   * #618). {@link shelfFolds}' contract keyed by deck: **infallible by signature** — an
+   * unreadable row answers `[]`, which is every stack drawn. `app_meta` is not synced, so a stack
+   * hidden here is this device's alone, which was the reader's call.
+   *
+   * **A stale id is answered, not pruned**: a pile deleted since stays in the list until it is
+   * shown again, and the editor ignores an id no pile of the deck carries.
+   */
+  hiddenStacks: (deckId: number) => invoke<number[]>("hidden_stacks", { deckId }),
+  /**
+   * Hide or show one stack, leaving every other stack and deck alone. Refuses an id that is not
+   * positive; answers `collection::BUSY` under a running sync, which the caller swallows —
+   * {@link setShelfFolds}' trade: the stack stays as the reader left it for this session.
+   */
+  setStackHidden: (deckId: number, categoryId: number, hidden: boolean) =>
+    invoke<void>("set_stack_hidden", { deckId, categoryId, hidden }),
+  /**
+   * How the decks page's folder tree was last left — how wide the reader dragged it, and whether
+   * it is folded to its rail.
+   *
+   * The **tenth** `app_meta` setting and the **first that carries a struct** — see this file's
+   * header, and {@link DeckFolderPane} for why the two facts are one row. **Infallible by
+   * signature**, which is {@link navCollapsed}'s contract and for its reason: the decks page reads
+   * this while it is drawing, and there is nothing it could do with an error that is not just
+   * "draw the tree at its default width" — so the far end answers that instead of making this side
+   * spell it out. A missing row, a row this build cannot parse and a row that cannot be read at
+   * all are all `{ width: null, collapsed: false }`.
+   *
+   * **`width` reaches this side as `number | null` and is deliberately not defaulted at the far
+   * end.** `null` is *the reader has never dragged this*, which the crate can say honestly and a
+   * number would be it inventing a pixel count for a column it does not draw —
+   * {@link markColors}' split, where what an uncustomised mark looks like belongs to the
+   * stylesheet. `@/features/decks/useFolderPane` turns the `null` into
+   * `DEFAULT_FOLDER_TREE_WIDTH_PX`, which is `FolderTree`'s number.
+   */
+  deckFolderPane: () => invoke<DeckFolderPane>("deck_folder_pane"),
+  /**
+   * Remember the tree's width and its fold, together.
+   *
+   * Two arguments where its neighbours in this family take one or two, and Tauri matches by name:
+   * **`width` and `collapsed`**. Both are sent on every write because the row is one struct — a
+   * caller that only means to change the fold still has to say what the width is, which is what
+   * makes the pending-write race in `@/features/decks/useFolderPane` a race worth solving there
+   * rather than a shape to be fixed here.
+   *
+   * **`width` is a `number` and never `null` on this side of the wire**, though the read answers
+   * `null` — the asymmetry {@link setMarkColor} has in the other direction. There is no "leave it
+   * as it was": once a reader has dragged or folded anything, this app knows a width and says it,
+   * and the hook supplies `DEFAULT_FOLDER_TREE_WIDTH_PX` for the fold that arrives before any
+   * drag. What that costs is one thing and it is worth naming: a reader who folds a tree they have
+   * never resized freezes *today's* default into their database, so a later build that picks a
+   * different default will not reach them — `features/decks/labelColors.ts`' cost, paid here
+   * because a nullable argument would be a second way to spell "unchanged" that only one of the
+   * two fields could use.
+   *
+   * **The only refusal is a width that could never be a width** — the crate bounds the number so
+   * `app_meta` cannot collect a row every later read would discard, and it does not check it
+   * against the *window*, deliberately: what fits is a fact about a desk this crate never
+   * measures, and a clamp here would make one narrow session permanent. That is
+   * `CardSearchPanel`'s clamp split stated one level down.
+   *
+   * Answers `collection::BUSY` under a running sync, like every other write, and **a refusal here
+   * is deliberately not surfaced** — {@link setNavCollapsed}'s trade, for its reason: the reader is
+   * looking at the width they just dragged, it stays where they put it for this session, and what
+   * a BUSY costs is only the next launch's starting width for that tree.
+   */
+  setDeckFolderPane: (width: number, collapsed: boolean) =>
+    invoke<void>("set_deck_folder_pane", { width, collapsed }),
+  /**
+   * How the deck gallery was last ordered — one `app_meta` row holding `"<key>:<direction>"`,
+   * e.g. `"updated:desc"`.
+   *
+   * The **eighth** `app_meta` setting and the third answered as a bare string — see this file's
+   * header. **Its value is opaque to Rust on purpose, and that is the strongest version of
+   * {@link printingGroupBy}'s split rather than an exception to it**: the sort keys are
+   * `features/decks/deckSort.ts`' vocabulary — `updated`, `name`, `colors`, `bracket`, `cards`,
+   * `format` — and three of those six are *computed on this side* (a deck's colours come from
+   * `deck_pip_costs` through `countPips`, its bracket from `estimateBracket`), so there is no
+   * list in the backend to check a word against and inventing one would be a second opinion
+   * about a table the webview owns.
+   *
+   * So the narrowing is entirely this side's, and it has to be: a database outlives the app, and
+   * a key a *future* build stops offering must degrade to the default rather than leaving the
+   * gallery ordered by something nothing can draw. The backend answers its default
+   * (`decksort::DEFAULT`, `"updated:desc"` — the same words `deckSort.ts` spells, because the two
+   * halves cannot share a constant across a wire) for a row that is missing, unreadable **or
+   * blank**, and hands anything else back verbatim. So a key a newer build wrote reaches this
+   * side as itself, and a word *this* build does not know becomes the default order here.
+   *
+   * **Only the sort is remembered, and no filter is.** A filter is a thing a reader is doing
+   * right now; a gallery that opened already narrowed, with no memory of having asked for it, is
+   * a gallery that looks like it has lost decks.
+   */
+  deckSort: () => invoke<string>("deck_sort"),
+  /**
+   * Remember the gallery's order.
+   *
+   * **One refusal and it is a blank**, where {@link setPrintingGroupBy} refuses every word it
+   * does not know. That is not leniency: the value has a vocabulary and the *backend does not
+   * have it*, so any wider refusal could only be the backend guessing about a list this side
+   * owns. A blank is refusable without a vocabulary — it is an order in nobody's — and it is
+   * the one value the read discards, so storing it would be a write that reported success and
+   * read back as the default for ever. Everything else survives the round trip, which is what
+   * makes the *read* the thing that protects the reader: an unrecognised key degrades to the
+   * default order here and costs them their ordering, never the gallery.
+   *
+   * **The argument is `sort`, not `value`** — `invoke` fills parameters by name and
+   * `decksort::set_deck_sort` calls its one parameter `sort`, so a mismatch is a rejection at
+   * run time with nothing red in either build. `ipc.test.ts` pins it, which is what that half
+   * of the mirror is for.
+   *
+   * Answers `collection::BUSY` under a running sync like every other write, and the caller
+   * deliberately does not put the picker back when it does — {@link setNavCollapsed}'s trade,
+   * for its reason: a refusal costs the next launch's starting order and nothing this session.
+   */
+  setDeckSort: (sort: string) => invoke<void>("set_deck_sort", { sort }),
+  /**
+   * The home page's tiles, in the order and at the widths the reader left them — see
+   * {@link HomeLayout}.
+   *
+   * The **eleventh** `app_meta` setting and the second that carries a struct. **The read cannot
+   * fail**: a missing row, a row this build cannot parse and a row holding something that is not a
+   * layout all answer the six-tile default, which is what a reader who has never touched the page
+   * sees. An empty widget list is the one thing that is *not* that default — it is a layout, and a
+   * reader who cleared the page keeps it cleared.
+   */
+  homeLayout: () => invoke<HomeLayout>("home_layout"),
+  /**
+   * Remember the whole page — **the document, not a tile**, so a reorder cannot half land.
+   *
+   * The write is the half that validates: a `version` that is not `2`, a blank `id` or `kind`, a
+   * footprint outside `home.rs`'s bounds, a `span` outside `1..=2` and a document over 64 KiB are
+   * each refused in a sentence, and a refusal leaves the stored row exactly as it was. Everything else survives the round trip **including
+   * what this build does not understand** — an unknown `kind` and its `config` come back verbatim,
+   * which is the whole reason {@link HomeWidget} is typed as loosely as it is.
+   *
+   * Answers `collection::BUSY` under a running sync like every other write.
+   */
+  setHomeLayout: (layout: HomeLayout) => invoke<void>("set_home_layout", { layout }),
+  /**
+   * The cards this device opened most recently, newest first, at most `limit` (clamped `1..=24`).
+   * Infallible at the far end: a missing or unreadable row is no cards.
+   */
+  recentCards: (limit: number) => invoke<RecentCard[]>("recent_cards", { limit }),
+  /**
+   * Remember that a card was opened. A card already on the list moves to the front rather than
+   * appearing twice, and the list is capped at 24. Answers `collection::BUSY` under a running sync,
+   * which the caller ignores — a missed entry costs one tile on the home page and nothing else.
+   */
+  recordRecentCard: (cardId: string) => invoke<void>("record_recent_card", { cardId }),
+  /** Every set the collection holds a card from, with how much of it is owned. See
+   *  {@link SetCompletion}. */
+  setCompletion: () => invoke<SetCompletion[]>("set_completion"),
+  /**
+   * The owned printings whose price at `marketplace` moved most since the window's baseline
+   * snapshot, largest move first, at most `limit` (clamped `1..=100`). See {@link PriceMovers}.
+   */
+  priceMovers: (
+    window: PriceMoverWindow,
+    direction: PriceMoverDirection,
+    marketplace: MarketplaceId,
+    limit: number,
+  ) => invoke<PriceMovers>("price_movers", { window, direction, marketplace, limit }),
+  /**
+   * One printing's daily price at `marketplace` and `finish`, before today and oldest first,
+   * beside today's live figure — the Price movers popup's read. The points are `price_snapshots`'
+   * rows, which are only ever taken of **owned** printings, so a printing never owned answers no
+   * points and may still answer a `now`. See {@link PriceHistory}.
+   */
+  priceHistory: (cardId: string, finish: Finish, marketplace: MarketplaceId) =>
+    invoke<PriceHistory>("price_history", { cardId, finish, marketplace }),
+  /**
+   * The collection's value over time at `marketplace`, cut by `split` — the Collection value
+   * graph's read, and `price_snapshots`' second reader after the movers (user schema v50 is what
+   * gave it copies to multiply by). Oldest first, a live point for today last; range and measure
+   * are the widget's and are not asked for here. An unknown `split` is refused in words. See
+   * {@link ValueHistory}.
+   */
+  collectionValueHistory: (split: ValueSplit, marketplace: MarketplaceId) =>
+    invoke<ValueHistory>("collection_value_history", { split, marketplace }),
+  /**
+   * Every sticky note, `ORDER BY sort_order, id` — see {@link StickyNote}.
+   *
+   * **Takes no arguments and cannot fail**: the read is `#[tauri::command(async)]` on a *sync*
+   * function whose signature has no `Result`, because it is called while the window draws its
+   * first frame and a home page that refuses to draw over a note is a worse answer than a page
+   * with no notes on it. A database that has never held one answers an empty list.
+   */
+  stickyNotes: (): Promise<StickyNote[]> => invoke("sticky_notes"),
+  /**
+   * Write a new note and answer its id. It lands **last** — `max(sort_order) + 1` — so a reader
+   * who has arranged their board keeps that arrangement and finds the new note at the end of it.
+   *
+   * **The colour is stored as written and validated by nobody**, which is the column's own rule
+   * read from this end: a word a newer build sends survives the round trip, and this build draws
+   * it as `slate`. Answers `collection::BUSY` under a running sync like every other write.
+   */
+  stickyNoteCreate: (title: string, body: string, color: string): Promise<number> =>
+    invoke("sticky_note_create", { title, body, color }),
+  /**
+   * Change a note — see {@link StickyNotePatch}, whose absent-means-leave-it rule is the whole of
+   * what this sends.
+   *
+   * **The patch is spread rather than nested**, because `sticky_note_update` declares its four
+   * optional columns as four parameters beside `id` rather than taking a struct — so a wrapper
+   * that sent `{ id, patch }` would be refused at run time with nothing red in either build.
+   * `ipc.test.ts` pins all five names.
+   *
+   * **And a key the patch omits is simply not sent, where {@link ipc.deckNoteUpdate} spells every
+   * key and folds `undefined` to `null`.** That is the same rule met a different way rather than
+   * drift: an absent field deserialises into an `Option` as `None`, which is exactly the
+   * `coalesce(?n, col)` arm that leaves the column alone — and here there is no `null` to send,
+   * because `None` and *leave it* are one word on both sides of this wire.
+   */
+  stickyNoteUpdate: (id: number, patch: StickyNotePatch): Promise<void> =>
+    invoke("sticky_note_update", { id, ...patch }),
+  /** Delete one note. Refused in a sentence — `sticky_notes::NOTE_GONE` — if it is already gone. */
+  stickyNoteDelete: (id: number): Promise<void> => invoke("sticky_note_delete", { id }),
+  /**
+   * Renumber the notes in the order given, `0..n`.
+   *
+   * **An id that is no longer a note is skipped rather than refused**: the page sends what it
+   * drew, and a note deleted in another window must not fail the drag the reader just made.
+   */
+  stickyNoteReorder: (ids: number[]): Promise<void> => invoke("sticky_note_reorder", { ids }),
+  /**
+   * Reprints of cards the watched decks already hold, newest first — see {@link NewPrintings}.
+   *
+   * Every argument is the widget's stored `config` narrowed on the way out, and every one is
+   * narrowed again in Rust: `days` into `1..=365`, `limit` into `1..=100`, an unknown `scope`
+   * into `all`, and `langs` to codes of the right shape. A hand-edited row cannot ask for the
+   * whole corpus.
+   */
+  newPrintings: (
+    scope: string,
+    deckIds: readonly number[],
+    days: number,
+    /**
+     * The languages to answer in. **An empty list is every language** — the allow-list's one
+     * sentinel, and the same rule at both ends of the wire. The default the widget sends is
+     * `["en"]`, which is one row per reprint.
+     */
+    langs: readonly string[],
+    includeVirtual: boolean,
+    includeTheory: boolean,
+    includeBasics: boolean,
+    limit: number,
+  ) =>
+    invoke<NewPrintings>("new_printings", {
+      scope,
+      deckIds,
+      days,
+      langs,
+      includeVirtual,
+      includeTheory,
+      includeBasics,
+      limit,
+    }),
+  /** Move the *seen* cursor to `at`, in Unix seconds. **The clock is the caller's.** */
+  markNewPrintingsSeen: (at: number) => invoke<void>("mark_new_printings_seen", { at }),
+  /**
+   * How far every deck is along under `compare`, priced at `marketplace` — see
+   * {@link DeckCompletion} and {@link DeckCompletionCompare}. Both belong in the caller's query key.
+   */
+  deckCompletion: (marketplace: MarketplaceId, compare: DeckCompletionCompare) =>
+    invoke<DeckCompletion[]>("deck_completion", { marketplace, compare }),
+  /**
+   * How many `deck_cards` rows carry a `needs_review` sentence — rows, not copies, and only that
+   * one table. Its own read rather than `sync_relay_status`' `reviewCount`, which sums six tables,
+   * is desktop-only and takes the write lock. **Takes no arguments**: an argument object sent to a
+   * command that declares only the managed state is a deserialisation error, not a type error.
+   */
+  deckReviewCount: () => invoke<number>("deck_review_count"),
+  /**
+   * The sets with paper printings released after today and within `days` (clamped `1..=365` in
+   * Rust) — see {@link UpcomingSets}.
+   */
+  upcomingSets: (days: number) => invoke<UpcomingSets>("upcoming_sets", { days }),
+  /**
+   * Which view the app opens on, as a stored word — `"home"` for a database nobody has changed.
+   *
+   * The **twelfth** `app_meta` setting and the fourth answered as a bare string. It is
+   * {@link ipc.deckSort}'s split exactly, and for the sharper version of that reason: **the
+   * vocabulary of views is TypeScript's** and `startview.rs` has no list to check a word against,
+   * because which pages exist is a fact about this app's router. So the backend hands back
+   * whatever was stored and this side narrows it — a word a *newer* build wrote reaches an older
+   * one as itself and degrades to the default here, where a Rust-side allow-list would have
+   * stranded the reader on a page that no longer exists.
+   */
+  startView: () => invoke<string>("start_view"),
+  /**
+   * Remember it. **One refusal and it is a blank** — {@link ipc.setDeckSort}'s trade, for its
+   * reason: a blank is refusable without a vocabulary, and it is the one value the read discards,
+   * so storing it would be a write that reported success and read back as `home` for ever. The
+   * word is trimmed on the way in. Answers `collection::BUSY` under a running sync.
+   */
+  setStartView: (view: string) => invoke<void>("set_start_view", { view }),
+  /**
+   * Download one marketplace's price feed and rewrite its rows. Answers the feed's state
+   * afterwards.
+   *
+   * **Only the feed-backed marketplaces have a feed to refresh** — see
+   * {@link MarketplaceFeedStatus} — and asking for another one is refused rather than quietly
+   * doing nothing.
+   *
+   * Long: 63.7 MiB for Card Kingdom, 48.4 MiB for Mana Pool, so it reports through the same
+   * `Activity` mechanism every other long job uses and answers `collection::BUSY` under a
+   * running sync, like every other write. **A failed fetch leaves the previous prices in
+   * place** and writes the reason to `error_log` — stale prices with an honest as-of line beat
+   * an empty table — so a rejection here is not a reason to blank a price column.
+   */
+  marketplaceFeedRefresh: (marketplace: MarketplaceId) =>
+    invoke<MarketplaceFeedStatus>("marketplace_feed_refresh", { marketplace }),
+  /**
+   * Every feed-backed marketplace's state, whether or not it has ever been fetched — one row
+   * each, so a panel can draw the list without knowing which ones exist.
+   *
+   * Reads two small tables and makes no network call, so it is cheap to poll while a refresh
+   * is running.
+   */
+  marketplaceFeedStatus: () => invoke<MarketplaceFeedStatus[]>("marketplace_feed_status"),
+  /**
+   * A feed being fetched, phase by phase — the ribbon's fast path, beside `sync:progress` and
+   * `update:progress`.
+   *
+   * **Subscribe once**, like both of those: every extra call is another `listen` registration
+   * for the life of the app. `useMarketplaceProgress` is that one caller.
+   */
+  onMarketplaceProgress: (cb: (e: FeedProgressEvent) => void): Unlisten =>
+    core.listen<FeedProgressEvent>("marketplace:progress", cb),
+  /**
+   * The Oracle tags for a set of **printings** — the read every categorising call site makes.
+   *
+   * **Match the answers back by `cardId`, never by position.** Blank ids and duplicates are
+   * dropped, so the answer is one entry per *distinct* id and `result.length` can be shorter
+   * than what was asked. Reading `result[i]` against `input[i]` works right up until a caller
+   * sends the same card twice — which a decklist with two printings of one card does.
+   *
+   * One statement per 500 ids, so a whole import asks once. An unknown id answers `slugs: []`
+   * rather than being absent, because {@link CardTags} makes "no tags" and "no such card" the
+   * same answer on purpose.
+   */
+  oracleTagsForPrintings: (cardIds: string[]) =>
+    invoke<PrintingTags[]>("oracle_tags_for_printings", { cardIds }),
+  /**
+   * The same read keyed by oracle id, for a caller holding one — `DeckCard.oracleId`, a
+   * wishlist row. Same contract, same match-by-id rule.
+   */
+  oracleTagsForCards: (oracleIds: string[]) =>
+    invoke<CardTags[]>("oracle_tags_for_cards", { oracleIds }),
+  /**
+   * The taxonomy's freshness. Reads one small table, makes no network call, and **is safe
+   * before the first refresh has ever run** — a database with no meta row answers every field
+   * `null` with `stale: true` rather than rejecting, so no caller needs a guard.
+   *
+   * **Nothing in `ipc` starts a refresh, and that absence is not a gap.** The launch fetches the
+   * taxonomy uninvited (`tags::oracle::refresh_if_due`) and no page ever asked for it again, so
+   * the `oracleTagsRefresh` wrapper that stood beside this — and its art twin — was called only
+   * from tests and one story, and was removed on 2026-09-27. The
+   * `oracle_tags_refresh` command itself stays registered, and a failed fetch still leaves the
+   * previous taxonomy in place, the type-line fallback always available.
+   */
+  oracleTagsStatus: () => invoke<OracleTagStatus>("oracle_tags_status"),
+  /**
+   * The taxonomy being fetched, phase by phase — beside `sync:progress`, `marketplace:progress`
+   * and `update:progress`.
+   *
+   * **Subscribe once**, like all three: every extra call is another `listen` registration for
+   * the life of the app. Tauri drops events emitted before the webview registered its listener
+   * and the startup refresh can begin before this window has one, so
+   * {@link ipc.oracleTagsStatus} is the reliable half of the pair.
+   */
+  onOracleTagProgress: (cb: (e: OracleTagProgressEvent) => void): Unlisten =>
+    core.listen<OracleTagProgressEvent>("oracle-tags:progress", cb),
+  /**
+   * The **art** taxonomy's freshness — {@link ipc.oracleTagsStatus} one dataset over, and safe
+   * before the first refresh for the same reason: a database with no meta row answers every
+   * field `null` with `stale: true` rather than rejecting.
+   *
+   * A never-ingested art taxonomy is not a failure. It is what every install is on its first
+   * launch and what a machine that cannot reach Scryfall stays in, and the honest answer to it
+   * is a Tags page that says it has nothing yet.
+   */
+  artTagsStatus: () => invoke<ArtTagStatus>("art_tags_status"),
+  /**
+   * The art taxonomy being fetched, phase by phase — a channel of its own beside
+   * `oracle-tags:progress`, because either taxonomy may be refreshing while the other is.
+   *
+   * **Subscribe once**, like every other listener here. Tauri drops events emitted before the
+   * webview registered a listener and the startup refresh can begin before this window has one,
+   * so {@link ipc.artTagsStatus} is the reliable half of the pair.
+   */
+  onArtTagProgress: (cb: (e: ArtTagProgressEvent) => void): Unlisten =>
+    core.listen<ArtTagProgressEvent>("art-tags:progress", cb),
+  /**
+   * Type-ahead over the tag taxonomies — the Tags page's search box.
+   *
+   * `namespace` is `"art"`, `"oracle"` or `"both"`, and **`"both"` puts art first on an equal
+   * rank**: the page's job is an art theme, so a reader who types `dog` means the illustrations
+   * and the oracle tag of the same name is the secondary reading.
+   *
+   * **Substring, not prefix, and that is a deliberate departure from Scryfall** — verified live
+   * 2026-08-20, `otag:remov` 404s and `otag:*spot*` answers nothing, so there is nothing to
+   * borrow and a reader told "no such tag" until they spell `dogs-of-war` exactly is not using a
+   * search box. The exact hit is ranked first, then the prefix hits, then the rest.
+   *
+   * **An empty or all-punctuation `text` matches every tag rather than none**, so an untouched
+   * box answers the tags with the widest reach. `limit` caps the *merged* answer.
+   */
+  tagSearch: (text: string, namespace: TagNamespace | "both", limit: number) =>
+    invoke<TagHit[]>("tag_search", { text, namespace, limit }),
+  /**
+   * One level of the tag tree: the children of `slug`, or the **roots** when it is `null`.
+   *
+   * Unlimited, deliberately — this draws one level of a tree (3 219 art roots, measured
+   * 2026-08-20) and an arbitrary cut would silently lose branches.
+   *
+   * A tag with several parents is listed under every one of them, which is the honest reading of
+   * a graph rather than a tree; its {@link TagHit.parents} name the rest so the rail can say so.
+   * **A muted tag takes its subtree off the rail with it** — its children are not roots and no
+   * other path reaches them unless they have a second parent. That is recoverable by unmuting,
+   * and the children stay findable through {@link ipc.tagSearch}.
+   */
+  tagChildren: (namespace: TagNamespace | "both", slug: string | null) =>
+    invoke<TagHit[]>("tag_children", { namespace, slug }),
+  /**
+   * Turn tag names typed into a card search box into the slugs {@link SearchRequest.artTags} and
+   * {@link SearchRequest.oracleTags} match on — `queryLanguage.ts`'s tokens, resolved.
+   *
+   * **One answer per ask, in the order asked, `null` where there is no such tag.** The misses
+   * ride along rather than being filtered out, because the box has to be able to name the token
+   * it could not find and a shortened list cannot say which one is missing.
+   *
+   * **Exact, where {@link ipc.tagSearch} is a substring, and the difference is the job.** That
+   * one is a type-ahead and should find `removal` from `remov`; this one builds a *filter*, and
+   * a substring here would resolve one token to many tags that would have to be ORed — while
+   * every tag filter in this app intersects, so `atag:dragon` would silently also answer
+   * `dragonborn`. Separators and case are still noise (`otag:"spot removal"`,
+   * `otag:spot-removal` and `otag:SPOT-REMOVAL` are one tag, verified live 2026-08-20), because
+   * Rust matches through `slug_norm`.
+   *
+   * **A muted tag still resolves.** Muting hides a tag from the search box and the rail; it is
+   * documented never to hide a *card*, and nothing in the card filters consults that table. A
+   * reader who spells a tag out has named it rather than browsed onto it.
+   *
+   * A blank or all-punctuation value answers `null` and never a tag — see the Rust for why that
+   * is a guard rather than an accident.
+   */
+  tagResolve: (asks: readonly TagLookup[]) =>
+    invoke<(TagRef | null)[]>("tag_resolve", { asks }),
+  /**
+   * Stop offering a tag anywhere — Scryfall asks downstream apps for this in as many words,
+   * because Tagger is crowdsourced and they cannot guarantee the data is free from abuse.
+   *
+   * **Keyed on {@link TagHit.id}, never on the slug**, and a blank id is refused in words rather
+   * than stored: one row with an empty `tagId` would equal every un-refreshed `oracle_tags` row
+   * and take the whole taxonomy off the page silently. `slug` rides along so Settings can name
+   * the tag later without joining a taxonomy that may since have been rebuilt or emptied.
+   *
+   * Idempotent by `(namespace, tagId)`: muting an already-muted tag refreshes the stored slug and
+   * the timestamp, which is what makes a rename harmless.
+   */
+  tagMute: (namespace: TagNamespace, tagId: string, slug: string) =>
+    invoke<void>("tag_mute", { namespace, tagId, slug }),
+  /** Offer a tag again. A tag that was never muted is **not** an error — the row is gone either
+   *  way, and a Settings list that raced a second window is not worth shouting about. Unlike
+   *  {@link ipc.tagMute} this accepts a blank `tagId`, because a row with one is unreachable by
+   *  any tag it was meant to name and junk to delete is all it can ever be. */
+  tagUnmute: (namespace: TagNamespace, tagId: string) =>
+    invoke<void>("tag_unmute", { namespace, tagId }),
+  /** Everything the reader has hidden, for the Settings list that gives it back — by taxonomy,
+   *  then by the stored slug, because this list exists to be searched by eye. */
+  tagsMuted: () => invoke<MutedTag[]>("tags_muted"),
+  /**
+   * The combo table's freshness. Reads one small table, makes no network call, and **is safe
+   * before the first refresh has ever run** — a database with no `combo_meta` row answers zero
+   * counts and `null` stamps with `stale: true` rather than rejecting, so no caller needs a
+   * guard.
+   *
+   * Read it before drawing "this deck has no combos": a never-ingested table and a deck with
+   * nothing in it are the same empty {@link ipc.combosForCards} answer, and only this call tells
+   * them apart. See {@link ComboStatus.fetchedAt}.
+   */
+  combosStatus: () => invoke<ComboStatus>("combos_status"),
+  /**
+   * Fetch Commander Spellbook's combo feed if it is due, and answer the table's state
+   * afterwards. `force` skips the weekly throttle, **not** the ETag check — a forced refresh of
+   * an unchanged file still costs one request and no ingest, exactly as the Tagger refreshes
+   * (`oracle_tags_refresh`, `art_tags_refresh`) do one dataset over.
+   *
+   * 27.5 MB compressed and 640 MB of JSON behind it (measured 2026-08-27), streamed rather than
+   * held, so it reports through the same `Activity` mechanism every other long job uses.
+   *
+   * **It does not answer `collection::BUSY` under a running sync**, and the asymmetry with the
+   * writes above it is deliberate rather than an oversight: a refresh opens on the *read*
+   * connection and only its ingest takes the write one, one 2 000-combo batch at a time,
+   * standing aside between them. So a sync delays this rather than refusing it — which is what
+   * a 640 MB download wants, since a refusal would throw the whole fetch away over a lock it
+   * would have got a second later.
+   *
+   * **A failed fetch leaves the previous rows standing** and writes the reason to `error_log` —
+   * the rule every feed here follows. A rejection is never a reason to stop drawing a bracket:
+   * the estimate reads the three signals it has and says so.
+   */
+  combosRefresh: (force: boolean) => invoke<ComboStatus>("combos_refresh", { force }),
+  /**
+   * Throw the combo table away — every row of `combos` and `combo_cards`, and the `combo_meta`
+   * watermark behind them. It answers the {@link ComboStatus} a database that has never ingested
+   * the feed already gives: two zeros, three `null`s and `stale: true`.
+   *
+   * **A debugging affordance, and not something the ordinary reader needs.** The list arrives on
+   * its own at launch and refreshes itself on the week, so there is no ordinary press this
+   * stands behind — what it is for is putting a machine back in the never-fetched state, which
+   * is a state worth being able to look at and one no reader can otherwise produce.
+   *
+   * **The caller is expected to follow it with `combosRefresh(true)`**, and the two really do
+   * fetch the body rather than earning a 304 — which is the half worth stating here, because
+   * nothing about this call makes it true. The stored ETag describes a *file* and not the state
+   * of this database, so `combos::conditional_etag` replays it **only when there are rows behind
+   * it**: a cleared table sends no `If-None-Match` and gets 27.5 MB. Without that rule the pair
+   * would empty the tables, be told nothing had changed, and leave a database that no amount of
+   * refreshing could ever fill again.
+   *
+   * **It makes no network call at all**, which is the whole difference from
+   * {@link ipc.combosRefresh} above it: that one opens on the read connection and only its
+   * ingest takes the write one, so a sync delays it, where this is a write from its first
+   * statement to its last.
+   */
+  combosClear: () => invoke<ComboStatus>("combos_clear"),
+  /**
+   * Which combos a set of cards fully contains — the deck bracket advisory's one read.
+   *
+   * **It takes card ids rather than a deck id, and that is the Rust/TS boundary drawn where this
+   * repo draws it.** Which of a deck's piles count toward a combo is a *domain* question — active
+   * categories only, the sideboard and the companion beside the deck rather than in it, `live`
+   * against `theory` — and those rules already live in TypeScript, in `features/decks`. So this
+   * side decides which cards are in play and Rust answers a fact about them: it resolves the ids
+   * to oracle ids and returns the combos whose every named card is present. Rust supplies facts;
+   * TypeScript draws the conclusion, and a `combos_for_deck` would have moved the pile rules into
+   * SQL where a second copy of them would drift.
+   *
+   * Matching is by **oracle** id, so any printing of a combo piece counts and duplicate ids cost
+   * nothing. Combos with {@link DeckCombo.templateCount} above zero come back too — they are the
+   * *possible* ones, and separating them is the caller's job, not a filter to apply here.
+   *
+   * Safe on a database that has never ingested the feed: the answer is `[]`, which is also what
+   * a deck with no combos in it answers. {@link ipc.combosStatus} is what tells those apart.
+   */
+  combosForCards: (cardIds: string[]) => invoke<DeckCombo[]>("combos_for_cards", { cardIds }),
+  /**
+   * Every combo that **names** one card — the card surface's combo list, and the opposite
+   * question to {@link ipc.combosForCards} directly above.
+   *
+   * **A second command rather than a widening of that one, and the two answer different
+   * questions about the same table.** `combos_for_cards` asks which combos a pile of printings
+   * fully *contains*: it is the deck advisory's read, it is narrow on purpose, and a reader
+   * holding one piece of a combo gets nothing from it. This one asks what a single card is part
+   * of and claims nothing about the rest of the pieces — most of what it answers is combos the
+   * reader owns no other card of, which is exactly what makes it worth drawing. Folding them
+   * together would mean one shape carrying `pieces` and their pictures for every combo of every
+   * deck in the gallery, to draw a list of names.
+   *
+   * Keyed on the **oracle** id, which is `oracleTagsKey`'s argument arriving at the same place:
+   * a combo is a fact about a card rather than about a piece of cardboard, so all four Lightning
+   * Bolts have one answer, and a printing-keyed read would fetch it again every time the reader
+   * stepped between printings of the card they are already reading about.
+   *
+   * The six arguments are named one by one rather than spread from {@link CardCombosQuery},
+   * because this is the one place the wire names are written down: a field added to that
+   * interface for this side's own use — a sort the backend does not have, say — would otherwise
+   * travel to a command that never declared it.
+   *
+   * **All three narrowings happen in SQL before the page is cut**, so a filtered answer is a
+   * different question rather than a subset of the unfiltered one — see `cardCombosKey` in
+   * `lib/query.ts`, which is why all three are in the key.
+   *
+   * **`search` is forwarded exactly as given, `""` included.** It is the same request as `null`
+   * by the command's contract, and folding one into the other here would be the second place
+   * that rule was written down — `cardCombosKey` is the first and only one, because the cache is
+   * where the difference between `""` and `null` can actually cost something. What this wrapper
+   * owes is that the key *travels*: `search: null` is sent as an explicit `null`, never dropped,
+   * for `cardCount`'s reason one field over — Tauri fills parameters by name and an absent one is
+   * a rejection rather than a default. `ipc.test.ts` asserts the key set rather than the object,
+   * because `toHaveBeenCalledWith` cannot tell an absent key from one holding `undefined`.
+   *
+   * Safe on a database that has never ingested the feed: the answer is an empty page with three
+   * zeros, which is also what a card in no combo answers, and {@link ipc.combosStatus} is what
+   * tells those two apart.
+   */
+  combosForCard: (q: CardCombosQuery) =>
+    invoke<CardCombosPage>("combos_for_card", {
+      oracleId: q.oracleId,
+      search: q.search,
+      cardCount: q.cardCount,
+      ownedOnly: q.ownedOnly,
+      limit: q.limit,
+      offset: q.offset,
+    }),
+  /**
+   * The combo feed being fetched, phase by phase — a channel of its own beside `sync:progress`,
+   * `marketplace:progress`, `update:progress` and the two tag channels.
+   *
+   * **Subscribe once**, like every other listener here: each call is another `listen`
+   * registration for the life of the app. Tauri drops events emitted before the webview
+   * registered a listener, so {@link ipc.combosStatus} is the reliable half of the pair.
+   */
+  onCombosProgress: (cb: (e: ComboProgress) => void): Unlisten =>
+    core.listen<ComboProgress>("combos:progress", cb),
+  /**
+   * The Scryfall CDN URL for one printing at one size, or `null`.
+   *
+   * A command rather than a field on the list DTOs, and called **on the press** — see
+   * `card_image_uri` in the crate. Three ways to `null`, all of them answers: an unknown
+   * card, a card with no `image_uris`, and a variant the source lacked.
+   */
+  cardImageUri: (cardId: string, variant: ImageVariant) =>
+    invoke<string | null>("card_image_uri", { cardId, variant }),
+  /**
+   * Ask the reader where to save `contents` — the OS save dialog, opened with `fileName` — and
+   * write it there. Resolves `true` when a file was written and `false` for Cancel, which is not
+   * a failure.
+   *
+   * **`fileName` is a suggestion and never a place** (issue #545): Rust keeps only its last
+   * component, opens the dialog itself and writes at the path it answered, so no path crosses
+   * IPC in either direction. It used to be `export_write_file(path, contents)` — a write
+   * anywhere, for any script in the page. The rejection is either the save dialog's or the
+   * disk's, and says which.
+   */
+  exportSaveFile: (fileName: string, contents: string) =>
+    invoke<boolean>("export_save_file", { fileName, contents }),
+  /**
+   * The plain-text mirror's whole state, in one round trip — the Backup panel's only read.
+   *
+   * **Infallible by signature at the far end**, which is the contract rather than an accident:
+   * a missing setting row, a hand-edited one and a row a newer build wrote all read as the
+   * default, so there is nothing for this call to reject with. It still returns a promise that
+   * can reject, because the IPC boundary itself can.
+   */
+  mirrorStatus: () => invoke<MirrorStatus>("mirror_status"),
+  /** Native save picker and a complete ZIP snapshot. False means the picker was cancelled. */
+  archiveExport: (): Promise<boolean> => invoke<boolean>("archive_export"),
+  /** Native open picker and destructive confirmation, then complete replacement. False means
+   *  either dialog was cancelled; true requires all frontend state to be reloaded. */
+  archiveImport: (): Promise<boolean> => invoke<boolean>("archive_import"),
+  /** A restore replaces row identities and settings; every open window must reload its state. */
+  onArchiveRestored: (cb: () => void): Unlisten => core.listen<void>("archive:restored", cb),
+  /** Switch the mirror on or off. Takes effect without a restart — the pass thread consults the
+   *  setting on every tick rather than reading it once at startup. Answers `BUSY` if a sync
+   *  holds the write connection, like every other write here. */
+  mirrorSetEnabled: (enabled: boolean) => invoke<void>("mirror_set_enabled", { enabled }),
+  /**
+   * Let the reader choose the mirror's folder — the OS folder picker, opened at the current
+   * root — and point the mirror there. Resolves `true` when it moved and `false` for Cancel,
+   * which is not a failure.
+   *
+   * **Takes no path** (issue #545): Rust opens the picker and saves what it answered, so nothing
+   * here can aim the mirror's writes at a folder. It used to be `mirror_set_root(root)`. The
+   * rejection is the picker's own sentence, `BUSY` if a sync holds the write connection, or
+   * the crate's refusal of a folder it cannot store.
+   *
+   * **The old folder is left alone**, deliberately: those files are the reader's cards in plain
+   * text, and changing a setting is not consent to delete them.
+   */
+  mirrorPickRoot: () => invoke<boolean>("mirror_pick_root"),
+  /**
+   * Rewrite every file the mirror owns, now, and answer what the pass did.
+   *
+   * Runs whether or not the mirror is enabled — an explicit press is an explicit press — and
+   * against a **fresh** digest cache, because this is the button a reader reaches for when they
+   * suspect the folder is wrong: reusing the thread's cache would let a file somebody deleted
+   * by hand read as unchanged, which is the one state this command exists to get out of.
+   */
+  mirrorRebuild: () => invoke<PassReport>("mirror_rebuild"),
+  /**
+   * This device, the group it is in, and the roster — the pairing panel's only read.
+   *
+   * A **write** path at the far end despite the name: a database that has never paired has no
+   * identity row, and reading the panel is what mints one. So it answers `BUSY` if the write
+   * connection is held past five seconds, like every other write here — which a sync trip no
+   * longer does: it holds the connection only while it reads or writes, never across a request.
+   */
+  syncPairingStatus: () => invoke<PairingStatus>("sync_pairing_status"),
+  /** Start offering a pairing. Replaces any offer already in flight. */
+  syncPairingBegin: () => invoke<PairingOffer>("sync_pairing_begin"),
+  /** Read an offer on the joining device. Answers the six digits. */
+  syncPairingAccept: (code: string) => invoke<PairingHandshake>("sync_pairing_accept", { code }),
+  /**
+   * The reader says the digits matched. Answers the sealed group key.
+   *
+   * **Nothing may call this on the reader's behalf.** The comparison is the whole of §7.5
+   * step 3, and a panel that pressed it once the digits arrived would have no
+   * man-in-the-middle defence at all while looking completely normal.
+   */
+  syncPairingConfirm: () => invoke<PairingSealedKey>("sync_pairing_confirm"),
+  /** Throw away whatever is in flight. The code that was on screen stops working. */
+  syncPairingCancel: () => invoke<void>("sync_pairing_cancel"),
+  /** Where a pairing has got to. Polled while one is in flight; answers `idle` when none is. */
+  syncPairingPoll: () => invoke<PairingProgress>("sync_pairing_poll"),
+  /**
+   * The relay, what is waiting to be sent, and what wants looking at.
+   *
+   * A **write** path at the far end, like {@link ipc.syncPairingStatus}: it counts unpushed
+   * ops on the write connection, so it answers `BUSY` if that is held past five seconds — which
+   * a sync trip, holding it only while it reads or writes, no longer does.
+   */
+  syncRelayStatus: () => invoke<RelayStatus>("sync_relay_status"),
+  /**
+   * Start connecting a membership. Answers the Patreon authorize URL to open.
+   *
+   * **Nothing has happened when this returns.** The URL is a string until something opens it,
+   * and the reader consents on Patreon's own page — so a panel that merely *offers* to connect
+   * has visited nothing.
+   */
+  syncPatreonBegin: () => invoke<string>("sync_patreon_begin"),
+  /**
+   * Hand over the code the relay's landing page showed, and become connected.
+   *
+   * One-time and short-lived at the far end, so a refusal is ordinary rather than exceptional —
+   * a code pasted twice, or ten minutes late, is the commonest thing that goes wrong here.
+   */
+  syncPatreonClaim: (code: string) => invoke<SupporterStatus>("sync_patreon_claim", { code }),
+  /** The membership as this device last heard it. Local read; it opens no connection. */
+  syncSupporterStatus: () => invoke<SupporterStatus>("sync_supporter_status"),
+  /**
+   * One round trip now: push, then pull, then ack.
+   *
+   * Answers `null` when there is nothing to do — no connected membership, or no pairing group.
+   * That is not an error, it is the state every existing installation is in.
+   */
+  syncNow: () => invoke<RelayOutcome | null>("sync_now"),
+  /** The relay socket's state right now. Seeds a listener that mounts after the last transition.
+   *
+   * The Rust manager **deduplicates** `sync:live` — it emits only on a transition, because
+   * otherwise `"off"` would be re-emitted every five seconds forever on every installation that
+   * has paired nothing, which is all of them today. So a listener that mounts *after* the last
+   * transition never learns the state by listening alone: Tauri also drops events emitted before
+   * the webview registered a listener, which makes that the common case at launch rather than a
+   * rare race. A later task seeds its hook from this command and then subscribes for changes.
+   */
+  syncLiveState: (): Promise<LiveState> => invoke<LiveState>("sync_live_state"),
+  /** Every row carrying a sentence, from all six tables that can hold one. */
+  syncReviewList: () => invoke<ReviewRow[]>("sync_review_list"),
+  /**
+   * "Looks fine": clear one row's sentence, and answer what is left.
+   *
+   * Clearing is a write like any other, so it is captured and travels — a row one device has
+   * looked at stops asking on the others too, which is why the sentence is on the row rather
+   * than in a notification.
+   */
+  syncReviewClear: (table: ReviewTable, uid: string) =>
+    invoke<ReviewRow[]>("sync_review_clear", { table, uid }),
+  /**
+   * Rename a device on the roster.
+   *
+   * Renaming **this** device also changes the name every later pairing sends, which is what
+   * stops the next press of Pair putting the old one back.
+   */
+  syncDeviceRename: (deviceId: string, name: string) =>
+    invoke<void>("sync_device_rename", { deviceId, name }),
+  /**
+   * Remove a device and rotate the group key.
+   *
+   * **The rotation is the removal** — see §7.6. What it cannot do is reach the removed device:
+   * whatever that device already synced, it keeps, and no server can take it back. The panel
+   * says so in those words rather than implying a lost phone has been cleaned.
+   */
+  syncDeviceRevoke: (deviceId: string) => invoke<void>("sync_device_revoke", { deviceId }),
+  /**
+   * Leave the group this device is in — and **always succeed**, short of being in no group.
+   *
+   * The far end plans a departure, publishes it **best effort**, and then clears this device's
+   * group *and* its grant whatever the relay answered (spec §2.1). So a reader on a plane leaves
+   * too; what they lose is the courtesy, never the departure — the other devices go on listing
+   * this one until somebody removes it there, which is why the dialog in front of this press
+   * says so. The one refusal is a device that is in no group, which has nothing to leave.
+   *
+   * **The grant goes with the group, and `clear` is not `revoke`** (§2.3): a leaver keeping its
+   * refresh secret keeps a working credential for the group it walked out of. Nothing *ended*,
+   * so no lapse is recorded — this device reads *Not connected* afterwards, not
+   * *Membership ended*.
+   */
+  syncGroupLeave: () => invoke<void>("sync_group_leave"),
+  /** `scanner::scanner_status`. Lazy: the first call loads the bundle and the models. */
+  scannerStatus: () => invoke<ScannerStatus>("scanner_status"),
+  /**
+   * `scanner::scanner_frame`. The JPEG is the body and the options ride in a header, because a
+   * frame is bytes with no fields to name.
+   *
+   * **A `detail` image rides in the same body, behind the frame**, and `x-scanner-detail` is the
+   * frame's byte length — the one fact the far end needs to split the two. It is the same video
+   * frame at full resolution, which the crate warps the title and collector bands out of, so the
+   * pair has to arrive in one request: two would let a second frame's pixels stand in for the
+   * first's quad. With no detail (or an empty one) the call is byte for byte what it was before
+   * the detail existed — no second header, no copy — because the far end refuses an empty detail
+   * in words and every frame but the one before a read carries none.
+   */
+  scannerFrame: (jpeg: Uint8Array, options: ScannerOptions, detail?: Uint8Array | null) => {
+    const optionsHeader = asciiJson(options);
+    if (detail == null || detail.length === 0) {
+      return invoke<ScannerVerdict>("scanner_frame", jpeg, {
+        headers: { "x-scanner-options": optionsHeader },
+      });
+    }
+    const body = new Uint8Array(jpeg.length + detail.length);
+    body.set(jpeg, 0);
+    body.set(detail, jpeg.length);
+    return invoke<ScannerVerdict>("scanner_frame", body, {
+      headers: { "x-scanner-options": optionsHeader, "x-scanner-detail": String(jpeg.length) },
+    });
+  },
+  /** `scanner::scanner_reset`. The reader pressed reset, or the next card is coming. */
+  scannerReset: () => invoke<void>("scanner_reset"),
+  /** `scanner::scanner_capture`. The same shape as {@link ipc.scannerFrame}: the JPEG is the
+   *  body and the sidecar rides in a header. */
+  scannerCapture: (jpeg: Uint8Array, sidecar: ScannerSidecar) =>
+    invoke<ScannerCaptured>("scanner_capture", jpeg, {
+      headers: { "x-scanner-capture": asciiJson(sidecar) },
+    }),
+  /**
+   * `scanner::scanner_set_filters`. Narrows every later frame to these sets and dates, and resets
+   * the tracker. **Rejects in the crate's words** — no card names loaded to filter by, or filters
+   * no printing matches — and a rejection leaves the previous filters in force.
+   */
+  scannerSetFilters: (filters: ScanFilters) => invoke<void>("scanner_set_filters", { filters }),
+  /** `scanner::scanner_prefs`. Never rejects: a missing or unreadable row is the defaults. */
+  scannerPrefs: () => invoke<ScannerPrefs>("scanner_prefs"),
+  /** `scanner::set_scanner_prefs`. Written whole; rejects only with the write lock's `BUSY`. */
+  setScannerPrefs: (prefs: ScannerPrefs) => invoke<void>("set_scanner_prefs", { prefs }),
+  /** `scanner::scanner_tray`. Never rejects: a missing or unreadable row is an empty tray. */
+  scannerTray: () => invoke<ScannerTrayRow[]>("scanner_tray"),
+  /**
+   * `scanner::set_scanner_tray`. Written whole. Rejects a row with fewer than one copy and a tray
+   * longer than 5,000 rows, in words, and leaves the stored tray as it was.
+   */
+  setScannerTray: (rows: ScannerTrayRow[]) => invoke<void>("set_scanner_tray", { rows }),
+  /**
+   * `scanner::scanner_tray_commit`. The tray's rows into the collection (`add` mode, into
+   * `folderId` or the root) **and** `remaining` stored as the tray, in one transaction — so no
+   * restart can bring back a row the collection already holds. Refuses as
+   * {@link ipc.collectionImportCommit} and {@link ipc.setScannerTray} do, and a refusal from either
+   * half leaves the collection and the stored tray both as they were.
+   */
+  scannerTrayCommit: (
+    items: CollectionImportItem[],
+    folderId: number | null,
+    remaining: ScannerTrayRow[],
+  ) => invoke<ImportCommitOutcome>("scanner_tray_commit", { items, folderId, remaining }),
+  /**
+   * `scanner_assets::owed`, as `scanner_assets`. Which of the scanner's three files this install
+   * lacks, and what fetching them costs. **Empty where the binary carries them** — a desktop
+   * release build — and rejected on a host that cannot fetch them, so a page draws its offer
+   * from the answer and never from what kind of host it is on.
+   */
+  scannerAssets: () => invoke<ScannerAssetsOwed>("scanner_assets"),
+  /**
+   * `scanner_assets::fetch`, as `scanner_assets_fetch`. Downloads every owed file, checks each
+   * before it is kept, and lets the engine's session go so the next scanner command reads them —
+   * no restart. Answers what is owed afterwards (nothing, when it worked); rejects with one
+   * sentence, and with `ALREADY_FETCHING`'s while another call is running. **Only ever called
+   * from a reader's press.** Progress arrives through {@link ipc.onScannerAssets}.
+   */
+  scannerAssetsFetch: () => invoke<ScannerAssetsOwed>("scanner_assets_fetch"),
+  /** The fetch's progress — `scanner_assets::PROGRESS_EVENT`. Best effort, like every event:
+   *  the command's own answer is what says a fetch ended. */
+  onScannerAssets: (cb: (e: ScannerAssetsProgress) => void): Unlisten =>
+    core.listen<ScannerAssetsProgress>("scanner:assets", cb),
+  /**
+   * Every share the group has published — `share::commands::share_list`, and the only one of the
+   * five that could reconcile against the relay first.
+   *
+   * It does, when it can: spec §4.3 has a second device inherit {@link ShareRow.ownerName} from
+   * the relay's list, and every other `share_*` command needs an id or a name that device does
+   * not yet have. **A failure — or no membership at all — answers the cache**, which is what the
+   * cache is for, so this is a read that is allowed to be offline and never a read that reports
+   * one.
+   */
+  shareList: () => invoke<ShareRow[]>("share_list"),
+  /**
+   * Publish a folder read-only — or the whole collection, for a `null` `folderUid`.
+   *
+   * ⚠️ **`null` is the whole collection and is a destination rather than an omission**, which
+   * makes this the one wrapper on this page where a misspelt argument is worse than a rejection:
+   * `invoke` matches by name, so a key the command does not declare is *dropped*, `folder_uid`
+   * arrives `None`, and the press succeeds — publishing every card the reader owns instead of
+   * the one binder they picked. `ipc.test.ts` pins the three names against `share/commands.rs`
+   * itself for exactly that.
+   *
+   * `folderUid` is `collection_folders.sync_uid` and never a row id — see
+   * {@link ShareRow.folderUid}. `ownerName` is what the reader typed, and
+   * {@link ipc.shareList} is where a second device gets it from.
+   */
+  shareCreate: (folderUid: string | null, ownerName: string, fields: ShareFields) =>
+    invoke<ShareRow>("share_create", { folderUid, ownerName, fields }),
+  /** Upload a fresh snapshot for a share that already exists, **keeping its link** — so a reader
+   *  who has handed the URL out never has to hand out a second one. Answers the row re-read. */
+  shareRefresh: (id: string) => invoke<ShareRow>("share_refresh", { id }),
+  /** Withdraw a share. **Terminal and the reader's own press** — the link stops answering, and
+   *  {@link ShareRow.state} is `revoked` rather than the row going away. */
+  shareRevoke: (id: string) => invoke<void>("share_revoke", { id }),
+  /**
+   * Open somebody else's shared collection from its link. **Needs no membership and sends no
+   * token** (spec §9): viewing is open to everyone and the link is the whole of the capability.
+   *
+   * ⚠️ **`unknown`, and that is the type rather than a gap to be tightened.** The crate answers
+   * `serde_json::Value` on purpose — spec §10 wants a snapshot published by a *newer* build told
+   * about rather than refused, which a strict Rust struct turns into a parse error at the wrong
+   * layer, with no sentence a reader could act on. So the conclusion is drawn one module over:
+   * **hand the answer to `parseSnapshotValue` in `@/lib/shareSnapshot`**, which is the one reader
+   * of this format on this side and the only thing entitled to say what it is. It takes a parsed
+   * value, so nothing is re-serialised on the way in — `parseSnapshot` is its sibling, for the
+   * web viewer, which has a response body and therefore has text.
+   *
+   * A `ShareSnapshot` return type here would be this file claiming a shape it has not checked,
+   * and a second implementation of the format's rules to keep in step with the writer and both
+   * viewers.
+   */
+  shareOpen: (url: string) => invoke<unknown>("share_open", { url }),
+};
+
+/**
+ * The message out of a rejected `invoke`.
+ *
+ * All three commands return `Result<_, String>`, so the rejection value is that bare
+ * string — not an `Error`. Rendering it with `String(e)` would be right for those and
+ * `"[object Object]"` for anything the IPC layer itself throws, so both are handled.
+ */
+export function ipcError(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e instanceof Error) return e.message;
+  return "Unexpected error: " + JSON.stringify(e);
+}

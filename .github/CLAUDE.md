@@ -16,14 +16,16 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
 - **Path routing (`changes` job)**:
   - Uses `git diff --name-only --no-renames` (`fetch-depth: 0`) and pipes changed paths to `scripts/ci-route.mjs`.
   - Evaluated using strict `case` semantics: **first match wins**, and `*` crosses `/`.
-  - `src-tauri/**` routes to `frontend` and `rust` (frontend tests inspect Rust files as text).
+  - `apps/desktop/src-tauri/**` routes to `frontend` and `rust` (frontend tests inspect Rust files as text).
   - `crates/grimoire-core/**` routes to `frontend`, `rust`, and `core` (must stay above `crates/*`).
   - `crates/*` routes to `frontend`, `rust`, and `core` (covers `crates/card-scanner`).
   - `crates/grimoire-web/**` and `crates/grimoire-scan/**` (the web host's two modules) route to `frontend`, `rust`, and `web`.
-  - `mobile/**` routes to `frontend` and `storybook`; `vite.mobile.config.ts` routes to `frontend`, `rust`, `android`, and `web`.
-  - `app-worker/**` routes to `frontend` and `web`.
+  - `apps/light/src-tauri/**` (the phone's host) routes to `frontend`, `rust`, and `android`; `apps/light/vite.config.ts` to `frontend`, `rust`, `android`, and `web`; `apps/light/vite.sw.ts` to `frontend` and `web`. All three must sit above `apps/light/*`, which routes the rest of the light app to `frontend`, `storybook`, and `web`.
+  - `apps/desktop/index.html` routes to `frontend` and `storybook` (above `apps/desktop/*`, which with `packages/ui/*` routes to `frontend`, `storybook`, and `web`); `packages/fake/*` to `frontend` and `storybook` (`packages/fake/aliases.ts` to `web` as well, above it).
+  - Root `vite.base.ts`, `vite.watch.ts`, `vitest.config.ts`, `tsconfig*.json` and `infrastructure/*/tsconfig.json` route to `frontend`, `storybook`, and `web`.
+  - `infrastructure/app-worker/**` routes to `frontend` and `web`.
   - `scripts/android-release/*` routes to `frontend`, `rust`, and `android` (must sit above `scripts/*`); `.release-please-manifest.json` routes to `frontend`.
-  - `*.ps1`/`*.psm1`/`*.psd1` routes to `powershell` (must sit above `src-tauri/*` and `scripts/*`).
+  - `*.ps1`/`*.psm1`/`*.psd1` routes to `powershell` (must sit above `apps/desktop/src-tauri/*` and `scripts/*`).
   - Unrecognised paths fall through to a fail-safe that runs all build jobs (`frontend`, `rust`, `core`, `storybook`, `web`).
   - **Fence test**: `scripts/ci-route.test.mjs` verifies that every file read across jobs is properly routed.
 - **Three routing traps to prevent**:
@@ -39,11 +41,11 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
 - **Job specifics**:
   - **`frontend`**: Matrix of 5 legs: 1 leg for `npm run build` and `npm run lint`; 4 parallel shards for `npm run test:run -- --shard=N/4`.
   - **`storybook`**: Runs `npm run build-storybook`. Gates `.storybook/DesignSystem.mdx` and `preview.css`.
-  - **`rust`**: Windows and Linux matrix. Writes a stub `dist/index.html` so `tauri-build` compiles on fresh checkouts.
+  - **`rust`**: Windows and Linux matrix. Writes a stub `apps/desktop/dist/index.html` (and `apps/light/dist-mobile/index.html`) so `tauri-build` compiles on fresh checkouts.
     Runs `cargo fmt --check` (Linux only, with `-p` for each workspace member; never `--all`), `clippy --workspace --all-targets -D warnings`,
     and `cargo test --workspace`. Also runs `crates/card-scanner` test suites (`--features cli`, `--features builder --bins`, and its frame bench's, `crates/card-scanner/bench`).
     Compiles shipping binaries without dev-dependencies (`cargo check -p mtg-grimoire -p grimoire-light`) and verifies no host enables the core's `testing` feature.
-    `Swatinem/rust-cache` is configured with `workspaces: ". -> src-tauri/target"` to align with `.cargo/config.toml`.
+    `Swatinem/rust-cache` is configured with `workspaces: ". -> target"`: `.cargo/config.toml` pins `target-dir = "target"`, so the workspace builds into `target/` at the repository root.
   - **`core`**: Target compile gate on `ubuntu-24.04` (requires clang ≥ 18 for `sqlite-wasm-rs`) for `wasm32-unknown-unknown` and `aarch64-linux-android`.
     Sets `CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER` and the NDK `bin` path explicitly because cargo does not read `NDK_HOME`.
     Each leg also `cargo check`s `crates/card-scanner/bench` — the scanner with its readers — for its target; nothing in this job runs.
@@ -55,7 +57,7 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
     - Fetches the scanner's three files from this repository's public release (`npm run scanner:assets -- --web`) before the page is built, and builds with `GRIMOIRE_SCANNER_ASSETS=required` — as `release.yml`'s `web` job does.
     - Executes headless Chrome smoke tests (`npm run web:smoke`) against fixture cards, enforcing offline operation and CORS safety.
     - Scans one real card through the scanner's own module (`npm run web:scanner-smoke`: a file for a camera, the desktop face and then the phone face); the card's picture is the one request the script makes of Scryfall, kept by `actions/cache` between runs.
-    - Runs the live-sync walk (`npm run web:sync-smoke`: two Chrome profiles, `relay/` under `wrangler dev --local`), with wrangler installed from `app-worker/package-lock.json` (`npm ci --ignore-scripts --prefix app-worker`) — never `npx wrangler@…`, and no secret in the job. `relay/**` routes to `frontend`, `rust` and `web`.
+    - Runs the live-sync walk (`npm run web:sync-smoke`: two Chrome profiles, `infrastructure/relay/` under `wrangler dev --local`), with wrangler installed from `infrastructure/app-worker/package-lock.json` (`npm ci --ignore-scripts --prefix infrastructure/app-worker`) — never `npx wrangler@…`, and no secret in the job. `infrastructure/relay/**` routes to `frontend`, `rust` and `web`.
   - **`powershell`**: Runs `lock.test.ps1` for worktree locks on `windows-latest`. Windows is required because holder PID, process name, and `StartTime` are inspected.
 
 ## Toolchain & Action Security
@@ -79,8 +81,8 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   and an older build holds a newer op until it updates. A host that ships ahead strands the others, so:
   - `build` (desktop matrix), `android` (the APK and the bundle, as `ci.yml` builds them) and `web` (`web:wasm`, `web:build`, `web:smoke`) all build at the tag and hold no secret.
   - `android-sign` re-signs the bundle with the owner's **upload key** (`scripts/android-release/sign-bundle.sh`, `jarsigner`) and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle`, which the owner uploads to Play Console. Nothing Android is attached to the release.
-    The key is held to the committed fingerprint `mobile/src-tauri/release-signer.sha256`: no file, no bundle; another key, a debug certificate or an archive that is not a bundle is refused.
-  - `web-deploy` installs `wrangler` from `app-worker/package-lock.json` (`npm ci --ignore-scripts`, no secret in that step), runs `npx --no-install wrangler deploy`,
+    The key is held to the committed fingerprint `apps/light/src-tauri/release-signer.sha256`: no file, no bundle; another key, a debug certificate or an archive that is not a bundle is refused.
+  - `web-deploy` installs `wrangler` from `infrastructure/app-worker/package-lock.json` (`npm ci --ignore-scripts`, no secret in that step), runs `npx --no-install wrangler deploy`,
     then `scripts/web-deploy-probe.mjs` against the origin (the document, its policy, and the card scanner's manifest). It needs `build`, `android-sign` and `web` — a deploy is live at once, so it goes last — and refuses a tag older than the newest published release.
   - `publish` needs `build`, `android-sign` and `web-deploy`; any failure leaves the release a draft.
 - **Secrets live in jobs that build nothing, and in the `release` environment**: `android-sign` and `web-deploy` run no root `npm ci`, cargo or Gradle, and are the only jobs with `environment: release`
@@ -94,9 +96,9 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   Equal schemas are necessary, not sufficient: a wire change with no schema rung is dropped by an older build, and the guard cannot see it.
 - **Release-please automation**:
   - Versions are automated via Conventional Commits; never bump versions manually.
-  - `release-please-config.json` tracks `package.json`, `Cargo.lock` (`@.name.value`), workspace member manifests, and `tauri.conf.json` files.
+  - `release-please-config.json` tracks `package.json`, `Cargo.lock` (`@.name.value`, one selector per workspace member), the root `Cargo.toml`'s `[workspace.package]` version (the members inherit it), and the two Tauri hosts' `tauri.conf.json` files.
   - The `Cargo.lock` selector must read `@.name.value`, never `@.name`, to prevent silent non-matches in release-please.
-  - Host tests (`the_core_wears_the_apps_version`, `the_host_wears_the_cores_version`) and `scripts/release-rule.test.mjs` (all four crates, both `tauri.conf.json`s) verify version alignment.
+  - Host tests (`the_core_wears_the_apps_version`, `the_host_wears_the_cores_version`) and `scripts/release-rule.test.mjs` (all five crates, both `tauri.conf.json`s) verify version alignment.
   - With `bump-minor-pre-major` enabled, breaking changes on `0.x` bump the minor version; releasing 1.0.0 requires a `Release-As: 1.0.0` commit footer.
 - **Assets & artifacts**:
   - Each build leg downloads the scanner hash bundle via `npm run scanner:assets` (published by `scanner-bundle.yml`).
@@ -124,4 +126,4 @@ For exhaustive live measurements, proof runs, and the historical evolution of ev
 - [`docs/reference/ci-and-releases.md`](../docs/reference/ci-and-releases.md) — Comprehensive record of pipeline measurements, routing test design, and release validations.
 - [`docs/reference/card-scanner.md`](../docs/reference/card-scanner.md) §10 — The scanner bundle workflow, asset publishing, and regression evaluation harness.
 - [`docs/reference/light-app.md`](../docs/reference/light-app.md) §8–§9 — Android build specifics, emulator first-run findings, and WebAssembly web host smoke test runs.
-- [`app-worker/README.md`](../app-worker/README.md) — Web application hosting Worker runbook, CSP headers verification, and deployment records.
+- [`infrastructure/app-worker/README.md`](../infrastructure/app-worker/README.md) — Web application hosting Worker runbook, CSP headers verification, and deployment records.

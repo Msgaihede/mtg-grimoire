@@ -287,7 +287,7 @@ pub async fn launch_downloads(state: Arc<State>) {
 /// Answer one command, as the JSON text the Worker parses — `{"ok": …}` or `{"err": "…"}`
 /// ([`wire::answer`]).
 ///
-/// `args` is JSON text: `null`, or the object `src/lib/ipc.ts` would have handed Tauri.
+/// `args` is JSON text: `null`, or the object `packages/ui/lib/ipc.ts` would have handed Tauri.
 /// **Every way this can go wrong is an `err`**: no state yet ([`NOT_OPEN`]), arguments that
 /// are not JSON, and whatever `grimoire_core::dispatch` refuses — a name the table does not
 /// have, arguments that do not fit, a raw body where none belongs.
@@ -374,7 +374,7 @@ const _: () = assert!(LABEL_ATTEMPTS > 8);
 /// it to the console and **rejects** with it, where no bytes is an answer. Answered as no
 /// bytes — as it was until the review of 2026-10-07 — a read that gave up was a session built
 /// without names and called done, with nothing to say the names were there to be had a moment
-/// later. The page's scanner keeps the two apart (`src/lib/core/web/scanner.ts`): it says the
+/// later. The page's scanner keeps the two apart (`packages/ui/lib/core/web/scanner.ts`): it says the
 /// sentence in its status and asks again when the status is next asked for.
 ///
 /// [`Breather`]: grimoire_core::platform::timer::Breather

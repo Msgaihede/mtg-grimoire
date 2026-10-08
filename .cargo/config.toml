@@ -1,23 +1,22 @@
-# Where cargo builds. One line, and it is here so that converting the repository to a cargo
-# workspace (2026-10-02, see the root `Cargo.toml`) moved nothing.
+# Where cargo builds: `<repository root>/target`, which is also cargo's default for a workspace.
+# The line is here because the default is not what a nested checkout gets.
 #
-# A workspace builds into `<workspace root>/target`. Left at that default, the app's dev
-# database would have moved with it — a debug build keeps `data/` beside its own executable, so
-# `src-tauri/target/debug/data` would have become `target/debug/data` in every checkout, each
-# one starting on an empty collection with gigabytes of stale artifacts left behind — along
-# with the portable-zip path `release.yml` reads, the coverage script's report, and every
-# reference doc and skill that names the folder.
+# **Cargo finds its config by walking up from the working directory, and the agent worktrees
+# are nested under the main checkout** (`.claude/worktrees/<name>/`). With no file here, a
+# worktree reads the main checkout's. Measured 2026-10-08, the day the build tree moved out of
+# `src-tauri/target`: this file had been deleted as redundant, the main checkout still carried
+# the old pin, and `cargo metadata` in the worktree answered `D:\Code\mtg-grimoire\src-tauri/target`
+# — the main checkout's tree. A debug build keeps `data/` beside its own executable, so that
+# worktree's app would have opened the main checkout's dev database. A file here is nearer than
+# one above it, and wins.
 #
 # Relative paths in this file resolve against the directory that holds `.cargo/`, so this is
-# `<repository root>/src-tauri/target` from wherever cargo is run.
+# `<repository root>/target` from wherever cargo is run.
 #
 # **It reaches every cargo run under the repository, which includes the standalone
 # `crates/card-scanner`** — cargo finds config files from the working directory, not from
 # `--manifest-path`. That package keeps its own tree: `crates/card-scanner/.cargo/config.toml`
 # answers a run started inside it, and every scripted run from the root (`npm run verify`,
 # `ci.yml`, `scanner-bundle.yml`) passes `--target-dir crates/card-scanner/target`.
-#
-# Moving the tree to the root later is deleting this file — and the sweep of everything that
-# names `src-tauri/target`, on an announced day, since every open branch's checkout rebuilds.
 [build]
-target-dir = "src-tauri/target"
+target-dir = "target"

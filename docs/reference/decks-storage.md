@@ -141,7 +141,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **The comparison is the only standing link between the lists**, and it matches cards, never
     piles (`deck_theory::theory_diff`); the two presses above match a pile at the press and keep
     nothing linked afterwards. The rung, the derived clone uids and the net for a group that
-    climbed unevenly: `src-tauri/CLAUDE.md`'s v53 entry.
+    climbed unevenly: `apps/desktop/src-tauri/CLAUDE.md`'s v53 entry.
 - **The grain is `deck_id, variant, category_id, card_id, coalesce(finish, '')`**
   (`schema::DECK_CARD_GRAIN`) — the
   same printing in two categories is two rows, added twice in one is one row with the sum, and
@@ -392,7 +392,7 @@ preferred_finish`'s nullability one table over.
   `sideboard_max`, `allows_companion`, `max_mana_value` and `enabled_in_picker` as columns. A
   rules change is a **new migration step re-running the seed constant**, never an engine
   branch, and a new format is a row. Never derive one format from another.
-- **Validation is TypeScript** (spec §3), in `src/features/decks/validation/`: `engine.ts`
+- **Validation is TypeScript** (spec §3), in `packages/ui/features/decks/validation/`: `engine.ts`
   (size, copy limits, restricted semantics, legality), `singleton.ts` (exact-phrase
   exceptions, re-derived from oracle text and never a card list), `commanders.ts`
   (eligibility, partners, colour identity), `companions.ts`, `bracket.ts` (advisory only —
@@ -527,7 +527,7 @@ preferred_finish`'s nullability one table over.
   **The decision is yes: owned attribution matches on the played finish**, and the rule is one
   function rather than a re-spelling per site. `deck::played_finish` — moved out of `deck_theory`,
   where #563 wrote it, to sit beside `normalise_finish` — is the deck row's stored finish, else the
-  printing's `deck::sole_finish` (`src/lib/finish.ts`' `playedFinish`, line for line), and
+  printing's `deck::sole_finish` (`packages/ui/lib/finish.ts`' `playedFinish`, line for line), and
   `deck::entry_finish` is the same answer in the collection's spelling. **It reads a collection
   row's `nonfoil` exactly as it reads a deck row's NULL**, because both are the regular copy's
   spelling on their table and a printing sold only in foil has no regular copy. That half is what
@@ -799,7 +799,7 @@ preferred_finish`'s nullability one table over.
   column and never will — it holds `kind` (one of `add|remove|quantity|move|swap|label|category|
 folder|deck`, `schema::AUDIT_KINDS`), `variant`, a soft `card_id`/`card_name`, a **JSON
   `payload`** (`CHECK (json_valid(payload))`) and a signed `delta` for the day header's roll-up.
-  `src/features/decks/auditText.ts` is the only thing that reads that payload, and it is the only
+  `packages/ui/features/decks/auditText.ts` is the only thing that reads that payload, and it is the only
   thing that words it — because a sentence is domain logic and this table has to survive the day
   the wording changes. Verified live 2026-08-11: a category move stored
   `{"from":"Main deck","to":"Ramp"}` with `card_name` `"Vampiric Tutor"` and `delta` 0, and the
@@ -1202,7 +1202,7 @@ behind` true rather than hoped for; `every_deck_write_leaves_exactly_one_audit_r
   **Rust stores the number and concludes nothing from it**, `AUTO_CATEGORY`'s rule exactly. The
   four facts an estimate reads are the crate's (`cards.game_changer`, oracle text, and the `combos`
   tables the same v26 rung created); the floor they become — a floor rather than a bracket, and
-  never 1 or 5 — is `src/features/decks/validation/bracket.ts`'s.
+  never 1 or 5 — is `packages/ui/features/decks/validation/bracket.ts`'s.
   [commander-brackets.md](commander-brackets.md) is the whole record.
 - **`decks.theory_mark_exact`, `decks.theory_mark_name` and `decks.theory_mark_unplanned` are
   which of the theory mark's three tiers this deck draws, and all three are on by default**
@@ -1488,7 +1488,7 @@ variant)`; `deck_missing_to_wishlist(deckId, folderId?)`, which reads `live` and
     label a stack clear as a list the reader never emptied. A row carrying no `scope` is a
     category clear and reads exactly as it always did. There is no `category` on this row because
     there was no category — it names the list instead, in the confirmation's own words, through
-    `src/features/decks/listNames.ts`.
+    `packages/ui/features/decks/listNames.ts`.
 - **`deck_import_commit(deckId, variant, mode, items)` is the third bulk card command. It existed
   for the allocator and outlives it.** Looping `deck_add_card` from the frontend would have run
   `allocate_deck` **once per line** — a hundred rebuilds of a deck's claims for one import, each
@@ -1639,8 +1639,8 @@ labels_it_made` is the proof that the reader's own labels are not swept with the
   card name should cost that one name, not the other hundred lines — the `U+FFFD` it leaves bears
   no card's name, so the damaged line comes back quoted in the preview while everything else
   resolves. A `from_utf8` would answer `Err` for the whole file and name no line.
-- **The TypeScript half decides everything a _deck_ decision is** (`src/features/transfer/import/`,
-  and its own [CLAUDE.md](../../src/features/transfer/CLAUDE.md) carries the binding rules): one
+- **The TypeScript half decides everything a _deck_ decision is** (`packages/ui/features/transfer/import/`,
+  and its own [CLAUDE.md](../../packages/ui/features/transfer/CLAUDE.md) carries the binding rules): one
   parser with per-line rules only, the pile from `autoCategoryFor`, the commander from
   `commanderIneligibility`. The one type that crosses for it is **`CardIdentity`, the card-level
   half of `CardFacts`** — everything true of a printing and nothing true only of a row in a deck —
@@ -1649,7 +1649,7 @@ labels_it_made` is the proof that the reader's own labels are not swept with the
   `quantity`, so a card in a deck is more than a card, and every existing caller passes a whole
   `DeckCard`, which satisfies a `Pick` of itself.
 - **The corpus the format work was designed against is three real exports of _one_ deck**, held
-  verbatim in `src/features/transfer/import/fixtures.ts`. **Most of this table is asserted rather than
+  verbatim in `packages/ui/features/transfer/import/fixtures.ts`. **Most of this table is asserted rather than
   remembered**: `parse.test.ts`'s `the format fixtures` block counts the rows, the card lines, the
   copies, the 17 first-entry `{noDeck}` lines and the decoration columns off the fixture **text**
   rather than off the parser's reading of it, so a tidied fixture is a failing assertion rather
@@ -1675,7 +1675,7 @@ labels_it_made` is the proof that the reader's own labels are not swept with the
   what makes preferring the bracket safe.
 
 - **What the TypeScript side learnt for those exports**, each rule with the failure behind it in
-  [the transfer feature's own CLAUDE.md](../../src/features/transfer/CLAUDE.md): four per-line decorations
+  [the transfer feature's own CLAUDE.md](../../packages/ui/features/transfer/CLAUDE.md): four per-line decorations
   (an **empty** `()` hint, an Archidekt `^Label,#colour^`, the `[Category]` bracket, the existing
   `*F*`) plus one heading rule that is **the only lookahead in the parser**; a bracket's first
   entry as the pile with `{flag}`s stripped, `{noDeck}` there meaning `is_active = 0` and `{noDeck}`
@@ -1688,7 +1688,7 @@ labels_it_made` is the proof that the reader's own labels are not swept with the
   `resolve_lines` sets `hint_missed` for a collector number with no set beside it without trying it
   at all, so `EMPTY_HINT_LIST` previews **33 hint misses** where it previewed 33 unresolved cards.
   That is the honest trade and the alternative was 33 cards nothing found.
-- **The export side is the mirror, and `src/features/transfer/decklists.test.ts` is what holds the
+- **The export side is the mirror, and `packages/ui/features/transfer/decklists.test.ts` is what holds the
   two writers and the parser to each other**: three real decklists crossed with every format
   (`plain · mtgo · arena · moxfield · archidekt · tcgplayer · csv`), driven text → planner →
   writer → parser, with **every readable format a fixed point** — export → import → export
@@ -1721,14 +1721,15 @@ labels_it_made` is the proof that the reader's own labels are not swept with the
   files.)*
 - **Driven in the shipped window 2026-08-12**, `npm run tauri dev` — so a **debug** build with
   Vite serving the frontend (`/src/main.tsx` in the page's script list, which is the cheap proof
-  that no stale embedded `dist/` is being measured), the live 116 695-card corpus, 1280×800.
+  that no stale embedded `dist/` is being measured — still `/src/main.tsx` since 2026-10-08, now
+  `apps/desktop/src/main.tsx`), the live 116 695-card corpus, 1280×800.
   The gallery path end to end: `Import deck` → paste `REFERENCE_LIST` → the box counts
   **105 lines · 117 cards** → name it and pick Commander → Preview → **117 cards · 6 categories**
   and **no problem list at all** → pick a commander → Import → the editor opens on the new deck.
   **That `6 categories` is the tally bug being measured, not the shipped behaviour**: the pile
   count was computed before the commander was chosen and never recomputed, so the same press
   today reads **7 categories** with a `Commander` row — see
-  [the transfer feature's own rules](../../src/features/transfer/CLAUDE.md) for the fix and the numbers.
+  [the transfer feature's own rules](../../packages/ui/features/transfer/CLAUDE.md) for the fix and the numbers.
   Read back through `deck_get`: **105 of 105 lines resolved** against the live corpus — 0
   unmatched, 0 hint misses, 0 parse issues — **105 rows carrying 117 copies**, and ten categories:
   the four `PREDEFINED_CATEGORIES` plus the six the import made (`Creature` 55, `Land` 38,
@@ -1971,7 +1972,7 @@ clientWidth` — so the tenth bar fitted the 250px content box with no overflow,
   row twice ([search-faceting.md](search-faceting.md)). Neither is a bug in the other. The pile
   sorts at 9, after `8 or more` and ahead of `unknown`, which moved to 10; the reasons, the
   `{Y}`/`{Z}` exclusion and the `useState`-versus-`deck.update` rule are the frontend's, in
-  [src/features/decks/CLAUDE.md](../../src/features/decks/CLAUDE.md).
+  [packages/ui/features/decks/CLAUDE.md](../../packages/ui/features/decks/CLAUDE.md).
 - **The curve's cells are 20px in both arms, and for one afternoon they were not.** The tenth bar
   arrived while the stats block was a **280px** aside beside the deck (`STATS_WIDTH_PX`, `w-70`)
   that drew its own scrollbar. 280 less `p-3.5` on both sides and a 1px border is **250px** of
@@ -2251,7 +2252,7 @@ below stays exactly as strict. What it says about these nine fences is that a re
 *backstop* rather than a design — a command that can only ever answer in words is one the near
 side should not be calling — and this is the one of the nine whose caller was a write rather than
 a readout, which is why a sweep for owned figures could not have found it. Full note:
-[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md)'s **Known open bugs**, which
+[`packages/ui/features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md)'s **Known open bugs**, which
 keeps the account rather than the entry.
 
 ### Where each fence sits, and why the order is the rule
@@ -2313,8 +2314,8 @@ the same reason.
 
 ### The near side, in one paragraph
 
-`src/features/decks/deckKind.ts` is the one place the pair is folded into a word — `DeckKind`,
-`deckKind`, `deckKindPatch`, `tracksCollection` — and `src/features/decks/CLAUDE.md` carries the
+`packages/ui/features/decks/deckKind.ts` is the one place the pair is folded into a word — `DeckKind`,
+`deckKind`, `deckKindPatch`, `tracksCollection` — and `packages/ui/features/decks/CLAUDE.md` carries the
 rules that bind it, including the trap this whole feature turns on: **`variant === "live"` no
 longer answers whether a deck reads the collection.** Ten or so surfaces used to ask it that way,
 and a virtual deck's rows are `live` rows on purpose, so every one of them needed a second fact
@@ -2856,7 +2857,7 @@ Three narrowings are worth naming because each is a decision rather than a filte
 **Rust ships the cost strings and TypeScript counts the pips**, which is this crate's
 facts/conclusions boundary applied to a colour bar. What a `{W/U}` is worth to a bar is a display
 decision — it counts as one pip of *each* half, because the bar answers *what does this deck
-want* rather than what will be spent — and it is decided in `src/lib/mana.ts`'s `addPips`, over
+want* rather than what will be spent — and it is decided in `packages/ui/lib/mana.ts`'s `addPips`, over
 the one `{…}` `SYMBOL` tokeniser this app already has. `cost` is `cards.mana_cost` verbatim,
 including the one-string form a split or double-faced card carries (`"{3}{U} // {3}{R}"`), and
 `copies` is `sum(quantity)` and not a row count, so four Lightning Bolts across two printings are
@@ -2939,7 +2940,7 @@ in it.
 **The one place it narrows `listview.rs` is the whole of what is worth writing down.** That
 module checks the word it is given against `LAYOUTS`, because a wall is drawn one of two ways and
 this build knows both. **This one checks nothing but emptiness**, because the words are
-`src/features/decks/deckSort.ts`' — six keys and two directions today, three of which are
+`packages/ui/features/decks/deckSort.ts`' — six keys and two directions today, three of which are
 computed on the TypeScript side and have no SQL counterpart to check against — and *a database
 outlives the app*. A key a later build stops offering, or one an earlier build has never heard
 of, has to degrade to the default **on the reading side**; refused at the write end it would be a
@@ -3129,7 +3130,7 @@ every Plot, Foretell and Adventure reminder, so the fix is narrower than that.
 - **Dungeons are listed too.** `is_listed_token`'s helper arm, and its SQL and TypeScript twins,
   also keep a face beginning `Dungeon`, so a dungeon can be picked from *All tokens* like
   The Initiative. A dungeon's line is never exactly `Card`.
-- The Storybook fake mirrors the table in `.storybook/fake/db.ts` (`TOKEN_MARKERS`).
+- The Storybook fake mirrors the table in `packages/fake/db.ts` (`TOKEN_MARKERS`).
 
 ### The grain is `(deck_id, oracle_id)`, and only deviations are written down
 
@@ -3324,8 +3325,8 @@ matching lines in `USER_SCHEMA_SQL`; an `UNDO_V<N>` for the rewind fixtures; `sc
 **both** the rung and `USER_SCHEMA_SQL`; `schema::SYNCED_TABLES`; a `capture::Spec`; and an
 `apply::Meta`. The three array lengths (`SYNCED_TABLES`, `capture::TABLES`, `apply::META`) move
 together, and they are the one part of the list a compile error catches. **It is twelve since
-v52's `deck_token_printings` counted them while landing**: the ten, plus `src/lib/userTables.json`
-(held to `schema::TABLES` by `changes.rs`) and `src/lib/crossWindow.ts`' `TABLE_KEYS` (held to that
+v52's `deck_token_printings` counted them while landing**: the ten, plus `packages/ui/lib/userTables.json`
+(held to `schema::TABLES` by `changes.rs`) and `packages/ui/lib/crossWindow.ts`' `TABLE_KEYS` (held to that
 file by `crossWindow.test.ts`), which any new *user* table owes, synced or not —
 [sync.md](sync.md) has the list.
 
@@ -3453,7 +3454,7 @@ went with it: no write is a triple now.
 - **The wire key for the state word was `state`, and the Tauri wrapper named its managed
   `AppState` `app` instead** — Tauri injects a `tauri::State` by its type and never by its name,
   which freed the name for the argument the page sent. Until v52 it was the other way round
-  (`tokenState` on the wire, `token_state` in Rust, and `src/lib/ipc.ts` the one place that knew
+  (`tokenState` on the wire, `token_state` in Rust, and `packages/ui/lib/ipc.ts` the one place that knew
   the rename); since v55 no command sends a state at all. `ipc.test.ts` pins every argument set
   against the crate's own parameter lists — it is the only fence that boundary has.
 - **Plain `sync::with_write` and never `with_write_owned`**, for all four writes. That one is for
@@ -3476,7 +3477,7 @@ went with it: no write is a triple now.
   would come back empty for every token in the game. **It still adds none at v52**, where the
   picker's grain became the printing *and* the finish: `card_printings` already answers each
   printing's `finishes` and `finishPrices`, and the page expands one printing into one tile per
-  finish (`src/features/decks/CLAUDE.md`). **`All tokens` added the one command it needed at v55**,
+  finish (`packages/ui/features/decks/CLAUDE.md`). **`All tokens` added the one command it needed at v55**,
   because no command listed tokens across the corpus: `card_printings` answers one oracle id, and
   `search_cards` has no layout predicate and hides tokens behind `playable_only`.
 
@@ -3907,7 +3908,7 @@ entry the list already holds at that grain rather than failing the launch on the
 printing gone from the corpus, or whose `finishes` says nothing, is left alone. It can touch
 nothing the reader chose, because the picker only offers a finish a printing is sold in.
 **Idempotent**, so every later launch costs one read that finds nothing; and **behind
-`capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device derives for itself —
+`capture::suppressed`**, `apps/desktop/src-tauri/CLAUDE.md`'s rule for a write every device derives for itself —
 whether a printing is foil-only is a fact of *this* device's corpus, and a captured fold would
 arrive on the other device as a second sum.
 ⚠️ **The entry keeps its row, and so its `sync_uid`.** The finish is rewritten **in place**
@@ -3964,7 +3965,7 @@ an ordinary token at 0, its printings kept.* `deck_tokens::retire_hidden`, per t
   meant a theory deck following `all` or `tokens` built its Tokens subfolder from a dismissed
   token's counts, which the pass then zeroed under it (the final review's M2,
   `the_launch_files_no_managed_token_wish_for_a_dismissal_it_retires`).
-- **Behind `capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device derives
+- **Behind `capture::suppressed`**, `apps/desktop/src-tauri/CLAUDE.md`'s rule for a write every device derives
   for itself: each device retires the same synced rows over the same corpus to the same answer, and
   an announced zero would reach a peer still on v54 as a count nobody set there.
 - **Idempotent, which is what an older peer's dismissal rests on.** A `hidden` that arrives by sync
@@ -4009,7 +4010,7 @@ six:
 | `collectorNumber` | its collector number |
 | `setName` | the set's name — the chin's hover, since the code is what fits |
 | `rarity` | Scryfall's word (`common`, `rare`, …) |
-| `finishes` | the JSON **text** `cards.finishes` holds (`["nonfoil","foil"]`) — `src/lib/finish.ts`' `parseFinishes` input, not a second shape |
+| `finishes` | the JSON **text** `cards.finishes` holds (`["nonfoil","foil"]`) — `packages/ui/lib/finish.ts`' `parseFinishes` input, not a second shape |
 | `unitPrice` | what one copy costs in the asked marketplace, or `null` |
 
 - **All six are `null` together when an entry's printing has left the corpus**, which is the
@@ -4041,7 +4042,7 @@ six:
   own heading (`tokenPileHeading` in `views/TokenPile.tsx`); `deck_values`, the ledger and every
   other pile's heading read `deck_cards` and cannot see a token.
 - **`DeckTokenRow` is `PartialEq` and no longer `Eq`**, because `unit_price` is an `f64`.
-- **`src/lib/ipc.ts` mirrors all six and `ipc.test.ts`'s struct table holds `DeckTokenRow`**, so
+- **`packages/ui/lib/ipc.ts` mirrors all six and `ipc.test.ts`'s struct table holds `DeckTokenRow`**, so
   the two sides cannot drift field for field, and its `deck_tokens` case pins the three argument
   names.
 - **The page puts the marketplace in the query key** (`["decks", "tokens", deckId, variant,
@@ -4221,7 +4222,7 @@ because `main` shipped its own v50 first — `price_snapshots.copies`. It rides
   Ctrl+Z assertion.
 - **How the page spends it** — Stacks' drag and grip, Grid and Text inserting the pile at that
   place, Table not spending it at all, and the optimistic move — is
-  [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md)'s *Tokens & Emblems*.
+  [`packages/ui/features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md)'s *Tokens & Emblems*.
 
 ### `decks.curve_creatures`, the Mana curve's creature split
 
@@ -4468,7 +4469,7 @@ the read had moved is the one number that did not.
 **`deck.rs`'s `IMAGE_COL` is gone since 2026-09-27**, with the image tail it pointed at and every
 list DTO's `imageUris`, so each `IMAGE_COL` figure this page records for `DECK_SELECT` is a rung's
 history rather than a constant to read. The statements that still append
-`image_uri::front_face_selects` declare their own, and `grep -rn "const IMAGE_COL" src-tauri/src/`
+`image_uri::front_face_selects` declare their own, and `grep -rn "const IMAGE_COL" apps/desktop/src-tauri/src/`
 is the census.
 
 ### The eight commands

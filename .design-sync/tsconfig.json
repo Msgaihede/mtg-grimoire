@@ -20,12 +20,12 @@
   "compilerOptions": {
     "baseUrl": ".",
     "paths": {
-      "@tauri-apps/api/core": ["../.storybook/fake/core.ts"],
-      "@tauri-apps/api/event": ["../.storybook/fake/event.ts"],
-      "@tauri-apps/api/window": ["../.storybook/fake/window.ts"],
-      "@/lib/images": ["../.storybook/fake/images.ts"],
+      "@tauri-apps/api/core": ["../packages/fake/core.ts"],
+      "@tauri-apps/api/event": ["../packages/fake/event.ts"],
+      "@tauri-apps/api/window": ["../packages/fake/window.ts"],
+      "@/lib/images": ["../packages/fake/images.ts"],
       "@/lib/core": ["./core-shim.ts"],
-      "@/*": ["../src/*"]
+      "@/*": ["../packages/ui/*"]
     }
   }
 }

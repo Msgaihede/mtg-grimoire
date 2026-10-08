@@ -4,8 +4,8 @@
 import { describe, expect, it } from "vitest";
 import { declaredFormat, formatOf, ORIGIN, policyOf, problems } from "./web-deploy-probe.mjs";
 import indexRs from "../crates/card-scanner/src/index.rs?raw";
-import headers from "../app-worker/_headers?raw";
-import wrangler from "../app-worker/wrangler.jsonc?raw";
+import headers from "../infrastructure/app-worker/_headers?raw";
+import wrangler from "../infrastructure/app-worker/wrangler.jsonc?raw";
 
 describe("policyOf", () => {
   it("reads the policy the real `_headers` sends with the document", () => {

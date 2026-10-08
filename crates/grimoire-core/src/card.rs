@@ -176,7 +176,7 @@ pub struct CardDetail {
     ///
     /// `finishes` says how shiny a copy is and has only three words for it; this says whether
     /// the shiny one is a Surge Foil, a Halo Foil or a Serialized card. Handed over unread —
-    /// naming these is a judgement and CLAUDE.md puts those in TypeScript, so `src/lib/
+    /// naming these is a judgement and CLAUDE.md puts those in TypeScript, so `packages/ui/lib/
     /// treatment.ts` owns the table and this column is copied the way `legalities` is.
     ///
     /// Open-ended by construction: 113 distinct members are live and Scryfall adds more without
@@ -208,7 +208,7 @@ pub struct Printing {
     pub finish_prices: FinishPrices,
     pub promo: bool,
     /// JSON, verbatim — the **kind** of foil this printing's shiny copy is. See the identical
-    /// field on [`CardDetail`]; read on the other side with `src/lib/treatment.ts`.
+    /// field on [`CardDetail`]; read on the other side with `packages/ui/lib/treatment.ts`.
     ///
     /// Distinct from [`Self::promo`] despite the name they share: that is a boolean about how
     /// the card was *distributed*, this is a list of what the cardboard *is*. 5 428 of 107 355
@@ -857,7 +857,7 @@ pub fn holdings(conn: &Connection, oracle_id: &str) -> Result<CardHoldings, Stri
 
 /// Every way the card pane groups its printings list, in the order the picker offers them.
 ///
-/// The mirror of the `PrintingGroupBy` union in `src/features/card/printings.ts`, and
+/// The mirror of the `PrintingGroupBy` union in `packages/ui/features/card/printings.ts`, and
 /// deliberately a flat list of strings rather than an enum with headings and orderings: what a
 /// mode *means* — which key the rows bucket on, what a group's heading reads, how the buckets
 /// are ordered against each other — is domain logic, and this module's own header is the rule
@@ -871,7 +871,7 @@ pub const PRINTING_GROUP_BY_MODES: [&str; 4] = ["artist", "released", "price", "
 /// returns, and what a reader opening *All printings* expects to scan. It was `artist` until
 /// then, the pane's pre-selector folding. Only an absent or unreadable row falls back here, so a
 /// reader who picked a mode keeps it. `DEFAULT_PRINTING_GROUP_BY` in
-/// `src/features/card/printings.ts` must name the same mode.
+/// `packages/ui/features/card/printings.ts` must name the same mode.
 pub const DEFAULT_PRINTING_GROUP_BY: &str = "released";
 
 /// The `app_meta` key.
@@ -1028,7 +1028,7 @@ mod tests {
     /// **Both reads of `cards` carry `promo_types` through, at the position each SELECT put
     /// it.** Issue #160: `finishes` has three words for how shiny a copy is and none for
     /// *which* shiny, so a Surge Foil and an ordinary foil were one glyph with one word behind
-    /// it. The naming is TypeScript's (`src/lib/treatment.ts`); this is the fact reaching it.
+    /// it. The naming is TypeScript's (`packages/ui/lib/treatment.ts`); this is the fact reaching it.
     ///
     /// Worth a test of its own rather than leaning on the two camelCase pins, which serialise a
     /// hand-built struct and never run the SQL. Both statements are read **positionally**, and
@@ -1519,7 +1519,7 @@ mod tests {
         assert!(parse_faces(Some(r#"{"name":"an object, not an array"}"#)).is_empty());
     }
 
-    /// `src/lib/ipc.ts` mirrors these names by hand and nothing checks that the two still
+    /// `packages/ui/lib/ipc.ts` mirrors these names by hand and nothing checks that the two still
     /// agree — a `rename_all` lost in a refactor turns every field of the detail pane into
     /// an `undefined` TypeScript is perfectly happy with, and the pane renders blank
     /// instead of failing. Compared as one whole value, so a field *added* on this side and

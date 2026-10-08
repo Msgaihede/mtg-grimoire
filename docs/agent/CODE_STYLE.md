@@ -20,7 +20,7 @@ mtg-grimoire repository.
 - **TypeScript** (`tsconfig.json`):
   - `strict: true`
   - `noUnusedLocals: true`, `noUnusedParameters: true`, `noFallthroughCasesInSwitch: true`
-  - Path alias: `@/*` maps to `./src/*`
+  - Path alias: `@/*` maps to `./packages/ui/*`
   - **No `@types/node` in webview packages**: `"types": []`. The browser/webview environment has no
     ambient `process` or `Buffer`, and `setTimeout` returns `number` (not `NodeJS.Timeout`).
   - Error chaining: `lib` includes `ES2022.Error` to allow `throw new Error(msg, { cause })`.
@@ -34,7 +34,7 @@ mtg-grimoire repository.
 ### Verification command
 - Run `npm run verify` at the end of a feature before committing (not after each intermediate change, to minimize re-fixing). It executes:
   1. Frontend build (`npm run build`)
-  2. Mobile Vite build (`vite build --config vite.mobile.config.ts`)
+  2. Mobile Vite build (`vite build --config apps/light/vite.config.ts`)
   3. Frontend lint (`npm run lint`)
   4. Rust lint (`npm run lint:rust`: fmt check + clippy -D warnings + cargo check)
   5. Vitest suite (`npm run test:run`)
@@ -47,7 +47,7 @@ mtg-grimoire repository.
 - **Components**: `PascalCase.tsx` (e.g. `CardImage.tsx`, `NoteEditor.tsx`).
 - **Hooks**: `useCamelCase.ts` (e.g. `useCardSelection.ts`, `useImageRetry.ts`).
 - **Utilities & Domain modules**: `camelCase.ts` (e.g. `marketplace.ts`, `folderOrder.ts`).
-- **Feature folders**: Grouped in `src/features/<feature>/` (e.g. `decks`, `transfer`, `collection`).
+- **Feature folders**: Grouped in `packages/ui/features/<feature>/` (e.g. `decks`, `transfer`, `collection`).
 - **Tests**: Colocated alongside the source file: `<name>.test.ts` or `<name>.test.tsx`.
 - **Imports**: Prefer `@/*` aliases over deep relative paths (`../../..`).
 
@@ -55,10 +55,10 @@ mtg-grimoire repository.
 - **Crates**:
   - `crates/grimoire-core`: Headless domain logic, SQLite storage, migrations, Scryfall client,
     search. Independent of Tauri/GUI windows. Compiles to native and WASM.
-  - `src-tauri`: Desktop application host, Tauri window lifecycle, updater, and `#[tauri::command]`
+  - `apps/desktop/src-tauri`: Desktop application host, Tauri window lifecycle, updater, and `#[tauri::command]`
     IPC handlers.
   - `crates/grimoire-web`: Web WASM target host.
-  - `mobile/src-tauri`: Android light app host.
+  - `apps/light/src-tauri`: Android light app host.
   - `crates/card-scanner`: OCR and optical card detection.
 - **Module files**: Standard Rust `snake_case.rs` and `module/mod.rs` conventions.
 - **Tests**: Colocated `#[cfg(test)] mod tests { ... }` modules inside the source files.
@@ -68,14 +68,14 @@ mtg-grimoire repository.
 - **Rust supplies facts, TypeScript draws conclusions**: Rust owns data plumbing (SQLite, FTS5,
   ingest, image cache); TS owns domain validation (deck formats, import/export parsing).
 - **IPC Types**: Rust structs exposed to the frontend use `#[serde(rename_all = "camelCase")]`.
-- **Type Mirroring**: `src/lib/ipc.ts` is the hand-written TypeScript mirror of Rust IPC structs and
+- **Type Mirroring**: `packages/ui/lib/ipc.ts` is the hand-written TypeScript mirror of Rust IPC structs and
   command signatures.
-- **IPC Drift Fence**: `src/lib/ipc.test.ts` validates TypeScript interfaces and command names
+- **IPC Drift Fence**: `packages/ui/lib/ipc.test.ts` validates TypeScript interfaces and command names
   against the Rust source text to ensure types stay synchronized.
 
 ## React & UI Guidelines
 
-- **Design System & Tailwind**: Built on Tailwind CSS and Radix/shadcn components (`components.json`),
+- **Design System & Tailwind**: Built on Tailwind CSS and Radix/shadcn components (`packages/ui/components.json`),
   styled using `cn(...)` (`clsx` + `tailwind-merge`).
 - **Storybook**: Stories live in `.storybook/` and feature folders. Use the Storybook MCP tools
   (`mtg-grimoire-sb-mcp`) to inspect existing components and properties before writing new UI.

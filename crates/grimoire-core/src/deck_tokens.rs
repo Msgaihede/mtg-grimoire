@@ -50,7 +50,7 @@
 //! # The boundary
 //!
 //! Rust supplies *facts* and TypeScript draws *conclusions*, the crate root's rule. Which rows the
-//! stacks draw and what order the wall is in are `src/features/decks/deckTokens.ts`'s; a `hidden`
+//! stacks draw and what order the wall is in are `packages/ui/features/decks/deckTokens.ts`'s; a `hidden`
 //! row is answered here like any other — and since user schema v55 nothing hides one:
 //! [`retire_hidden`] turns every dismissal back into an ordinary token at launch. **What an implicit entry *is* is answered
 //! here and not there**, since v52, because a write has to be able to materialise it (rule 2) and
@@ -376,7 +376,7 @@ pub struct DeckTokenRow {
     /// This entry's printing's rarity, Scryfall's word (`common`, `rare`, …).
     pub rarity: Option<String>,
     /// This entry's printing's finishes, as the JSON text `cards.finishes` holds
-    /// (`["nonfoil","foil"]`) — `src/lib/finish.ts`' `parseFinishes` input, not a second shape.
+    /// (`["nonfoil","foil"]`) — `packages/ui/lib/finish.ts`' `parseFinishes` input, not a second shape.
     /// What the picker offers; [`Self::finish`] is what this entry is.
     pub finishes: Option<String>,
     /// What one copy of this entry costs in the asked marketplace **at [`Self::finish`]**
@@ -2757,7 +2757,7 @@ fn convert_pick_in(
 /// it, so walked in each device's own row order two devices could keep the entry under two names,
 /// and each would then hold a row the other's edits cannot find.
 ///
-/// **Behind `capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device
+/// **Behind `capture::suppressed`**, `apps/desktop/src-tauri/CLAUDE.md`'s rule for a write every device
 /// derives for itself: whether a printing is foil-only is a fact of *this* device's corpus, each
 /// device repairs its own rows, and a captured fold would arrive on the other device as a second
 /// sum. `the_finish_repair_keeps_the_entrys_uid_and_a_later_step_is_captured` is the paired
@@ -2874,7 +2874,7 @@ pub fn repair_entry_finishes(conn: &Connection) -> Result<(), String> {
 /// [`reconcile_dirty_logged`] and the managed wishlist's settle — so the first v55 launch settles
 /// each theory deck's managed wishlist on the zeroed counts rather than before them.
 ///
-/// **Behind `capture::suppressed`**, `src-tauri/CLAUDE.md`'s rule for a write every device
+/// **Behind `capture::suppressed`**, `apps/desktop/src-tauri/CLAUDE.md`'s rule for a write every device
 /// derives for itself: each device retires the same synced rows over the same corpus to the same
 /// answer, so there is nothing to announce — and an announced zero would reach a peer still on
 /// v54 as a count nobody set there. The entries are rewritten **in place**, for
@@ -7723,7 +7723,7 @@ mod tests {
 
     // ── The wire ─────────────────────────────────────────────────────────────────────
 
-    /// The keys `src/lib/ipc.ts` reads, and the two value shapes that cannot be checked by a
+    /// The keys `packages/ui/lib/ipc.ts` reads, and the two value shapes that cannot be checked by a
     /// name-for-name mirror: `colors` is a **concatenated letter string** (`""`, `"W"`,
     /// `"BGRUW"`) the way `cards.colors` is stored, and `power`/`toughness` are **strings**,
     /// because there is a real `*/*` Elemental in the corpus and nothing to parse.

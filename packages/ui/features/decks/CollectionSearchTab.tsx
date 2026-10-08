@@ -1,0 +1,843 @@
+import { useCallback, useMemo, useState } from "react";
+import { Plus } from "lucide-react";
+import { AnimatePresence, motion } from "motion/react";
+import { OwnedBadge } from "@/components/OwnedBadge";
+import { useTooltip } from "@/components/tooltip/useTooltip";
+import { CardGrid } from "@/features/search/CardGrid";
+import { FilterBar, type TrayCell } from "@/features/search/FilterBar";
+import type { FormatFilterOption } from "@/features/search/useCardSearch";
+import { COLLECTION_SORTS } from "@/features/collection/useCollection";
+import { sortOptions } from "@/lib/options";
+import { CONDITION_LABEL, type Condition } from "@/lib/conditions";
+import { plural } from "@/lib/counts";
+import { FINISH_LABEL, type Finish } from "@/lib/finish";
+import { ipcError, type CollectionRow, type DeckCategory, type DeckPile } from "@/lib/ipc";
+import { statusLine } from "@/lib/motion";
+import { formatPrice, pricesAsOf } from "@/lib/prices";
+import { useAppStore } from "@/lib/store";
+import { tileKeyOf } from "@/lib/tileKey";
+import { cn } from "@/lib/utils";
+import { ADD_BUTTON } from "./addButton";
+import { AUTO_CATEGORY, autoCategoryIfKnown, UNNAMED_PILE_TIP } from "./autoCategory";
+import { foldCopies, type CopyTile } from "./collectionTiles";
+import type { DragPayload } from "./dnd";
+import { CONFIRM_CANCEL, CONFIRM_DESTRUCTIVE, useConfirmFocus } from "./metaRows";
+import { useCollectionSearch, type PlayState } from "./useCollectionSearch";
+import { useWallOracleTags } from "./useWallOracleTags";
+
+/**
+ * How wide a tile is at 100 %, in px.
+ *
+ * `DeckSearchPanel`'s `TILE_BASE` for the card-search tab, spelled again here rather than
+ * imported across, because the two tabs are two components and the shared value is the *panel's*
+ * — see the note on the tab strip. Both walls also pass `zoomSection="deckSearch"`, so the reader
+ * sizes this column once and gets that size on whichever tab they are on.
+ */
+const TILE_BASE = 150;
+
+/**
+ * Which of `FilterBar`'s tray cells this tab offers, and the three absences are each a fact about
+ * a collection rather than a shortcut.
+ *
+ * - **No `owned`** — every row here is a copy the reader has. A filter whose two states select the
+ *   same list is a control that reads as broken.
+ * - **No `printings`** — that switch asks whether to fold a card's printings together, and these
+ *   *are* the reader's printings. Folding them would hide which piece of cardboard is being moved.
+ *   ({@link foldCopies} folds a printing's *conditions and folders* together, which is a different
+ *   question and one the reader cannot get wrong: a tile's press picks the copy. The **finish** is
+ *   not folded — a foil and a played nonfoil are two objects at two prices, and two tiles.)
+ * - **`decks` in their place**, which is the one cell no other surface has and the whole of what
+ *   this tab is for. See `FilterBar`'s own note on it.
+ *
+ * `set`, `format`, `rarity`, `type`, `border` and `price` are the card search's, drawn here over
+ * the reader's own binder — the filters ride the wire as `CardFilters` (`CollectionQuery extends
+ * CardFilters`), a copy has its printing's frame, and the band is `collection::scope`'s, banding
+ * the copy's own finish rather than the printing's fallback chain.
+ *
+ * **`finish` is the collection page's and not the card search's** (issue #573): it asks which
+ * finish this copy *is*, the question a reader filing a foil into a deck is asking, where the card
+ * search's Finish cell asks what the printing was published in. Last, after the printing cells, as
+ * it is on the collection page.
+ */
+const COLLECTION_TRAY: readonly TrayCell[] = [
+  "set",
+  "format",
+  "decks",
+  "rarity",
+  "type",
+  "border",
+  "price",
+  "finish",
+];
+
+/**
+ * The orders this column can act on, alphabetically by the word on screen.
+ *
+ * **No pinned row, where the card search pins `Best match`.** There are no sortable headers here
+ * to build a `Custom…` state out of — that option exists on the collection page because its
+ * table's headers write the same state from the other end — and this list has no ranking to fall
+ * back to: every value `sortSelection` can hold is one of these options, and the empty sort spec
+ * reports as `name`, which is the row it really means.
+ */
+const COLLECTION_SORT_ROWS = sortOptions(COLLECTION_SORTS, (s) => s.label);
+
+/**
+ * What this tab calls its search box, and the `id` stem its labels bind through.
+ *
+ * **`Search your collection`, never `Search cards`** — the box beside it on the other tab is over
+ * every printing Scryfall has published and this one is over the reader's own binder, so one name
+ * on both would be the control lying about which list it narrows and a `getByLabelText` that
+ * cannot tell the two apart. The words are the ones this tab drew before it shared `FilterBar`.
+ *
+ * The stem keeps the two rows' `id`s apart. Only one is mounted at a time — the panel's tabs are
+ * two components — so it is a fence rather than a fix, which is the right time to build one.
+ */
+const COLLECTION_LABELS = { idStem: "deck-collection", search: "Search your collection" };
+
+/**
+ * As much of a row as the naming below reads, **with every field optional**.
+ *
+ * The optionality is the point rather than a convenience: `CollectionRow` types these as present,
+ * and a type is a claim about the wire rather than a guarantee about the object in hand. Writing
+ * the narrower shape down is also what says which fields naming a copy is allowed to depend on.
+ */
+type PartialCopy = Partial<
+  Pick<CollectionRow, "name" | "setCode" | "collectorNumber" | "finish" | "condition">
+>;
+
+/**
+ * What a row says about **which copy** it is: the printing, its finish and its grade — each left
+ * out where the row does not carry it.
+ *
+ * **Every one of these is the entry's own column and none is joined from `cards`**, which is why
+ * they are the facts an orphan — a copy whose printing has left the card database — still has:
+ * they are denormalised onto the row at write time for exactly that. So a row missing one is a row
+ * missing something the schema says is there, and the honest answer is to say the rest rather than
+ * to invent a placeholder for it.
+ *
+ * **Reading them defensively is not only about a stub.** `row.setCode.toUpperCase()` threw during
+ * render until 2026-08-23, and this is the tab the panel *opens* on — so one unexpected row was
+ * the whole deck editor rather than one line.
+ *
+ * **A grade the reader never stated is a fact and is said**, so `Not set` joins the list the way
+ * any other grade does — `CollectionTable`'s cell drops it and this does not, which is one rule at
+ * two grains rather than a disagreement (`PickCopies.tsx`'s `copyFace` has it in full). The
+ * absence this function drops is a column that is *missing*, and the sentinel is a column that
+ * says something.
+ */
+function copyFacts(row: PartialCopy): string[] {
+  const printing = [row.setCode?.toUpperCase(), row.collectorNumber].filter(Boolean).join(" ");
+  const finish = row.finish ? (FINISH_LABEL[row.finish as Finish] ?? row.finish) : null;
+  const condition = row.condition
+    ? (CONDITION_LABEL[row.condition as Condition] ?? row.condition)
+    : null;
+  return [printing, finish, condition].filter((fact): fact is string => Boolean(fact));
+}
+
+/**
+ * The copy a press is about, named the way a press has to name it.
+ *
+ * The wall's grain is the printing, so two tiles never differ only in a parenthesis the way the
+ * list this replaced did — but the **button** still names the copy rather than the tile, because
+ * what it moves is one entry with a finish, a grade and a place, and that is the half of the press
+ * a wall of art cannot draw.
+ *
+ * The parenthesis is dropped **whole** where there is nothing to put in it rather than drawn
+ * empty: "Unknown card ()" reads as a rendering fault, where "Unknown card" reads as a row about a
+ * card nothing knows the name of.
+ */
+function copyLabel(name: string, row: PartialCopy): string {
+  const facts = copyFacts(row);
+  return facts.length > 0 ? `${name} (${facts.join(", ")})` : name;
+}
+
+/**
+ * Where one press files, and what the button may call it.
+ *
+ * Two fields because they are two questions that usually have one answer and sometimes have none:
+ * {@link name} is the word on the button and in the confirmation, {@link pile} is what the write
+ * is addressed with. Both are `null` together, for a card whose pile the rule cannot name yet —
+ * the press is still made, and `useCollectionSearch`'s `move` reads the rule's answer then.
+ */
+export interface Landing {
+  name: string | null;
+  pile: DeckPile | null;
+}
+
+/**
+ * Which pile a press on this tile files into — **decided before the press and named on the
+ * button**, which is the promise the card-search tab's Add button already makes.
+ *
+ * Two steps. A named `targetCategoryId` the deck actually carries is the deck setting and is used
+ * as it stands, by id. Otherwise it is the app's one filing rule — `autoCategoryFor`, over the
+ * card's Oracle tags and then its type line — and the pile goes by **name**, for
+ * `collection_to_deck` to find or make inside the move's own transaction.
+ *
+ * **There was a third step until 2026-10-04, and it was the bug.** The rule was asked with the
+ * type line alone, its answer was matched against the piles the deck *already had*, and a miss
+ * fell back to "the deck's main pile" — written as the first `main`-kind category, while
+ * `collection_to_deck` took only an id and there was none to send for a pile that did not exist.
+ * A deck filed by function has a dozen `main`-kind piles and no pile called `Artifact`, so the
+ * button read `Add Sol Ring … to Lifegain` and the copy went there: a true label over the wrong
+ * pile, on the tab the panel opens on, while the tab beside it named `Sorcery` and filed under
+ * Ramp. The command has taken a name since 2026-08-23; the fallback outlived its reason.
+ *
+ * **`oracleTags` is `undefined` for a card whose tags are not in hand** — the wall's read is
+ * still out, or was refused — and the answer then names nothing (`autoCategoryIfKnown`), except a
+ * land, which no tag can move.
+ */
+export function landingCategory(
+  categories: readonly DeckCategory[],
+  targetCategoryId: number,
+  row: Pick<CollectionRow, "typeLine">,
+  oracleTags: readonly string[] | undefined,
+): Landing {
+  // **An id the deck's `categories` does not carry reads as `AUTO_CATEGORY`** — this folder's
+  // `CLAUDE.md`, and it is a *read* rather than the repairing write an old clamp used to be:
+  // `deck_category_delete` puts the deck row back to `0` itself, so what is left is the one commit
+  // where the deck row and the category list disagree, and Auto is where the deck already is.
+  const named =
+    targetCategoryId === AUTO_CATEGORY
+      ? undefined
+      : categories.find((c) => c.id === targetCategoryId);
+  if (named) return { name: named.name, pile: { id: named.id } };
+  const name = autoCategoryIfKnown({ typeLine: row.typeLine, oracleTags });
+  return { name, pile: name === null ? null : { name } };
+}
+
+/**
+ * The reader's own binder, in the column beside the deck — **the tab this panel opens on**, and
+ * the first thing in the app to call `collection_to_deck`.
+ *
+ * ## It is the card search's wall, over the collection
+ *
+ * Until 2026-08-24 this was a list of text rows, on the argument that a wall of art answers "which
+ * card" while this tab has to answer "**which copy**": the grain was the printing, its finish, its
+ * condition and the folder it sat in, and the last of those decides whether pressing Add costs
+ * another deck a card. The argument was sound and the conclusion was wrong, for a reason no amount
+ * of reasoning about grain reaches — **a reader picks a card by looking at it**. Two searches an
+ * inch apart, one a wall of illustrations and one a column of 11px type, read as two different
+ * applications rather than as two scopes of one search, and the tab this panel *opens* on was the
+ * one that did not look like the app.
+ *
+ * So the wall is `CardGrid` — the same component, the same zoom section, the same tile — and the
+ * grain question is answered where it can be answered without a picture: {@link foldCopies} folds
+ * the copies of a printing **in one finish** into one tile and **{@link pickCopy} chooses which of
+ * them a press moves**, desk before deck, real card before proxy, oldest entry first. What the
+ * reader loses is picking between two copies they hold; what they keep is the guarantee that
+ * mattered, which is that a copy another deck is holding is never taken silently.
+ *
+ * **The finish is not folded away, since 2026-08-26**: a foil and a played nonfoil of one printing
+ * are two objects at two prices sharing only a set and a number, so they are two tiles — and the
+ * chin under each can then quote its own money. The collection page's wall splits on the same
+ * pair; two drawings of one collection that disagreed about what a tile *is* would be exactly the
+ * drift the shared `CardGrid` exists to remove.
+ *
+ * ## Why it draws `FilterBar` (2026-08-25)
+ *
+ * It did not, for two days, and the reason was a type: `FilterBar`'s prop was a `CardSearch` —
+ * `ReturnType<typeof useCardSearch>` — and that hook *is* a `search_cards` with no `enabled` to
+ * switch it off, so reaching for the component would have run the 116 k-row card search for every
+ * reader who never leaves their binder. That is the exact cost `DeckSearchPanel`'s two-component
+ * split exists to have removed, and it is still removed: the hook here is
+ * {@link useCollectionSearch} and nothing on this tab touches the card search.
+ *
+ * What was wrong was the *fence*, not the conclusion. The row this drew instead was built out of
+ * `@/components/FilterChips` the sanctioned way — which is still the right module boundary, and is
+ * still how `PrintingsFilterBar` is built — but it was the same arrangement of the same controls
+ * as the tab next to it, written twice, and a reader switching tabs met two different filter rows.
+ * `FilterBar`'s prop is a structural `FilterSurface` now, which both hooks satisfy, so the two tabs
+ * are one control over two backends. {@link COLLECTION_TRAY} is where this tab says which of its
+ * cells it offers.
+ *
+ * ## It is assign-only (2026-09-03, [#358](https://github.com/Msgaihede/mtg-grimoire/issues/358))
+ *
+ * Pressing Add here files copies into the deck's **collection group** and writes the `deck_cards`
+ * row in one transaction, which for a card the deck does not play meant putting cardboard into a
+ * deck folder for a card that deck has never played — a folder that is meant to be the physical
+ * ledger of where the reader's cards *are* recording a card the list does not name.
+ *
+ * So this tab answers one question: **which copies I own back this deck's list**. Adding a card the
+ * deck does not play is the **Card search** tab beside it, one press away, and the refusal names
+ * that route. A tile for such a card is drawn **greyed rather than left out**, because the reader
+ * can see the card in their binder and a tile that vanished under a search that found it reads as
+ * the search losing rows. {@link PlayState} carries the shape of the fence and why it is a second
+ * axis rather than a fourth `CopySource`; `collection_alloc::NOT_IN_DECK` is the fence itself, and
+ * the greying is that refusal said early.
+ */
+export function CollectionSearchTab({
+  categories,
+  deckId,
+  targetCategoryId,
+  defaultFormat,
+}: {
+  /** The open deck's piles — where a copy may land. */
+  categories: readonly DeckCategory[];
+  /**
+   * The deck the copies move **into** — what `collection_to_deck` is addressed with.
+   *
+   * **The editor's own id, threaded through the panel**, and it replaces a working inference:
+   * this read `categories[0]?.deckId` for a day, on the true observations that every category of
+   * one deck carries the same id and that `deck_create` seeds four piles in the deck's own
+   * transaction. What was wrong with it is not that it answered incorrectly — it is that a list
+   * of *piles* is a different fact from *which deck this is*, so an empty list (a story, a query
+   * that has not landed) silently turned the write off instead of being a state nobody has to
+   * think about. The fact was in hand one component up the whole time.
+   */
+  deckId: number;
+  /** The deck's `default_category_id` — {@link AUTO_CATEGORY} for "by what the card does". See
+   *  {@link landingCategory}, which resolves it the way every other add in the app does. */
+  targetCategoryId: number;
+  /** The format the wall opens on — the deck's, already fenced by `spec.hasLegalityData` in
+   *  `DeckEditor`. A default and never a constraint. */
+  defaultFormat?: FormatFilterOption | null;
+}) {
+  const tip = useTooltip();
+  const search = useCollectionSearch({ deckId, defaultFormat });
+  const { query, rows, move, sourceOf, playStateOf, marketplace } = search;
+
+  /**
+   * Read here rather than handed down: the root's own `selectedCardId` is for the caret effect,
+   * and this is the wall's selection. One field, two subscriptions, no round trip either side.
+   */
+  const selectedCardId = useAppStore((s) => s.selectedCardId);
+  /**
+   * The finish the pane was opened as — the other half of which **tile** is the open one.
+   *
+   * A tile here is a printing *and* a finish, so the card id alone names two of them and the ring
+   * would be on both. Read beside `selectedCardId` and joined with it by {@link tileKeyOf}.
+   */
+  const paneFinish = useAppStore((s) => s.paneFinish);
+  /**
+   * **`openCardFromDeckSearch`, not `setSelectedCardId`** — the one write in the app that says a
+   * card was opened from *this* column, so the editor draws the card pane over the **deck**
+   * attached to this column's left edge rather than over the search itself (issue #183). The
+   * card-search tab beside this one has always done it; a wall that covered its own results when
+   * you pressed a tile would be the same failure on the other tab.
+   *
+   * **It carries the finish since 2026-08-26**, which is why it is that opener widened rather than
+   * `openCardAsFinish` borrowed: the second sets `paneFromDeckSearch: false` and would draw the
+   * pane over this very column. The two facts are written in one `set`, so the pane can never be
+   * told it came from here as one finish and from somewhere else as another.
+   */
+  const selectCard = useAppStore((s) => s.openCardFromDeckSearch);
+
+  /**
+   * The printing whose copies are all in **other decks**, waiting on an answer — `null` when
+   * nothing is being asked.
+   *
+   * One at a time, by construction: a second press replaces the question rather than opening a
+   * second one, which is the context menu's rule and the right one here for the same reason. The
+   * tile itself rather than its id, so the question can quote the copy and the deck without
+   * looking either back up in a list the answer is about to change.
+   */
+  const [asking, setAsking] = useState<CopyTile | null>(null);
+
+  /**
+   * What the last move took, and from where — `MoveOutcome.fromDeck` and `.quantity`, read rather
+   * than assumed.
+   *
+   * The deck it came out of is the one thing about this press the reader cannot see for
+   * themselves, because they are looking at the deck it went *into*. `quantity` is the number that
+   * actually moved, which is not always the one that was asked for.
+   */
+  const took = move.data?.fromDeck ? move.data : null;
+
+  const failure = move.isError ? ipcError(move.error) : null;
+  const listFailure = query.isError ? ipcError(query.error) : null;
+
+  /**
+   * The wall's rows — every copy folded to one tile per printing.
+   *
+   * A memo because `CardGrid` virtualises off this array's identity, and because `sourceOf` is one
+   * `find` over the folder census per row. Both inputs are held still by the hook, so this refolds
+   * when a page lands or the census answers and not on every keystroke.
+   */
+  const tiles = useMemo(() => foldCopies(rows, sourceOf), [rows, sourceOf]);
+  const empty = tiles.length === 0;
+
+  /**
+   * What every card on this wall *does*, so a button under `Auto` names the pile the filing rule
+   * will answer — `useWallOracleTags`, the read the tab beside this one makes for the same reason.
+   * Nothing is asked for a deck that names its pile. The ids are a tile's **card** id, which two
+   * tiles of one printing in two finishes share; the hook asks once.
+   */
+  const auto =
+    targetCategoryId === AUTO_CATEGORY || !categories.some((c) => c.id === targetCategoryId);
+  const wallIds = useMemo(() => tiles.map((tile) => tile.id), [tiles]);
+  const wallTags = useWallOracleTags(wallIds, auto);
+  const landingOf = (tile: CopyTile) =>
+    landingCategory(categories, targetCategoryId, tile, wallTags.get(tile.id));
+
+  /** Send it. The confirm — where there is one — has already been answered by the time this runs. */
+  const commit = (tile: CopyTile, pile: DeckPile | null) => {
+    setAsking(null);
+    if (tile.add) move.mutate({ row: tile.add, pile, quantity: 1 });
+  };
+
+  /**
+   * Every tile's finish, as `CardArt`'s chip reads it — **`null` for the regular copy**, which a
+   * collection row spells `nonfoil` and `CardArt` reads as a finish to sheen. Handed through raw
+   * it put a holo sheen over every plain copy on this tab (found in the shipped window,
+   * 2026-09-26); `CollectionPage`'s `finishMarkOf` is the same rule on the collection's own wall.
+   *
+   * Module-scope-stable through `useCallback` with no dependencies, which `CardGrid` asks for at
+   * this prop: a fresh arrow per render tears down and rebuilds every tile's drag registration on
+   * every scrolled row.
+   */
+  const tileFinish = useCallback(
+    (tile: CopyTile) => (tile.finish === "nonfoil" ? null : tile.finish),
+    [],
+  );
+
+  /**
+   * What a tile carries when it is picked up — **the card-search tab's own payload**, so a drop onto
+   * a deck column means on this tab exactly what it means one press away: `deck_add_card`, one copy
+   * on the list, no copy moved.
+   *
+   * **The wall registered no drag at all until this**, while the Add button's comment called the
+   * tile draggable and #358's closing note described dragging from this tab — so a reader who
+   * dragged a card from their binder into a pile got nothing, on the one tab the panel opens on.
+   *
+   * Three decisions, each the smaller claim:
+   *
+   * - **Not `collection_to_deck`.** Moving a copy is the Add button's write, and it comes with a
+   *   confirmation that names the deck a spoken-for copy leaves; a drop cannot stop to ask. So the
+   *   drag stays the list write, and filing the copy is the button's second press.
+   * - **A tile the button refuses is still draggable.** The assign-only fence (#358) is about
+   *   putting cardboard in a deck folder, which this write never does — and a card the deck does not
+   *   play is exactly the one the refusal sends to the list first.
+   * - **No finish.** A `"search-card"` has no slot for one, so a foil tile lands as a plain card —
+   *   the collection page's wall carries the same limitation (`CollectionPage.tsx`'s `tileDrag`).
+   *
+   * Through `CardGrid`'s `dragPayload` rather than a `tileRef`, so a drag from a picked tile carries
+   * the whole set (`selectionScope` below). No dependencies, for {@link tileFinish}'s reason.
+   */
+  const tileDrag = useCallback(
+    (tile: CopyTile): DragPayload => ({
+      kind: "search-card",
+      cardId: tile.id,
+      name: tile.name,
+      typeLine: tile.typeLine,
+    }),
+    [],
+  );
+
+  return (
+    // A fragment, so these stay flex children of the panel's own column — `OpenPanel`'s rule, and
+    // the reason the two tab bodies are interchangeable at that call site at all.
+    <>
+      {/* Grown into place rather than shoved in, exactly as the card tab's add banner is: this
+          panel is a fixed-width column of stacked rows, so a banner at the top of it pushes
+          everything below it down together. The animated element carries only `overflow-hidden` —
+          `statusLine` takes `height` to 0, and a box with its own padding can never be shorter
+          than that padding. */}
+      <AnimatePresence initial={false}>
+        {failure && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+            <p
+              role="alert"
+              className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5 text-xs text-destructive"
+            >
+              Couldn't move that copy — {failure}
+            </p>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* The card-search tab's own row, over this tab's backend — see the note on this component
+          for why that is one component now and was two until 2026-08-25. `layoutToggle={false}`
+          for `OpenPanel`'s reason: this wall has no table to switch to, so the pair would move the
+          *search view's* stored preference and change nothing the reader can see. */}
+      <FilterBar
+        search={search}
+        sortRows={COLLECTION_SORT_ROWS}
+        tray={COLLECTION_TRAY}
+        labels={COLLECTION_LABELS}
+        layoutToggle={false}
+      />
+
+      {/**
+       * The question, **above the wall rather than under the tile it was asked from**.
+       *
+       * It was drawn under its own row while this tab was a list, which is `ClearCategory`'s shape
+       * and the better place for it — a confirmation belongs next to the thing it is about. A
+       * folded tile has no row to sit under: putting it inside the grid would reflow the wall
+       * around the card the reader is aiming at, and `CardGrid` virtualises, so a tile scrolled out
+       * from under an open question would unmount it mid-answer.
+       *
+       * So it takes the banner's place, in the same `statusLine` grow-in the failure above uses,
+       * and **quotes the copy and the deck by name** — which is what makes the position survivable:
+       * the question never depended on the reader remembering which tile they pressed, because it
+       * has always had to say whose card it is taking.
+       *
+       * This app's confirmations carry no `dialog` or `alertdialog` role at all, and the caret goes
+       * into the *question* rather than onto a button in it — the reader has not decided yet and a
+       * stray Enter must not decide for them.
+       */}
+      <AnimatePresence initial={false}>
+        {asking && (
+          <motion.div {...statusLine} className="shrink-0 overflow-hidden">
+            <Confirm
+              tile={asking}
+              lands={landingOf(asking)}
+              pending={move.isPending}
+              onCancel={() => setAsking(null)}
+              onConfirm={(pile) => commit(asking, pile)}
+            />
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/**
+       * One live region, mounted for as long as this tab is — a region that appears together with
+       * its text announces nothing, because there was no change to notice.
+       *
+       * **It carries the result of the last move as well as the count**, and that is why there is
+       * one region here rather than two: two live regions in a 193px column both announce, in an
+       * order nothing controls, and the second would be mounted only when it has something to say
+       * — which is the failure this comment opens with.
+       */}
+      <p
+        role="status"
+        className={cn(
+          "shrink-0 text-xs",
+          empty && listFailure ? "text-destructive" : "text-dim",
+          empty && "py-8 text-center",
+        )}
+      >
+        {took && (
+          <span className="text-text">
+            Moved {plural(took.quantity, "copy", "copies")} from {took.fromDeck}.{" "}
+          </span>
+        )}
+        {listFailure
+          ? `Couldn't load your collection — ${listFailure}`
+          : query.isPending
+            ? "Loading your collection…"
+            : empty
+              ? "No copies match"
+              : // **Cards, and the word changed with the fold.** It counted *matches* while a row
+                // was one printing in one finish, one condition and one folder; a tile is a
+                // printing, so what is drawn is cards and `search.total` — which is still the
+                // backend's row count — is no longer the same number. Saying "N cards" over a
+                // total of rows would be two units in one sentence, so the caption counts what is
+                // on screen and says whether there is more.
+                `${plural(tiles.length, "card", "cards")}${query.hasNextPage ? " — scroll for more" : ""}`}
+      </p>
+
+      {!empty && (
+        <CardGrid
+          rows={tiles}
+          label="Your collection"
+          // The panel's own search, so a new one starts at the top of the wall rather than
+          // wherever the last one was scrolled to.
+          listKey={search.queryKeyString}
+          // **The card-search tab's section, shared deliberately.** The two tabs are one column and
+          // one press apart, so a reader who sized the cards on one has sized the cards they are
+          // looking at — a second key here would make switching tabs resize the wall.
+          zoomSection="deckSearch"
+          // Its **own** scope, where the zoom above is deliberately shared: a size is a fact about
+          // the column, and a picked set is a fact about a particular list of cards. Switching
+          // tabs puts the other tab's set down, which is right — the rows are different rows.
+          selectionScope="deck-collection"
+          baseTileWidth={TILE_BASE}
+          // **A tile's key, not a card id** — `CardGrid` compares this against `card.key ?? card.id`
+          // and every tile here carries a key, so the pane's card id alone would match nothing and
+          // ring nothing at all, silently. Composed through the same {@link tileKeyOf} the fold
+          // stamps, so the two strings cannot drift apart.
+          selectedId={selectedCardId === null ? null : tileKeyOf(selectedCardId, paneFinish)}
+          // The finish travels with the press, so the pane opens showing the object the reader
+          // pointed at rather than the plain one — and so the ring above lands on the tile they
+          // pressed rather than on its sibling. The tile is `CardGrid`'s second argument because a
+          // tile here is a printing *and* a finish; the wall itself knows nothing about finishes.
+          onSelect={(cardId, tile) => selectCard(cardId, tile.finish)}
+          finish={tileFinish}
+          dragPayload={tileDrag}
+          // What one copy of this printing **in this finish** costs — the tile's own figure, so a
+          // foil tile and the nonfoil beside it quote different money, which is the whole reason
+          // they are two tiles. `CollectionRow.unitPrice` is already per copy, per finish, at the
+          // marketplace this hook's query named, so nothing here recomputes or converts it, and a
+          // printing the marketplace does not quote draws an em dash rather than borrowing
+          // another one's number.
+          money={(tile) => formatPrice(tile.unitPrice, marketplace.currency)}
+          // The copies behind the art, in the corner the collection page's own wall marks them in.
+          // No `wishlisted`: this wall shows what is owned and has no opinion about what is wanted.
+          badge={(tile) => <OwnedBadge owned={tile.copies} />}
+          action={(tile) => (
+            <AddButton
+              tile={tile}
+              // The second axis, per tile and never per copy — see `PlayState`. It is computed
+              // here rather than inside the button so that the *one* place a tile's press is
+              // decided stays the hook's model: this file branches on the answer and never on the
+              // census.
+              play={playStateOf(tile)}
+              lands={landingOf(tile)}
+              tip={tip}
+              onAsk={setAsking}
+              onCommit={commit}
+            />
+          )}
+          onNeedNextPage={() => {
+            if (query.hasNextPage && !query.isFetchingNextPage && !query.isFetchNextPageError) {
+              void query.fetchNextPage();
+            }
+          }}
+        />
+      )}
+
+      {/**
+       * **Spec §5: a price is never shown without saying how old it is** — said once under the
+       * wall, in the same words, the same element and the same voice as the tab one press away.
+       *
+       * **The two tabs of this column had to agree, and for two days they did not.** The chins
+       * here started quoting money on 2026-08-26 and this line did not come with them, so a
+       * reader toggling `Search → Collection` in a 384px column watched the dates disappear while
+       * the prices stayed — one control answering the same question two ways, which is the exact
+       * failure the shared `FilterBar` and the shared `CardGrid` exist to remove.
+       *
+       * `DeckSearchPanel`'s note is the record for the rest, and its measurements are this
+       * column's: **two wrapped lines, 33.59px**, at the 193px content box `MIN_PANEL_WIDTH_PX`
+       * leaves, and **one line, 16.8px**, at the panel's 384px opening width. Drawn
+       * unconditionally within `!empty` either way — **the rule has no narrow-surface exemption,
+       * and a price with no date is worse than a wall one line shorter.** `shrink-0` so the wall
+       * gives up the height rather than this being squeezed to nothing.
+       *
+       * **Unconditional on the layout**, where the collection page's and the wishlist's are gated
+       * to their grid: each of those has a table that states the same thing in a column header of
+       * its own — the collection's `Value`, the wishlist's `Cost` — so drawing it under both would
+       * say it twice in one view. This tab has no table at all (`layoutToggle={false}` above, for
+       * `OpenPanel`'s reason), so the wall is the only thing that can be on screen here.
+       *
+       * Above the failure below rather than below it, so the sentence stays against the wall it
+       * dates: that alert is drawn *under* rows query-core has kept, and a caption that moved a
+       * line whenever a refresh failed would be answering about something else.
+       */}
+      {!empty && <p className="shrink-0 text-[0.7rem] text-dim">{pricesAsOf(marketplace)}</p>}
+
+      {/* **The failure that arrives with rows still on screen.** query-core keeps the pages it has
+          when a fetch fails, so this is drawn under the wall rather than instead of it — the same
+          split the card tab makes, and the reason the caption above cannot carry it. */}
+      {!empty && listFailure && (
+        <p role="alert" className="shrink-0 text-xs text-destructive">
+          {query.isFetchNextPageError ? "Couldn't load more copies" : "Couldn't refresh these"} —{" "}
+          {listFailure}
+        </p>
+      )}
+    </>
+  );
+}
+
+/**
+ * One tile's press — the control that puts a copy in the deck.
+ *
+ * Its own component so the two names it carries are built in one place, and so the three
+ * {@link CopySource} answers are branched on exactly once.
+ *
+ * **Two axes since issue #358, and they are branched on in one ladder.** `play` says whether the
+ * deck's list has the card at all and `tile.from` says what taking this particular copy costs; both
+ * are decided by the hook and this component only words them. Adding a third refusal means one more
+ * arm of `refusal` below and nothing else — which is the property the split was chosen for.
+ */
+function AddButton({
+  tile,
+  play,
+  lands,
+  tip,
+  onAsk,
+  onCommit,
+}: {
+  tile: CopyTile;
+  /** Whether this deck's live list plays this card at all — the assign-only fence (issue #358).
+   *  See `PlayState`, which is where the four answers and the two axes are argued. */
+  play: PlayState;
+  /** Where the press files and what to call it — {@link landingCategory}. A `null` name is a
+   *  pile this button cannot promise yet, and it then names none. */
+  lands: Landing;
+  tip: ReturnType<typeof useTooltip>;
+  onAsk: (tile: CopyTile) => void;
+  onCommit: (tile: CopyTile, pile: DeckPile | null) => void;
+}) {
+  const copy = tile.add ? copyLabel(tile.name, tile.add) : tile.name;
+
+  /**
+   * Why this tile cannot be pressed, or `null`.
+   *
+   * **Every one of them is said in the button's own accessible *name*** rather than only
+   * in a tooltip: a greyed control whose name has not changed reads as a control that broke, and a
+   * hover sentence is not something a keyboard reader can produce (`packages/ui/CLAUDE.md`'s greyed-row
+   * rule).
+   *
+   * **The census answers first, and that ordering is the fail-closed half.** The two `PlayState`
+   * arms below `plays` are states in which nothing is *known* about this card, so a sentence
+   * underneath them would be a claim made out of an unanswered query: *"already in this deck"* is
+   * knowable from the rows in hand, but so is nothing else worth saying about a press that cannot
+   * be allowed. `CollectionPage.tsx`'s `stepperByTile` takes the same direction for the same
+   * reason — a control that is live for the length of one query and then greys is worse than one
+   * that was never live, because the reader has already reached for it.
+   *
+   * **Then the fence, then the copy.** *"is not in this deck — add it from the Card search tab
+   * first"* is the whole of issue #358 in one sentence: it says what is wrong (the deck's list, not
+   * the copy) and where to go (the tab one press away), which is the grammar `blockedReason` uses
+   * on the collection page. It outranks *"already in this deck"* only in principle — a card whose
+   * every copy sits in **this** deck's group is a card the deck plays — so the two are ordered
+   * rather than exclusive, and the order is the one that stays true if the group and the list ever
+   * disagree.
+   */
+  const refusal =
+    play === "unread"
+      ? `${tile.name} — checking deck…`
+      : play === "unreadable"
+        ? `${tile.name} — couldn't check the deck`
+        : play === "notPlayed"
+          ? `${tile.name} is not in this deck — add it from the Card search tab first`
+          : tile.add === null
+            ? `${tile.name} is already in this deck`
+            : null;
+
+  /**
+   * **Where the copy is coming from** — the fact the list this replaced drew on every row, and the
+   * one thing about this press that a picture cannot show.
+   *
+   * It is on the button rather than in the caption because the caption is `SET · number` on both
+   * tabs and that parity is the whole point of the wall; and because this is a fact about the
+   * *press* rather than about the card. Two shapes, and the difference is what the press costs:
+   * a deck's group is named as a **taking** (`from Mono-Red Aggro`), because that deck loses the
+   * card, and a drawer the reader made is named as a place (`in Serah`), because nothing loses
+   * anything.
+   *
+   * **The root says nothing at all, which reverses the list's rule rather than forgetting it.**
+   * That list drew the place in a *cell*, where blank reads as data that failed to arrive, so the
+   * root was written out in words. This is a button's **name**, where there is no cell to leave
+   * empty — and the root is where most copies sit, so naming it would add four words to nearly
+   * every control on the wall to say "filed nowhere in particular".
+   */
+  const place =
+    tile.from === null || tile.add === null
+      ? null
+      : tile.from.kind === "otherDeck"
+        ? { taking: true, name: tile.from.deckName ?? "another deck" }
+        : tile.add.folderName
+          ? { taking: false, name: tile.add.folderName }
+          : null;
+
+  const where = place ? (place.taking ? `taking it from ${place.name}` : `in ${place.name}`) : null;
+
+  /** ` to Ramp`, or nothing for a pile the rule has not named yet — see {@link Landing}. */
+  const into = lands.name === null ? "" : ` to ${lands.name}`;
+
+  return (
+    <button
+      type="button"
+      // The tile is draggable and this is its one control: a press that slips a few pixels is a
+      // press, not a drag (`cardDraggable`).
+      data-no-drag=""
+      // `aria-disabled`, never `disabled`: a disabled button leaves the tab order, which would put
+      // the reason on a hover a keyboard reader cannot perform.
+      aria-disabled={refusal ? true : undefined}
+      aria-label={refusal ?? `Add ${copy}${into}${where ? ` — ${where}` : ""}`}
+      {...tip(
+        refusal ??
+          (place
+            ? place.taking
+              ? lands.name === null
+                ? `Take from ${place.name}`
+                : `Take from ${place.name} → ${lands.name}`
+              : `Add${into} — your copy in ${place.name}`
+            : lands.name === null
+              ? UNNAMED_PILE_TIP
+              : `Add${into}`),
+        { describes: false },
+      )}
+      // **Never disabled while a write is in flight**, exactly as the card tab's Add button is
+      // not: `collection_to_deck` folds into the deck row it finds, so pressing twice is two
+      // copies — and "press it again for another one" is how a deck gets built.
+      onClick={() => {
+        if (refusal || !tile.add) return;
+        // The one branch this whole tab is about: a copy another deck is holding is asked about
+        // first, because confirming takes it out of that deck's *list* as well as its group — and
+        // that deck is not on screen. `pickCopy` has already preferred a desk copy where the
+        // reader has one, so this is reached only when every copy is spoken for.
+        if (tile.from?.kind === "otherDeck") onAsk(tile);
+        else onCommit(tile, lands.pile);
+      }}
+      className={cn(
+        ADD_BUTTON,
+        refusal
+          ? "cursor-not-allowed opacity-45 active:scale-100"
+          : "hover:border-accent hover:text-accent",
+      )}
+    >
+      <Plus className="size-3.5" aria-hidden="true" />
+    </button>
+  );
+}
+
+/**
+ * "This copy is in Mono-Red Aggro. Move it to this deck?"
+ *
+ * **The name of the other deck is the load-bearing half.** The side effect of saying yes lands
+ * somewhere the reader is not looking: the copies leave that deck's group *and* its live list, so
+ * a deck they have not opened is one card shorter afterwards. A question that said only "are you
+ * sure" would be asking about a consequence it had not stated.
+ *
+ * **It names the card too, which the row-anchored version did not have to.** Drawn above the wall
+ * it is no longer adjacent to the tile it was asked from, so the sentence carries the identity the
+ * position used to.
+ *
+ * `CONFIRM_DESTRUCTIVE` on the affirmative, which reads oddly for an *add* and is right: what is
+ * being confirmed is the subtraction from the other deck, and that is the part that cannot be
+ * undone by pressing something else on this screen.
+ */
+function Confirm({
+  tile,
+  lands,
+  pending,
+  onCancel,
+  onConfirm,
+}: {
+  tile: CopyTile;
+  lands: Landing;
+  pending: boolean;
+  onCancel: () => void;
+  onConfirm: (pile: DeckPile | null) => void;
+}) {
+  const confirm = useConfirmFocus(`Move ${tile.name} into this deck`);
+  const deckName = tile.from?.deckName ?? "another deck";
+
+  return (
+    <div
+      {...confirm}
+      className="rounded-md border border-destructive/40 bg-destructive/10 px-2 py-1.5"
+    >
+      <p className="text-[0.6875rem] leading-relaxed text-destructive">
+        Your copy of “{tile.name}” is in “{deckName}”. Moving it here takes it off that deck’s list
+        too.
+      </p>
+      {/* Said only where it can be promised: a pile the rule has not named yet is not guessed at
+          in the one sentence a reader is being asked to agree to. */}
+      {lands.name !== null && (
+        <p className="mt-1 text-[0.6875rem] leading-relaxed text-dim">It will go in {lands.name}.</p>
+      )}
+
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          type="button"
+          // `aria-disabled` rather than the attribute, so the button that is about to be pressed
+          // again does not leave the tab order under the reader's caret mid-write.
+          aria-disabled={pending ? true : undefined}
+          onClick={() => {
+            if (pending) return;
+            onConfirm(lands.pile);
+          }}
+          className={CONFIRM_DESTRUCTIVE}
+        >
+          Move it here
+        </button>
+        <button type="button" onClick={onCancel} className={CONFIRM_CANCEL}>
+          Leave it there
+        </button>
+      </div>
+    </div>
+  );
+}

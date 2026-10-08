@@ -3,7 +3,7 @@
 For restorable ZIP backups of user data and preferences, see [full-data-archives.md](full-data-archives.md).
 The mirror described here remains the readable, continuously updated text projection.
 
-`src-tauri/src/mirror/` and `src-tauri/src/transfer/`, shipped 2026-08-25. The design is
+`apps/desktop/src-tauri/src/mirror/` and `apps/desktop/src-tauri/src/transfer/`, shipped 2026-08-25. The design is
 [2026-08-25-text-backed-cards-design.md](../superpowers/specs/2026-08-25-text-backed-cards-design.md);
 this page is the record of what shipped, with the reason at each site. Every figure keeps the date
 and the build it was taken on.
@@ -28,7 +28,7 @@ fence](#the-golden-fence-necessary-and-not-sufficient) is what makes it legal.
 ## What lands on disk
 
 Default root `data/export/`, movable from Settings → Backup. Under `npm run tauri dev` that is
-`src-tauri/target/debug/data/export/`.
+`target/debug/data/export/`.
 
 ```
 <root>/
@@ -116,7 +116,7 @@ dialog offers is a filter the mirror leaves off, because a backup that narrows i
 backup. Only Arena's is written down in `README.txt`, and the asymmetry is deliberate — that one
 costs the reader something (a file Arena will reject), while this one only ever hands them a pile
 they still have. It cost the mirror no code either: the filter lives in `ExportDialog` above
-`formatExport`, exactly where Arena's does, which is why neither `src-tauri/src/transfer/` nor the
+`formatExport`, exactly where Arena's does, which is why neither `apps/desktop/src-tauri/src/transfer/` nor the
 golden corpus moved for it.
 
 Prices are quoted at whatever marketplace the reader has selected, read fresh on every pass, so a
@@ -188,7 +188,7 @@ by a future migration stays safe.** A prefix test would have got `deck_audit` wr
 `None` from being a silent decision is `every_table_in_the_schema_has_been_decided_about`, which
 asserts the whole of `sqlite_master` against a written-down list: **a migration that adds a table
 goes red there until somebody says which side of the match it belongs on.** That test is the reason
-the rule in [`src-tauri/CLAUDE.md`](../../src-tauri/CLAUDE.md) has teeth.
+the rule in [`apps/desktop/src-tauri/CLAUDE.md`](../../apps/desktop/src-tauri/CLAUDE.md) has teeth.
 
 `decks` dirtying the collection as well is an over-approximation of one table, kept because the cost
 of being wrong in the other direction is a group folder whose name never catches up with its deck.
@@ -444,7 +444,7 @@ the background pass — a few hundred files, rewritten on every change — at an
 write to. **Issue #545 moved the picker into Rust**: `mirror_pick_root` opens the folder dialog
 itself, at the current root (or its parent before the first pass has made it), and hands the folder
 to `set_root_now` without it crossing IPC. `capabilities/desktop.json` grants no `dialog:`
-permission now, and `src-tauri/CLAUDE.md`'s capabilities section is the rule.
+permission now, and `apps/desktop/src-tauri/CLAUDE.md`'s capabilities section is the rule.
 
 **Two settings, two `app_meta` keys, no migration** — `mirror_enabled` and `mirror_root`, exactly the
 shape `marketplace` settled on. Reading can never fail: a missing row, a hand-edited row, or a row a
@@ -534,7 +534,7 @@ list.
 
 Two writers, one behaviour, and a build that goes red the moment they disagree.
 
-- **One corpus, shared.** `src/features/transfer/__golden__/corpus.json` — cards on all three
+- **One corpus, shared.** `packages/ui/features/transfer/__golden__/corpus.json` — cards on all three
   surfaces, every field populated, plus the edge cases both suites already know are sharp: a `//`
   split name, a CSV cell holding a comma and a quote, a switched-off pile, a labelled card with and
   without a colour, a list a format empties for itself, and an empty list. Rust deserialises it into

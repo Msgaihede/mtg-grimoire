@@ -209,7 +209,7 @@ impl SearchRequest {
     /// The card half of this request, in the shape every other list uses.
     ///
     /// Cloned rather than borrowed, and the fields stay flat on this struct rather than
-    /// moving behind a `#[serde(flatten)]`: the wire shape is what `src/lib/ipc.ts` sends
+    /// moving behind a `#[serde(flatten)]`: the wire shape is what `packages/ui/lib/ipc.ts` sends
     /// and thirty tests construct, and a request is a handful of small strings.
     fn card_filters(&self) -> filters::CardFilters {
         filters::CardFilters {
@@ -293,7 +293,7 @@ pub struct CardSummary {
     ///
     /// [`Self::finishes`] has three words for how shiny a copy is and no way to say *which*
     /// shiny — a Surge Foil and an ordinary foil were one glyph and one word until issue #160.
-    /// Handed over unread: naming these is a judgement, so `src/lib/treatment.ts` owns the
+    /// Handed over unread: naming these is a judgement, so `packages/ui/lib/treatment.ts` owns the
     /// table and this is copied the way `legalities` is on the card pane's DTO.
     ///
     /// **22.7 bytes on the 32 174 of 116 712 rows that carry one**, so a 50-row page grows by
@@ -2008,7 +2008,7 @@ mod tests {
         }
     }
 
-    /// The frontend mirrors these names by hand in `src/lib/ipc.ts`; a rename here that is
+    /// The frontend mirrors these names by hand in `packages/ui/lib/ipc.ts`; a rename here that is
     /// not mirrored there is a silently `undefined` field in the UI.
     #[test]
     fn search_response_json_uses_the_camel_case_names_the_frontend_expects() {
@@ -2133,7 +2133,7 @@ mod tests {
     ///
     /// Issue #160: the column names *which* foil a printing's shiny copy is — Surge, Halo,
     /// Serialized — where `finishes` only has three words for how shiny it is. Rust hands it
-    /// over unread; `src/lib/treatment.ts` does the naming.
+    /// over unread; `packages/ui/lib/treatment.ts` does the naming.
     ///
     /// The test is about **positions**, not about the value. This read is positional and the
     /// two branches share one row mapping, so a column added to one and not the other, or
@@ -3210,7 +3210,7 @@ mod tests {
     /// DTOs whose drift a reader would never report: a picker whose `cardCount` all arrive
     /// as `undefined` still looks like a working picker, just one where every set is
     /// suddenly blank. Whole-value equality rather than field-by-field, so a field added
-    /// here and never mirrored in `src/lib/ipc.ts` fails the test as loudly as a rename.
+    /// here and never mirrored in `packages/ui/lib/ipc.ts` fails the test as loudly as a rename.
     #[test]
     fn set_summary_json_uses_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(SetSummary {
@@ -4177,7 +4177,7 @@ mod tests {
     }
 
     /// The wire name, and the default an omitted field carries. `availableForDeck` is what
-    /// `src/lib/ipc.ts` sends; absent is every copy, which is what every caller written before
+    /// `packages/ui/lib/ipc.ts` sends; absent is every copy, which is what every caller written before
     /// the deck builder's badge relies on without saying so.
     #[test]
     fn available_for_deck_is_camel_cased_and_absent_by_default() {
@@ -5134,7 +5134,7 @@ mod tests {
     }
 
     /// The **wire shape**, which no test in `filters` can see: a field spelled differently
-    /// here from `src/lib/ipc.ts` is a filter that silently does nothing, and this is the
+    /// here from `packages/ui/lib/ipc.ts` is a filter that silently does nothing, and this is the
     /// whole reason the Tags page can reuse `search_cards` instead of growing a second search
     /// stack.
     ///

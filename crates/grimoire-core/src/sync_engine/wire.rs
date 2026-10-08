@@ -31,7 +31,7 @@ pub const BATCH: usize = 200;
 /// `code: "too_large"` at the push, before the Durable Object — whose rows cap at 2 MB — is
 /// reached.
 ///
-/// **It must equal `MAX_SEALED_CHARS` in `relay/src/log.ts`**, and
+/// **It must equal `MAX_SEALED_CHARS` in `infrastructure/relay/src/log.ts`**, and
 /// [`tests::the_sealed_cap_is_the_relays`] reads that file to hold the two together: moved on one
 /// side only, it is a push refused by a relay this side believed would take it, or an op given up
 /// on that the relay would have stored.
@@ -794,11 +794,11 @@ mod tests {
     /// nothing.
     #[test]
     fn the_sealed_cap_is_the_relays() {
-        let relay = include_str!("../../../../relay/src/log.ts");
+        let relay = include_str!("../../../../infrastructure/relay/src/log.ts");
         assert_eq!(MAX_SEALED_CHARS, 1_500_000);
         assert!(
             relay.contains("export const MAX_SEALED_CHARS = 1_500_000;"),
-            "relay/src/log.ts no longer exports the cap `batches` and `oversized` cut against"
+            "infrastructure/relay/src/log.ts no longer exports the cap `batches` and `oversized` cut against"
         );
     }
 

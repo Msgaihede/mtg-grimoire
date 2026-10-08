@@ -1,0 +1,450 @@
+import type { Meta, StoryObj } from "@storybook/react-vite";
+import { expect, fn, userEvent, waitFor, within } from "storybook/test";
+import { TOOLTIP_OPEN_MS, TOOLTIP_PANEL_ID } from "@/components/tooltip/TooltipProvider";
+import type { DeckCard } from "@/lib/ipc";
+import { deckCard, orphanDeckCard, printing } from "../../../fake/fixtures";
+import { CardStack, STACK_OPEN_ATTR, stackHeight } from "./CardStack";
+import { LANDED_ATTR, SELECTED_ATTR } from "./cardControl";
+import { deckCardSlot } from "./dnd";
+import type { ValidationIssue } from "./validation/types";
+
+/**
+ * A Ramp column's worth of cards — enough of them that the stack is a stack, with the
+ * quantities, prices and colours spread far enough apart that every part of a card face has
+ * something to draw.
+ */
+const RAMP: DeckCard[] = [
+  deckCard(printing("lea", "288"), { quantity: 2, ownedQuantity: 1 }),
+  deckCard(printing("mh2", "138"), { quantity: 1, ownedQuantity: 1 }),
+  deckCard(printing("dom", "168"), { quantity: 1, ownedQuantity: 0 }),
+  deckCard(printing("lea", "161"), { quantity: 1, ownedQuantity: 1 }),
+  deckCard(printing("isd", "51"), { quantity: 1, ownedQuantity: 1 }),
+  deckCard(printing("gtc", "148"), { quantity: 1, ownedQuantity: 1 }),
+];
+
+const meta = {
+  title: "Decks/CardStack",
+  component: CardStack,
+  tags: ["autodocs"],
+  args: {
+    cards: RAMP,
+    label: "Ramp",
+    // The default marketplace, and what every dollar figure in this file is a claim about. A
+    // stack takes the currency rather than reading it, so it cannot disagree with the heading
+    // the view draws above it.
+    currency: "usd",
+    onSelect: fn(),
+  },
+  // The editor's own column width, straight off the design canvas: 224px, which is what a
+  // 1280px window fits seven of with the stats panel docked. The stack sizes its own height,
+  // so nothing here constrains it — that is the whole point of the fixed height inside.
+  decorators: [
+    (Story) => (
+      <div className="w-56">
+        <Story />
+      </div>
+    ),
+  ],
+} satisfies Meta<typeof CardStack>;
+
+export default meta;
+type Story = StoryObj<typeof meta>;
+
+/**
+ * The collapsed stack: every card but the last shows only its 34px reveal strip — the card's own
+ * printed title bar, with the quantity tag laid over the left of it — and the last is drawn in
+ * full because nothing covers it.
+ *
+ * Run the pointer down it. Each card opens where it stands and pushes the ones after it out of
+ * the bottom of the group — **the group itself never resizes**, which is what lets a reader
+ * walk a whole column without the page moving under them. Rest on a card for a moment before
+ * it opens: that dwell is the whole point, and moving straight past a card opens nothing.
+ */
+export const Default: Story = {};
+
+/**
+ * The flip-through itself: dwell on a card and it opens, cross to the next and the stack hands
+ * over without closing, leave and it collapses after a beat.
+ *
+ * **This story could not exist before, and the reason it could not is worth keeping.** The lift
+ * used to be CSS `:hover`, and `userEvent.hover` dispatches pointer events without ever
+ * engaging the `:hover` state — in either runner. So the earlier version of the docblock in
+ * this slot recorded that *no story could assert the lift at all*, and the play here asserted
+ * the derived height instead, because a hover assertion would have been vacuous: nothing moved,
+ * so nothing could fail. That was honest and it was also a hole, on the headline interaction of
+ * the redesign.
+ *
+ * The trigger is `pointerenter` now, driven from state, and `userEvent.hover` fires exactly
+ * that. So the claim is checkable — here, in `CardStack.test.tsx` against a fake clock, and in
+ * the shipped WebView2 over CDP, which is still the only one of the three that can see the
+ * paint.
+ *
+ * What is asserted: the open card is the one dwelt on, there is only ever one of them, the
+ * hand-over to the next card leaves exactly one open, and **the list's height does not move
+ * through any of it** — the property the whole component exists for. The *close delay* is the
+ * one rule left to `CardStack.test.tsx`, because proving it means catching a frame at a named
+ * millisecond, and only a fake clock can be at a named millisecond.
+ */
+export const FlipThrough: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const list = canvas.getByRole("list", { name: "Ramp" });
+    const cards = canvas.getAllByRole("listitem");
+    const open = () => list.querySelectorAll(`[${STACK_OPEN_ATTR}]`);
+    const height = list.style.height;
+
+    // At rest the stack is closed and is the arithmetic's own height.
+    expect(open()).toHaveLength(0);
+    expect(height).toBe(`${stackHeight(RAMP.length)}px`);
+
+    await userEvent.hover(cards[1]);
+    await waitFor(() => expect(cards[1]).toHaveAttribute(STACK_OPEN_ATTR));
+    expect(open()).toHaveLength(1);
+    expect(list.style.height).toBe(height);
+
+    // Crossing to the next card is a hand-over rather than a close and an open: moving between
+    // two cards never leaves the list, so nothing schedules a collapse in the first place, and
+    // exactly one card is up once the second commits.
+    await userEvent.hover(cards[2]);
+    await waitFor(() => expect(cards[2]).toHaveAttribute(STACK_OPEN_ATTR));
+    expect(cards[1]).not.toHaveAttribute(STACK_OPEN_ATTR);
+    expect(open()).toHaveLength(1);
+    expect(list.style.height).toBe(height);
+
+    // And leaving collapses it — after the close delay, not on the way out.
+    await userEvent.unhover(cards[2]);
+    await waitFor(() => expect(open()).toHaveLength(0));
+    expect(list.style.height).toBe(height);
+  },
+};
+
+/**
+ * The list's height is **a function of the card count and nothing else** — which is the whole
+ * of why the group cannot reflow, and it is a property that can be checked without touching
+ * anything.
+ *
+ * Kept as its own story beside {@link FlipThrough} because the two check it from opposite
+ * ends: this one against the arithmetic, at three counts, with nothing hovered; that one
+ * through a real gesture, where the height is read back across an open, a hand-over and a
+ * close. The measured third leg is a real Chromium over CDP, three-step pointer approach,
+ * which reported the list at 796px before, during and after opening a card in a 15-card stack
+ * while that card's margin went −278px → 8px and the next card's top went 50 → 336.
+ *
+ * **Those three figures are from the pre-data-line geometry and are kept as a record rather
+ * than as a claim** — the card is 319px now, so the same pass would read 803px, −285px → 8px
+ * and 50 → 344. A live number belongs to the build it was taken on; re-measuring is the live
+ * pass's job, not this docblock's.
+ */
+export const FixedHeightFromTheCardCount: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const list = canvas.getByRole("list", { name: "Ramp" });
+
+    expect(list.style.height).toBe(`${stackHeight(RAMP.length)}px`);
+    // The canvas's own formula, and the slack that lets an open card overflow rather than
+    // resize its group.
+    expect(stackHeight(RAMP.length)).toBe(34 * RAMP.length + 293);
+    expect(stackHeight(RAMP.length) - stackHeight(RAMP.length - 1)).toBe(34);
+  },
+};
+
+/**
+ * A card that breaks a rule and a card that is a game changer, side by side — because the spec
+ * requires the two never be confusable, and the only honest way to check that is to draw them
+ * together.
+ *
+ * `RULE BREAK` is red, boxed, in the card's **bottom-left** corner (it moved out of the top-right
+ * on 2026-08-20, to keep it from ever sitting beside the plan's tick), and it is the one mark
+ * that changes the card's own edge. The game changer is a **crown printed on the quantity tag**
+ * at the left of the title strip — no words, no box, and no colour of its own: it is stroked in
+ * `currentColor`, so it is whatever is legible on the fill the card's label chose.
+ *
+ * **Only one of the two spells anything out, and that is the point of drawing them together.**
+ * This story used to show a stamped gold `Game Changer` ribbon here, on the argument that a 210px
+ * face has the room where the 150px Grid tile only had space for `GC` — one fact, three drawings,
+ * a difference of room. The ribbon and the letters both went on 2026-09-08 (the ribbon was
+ * measured overflowing that tile by 11px and clipping the plan's tick), so the deck draws this
+ * fact with one glyph on all four of its views and the *words* separation is now a mark with
+ * words against a mark with none. The other three — the colour, the place and the card's own
+ * edge — are unchanged, and this is where all four are looked at at once.
+ */
+/** The row the story below marks — a violations map is keyed by row slot, never by printing
+ *  (issue #554), so the story needs the row itself to name the key. */
+const TWO_ISLANDS = deckCard(printing("lea", "288"), { quantity: 2 });
+
+export const RuleBreakAndGameChanger: Story = {
+  args: {
+    cards: [
+      TWO_ISLANDS,
+      deckCard(printing("mh2", "138"), { gameChanger: true }),
+      deckCard(printing("lea", "161"), { gameChanger: true }),
+    ],
+    violations: new Map<string, ValidationIssue[]>([
+      [
+        deckCardSlot(TWO_ISLANDS.categoryId, TWO_ISLANDS.cardId, TWO_ISLANDS.finish),
+        [
+          {
+            severity: "error",
+            code: "singleton",
+            message: `Commander decks are singleton: max 1 copy of ${printing("lea", "288").name}; you have 2.`,
+            cardIds: [printing("lea", "288").id],
+          },
+        ],
+      ],
+    ]),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The words: one mark has them and the other has none anywhere on the card. `queryByText`
+    // reads text content, which is the assertion that says the ribbon is gone rather than merely
+    // moved — the fact is in each card's `aria-label` instead, which no text query can reach.
+    expect(canvas.getByText("RULE BREAK")).toBeInTheDocument();
+    expect(canvas.queryByText(/game changer/i)).toBeNull();
+
+    // Two crowns, one per game changer, and each inside its card's quantity tag rather than
+    // beside it. lucide's own class is the handle: the glyph is `aria-hidden` inside an
+    // `aria-hidden` tag, so it has no role, no name and no text to be found by.
+    const crowns = canvasElement.querySelectorAll(".lucide-crown");
+    expect(crowns).toHaveLength(2);
+    for (const crown of crowns) {
+      // The tag around it is the count's — a crown drawn as a mark of its own would have some
+      // other parent, and would be the second object in the strip this fold exists to remove.
+      const tag = crown.parentElement as HTMLElement;
+      expect(tag).toHaveAttribute("aria-hidden", "true");
+      expect(tag.textContent).toBe("1");
+      // Before the number, and `firstChild` rather than `firstElementChild`: the count is a bare
+      // text node, so the element-only walk answers "the crown" whichever side of it the crown is.
+      expect(tag.firstChild).toBe(crown);
+      // No colour of its own — it is `currentColor` on the tag's foreground, never the gold a
+      // crown floating on artwork wears and never the destructive red beside it.
+      expect(crown.getAttribute("stroke")).toBe("currentColor");
+      expect(crown.getAttribute("class")).not.toContain("text-");
+    }
+
+    // The place: the rule break is laid on the art, absolutely positioned in the card's
+    // bottom-left corner; the crown is positioned by nothing at all, being a flex item of the
+    // tag in the title strip. Two marks that cannot arrive in one corner.
+    const mark = canvas.getByText("RULE BREAK");
+    expect(mark.className).toContain("absolute");
+    expect(mark.className).toContain("text-destructive");
+    expect(mark.className).toContain("left-[calc(5px*var(--mark-scale,1))]");
+    expect(mark.className).not.toContain("right-");
+    expect(crowns[0].getAttribute("class")).not.toContain("absolute");
+
+    // The edge: only the card that breaks a rule carries the destructive one.
+    const items = canvas.getAllByRole("listitem");
+    expect(items[0].className).toContain("border-destructive");
+    expect(items[1].className).not.toContain("border-destructive");
+  },
+};
+
+/**
+ * Labels, as **the colour of the copy count**, with the name one hover away — and a card the deck
+ * wants more copies of than the collection could give it.
+ *
+ * A colour rather than a word: a label is a mark the reader put there and already knows, and a
+ * 224px column has no room for a second label beside a card's name. It is not a separate dot
+ * either — down a fifteen-card stack the column of coloured labels *is* the structure of the pile,
+ * and the count is the thing the reader wants beside it, so the two are one object.
+ */
+export const LabelledAndShortOfCopies: Story = {
+  args: {
+    cards: [
+      deckCard(printing("lea", "288"), {
+        quantity: 3,
+        ownedQuantity: 1,
+        labelId: 1,
+        labelName: "Wincon",
+        labelColor: "gold",
+      }),
+      deckCard(printing("mh2", "138"), { labelId: 2, labelName: "Cut candidate", labelColor: "ember" }),
+      deckCard(printing("lea", "161"), { labelId: 3, labelName: "Keeper", labelColor: "moss" }),
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    // The mark is decoration, `aria-hidden`, and its words are one hover away — found by its
+    // own text rather than by `getByTitle`: `QuantityTag` forwards to `components/CountTag`,
+    // which binds `useTooltip()` (`describes: false`, redundant with the card's own name, the
+    // only text inside an `aria-label`-ed button that anyone hears) rather than a native
+    // `title`. `describes: false` means no `role="tooltip"`, so the panel is found by its one
+    // stable id — `.storybook/preview.tsx` already wraps every story in `TooltipProvider`.
+    const tag = canvas.getByText("3");
+    expect(tag).toHaveAttribute("aria-hidden", "true");
+    await userEvent.hover(tag);
+    await waitFor(() => expect(document.getElementById(TOOLTIP_PANEL_ID)).not.toBeNull(), {
+      timeout: TOOLTIP_OPEN_MS + 1000,
+    });
+    expect(document.getElementById(TOOLTIP_PANEL_ID)).toHaveTextContent("Wincon · 3 in this category");
+    await userEvent.unhover(tag);
+    expect(canvas.getByRole("button", { name: /Wincon.*/ }).getAttribute("aria-label")).toContain(
+      "you own 1 of 3",
+    );
+  },
+};
+
+/**
+ * The Maybeboard, or any pile the reader switched off.
+ *
+ * The cards look exactly like the ones that count — that is deliberate, and it is the whole
+ * of the category model: what changes is the group's own header, which the view above draws,
+ * and the fact that **no card here is ever called short of copies**. The allocator claims
+ * nothing for an inactive category, so every row in one reads 0 owned by construction, and a
+ * shortage mark would report one the reader does not have.
+ */
+export const InactiveCategory: Story = {
+  args: {
+    label: "Maybeboard",
+    cards: [
+      deckCard(printing("lea", "288"), {
+        quantity: 2,
+        categoryActive: false,
+        categoryKind: "maybe",
+      }),
+      deckCard(printing("nph", "57"), {
+        quantity: 1,
+        categoryActive: false,
+        categoryKind: "maybe",
+      }),
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(canvas.queryByText("0/2")).not.toBeInTheDocument();
+  },
+};
+
+/**
+ * A row whose printing has left the card database.
+ *
+ * It is listed and counted exactly as before — that is the reconciler's rule, and it is why
+ * `deck_cards` denormalises a name. Nothing fetches a picture for it, because there is no
+ * card to fetch one of.
+ */
+export const Orphan: Story = {
+  args: { cards: [orphanDeckCard({ quantity: 1 }), deckCard(printing("mh2", "138"))] },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    expect(canvas.getByText("No card")).toBeInTheDocument();
+  },
+};
+
+/**
+ * One card, which is what the Commander and Companion piles usually hold. It is drawn in full,
+ * because nothing covers it.
+ */
+export const OneCard: Story = {
+  args: { label: "Commander", cards: [deckCard(printing("dom", "168"))] },
+};
+
+/**
+ * Fifteen cards, which is where the arithmetic earns itself: the collapsed stack is 476px of
+ * reveal strips plus one full 319px card, and opening the first of them pushes 293px of cards
+ * out of the bottom without the group growing by a pixel.
+ *
+ * It is also where the dwell earns itself. Fifteen strips are 510px of travel and a sweep down
+ * them crosses one every ~15ms, so under the CSS lift this replaced, a reader aiming for card
+ * four landed on card eight or nine.
+ */
+export const LongStack: Story = {
+  args: {
+    cards: [
+      ...RAMP,
+      deckCard(printing("mh2", "267")),
+      deckCard(printing("wwk", "31")),
+      deckCard(printing("mh2", "259")),
+      deckCard(printing("tmp", "315")),
+      deckCard(printing("fut", "153")),
+      deckCard(printing("nph", "57")),
+      deckCard(printing("lea", "288"), { quantity: 4 }),
+      deckCard(printing("dom", "168"), { quantity: 2 }),
+      deckCard(printing("isd", "51"), { quantity: 3 }),
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const list = canvas.getByRole("list", { name: "Ramp" });
+    expect(list.style.height).toBe(`${stackHeight(15)}px`);
+    // Every card is reachable, and the last one is a card rather than a scrollbar: a stack is
+    // a list, and a list is what a screen reader counts.
+    expect(canvas.getAllByRole("listitem")).toHaveLength(15);
+  },
+};
+
+/**
+ * **The picked card**: the one the card pane docked beside the deck is open on.
+ *
+ * Two things at once, and the second is the one to look at. It wears the search wall's own gold
+ * ring, so a reader who learned "gold ring means the pane is about this one" on that wall is not
+ * learning a second vocabulary here — and **the pile rests open on it**. Move the pointer down
+ * the stack and the hover wins as it always did; take the pointer away and the pile comes back
+ * to this card rather than closing, which is the whole fix: reading a card in the pane used to
+ * mean watching it drop out of the deck the moment you looked away from it.
+ *
+ * Still exactly one card open, which the geometry at the top of `CardStack.tsx` depends on.
+ */
+export const PickedCard: Story = {
+  args: { selectedSlot: deckCardSlot(RAMP[2].categoryId, RAMP[2].cardId, RAMP[2].finish) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const list = canvas.getByRole("list", { name: "Ramp" });
+    const cards = canvas.getAllByRole("listitem");
+
+    expect(list.querySelectorAll(`[${SELECTED_ATTR}]`)).toHaveLength(1);
+    expect(list.querySelectorAll(`[${STACK_OPEN_ATTR}]`)).toHaveLength(1);
+    expect(cards[2]).toHaveAttribute(SELECTED_ATTR);
+    expect(cards[2]).toHaveAttribute(STACK_OPEN_ATTR);
+  },
+};
+
+/**
+ * **Just landed**: a card the reader has this second added, saying so for five seconds and fading
+ * the whole way.
+ *
+ * Gold, washed across the whole face and glowing inward from its own rim — a card that has just
+ * arrived should read as *lit up*. It was parchment until 2026-08-15, on the argument that gold
+ * was already focus, the picked card and both halves of the drop affordance; what that missed is
+ * that parchment is the app's text colour, so the quiet mark was the same value as everything else
+ * on screen. The three golds stay apart by **shape**: they are all lines around the outside of a
+ * box, and this is a filled face.
+ *
+ * It is drawn inside the card's face, which is the half that matters here: in a fanned pile a card
+ * shows only the 34px of its own printed title bar, so what the reader sees from four cards away
+ * is a bright hairline across the top of one card and a lit strip under it. That is the difference
+ * between "somewhere in this pile" and "this one".
+ *
+ * The third card here is mid-pile deliberately. Watch the fade: full strength for two seconds,
+ * then three seconds down to nothing.
+ */
+export const JustLanded: Story = {
+  args: { landed: new Map([[RAMP[2].id, 1]]) },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement);
+    const cards = canvas.getAllByRole("listitem");
+    const marks = canvasElement.querySelectorAll(`[${LANDED_ATTR}]`);
+
+    expect(marks).toHaveLength(1);
+    // Inside the card's *face* — the button — rather than on the card's outer box, which is
+    // what a collapsed neighbour would paint over on three sides.
+    expect(cards[2].contains(marks[0])).toBe(true);
+    expect(marks[0].closest("button")).not.toBeNull();
+  },
+};
+
+/**
+ * Both marks on one card, which is the ordinary end of an add: the reader presses Add in the
+ * panel, the card lands, and they click it to read what it does.
+ *
+ * They have to stay tellable apart while they overlap, and since 2026-08-15 they are the same
+ * gold — so the thing telling them apart is **shape and place**. The ring is a line standing
+ * **outside** the card's edge and touches nothing inside it; the landed mark is a filled face
+ * drawn **inside**, washed and glowing from its rim. So the card has a gold outline around a card
+ * that is itself lit, and the lit part is gone five seconds later while the outline stays for as
+ * long as the pane is open on it.
+ */
+export const PickedAndJustLanded: Story = {
+  args: {
+    selectedSlot: deckCardSlot(RAMP[2].categoryId, RAMP[2].cardId, RAMP[2].finish),
+    landed: new Map([[RAMP[2].id, 1]]),
+  },
+};

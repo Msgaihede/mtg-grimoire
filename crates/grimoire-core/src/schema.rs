@@ -1047,7 +1047,7 @@ pub fn mint_missing_uids(conn: &Connection, schema: &str) -> rusqlite::Result<()
 /// **The stamps are the original's rather than now**, so a baseline a device sends a new peer
 /// stamps the clone as old as the pile it came from and never outranks a peer's genuine edit.
 ///
-/// **Those decks' undo journals are discarded**, v21's move and `src-tauri/CLAUDE.md`'s rule for
+/// **Those decks' undo journals are discarded**, v21's move and `apps/desktop/src-tauri/CLAUDE.md`'s rule for
 /// a rung that rewrites `deck_cards`: every step recorded before it names a theory card by the
 /// pile it has just left, so an undo would either be retired at the first press or, restoring a
 /// deleted pile with its cards, file the plan's cards back into a pile of the deck's list — the
@@ -2892,7 +2892,7 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
         // are a snapshot of what that rule answered on the day this step shipped, spelled out
         // as literals for [`CARDS_COLUMNS`]'s reason and [`PREDEFINED_CATEGORIES`]'s: a
         // migration is history the moment it ships. A fourteenth functional bucket added to
-        // `src/features/decks/autoCategory.ts` next month does **not** belong here — it would
+        // `packages/ui/features/decks/autoCategory.ts` next month does **not** belong here — it would
         // rewrite what a past migration did on new installs only, while every machine that has
         // already run this step keeps the old answer.
         //
@@ -2933,7 +2933,7 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
         // each is load-bearing:
         //
         // 1. `deck_categories.id` is an `INTEGER PRIMARY KEY`, so no category can ever *be* 0 —
-        //    the same guarantee `src/features/decks/autoCategory.ts`'s `AUTO_CATEGORY` already
+        //    the same guarantee `packages/ui/features/decks/autoCategory.ts`'s `AUTO_CATEGORY` already
         //    rests on. One word for "the card's own text decides" on both sides of the IPC.
         // 2. [`crate::deck::DeckPatch`] writes `coalesce(?n, column)`, where a bound NULL means
         //    *leave it*. A nullable column would therefore need a command of its own to say
@@ -2974,7 +2974,7 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
         // whole pile of a deck — which is orders of magnitude larger than the sentence it
         // would have sat beside, and `deck_audit_list` selects its columns by name, so the
         // blob would have ridden along on every read of a feature that never wants it.
-        // `src/features/decks/auditText.ts` is the only reader of `payload` and stays so.
+        // `packages/ui/features/decks/auditText.ts` is the only reader of `payload` and stays so.
         //
         // **`audit_id` is the primary key**, so the journal is 1:1 with a history row by
         // construction and one change cannot grow two steps. `deck_id` is denormalized from
@@ -3091,7 +3091,7 @@ pub fn migrate_single_file(conn: &Connection) -> rusqlite::Result<()> {
         // rather than a quiet second row.
         //
         // **`ALTER TABLE … ADD COLUMN … CHECK (…)` is accepted and enforced**, which contradicts
-        // what `src-tauri/CLAUDE.md` said twice (`deck_categories.origin` and
+        // what `apps/desktop/src-tauri/CLAUDE.md` said twice (`deck_categories.origin` and
         // `decks.last_variant` both went unfenced on the belief that it could not be done, and
         // `last_variant` grew a Rust fence instead). Verified rather than assumed: an inserted
         // `'nonfoil'` raises `CHECK constraint failed` — see
@@ -7124,7 +7124,7 @@ pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // module's rules holds here: [`crate::activity::record`] joins the caller's transaction
     // and never opens one (an activity row that committed while its change rolled back is a
     // history that lies in the one direction a reader cannot check), and Rust records *facts*
-    // while `src/features/home/activityText.ts` writes the sentence — which is why `payload`
+    // while `packages/ui/features/home/activityText.ts` writes the sentence — which is why `payload`
     // is JSON and there is no `summary` column.
     //
     // ⚠️ **It is deliberately absent from [`SYNCED_TABLES`] and carries no `sync_uid`.** That
@@ -7314,7 +7314,7 @@ pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     // builds them. It syncs, because it is the reader's answer about a deck.
     //
     // **`wishlist_folders.managed_deck_id` does not sync and has no foreign key.** A managed
-    // folder and its wishes are *derived* from the deck, and `src-tauri/CLAUDE.md`'s rule is
+    // folder and its wishes are *derived* from the deck, and `apps/desktop/src-tauri/CLAUDE.md`'s rule is
     // that a write every device derives for itself must not be captured — so each device builds
     // its own from its own copy of the synced deck, behind `capture::suppressed`. No `REFERENCES
     // decks(id)`, because neither cascade is right: `ON DELETE CASCADE` would drop the folder
@@ -7670,7 +7670,7 @@ pub fn migrate_user(conn: &Connection) -> rusqlite::Result<()> {
     //
     // **`idx_wishlist_folders_managed` widens to `(managed_deck_id, managed_tokens)`** — one
     // folder per deck per kind, where v48's was one per deck and would refuse the child. It is
-    // dropped first, `src-tauri/CLAUDE.md`'s rule for a changed index definition: a `CREATE`
+    // dropped first, `apps/desktop/src-tauri/CLAUDE.md`'s rule for a changed index definition: a `CREATE`
     // over the old one would be refused by name, and an `IF NOT EXISTS` would be the silent
     // no-op on exactly the machines that need the widening. NULLs stay distinct in it, so every
     // folder the reader made is untouched.
@@ -13929,7 +13929,7 @@ pub(crate) mod tests {
     /// Folders the reader made (NULL `managed_deck_id`) stay as distinct as ever.
     ///
     /// **The index is read off `sqlite_master`**, because the failure this guards is the one
-    /// `src-tauri/CLAUDE.md` names for a changed index definition: a rung that forgot the `DROP`
+    /// `apps/desktop/src-tauri/CLAUDE.md` names for a changed index definition: a rung that forgot the `DROP`
     /// would leave v48's one-column index in place and refuse the child on exactly the machines
     /// that climbed.
     #[test]
@@ -20198,7 +20198,7 @@ pub(crate) mod tests {
     /// answer, and the difference matters to every reader of it.
     ///
     /// Driven rather than trusted, because `NOT NULL DEFAULT 0` on an `ALTER TABLE … ADD COLUMN`
-    /// is exactly the pair `src-tauri/CLAUDE.md` warns about: a default is a promise to a
+    /// is exactly the pair `apps/desktop/src-tauri/CLAUDE.md` warns about: a default is a promise to a
     /// population, and the only way to know which population it is lying to is to try to write
     /// the value it is supposed to make impossible.
     #[test]
@@ -21514,7 +21514,7 @@ pub(crate) mod tests {
 
         // Schema-qualified: `pragma_table_info('combos')` as a table-valued function reads
         // `main`, and `combos` has been in the corpus since schema 27 — the trap
-        // `src-tauri/CLAUDE.md` states about every unqualified catalog read in a test.
+        // `apps/desktop/src-tauri/CLAUDE.md` states about every unqualified catalog read in a test.
         let defaults = |table: &str| -> Vec<(String, Option<String>)> {
             let mut stmt = conn
                 .prepare(&format!("PRAGMA {CORPUS}.table_info({table})"))
@@ -21564,7 +21564,7 @@ pub(crate) mod tests {
     ///
     /// **The index half is the one worth driving.** The step drops and recreates
     /// `idx_deck_cards_grain`, and a widening that is a silent no-op on exactly the machines
-    /// that need it is what `src-tauri/CLAUDE.md` warns a changed index definition costs. Read
+    /// that need it is what `apps/desktop/src-tauri/CLAUDE.md` warns a changed index definition costs. Read
     /// off `sqlite_master` rather than `PRAGMA index_info`, which answers a NULL name for an
     /// expression column and so cannot see the thing that changed.
     #[test]
@@ -21990,7 +21990,7 @@ pub(crate) mod tests {
     /// `deck::normalise_finish` is the enforcement at the command boundary; this CHECK is what
     /// makes any *other* path a hard error rather than a quiet second row.
     ///
-    /// **It also settles a claim `src-tauri/CLAUDE.md` made twice** — that `ALTER TABLE ADD
+    /// **It also settles a claim `apps/desktop/src-tauri/CLAUDE.md` made twice** — that `ALTER TABLE ADD
     /// COLUMN` cannot carry a CHECK, which is why `deck_categories.origin` has none and
     /// `decks.last_variant` grew a Rust fence instead. It can. SQLite's documented ADD COLUMN
     /// restrictions are PRIMARY KEY, UNIQUE, a non-constant DEFAULT, NOT NULL without a
@@ -22707,7 +22707,7 @@ pub(crate) mod tests {
     /// **The deck is seeded into the v25 fixture before the migration and not after**, which is
     /// the whole of what this test is for. A fresh install has no decks, so every deck in it is
     /// born with the column's DEFAULT and the question "what does an *existing* deck read" is
-    /// one only an upgrade fixture can answer — the trap `src-tauri/CLAUDE.md` states as *a
+    /// one only an upgrade fixture can answer — the trap `apps/desktop/src-tauri/CLAUDE.md` states as *a
     /// fresh worktree is a fresh install and is the one population that cannot show it*.
     #[test]
     fn v26_gives_an_existing_deck_the_auto_bracket_and_creates_the_combo_tables() {

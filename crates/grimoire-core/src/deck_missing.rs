@@ -114,7 +114,7 @@ const KNOWN_SQL: &str = "SELECT 1 FROM cards WHERE id = ?1";
 
 /// One printing and finish the live list is short of, and every wish those copies could clear.
 ///
-/// The hand-written mirror of `DeckMissingRow` in `src/lib/ipc.ts`, field for field. Its doc
+/// The hand-written mirror of `DeckMissingRow` in `packages/ui/lib/ipc.ts`, field for field. Its doc
 /// carries the same reasoning from the reader's end.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

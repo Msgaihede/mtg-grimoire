@@ -33,9 +33,10 @@ The installers are unsigned, so Windows SmartScreen warns on first run.
 ## Development
 
 See `CLAUDE.md` for architecture and the map of the rest. Rules for an area live in that area's
-own `CLAUDE.md` (`src/`, `src-tauri/`, `src/features/decks/`, `src/features/transfer/`,
+own `CLAUDE.md` (`packages/ui/`, `apps/desktop/src-tauri/`, `packages/ui/features/decks/`, `packages/ui/features/transfer/`,
 `.storybook/`, `.github/`); `docs/reference/` holds the long-form record behind them, and
-`docs/superpowers/` the specs and plans.
+`docs/superpowers/` the specs and plans. The four code folders (`apps/`, `packages/`, `crates/`,
+`infrastructure/`) are described in [docs/reference/repository-layout.md](docs/reference/repository-layout.md).
 
 ### Prerequisites
 

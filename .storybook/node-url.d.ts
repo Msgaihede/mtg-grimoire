@@ -6,7 +6,7 @@
  * *automatic* inclusion of `node_modules/@types/*` — it does nothing about a transitive
  * `/// <reference types="node" />` inside a dependency's declarations. Measured 2026-08-09:
  * with `@types/node` merely present in the tree, `vitest` (imported by every test under
- * `src/`) and `vite` (imported by `src/lib/iconFont.ts`) each dragged it into the app
+ * `packages/ui/`) and `vite` (imported by `packages/ui/lib/iconFont.ts`) each dragged it into the app
  * program even under `"types": []`, and the damage was real and silent — `process.env.FOO`
  * type-checked clean in webview code, and the three existing `ReturnType<typeof setTimeout>`
  * handles turned from `number` into `NodeJS.Timeout`, which is the wrong runtime for a

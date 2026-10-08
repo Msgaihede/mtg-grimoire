@@ -10,16 +10,18 @@ import { ARMS, JOBS, armFor, route } from "./ci-route.mjs";
 import ciYml from "../.github/workflows/ci.yml?raw";
 
 // Vite needs both glob arguments as literals, so the options repeat.
-// Mirrors `test.include` in `vite.config.ts`: every file vitest collects.
+// Mirrors `test.include` in `vitest.config.ts`: every file vitest collects.
 const TS_TESTS = import.meta.glob(
   [
-    "/src/**/*.test.{ts,tsx}",
+    "/packages/ui/**/*.test.{ts,tsx}",
+    "/apps/desktop/src/**/*.test.{ts,tsx}",
+    "/packages/fake/**/*.test.ts",
     "/.storybook/**/*.test.ts",
-    "/relay/src/**/*.test.ts",
-    "/share-worker/src/**/*.test.ts",
-    "/app-worker/src/**/*.test.ts",
-    "/share/**/*.test.{ts,tsx}",
-    "/mobile/**/*.test.{ts,tsx}",
+    "/infrastructure/relay/src/**/*.test.ts",
+    "/infrastructure/share-worker/src/**/*.test.ts",
+    "/infrastructure/app-worker/src/**/*.test.ts",
+    "/apps/share/**/*.test.{ts,tsx}",
+    "/apps/light/**/*.test.{ts,tsx}",
     "/scripts/**/*.test.mjs",
   ],
   { query: "?raw", import: "default", eager: true },
@@ -29,12 +31,12 @@ const TS_TESTS = import.meta.glob(
 // run in `rust` and in no other job — and `card-scanner`. `target/` is never globbed.
 const RUST = import.meta.glob(
   [
-    "/src-tauri/src/**/*.rs",
-    "/src-tauri/build.rs",
+    "/apps/desktop/src-tauri/src/**/*.rs",
+    "/apps/desktop/src-tauri/build.rs",
     "/crates/*/src/**/*.rs",
     "/crates/*/build.rs",
-    "/mobile/src-tauri/src/**/*.rs",
-    "/mobile/src-tauri/build.rs",
+    "/apps/light/src-tauri/src/**/*.rs",
+    "/apps/light/src-tauri/build.rs",
   ],
   { query: "?raw", import: "default", eager: true },
 );
@@ -54,7 +56,7 @@ function tsReads() {
   for (const [file, src] of Object.entries(TS_TESTS)) {
     for (const [, spec] of src.matchAll(/(?:from|import)\s*\(?\s*["']([^"']+)\?raw["']/g)) {
       let abs;
-      if (spec.startsWith("@/")) abs = `/src/${spec.slice(2)}`;
+      if (spec.startsWith("@/")) abs = `/packages/ui/${spec.slice(2)}`;
       else if (spec.startsWith("/")) abs = spec;
       else if (spec.startsWith(".")) abs = posix.join(posix.dirname(file), spec);
       else continue; // A package in `node_modules/`, which no diff names.
@@ -68,10 +70,15 @@ function tsReads() {
 function rustReads() {
   const out = [];
   for (const [file, src] of Object.entries(RUST)) {
-    const crate = rel(file).startsWith("src-tauri/")
-      ? "src-tauri"
+    // A crate's folder: the two Tauri hosts sit three levels down (`apps/<app>/src-tauri`), the
+    // rest two (`crates/<name>`).
+    const crate = rel(file).startsWith("apps/")
+      ? rel(file).split("/").slice(0, 3).join("/")
       : rel(file).split("/").slice(0, 2).join("/");
-    const push = (path) => out.push({ reader: rel(file), path: rel(path) });
+    // `home` is the tree the reader belongs to, which a read inside is not a crossing of:
+    // `crates/` as a whole, or one Tauri host (`apps/desktop/src-tauri`, `apps/light/src-tauri`).
+    const home = rel(file).startsWith("apps/") ? crate : rel(file).split("/")[0];
+    const push = (path) => out.push({ reader: rel(file), home, path: rel(path) });
     // Relative to the file that names it.
     for (const [, p] of src.matchAll(/include_(?:str|bytes)!\(\s*"([^"]+)"\s*\)/g)) {
       push(posix.join(posix.dirname(file), p));
@@ -92,7 +99,7 @@ function rustReads() {
   return out;
 }
 
-const RUST_OWNED = /^(src-tauri|crates|mobile\/src-tauri)\//;
+const RUST_OWNED = /^(apps\/desktop\/src-tauri|crates|apps\/light\/src-tauri)\//;
 
 describe("the census", () => {
   const ts = tsReads();
@@ -105,15 +112,15 @@ describe("the census", () => {
     // Both halves of a module the core extraction split: the engine's file, and the desktop's
     // command wrappers beside it.
     expect(tsPaths).toContain("crates/grimoire-core/src/deck.rs");
-    expect(tsPaths).toContain("src-tauri/src/deck/mod.rs");
-    expect(tsPaths).toContain("src-tauri/src/share/__golden__/snapshot.json");
-    expect(tsPaths).toContain("src-tauri/tauri.conf.json");
+    expect(tsPaths).toContain("apps/desktop/src-tauri/src/deck/mod.rs");
+    expect(tsPaths).toContain("apps/desktop/src-tauri/src/share/__golden__/snapshot.json");
+    expect(tsPaths).toContain("apps/desktop/src-tauri/tauri.conf.json");
     expect(tsPaths).toContain("crates/card-scanner/src/session.rs");
-    expect(rustPaths).toContain("src/lib/userTables.json");
-    expect(rustPaths).toContain("src/lib/syncedTables.json");
-    expect(rustPaths).toContain("src/features/transfer/__golden__");
-    expect(rustPaths).toContain("src/features/transfer/__golden__/corpus.json");
-    expect(rustPaths).toContain("share-worker/wrangler.jsonc");
+    expect(rustPaths).toContain("packages/ui/lib/userTables.json");
+    expect(rustPaths).toContain("packages/ui/lib/syncedTables.json");
+    expect(rustPaths).toContain("packages/ui/features/transfer/__golden__");
+    expect(rustPaths).toContain("packages/ui/features/transfer/__golden__/corpus.json");
+    expect(rustPaths).toContain("infrastructure/share-worker/wrangler.jsonc");
     expect(rustPaths).toContain("release-please-config.json");
   });
 
@@ -124,8 +131,8 @@ describe("the census", () => {
     const sources = Object.keys(RUST).map(rel);
     expect(sources).toContain("crates/grimoire-core/src/lib.rs");
     expect(sources).toContain("crates/card-scanner/src/session.rs");
-    expect(sources).toContain("src-tauri/src/desktop.rs");
-    expect(sources).toContain("mobile/src-tauri/src/lib.rs");
+    expect(sources).toContain("apps/desktop/src-tauri/src/desktop.rs");
+    expect(sources).toContain("apps/light/src-tauri/src/lib.rs");
   });
 
   it("routes every file a frontend test reads to `frontend`", () => {
@@ -143,7 +150,7 @@ describe("the census", () => {
   it("routes every crossing to both `frontend` and `rust`", () => {
     const crossings = [
       ...ts.filter((r) => RUST_OWNED.test(r.path)),
-      ...rust.filter((r) => !r.path.startsWith(`${r.reader.split("/")[0]}/`)),
+      ...rust.filter((r) => !r.path.startsWith(`${r.home}/`)),
     ];
     expect(crossings.length).toBeGreaterThan(0);
     const missed = crossings.filter((r) => {
@@ -174,10 +181,10 @@ describe("the arms", () => {
     ["scripts/android-first-run.sh", T, F, F, F, F, F, F],
     [".github/dependabot.yml", T, F, F, F, F, F, F],
     [".nvmrc", T, F, F, F, T, F, T],
-    ["src/lib/core/index.ts", T, F, F, F, T, F, T],
+    ["packages/ui/lib/core/index.ts", T, F, F, F, T, F, T],
     ["docs/reference/ci-and-releases.md", F, F, F, F, F, F, F],
     ["README.md", F, F, F, F, F, F, F],
-    ["src/features/decks/CLAUDE.md", F, F, F, F, F, F, F],
+    ["packages/ui/features/decks/CLAUDE.md", F, F, F, F, F, F, F],
     [".storybook/CLAUDE.md", F, F, F, F, F, F, F],
     // Prose wins over the web host's arm too: it sits above it, and `*` crosses `/`.
     ["crates/grimoire-web/CLAUDE.md", F, F, F, F, F, F, F],
@@ -189,48 +196,50 @@ describe("the arms", () => {
     ["release-please-config.json", T, T, F, F, F, F, F],
     ["scripts/x.ps1", F, F, F, T, F, F, F],
     [".claude/skills/running-the-app/lock.ps1", F, F, F, T, F, F, F],
-    ["src-tauri/x.psm1", F, F, F, T, F, F, F],
+    ["apps/desktop/src-tauri/x.psm1", F, F, F, T, F, F, F],
     ["tools/x.psd1", F, F, F, T, F, F, F],
     // A module the core extraction split: the desktop keeps its command wrappers at the old
     // module path, and the engine's half — a `core` row — is below.
-    ["src-tauri/src/deck/mod.rs", T, T, F, F, F, F, F],
-    ["src-tauri/src/desktop.rs", T, T, F, F, F, F, F],
-    ["src-tauri/src/schema/mod.rs", T, T, F, F, F, F, F],
-    ["src-tauri/Cargo.toml", T, T, F, F, F, F, F],
-    ["src-tauri/src/share/__golden__/snapshot.json", T, T, F, F, F, F, F],
-    ["src/features/transfer/__golden__/deck.arena.all.txt", T, T, F, F, T, F, T],
-    ["src/features/transfer/__golden__/corpus.json", T, T, F, F, T, F, T],
-    ["src/lib/userTables.json", T, T, F, F, T, F, T],
-    ["src/lib/syncedTables.json", T, T, F, F, T, F, T],
-    ["src/features/decks/DeckEditor.tsx", T, F, F, F, T, F, T],
-    ["public/favicon.svg", T, F, F, F, T, F, T],
-    // The desktop's document. The web build's is `mobile/index.html`, a `mobile/*` row below.
-    ["index.html", T, F, F, F, T, F, F],
-    [".storybook/fake/db.ts", T, F, F, F, T, F, F],
+    ["apps/desktop/src-tauri/src/deck/mod.rs", T, T, F, F, F, F, F],
+    ["apps/desktop/src-tauri/src/desktop.rs", T, T, F, F, F, F, F],
+    ["apps/desktop/src-tauri/src/schema/mod.rs", T, T, F, F, F, F, F],
+    ["apps/desktop/src-tauri/Cargo.toml", T, T, F, F, F, F, F],
+    ["apps/desktop/src-tauri/src/share/__golden__/snapshot.json", T, T, F, F, F, F, F],
+    ["packages/ui/features/transfer/__golden__/deck.arena.all.txt", T, T, F, F, T, F, T],
+    ["packages/ui/features/transfer/__golden__/corpus.json", T, T, F, F, T, F, T],
+    ["packages/ui/lib/userTables.json", T, T, F, F, T, F, T],
+    ["packages/ui/lib/syncedTables.json", T, T, F, F, T, F, T],
+    ["packages/ui/features/decks/DeckEditor.tsx", T, F, F, F, T, F, T],
+    ["apps/desktop/public/favicon.svg", T, F, F, F, T, F, T],
+    // The desktop's document. The web build's is `apps/light/index.html`, a `apps/light/*` row below.
+    ["apps/desktop/index.html", T, F, F, F, T, F, F],
+    ["packages/fake/db.ts", T, F, F, F, T, F, F],
     // The one file there the light config imports, in every mode.
-    [".storybook/fake/aliases.ts", T, F, F, F, T, F, T],
+    ["packages/fake/aliases.ts", T, F, F, F, T, F, T],
     [".storybook/DesignSystem.mdx", T, F, F, F, T, F, F],
     ["package.json", T, F, F, F, T, F, T],
     ["package-lock.json", T, F, F, F, T, F, T],
-    ["components.json", T, F, F, F, T, F, F],
-    ["vite.config.ts", T, F, F, F, T, F, T],
+    ["packages/ui/components.json", T, F, F, F, T, F, F],
+    ["vite.base.ts", T, F, F, F, T, F, T],
+    ["vitest.config.ts", T, F, F, F, T, F, T],
+    ["apps/desktop/vite.config.ts", T, F, F, F, T, F, T],
     ["vite.watch.ts", T, F, F, F, T, F, T],
     ["tsconfig.json", T, F, F, F, T, F, T],
-    ["tsconfig.node.json", T, F, F, F, T, F, T],
+    ["apps/desktop/tsconfig.node.json", T, F, F, F, T, F, T],
     // The web Worker's own `tsc` program, by the glob — so by any name it lands under.
-    ["tsconfig.web-worker.json", T, F, F, F, T, F, T],
+    ["packages/ui/tsconfig.web-worker.json", T, F, F, F, T, F, T],
     // Out of the fail-safe with it: no Rust job reads a `tsc` program.
-    ["tsconfig.relay.json", T, F, F, F, T, F, T],
-    ["tsconfig.share-worker.json", T, F, F, F, T, F, T],
+    ["infrastructure/relay/tsconfig.json", T, F, F, F, T, F, T],
+    ["infrastructure/share-worker/tsconfig.json", T, F, F, F, T, F, T],
     // Anchored: a `tsconfig.json` further down is some other arm's, or nobody's.
     [".design-sync/tsconfig.json", T, T, T, F, T, F, T],
-    // The light app's Vite config: linted, built into the APK's bundle, built into `dist-web/`.
+    // The light app's Vite config: linted, built into the APK's bundle, built into `apps/light/dist-web/`.
     // `rust` rides with `android`.
-    ["vite.mobile.config.ts", T, T, F, F, F, T, T],
+    ["apps/light/vite.config.ts", T, T, F, F, F, T, T],
     ["eslint.config.js", T, F, F, F, T, F, F],
     ["scripts/golden.mjs", T, F, F, F, F, F, F],
     // The web build's two scripts, which `scripts/*` would lint and never run.
-    ["vite.sw.ts", T, F, F, F, F, F, T],
+    ["apps/light/vite.sw.ts", T, F, F, F, F, F, T],
     ["scripts/build-wasm.mjs", T, F, F, F, F, F, T],
     ["scripts/web-smoke.mjs", T, F, F, F, F, F, T],
     ["scripts/web-sync-smoke.mjs", T, F, F, F, F, F, T],
@@ -240,7 +249,7 @@ describe("the arms", () => {
     // What both browser runs are written in, beside the fixtures it answers from.
     ["scripts/web-smoke/harness.mjs", T, F, F, F, F, F, T],
     // The Android release's scripts, which `android` proves on throwaway keys and
-    // `mobile/host.test.ts` reads as text; and the two deploy scripts no job in this gate runs.
+    // `apps/light/host.test.ts` reads as text; and the two deploy scripts no job in this gate runs.
     ["scripts/android-release/sign-bundle.sh", T, T, F, F, F, T, F],
     ["scripts/android-release/proof.sh", T, T, F, F, F, T, F],
     ["scripts/android-release/check-version.sh", T, T, F, F, F, T, F],
@@ -257,7 +266,7 @@ describe("the arms", () => {
     ["crates/grimoire-scan/src/glue.rs", T, T, F, F, F, F, T],
     ["crates/grimoire-scan/Cargo.toml", T, T, F, F, F, F, T],
     ["crates/grimoire-core/src/lib.rs", T, T, T, F, F, F, T],
-    // The schema since 2026-10-02. `src-tauri/src/schema/mod.rs` above is what the desktop host
+    // The schema since 2026-10-02. `apps/desktop/src-tauri/src/schema/mod.rs` above is what the desktop host
     // kept of it — the conversion from a single file — so both rows are true, and this is the
     // one a new rung changes. The deck's row is the same pair, one step later.
     ["crates/grimoire-core/src/deck.rs", T, T, T, F, F, F, T],
@@ -268,38 +277,38 @@ describe("the arms", () => {
     ["crates/card-scanner/src/session.rs", T, T, T, F, F, F, T],
     ["crates/card-scanner/Cargo.lock", T, T, T, F, F, F, T],
     ["crates/card-scanner/.cargo/config.toml", T, T, T, F, F, F, T],
-    ["share-worker/wrangler.jsonc", T, T, T, F, T, F, T],
+    ["infrastructure/share-worker/wrangler.jsonc", T, T, T, F, T, F, T],
     // The sync relay: tested by `frontend`, read as text by Rust tests, and **run** by `web`,
     // whose sync smoke starts it under workerd. Out of the fail-safe: not `core`, not `storybook`.
-    ["relay/src/index.ts", T, T, F, F, F, F, T],
-    ["relay/src/ticket.ts", T, T, F, F, F, F, T],
-    ["relay/wrangler.jsonc", T, T, F, F, F, F, T],
-    ["relay/schema.sql", T, T, F, F, F, F, T],
-    ["relay/README.md", F, F, F, F, F, F, F],
-    // The web app's hosting: checked and tested by `frontend`, copied into `dist-web/` by `web`.
+    ["infrastructure/relay/src/index.ts", T, T, F, F, F, F, T],
+    ["infrastructure/relay/src/ticket.ts", T, T, F, F, F, F, T],
+    ["infrastructure/relay/wrangler.jsonc", T, T, F, F, F, F, T],
+    ["infrastructure/relay/schema.sql", T, T, F, F, F, F, T],
+    ["infrastructure/relay/README.md", F, F, F, F, F, F, F],
+    // The web app's hosting: checked and tested by `frontend`, copied into `apps/light/dist-web/` by `web`.
     // Out of the fail-safe the share Worker still falls to — no Rust source reads it.
-    ["app-worker/wrangler.jsonc", T, F, F, F, F, F, T],
-    ["app-worker/_headers", T, F, F, F, F, F, T],
-    ["app-worker/src/headers.ts", T, F, F, F, F, F, T],
-    ["app-worker/src/index.ts", T, F, F, F, F, F, T],
+    ["infrastructure/app-worker/wrangler.jsonc", T, F, F, F, F, F, T],
+    ["infrastructure/app-worker/_headers", T, F, F, F, F, F, T],
+    ["infrastructure/app-worker/src/headers.ts", T, F, F, F, F, F, T],
+    ["infrastructure/app-worker/src/index.ts", T, F, F, F, F, F, T],
     // The deploy tool's manifest and lockfile (step 6.6): `release-rule.test.mjs` reads both, and
     // no job in this gate installs from them — `release.yml`'s `web-deploy` does.
-    ["app-worker/package.json", T, F, F, F, F, F, T],
-    ["app-worker/package-lock.json", T, F, F, F, F, F, T],
+    ["infrastructure/app-worker/package.json", T, F, F, F, F, F, T],
+    ["infrastructure/app-worker/package-lock.json", T, F, F, F, F, F, T],
     // Its runbook is prose, by the arm above every tree's; its `tsc` program is the glob's.
-    ["app-worker/README.md", F, F, F, F, F, F, F],
-    ["tsconfig.app-worker.json", T, F, F, F, T, F, T],
+    ["infrastructure/app-worker/README.md", F, F, F, F, F, F, F],
+    ["infrastructure/app-worker/tsconfig.json", T, F, F, F, T, F, T],
     ["some/new/thing.txt", T, T, T, F, T, F, T],
     // The light app: its host, built into an APK, and its pages, which no Rust job reads — and
     // which are the web build's own page, where the phone's host is nothing to a browser.
-    ["mobile/src-tauri/src/lib.rs", T, T, F, F, F, T, F],
-    ["mobile/src-tauri/Cargo.toml", T, T, F, F, F, T, F],
-    ["mobile/src-tauri/gen/android/app/src/main/AndroidManifest.xml", T, T, F, F, F, T, F],
+    ["apps/light/src-tauri/src/lib.rs", T, T, F, F, F, T, F],
+    ["apps/light/src-tauri/Cargo.toml", T, T, F, F, F, T, F],
+    ["apps/light/src-tauri/gen/android/app/src/main/AndroidManifest.xml", T, T, F, F, F, T, F],
     // The release signer's fingerprint, once the owner commits it: `host.test.ts` holds its shape.
-    ["mobile/src-tauri/release-signer.sha256", T, T, F, F, F, T, F],
-    ["mobile/index.html", T, F, F, F, T, F, T],
-    ["mobile/phone/CardSheet.tsx", T, F, F, F, T, F, T],
-    ["mobile/host.test.ts", T, F, F, F, T, F, T],
+    ["apps/light/src-tauri/release-signer.sha256", T, T, F, F, F, T, F],
+    ["apps/light/index.html", T, F, F, F, T, F, T],
+    ["apps/light/phone/CardSheet.tsx", T, F, F, F, T, F, T],
+    ["apps/light/host.test.ts", T, F, F, F, T, F, T],
   ])("%s", (path, frontend, rust, core, powershell, storybook, android, web) => {
     expect(route([path])).toEqual({ frontend, rust, core, powershell, storybook, android, web });
   });
@@ -310,7 +319,7 @@ describe("the arms", () => {
   });
 
   it("ORs a set of paths together", () => {
-    expect(route(["README.md", "scripts/x.ps1", "src/lib/userTables.json"])).toEqual({
+    expect(route(["README.md", "scripts/x.ps1", "packages/ui/lib/userTables.json"])).toEqual({
       frontend: true,
       rust: true,
       core: false,
@@ -361,7 +370,7 @@ describe("the arms", () => {
     ["scripts/web-scanner-smoke.mjs", "scripts/*"],
     ["scripts/scanner-assets.mjs", "scripts/*"],
     ["scripts/web-smoke/*", "scripts/*"],
-    [".storybook/fake/aliases.ts", ".storybook/*"],
+    ["packages/fake/aliases.ts", ".storybook/*"],
   ])("puts `%s` above `%s`", (file, tree) => {
     const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));
     expect(at(file)).toBeGreaterThan(-1);
@@ -397,8 +406,18 @@ describe("the arms", () => {
 
   it("puts the light host's arm above the light app's", () => {
     const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));
-    expect(at("mobile/src-tauri/*")).toBeGreaterThan(-1);
-    expect(at("mobile/src-tauri/*")).toBeLessThan(at("mobile/*"));
+    expect(at("apps/light/src-tauri/*")).toBeGreaterThan(-1);
+    expect(at("apps/light/src-tauri/*")).toBeLessThan(at("apps/light/*"));
+  });
+
+  // The light app's two Vite files moved to the root of `apps/light/` on 2026-10-08, so the
+  // page-file arm beside them would take them — and lose `rust` and `android` for the config.
+  it("puts the light app's Vite files above the light app's pages", () => {
+    const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));
+    expect(at("apps/light/vite.config.ts")).toBeGreaterThan(-1);
+    expect(at("apps/light/vite.config.ts")).toBeLessThan(at("apps/light/*"));
+    expect(at("apps/light/vite.sw.ts")).toBeGreaterThan(-1);
+    expect(at("apps/light/vite.sw.ts")).toBeLessThan(at("apps/light/*"));
   });
 
   it("never routes to `core` without `rust`", () => {

@@ -1,0 +1,302 @@
+# `infrastructure/share-worker/` — the shared-collection Worker
+
+A second Cloudflare Worker beside `infrastructure/relay/`. It holds the whole of shared collections: the gated
+writes an entitled reader publishes with, the R2 blob each snapshot lives in, the public pages a
+stranger opens, and the daily pass that darkens a link when a membership ends.
+
+**A share is a snapshot the owner publishes, not a window onto their database.** Everything a
+viewer sees was true when the owner last pressed publish, the owner chooses what crosses, and
+nothing a viewer does can reach back. `docs/superpowers/specs/2026-09-08-collection-sharing-design.md`
+is the design; everything below is what a deploy needs.
+
+## Why it is not a route on the relay
+
+**Blast radius.** Sync is a paid feature people depend on; sharing is new and will churn, and
+every deploy here is done by hand by one person. One Worker carrying both means a bad share
+deploy is a sync outage. The two share **a D1 database** and **the `RELAY_HMAC_KEY` secret** and
+nothing else — no service binding, and only two of the relay's modules are imported
+(`src/token.ts` for `verify`, and `src/fakeD1.ts` in the tests).
+
+`infrastructure/relay/`'s source and its deploy are untouched by this feature.
+
+## What it can read, which is the invariant that now has an exception
+
+`infrastructure/relay/src/index.ts` argues, correctly, that the relay can decrypt nothing it stores. **That
+argument does not extend here.** By decision 2 a share snapshot is stored **in the clear**, and
+Cloudflare — and Markus — can read it. What that buys is the OpenGraph card in Discord, a
+server-rendered landing page, and the freedom to page server-side later without re-cutting the
+format. What it costs, stated so nobody has to rediscover it:
+
+- the app must never send a field a reader would not put on a public page. Spec §3's six absences
+  (`purchase_price`, `purchase_currency`, `acquired_at`, `acquisition_source`, `notes`, `tags`)
+  are the fence, and they are **absences rather than switches** for exactly this reason;
+- a compromise of this Worker's D1 or R2 is a compromise of every shared binder and of nothing
+  else — the sync log's ciphertext is in a different Durable Object under a different key, and
+  this Worker holds no key material at all;
+- the privacy claim the app makes to a reader is therefore **"anyone with the link"**, and must be
+  worded that way in the UI. Not "private", not "encrypted".
+
+## The routes
+
+| Route | Body | Answer | Guard |
+| --- | --- | --- | --- |
+| `POST /g/{group}/share` | metadata | `200 { id, url }` | bearer |
+| `PUT /g/{group}/share/{id}` | gzip | `200 { hash }` | bearer |
+| `GET /g/{group}/shares` | | `200 { shares: [ … ] }` | bearer |
+| `DELETE /g/{group}/share/{id}` | | `204` | bearer |
+| `GET /s/{id}` | | `200` HTML, or `410` | **public** |
+| `GET /s/{id}/{hash}.json.gz` | | `200`, immutable | **public** |
+| `GET /assets/*` | | the viewer bundle | **public** |
+
+The gated four verify the token the relay minted, with `infrastructure/relay/src/token.ts`'s `verify` over the
+shared `RELAY_HMAC_KEY`, and compare **`claims.grp` against the path segment**. That comparison is
+not redundant with the signature: a validly signed token for one's *own* group is exactly what an
+attacker has.
+
+**Then they ask whether the device is still in the group** (2026-10-01, issue #548). A token
+outlives its device's removal by up to a day, and a share is plaintext, so a removed laptop could
+otherwise overwrite or withdraw the group's binders for that long. The gate reads the group's
+newest `group_keys` row — the manifest a rotation published, whose key set is the roster — and
+refuses a token minted **before** that rotation by a device (`dev`, stamped by the relay since the
+same date) that the manifest omits. A token minted at or after it passes: only the group's
+*current* auth mints one, and a removed device no longer derives it, while a device that has just
+paired may not be on the manifest yet. A token with no `dev` (an older relay's) predating the
+rotation is refused. A group with no rows has never rotated and is not asked. One D1 read per gated
+request — traffic from at most five devices, never from a viewer.
+
+⚠️ **This needs the relay deployed first** so that tokens carry `dev`; until then every token
+minted before a group's newest rotation is refused, and a device sees one day of
+*"would not accept this device's membership"* at most.
+
+**Issue #752 closes the re-claim path in the relay source** (2026-10-05): `/claim` requires
+`authIsCurrent` whenever the target group already has key rows. A stale claim returns a plain
+**401** before consuming the claim code or changing the binding, refresh secret, device roll or
+key rows, so a removed device cannot press Connect to obtain a token minted *after* its removal.
+A legitimate device behind a rotation catches up through `/keys` and then retries Connect; a
+group with no key rows keeps the first-claim seed behavior. The binding write also checks that
+the authenticated epoch and auth are unchanged, and an existing group's token is stamped before
+the auth check, so a removal overtaking the claim cannot yield a post-removal token. A rotation
+that wins after the initial check can consume the code before the claim is refused.
+**It needed a relay deployment, and has had one: 2026-10-05 at 02:21:29 UTC, from `main` at
+`117827d2`** (PR #827; `docs/reference/hosted-relay-deploy.md`, step 6). Nothing without a
+credential shows the gate, and nobody has presented a stale claim to the hosted relay.
+
+**The two public routes are the whole of the entitlement asymmetry.** Publishing needs a token,
+which needs a membership; viewing needs the link and nothing else, which is what issue #360 asked
+for. The link *is* the capability — there is no viewer account and no per-viewer access control.
+
+`GET /assets/*` reaches **no code here**. `wrangler.jsonc`'s `assets` binding names `/s/*` and
+`/g/*` as the only prefixes that `run_worker_first`, so the viewer bundle is served at the edge:
+a static asset request is free and unlimited even on the free plan, and that is what keeps a share
+that goes viral off the account's 100,000-request/day budget. Adding a route for the bundle would
+undo it.
+
+## The blob, and the two-step
+
+`POST` writes the metadata row with `object_key` **NULL**; `PUT` stores the bytes in R2 and only
+then points the row at them. That order is the whole of what makes a failed upload harmless: a
+publish that dies in between leaves either *no* snapshot or the *previous* snapshot, and never a
+link to something that was never written. The superseded object is deleted **after** the row has
+moved, and only when the key actually changed — a republish of an unchanged collection is
+content-addressed to the same key, and a delete that skipped that comparison would erase the
+object it had just written.
+
+**The row moves by compare-and-swap, never by a blind write.** The `UPDATE` names the key the
+request last read (`coalesce(object_key, '') = ?`) and `state <> 'revoked'`; a loser re-reads and
+tries again from where the row now stands, so each displaced object is deleted by exactly the
+request that displaced it. Until 2026-10-01 two devices refreshing one share at once both deleted
+the same old key and the loser's new object stayed in R2 with nothing pointing at it. An upload
+that finds the share withdrawn underneath it deletes what it wrote and answers 404.
+
+**Withdrawing deletes the snapshot.** `DELETE /g/{group}/share/{id}` flips the row to `revoked`
+and reads its `object_key` in **one** statement (`UPDATE … RETURNING`), then points the row at
+nothing and deletes the object. A snapshot is plaintext and `revoked` is terminal, so the object
+left behind until 2026-10-01 was a binder the reader had withdrawn sitting readable in R2 for ever.
+The single statement is the guard: an upload either committed before it — and its key is the one
+returned — or meets `revoked` in its own swap.
+
+The key is `shares/{id}/{hash}.json.gz`, where `hash` is the first 16 hex characters of the body's
+SHA-256. ⚠️ **That is why the `PUT` buffers rather than streaming straight into R2**: the digest
+has to be known before the object can be named, and R2's Workers binding has no rename. The buffer
+is bounded by the 8 MB cap, which is checked as it fills, so a caller who omits or lies about
+`content-length` still cannot make this Worker hold more than the cap.
+
+`GET /s/{id}/{hash}.json.gz` is `public, max-age=31536000, immutable` with `caches.default` in
+front of R2, so a warm view costs no storage read. ⚠️ **The response sets `encodeBody: "manual"`**:
+by default the Workers runtime *applies* a declared `content-encoding` — gzips the body on the
+way out — and an R2 stream is not the unread `fetch()` pass-through it exempts. Without the option
+every snapshot left gzipped twice, which the jsdom suite cannot see; step 5 of the deploy is the
+check that can. What `immutable` costs is that revoking cannot
+recall an edge copy somebody already holds; what revoking *does* stop is every new viewer, because
+the shell is the only thing that hands out that URL and it is `max-age=300`.
+
+`GET /s/{id}` is rendered from the D1 row — that is what carries the OpenGraph card, and it is the
+only thing decision 2's plaintext storage buys. **It inlines the blob's URL** as
+`<link id="snapshot" rel="preload" as="fetch" crossorigin href="/s/{id}/{hash}.json.gz">` rather
+than offering an `index.json` route beside it, because the response is already holding the fact a
+second request would go and fetch. A row whose `object_key` is still NULL gets the shell, a
+sentence, and **no `<link>`** — its absence is the signal the viewer reads.
+
+⚠️ **`src/page.ts` interpolates a title and an owner's name that a reader typed, and there is no
+template engine.** One `esc()` covers every value; a new field rendered without it is an XSS on a
+page strangers open.
+
+## The lapse, and why the public read stays one lookup
+
+`src/lapse.ts` is a **daily cron on this Worker**, `30 3 * * *`. It reads `entitlements` — the
+relay's table, in the D1 database the two Workers share — and writes `shares.state`: a group whose
+subject is `dead` has its **live** shares darkened to `lapsed`, and a group whose subject is
+`active` or in `grace` has its **lapsed** shares lit again.
+
+**It reads the stored `status` and does not re-run `decide`.** `infrastructure/relay/src/claim.ts`'s `reconcile`
+is what moves a subject through `active → grace → dead` against Patreon; a second opinion here
+would be one account with two answers to when a membership ended. `grace` **serves** — a declined
+card is a failed payment Patreon retries, not a cancellation the reader chose.
+
+**`revoked` is never touched.** The reader's own press is terminal and the cron's flip is
+reversible, which is the whole reason `state` is a state rather than a `revoked_at` stamp. The
+`AND state = ?` clause in the one `UPDATE` is what enforces it, and the candidate query ahead of
+it is deliberately **not** narrowed to the rows that can move — narrowing it would be free,
+correct, and would make that clause unreachable for a group whose only share is a tombstone, which
+is exactly the case it exists for.
+
+**A group with no entitlement row at all is not serving, and goes dark.** That is a real state
+rather than a hypothesis: `/claim` *moves* a binding rather than refusing one, so a subject who
+reconnects on another group leaves this one entitled by nothing. Fail closed, because `lapsed` is
+reversible — a group that should not have gone dark lights again on the next pass, where a group
+that should have gone dark and did not, never does.
+
+Two things follow for a deploy. `30` and not `0` because `infrastructure/relay/wrangler.jsonc` owns minute `0` —
+`0 3 * * *` until 2026-09-28 and `0 * * * *`, hourly, since — and there is nothing to be gained by
+having both passes write the same D1 on the same minute; this is the account's **second** cron
+trigger of the free plan's five. And because the verdict is written into the column,
+**`GET /s/{id}` reads one row and branches on `state`** — no join to `entitlements`, no second
+query — so a link that goes viral costs a single-table read on the budget every paying reader's
+sync shares.
+
+**It never writes `updated_at`.** That column is the date the shell's OpenGraph card puts on the
+snapshot, and a lapse or a revival changes the row's state and not one byte of what the owner
+published — until 2026-10-01 both directions restamped it, so a share relit after a month
+previewed as *updated today*.
+
+A lapsed share **keeps its R2 object**. Reclaiming that storage is a sweep for later (spec §13),
+not a retention rule invented here: a revived membership wants the snapshot back.
+
+## Deploying
+
+⚠️ **No agent may run `wrangler deploy`, `wrangler d1 execute --remote` or `wrangler secret put`.**
+Those are the repo owner's. `wrangler dev --local` is the only wrangler command an agent may run.
+
+**Step 0 is to ask the host rather than a document**, for the reason `infrastructure/relay/README.md` opens with:
+that file has been wrong twice about what was deployed, in the same week, and the only sentence
+that cannot rot is a `curl`. **The Worker was first deployed on 2026-10-01 at 20:10 UTC**, at
+`https://mtg-grimoire-share.denmark-east.workers.dev`, and the five against it are:
+
+```
+S=https://mtg-grimoire-share.denmark-east.workers.dev
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "$S/s/AAAAAAAAAAAAAAAA"
+curl -s -o /dev/null -w "%{http_code} %{content_type}\n" "$S/assets/share.js"
+curl -s -w " %{http_code}\n" "$S/g/abc/shares"
+curl -s -o /dev/null -w "%{http_code}\n" -H "authorization: Bearer nonsense" "$S/g/abc/shares"
+curl -s -w " %{http_code}\n" "$S/g/abc/bogus"
+```
+
+**That day's answers were `404 text/html`, `200 text/javascript`, `{"error":"unauthorized"} 401`,
+`401` and `{"error":"not found"} 404`.** The first is a D1 read that found no share — a missing
+`shares` table is a 500 there. ⚠️ **The fourth is the secret's tell, and 500 means it is unset**:
+`authorised` calls `required(env.RELAY_HMAC_KEY, …)` before `verify` can refuse a malformed
+bearer. It answered **500** for the five minutes between the deploy and step 3, and **401**
+since. The third is its control — no bearer is 401 either way.
+
+**Every step below has been run except step 5's `curl`s**: the bucket exists, the table and both
+indexes were read back from `sqlite_master`, the secret is set, and `SHARE_BASE` went into both
+files before that first deploy — the address is the Worker's name and the account's subdomain —
+so the second deploy step 6 asks for was not needed. ⚠️ **Step 3 ran after step 5, not before
+it**: `wrangler secret put` against a Worker that does not exist yet did not stick, and the
+account listed no script at all until the deploy made one. **Step 5's `curl`s have never been
+run** — they need a published snapshot, and nothing has published one, which is also the only
+thing that can show the two Workers hold the same key.
+
+1. **Enable R2 on the account** — a dashboard action, and spec §14's open item 2. Then
+   `npx wrangler r2 bucket create mtg-grimoire-shares`.
+2. **Apply the schema** to the relay's existing database:
+   `npx wrangler d1 execute mtg-grimoire-relay --remote --file=./schema.sql`.
+   ⚠️ On a database that already holds part of it, run **one statement per `--command`**:
+   `--file` is atomic and a duplicate object takes the whole file down, which is the failure that
+   left a deployed Worker 500ing on 2026-08-30.
+3. **Set the one secret**: `npx wrangler secret put RELAY_HMAC_KEY`, with the **same value** the
+   relay holds. A different one means every publish is a 401 and nothing else says why.
+4. **Build the viewer** so `apps/share/dist-share/` exists. ⚠️ `wrangler.jsonc` declares an `assets`
+   binding over `../../apps/share/dist-share`, and **`wrangler deploy` fails naming that directory when it is
+   absent** — the binding is declared ahead of the build for the same reason the R2 bucket is, so
+   the deploy question is asked once.
+5. `npx wrangler deploy`, and read the address it prints.
+
+   ⚠️ **Then ask the edge what it actually does to the blob, with two `curl`s and not one.** The
+   object is stored gzipped and `blob.ts` nails `content-encoding: gzip` on by hand; the app's
+   reqwest is built with no `gzip` feature, so it decodes nothing itself and — until it began
+   sending the header explicitly — asked for nothing either. Whether Cloudflare hands an
+   `accept-encoding`-less client the identity body is a fact about the deploy, not about this
+   repository, and getting it wrong makes **every in-app open** fail with a corruption sentence on
+   a perfectly healthy share. Both requests, against a real published snapshot URL:
+
+   ```
+   curl -sI --compressed https://<address>/s/<id>/<hash>.json.gz   # asks for gzip
+   curl -sI              https://<address>/s/<id>/<hash>.json.gz   # asks for nothing
+   ```
+
+   Then prove the body is gzipped **once**, cold and again warm (the second request is a
+   `caches.default` hit, which is a different code path at the edge):
+
+   ```
+   curl -s --compressed https://<address>/s/<id>/<hash>.json.gz | head -c 1; echo   # run twice
+   ```
+
+   Both must print `{`. Anything else — binary, `1f 8b` under `xxd` — is a body gzipped twice,
+   which is what `blob.ts`'s `encodeBody: "manual"` exists to prevent; every viewer would answer
+   it with a corruption sentence.
+
+   Read `content-encoding` on each of the two `-I` requests. `gzip` on both is the case the app was written for; its
+   absence on the bare one is the case the app now survives anyway — `share::publish::open` sends
+   `accept-encoding: gzip` and `parse_snapshot` sniffs the `1f 8b` magic rather than assuming it,
+   so either answer opens. Record which one this deploy gives in
+   [collection-sharing.md](../../docs/reference/collection-sharing.md); it is the only way anyone
+   ever finds out.
+6. **Write that address into two places, byte for byte**: `wrangler.jsonc`'s `SHARE_BASE` var
+   (currently the placeholder `<set on first deploy>`) and `share::SHARE_BASE` in the Rust. Then
+   deploy again, because a `var` is baked at deploy time. The same trap `RELAY_BASE` documents
+   for the OAuth redirect URI applies with less mercy here: a mismatched `SHARE_BASE` produces
+   links that resolve to nothing rather than an error anybody sees.
+
+## Testing
+
+There is **no test runner for workerd in this tree, deliberately** —
+`@cloudflare/vitest-pool-workers` drags wrangler and workerd into the tree, and its peer range
+(`vitest ^4.1.0` at 0.22.0, checked 2026-09-27) does not cover the vitest 5 this suite runs;
+`vitest.config.ts` says so. So the handlers are plain functions over an injected `Env`, driven
+as `worker.fetch(request, env)` against `infrastructure/relay/src/fakeD1.ts`'s SQL evaluator, exactly as
+`infrastructure/relay/src/rotate.test.ts` drives `/rotate` and `/keys`.
+
+```
+npx vitest run infrastructure/share-worker/
+npx tsc -p infrastructure/share-worker/tsconfig.json
+```
+
+⚠️ `infrastructure/share-worker/src/**/*.test.ts` is a glob in `vitest.config.ts`. A directory that list does not
+name is collected by **nothing**, and `vitest run` answers `No test files found` — which is easy
+to read as a pass.
+
+`fakeD1` models column keys and not expression indexes, so `shares_folder` — the partial unique
+index that makes one share per folder true — is **not** enforced there. `handleCreate` therefore
+decides it by *reading* the folder's row, and catches a constraint violation only as the backstop
+for two devices publishing at once: the loser re-reads and is answered the winner's id rather than
+a 500. Neither half can be checked against the fake, so both were driven against real SQLite with
+`node:sqlite` on 2026-09-08 — the index refuses a second live share of one folder and a second
+whole-collection share, admits a fresh row beside a revoked tombstone, and the sequence
+publish → revoke → publish → publish → publish answers one stable id from the second press on.
+
+⚠️ **That last sequence is the shape of the bug this Worker shipped for one commit.** The lookup
+in front of the index has to carry the index's own `state <> 'revoked'` predicate; without it the
+tombstone is what `first()` answers, every later publish takes the mint-a-new-id branch, and the
+third press is an uncaught 500 for ever. Two publishes cannot see it — the second is *supposed*
+to mint a new id — which is why the test publishes four times.

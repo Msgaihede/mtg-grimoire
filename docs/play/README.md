@@ -25,7 +25,7 @@ Only the owner signs in, creates, accepts, sets a secret or submits.
    up — `docs/reference/ci-and-releases.md`, *What only the owner can do*. **The web app's
    deploy is a separate pair of values** in the same runbook (`CLOUDFLARE_API_TOKEN`,
    `CLOUDFLARE_ACCOUNT_ID`): with them set a release deploys the web app; without them it
-   does not, and the web app is deployed by hand from the tag (`app-worker/README.md`).
+   does not, and the web app is deployed by hand from the tag (`infrastructure/app-worker/README.md`).
 3. **Merge the three changes, then the release PR.** The run leaves the signed bundle as the
    artifact `play-upload-bundle`. The privacy policy goes live with the web app's deploy —
    the release's own, or the one made by hand.
@@ -202,7 +202,7 @@ Everything else: **not collected**. In particular:
 
 **The one judgement in this section**, for the owner: Cloudflare keeps a log of each request to
 the relay in his own account for up to seven days (`observability` is on in
-`relay/wrangler.jsonc`), and a log line holds the group identifier, in the request's path,
+`infrastructure/relay/wrangler.jsonc`), and a log line holds the group identifier, in the request's path,
 beside the request's IP address. The privacy policy says so. Declaring *Device or other IDs*
 covers the identifier. Turning request logs off for the relay
 (`"observability": { "enabled": true, "logs": { "invocation_logs": false } }`, then a relay
