@@ -36,6 +36,24 @@
   "include": ["../packages/ui", "./entry.ts"],
   // Tests and stories are not API. They emit harmlessly, but they land in the same tree the
   // converter globs and every one of them is a file ts-morph then has to parse.
-  "exclude": ["../packages/ui/**/*.test.ts", "../packages/ui/**/*.test.tsx", "../packages/ui/**/*.stories.tsx"],
+  //
+  // **And the three files the app's own program leaves out, which this list has to repeat**: an
+  // `exclude` written here replaces the one `extends` would have brought; it does not add to it.
+  // The web host's two Workers and its service worker are compiled under the `WebWorker` lib, by
+  // programs of their own (`packages/ui/tsconfig.web-worker.json`, `tsconfig.web-sw.json`). Under
+  // this program's `DOM` they were seven of the nine errors this build printed on 2026-10-08 —
+  // `DedicatedWorkerGlobalScope` is not a name here — and an error is not harmless to the build
+  // even though it does not stop the emit: `tsc` exits non-zero, and `buildCmd` chains the
+  // reference build after it with `&&`. Nothing imports the three (the page names each by URL),
+  // so leaving them out takes nothing from the barrel. A fourth file the root `tsconfig.json`
+  // excludes owes a line here.
+  "exclude": [
+    "../packages/ui/**/*.test.ts",
+    "../packages/ui/**/*.test.tsx",
+    "../packages/ui/**/*.stories.tsx",
+    "../packages/ui/lib/core/web/worker.ts",
+    "../packages/ui/lib/core/web/scanWorker.ts",
+    "../packages/ui/lib/core/web/sw/sw.ts"
+  ],
   "references": []
 }
