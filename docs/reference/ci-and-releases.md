@@ -315,7 +315,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     src-tauri/target"` until 2026-10-08, when the build tree moved to the root.)
   - **Proven by a run on 2026-10-03: `tauri-action` still finds its bundles.** v0.40.0 was the
     first release under the workspace; it is invoked exactly as before, the portable step read
-    `src-tauri/target/release/mtg-grimoire.exe` as before, and all five files were attached —
+    `src-tauri/target/release/mtg-grimoire.exe` as before (now `target/release/mtg-grimoire.exe`,
+    since 2026-10-08), and all five files were attached —
     the NSIS installer, the MSI, the portable zip, the `.deb` and the AppImage, each within 1% of
     v0.39.0's size. [light-app.md](light-app.md) §6.12 has the run and what it did not check.
     **`rust-cache` restores under the new line in `ci.yml`** — read off the `rust
@@ -328,7 +329,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     first `Cargo.toml` whose `[workspace]` lists it — the repository root now — and its default
     target is `<that>/target`, which would be wrong here. But `getTargetDir` looks first, on the
     same walk up, for a `.cargo/config` or `.cargo/config.toml` with `build.target-dir`, and
-    joins a relative value onto the directory holding the `.cargo` folder: `<root>/src-tauri/target`.
+    joins a relative value onto the directory holding the `.cargo` folder: `<root>/src-tauri/target`
+    (now `<root>/target`, since 2026-10-08).
     `CARGO_TARGET_DIR` would outrank both and no job sets it. `tauri dev`, which asks
     `cargo metadata`, was launched under the same layout on 2026-10-02 and built into
     `src-tauri/target/debug`.

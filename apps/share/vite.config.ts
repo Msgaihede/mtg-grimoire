@@ -41,7 +41,11 @@ function goldenSnapshot() {
   return {
     name: "share:golden-snapshot",
     transformIndexHtml: (html: string) =>
-      html.replace("%GOLDEN_SNAPSHOT%", `/@fs/${golden.replaceAll("\\", "/")}`),
+      html.replace(
+        "%GOLDEN_SNAPSHOT%",
+        // Without its leading slash, so a POSIX path does not make `/@fs//home/…`.
+        `/@fs/${golden.replaceAll("\\", "/").replace(/^\//, "")}`,
+      ),
   };
 }
 

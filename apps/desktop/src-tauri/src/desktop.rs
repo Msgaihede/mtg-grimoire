@@ -1413,8 +1413,11 @@ mod tests {
     /// own package version** — so that version has to be this app's, or Scryfall, the feeds and
     /// the relay are told a version that is not running. One table holds the number —
     /// `[workspace.package]` in the root `Cargo.toml`, which both manifests inherit — and
-    /// release-please bumps it (`release-please-config.json`'s `extra-files`); this is what goes
-    /// red on a release pull request that moved the lockfile's entries without it.
+    /// release-please bumps it (`release-please-config.json`'s `extra-files`). This guards that
+    /// the core and the desktop stay on that one inherited version: its first assertion can only
+    /// fail if a literal version returns to a manifest, and its second that the config still
+    /// names the bump. It never reads `Cargo.lock`; a lockfile that disagrees with the manifests
+    /// is caught by `--locked` and by `scripts/release-rule.test.mjs`.
     #[test]
     fn the_core_wears_the_apps_version() {
         let expected = concat!("MTGGrimoire/", env!("CARGO_PKG_VERSION"), " (");

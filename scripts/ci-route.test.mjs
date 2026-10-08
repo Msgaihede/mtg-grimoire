@@ -420,6 +420,23 @@ describe("the arms", () => {
     expect(at("apps/light/vite.sw.ts")).toBeLessThan(at("apps/light/*"));
   });
 
+  // The three Workers' `tsc` programs are `infrastructure/*/tsconfig.json`, one glob, and a
+  // Worker's own arm is `infrastructure/<name>/*` (the app's and the relay's; the share Worker
+  // has none and falls to the fail-safe): below those arms a Worker's tsconfig would route to
+  // what the Worker's files do and not to what a program does, silently fewer jobs. The table
+  // above holds each tsconfig's jobs; this holds the order that makes them so.
+  it("puts the Workers' tsconfig arm above every Worker's own arm", () => {
+    const at = (pattern) => ARMS.findIndex((arm) => arm.match.includes(pattern));
+    const workers = ARMS.flatMap((arm, index) =>
+      arm.match.some((pattern) => /^infrastructure\/[^*/]+\/(?!tsconfig\.json$)/.test(pattern))
+        ? [index]
+        : [],
+    );
+    expect(at("infrastructure/*/tsconfig.json")).toBeGreaterThan(-1);
+    expect(workers.length).toBeGreaterThanOrEqual(2);
+    for (const index of workers) expect(at("infrastructure/*/tsconfig.json")).toBeLessThan(index);
+  });
+
   it("never routes to `core` without `rust`", () => {
     const coreArms = ARMS.filter((arm) => arm.jobs.includes("core"));
     expect(coreArms.length).toBeGreaterThan(0);

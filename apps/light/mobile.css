@@ -7,3 +7,7 @@
    the same reason, and `apps/desktop/src/desktop.css` the desktop's. */
 @import "../../packages/ui/index.css";
 @source "./";
+/* The folder's two Node files are not markup, and their long comments are prose a scanner
+   could take for class names. */
+@source not "./vite.config.ts";
+@source not "./vite.sw.ts";

@@ -27,10 +27,14 @@
       different string on every machine. `vite.config.ts`'s `share:golden-snapshot` writes it in
       as the page is served.
 
-      `vite-ignore` because Vite 8 treats a `rel="preload" as="fetch"` link as an asset: without it
-      `share:build` copies the golden into `apps/share/dist-share/assets/`, the folder the share
-      Worker's `assets` binding serves, and publishes a test fixture. Vite drops the attribute on
-      output and the dev server still answers the path it is given.
+      `vite-ignore` is kept from when the `href` was the golden's own path: Vite 8 treats a
+      `rel="preload" as="fetch"` link as an asset, and with that path `share:build` copied the
+      golden into `apps/share/dist-share/assets/`, the folder the share Worker's `assets` binding
+      serves, and published a test fixture. It no longer does anything the build shows. Measured
+      2026-10-08, `share:build` with the attribute and without it emits the same twenty-one files,
+      the golden in neither, because what the plugin writes in is a `/@fs/` address the dev
+      server answers and not a file Vite can copy. The attribute stays as the guard if the
+      `href` is ever a path to a real file again.
     -->
     <link
       vite-ignore

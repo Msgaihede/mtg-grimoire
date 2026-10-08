@@ -5897,7 +5897,8 @@ every visit to Settings.
 **The panel ids are the panels' own `SettingsSection` stems, character for character, and that
 claim now has a fence.** The stem is a `string` prop, so a `PanelId` no heading answers to
 type-checks perfectly and costs the reader a rail entry that scrolls to nothing.
-`packages/ui/features/settings/nav.test.ts` sweeps `/packages/ui/**/*.{ts,tsx}` and `/apps/desktop/src/**/*.{ts,tsx}` (`/src/**` until 2026-10-08) through Vite's `?raw` — the
+`packages/ui/features/settings/nav.test.ts` sweeps `/packages/ui/**/*.{ts,tsx}` and
+`/apps/desktop/src/**/*.{ts,tsx}` (`/src/**` until 2026-10-08) through Vite's `?raw` — the
 `layers.test.ts` trick, for its reason: no `@types/node`, so no `node:fs` — and asserts the set of
 drawn stems against `Object.keys(PANELS)`. Two things the sweep has to get right and a naive one
 would not: it **strips comments first**, because this repo keeps its reasoning in prose and the

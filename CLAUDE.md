@@ -66,19 +66,19 @@ _For full architecture details and golden export fences, see [`docs/agent/ARCHIT
 
 This file contains only global instructions. **The binding rules for any specific area live in that area's own `CLAUDE.md`**, which should be read before modifying code there:
 
-| Area / File                                                          | Governs                                                                                                     |
-| -------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
-| [`apps/desktop/src-tauri/CLAUDE.md`](apps/desktop/src-tauri/CLAUDE.md)                         | Desktop Rust host, window management, updater, desktop migrations, and `#[tauri::command]` IPC handlers     |
-| [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md)   | Shared headless engine (schema, decks, collection, wishlist, search, Scryfall client, platform abstraction) |
-| [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md)     | Web host — engine compiled to WASM module for browser execution                                             |
-| [`crates/grimoire-scan/CLAUDE.md`](crates/grimoire-scan/CLAUDE.md)   | Web host's scanner — `card-scanner` as a WASM module of its own, for a Worker of its own                    |
-| [`apps/light/CLAUDE.md`](apps/light/CLAUDE.md)                               | Light app — Android and web UI faces and responsive boundary                                                |
+| Area / File                                                                          | Governs                                                                                                     |
+| ------------------------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------- |
+| [`apps/desktop/src-tauri/CLAUDE.md`](apps/desktop/src-tauri/CLAUDE.md)               | Desktop Rust host, window management, updater, desktop migrations, and `#[tauri::command]` IPC handlers     |
+| [`crates/grimoire-core/CLAUDE.md`](crates/grimoire-core/CLAUDE.md)                   | Shared headless engine (schema, decks, collection, wishlist, search, Scryfall client, platform abstraction) |
+| [`crates/grimoire-web/CLAUDE.md`](crates/grimoire-web/CLAUDE.md)                     | Web host — engine compiled to WASM module for browser execution                                             |
+| [`crates/grimoire-scan/CLAUDE.md`](crates/grimoire-scan/CLAUDE.md)                   | Web host's scanner — `card-scanner` as a WASM module of its own, for a Worker of its own                    |
+| [`apps/light/CLAUDE.md`](apps/light/CLAUDE.md)                                       | Light app — Android and web UI faces and responsive boundary                                                |
 | [`packages/ui/CLAUDE.md`](packages/ui/CLAUDE.md)                                     | React frontend, design tokens, `CardImage` rules, Storybook MCP usage                                       |
 | [`packages/ui/features/decks/CLAUDE.md`](packages/ui/features/decks/CLAUDE.md)       | Deck validation, categories, deck editor views, and drag-and-drop interactions                              |
 | [`packages/ui/features/transfer/CLAUDE.md`](packages/ui/features/transfer/CLAUDE.md) | Decklist import and export parsing, planning, and dialogs                                                   |
-| [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md)                       | Storybook workbench, mock database (`packages/fake/db.ts`), seed fixtures, and fault simulation                      |
-| [`.github/CLAUDE.md`](.github/CLAUDE.md)                             | CI workflows, path routers, and release-please configuration                                                |
-| [`infrastructure/app-worker/README.md`](infrastructure/app-worker/README.md)                       | Web app Cloudflare Worker hosting, headers, and deploy runbook                                              |
+| [`.storybook/CLAUDE.md`](.storybook/CLAUDE.md)                                       | Storybook workbench, mock database (`packages/fake/db.ts`), seed fixtures, and fault simulation             |
+| [`.github/CLAUDE.md`](.github/CLAUDE.md)                                             | CI workflows, path routers, and release-please configuration                                                |
+| [`infrastructure/app-worker/README.md`](infrastructure/app-worker/README.md)         | Web app Cloudflare Worker hosting, headers, and deploy runbook                                              |
 
 ---
 
