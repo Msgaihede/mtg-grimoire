@@ -7,7 +7,7 @@
 //!     crates/card-scanner/eval/printings.txt .scanner-bundle/eval-cache
 //! cargo run --release --features builder --bin stacking -- sequence \
 //!     crates/card-scanner/eval/printings.txt .scanner-bundle/eval-cache \
-//!     .scanner-bundle/card-hashes-v5.bin src-tauri/target/debug/data/corpus.db \
+//!     .scanner-bundle/card-hashes-v5.bin target/debug/data/corpus.db \
 //!     .scanner-bundle/models
 //! ```
 //!

@@ -1,0 +1,9 @@
+/* The desktop app's stylesheet: the shared one, and this app's own Tailwind sources.
+
+   `packages/ui/index.css` opens with `@import "tailwindcss" source(none)` and names its own
+   folder, so nothing outside it is scanned unless a `@source` says so — the pattern
+   `apps/light/mobile.css` and `apps/share/share.css` follow. Without the two lines below a class
+   written only in `index.html` or in this folder emits no rule, and nothing fails. */
+@import "../../../packages/ui/index.css";
+@source "../index.html";
+@source "./";

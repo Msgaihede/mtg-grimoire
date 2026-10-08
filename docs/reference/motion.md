@@ -2,11 +2,11 @@
 
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
-- **Timings live in `src/lib/motion.ts` and nowhere else.** `DURATION` is `instant` 50 · `fast`
+- **Timings live in `packages/ui/lib/motion.ts` and nowhere else.** `DURATION` is `instant` 50 · `fast`
   120 · `base` 180 · `slow` 260 ms, `EASE` is `standard`/`enter`/`exit`, and consumers import a **preset**
   (`scrim`, `dialog`, `popup`, `statusLine`, `press`, `stackCard`) rather than a
   number. The 150 ms budget it replaces existed only as a prose comment and ~100 hand-copied
-  `duration-150` literals. `src/index.css` carries the same scale so CSS-only sites agree.
+  `duration-150` literals. `packages/ui/index.css` carries the same scale so CSS-only sites agree.
 - **`drawerRight` was deleted on 2026-08-14**, when the deck editor's two right-hand drawers
   (Categories & labels, History) became centred modals and it lost its last consumer. It slid a
   right-docked panel in from `x: "100%"` on `slow`, out on `base`. `CardDetailPane` had already
@@ -63,8 +63,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   nonce-based `style-src`. `mode="sync"` and `"wait"` are fine.
 - **`devCsp` has `style-src 'self' 'unsafe-inline'` and the shipped `csp` does not**, so dev,
   Storybook and jsdom are all green on that violation and only the packaged exe breaks. A source
-  sweep is the only thing that can catch it, and `src/lib/tokens.test.ts` now carries it, beside
-  a second guard asserting exactly one `MotionConfig reducedMotion="user"` exists in `src/`.
+  sweep is the only thing that can catch it, and `packages/ui/lib/tokens.test.ts` now carries it, beside
+  a second guard asserting exactly one `MotionConfig reducedMotion="user"` exists in `packages/ui/`.
   Both were proven red before being trusted. The old `\btransition-(?!none)` sweep is **blind to
   JS motion** — a file animated entirely through `motion` matches nothing and passes trivially.
 - **Measured in the shipped window 2026-08-12, on a `--debug` build, which enforces the
@@ -75,7 +75,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 - **Under jsdom `motion` needs no shim**: `Element.prototype.animate` is undefined, so it falls
   back to its own rAF driver, which jsdom has. The animations are therefore **real and
   timing-dependent**, which is why `MotionGlobalConfig.skipAnimations = true` is set in
-  `src/test-setup.ts` — one assignment before any test file loads, covering the composed story
+  `packages/ui/test-setup.ts` — one assignment before any test file loads, covering the composed story
   plays too.
 - **A `motion` element's first painted frame carries its `initial`, so `toBeVisible` is false
   for everything inside an animated surface until the next frame** — even with `skipAnimations`,
@@ -89,7 +89,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `transition-[color,background-color,border-color,opacity,transform,scale]` +
   `duration-[var(--duration-fast)] ease-standard` + `active:scale-[0.97]` +
   `motion-reduce:transition-none`, verified in the built CSS rather than in source. **It is
-  `PRESS` in `src/lib/motion.ts` since 2026-08-16** (`b0a49aa`) — until then it was hand-copied
+  `PRESS` in `packages/ui/lib/motion.ts` since 2026-08-16** (`b0a49aa`) — until then it was hand-copied
   onto every pressable control in the app, with the paragraph above pasted beside almost all of
   them. `PRESS_SOFT` sits next to it: the same string at `0.99`, for `MarketplacePanel`'s
   full-width rows. **Both are built from one `PRESS_STILL`** and are template literals,
@@ -147,7 +147,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 
   **Nothing in the suite can see any of this**: jsdom has no layout engine and no user-agent
   shadow tree, so there is no button to press and no hit test to miss. `motion.test.ts` sweeps
-  `src/` for the class instead, slicing each `<input>` tag brace- and comment-aware, and pins
+  `packages/ui/` for the class instead, slicing each `<input>` tag brace- and comment-aware, and pins
   four ways that sweep could go vacuously green.
 - **Cost: +41.4 kB gzip** for the full `motion.*` surface against the app's 176 kB (esbuild
   `--bundle --minify`, `NODE_ENV=production`, gzip -9). `m` + `LazyMotion(domAnimation)` measures

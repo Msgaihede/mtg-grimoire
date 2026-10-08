@@ -2,16 +2,16 @@
 // asked by `release.yml`'s `web-deploy` job the moment `wrangler deploy` returns (light app
 // phase 6, step 6.6).
 //
-//   node scripts/web-deploy-probe.mjs <dist-web> [origin]     # origin: https://mtg-grimoire.app
+//   node scripts/web-deploy-probe.mjs <apps/light/dist-web> [origin]     # origin: https://mtg-grimoire.app
 //
 // Three questions of `GET <origin>/`, each against the bundle that was uploaded:
 //
 //   1. it answers 200;
 //   2. its `Content-Security-Policy` is **the built `_headers` line, byte for byte** — read with
-//      the hosting Worker's own reader (`app-worker/src/headers.ts`), so "the line" means here
+//      the hosting Worker's own reader (`infrastructure/app-worker/src/headers.ts`), so "the line" means here
 //      what it means to `npm run web:preview` and to `hosting.test.ts`. This is probe 1 of
-//      `app-worker/README.md`'s step 0;
-//   3. the document is `<dist-web>/index.html`, byte for byte. The first two pass on yesterday's
+//      `infrastructure/app-worker/README.md`'s step 0;
+//   3. the document is `<apps/light/dist-web>/index.html`, byte for byte. The first two pass on yesterday's
 //      deploy whenever the policy did not change; this is the one that says *this* build is what
 //      the address serves, because the document names its chunks by their hashes. It is also the
 //      README's warning made a check: a `<script>` the build did not write is a zone feature
@@ -37,9 +37,9 @@
 import { appendFileSync, existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { headersFor, parseHeaders } from "../app-worker/src/headers.ts";
+import { headersFor, parseHeaders } from "../infrastructure/app-worker/src/headers.ts";
 
-/** The app's one origin (`app-worker/wrangler.jsonc`, `routes`). */
+/** The app's one origin (`infrastructure/app-worker/wrangler.jsonc`, `routes`). */
 export const ORIGIN = "https://mtg-grimoire.app";
 
 /** How long one attempt may take, connection to last byte (`PROBE_TIMEOUT_MS`). */
@@ -135,7 +135,7 @@ async function ask(origin) {
 async function main() {
   const [dist, origin = ORIGIN] = process.argv.slice(2);
   if (!dist) {
-    console.error("usage: node scripts/web-deploy-probe.mjs <dist-web> [origin]");
+    console.error("usage: node scripts/web-deploy-probe.mjs <apps/light/dist-web> [origin]");
     process.exitCode = 2;
     return;
   }

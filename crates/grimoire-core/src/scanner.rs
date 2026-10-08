@@ -23,7 +23,7 @@
 //! **Assets load per asset, first hit wins: a file in `data/scanner/`, then the copy the host's
 //! binary carries, then absent.** What the binary carries is the host's to say: the desktop's
 //! release build embeds all three under `cfg(scanner_assets)` (`build.rs` sets it when
-//! `src-tauri/scanner-assets/` holds them) and says so once, through [`ScannerState::carry`],
+//! `apps/desktop/src-tauri/scanner-assets/` holds them) and says so once, through [`ScannerState::carry`],
 //! before any command can ask; a host that never says carries nothing. A file placed in
 //! `data/scanner/` overrides the embedded copy so a new bundle can be tried without a rebuild.
 //! Nothing here downloads — `scanner_assets` does, when a reader asks it to, into that same
@@ -133,8 +133,8 @@ pub const DETECT_FINISH: &str = "detect";
 /// one it has and one it has not fetched yet alike, because `Absent` promises a path to place a
 /// file at and a page has none. [`load`] never answers it: this crate runs no session on a page
 /// ([`not_in_a_browser_yet`]), and the status a page reads is composed by the web host
-/// (`src/lib/core/web/scanner.ts`) in this struct's shape. It is declared here because the shape
-/// is declared here, and `src/lib/ipc.ts` mirrors it from this text.
+/// (`packages/ui/lib/core/web/scanner.ts`) in this struct's shape. It is declared here because the shape
+/// is declared here, and `packages/ui/lib/ipc.ts` mirrors it from this text.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "lowercase")]
 pub enum AssetSource {
@@ -159,7 +159,7 @@ pub struct Asset {
 /// The assets compiled into the host's binary, if any — said to [`ScannerState::carry`].
 ///
 /// **A struct passed to [`load`] rather than a `cfg!` inside it**, the `bool`-parameter rule
-/// `src-tauri/CLAUDE.md` states for every `cfg`: both arms of the load order compile and are
+/// `apps/desktop/src-tauri/CLAUDE.md` states for every `cfg`: both arms of the load order compile and are
 /// tested on every build, whether or not this one embedded anything. It is also what keeps the
 /// `cfg` out of this crate, whose fence refuses one outside `platform/`: the desktop's
 /// `scanner::compiled()` is where `cfg(scanner_assets)` is asked.
@@ -172,7 +172,7 @@ pub struct Embedded {
 
 impl Embedded {
     /// Nothing embedded — a host that carries no assets, a desktop build without
-    /// `src-tauri/scanner-assets/`, and every test that is about files.
+    /// `apps/desktop/src-tauri/scanner-assets/`, and every test that is about files.
     pub fn none() -> Embedded {
         Embedded {
             bundle: None,
@@ -294,7 +294,7 @@ pub const NOT_IN_A_BROWSER_YET: &str = "The scanner does not run in a browser ye
 ///
 /// **A backstop, and what makes the linker drop the session.** The web host answers the
 /// session's commands and the two for its files on the page, in front of the table
-/// (`src/lib/core/web/scanner.ts`), so nothing a reader does arrives here. This stays because
+/// (`packages/ui/lib/core/web/scanner.ts`), so nothing a reader does arrives here. This stays because
 /// the table still names those commands for every host, and because on `wasm32` it is a
 /// constant refusal: everything behind it — the session, the readers, their OCR runtime — is
 /// unreachable, and fat LTO leaves it out of the engine's module — three megabytes of it.
@@ -313,7 +313,7 @@ pub const NOT_IN_A_BROWSER_YET: &str = "The scanner does not run in a browser ye
 ///
 /// `verdictText.ts`'s `SCANNER_NOT_IN_A_BROWSER_YET` is the same sentence, `ipc.test.ts` pins
 /// it, and the page reads it as it reads the web host's own two for a scanner it cannot offer
-/// (`src/lib/core/hostScanner.ts`): quietly, with no camera asked for and no frame sent.
+/// (`packages/ui/lib/core/hostScanner.ts`): quietly, with no camera asked for and no frame sent.
 pub fn not_in_a_browser_yet() -> Result<(), String> {
     if !crate::platform::host::keeps_files() {
         return Err(NOT_IN_A_BROWSER_YET.to_owned());
@@ -1054,7 +1054,7 @@ pub enum Header<'a> {
 
 impl<'a> Header<'a> {
     /// A header as a call through the command table carries it: **the call's arguments are the
-    /// headers**, an object of strings, exactly as `src/lib/core/table.ts` and the web host's
+    /// headers**, an object of strings, exactly as `packages/ui/lib/core/table.ts` and the web host's
     /// `protocol.ts` send a `Uint8Array` call — `{"x-scanner-options": "<json>",
     /// "x-scanner-detail": "<n>"}`. A key that is missing or `null` was not sent; a value that
     /// is not a string is there and unreadable, as a header of raw bytes is on the desktop.

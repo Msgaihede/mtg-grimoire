@@ -1,9 +1,0 @@
-/* The light app's stylesheet: the app's own sheet, plus one line.
-
-   `src/index.css` opens with `@import "tailwindcss" source(none)` and names its own sources, and
-   its `@source "../src"` resolves against `src/`, which this directory is not under. Without the
-   line below every class written under `mobile/` would emit no rule at all, silently — the page
-   would draw with the app's tokens and none of its own layout. `share/share.css` is the same file
-   for the same reason. */
-@import "../src/index.css";
-@source "../mobile";

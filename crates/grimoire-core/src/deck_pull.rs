@@ -133,7 +133,7 @@ const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 /// One printing the live list is short of, and every copy on the reader's desk that could fill
 /// it.
 ///
-/// The hand-written mirror of `DeckPullRow` in `src/lib/ipc.ts`, field for field. Its doc carries
+/// The hand-written mirror of `DeckPullRow` in `packages/ui/lib/ipc.ts`, field for field. Its doc carries
 /// the same reasoning from the reader's end.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]

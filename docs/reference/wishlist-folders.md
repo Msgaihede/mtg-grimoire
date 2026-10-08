@@ -186,7 +186,7 @@ roll back should not have taken a write lock, and this is not one of those: it r
 `wishlist_folders` row the loop below is about to write against, so the answer has to be the one
 that write will see.
 
-**One control serves both surfaces**, `src/features/wishlist/WishDestination.tsx`, so two dialogs
+**One control serves both surfaces**, `packages/ui/features/wishlist/WishDestination.tsx`, so two dialogs
 cannot describe one cabinet differently. It is a `Dropdown` of three kinds of row:
 
 - **`Wishlist`** — the root, wearing the `Heart` glyph and not a `Folder`. That is
@@ -344,7 +344,7 @@ Five properties of that count:
   printings have left the corpus, and "also on your list" over them says something false about the
   one thing the mark exists to say something true about.
   `elsewhere_counts_the_other_wishes_for_the_same_oracle_card` is what fails if anyone writes it,
-  and `.storybook/fake/db.test.ts` pins the same fence on the fake.
+  and `packages/fake/db.test.ts` pins the same fence on the fake.
 
 ## The drag payload carries two marks, under two keys
 
@@ -366,7 +366,7 @@ module's mark onto it, `dnd.ts`'s reader would see only whichever mark won, and 
 would be lied to. So a wish drag answers under its **own** key.
 
 ```ts
-// src/features/wishlist/wishDrag.ts
+// packages/ui/features/wishlist/wishDrag.ts
 const WISH_MARK = "mtg-grimoire/wish-file-drag";
 const MARK_KEY = "wishSource";          // NOT dnd.ts's `dragSource`
 ```
@@ -409,7 +409,7 @@ be exactly the card's, and because every test and story addresses the two boxes 
 [frontend-design.md](frontend-design.md) for the measured version of the registry rule.
 **`DROP_MARK_ROOM` stays for
 `FOCUS`'s sake rather than the ring's**: an inset ring cannot be clipped, and half a focus
-indicator is a WCAG 2.4.7 failure. `src/lib/dropMarks.ts` carries the reasoning in full.
+indicator is a WCAG 2.4.7 failure. `packages/ui/lib/dropMarks.ts` carries the reasoning in full.
 
 The two destinations are the folder cards and **the breadcrumb's segments**, which is how a wish
 gets back *out*: without them a drag could only ever push wishes deeper. Both write through
@@ -421,7 +421,7 @@ the half a keyboard cannot use.
 **History (2026-09-26):** the folder cards are shelf headings now, joined by the empty shelf's
 dashed box and the sticky bar as card targets, and a breadcrumb segment takes a folder too. A
 heading carries its card target and its folder target **on one element** (`useShelfDropTarget`,
-`src/features/shelves/useShelfDrag.ts`), which the entity-id registry described above allowed all
+`packages/ui/features/shelves/useShelfDrag.ts`), which the entity-id registry described above allowed all
 along. See [Shelves](#shelves-2026-09-26).
 
 ### `WishDrop`, the discriminator the wishlist never had (2026-09-07)
@@ -479,7 +479,7 @@ was a link, and readers did what the issue describes: they gave up on the drag a
 row menu's `Move to folder…`.
 
 **The fix is a folder card for the level above**, first in the wall, drawn only when the reader is
-inside a folder. It is `src/components/ParentFolderCard.tsx`, shared by all three cabinets, with a
+inside a folder. It is `packages/ui/components/ParentFolderCard.tsx`, shared by all three cabinets, with a
 thin per-page wrapper beside each page's own folder card (`WishParentFolderCard` here) holding the
 two drop targets. Four decisions:
 
@@ -526,7 +526,7 @@ under the breadcrumb** — a box with its own edge, an input, `Create folder` an
 out in words, and, on a create, a line reading *in Wishlist* to say which level the strip was
 about. Every one of those pieces re-established a context the wall on screen already carried, so
 each one is gone and the tile *becomes* the field.
-`src/components/FolderNameField.tsx` is the shape and
+`packages/ui/components/FolderNameField.tsx` is the shape and
 [frontend-design.md](frontend-design.md) is the whole argument. Three things belong here, because
 they are facts about this cabinet rather than about the field.
 
@@ -596,7 +596,7 @@ headings" mode — the spec's decision 2, argued in
 [the collection's section](collection-folders.md#flatten-was-deleted-not-hidden). **The wire kept
 its field**: `WishlistQuery::flatten` is still read, and *Export everything* and the shared-binder
 view's owned-and-wanted index still send `flatten: true` (`useExportScope`'s sweep in
-`src/features/transfer/export/scope.ts`, and `src/features/share/useOwnedIndex.ts`).
+`packages/ui/features/transfer/export/scope.ts`, and `packages/ui/features/share/useOwnedIndex.ts`).
 
 ### `WishlistQuery::shelves`
 
@@ -649,7 +649,7 @@ filter included — by `wishlist::shelf_counts`:
 | `peek` | `c.id` off `priced_wishes`' join — a pinned wish's own printing, an any-printing wish's cheapest — so each is the id that wish's tile is drawn from; a genuine orphan has no picture and is left out. **Unfiltered**, for the collection's reason |
 
 **The loaded rows are a floor under a count, never a ceiling** (`effectiveCounts` in
-`src/features/wishlist/wishShelfPlan.ts`). The list and the counts are two reads settled by
+`packages/ui/features/wishlist/wishShelfPlan.ts`). The list and the counts are two reads settled by
 one invalidation, so for a round trip either can be ahead; a shelf laid out from a count one short
 of the rows on screen would drop a wish the reader can see.
 
@@ -1299,7 +1299,7 @@ the answer that keeps every wish.
 
 Three CDP passes over `a534bf7`, on Windows, `tauri dev` (debug), at 1920×1080 and 1280×800. Every
 figure below was measured, not derived. The suite could not see any of them: jsdom has no layout
-engine, and its default `staleTime` is 0 where the app's is 30 s (`src/lib/query.ts`).
+engine, and its default `staleTime` is 0 where the app's is 30 s (`packages/ui/lib/query.ts`).
 
 **A wish filed into a folder used to vanish until reload, and that is the one worth remembering.**
 `setFolder` removed the row optimistically from every cached list page and then invalidated only the
@@ -1334,7 +1334,7 @@ reads 257.
 
 **Two harness facts, for the next pass.** `window.__TAURI_INTERNALS__.invoke` is non-writable and
 non-configurable, so patching it to count ipc calls fails silently and reports zero — which reads
-exactly like an app that made no calls. Wrap the methods on `src/lib/ipc.ts`'s `ipc` object instead.
+exactly like an app that made no calls. Wrap the methods on `packages/ui/lib/ipc.ts`'s `ipc` object instead.
 And this app's confirmations carry **no** `dialog` or `alertdialog` role, so probing for one finds
 nothing on a confirmation plainly on screen; find it by its text.
 
@@ -1419,19 +1419,19 @@ they were before the press. Findings B and C, both known and accepted, are recor
 | `crates/grimoire-core/src/wishlist_folders.rs` | The folder commands, `set_wish_folder`, `folder_summary`, and since issue #471 `clear_folder` and `delete_folder_and_wishes` |
 | `crates/grimoire-core/src/wishlist.rs` | `set_wish_printing`, `elsewhere`, `WISH_PREFERRED_FINISH`, the cheapest-printing join — and since 2026-09-26 `WishlistQuery::shelves`, `shelf_counts`, `wishlist_peek_sql` and `wishlist_shelf_counts` |
 | `crates/grimoire-core/src/wishlist_optimize.rs` | `plan` and `apply`, the candidate query, and the six DTOs `ipc.test.ts`'s `plainMirrors` pins |
-| `src/features/wishlist/optimizePlan.ts` | The conclusions drawn from those facts — the ticked set, the headline, the outcome reading |
-| `src/features/wishlist/OptimizeWishlistDialog.tsx` | The preview, and the one press that commits it |
+| `packages/ui/features/wishlist/optimizePlan.ts` | The conclusions drawn from those facts — the ticked set, the headline, the outcome reading |
+| `packages/ui/features/wishlist/OptimizeWishlistDialog.tsx` | The preview, and the one press that commits it |
 | `crates/grimoire-core/src/sorting.rs` | `row_price_expr`'s two arms, and `deck_card_price_expr` as one caller of it |
-| `src/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
-| `src/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
-| ~~`src/features/wishlist/WishFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band, beside `ManagedWishFolders.tsx`. A folder is a shelf heading |
-| `src/features/wishlist/wishShelfPlan.ts` | The wishlist's reading of the shelves: `toShelfFolder`, `NEW_FOLDER_SHELF`, `effectiveCounts`, `countTotals`, `shelfStat`, `foldedForDrag` and the table's `shelfTable` |
-| `src/features/wishlist/WishShelfHeading.tsx` | The heading, the sticky bar and the empty box, each wired to `readWishDrop` and this page's filing policy |
-| `src/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` — drawn on a shelf heading since 2026-09-26 |
-| ~~`src/components/NewFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band. Add folder is `ShelfToolbar` and `ShelfHeading` |
-| `src/components/ParentFolderCard.tsx` | The up-one-level tile — drawn by no cabinet since 2026-09-26, with its stories kept; the deck gallery's `FolderCard` imports its words. Its folder half is a breadcrumb segment's drop now |
-| `src/features/card/cardMenu.tsx` | `buildWishlistTargetItems` — `Add to → Wishlist` |
-| `src/features/wishlist/WishDestination.tsx` | The destination dropdown both deck sweeps draw — the root, the full-path rows, and `New folder…` |
+| `packages/ui/lib/folderTree.ts` | `buildFolderTree` and friends, shared with the deck gallery |
+| `packages/ui/features/wishlist/wishDrag.ts` | The payload, the tile that offers it, the target that takes it |
+| ~~`packages/ui/features/wishlist/WishFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band, beside `ManagedWishFolders.tsx`. A folder is a shelf heading |
+| `packages/ui/features/wishlist/wishShelfPlan.ts` | The wishlist's reading of the shelves: `toShelfFolder`, `NEW_FOLDER_SHELF`, `effectiveCounts`, `countTotals`, `shelfStat`, `foldedForDrag` and the table's `shelfTable` |
+| `packages/ui/features/wishlist/WishShelfHeading.tsx` | The heading, the sticky bar and the empty box, each wired to `readWishDrop` and this page's filing policy |
+| `packages/ui/components/FolderNameField.tsx` | The one naming field, both shapes, `FOLDER_CARD_HEIGHT` and `useFolderFieldReturn` — drawn on a shelf heading since 2026-09-26 |
+| ~~`packages/ui/components/NewFolderCard.tsx`~~ | **Deleted 2026-09-26** with the folder band. Add folder is `ShelfToolbar` and `ShelfHeading` |
+| `packages/ui/components/ParentFolderCard.tsx` | The up-one-level tile — drawn by no cabinet since 2026-09-26, with its stories kept; the deck gallery's `FolderCard` imports its words. Its folder half is a breadcrumb segment's drop now |
+| `packages/ui/features/card/cardMenu.tsx` | `buildWishlistTargetItems` — `Add to → Wishlist` |
+| `packages/ui/features/wishlist/WishDestination.tsx` | The destination dropdown both deck sweeps draw — the root, the full-path rows, and `New folder…` |
 | `crates/grimoire-core/src/deck_theory.rs` | `missing_to_wishlist`, the Compare dialog's write and its up-front folder check |
 | `crates/grimoire-core/src/deck.rs` | `missing_to_wishlist`, the live deck's, taking the same optional folder |
 
@@ -1485,7 +1485,7 @@ drops it, its wishes first, when the deck is short of none.
   because a reader's own folder called `Tokens`, or a deck named `Tokens`, must never be taken for
   it. **`idx_wishlist_folders_managed` widened from `(managed_deck_id)` to `(managed_deck_id,
   managed_tokens)`** — one folder per deck per kind, where v48's one per deck would refuse the
-  child — and the rung **drops it first**, `src-tauri/CLAUDE.md`'s rule for a changed index
+  child — and the rung **drops it first**, `apps/desktop/src-tauri/CLAUDE.md`'s rule for a changed index
   definition: a `CREATE` over the old one would be refused by name, and `IF NOT EXISTS` would be a
   silent no-op on exactly the machines that climbed. NULLs stay distinct in it, so every folder the
   reader made is untouched. `the_v55_rung_widens_the_managed_index` reads the index off
@@ -1522,7 +1522,7 @@ reads `off` after v49, the ones v48 switched on unasked included, and the launch
 their folders.
 
 - **Derived per device, never synced.** The mode syncs; the folder and its wishes do not.
-  `src-tauri/CLAUDE.md`'s rule is that a write every device derives for itself must not be
+  `apps/desktop/src-tauri/CLAUDE.md`'s rule is that a write every device derives for itself must not be
   captured — two devices would each insert the same wish under two `sync_uid`s and the grain's
   upsert would sum them — so `managed_wishlist::settle_deck` writes inside
   `capture::suppressed`, and `wishlist_folders.managed_deck_id` is on no capture spec. It has no

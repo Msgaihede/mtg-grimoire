@@ -80,7 +80,7 @@ therefore always "not allowed below N", never "is N" — so `BracketEstimate.flo
 bracket the deck is allowed in, and it is the only reading that makes a *set* bracket checkable
 against it at all.
 
-The rungs, as shipped in `rulesThatFired` (`src/features/decks/validation/bracket.ts`):
+The rungs, as shipped in `rulesThatFired` (`packages/ui/features/decks/validation/bracket.ts`):
 
 ```
 4  ≥ 4 Game Changers · any mass land denial · ≥ 3 extra-turn cards · a combo tagged R
@@ -294,7 +294,7 @@ claim about how a deck plays, and no list of cards answers it.
 ## The combo feed
 
 `crates/grimoire-core/src/combos.rs` since 2026-10-02, with its five commands in
-`src-tauri/src/combos/mod.rs`. Modelled on `marketplace_feed.rs` and not on `tags/`: it is not
+`apps/desktop/src-tauri/src/combos/mod.rs`. Modelled on `marketplace_feed.rs` and not on `tags/`: it is not
 Scryfall, so it gets its own client (a `platform::http::Client`, which is `reqwest`), its own timeouts, no share of Scryfall's
 rate-limit budget and no place in its 429 penalty state.
 
@@ -1237,7 +1237,7 @@ full size, with nothing collapsed and nothing abbreviated. **Nothing about the b
 differently.
 
 **The panel is `w-[62rem] h-[54rem]`, and the width is arithmetic rather than taste.** `minWidth`
-is **1024** (`src-tauri/tauri.conf.json`) and `Dialog`'s scrim spends **24px a side** at `sm`
+is **1024** (`apps/desktop/src-tauri/tauri.conf.json`) and `Dialog`'s scrim spends **24px a side** at `sm`
 (640px) and above, so **976px** is every pixel the smallest window this app can be has to give. 62rem is
 **992** — over that by 16, which the shell's own `max-w-full` absorbs — where 72rem would be 176px
 of panel a reader could never see. Everything else here is `w-[45rem]` or `w-[55rem]`; a split
@@ -1493,24 +1493,24 @@ without a relaunch, and it is covered in the suite and in Storybook instead.
 
 | File | Holds |
 | --- | --- |
-| `crates/grimoire-core/src/combos.rs` (commands: `src-tauri/src/combos/mod.rs`) | The feed: client, streaming parse, staged write, `due_at_startup`, `clear_combos`, the commands, `combos:progress` — **and both match queries**: `match_combos`/`combos_for_cards` (*which combos does this pile of printings hold*, the deck advisory's and the gallery's fourth signal) and `card_combos`/`combos_for_card` (*which combos name this one oracle card* — `HIT_CTE`, `OWNED_CTE`, `GRP_CTE`, `counts_sql`, `page_sql`, `pieces_sql`, `MAX_PAGE`) |
+| `crates/grimoire-core/src/combos.rs` (commands: `apps/desktop/src-tauri/src/combos/mod.rs`) | The feed: client, streaming parse, staged write, `due_at_startup`, `clear_combos`, the commands, `combos:progress` — **and both match queries**: `match_combos`/`combos_for_cards` (*which combos does this pile of printings hold*, the deck advisory's and the gallery's fourth signal) and `card_combos`/`combos_for_card` (*which combos name this one oracle card* — `HIT_CTE`, `OWNED_CTE`, `GRP_CTE`, `counts_sql`, `page_sql`, `pieces_sql`, `MAX_PAGE`) |
 | `crates/grimoire-core/src/schema.rs` | The v26 rung — `decks.bracket`, `combos`, `combo_cards`, `combo_meta`, the two indexes, and the staging twins — **and corpus schema 2**: `COMBO_TABLES_SQL`, `create_combo_tables`, `combos_are_at_head`, `COMBO_V2_COLUMNS`, `rebuild_combo_tables` |
 | `crates/grimoire-core/src/deck.rs` | `AUTO_BRACKET`, `valid_bracket`, `BAD_BRACKET`, the column on `DeckRow`/`DeckPatch`/`DeckBefore` and the audit line — **and `deck_bracket_reads`**, with `BRACKET_CARDS_SQL` and `BRACKET_IDS_SQL` behind it |
-| `src/lib/ipc.ts` | `AUTO_BRACKET`, `ComboBracketTag`, `DeckCombo`, `ComboStatus`, `ComboProgress` and the calls — plus `BracketCardRow`/`DeckBracketRead`/`deckBracketReads`, and the card side's `ComboPiece`/`CardCombo`/`ComboCountBucket`/`CardCombosPage`, plus `CardCombosQuery`, which mirrors no Rust struct and exists so the call site and `cardCombosKey` cannot disagree about what was asked |
-| `src/lib/query.ts` | `COMBOS_KEY`, `COMBOS_STATUS_KEY`, `combosForCardsKey`, `cardCombosKey` — one root, so an ingest landing under an open deck or an open card refills it. The last two are **deliberately not both `"forCards"`**: every prefix-scoped TanStack operation matches by prefix, so one spelling would let a targeted invalidation of the cheap read throw away the expensive one |
-| `src/features/decks/validation/types.ts` | `BracketCardFacts` — the five fields, and why the narrowing lives there and not on `CardFacts` |
-| `src/features/decks/validation/bracket.ts` | The floor, the two greps, `COMBO_FLOOR` — **exported since 2026-09-20** — and `comboBrackets` beside it, the card side's five pips derived from that one table and never tabulated a second time; plus `describeReason` and `bracketWarning` |
-| `src/features/decks/DeckBracket.tsx` | The readout, the picker, the combo list, and the four states of the combo read — **and `COMBO_TAG`**, exported since the card side became its second reader, because two tables spelling Spellbook's seven letters are two things that can come to disagree about what `S` means |
-| `src/features/card/CombosDialog.tsx` | The card side's whole surface: the `Rail` with its sentinel and `IntersectionObserver`, the `Pane`, `PAGE_SIZE` (50 since 2026-09-20), `bracketRange` / `bracketSentence` / `comboRowLabel`, the search box and the two filters, the piece art at `w-44` and its owned mark, the four empty sentences, `AS_OF`, and the Spellbook permalink |
-| `src/features/card/CardModalRail.tsx` | The `Combos` row — a noun in the first block, at the end of it, because nothing a reader has learnt the position of moves |
-| `src/features/card/cardDetailKey.ts` | The one `card_detail` key the modal and all four of its overlays share, so opening this dialog is a cache read rather than a round trip |
-| `src/features/decks/useDeckBrackets.ts` | The gallery's read, `deckBracketsKey`, `bracketLabel` and `effectiveBracket` — the wall's whole share of this document |
-| `src-tauri/src/desktop.rs` | The launch task — its own, spawned after the two tagger refreshes and chained onto neither |
-| `src/lib/useComboProgress.ts` | `COMBO_PHASE_LABEL`, the one `combos:progress` subscription, and the two roots a terminal phase invalidates — why the flag is derived from the event here and polled for the tags |
-| `src/lib/activity.ts` | `comboActivity` and `RANK.combos` — the ribbon's sentence, and why the longest job takes the quietest rung |
-| `src/features/settings/CachePanel.tsx` | The `Clear combos` button and its confirm — the only combo surface left in Settings |
-| `src/features/settings/useDataReset.ts` | `useLocalCache` — the clear and the forced refresh as one mutation |
-| `src/features/settings/clearOutcome.ts` | `combosOutcome` — what the press reports, counted off the *refilled* table |
+| `packages/ui/lib/ipc.ts` | `AUTO_BRACKET`, `ComboBracketTag`, `DeckCombo`, `ComboStatus`, `ComboProgress` and the calls — plus `BracketCardRow`/`DeckBracketRead`/`deckBracketReads`, and the card side's `ComboPiece`/`CardCombo`/`ComboCountBucket`/`CardCombosPage`, plus `CardCombosQuery`, which mirrors no Rust struct and exists so the call site and `cardCombosKey` cannot disagree about what was asked |
+| `packages/ui/lib/query.ts` | `COMBOS_KEY`, `COMBOS_STATUS_KEY`, `combosForCardsKey`, `cardCombosKey` — one root, so an ingest landing under an open deck or an open card refills it. The last two are **deliberately not both `"forCards"`**: every prefix-scoped TanStack operation matches by prefix, so one spelling would let a targeted invalidation of the cheap read throw away the expensive one |
+| `packages/ui/features/decks/validation/types.ts` | `BracketCardFacts` — the five fields, and why the narrowing lives there and not on `CardFacts` |
+| `packages/ui/features/decks/validation/bracket.ts` | The floor, the two greps, `COMBO_FLOOR` — **exported since 2026-09-20** — and `comboBrackets` beside it, the card side's five pips derived from that one table and never tabulated a second time; plus `describeReason` and `bracketWarning` |
+| `packages/ui/features/decks/DeckBracket.tsx` | The readout, the picker, the combo list, and the four states of the combo read — **and `COMBO_TAG`**, exported since the card side became its second reader, because two tables spelling Spellbook's seven letters are two things that can come to disagree about what `S` means |
+| `packages/ui/features/card/CombosDialog.tsx` | The card side's whole surface: the `Rail` with its sentinel and `IntersectionObserver`, the `Pane`, `PAGE_SIZE` (50 since 2026-09-20), `bracketRange` / `bracketSentence` / `comboRowLabel`, the search box and the two filters, the piece art at `w-44` and its owned mark, the four empty sentences, `AS_OF`, and the Spellbook permalink |
+| `packages/ui/features/card/CardModalRail.tsx` | The `Combos` row — a noun in the first block, at the end of it, because nothing a reader has learnt the position of moves |
+| `packages/ui/features/card/cardDetailKey.ts` | The one `card_detail` key the modal and all four of its overlays share, so opening this dialog is a cache read rather than a round trip |
+| `packages/ui/features/decks/useDeckBrackets.ts` | The gallery's read, `deckBracketsKey`, `bracketLabel` and `effectiveBracket` — the wall's whole share of this document |
+| `apps/desktop/src-tauri/src/desktop.rs` | The launch task — its own, spawned after the two tagger refreshes and chained onto neither |
+| `packages/ui/lib/useComboProgress.ts` | `COMBO_PHASE_LABEL`, the one `combos:progress` subscription, and the two roots a terminal phase invalidates — why the flag is derived from the event here and polled for the tags |
+| `packages/ui/lib/activity.ts` | `comboActivity` and `RANK.combos` — the ribbon's sentence, and why the longest job takes the quietest rung |
+| `packages/ui/features/settings/CachePanel.tsx` | The `Clear combos` button and its confirm — the only combo surface left in Settings |
+| `packages/ui/features/settings/useDataReset.ts` | `useLocalCache` — the clear and the forced refresh as one mutation |
+| `packages/ui/features/settings/clearOutcome.ts` | `combosOutcome` — what the press reports, counted off the *refilled* table |
 
 ## Sources
 

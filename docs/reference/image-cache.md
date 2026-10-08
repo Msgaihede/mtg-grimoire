@@ -329,7 +329,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `<deckId>.webp` files as inert bytes; they are safe to delete by hand and no code path opens
   the folder. That is deliberate rather than unfinished — removing a directory of unknown
   contents means a recursive delete, and taking the recursive delete out of the deck path — see
-  `reset.rs`'s `clear_decks` doc; a mutation-test run once made `covers` resolve to `src-tauri/`,
+  `reset.rs`'s `clear_decks` doc; a mutation-test run once made `covers` resolve to `apps/desktop/src-tauri/`,
   a cargo test binary's working directory, and deleted 93 source files — is one of the things
   this change is *for*.
 - **The CSP did not change when the route arrived and did not change when it left, and that is
@@ -358,7 +358,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
 The light app's web host (phase 5, step 5.3, 2026-10-04) keeps its pictures somewhere else
 entirely, and **nothing above this heading is true of it**: no `data/images`, no `image_cache`
 row, no upkeep thread, no pre-warm, and `images::Cache` is not called at all. The code is
-`src/lib/core/web/sw/`; what was driven and timed is
+`packages/ui/lib/core/web/sw/`; what was driven and timed is
 [light-app.md](light-app.md) §9.3.
 
 - **Cache Storage rather than files.** `platform::files` refuses in a browser, so the core's
@@ -368,7 +368,7 @@ row, no upkeep thread, no pre-warm, and `images::Cache` is not called at all. Th
   `v1` moves only when the *stored shape* does.
 - **The address keeps the protocol's shape on the app's own origin**:
   `<origin>/mtgimg/<variant>/<card_id>/<face>`, built by the same `cardImageUrl`
-  (`src/lib/images.ts`'s `imageOrigin` answers the origin by the build's mode). The cache key
+  (`packages/ui/lib/images.ts`'s `imageOrigin` answers the origin by the build's mode). The cache key
   is that address **without its query**, so a `?retry=N` or a `?stall=N` is the same picture.
 - **The engine says where a picture is, and the worker fetches it.** A service worker cannot
   reach the database Worker, so it asks the page that made the request, over a

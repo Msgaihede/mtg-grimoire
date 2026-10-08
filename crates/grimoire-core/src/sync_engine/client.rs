@@ -164,7 +164,7 @@ pub const RELAY_REMOVAL_STEP: &str = "relay_removal_step";
 /// The most rows a pull asks the relay for in one page.
 ///
 /// **It is a ceiling on rows and not what sizes a page.** The relay holds every page to a budget
-/// of sealed characters of its own, whatever a client names (`relay/src/log.ts`,
+/// of sealed characters of its own, whatever a client names (`infrastructure/relay/src/log.ts`,
 /// `PULL_PAGE_CHARS`, half a mebibyte) — that budget is what keeps a page to about a quarter of
 /// a second of apply in which a browser's engine answers nothing, 79 s on a 40 kbit/s link
 /// against the 120 s a request is given, and a megabyte of the relay's own heap; its doc has
@@ -674,7 +674,7 @@ fn http() -> http::Client {
 ///
 /// **A page asks the relay through this client like any host.** In a browser it is `fetch`, and
 /// what binds a request there is CORS, which the relay answers for the origins on its allow-list
-/// (`relay/src/cors.ts`). Three things on this side are what that answer covers, and each is a
+/// (`infrastructure/relay/src/cors.ts`). Three things on this side are what that answer covers, and each is a
 /// rule about every request below rather than a habit:
 ///
 /// * **The only request headers set are `authorization` and `content-type`** — here and in
@@ -714,7 +714,7 @@ fn build_http() -> http::Client {
 /// floor on the link that rose with the log: 0.45 Mbit/s for 10 000 ops, 2.2 for 50 000.
 ///
 /// **Since the pull is paged it is a floor on a page**, which the relay holds to half a mebibyte
-/// of sealed text — 393 KB on the wire, 79 s at 40 kbit/s (`relay/src/log.ts`,
+/// of sealed text — 393 KB on the wire, 79 s at 40 kbit/s (`infrastructure/relay/src/log.ts`,
 /// `PULL_PAGE_CHARS`) — whatever the log's size. The one answer that can still miss it is a
 /// single row at the relay's cap, which needs 75 kbit/s. A push is one envelope and was always
 /// inside it. **What a missed deadline costs is the catch-up's fetching, not a page's**: a pull
@@ -1429,7 +1429,7 @@ pub async fn get_rendezvous(
 /// adopts it, so a manifest built from a partial view does not merely fail to add anybody — it
 /// **evicts** whoever it leaves out. That is not hypothetical: `identity::adopt_epoch` prunes and
 /// **never inserts** (there is no public key anywhere in a manifest to insert *with* —
-/// `relay/src/rotate.ts` answers `devices: Object.keys(manifest.keys)`, ids only), so a device
+/// `infrastructure/relay/src/rotate.ts` answers `devices: Object.keys(manifest.keys)`, ids only), so a device
 /// that adopted somebody else's rotation learns *who left* and never *who joined*. Pair a third
 /// device from such a device and its `plan_join` would omit the peer it was never told about,
 /// whose next `check_keys` would read a higher epoch with no blob for itself and leave a group
@@ -3243,7 +3243,7 @@ pub async fn run_once_without_baselines(db: &impl Store) -> Result<Option<RelayO
 /// joiner's first trip is running. Seen in the sync smoke, three runs in twenty-one, as a
 /// `/token` 401 behind a `/rotate` 200 and a joiner's first trip failed. The relay's own source
 /// has said since the group door was built that the app re-checks `/keys` once on this 401
-/// (`relay/src/claim.ts`, `groupDoor`), and [`entitlement::STALE_GROUP_AUTH`] was named "so
+/// (`infrastructure/relay/src/claim.ts`, `groupDoor`), and [`entitlement::STALE_GROUP_AUTH`] was named "so
 /// `client` can act on it" — and until this, nothing in `client` did.
 ///
 /// So the refusal is taken to `/keys`, as [`push`] takes a `stale_epoch`: a rotation adopted

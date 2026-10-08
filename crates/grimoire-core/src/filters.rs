@@ -46,7 +46,7 @@ pub const MANA_VALUE_OPEN_ENDED: u8 = 8;
 pub const VARIABLE_COST_LIKE: &str = "%{X}%";
 
 /// The border chips, in the order the filter row draws them — the ids
-/// `src/features/card/printingFilters.ts` already used before they became a filter.
+/// `packages/ui/features/card/printingFilters.ts` already used before they became a filter.
 ///
 /// **A vocabulary over two columns, not a column's own values.** `cards.border_color` holds six
 /// words (measured 2026-09-27 on the dev corpus's 109 254 paper printings: black 93 029,
@@ -112,7 +112,7 @@ pub const ART_WEIGHT_FLOOR_STRONG: &str = "strong";
 /// failure this split can produce and the reason there is a test per side.
 ///
 /// Closed, so the boundary is type-checked rather than stringly typed; the camelCase serde
-/// names are the contract `src/lib/ipc.ts` mirrors and `ipc.test.ts` fences.
+/// names are the contract `packages/ui/lib/ipc.ts` mirrors and `ipc.test.ts` fences.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum PredicateField {
@@ -141,7 +141,7 @@ pub enum PredicateField {
 /// trap worth stating first: `c:rg` is `c>=rg` and answers 676 cards, while `id:rg` is
 /// `id<=rg` and answers 13 399 (both measured on Scryfall, 2026-09-22). So it stays a variant
 /// of its own and is resolved per field by [`default_op`] rather than folded into `Eq`
-/// anywhere. The grammar in `src/features/search/queryLanguage.ts` resolves it at the edge for
+/// anywhere. The grammar in `packages/ui/features/search/queryLanguage.ts` resolves it at the edge for
 /// every field but the four whose default really *is* `:`, so a `Colon` arriving on a numeric
 /// field is a hand-built payload and is answered as that field's default rather than refused.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
@@ -158,7 +158,7 @@ pub enum PredicateOp {
 
 /// One term of a query box — `t:goblin`, `cmc>=3`, `-a:rebecca`.
 ///
-/// **Parsed in TypeScript and never here.** `src/features/search/queryLanguage.ts` reads the
+/// **Parsed in TypeScript and never here.** `packages/ui/features/search/queryLanguage.ts` reads the
 /// box into free text, tag tokens and a list of these; this crate receives closed enums and
 /// emits SQL from them. Rust supplies facts and TypeScript draws conclusions, and a query
 /// grammar is a conclusion — it is also the half that has to answer *while the reader is still
@@ -2792,7 +2792,7 @@ mod tests {
     /// `#[serde(rename_all = "camelCase")]` on an *enum* renames its variants, and what it
     /// does to a one-word variant (`Cmc` -> `cmc`) against a two-word one (`TypeLine` ->
     /// `typeLine`) is the half a reader would have to know serde's rule to predict. These are
-    /// the strings `src/lib/ipc.ts` declares and `queryLanguage.ts` produces, so this is the
+    /// the strings `packages/ui/lib/ipc.ts` declares and `queryLanguage.ts` produces, so this is the
     /// Rust end of a cross-boundary contract whose other end is `ipc.test.ts`'s drift fence —
     /// and neither end can check the other, which is why both are written out.
     ///

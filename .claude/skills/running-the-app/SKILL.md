@@ -8,7 +8,7 @@ description: Use when launching MTG Grimoire, a live CDP pass, the Vite dev serv
 **Two things here are exclusive across every worktree, and both fail quietly.**
 
 - **The app.** `tauri-plugin-single-instance` is registered before every other plugin
-  (`src-tauri/src/desktop.rs`, the `let builder` at the top of `run()`) and keys on the
+  (`apps/desktop/src-tauri/src/desktop.rs`, the `let builder` at the top of `run()`) and keys on the
   `com.mtggrimoire.app` identifier, which every worktree builds. A second instance gets
   **exit code 0, no window, no stderr** — it reads as a broken build. A debug build from
   `target/debug` counts.
@@ -24,7 +24,7 @@ description: Use when launching MTG Grimoire, a live CDP pass, the Vite dev serv
 So take a lock. `lock.ps1` sits beside this file.
 
 **Ports are fixed — 1420 (Vite), 6006 (Storybook), 9222 (CDP) — and remapping them is not
-a workaround.** `src-tauri/tauri.conf.json`'s `devCsp` and `.mcp.json` hardcode them, both
+a workaround.** `apps/desktop/src-tauri/tauri.conf.json`'s `devCsp` and `.mcp.json` hardcode them, both
 files are tracked, and the single-instance guard is not about a port anyway. Serialise
 with the lock instead.
 
@@ -102,7 +102,7 @@ window if it survived its child.
 ## `npm run mobile:tauri` is the same app, and takes the same lock
 
 The light app's dev window is **this binary with a config overlay**
-(`src-tauri/tauri.light.conf.json`): the same `com.mtggrimoire.app` identifier, the same
+(`apps/desktop/src-tauri/tauri.light.conf.json`): the same `com.mtggrimoire.app` identifier, the same
 single-instance guard, the same `target/debug/data`. So it is launched exactly as above with
 `"run","mobile:tauri"` in place of `"run","tauri","dev"`, under the **`app`** lock, and the
 process to adopt is still `mtg-grimoire`. Its Vite is on **5175** rather than 1420 — which

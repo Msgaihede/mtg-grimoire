@@ -123,7 +123,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   view beside them — `<nav>` carries no `overflow-hidden` and *cannot*, because the collapsed
   rail's floating notes hang off it at `left-full`. Measured with the hold backed out: `Decks` sat
   with its right edge at **102** against a rail 68 wide, **34px** outside it, for the first ~55ms;
-  `Tags` overhangs by 22, `Collapse` by 52, `Collection` by **62**. `src/lib/useNavLabels.ts` holds
+  `Tags` overhangs by 22, `Collapse` by 52, `Collection` by **62**. `packages/ui/lib/useNavLabels.ts` holds
   them back for the length of the tween and the label sites fade them in over
   `--duration-instant` (50ms, the tier added for this). The corrected sweep: the rail reaches 208
   at **172ms**, the word leaves `sr-only` at **195ms**, opacity climbs 0 → 17 → 47 → 70 → 85 → 94
@@ -140,7 +140,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   starts* gets `delayMs: 0`; emulating it mid-session cannot show that, and
   `useNavLabels.test.ts` is what covers the zero-delay path.
 - **The ribbon says what the app is doing, and it is a registry rather than a sync.** A long
-  job registers an `Activity` (`src/lib/activity.ts`) — key, rank, label, `detail`, value —
+  job registers an `Activity` (`packages/ui/lib/activity.ts`) — key, rank, label, `detail`, value —
   through `useRegisterActivity`, and the lowest rank wins the row (`RANK.sync` 0 beats
   `RANK.update` 10; ties break by insertion order, because two hooks' effects run in an order
   nobody chose). The store is created per `ActivityProvider`, at the top of `AppShell` and
@@ -296,7 +296,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `sld 811`, `mul 133` and `mul 133z`. `cards.promo_types` answers it, was already synced and
   stored, and had simply never crossed into TypeScript. So a **treatment is an annotation on a
   finish and never a fourth finish**: no migration, no `CHECK` change, nothing in any import
-  format. `src/lib/treatment.ts` owns the naming, because naming is a judgement; Rust hands the
+  format. `packages/ui/lib/treatment.ts` owns the naming, because naming is a judgement; Rust hands the
   column over unread on all five card-shaped DTOs, at **22.7 bytes** on the 32 174 rows that
   carry one.
   **32 names over 5 428 of 107 355 paper printings (5.1 %)**, in two kinds, and the split is what
@@ -324,7 +324,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   drawing nothing at all. Iris blades because it has to be told from `Sparkles` and `Gem` at
   12px, where `Sparkle` is `Sparkles` minus two points and `Diamond` is `Gem` without its
   facets. At most one glyph either way, so the corner chip still holds at most a crown and one
-  finish mark — the rule in `src/CLAUDE.md` that a third mark wanting that corner means the
+  finish mark — the rule in `packages/ui/CLAUDE.md` that a third mark wanting that corner means the
   corner is full.
   Two call sites moved with it. The **collection table's** mark was gated on the copy having a
   treatment name, which was right while a treatment had its own glyph and became the same
@@ -527,7 +527,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the merge buys is that the number and the press that acts on it are the same object, and what it
   costs is a chip whose caption has two spellings (`2 game changers`, and the bare `Game Changers`
   for a game changer parked in a switched-off pile, where the rules readout counts nothing). Its
-  rules are in [`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
+  rules are in [`packages/ui/features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md).
   **Two findings the deleted rule leaves behind, both still true of anything shaped like it.** The
   **dimmed** state was what carried the class, because the inverse spelling is
   `[data-gc-spotlight] *:not(.deck-gc-lit)` — a `:not()` over a **broad subject**, evaluated
@@ -643,7 +643,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   own zoom.** The gesture was already attached per _card section_ — `CardGrid`'s scroller and the
   deck editor's own `StackView` and `GridView` roots — so the sidebar, the ribbon, the tables and
   the card pane never move. What changed is what those listeners write. `useAppStore`'s `cardZoom`
-  is a `Record<ZoomSection, number>` keyed by `ZOOM_SECTIONS` (`src/lib/cardZoom.ts`, which is the
+  is a `Record<ZoomSection, number>` keyed by `ZOOM_SECTIONS` (`packages/ui/lib/cardZoom.ts`, which is the
   list — no count is written here, because a count is a fact about a tree and the constant already
   answers it): `search`, `tags`, `collection` and `wishlist`, the page-sized list walls;
   `deckSearch`, `collectionSearch` and `wishlistSearch`, the three **docked search columns**, each
@@ -703,7 +703,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   climbed into the border strip above the name by ~2×.
   - **`--mark-scale` is the reader's zoom; `--control-scale` is that times `CONTROL_SHRINK` (0.85)**
     — a control drawn on somebody's artwork, revealed on hover, does not need the presence a
-    table's stepper has. Both live in `src/lib/cardZoom.ts` and are published by `cardScaleVars()`.
+    table's stepper has. Both live in `packages/ui/lib/cardZoom.ts` and are published by `cardScaleVars()`.
   - **Three elements set them and nothing else has to be touched**: `CardGrid`'s tile, `GridView`'s
     tile and `CardStack`'s card. **A variable rather than a prop because the marks are shared.**
     `RarityGem`, `OwnedBadge`, `FinishMark`, `LabelDot`, `CountTag` and `QuantityStepper` are each
@@ -774,7 +774,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   page.
 
   One `app_meta` row, `card_zoom`, holding a JSON object of section → multiplier
-  (`crates/grimoire-core/src/zoom.rs`); `src/lib/useCardZoomPersistence.ts` is the whole of the frontend and
+  (`crates/grimoire-core/src/zoom.rs`); `packages/ui/lib/useCardZoomPersistence.ts` is the whole of the frontend and
   `AppShell` is its only mount. Five decisions in it, each with a failure it is avoiding:
 
   - **The row is an object, not one key per section.** Every wall is seeded in one pass at launch,
@@ -808,7 +808,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     second costs only the next launch's starting size.
 - **A list's grid-or-table choice is remembered too, and it is `card_zoom`'s mechanism with one
   deliberate difference** (2026-08-26). One `app_meta` row, `list_view`, holding a JSON object of
-  section → `"grid"`/`"table"` (`crates/grimoire-core/src/listview.rs`); `src/lib/useListViewPersistence.ts`
+  section → `"grid"`/`"table"` (`crates/grimoire-core/src/listview.rs`); `packages/ui/lib/useListViewPersistence.ts`
   is the whole of the frontend and `AppShell` is its only mount. It copies the object row, the
   preserve-what-you-do-not-understand write, the per-entry fallback, the `hydrate…` seed with its
   `pulse !== 0` guard, and the swallow-every-failure rule. Three things differ, and each is the same
@@ -833,7 +833,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   what is painted. Rescaling the numbers keeps text crisp, lets the wall reflow to a new column
   count, and keeps `CardGrid`'s existing `virtualizer.measure()` effect — already keyed on
   `tileHeight` — correct for free.
-- **A ladder, not a multiplier** — `src/lib/cardZoom.ts`. A wheel `deltaY` is
+- **A ladder, not a multiplier** — `packages/ui/lib/cardZoom.ts`. A wheel `deltaY` is
   not a magnitude worth trusting: a mouse notch arrives as 100 through Chromium's line mode and 120
   from a driver reporting raw ticks, while a precision trackpad's pinch reaches the page as a stream
   of ctrl-flagged wheel events in the single digits, dozens a second. The ladder makes the unit the
@@ -1081,10 +1081,10 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     `Search your collection` / `Search your wishlist`.
   - **The dock's height is imperative and now shared.** CSS cannot say *"the scroller's visible
     height, less however much of the page sits above this row"*, so `DeckEditor` had sized its dock
-    in a `useLayoutEffect`. That is `src/lib/useDockHeight.ts` now, and it finds the *nearest
+    in a `useLayoutEffect`. That is `packages/ui/lib/useDockHeight.ts` now, and it finds the *nearest
     scrolling ancestor* rather than assuming one — the deck editor's own page section is
     `overflow-y-auto` while these two pages scroll in `AppShell`'s `main`. All three sites call it.
-  - **The row's arithmetic is `src/lib/useDeskWidth.ts`**, and it was two byte-identical copies for
+  - **The row's arithmetic is `packages/ui/lib/useDeskWidth.ts`**, and it was two byte-identical copies for
     about a day before it was one. `maxPanelWidth = min(⌊viewport / 2⌋, deskWidth − DESK_GAP −
     floor)`, `roomy = deskWidth === 0 || maxPanelWidth >= MIN_PANEL_WIDTH_PX`, and an `overWidth`
     of the whole row for a desk that cannot hold both. `viewport` is
@@ -1277,7 +1277,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   `Group by mana value` and `Group by type` — each pile is drawn whole — and in **all three**
   grouping modes it puts the active ones **first**, commander then companion, whatever `sortOrder`
   says. That much is a domain rule and it is written out in
-  [`features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); what belongs here is the box
+  [`features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md); what belongs here is the box
   they are drawn in and the five things that fall out of it.
   - **They are still not railed, and the old reason is intact.** One card each, by construction, so
     a column's width spent on either is spent permanently, in every deck, on a pile that is read at
@@ -1326,7 +1326,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     never called `buildGroups`, so a four-drop commander still stands in the `4` bar beside a desk
     that has stopped filing it there. The reasoning, and why that is not the two-surfaces-disagree
     failure the `Split X` entries name, is in
-    [`features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
+    [`features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md).
   - **None of this has been driven in the window, and nothing in this entry is a measurement.** The
     box is one grid item, so it takes one track of the `auto-fill` grid the way any pile does, and
     the rail widths and gutters quoted above are untouched by it — but what a head box costs a
@@ -1393,7 +1393,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     content edge of 2467, `ml-auto flex flex-col gap-4` on the box, and the flowing half **1909**
     wide with no `max-width` — one 300px column in it and the rest blank desk before the rail.
 - **Which piles are drawn, driven 2026-08-14 — in Storybook over CDP (headless Edge), _not_ the
-  shipped window.** Against `.storybook/fake`, reading each group's accessible name off
+  shipped window.** Against `packages/fake`, reading each group's accessible name off
   `section[aria-labelledby]`: the Modern deck drew `Main deck, Sideboard, Maybeboard` with **no
   Commander and no Companion**, and the rail held `["Sideboard", "Maybeboard"]` in that order. A
   freshly created **Commander**-format deck drew `Commander, Sideboard, Maybeboard` — the command
@@ -1542,8 +1542,8 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   observed**: the last section on this page measured the tiles' geometry over the built CSS, but
   where the caret actually lands after each of the four exits is one of the three things it still
   owes, and only the shipped window can answer it.
-- **Z-indexes come from `LAYER` in `src/lib/layers.ts`, and `src/lib/layers.test.ts` sweeps
-  `src/` to keep it the only place they are written.** The bug it closed is worth the
+- **Z-indexes come from `LAYER` in `packages/ui/lib/layers.ts`, and `packages/ui/lib/layers.test.ts` sweeps
+  `packages/ui/` to keep it the only place they are written.** The bug it closed is worth the
   paragraph: the search view's set picker (`absolute z-20`) was painted over by the results
   table's sticky header (`sticky top-0 z-20`), because nothing between them creates a
   stacking context and **equal z-indexes are resolved by document order** — where every
@@ -1604,7 +1604,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   became dialogs: `AuditDrawer` → `DeckHistoryDialog`, and `CategoriesPanel` split into
   `CategoriesDialog` and `LabelsDialog` — two sections of one drawer that each cost a press and a
   scroll are two dialogs one press apart, each sized for what it draws. All of them and
-  `DeckSettingsDialog` are now built on **one shell, `src/components/Dialog.tsx`**, so
+  `DeckSettingsDialog` are now built on **one shell, `packages/ui/components/Dialog.tsx`**, so
   "the style of Deck settings" is a component rather than a resemblance: `LAYER.overlay`, the
   `scrim` preset, `aria-modal`, `trapTab`, the `"inner"` Escape rung registered on the open flag
   (the panel outlives that flag by the length of its fade), and **nothing mounted while closed**,
@@ -1708,7 +1708,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   2026-08-14 and is a third thing now: session-scoped like those two, but one number per card
   **section**, so this panel's own wall zooms apart from the desk beside it — see the zoom entry
   above.)
-  `src/lib/motion.ts`'s `drawerRight` lost its last consumer to this change and was deleted; see
+  `packages/ui/lib/motion.ts`'s `drawerRight` lost its last consumer to this change and was deleted; see
   [motion.md](motion.md). **None of this has been driven in the shipped window yet** — the layer,
   focus and Escape figures above were taken on the drawers this replaced, and the collapsed
   default's effect on the desk is arithmetic from `DECK_FLOOR`'s measurement rather than a new
@@ -1764,12 +1764,12 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   flag, because a toolbar field with no list under it owes the press to the card detail
   pane, which listens on `window` in the bubble phase. Its deck-side rules — the three
   routes to one write, the freshness guard, the missing `marketplace` — are in
-  `src/features/decks/CLAUDE.md`. **Driven in the shipped window 2026-08-14** (`tauri dev`,
+  `packages/ui/features/decks/CLAUDE.md`. **Driven in the shipped window 2026-08-14** (`tauri dev`,
   debug, 1280×800): the panel computes `z-index: 30` and `transform-origin: 0px 0px`, its
   left edge sits on the field's to the pixel (285/285), nothing overflowed right and
   `scrollLeft` stayed 0 — and Escape closed the list while leaving the card pane open, then
   closed the pane on the second press. Every figure is in
-  `src/features/decks/CLAUDE.md`.
+  `packages/ui/features/decks/CLAUDE.md`.
 - **A fixed-width column layout that opens the next column to the right is a horizontal
   scrollbar with extra steps.** The deck editor's two column views pack a deck's groups into
   columns of a fixed width — `stackColumnWidth(zoom)`, 224px at 1×, and `TextView`'s
@@ -2179,7 +2179,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
   **jsdom applies no container queries and loads no stylesheet at all**, so none of this can go
   red in the suite: every test there sees the base (narrowest) arrangement, and the numbers come
   from a browser.
-- **The three tables are one component**, `src/components/table/VirtualTable.tsx`: columns
+- **The three tables are one component**, `packages/ui/components/table/VirtualTable.tsx`: columns
   are data, and the two things that genuinely differ stay callbacks — `renderRow` (the
   collection and wishlist wrap a row in a drag source; the wishlist also decides per row
   whether it opens a card at all, because an any-printing wish has none) and `extraHeight`
@@ -2189,7 +2189,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
   `firstDir → the opposite → gone`; the modifier decides only what happens to the _other_
   columns, so every single-column order is reachable without ever holding Shift. `firstDir`
   is descending on money and count columns. The whole interaction is one pure reducer,
-  `applySort` in `src/lib/sort.ts`. `aria-sort` goes on **every** sorted column — the
+  `applySort` in `packages/ui/lib/sort.ts`. `aria-sort` goes on **every** sorted column — the
   alternative is telling assistive tech that a two-key sort has one key — and the rank rides
   in the button's accessible name (`"Price, sort priority 2"`). **Name-from-content does not
   reach into a descendant's `aria-label`**, so a column's own description belongs on the
@@ -2202,7 +2202,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
   replaces the sort with that one term, and the control reads `Custom…` once the sort starts
   somewhere it has no option for. The wishlist's Printing column is deliberately not
   sortable at all — an any-printing wish names no set.
-- **Every option list is drawn through `sortOptions` in `src/lib/options.ts`: alphabetical by
+- **Every option list is drawn through `sortOptions` in `packages/ui/lib/options.ts`: alphabetical by
   the display label, with a faceted control's greyed rows sunk below its pickable ones.** The
   label is the words on screen, never the key — `standard` and `Standard Brawl` sort by what
   the reader reads. One `Intl.Collator` pinned to `"en"`, `sensitivity: "base"` and
@@ -2486,7 +2486,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
 
 Added 2026-08-20 with `TheoryMatchMark` — the mark a deck card wears on the **Live** list when the
 deck's plan asks for it too. The rule and the data are in
-[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); this is what looking at it
+[`packages/ui/features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md); this is what looking at it
 changed, and every one of the four was a decision the suite could not have made.
 
 **How it was looked at.** Both locks were held by other worktrees all afternoon, so this was the
@@ -2709,7 +2709,7 @@ is owed — the foot of this subsection says what is unmeasured.
 The mark answers two questions now instead of one — **green** where a Live row is the exact
 printing the plan named, **blue** where it is that same card in a printing the plan did not name.
 The rule, the per-deck switches and the arithmetic are in
-[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md). What belongs here is the
+[`packages/ui/features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md). What belongs here is the
 **colour**, because the first bullet of this section ruled green out and that finding is now
 reversed. **It is left standing above rather than deleted**: it was right about what it was
 looking at, and knowing why it stopped applying is the whole of the argument.
@@ -2734,7 +2734,7 @@ rather than a verdict. One pass, one sentence, two marks — and the sentence we
 was true of.
 
 **The default green is `#56bd78`, and it is `--color-ok` itself rather than a colour picked to
-look like it.** `src/index.css` defines `--color-ok: oklch(0.72 0.14 152)`; converted to sRGB that
+look like it.** `packages/ui/index.css` defines `--color-ok: oklch(0.72 0.14 152)`; converted to sRGB that
 is `#56bd78`, and the conversion is **in gamut** — the linear components come out at
 `0.0931 / 0.5103 / 0.1870`, all inside `[0, 1]` — so the hex is the exact colour rather than one
 clamped to the nearest displayable point. Blue is `#0e68ab`, today's azure, unchanged. Both are
@@ -2743,9 +2743,9 @@ clamped to the nearest displayable point. Blue is `#0e68ab`, today's azure, unch
 replaces, so they cannot be a reference to something the palette decides later.
 
 ⚠️ **The duplication has no fence, and that is worth knowing precisely because the six labels
-do have one.** `labelColors.test.ts` reads `src/index.css` through Vite's `?raw` and holds
+do have one.** `labelColors.test.ts` reads `packages/ui/index.css` through Vite's `?raw` and holds
 `LABEL_COLORS` to the declarations it finds; nothing does that for these two. `MARK_COLOR_DEFAULTS`
-in `src/lib/useMarkColors.ts` spells `#56bd78` and `#0e68ab` a second time — an
+in `packages/ui/lib/useMarkColors.ts` spells `#56bd78` and `#0e68ab` a second time — an
 `<input type="color">` cannot take a `var()`, so the picker needs a literal to open on — and
 `useMarkColors.test.ts` asserts those same two literals, which pins the constant to itself. A
 palette edit that moved `--color-theory-exact` and left the constant alone would ship a picker
@@ -2788,7 +2788,7 @@ tier already used — **positive is copies to add, negative is copies to remove*
 tick — where it was `live − planned` from 2026-08-26 (issue #212) until this. The reader's own
 eight-Forests case reads **green +6** on the planned printing rather than green −6; the rule, both
 tiers and the floor are unchanged and live in
-[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md).
+[`packages/ui/features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md).
 
 **Every measurement above still stands, and that is the point of recording it here.** The box is
 the same box: `COUNT_TAG_BOX_MIRRORED`'s `8/3` over the `1ch + 1.125rem` floor, the 24.59-against-24.61
@@ -2810,7 +2810,7 @@ signed count would be a subtraction against nothing. The words are **"Not in the
 the tooltip, in the table's `sr-only` twin and in the card's accessible name, and the attribute is
 `data-theory-match="unplanned"`. The resolver rule, the third per-deck switch and the reason a
 *planned* row never falls through to this tier are in
-[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); what belongs here is the
+[`packages/ui/features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md); what belongs here is the
 **red**, because this app already had two of them and neither would do.
 
 **It is not the destructive token.** `--destructive` is Tailwind red-400,
@@ -2839,7 +2839,7 @@ own background, exactly as they already draw the tick and the number, so those t
 `-fg` half not at all.
 
 ⚠️ **The unfenced duplication above is now three hexes rather than two, and the gap is still
-owed.** `MARK_COLOR_DEFAULTS` in `src/lib/useMarkColors.ts` spells `#e2484f` a second time — an
+owed.** `MARK_COLOR_DEFAULTS` in `packages/ui/lib/useMarkColors.ts` spells `#e2484f` a second time — an
 `<input type="color">` cannot take a `var()`, so the picker needs a literal to open on — and
 `useMarkColors.test.ts` asserts that same literal, which pins the constant to itself. The one test
 in `labelColors.test.ts`' shape that would close it was owed on 2026-09-07 and is owed still; the
@@ -2865,7 +2865,7 @@ screenshot would start.
 ## The two marks a deck card carries: picked, and just landed
 
 Added 2026-08-14. The rules and the routing live in
-[`src/features/decks/CLAUDE.md`](../../src/features/decks/CLAUDE.md); this is the design argument
+[`packages/ui/features/decks/CLAUDE.md`](../../packages/ui/features/decks/CLAUDE.md); this is the design argument
 and what driving it found.
 
 - **Picked is `ring-2 ring-accent`, which is `components/CardArt`'s `selected` recipe unchanged.**
@@ -2921,8 +2921,8 @@ transparent)` because full-strength gold at that radius is a lamp.
   the _worst_ case for a white wash and the best case for a white hairline. Over a real `grid`
   image the wash has more to lift and the hairline has a printed black border to sit on. **Not
   driven in the shipped window.**
-- **The five seconds are in `src/index.css` (`--animate-card-landed`) and in `LANDED_MS`, and
-  `cardControl.test.ts` compares them.** They are not in `src/lib/motion.ts` and must not be moved
+- **The five seconds are in `packages/ui/index.css` (`--animate-card-landed`) and in `LANDED_MS`, and
+  `cardControl.test.ts` compares them.** They are not in `packages/ui/lib/motion.ts` and must not be moved
   there: that module is a three-tier scale capped at 260ms and `motion.test.ts` fails any duration
   off it, correctly — everything in it is a _transition_, and this is a mark that decays. **It was
   ten until 2026-08-15 and was halved by the same change that made the mark gold**: ten seconds was
@@ -3153,7 +3153,7 @@ line, and **Grid loses the ring down both sides of every group at once** — a g
 as the desk, so both of its vertical edges are the content edge.
 
 **The fix is `DROP_MARK_ROOM` (`p-1.5`) on all three roots**, defined beside the marks it makes room
-for in `src/lib/dropMarks.ts`. **Six pixels rather than the ring's two** because the outline is the
+for in `packages/ui/lib/dropMarks.ts`. **Six pixels rather than the ring's two** because the outline is the
 larger of the two claims and a focus indicator clipped to half its width is a WCAG 2.4.7 failure
 rather than a cosmetic loss. `StackView` keeps its `pb-2`: Tailwind emits the `padding` shorthand
 before the `padding-bottom` longhand — `.p-1\.5` at byte **29 557** against `.pb-2` at **31 795** in
@@ -3229,7 +3229,7 @@ time rather than in space, introduced by the fix for the first.
 **The occlusion is a separate, one-line change.** There was no `opacity` anywhere on
 `[data-dnd-dragging]` — the preview is a clone of the source drawn at full size and full opacity,
 and on a deck that is ~293px of card art laid over the heading the reader is aiming at.
-`src/index.css` now carries `[data-dnd-dragging] { opacity: 0.75 }` as an **app-owned rule kept
+`packages/ui/index.css` now carries `[data-dnd-dragging] { opacity: 0.75 }` as an **app-owned rule kept
 separate from the copied library block**, which is a verbatim copy the fence in
 `lib/dndManager.test.ts` checks the library against; that fence runs one way (library ⊆ ours), so
 an extra rule of the app's own is legal and does not read as drift in a copy the app does not own.
@@ -3291,7 +3291,7 @@ fall on the other side of them.
 
 **The glyph is `CircleCheck` in `--color-ok` or `TriangleAlert` in `--destructive`**, computed
 `oklch(0.72 0.14 152)` and `oklch(0.704 0.191 22.216)` — a new token beside the red rather than
-one of the palette's two greens, both of which belong to mana (`src/index.css` says why at the
+one of the palette's two greens, both of which belong to mana (`packages/ui/index.css` says why at the
 token). Nothing but the glyph is coloured: the control's surface stays what every other chip on
 that row is, because this panel refuses nothing.
 
@@ -3325,14 +3325,14 @@ instead, which is the same claim written where it can fail, plus the bubble bein
 
 ## Vendored components and tokens
 
-- shadcn components: always `npx shadcn@latest add <x>` with Radix base (components.json).
+- shadcn components: always `npx shadcn@latest add <x>` with Radix base (packages/ui/components.json).
   The app palette maps `accent` to a **text** colour (gold), so rewrite a vendored
   component's `bg-accent` surfaces to `bg-surface`. `bg-muted` needs no rewrite any more:
   the app's dim text is `--color-dim` and `--color-muted` is the surface shadcn means by it
   (it used to be the dim text, which gave a stock `TabsList` invisible labels).
   `text-muted-foreground` and `text-accent-foreground` already resolve correctly.
 - **Dim text is `text-dim`, never `text-muted`** — the latter still compiles and now paints
-  text in the surface colour, i.e. very nearly invisible. `src/lib/tokens.test.ts` guards it.
+  text in the surface colour, i.e. very nearly invisible. `packages/ui/lib/tokens.test.ts` guards it.
 
 ## All printings, as a modal — driven in the shipped window
 
@@ -3406,7 +3406,7 @@ live pass found one defect behind all three, plus one the suite could not see.
 > neighbouring pile's top card — is gone. Nothing else in either section moved: the caret note,
 > the card's `<li>`, the wall's absolute index and the modal's own two keys are all still the
 > current answer, which is why the pass is kept whole rather than edited into agreement with a
-> later decision. `src/features/decks/CLAUDE.md` states the rule that is live.
+> later decision. `packages/ui/features/decks/CLAUDE.md` states the rule that is live.
 
 ### One cause, three surfaces: the walk was exactly one press long
 
@@ -3425,7 +3425,7 @@ The third is the worst of them and is the one the reader reported: `trapTab` cyc
 panel, so a caret that has left the panel is one it cannot get back — Tab carried on through the
 page under the scrim, and the modal's own keydown never fired again.
 
-The fix is `src/lib/caretWalk.ts`: a note saying *this selection was walked to, so the caret is
+The fix is `packages/ui/lib/caretWalk.ts`: a note saying *this selection was walked to, so the caret is
 already where it belongs*, written by the three walkers immediately before their store write and
 read by the pane's mount effect. The pane still recorded the opener — during a walk the active
 element **is** the right thing for Escape to hand back to — and skipped only the focus.
@@ -3467,7 +3467,7 @@ box** at every step. Two things were behind it and the second is the general one
 - `scrollIntoView({ block: "nearest" })` parks an element **flush** against the scrollport, and a
   scrollport is the *padding box* — so the wall's own `p-3` buys nothing at an intermediate scroll
   offset, and the `FOCUS` ring, which paints 4px proud of the border box, lands in the clipped
-  region. That is `DROP_MARK_ROOM`'s rule (`src/lib/dropMarks.ts`) arriving by a different road,
+  region. That is `DROP_MARK_ROOM`'s rule (`packages/ui/lib/dropMarks.ts`) arriving by a different road,
   and half a focus indicator is a WCAG 2.4.7 failure rather than a cosmetic one.
 
 A `scroll-m-1.5` on the tile — **6px, that constant's own number, so the two cannot drift** — plus
@@ -3740,7 +3740,7 @@ happened" looks identical to a dead handler and cost this pass two wrong diagnos
 ## The window's own title bar, and the two questions only a live pass could answer
 
 **2026-08-20, `npm run tauri dev`, a debug build, at 1280×800.** `tauri.conf.json` sets
-`decorations: false` and `src/components/TitleBar.tsx` draws the caption instead.
+`decorations: false` and `packages/ui/components/TitleBar.tsx` draws the caption instead.
 
 Two things research could not settle, and both are settled here by measurement rather than by
 reading an issue tracker. Tauri's tracker has "cannot resize an undecorated window on Windows"
@@ -3811,7 +3811,7 @@ purpose, and only the fallback one is drivable from here.
 ## The app draws its own tooltips, and the sweep off `title` is done
 
 Full design: `docs/superpowers/specs/2026-08-20-tooltip-component-design.md`. `useTooltip()`
-(`src/components/tooltip/useTooltip.ts`) is the one door: `{...tip(words, options)}` on the
+(`packages/ui/components/tooltip/useTooltip.ts`) is the one door: `{...tip(words, options)}` on the
 element that already carries the hint. **A hint is that spread, never a `title` attribute and
 never an SVG `<title>` element.** Every real tooltip in the app is `useTooltip()`'s now; one
 native `title` survives on purpose (below), and everything else `title=` still matches in the
@@ -3838,7 +3838,7 @@ something the reader cannot see), needs neither raised further nor clipped by an
 placed its own preview with `frame.scrollTop`/`clientLeft` arithmetic instead of `fixed`, because
 it had to stay inside its scroller's transform. That file was deleted with the docked card pane on
 2026-09-03 and **nothing in the app does that arithmetic now**, so the comparison is a record
-rather than a live example. `TooltipProvider` mounts in `src/App.tsx` and
+rather than a live example. `TooltipProvider` mounts in `packages/ui/App.tsx` and
 `.storybook/preview.tsx`, both above `ContextMenuProvider`, for that provider's own reason — its
 panel is a sibling of `children`, so a context nested inside it would wrap every view and none of
 the menu's own rows.
@@ -3884,7 +3884,7 @@ accessibility tree — only the *paint* is cut off by `truncate` — so wiring `
 it would make a screen reader announce the same words twice.
 
 **Escape closes the open tooltip without calling `preventDefault()`, and it deliberately does not
-join `useDismissOnEscape`'s capture-phase ladder** — the handshake `src/CLAUDE.md`'s "Escape
+join `useDismissOnEscape`'s capture-phase ladder** — the handshake `packages/ui/CLAUDE.md`'s "Escape
 closes one layer per press" rule describes for every other dismissible layer in the app. That
 stack is for a layer the reader navigated *into*; its top rung consumes the press. A tooltip that
 opened because a pointer drifted over a control is not such a layer, and if it consumed Escape it
@@ -3899,7 +3899,7 @@ lesson carries over on its own.
 
 **`useTooltip()` returns a no-op when no `TooltipProvider` is above it, and a dropped provider is
 silent** — every hint in the app, or every hint in Storybook, simply stops appearing, with no
-error and no red test at the call site that lost it. `src/lib/tokens.test.ts` pins both mounts
+error and no red test at the call site that lost it. `packages/ui/lib/tokens.test.ts` pins both mounts
 (`App.tsx`, `.storybook/preview.tsx`) **and their ordering above `ContextMenuProvider`**, which is
 the one thing a source sweep can catch here — the same no-op trade `NO_MENU` makes in
 `menu/useContextMenu.ts`, for the same reason: after the sweep, most surfaces in the app bind a
@@ -3995,7 +3995,7 @@ width of nothing under it — measured in the shipped window at 900px, a **335×
 Chromium. Sampled over a 600ms transition on a standalone page in Chromium 151, a 200px-wide box
 went 280.0px → 208.3px → 142.8px across 79 frames (2026-08-22). The alternative — `height: 0` with
 a transitioning `padding-bottom` percentage — animates in every engine but spells the proportions
-of a Magic card out twice more, which is the drift `src/CLAUDE.md` already records the deck Grid
+of a Magic card out twice more, which is the drift `packages/ui/CLAUDE.md` already records the deck Grid
 view paying for.
 
 **The card's size is what makes it fill the frame exactly.** Quarter-turned it is `CARD_ASPECT` of
@@ -4064,13 +4064,13 @@ not reading one, and a turned tile in a grid of upright ones would be a hole in 
 `logos/svg/mtg-grimoire-mark.svg` is the master and the thing to edit, and everything beside it
 is an **export of that file** — `logos/svg/mtg-grimoire-tile.svg` (the mark on the dark rounded
 tile), `logos/png/mark-*.png` from 16 to 1024, `logos/icon.ico` (six sizes in one file) and
-`logos/tauri/`, a drop-in replacement for `src-tauri/icons/`. A change that only reaches a PNG is
+`logos/tauri/`, a drop-in replacement for `apps/desktop/src-tauri/icons/`. A change that only reaches a PNG is
 a change the next export undoes.
 
 **The colours in that package are this app's own tokens resolved to hex**, which is the whole
 reason the mark can be drawn inline rather than loaded: gold `#D1A84B` is `--color-accent`, the
 panel `#16181E` is `--color-surface`, and the field `#0C0D12` is `--color-bg`.
-`src/components/GrimoireMark.tsx` binds them back the other way — every stroke is `currentColor`
+`packages/ui/components/GrimoireMark.tsx` binds them back the other way — every stroke is `currentColor`
 and every fill is `var(--color-surface)` — so the mark takes its gold from whatever the caller
 sets `text-*` to, and a token that moves takes the mark with it instead of stranding a hex in a
 binary. The `#0C0D12` field is a fact about the exported **tile**, and about nothing that ships:
@@ -4083,7 +4083,7 @@ on a dark taskbar the plate reads as no plate at all — and that is exactly why
 as it did. Everywhere else it is a black rounded square: the Explorer file list, a light-theme
 taskbar, a pale wallpaper, the Alt-Tab strip. The measurement is the whole argument — the tile
 exports were **3–5% non-opaque** (the rounded corners, nothing else) against **45–60%** for the
-mark, across all sixteen files of `src-tauri/icons/`.
+mark, across all sixteen files of `apps/desktop/src-tauri/icons/`.
 
 Two consequences, both worth knowing before somebody reads them as damage. **The book grew 5.7%**,
 because `mtg-grimoire-mark.svg` draws at `scale(0.92)` where `mtg-grimoire-tile.svg` draws at
@@ -4094,7 +4094,7 @@ this platform — Windows asks for 24 (small taskbar, Alt-Tab) and interpolates 
 was the generator's choice rather than a tuned one, which is the honest way to record it.
 
 **Nothing in either suite can see any of this.** The icons are binaries referenced by
-`tauri.conf.json`'s `bundle.icon` list and by nothing in `src/` or `src-tauri/src/`, so a tile
+`tauri.conf.json`'s `bundle.icon` list and by nothing in `packages/ui/` or `apps/desktop/src-tauri/src/`, so a tile
 could come back through a re-export with `npm run verify` fully green. `logos/README.md` carries
 the regenerate command and the warning next to the artwork, which is the only place that fence can
 live.
@@ -4109,7 +4109,7 @@ one survives a rebuild and reads as a failed change. Three steps, none of which 
    shows the bytes it will actually paint. Composite them over a light ground — over a dark one
    the old tile and the new mark are nearly the same picture, which is the whole reason this
    shipped.
-2. **Read `src-tauri/target/debug/build/mtg-grimoire-*/out/resource.rc`.** `tauri-build` writes it,
+2. **Read `target/debug/build/mtg-grimoire-*/out/resource.rc`.** `tauri-build` writes it,
    and the `32512 ICON "…"` line names the absolute path it embedded — `32512` is
    `IDI_APPLICATION`, the icon the shell reads off the exe.
 3. **Search the sibling `resource.lib` for the literal PNG bytes** of a new entry and of the one it
@@ -4174,7 +4174,7 @@ document.** Every figure below is a reading from that window.
 rectangle it measures is `0` — so `usePopupPlacement` is executed by the whole `Dropdown` suite
 without a single one of its numbers being *tested*. `place.test.ts` covers the arithmetic; whether
 that arithmetic is fed the right rectangles, and whether its result lands where a reader can see
-it, is a question only a browser answers. `src/components/Dropdown/PlacementProbe.stories.tsx` is
+it, is a question only a browser answers. `packages/ui/components/Dropdown/PlacementProbe.stories.tsx` is
 the three containers the placement has to survive, and it carries no `play` — a play would be a
 second jsdom reading of the same zeros.
 
@@ -4337,7 +4337,7 @@ placeholder, none on a `<MultiDropdown>`, and the label swatch carrying the stor
 
 ## The card's chin, and the one foot under every card in the app
 
-`src/components/CardChin.tsx`, 2026-08-26. Three surfaces drew a foot under a card and each held
+`packages/ui/components/CardChin.tsx`, 2026-08-26. Three surfaces drew a foot under a card and each held
 its own numbers, which is how a shared look stops being shared:
 
 | Surface | Foot at 1× | Type at 1× | The bar |
@@ -4347,7 +4347,7 @@ its own numbers, which is how a shared look stops being shared:
 | `GridView` — the deck's grid | **20px** | **9px** | none |
 
 Only the first read as *part of* the card; the other two read as a label under a picture. There is
-one component now, and `chinHeight(zoom)` in `src/lib/cardZoom.ts` is the height every surface
+one component now, and `chinHeight(zoom)` in `packages/ui/lib/cardZoom.ts` is the height every surface
 budgets from. `CardStack` keeps `STACK_DATA_HEIGHT`, `STACK_DATA_RISE` and `stackDataHeight` as its
 names for `CHIN_HEIGHT`, `CHIN_RISE` and `chinHeight`, so its geometry sums — and every assertion
 written against them — keep the names they were written under.
@@ -4458,7 +4458,7 @@ tick met it.
 
 **The root cause is one number and it had been wrong since the face was written.** A bordered box
 has two curves — the border box's, and the padding box's one border width tighter — and
-`DeckCardFace`'s face fills the padding box exactly. `src/index.css` sets `--radius: 0.625rem` and
+`DeckCardFace`'s face fills the padding box exactly. `packages/ui/index.css` sets `--radius: 0.625rem` and
 `--radius-lg: var(--radius)`, so a deck card's `rounded-lg` outer corner is **10px** here rather
 than Tailwind's stock 8, and the padding box's is **9**. The face clipped at `rounded-[7px]`, which
 is the stock-8 arithmetic. Everything between the two arcs is *border*, and a face that clips 2px
@@ -4570,7 +4570,7 @@ It is on the **tile root** now, and `CardArt` is passed no `selected` from this 
 
 Three things are worth writing down.
 
-**`rounded-lg` is the right radius and is not a guess.** `src/index.css` sets `--radius: 0.625rem`
+**`rounded-lg` is the right radius and is not a guess.** `packages/ui/index.css` sets `--radius: 0.625rem`
 and `--radius-lg: var(--radius)`, so it is **10px** here rather than Tailwind's stock 8 — the same
 utility `CardArt`'s frame already uses on its top corners and `CardChin`'s `rounded-b-lg` uses on
 its bottom ones. The ring therefore traces exactly the outline the two components already draw
@@ -4613,7 +4613,7 @@ break between releases), by building the smallest real thing and reading what ha
 reading the docs.
 
 **The section is titled for `@dnd-kit/dom` and was titled for `@dnd-kit/react` until 2026-08-28,
-which was wrong the day it was written**: nothing in `src/` ever imported the React package, every
+which was wrong the day it was written**: nothing in `packages/ui/` ever imported the React package, every
 answer below is about the DOM one, and §1 and §2 are the record of deciding not to use the hooks.
 
 **As of 3c (2026-08-28) the manifest declares exactly what the code imports and nothing else:**
@@ -4634,7 +4634,7 @@ Windows, as of 2026-08-28.**
 **`@atlaskit/pragmatic-drag-and-drop` and its auto-scroller were uninstalled in 3c**, taking
 `bind-event-listener` and `raf-schd` with them — four packages, `npm`'s own count. 3b had already
 removed the last import; 3c removed the last call sites in the test harness and then the
-dependency. `src/lib/dndManager.test.ts` is the fence that keeps them out, and **it matches an
+dependency. `packages/ui/lib/dndManager.test.ts` is the fence that keeps them out, and **it matches an
 import statement rather than a name**, on purpose: many files in this app still mention
 pragmatic-dnd in a doc comment as the record of why something is the way it is, and a sweep
 that matched the name would turn this project's memory of its own reasons into a red build.
@@ -4742,7 +4742,7 @@ pragmatic-dnd's store was. `canceled` is a first-class field on the same event, 
 
 ### What jsdom cannot do on its own, and the six things that fix it
 
-Worth as much as the four answers above, because the test harness rests on it. `src/test-drag.ts`
+Worth as much as the four answers above, because the test harness rests on it. `packages/ui/test-drag.ts`
 opens by explaining that a native HTML5 drag is testable *because* pragmatic-dnd hit-tests with
 `event.target` and `Element.closest`. **dnd-kit hit-tests by coordinate against measured
 rectangles**, and jsdom measures every rectangle as zero — so a pointer drag driven in the suite
@@ -4773,7 +4773,7 @@ they are hit:
    **What shipped is not what this paragraph said until 2026-08-28.** It described the fix as
    giving `document.body` a viewport-sized `getBoundingClientRect`, "and every ancestor between
    the target and the body needs one too" — the spike's finding, written down and never
-   reconciled with the code. `src/test-setup.ts` gives `<body>` no rect at all: it wraps
+   reconciled with the code. `packages/ui/test-setup.ts` gives `<body>` no rect at all: it wraps
    `window.getComputedStyle` and answers `visible` for `overflow`, `overflowX` and `overflowY`
    wherever jsdom answers the empty string, so **no** ancestor counts as clipping and no ancestor
    needs a rectangle. That is a better fix and a different one — it is one shim rather than one
@@ -4811,7 +4811,7 @@ helper or a call site has to know:
   measures on construction. For a target boxed before the gesture that one measurement is right;
   for one drawn **during** it — the quick-zone bar, the remove tray, both of which appear on
   `dragstart` — the only measurement ever taken is of a rectangle that is still four zeroes.
-  `src/test-drag.ts` calls `refreshShape()` on every registered droppable before each forced
+  `packages/ui/test-drag.ts` calls `refreshShape()` on every registered droppable before each forced
   collision pass for exactly this.
 - **The operation's *target* follows the collisions one hop behind.** The observer's reaction
   disables the observer, calls `setDropTarget`, and re-enables it when that promise resolves — so
@@ -4832,7 +4832,7 @@ helper or a call site has to know:
 ### What a drag is to a keyboard and a screen reader, measured
 
 Measured 2026-08-28 in jsdom, against the real components, by reading
-`dndManager.registry.draggables` back off each rendered surface. `src/lib/dndAccessibility.test.tsx`
+`dndManager.registry.draggables` back off each rendered surface. `packages/ui/lib/dndAccessibility.test.tsx`
 is the measurement as assertions; this is the same reading in prose. **Nothing in this subsection
 is a decision** — it is what is true, so that whatever is decided next is decided against
 something.
@@ -5029,6 +5029,8 @@ recorded**, which matters for none of the readings below — every one of them i
 registry entry or a focus target rather than a measurement in pixels.
 
 **The plugin list and the sensor list, read off the live manager.** `import('/src/lib/dndManager.ts')`
+(since 2026-10-08 `import('/@fs/<absolute path of the checkout>/packages/ui/lib/dndManager.ts')`,
+the desktop's Vite root being `apps/desktop`)
 resolves under Vite's dev server, so the manager can be asked directly rather than deduced from the
 DOM: `dndManager.sensors` is **`[PointerSensor]`** and nothing else, and `dndManager.plugins` is the
 eight `CollisionNotifier, ScrollListener, Scroller, StyleInjector, AutoScroller, Cursor, Feedback,
@@ -5155,7 +5157,7 @@ place.** The plan that adopts it has to answer each of these at its own site:
    `this.sensors ?? [...manager.sensors]`, `??` and not a merge. `useCategoryDragSource` passes its
    own, so **the category grip is fenced by accident** and says nothing about what the manager is
    configured with. Assert on a table row, which inherits.
-3. **A latent one, still true and still unfired**: `src/features/decks/dnd.ts`'s
+3. **A latent one, still true and still unfired**: `packages/ui/features/decks/dnd.ts`'s
    `composedDraggable` builds a per-source sensor list *including* `KeyboardSensor` whenever a
    caller narrows `notFrom` — and **no caller does** (confirmed 2026-08-29: every `notFrom`
    occurrence in the tree is inside `dnd.ts` itself). The first surface that narrows its press
@@ -5165,7 +5167,7 @@ place.** The plan that adopts it has to answer each of these at its own site:
 **The audit this does not remove.** The plugin answers the *drag*. It does not answer the app's
 other pointer-only affordances, which the touch census (*What touch takes away*, below)
 enumerated: `menuClick` — a plain-click door to a context menu — existed at exactly **two**
-surfaces on the day of that census (`grep -rn "menuClick(" src/` for today's), and the ctrl+wheel
+surfaces on the day of that census (`grep -rn "menuClick(" packages/ui/` for today's), and the ctrl+wheel
 card zoom has exactly one caller and no other door. Those stay open and belong to touch rather than
 to this decision.
 
@@ -5261,7 +5263,7 @@ Three things about the copy are worth knowing before touching it.
   one timeout, and the default reporter prints no duration for a test that passes, so nothing in
   the log said so. The check is the story plays and they already run in `verify`; what they
   cannot do is report a regression that is still, barely, under the wall.
-- **`src/lib/dndManager.test.ts` is the fence, and it compares against the library rather than
+- **`packages/ui/lib/dndManager.test.ts` is the fence, and it compares against the library rather than
   against a string.** It starts a real drag through the app's own manager in jsdom (where nothing
   is blocked), captures the `<style>` elements `StyleInjector` actually injected, parses both them
   and `index.css` into selector-to-declaration maps, and fails unless every one of the library's
@@ -5305,7 +5307,7 @@ there rather than merely permissive.
 
 ## The desktop floor, and the one module that states it
 
-**`1024` is `src-tauri/tauri.conf.json`'s `minWidth`, so it is a promise the *desktop window*
+**`1024` is `apps/desktop/src-tauri/tauri.conf.json`'s `minWidth`, so it is a promise the *desktop window*
 makes** (2026-08-29, read out of the config in the `mobile-layout` worktree at `56e94c2`). Tauri
 hands it to the OS window manager, which refuses to drag the frame narrower. Every measurement in
 this document that ends "which the 1024px floor forbids" is still true — a horizontal page
@@ -5318,7 +5320,7 @@ frames were drawn for went after them — *The phone layout, removed on 2026-09-
 went and what stayed — so the desktop window is the one target left and its floor is the one width
 the app states.
 
-**It is stated in one place, `src/lib/viewports.ts`**: `DESKTOP_FLOOR_PX` and
+**It is stated in one place, `packages/ui/lib/viewports.ts`**: `DESKTOP_FLOOR_PX` and
 `DESKTOP_FLOOR_HEIGHT_PX`, 1024 × 700, quoted from `tauri.conf.json`'s `minWidth`/`minHeight`.
 Rust owns the number; TypeScript only repeats it.
 
@@ -5331,8 +5333,8 @@ about *that row's own box* — `FilterBar` answers it with `@container/fb` and `
 the thing it is asking about. **There has been no viewport branch in the app since 2026-09-27**;
 the one there was, `useNarrowWindow`, went with the phone layout.
 
-**`src/lib/viewports.test.ts` is the fence, and it is the only thing in the build that compares
-the two files.** It reads `src-tauri/tauri.conf.json` through Vite's `?raw` — the same trick
+**`packages/ui/lib/viewports.test.ts` is the fence, and it is the only thing in the build that compares
+the two files.** It reads `apps/desktop/src-tauri/tauri.conf.json` through Vite's `?raw` — the same trick
 `tokens.test.ts` uses on `index.css`, because this project has no `@types/node` and cannot reach
 `node:fs` — parses it, and asserts the constants against `app.windows[0]`. Without it a floor
 raised in Rust and not in TypeScript would leave every story sized from it drawn at a width the
@@ -5363,10 +5365,10 @@ line break and the pattern misses it, so the real figure is a floor and not a co
 
 Shipped 2026-08-29 (mobile-layout 9a, Task 2), measured against a production `npm run build` —
 `tsc && tsc -p .storybook && tsc -p tsconfig.sw.json && tsc -p tsconfig.relay.json && vite build`
-— in the `mobile-layout` worktree. Nothing here changes a layout. It changed what the shell's
+(the relay's program is `infrastructure/relay/tsconfig.json` since 2026-10-08) — in the `mobile-layout` worktree. Nothing here changes a layout. It changed what the shell's
 height *means* in a mobile browser, and it opted the page into the safe area. **The safe-area half
 was removed on 2026-09-27 with the phone layout** — `viewport-fit=cover` in `index.html`, the four
-`--safe-*` insets in `src/index.css`, their uses in `AppShell` and `StartupScreen`, and the tests
+`--safe-*` insets in `packages/ui/index.css`, their uses in `AppShell` and `StartupScreen`, and the tests
 that pinned them; *The phone layout, removed on 2026-09-27* below has why. **`h-dvh` stayed**: in
 WebView2 it is the same number as `h-screen`, as the reading below shows, so there is nothing to
 gain by swapping it back.
@@ -5449,9 +5451,9 @@ this one's, most files can.
 
 Both name the shell as `h-screen` and neither is in this task's file set:
 
-- `src/components/AppShell.stories.tsx:291` — "The shell is `h-screen`, and in a docs page that is
+- `packages/ui/components/AppShell.stories.tsx:291` — "The shell is `h-screen`, and in a docs page that is
   the *docs* page's screen." The argument still holds; the class name in it no longer does.
-- `src/features/decks/DeckEditor.tsx:3141` — "…while `body.scrollHeight` and the `h-screen` shell
+- `packages/ui/features/decks/DeckEditor.tsx:3141` — "…while `body.scrollHeight` and the `h-screen` shell
   root both read 800…". This one is a **record of a 2026-08-15 measurement** and arguably should
   keep the class the shell had on the day, but it reads as a present-tense claim.
 
@@ -5487,7 +5489,7 @@ vocabulary is one a reader of this codebase already has.
 **`pointer`, not `any-pointer`.** A laptop with a touchscreen has a fine pointer *and* a coarse
 one, so the `any-` spelling is true on that machine and would grow every control on it for a
 finger nobody is using. The near miss is the thing worth fencing, which is why
-`src/lib/touchTargets.test.ts` sweeps for both spellings and allows neither outside `index.css`.
+`packages/ui/lib/touchTargets.test.ts` sweeps for both spellings and allows neither outside `index.css`.
 
 **One spelling, for `layers.test.ts`'s reason.** A raw media query written in a component is a
 second answer to a question the app should answer once, and the two drift the first time either
@@ -5553,10 +5555,10 @@ Published in the sheet as `--target-min:44px`.
 
 **9b took it the same day** — the ⚠️ above records its Task 7 giving the variant its first
 utilities — and those consumers are what stayed when the phone layout went; `grep -rn "coarse:"
-src/` is the census rather than a count here. What follows is the state 9a left, kept as it was
+packages/ui/` is the census rather than a count here. What follows is the state 9a left, kept as it was
 written.
 
-**No `coarse:` variant and no `var(--target-min)` appeared anywhere in `src/` outside the two
+**No `coarse:` variant and no `var(--target-min)` appeared anywhere in `packages/ui/` outside the two
 places that declare and guard them** — `index.css`'s own comment and `touchTargets.test.ts`'s.
 Which control grows, and by how much, and on which surface, is a design decision: it is downstream
 of the four option rounds, and writing it now would be answering a question nobody has been asked.
@@ -5569,8 +5571,8 @@ variant costs the bundle nothing until something uses it.
 
 ### A measured correction to the "prose is a class source" rule
 
-`src/index.css`'s comment for the variant names `coarse:min-h-[var(--target-min)]` verbatim, as a
-whole class name, to show the intended spelling. This repo's rule — stated in `src/CLAUDE.md`, in
+`packages/ui/index.css`'s comment for the variant names `coarse:min-h-[var(--target-min)]` verbatim, as a
+whole class name, to show the intended spelling. This repo's rule — stated in `packages/ui/CLAUDE.md`, in
 `tokens.test.ts` and in this plan's own constraints — is that **Tailwind scans source text for
 whole class names, so a class named in a doc comment emits a rule**. That rule is why `@source` was
 narrowed away from `docs/` in the first place.
@@ -5578,7 +5580,7 @@ narrowed away from `docs/` in the first place.
 **It does not apply to the stylesheet's own comments, measured today.** With the throwaway class
 removed and that comment left in place verbatim, a full rebuild emits **no `coarse` rule and no
 occurrence of the string `coarse` anywhere in `dist/assets/index-*.css`** — `grep -o "coarse"`
-exits with nothing. So `src/index.css` can name a class in prose without shipping it, even though
+exits with nothing. So `packages/ui/index.css` can name a class in prose without shipping it, even though
 `@source "../src"` covers the directory it lives in.
 
 Do not generalise this to `.tsx`: those were not re-measured, the narrowing of `@source` was done
@@ -5654,18 +5656,18 @@ declarations**, and the balance prose — over one document-level suppressor at
 **Six things the sweep found none of, each checked rather than assumed:** `onDoubleClick` and
 `dblclick`, **0**. `onWheel` as a React prop, **0** — the app's only `wheel` listener is
 `lib/useCardZoomGesture.ts:88`. `pointerType` in shipped code, **0** (five matches, all in stories
-and `src/test-drag.ts`, all synthesising `"mouse"`). `touchstart`/`touchend`/`TouchEvent`, **0**.
+and `packages/ui/test-drag.ts`, all synthesising `"mouse"`). `touchstart`/`touchend`/`TouchEvent`, **0**.
 Any long-press, **0**. `matchMedia` in shipped code, **0** — the two matches are the jsdom stub at
-`src/test-setup.ts:147`.
+`packages/ui/test-setup.ts:147`.
 
 **`title=` is 59 shipped lines and exactly one of them is a native attribute**, `components/AppShell.tsx:596`.
 Every other match is a component prop — a heading (`Dialog`, `Notice`, `SettingsSection`) or a
 prop the component turns into a `useTooltip()` binding itself (`Marker` at
 `features/decks/views/GroupHeader.tsx:143`, `ToggleChip` at `features/decks/DeckEditor.tsx:3752`).
-The shape `src/CLAUDE.md` describes is the shape the tree is in.
+The shape `packages/ui/CLAUDE.md` describes is the shape the tree is in.
 
 **One correction worth recording before it is repeated: `touch-action` is not absent from this
-tree.** Two sites carry it — `src/index.css:434`, inside the block mirroring the rules
+tree.** Two sites carry it — `packages/ui/index.css:434`, inside the block mirroring the rules
 `@dnd-kit/dom` injects at runtime, applying `touch-action: none` to whatever is mid-drag; and
 `features/search/CardSearchPanel.tsx:747`, where the panel's resize strip carries Tailwind's
 `touch-none` with a comment saying why. (That was `features/decks/DeckSearchPanel.tsx:1072` until
@@ -5690,7 +5692,7 @@ is prose about something else.
 | `components/menu/ContextMenu.tsx:730` — `onPointerOver`, `SUBMENU_HOVER_MS` 120 (`:48`) | Opening a submenu by resting on its row. | **Yes, at the site**: the submenu row's own `onClick` toggles it (`components/menu/Submenu.tsx:163`). Opening the parent menu is the gestures table's problem, not this one's. |
 | The other **98** `{...tip(…)}` spreads, across 53 shipped files | Everything this app says only in a hint. Two kinds, unequally lost: **11** pass `whenClipped: true`, where the words are the anchor's own truncated text — complete in the DOM and therefore in the accessibility tree, so only the *paint* is cut off; the rest are descriptions, and the ~57 lines passing `describes: false` are the ones whose words are the element's own name or already-visible text, drawn `aria-hidden`. | Nothing generic. Each of the 98 is its own question, and the two kinds have to be told apart before any of them is counted as lost. |
 | The marks on a card face — `components/CardArt.tsx`, `components/FinishMark.tsx`, `components/GameChangerMark.tsx`, `components/CountTag.tsx`, `components/OwnedBadge.tsx`, `components/RarityGem.tsx` and every mark in `features/decks/CardMarks.tsx` (grep `useTooltip` there for the census — the line numbers this row carried moved twice on 2026-09-08 alone, and a stale line number reads as a claim about a site nobody can find) | What a glyph means. Each binds `describes: false` because the panel carries the mark's *name* and the mark itself is `aria-hidden`. | Nothing on the card. The same facts are set in type in the card pane and in the three tables — a different surface, not the same one reached twice. |
-| `components/AppShell.tsx:596` — the app's one native `title` | Nothing at all, and it is in this table so it is not mistaken for a lead. | **The touch answer is never "put the `title` back."** `src/CLAUDE.md` requires a hint to be `useTooltip()`'s spread, and the reason holds twice over here: a native tooltip does not appear on touch either, so restoring one would trade a hint nobody sees for a hint nobody sees. This site survives precisely *because* its sentence is never shown to anybody — Chromium freezes `:hover` at a drag's origin for the whole drag — and is read through the accname spec's description fallback instead. |
+| `components/AppShell.tsx:596` — the app's one native `title` | Nothing at all, and it is in this table so it is not mistaken for a lead. | **The touch answer is never "put the `title` back."** `packages/ui/CLAUDE.md` requires a hint to be `useTooltip()`'s spread, and the reason holds twice over here: a native tooltip does not appear on touch either, so restoring one would trade a hint nobody sees for a hint nobody sees. This site survives precisely *because* its sentence is never shown to anybody — Chromium freezes `:hover` at a drag's origin for the whole drag — and is read through the accname spec's description fallback instead. |
 
 ### Gestures with no touch equivalent
 
@@ -5699,7 +5701,7 @@ is prose about something else.
 | **Ctrl+wheel — the card zoom** | `lib/useCardZoomGesture.ts:82–88`: one native `wheel` listener at `{ passive: false }` that returns unless `e.ctrlKey`, then `preventDefault()`s and calls `zoomCards(section, e.deltaY < 0 ? 1 : -1)`. It steps the sixteen-stop ladder in `lib/cardZoom.ts:79–81` for one of the eight sections at `:125–134`. | **Nothing. The grep is below, and it is the finding this round rests on.** |
 | **Ctrl/⌘-click** | `readModifiers` (`lib/multiSelect.ts:70–79`) sets `toggle` from `ctrlKey \|\| metaKey`; `applySelect` (`:80` onward) toggles that one key in or out of the set. It reaches a surface through `useCardSelection`'s `pick` (`lib/useCardSelection.ts:79`, `:125`), which returns whether the press was a selection. | **Nothing.** There is no "Select all", no checkbox column and no selection mode anywhere in the tree — `grep -rni "select all\|selectAll\|selectRange"` outside tests and stories returns no lines. `CardGrid`'s arrow walk returns early on **any** modifier (`features/search/CardGrid.tsx:969`), so the wall's keyboard path offers no chord either. |
 | **Shift-click** | The same `readModifiers`, setting `range` from `shiftKey`; `applySelect` replaces the set with the run from the anchor, and Ctrl+Shift adds that run instead. Four cases and no others, Shift outranking Ctrl (`lib/multiSelect.ts:80–110`). | As above. |
-| **Right-click** | `useContextMenu`'s `menu(build)` (`components/menu/useContextMenu.ts:151`), spread as `onContextMenu` at 14 shipped attachments over 9 handler factories, above a document-level suppressor at `components/menu/ContextMenuProvider.tsx:67`. It is how a card, a table row, a folder, a deck tile, a pile heading and the card pane are acted on. | **Two doors, and neither belongs to touch.** `menuKey` answers Shift+F10 and the ContextMenu key (`useContextMenu.ts:153–162`) — a keyboard. `menuClick` opens the same menu from a plain click on a `⋯` trigger (`:182–185`) — and on the day of this census it existed at **two** surfaces, the collection's and the wishlist's folder cards (`features/collection/CollectionPage.tsx:1322` and `features/wishlist/WishlistPage.tsx:862`, drawn at `CollectionFolderCard.tsx:244` and `WishFolderCard.tsx:229`). **Both cards went with folder shelves on 2026-09-26** and each page's shelf headings carry the `⋯` now (`ShelfHeading`), and other `⋯` triggers have joined since — `grep -rn "menuClick(" src/` is the census rather than a count here. A menu with no `⋯` still has no plain-click door. |
+| **Right-click** | `useContextMenu`'s `menu(build)` (`components/menu/useContextMenu.ts:151`), spread as `onContextMenu` at 14 shipped attachments over 9 handler factories, above a document-level suppressor at `components/menu/ContextMenuProvider.tsx:67`. It is how a card, a table row, a folder, a deck tile, a pile heading and the card pane are acted on. | **Two doors, and neither belongs to touch.** `menuKey` answers Shift+F10 and the ContextMenu key (`useContextMenu.ts:153–162`) — a keyboard. `menuClick` opens the same menu from a plain click on a `⋯` trigger (`:182–185`) — and on the day of this census it existed at **two** surfaces, the collection's and the wishlist's folder cards (`features/collection/CollectionPage.tsx:1322` and `features/wishlist/WishlistPage.tsx:862`, drawn at `CollectionFolderCard.tsx:244` and `WishFolderCard.tsx:229`). **Both cards went with folder shelves on 2026-09-26** and each page's shelf headings carry the `⋯` now (`ShelfHeading`), and other `⋯` triggers have joined since — `grep -rn "menuClick(" packages/ui/` is the census rather than a count here. A menu with no `⋯` still has no plain-click door. |
 | **Resting a pointer** | Four dwell timers, each keyed on a pointer that arrives and does not leave: `TOOLTIP_OPEN_MS` 400 (`components/tooltip/TooltipProvider.tsx:17`), `SUBMENU_HOVER_MS` 120 (`components/menu/ContextMenu.tsx:48`), ~~`PREVIEW_DWELL_MS` 250 (`features/card/PrintingPreview.tsx:25`)~~ — **deleted 2026-09-03, so three** — and `STACK_OPEN_DWELL_MS` 80 (`features/decks/CardStack.tsx:271`). | Per site, in the table above. **The tooltip's own mechanics deserve stating precisely, and they were not measured on hardware for this census.** The binding is `onPointerEnter`, not `onMouseEnter` (`components/tooltip/useTooltip.ts:113`), and a touch tap *does* dispatch `pointerenter` — so the 400ms timer is armed. What happens next has three parts: the provider's document-level `pointerdown` handler calls `hideNow` (`TooltipProvider.tsx:190–195`), which clears the *close* timer and hides what is open but does **not** clear the open timer; `pointerleave` at lift-off calls `leave`, which does clear it (`:155–160`); and the `focus` door is fenced on `anchor.matches(":focus-visible")` (`:141`), which a pointer press makes false. Whether a deliberate press-and-hold past 400ms puts a panel up is therefore a **reading somebody owes on a device**, and not a conclusion this census may draw from source. |
 
 ### The zoom is the one with no other door
@@ -5717,7 +5719,7 @@ events with `ctrlKey` set and no key held — that file says so at `:51–55` �
 two input devices, and the `preventDefault` is load-bearing on hardware where nobody is touching
 Ctrl. A touchscreen pinch produces **no wheel event at all**. It is a two-pointer gesture, and
 nothing in this app listens for one: no `touchstart`, no `TouchEvent`, no `pointerType` branch, no
-gesture library, nowhere in `src/`.
+gesture library, nowhere in `packages/ui/`.
 
 **So on a touchscreen with no wheel and no trackpad, `cardZoom` is frozen at whatever the last
 session left.** `ZOOM_STEPS` is
@@ -5790,9 +5792,9 @@ followed it.
   (only the phone flag ever fed it), `CardGrid`'s `PHONE_TILE_WIDTH` (141), and the `Phone`
   stories of `CardDetailModal` and `PriceHistoryDialog`.
 - **The safe area**: `viewport-fit=cover` in `index.html`, the four `--safe-*` insets in
-  `src/index.css`, their uses in `AppShell` and `StartupScreen`, and the tests that pinned them.
+  `packages/ui/index.css`, their uses in `AppShell` and `StartupScreen`, and the tests that pinned them.
   The shell's `h-dvh` stayed — *The shell is as tall as the visible viewport* above.
-- **`PHONE_PX`, `PHONE_HEIGHT_PX` and `TABLET_PX`** from `src/lib/viewports.ts`, with the test
+- **`PHONE_PX`, `PHONE_HEIGHT_PX` and `TABLET_PX`** from `packages/ui/lib/viewports.ts`, with the test
   that ordered them. `DESKTOP_FLOOR_PX` and `DESKTOP_FLOOR_HEIGHT_PX` stay.
 
 **What stays, by the owner's explicit decision — machinery, not the layout:**
@@ -5809,7 +5811,7 @@ followed it.
   correct at any width and change nothing on desktop, and collapsing about a hundred classes
   carries layout risk for no visible change. **A below-`sm` rung is kept on purpose; never read
   one as a phone target.**
-- **The public share page** (`share/`) keeps its own narrow layout. It is a web page a viewer
+- **The public share page** (`apps/share/`) keeps its own narrow layout. It is a web page a viewer
   opens on whatever they have, and nothing here touched it.
 
 **Three findings from the phone passes still describe code that stays**, so they are kept here
@@ -5859,7 +5861,7 @@ answer, and this page deliberately stops writing that number down — `nav.ts`' 
 makes the same refusal for the same reason. The rail's own count is written in the build, on
 `GroupId`, so it is repeated here and nowhere else.)
 
-**`src/features/settings/nav.ts` is the whole of the decision and neither component that draws it
+**`packages/ui/features/settings/nav.ts` is the whole of the decision and neither component that draws it
 decides anything.** `SettingsNav` draws the rail, `SettingsPage` draws the pane, and both of the
 things worth getting wrong here — which panels a group holds, and which panels a query matches —
 are decidable with no DOM in front of them.
@@ -5895,7 +5897,7 @@ every visit to Settings.
 **The panel ids are the panels' own `SettingsSection` stems, character for character, and that
 claim now has a fence.** The stem is a `string` prop, so a `PanelId` no heading answers to
 type-checks perfectly and costs the reader a rail entry that scrolls to nothing.
-`src/features/settings/nav.test.ts` sweeps `/src/**/*.{ts,tsx}` through Vite's `?raw` — the
+`packages/ui/features/settings/nav.test.ts` sweeps `/packages/ui/**/*.{ts,tsx}` and `/apps/desktop/src/**/*.{ts,tsx}` (`/src/**` until 2026-10-08) through Vite's `?raw` — the
 `layers.test.ts` trick, for its reason: no `@types/node`, so no `node:fs` — and asserts the set of
 drawn stems against `Object.keys(PANELS)`. Two things the sweep has to get right and a naive one
 would not: it **strips comments first**, because this repo keeps its reasoning in prose and the
@@ -5910,7 +5912,7 @@ instead of quietly under-reporting.
 The page root is `mx-auto flex max-w-4xl flex-wrap items-start gap-8 py-2`. The rail is
 `flex-[1_1_232px]` and the pane `flex-[999_1_480px]`, so with the 32px gap **the row holds both
 only while the content box is at least 744px** (232 + 32 + 480) and wraps below that. There is no
-`sm:`/`md:`/`lg:` anywhere in it: `src/lib/viewports.ts` forbids a viewport branch outside
+`sm:`/`md:`/`lg:` anywhere in it: `packages/ui/lib/viewports.ts` forbids a viewport branch outside
 `AppShell`, and none is needed, because plain flex already puts the rail above the pane when there
 is no room beside it.
 
@@ -5956,10 +5958,10 @@ phone layout and the root is one `@container/fb` element again, and the note ove
 the rule — nothing that must cover the window may mount inside it.
 
 Settings meets it from the inside. **Its panels mount their dialogs inline, and there is no
-`createPortal` anywhere in `src/`** — verified 2026-09-03: `grep -rn createPortal src/` matches
+`createPortal` anywhere in `packages/ui/`** — verified 2026-09-03: `grep -rn createPortal packages/ui/` matches
 nothing, and neither does `from "react-dom"`. The chain is `ConfirmDialog` → `Dialog` →
 **`Dialog.tsx:333`**, which is a bare `fixed inset-0` scrim that corrects for nothing. No settings
-file writes `fixed inset-0` itself, so grepping for that class in `src/features/settings/` finds
+file writes `fixed inset-0` itself, so grepping for that class in `packages/ui/features/settings/` finds
 zero and is the wrong grep; **`ConfirmDialog` is the census**, and today it names four sites in
 three panels — `CachePanel.tsx:54`, `DangerZonePanel.tsx:169`, `SyncPanel.tsx:1527` and
 `SyncPanel.tsx:1552`. `SettingsNav.tsx`'s own comment names two of the four and the plan this
@@ -5980,7 +5982,7 @@ inside a panel resolved against.
 
 ### Why not a window-width branch
 
-`src/lib/viewports.ts` demands a reason at the site of any viewport branch, and the test to apply
+`packages/ui/lib/viewports.ts` demands a reason at the site of any viewport branch, and the test to apply
 is the one `useNarrowWindow`'s doc comment stated while the app had that hook: **name the box the
 question is about, and if it is not the window, this is not the mechanism.** The rail's question
 is whether the pane is beside it, which is a fact about the rail's own box and about the page's
@@ -6324,13 +6326,13 @@ one `<button>` and one `tabIndex={-1}` `<div>`, reading `activeElement.matches("
 
 Step C is the entire bug, and it explains every screenshot: a reader clicks a card, the dialog
 opens and focuses its own `tabIndex={-1}` panel (step B), then presses any key at all (step C).
-Nothing in `src/` was at fault — the app had **no** `focus:` variants anywhere, only
+Nothing in `packages/ui/` was at fault — the app had **no** `focus:` variants anywhere, only
 `focus-visible:`, which is the correct spelling and was already the fix for the mouse case.
 
 ### The rule that replaced it
 
 **Focus is keyboard-driven when it *moved* and the reader's most recent input was a key.**
-`src/lib/keyboardModality.ts` decides that at one moment — `focusin` — rather than continuously
+`packages/ui/lib/keyboardModality.ts` decides that at one moment — `focusin` — rather than continuously
 off a flag any keystroke can flip, and publishes `data-kbd` on `<html>`.
 
 Two things fall out of it that a key allowlist does not give:
@@ -6345,7 +6347,7 @@ Two things fall out of it that a key allowlist does not give:
 
 ### One line gates every outline in the app
 
-`src/index.css` redefines Tailwind's own `focus-visible` variant rather than introducing a new
+`packages/ui/index.css` redefines Tailwind's own `focus-visible` variant rather than introducing a new
 name at the call sites. Confirmed against the built stylesheet — **every** `focus-visible:` utility
 the app emits is rewritten, including the composed `group-focus-visible:` form nobody edited. Grep
 `dist/assets/*.css` for `data-kbd` for the current set; a count here would be a fact about one tree:
@@ -6363,7 +6365,7 @@ Two things the variant cannot reach, both handled beside it:
   as a *recolour* — the gold outline swapped for the platform's blue one, on the same keystroke.
 - **`PriceRange`'s thumb**, which spells the pseudo-class inside an arbitrary variant — a string
   the component wrote, not the variant Tailwind owns. It gets the named `focus-thumb` variant, and
-  `keyboardModality.test.ts` sweeps `src/` so a second component cannot reintroduce the shape.
+  `keyboardModality.test.ts` sweeps `packages/ui/` so a second component cannot reintroduce the shape.
 
 **A `@custom-variant` this Tailwind mis-parses emits nothing, silently, with `tsc` and the whole
 suite green** — the standing warning at the head of `index.css`, and it applies double to an
@@ -6600,7 +6602,7 @@ collapses one control: the colour bar becomes the tile's foot, the theory badge 
 become two marks on the art, a folder card becomes a deck tile's frame, the folder tree draws its
 nesting, and three folder verbs in the heading row become one menu. `DeckColorBar.tsx`,
 `DeckTile.tsx`, `FolderCard.tsx`, `FolderTree.tsx`, `DecksPage.tsx` and `panels.ts` under
-`src/features/decks/`, plus a prose correction in `src/lib/dropMarks.ts`.
+`packages/ui/features/decks/`, plus a prose correction in `packages/ui/lib/dropMarks.ts`.
 
 **Say the honest half first: everything down to the last subsection is the design _as
 authored_, read off the source** — every size is what the file says rather than what a box
@@ -6632,7 +6634,7 @@ printed `mana-font` glyph.
   than drift: a pie slice is a colour with nothing printed on it, a band segment is a field with a
   symbol on it, and those are two demands the palette has two answers for. The table stays a
   `Record` with `var(…)` spelled out per key — an interpolated `bg-mana-${key}` emits no rule at
-  all, which is `src/CLAUDE.md`'s standing rule and the same trap the old table was written around.
+  all, which is `packages/ui/CLAUDE.md`'s standing rule and the same trap the old table was written around.
 - **Four numbers, each answering a different question.** 20px of height at 100%
   (`calc(1.25rem * var(--mark-scale, 1))`), which is what a 12px glyph needs with air either side
   — the symbol sets the floor, the band is not a thickness anybody chose. **26px of minimum width
@@ -6720,7 +6722,7 @@ exact at every stop the ladder has; a measured one would answer a frame late.
   shared is the dash: `border-dashed` means provisional, which a theory list is and an estimate is
   not.
 - **The pill takes no tooltip, and the reason generalises.** `pointer-events` inherits, so a hint
-  bound anywhere inside a `pointer-events-none` wrapper can never open — `src/CLAUDE.md`'s rule.
+  bound anywhere inside a `pointer-events-none` wrapper can never open — `packages/ui/CLAUDE.md`'s rule.
   The escape `FoilOverlay` uses, `pointer-events-auto` on the mark itself, works only because that
   chip is *inside* its button, where the press still opens the card. Here the marks are siblings
   of the button, so buying the hint back would buy a genuine dead spot in the picture's corner,
@@ -6775,7 +6777,7 @@ now rather than two kinds of object in one grid.
   62px lines of type (the 2026-09-03 section above measured them), where an edge is the only thing
   separating a container from a control. This one draws it as a picture the size of a deck's
   picture with the word `Folder` in the caption.
-- **`src/lib/dropMarks.ts`' prose was corrected in the same commit** — it described all four folder
+- **`packages/ui/lib/dropMarks.ts`' prose was corrected in the same commit** — it described all four folder
   cards as dashed, and one of them no longer is. Its argument was unaffected; the sentence was one
   wall behind.
 
@@ -6835,7 +6837,7 @@ The arithmetic, with `GUIDE_STEP = 16`, `GUIDE_TICK = 10`, and a 16px glyph at 8
   about `folderEdge`'s thresholds moves either way — `axis="vertical"` divides the box by
   **height**, and a gutter of absolutely positioned hairlines adds none.
 
-**`indent()` in `src/lib/folderTree.ts` was deliberately not changed, and the two steps no longer
+**`indent()` in `packages/ui/lib/folderTree.ts` was deliberately not changed, and the two steps no longer
 agree on purpose.** That function is 14, still exported, and still the wishlist tree's, the
 collection cabinet's and `MoveToFolder`'s — pickers, flat lists of destinations with no guides in
 them, whose step is free to be what reads well. A step that draws hairlines is not free: pulling
@@ -6956,7 +6958,7 @@ The glyph is drawn as `<i class="ms ms-u …">`, and the size was written on tha
 
 **The cause is source order, not the class.** `mana-font`'s own `.ms` rule declares
 `font: normal normal normal 14px Mana` and then `font-size: inherit` — a **class** selector,
-exactly as specific as a Tailwind utility — and `src/main.tsx` imports `mana-font/css/mana.css`
+exactly as specific as a Tailwind utility — and `apps/desktop/src/main.tsx` imports `mana-font/css/mana.css`
 after `index.css`. On a specificity tie the later sheet wins, so the utility was in the markup,
 in the stylesheet, and inert; the symbol simply took its parent's 16px.
 

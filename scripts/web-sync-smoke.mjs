@@ -8,7 +8,7 @@
 // `web-smoke.mjs` proves the web host on a device that has paired nothing. This is the run in
 // which it pairs: two headless Chromiums on two profiles — two devices — each serving the built
 // app under the production policy, and between them **the relay itself under workerd**
-// (`wrangler dev --local` on `relay/wrangler.jsonc`: its `fetch`, its Durable Object, a local D1).
+// (`wrangler dev --local` on `infrastructure/relay/wrangler.jsonc`: its `fetch`, its Durable Object, a local D1).
 // It walks, in this order:
 //
 //   1. both devices get past their startup gate — the first on the six fixture cards, the second
@@ -65,7 +65,7 @@
 // code path a reader's own claim takes.
 //
 // **wrangler is not one of this repository's root dependencies.** It is looked for at
-// `app-worker/node_modules/wrangler/` — where `npm ci --ignore-scripts --prefix app-worker` puts
+// `infrastructure/app-worker/node_modules/wrangler/` — where `npm ci --ignore-scripts --prefix infrastructure/app-worker` puts
 // the one version that directory's lockfile pins, which is what CI does — and then at the path
 // in `WRANGLER`, a `wrangler.js`. The only wrangler commands this runs are `d1 execute --local`
 // and `dev --local`: nothing here reaches Cloudflare.

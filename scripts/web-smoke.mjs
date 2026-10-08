@@ -5,8 +5,8 @@
 //
 // A green suite proves the host it ran on, and no suite runs the WASM module: vitest drives the
 // Worker's logic over a fake, and cargo compiles the engine for a browser without starting one.
-// This is the run that instantiates it. It serves `dist-web/` **as the production host will** —
-// every response under the headers `dist-web/_headers` gives its address, the
+// This is the run that instantiates it. It serves `apps/light/dist-web/` **as the production host will** —
+// every response under the headers `apps/light/dist-web/_headers` gives its address, the
 // Content-Security-Policy among them, and a miss as the hosting Worker's own 404 — opens it in
 // headless Chromium over the DevTools protocol, and asks eighteen things, in this order — the
 // first seventeen of one browser, and the last of a second, because it needs a first run of its
@@ -114,7 +114,7 @@ import {
   serve,
 } from "./web-smoke/harness.mjs";
 
-/** The folder `src/lib/core/web/index.ts` asks the engine to keep its databases in. */
+/** The folder `packages/ui/lib/core/web/index.ts` asks the engine to keep its databases in. */
 const OPFS_DIRECTORY = "mtg-grimoire";
 /** How long the whole run may take. CI's step has a longer bound of its own behind this one. */
 const DEADLINE_MS = 180_000;
@@ -206,7 +206,7 @@ function engineFiles() {
   const build = readdirSync(join(DIST, "wasm")).find((id) =>
     existsSync(join(DIST, "wasm", id, "grimoire_web.js")),
   );
-  if (!chunk || !build) fail("dist-web has no database Worker chunk, or no engine folder.");
+  if (!chunk || !build) fail("apps/light/dist-web has no database Worker chunk, or no engine folder.");
   return [
     `/assets/${chunk}`,
     `/wasm/${build}/grimoire_web.js`,
@@ -227,7 +227,7 @@ const GROWN_CARDS = 30_000;
 const BUSY_MS = 250;
 /** How many first runs the check may stage before it gives up on landing a reload in time. */
 const RELOAD_ATTEMPTS = 3;
-/** What the page says when an open it had to retry got through (`src/lib/core/web/index.ts`). */
+/** What the page says when an open it had to retry got through (`packages/ui/lib/core/web/index.ts`). */
 const RETRIED = "still held by a page that had gone";
 
 /**
@@ -391,7 +391,7 @@ async function main() {
         `Thrown: ${first.thrown().join(" | ") || "nothing"}`,
     );
   }
-  // The page says which journal each file got (`src/lib/core/web/index.ts`). The OPFS pool
+  // The page says which journal each file got (`packages/ui/lib/core/web/index.ts`). The OPFS pool
   // refuses WAL, so anything but `delete` on either is a browser doing something new.
   const line = first.said().find((text) => text.includes(OPENED));
   const opened = /journal (\w+), corpus journal (\w+), schema (\d+)/.exec(line ?? "");
@@ -430,7 +430,7 @@ async function main() {
   );
 
   // An empty corpus with a sync running over it: the Search page says so where its wall would
-  // be, with the sync's phase in a live region beside it (`mobile/phone/search/NoCards.tsx`).
+  // be, with the sync's phase in a live region beside it (`apps/light/phone/search/NoCards.tsx`).
   // The card file is still held, so the phase is the download's.
   const phase = await first.until(
     "the page said it is a first run",

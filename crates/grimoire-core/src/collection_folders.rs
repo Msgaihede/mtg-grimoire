@@ -159,7 +159,7 @@ const REMOVED_KIND: &str = crate::schema::COLLECTION_FOLDER_KINDS[2];
 const MAX_FOLDER_DEPTH: usize = 64;
 
 /// One folder. Flat rows; the tree is the reader's to build from `parent_id`, the way
-/// `collection_folders` itself has no notion of depth. `src/lib/folderTree.ts` is the reader.
+/// `collection_folders` itself has no notion of depth. `packages/ui/lib/folderTree.ts` is the reader.
 ///
 /// `kind` and `deck_id` are on the wire because the **page** has to draw a deck's folder and the
 /// removed-cards folder differently from a binder the reader named — and because a row it may
@@ -180,7 +180,7 @@ pub struct CollectionFolder {
     /// is locked ([`LOCKED_FOLDER_IDS`]), but storing that here would be a second copy of a fact
     /// the parent already holds, and the two disagree the first time a folder is moved. Every
     /// refusal in this module asks [`effectively_locked`]; the page walks ancestry for the same
-    /// answer in `src/lib/folderTree.ts`.
+    /// answer in `packages/ui/lib/folderTree.ts`.
     ///
     /// **A `bool` where [`EntryGrain`]'s four booleans are `i64`**, and the difference is what
     /// the value is for: those are read to be handed straight back to a probe, and this one is
@@ -210,7 +210,7 @@ pub struct CollectionFolder {
 /// What one folder tile is drawn from — the two numbers, per folder, in one round trip.
 ///
 /// **Direct per folder, never recursive**, and that is the load-bearing decision. The tree
-/// builder on the TypeScript side (`src/lib/folderTree.ts`) already sums a node's children for
+/// builder on the TypeScript side (`packages/ui/lib/folderTree.ts`) already sums a node's children for
 /// the deck gallery and the wishlist, and does it here for the same reason: SQL that walked the
 /// tree would be a second implementation of arithmetic that is already written, tested and drawn
 /// from, and two implementations of one figure disagree the first time either changes.
@@ -840,7 +840,7 @@ pub fn delete_folder(conn: &Connection, id: i64) -> Result<(), String> {
 /// so a `DELETE … WHERE folder_id = ?1` writes one tombstone per row exactly as
 /// [`crate::collection::remove_entry`]'s single delete writes one. The `WHERE` matters for the
 /// other listener too: an unconditional `DELETE` can take SQLite's truncate optimisation and fire
-/// no update hook at all (`src-tauri/CLAUDE.md`), and this statement is never unconditional.
+/// no update hook at all (`apps/desktop/src-tauri/CLAUDE.md`), and this statement is never unconditional.
 pub fn clear_removed(conn: &Connection) -> Result<i64, String> {
     let tx = conn.unchecked_transaction().map_err(|e| e.to_string())?;
     // The folder and its name — the name for the feed row, and the refusal before anything is

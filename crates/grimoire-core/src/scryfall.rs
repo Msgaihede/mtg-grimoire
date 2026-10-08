@@ -43,7 +43,7 @@ use std::time::Duration;
 /// this line does not spell out by hand.
 ///
 /// **The package this reads is `grimoire-core`, whose version is the app's** — its manifest
-/// says so, release-please bumps the two together, and `src-tauri`'s
+/// says so, both inherit the workspace's version (`[workspace.package]`), and `src-tauri`'s
 /// `the_core_wears_the_apps_version` is what goes red if they part. Every host sends this
 /// string, and the feeds', the relay's and the updater's clients borrow it.
 pub const USER_AGENT: &str = concat!(

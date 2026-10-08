@@ -1,7 +1,7 @@
 //! Importing a decklist: the one question TypeScript cannot answer.
 //!
-//! A reader pastes a list; the TypeScript half (`src/features/transfer/import/`, mirrored across
-//! IPC by `src/lib/ipc.ts`) parses it into lines and
+//! A reader pastes a list; the TypeScript half (`packages/ui/features/transfer/import/`, mirrored across
+//! IPC by `packages/ui/lib/ipc.ts`) parses it into lines and
 //! decides everything a *deck* decision is — which pile a card lands in, which card is the
 //! commander, what the format is. What it cannot decide is **which printing in this app's
 //! corpus a name means**, because that is a question about 116 k rows of data. So this module
@@ -1378,7 +1378,7 @@ pub fn commit_import(
     })
 }
 
-/// How a picked file's bytes were turned into text — `ImportFile.encoding` in `src/lib/ipc.ts`,
+/// How a picked file's bytes were turned into text — `ImportFile.encoding` in `packages/ui/lib/ipc.ts`,
 /// whose four strings are these four `rename`s exactly.
 ///
 /// **The page is told, because one of the four is a guess.** A byte-order mark *names* UTF-16
@@ -1492,7 +1492,7 @@ pub fn decode(bytes: &[u8]) -> ImportFile {
 /// A decklist is text; the other three are what the desktop clients have always written one as
 /// (`.dec` MTGO, `.dek` Arena, `.csv` a spreadsheet export). **A filter and not a fence** — the
 /// dialog lets the reader switch it off, and [`read_import_file`] reads whatever they chose, so
-/// a list saved as `.md` is still a list. It lived in `src/features/transfer/files.ts` until the
+/// a list saved as `.md` is still a list. It lived in `packages/ui/features/transfer/files.ts` until the
 /// dialog moved here.
 pub const DECKLIST_EXTENSIONS: [&str; 4] = ["txt", "dec", "dek", "csv"];
 
@@ -3452,7 +3452,7 @@ mod tests {
         assert!(!file.text.contains('\u{FFFD}'));
     }
 
-    /// The four strings `src/lib/ipc.ts`'s `ImportFile.encoding` union names, exactly — a
+    /// The four strings `packages/ui/lib/ipc.ts`'s `ImportFile.encoding` union names, exactly — a
     /// `rename` that drifted would reach the dialog as a value its `=== "windows-1252"` test never
     /// matches, and the notice would silently stop being drawn.
     #[test]

@@ -69,7 +69,7 @@ pub const NEW_PRINTINGS_READ: i64 = 100;
 /// whole corpus, and the registry offers 30, 90 and 365.
 const MAX_DAYS: i64 = 365;
 
-/// How many language codes an allow-list may carry. `src/lib/languages.ts` names **19**, which is
+/// How many language codes an allow-list may carry. `packages/ui/lib/languages.ts` names **19**, which is
 /// every code across the 116 712 rows of the 2026-08-18 bulk, so 24 clears the corpus with room
 /// and refuses a list that could only be a bug.
 const MAX_LANGS: usize = 24;

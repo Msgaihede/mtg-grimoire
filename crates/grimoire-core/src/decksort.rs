@@ -10,7 +10,7 @@
 //! difference is the whole of what is worth writing down here. That module checks the word it is
 //! given against [`crate::listview::LAYOUTS`], because a wall is drawn one of two ways and this
 //! build knows both. **This one checks nothing but emptiness**, because the words are
-//! `src/features/decks/deckSort.ts`'s — six keys and two directions today — and *a database
+//! `packages/ui/features/decks/deckSort.ts`'s — six keys and two directions today — and *a database
 //! outlives the app*. A key a later build stops offering, or one an earlier build has never
 //! heard of, has to degrade to the default **on the reading side**; refused at the write end it
 //! would instead be a reader whose sort silently would not save, on a build that had every

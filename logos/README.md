@@ -12,7 +12,7 @@ Everything is centred on the BOOK — its two boards, excluding the clasp and th
 sits dead centre in the frame with equal margins on all four sides, and the clasp and ribbon reach
 into that margin. Clear space is about 9/64 on the tile, 12/64 on the transparent mark.
 - `png/mark-*.png` — transparent renders, 16 to 1024 px.
-- `tauri/` — drop-in replacement for `src-tauri/icons/`, **rendered from the mark, transparent**.
+- `tauri/` — drop-in replacement for `apps/desktop/src-tauri/icons/`, **rendered from the mark, transparent**.
 - `icon.ico` — Windows icon: 16, 24, 32, 48, 64 and 256 px in one file.
 
 **The shipped app icon is the mark, not the tile, and that is a decision rather than an oversight**
@@ -31,15 +31,15 @@ Two things fall out of it and neither is a regression:
 
 Regenerate the whole set from the master with
 `npx tauri icon logos/png/mark-1024.png -o <dir>`, then copy the flat files over **both**
-`src-tauri/icons/` and `logos/tauri/`, which are kept byte-identical. Do not point that command at
+`apps/desktop/src-tauri/icons/` and `logos/tauri/`, which are kept byte-identical. Do not point that command at
 `svg/mtg-grimoire-tile.svg` or its renders — that is what put the black plate there. Render into a
-scratch directory rather than over `src-tauri/icons/`: the command also emits `android/`, `ios/`
-and a `64x64.png`, none of which this repo tracks, and `icon.icns` belongs to `src-tauri/icons/`
+scratch directory rather than over `apps/desktop/src-tauri/icons/`: the command also emits `android/`, `ios/`
+and a `64x64.png`, none of which this repo tracks, and `icon.icns` belongs to `apps/desktop/src-tauri/icons/`
 alone while the Windows `.ico` is copied to `logos/icon.ico` as well.
 
 ## The light app's icons
 
-`mobile/public/icons/` holds the four PNGs the web manifest names (`mobile/public/light.webmanifest`):
+`apps/light/public/icons/` holds the four PNGs the web manifest names (`apps/light/public/light.webmanifest`):
 `icon-192.png` and `icon-512.png` are the mark, transparent, for the reason above; `maskable-192.png`
 and `maskable-512.png` are the mark on the `#0C0D12` field to every edge, drawn at `scale(0.70)` so
 that all of it — clasp and ribbon too — is inside the circle Android keeps whole when it cuts an
@@ -47,20 +47,20 @@ installed icon to the launcher's shape (80% of the width; the mark reaches **37.
 centre against the 40% allowed, measured from the pixels on 2026-10-04).
 
 The same script renders the **Android launcher's** set from this mark
-(`mobile/src-tauri/gen/android/app/src/main/res/mipmap-*`): an adaptive icon whose foreground is
+(`apps/light/src-tauri/gen/android/app/src/main/res/mipmap-*`): an adaptive icon whose foreground is
 the mark at scale 0.55 on a transparent 108dp layer, over the app's ground. A launcher keeps only a
 circle 66dp across — 30.6% of the width from the centre — and the script measures the foreground's
 furthest painted pixel against it (**29.5%**, measured from the pixels on 2026-10-07) and fails the
 render if it passes. It also writes the store's two graphics to `docs/play/`. `tauri android init`
-and `tauri icon` both overwrite the launcher's pictures with stock art; `mobile/host.test.ts` goes
+and `tauri icon` both overwrite the launcher's pictures with stock art; `apps/light/host.test.ts` goes
 red when they do.
 
 **Made by `node scripts/light-icons.mjs`**, from `svg/mtg-grimoire-mark.svg` alone: it derives the
 maskable drawing from the mark rather than reading a third SVG, renders each size in headless
 Chromium over the DevTools protocol (no image library is a dependency of this repo), and fails if
 the maskable mark reaches past the safe zone. Run it again after editing the mark and commit what
-it writes. `mobile/public/mtg-grimoire-mark.svg` is a second copy of the mark, as
-`public/mtg-grimoire-mark.svg` is the first; `mobile/host.test.ts` holds it equal to the master.
+it writes. `apps/light/public/mtg-grimoire-mark.svg` is a second copy of the mark, as
+`apps/desktop/public/mtg-grimoire-mark.svg` is the first; `apps/light/host.test.ts` holds it equal to the master.
 
 ## Notes
 

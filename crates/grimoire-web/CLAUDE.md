@@ -20,10 +20,10 @@ Four functions are exposed to the Worker:
 | `listen(handler)` | Callback `(name, payload)` with payload as JSON string | Nothing; subsequent calls replace previous handler |
 | `scanner_labels()` | — | `Promise<Uint8Array>`: every printing's label as `card_scanner::labels` bytes, for the scanner's own Worker; **no bytes** before `open` is ready and while the corpus is empty. **Rejects with one sentence** when the read failed or gave up on a corpus that kept changing (`LABEL_ATTEMPTS`, twelve: a launch moves the corpus's schema cookie eight times) — the page must be able to tell that from empty |
 
-- **Wire synchronization**: The Worker's hand-written definitions live in `src/lib/core/web/grimoire_web.d.ts` and `protocol.ts`. A change to an export or wire string in `wire.rs` must update both TypeScript files in the same commit.
+- **Wire synchronization**: The Worker's hand-written definitions live in `packages/ui/lib/core/web/grimoire_web.d.ts` and `protocol.ts`. A change to an export or wire string in `wire.rs` must update both TypeScript files in the same commit.
 - **Strict export check**: `scripts/build-wasm.mjs` checks each module's `exports` and fails the build if any is missing (missing `#[wasm_bindgen]` attributes compile without warnings).
 - **Core dispatch**: `call` dispatches directly via `grimoire_core::dispatch`. Commands are added in `crates/grimoire-core/src/commands.rs`, never directly in this crate.
-- **The scanner is not in this module.** Its session runs in a Worker of its own on `crates/grimoire-scan` (see [its guide](../grimoire-scan/CLAUDE.md)); this host only hands it the labels, because it holds the corpus. `host::scanner_labels` reads `cards` through the state's one connection a page at a time (`LABEL_PAGE`), lets go of the connection between pages, takes a `Breather` turn on `feed::WORK_BUDGET`, and starts over if the corpus's schema cookie moved (a sync's swap). Never open a second connection for it. On the wire it is a message of its own — `{ kind: "labels" }`, answered with the bytes transferred (`protocol.ts`'s `transferOf`) — and no command of the table; the page's scanner (`src/lib/core/web/scanner.ts`) asks once per session it builds.
+- **The scanner is not in this module.** Its session runs in a Worker of its own on `crates/grimoire-scan` (see [its guide](../grimoire-scan/CLAUDE.md)); this host only hands it the labels, because it holds the corpus. `host::scanner_labels` reads `cards` through the state's one connection a page at a time (`LABEL_PAGE`), lets go of the connection between pages, takes a `Breather` turn on `feed::WORK_BUDGET`, and starts over if the corpus's schema cookie moved (a sync's swap). Never open a second connection for it. On the wire it is a message of its own — `{ kind: "labels" }`, answered with the bytes transferred (`protocol.ts`'s `transferOf`) — and no command of the table; the page's scanner (`packages/ui/lib/core/web/scanner.ts`) asks once per session it builds.
 
 ---
 
@@ -32,7 +32,7 @@ Four functions are exposed to the Worker:
 Workers do not propagate traps as rejected promises with descriptive messages (they fire `onerror`). Every error condition must return a structured response:
 
 - Invalid calls before `open`, invalid JSON arguments, missing commands, or unexpected byte bodies return `{"err": "..."}`.
-- Storage initialization errors return `{"kind":"already-open"}` (detected by `NoModificationAllowedError` in DOMException) or `{"kind":"failed"}`. `already-open` indicates another Worker of this origin holds the pool; see [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md) and `src/lib/core/web/holder.ts` for Web Lock handling.
+- Storage initialization errors return `{"kind":"already-open"}` (detected by `NoModificationAllowedError` in DOMException) or `{"kind":"failed"}`. `already-open` indicates another Worker of this origin holds the pool; see [`apps/light/CLAUDE.md`](../../apps/light/CLAUDE.md) and `packages/ui/lib/core/web/holder.ts` for Web Lock handling.
 - Panic hook is initialized during instantiation; logs to `console.error`/`console.warn` (`eprintln!` is a no-op on wasm32).
 
 ---
@@ -93,9 +93,9 @@ Run verification only at the end of a feature (not after each change):
 | `cargo test -p grimoire-web` | Run native logic and wire tests |
 | `npm run web:wasm` | Build both WASM modules using the `wasm` profile: this host's into `dist-wasm/`, the scanner's (`grimoire-scan`, with `simd128`) into `dist-wasm/scanner/`. `-- --only engine` for this one alone |
 | `npm run web:dev` | Start Vite dev server on port 5176 using current WASM build |
-| `npm run web:build` | Build production web bundle into `dist-web/` |
+| `npm run web:build` | Build production web bundle into `apps/light/dist-web/` |
 | `npm run web:smoke` | Run headless Chromium offline smoke tests |
-| `npm run web:sync-smoke` | Pair two headless Chromium profiles through the relay under workerd and sync both ways (runs `app-worker`'s pinned wrangler — `npm ci --ignore-scripts --prefix app-worker` first — or `WRANGLER=<wrangler.js>`) |
+| `npm run web:sync-smoke` | Pair two headless Chromium profiles through the relay under workerd and sync both ways (runs `app-worker`'s pinned wrangler — `npm ci --ignore-scripts --prefix infrastructure/app-worker` first — or `WRANGLER=<wrangler.js>`) |
 | `npm run web:preview` | Preview production build on port 4176 with Service Worker |
 
 Formatting and clippy:

@@ -104,7 +104,7 @@ the screen in front of the reader, not about the collection.
 `crates/grimoire-core/src/startview.rs`, key `start_view`, is `nav.rs`'s module with a word instead of a bit
 and the same two rules — reading can never fail, writing validates only what Rust can validate.
 Rust stores a non-empty trimmed word and checks nothing else, because the vocabulary of *views* is
-TypeScript's for `listview.rs`'s reason. `useStartView` (`src/lib/useStartView.ts`) checks the
+TypeScript's for `listview.rs`'s reason. `useStartView` (`packages/ui/lib/useStartView.ts`) checks the
 stored word against `ViewId` and falls back to `"home"`, so a downgrade to a build without some
 view does not strand a reader on a page that no longer exists. A Rust-side allow-list would have
 made every new view a Rust change *and* refused the downgraded reader's row on read with nowhere
@@ -202,7 +202,7 @@ Two smaller rulings, each written at its site so it is a decision rather than an
 
 ### The query keys sit under the roots the data already lives under
 
-`src/features/home/keys.ts` is the whole list, and the rule is that a key sits under
+`packages/ui/features/home/keys.ts` is the whole list, and the rule is that a key sits under
 `["collection"]`, `["wishlist"]` or `["decks"]` — the roots every write in this app already
 invalidates. The dashboard therefore refreshes after an add, a move, a rename or a removal with
 **no mutation anywhere learning a new key**, where a `["home", …]` root would have needed every one
@@ -253,7 +253,7 @@ page's, kept.** Layout containment makes the box the containing block for every 
 descendant — and these widgets open anchored popovers, context menus and, through them, dialogs
 whose scrim is a bare `fixed inset-0` that corrects for nothing. The design reached for container
 units because its runtime could not measure; this page can, so it measures. The precedent is
-`src/features/decks/DeckStats.tsx`, which refuses a container over its own two columns in the same
+`packages/ui/features/decks/DeckStats.tsx`, which refuses a container over its own two columns in the same
 words.
 
 **What fits in a card is a question about pixels, decided by the body.** `makeFit` hands each body
@@ -394,7 +394,7 @@ CREATE INDEX idx_activity_recent ON activity (at DESC, id DESC);
 JSON payload of facts and a signed copy delta — and TypeScript writes the sentence, because a
 sentence is domain logic: it changes with the wording and with the reader's language, and a table
 that stored one would be a table full of the phrasing of whichever release wrote each row.
-`src/features/home/activityText.ts` is the **only** reader of `payload`; `activity.rs` stores it
+`packages/ui/features/home/activityText.ts` is the **only** reader of `payload`; `activity.rs` stores it
 verbatim, hands it back byte for byte, and never parses, branches on or knows what a key in one
 means. Rewording a line is therefore not a migration, and a second language stays possible.
 
@@ -456,7 +456,7 @@ deliverable rather than a hope. Every statement in the crate that writes `collec
 three things.
 
 Counted 2026-09-10 on the merged tree at `64d9d709`: **61 production statements across 34
-functions in 10 files** (`python` sweep over `src-tauri/src/**.rs`, matching
+functions in 10 files** (`python` sweep over `apps/desktop/src-tauri/src/**.rs`, matching
 `(INSERT [OR …] INTO|REPLACE INTO|UPDATE [OR …]|DELETE FROM)\s+<table>` and excluding every
 `#[cfg(test)] mod` and every `tests.rs`). **22 record, 6 are already logged, 33 are a
 consequence** — with `add_entry_filed` counted under *records* and appearing in the table under
@@ -643,10 +643,10 @@ From the design's §9, plus two the build itself turned up:
 * **No cross-device activity for the collection.** §5.
 * **No deck-folder shortcuts.** There is no `deck_folder_summary` command and deck folders carry no
   counts; the `decks` widget pins decks, which is what the issue asks for.
-* **`StatsCard` has not moved to `src/components/`.** The widgets import `StatsCard`, `Track` and
-  `percent` from `src/features/decks/stats/StatsCard.tsx`. A cross-feature import is idiomatic here
+* **`StatsCard` has not moved to `packages/ui/components/`.** The widgets import `StatsCard`, `Track` and
+  `percent` from `packages/ui/features/decks/stats/StatsCard.tsx`. A cross-feature import is idiomatic here
   — `CollectionPage.tsx` already imports three things from `features/decks` — and it was the
-  cheaper half of a trade: the honest home for these primitives is `src/components/`, and moving
+  cheaper half of a trade: the honest home for these primitives is `packages/ui/components/`, and moving
   the file while four other branches were editing the deck stats band would have been a
   delete-plus-add conflict against live work. **Still a follow-up, recorded so it stays a decision.**
 * **The deck cover rule is a third copy and stays one.** `hasCover(deck)` is
@@ -686,7 +686,7 @@ From the design's §9, plus two the build itself turned up:
   graph's readout (§14) borrows the tooltip's root mount for the same reason.
 * **Six refusal sentences are unreachable from Storybook**, and this is a gap in the workbench
   rather than in the feature — each is covered by its widget's own unit test. Measured while
-  writing the stories: `.storybook/fake/db.ts`'s `gone` fault is checked in exactly one place
+  writing the stories: `packages/fake/db.ts`'s `gone` fault is checked in exactly one place
   (`deck_get`), which the home page never calls, so a `gone` world renders byte-for-byte as
   `starter`; and `refuseIfBusy` is wired into every **write** handler and no read, which
   `activity_recent`'s own doc says outright. So every one of the six widgets' *"could not be read"*
@@ -771,7 +771,7 @@ make.
 **The launch flash — measured, fixed, and the fix backed out.** Sampled per `requestAnimationFrame`
 across a reload with `start_view` set to `search`: the ribbon read **Home at 224 ms** and **Search at
 317 ms**. So a reader who moved off the default watches ~**93 ms** of a page they did not choose,
-every launch. §4 of `src/lib/useStartView.ts` carries the whole reasoning; the short version is that
+every launch. §4 of `packages/ui/lib/useStartView.ts` carries the whole reasoning; the short version is that
 gating the view area on that read trades a bounded flicker for an unbounded blank — `lib/query.ts`
 sets `retry: 1`, and a view that is waiting looks exactly like a view that is broken. Nine
 `App.test.tsx` cases went red the moment the gate landed, each one a read that had not settled in
@@ -795,7 +795,7 @@ Two things happened in that merge that still matter, and they are not the same s
   happened had the field been typed loosely.
 
 The counts this branch moved, and the command that answers each, so the next reader re-derives
-rather than trusts (a rule the grid redesign below followed for its own two rungs): `USER_SCHEMA_VERSION` is `grep USER_SCHEMA_VERSION crates/grimoire-core/src/schema.rs` (`src-tauri/src/schema.rs` until 2026-10-02);
+rather than trusts (a rule the grid redesign below followed for its own two rungs): `USER_SCHEMA_VERSION` is `grep USER_SCHEMA_VERSION crates/grimoire-core/src/schema.rs` (`apps/desktop/src-tauri/src/schema.rs` until 2026-10-02);
 the user-table count is the `Side::User` entries in `schema::TABLES`.
 
 ## 11. The grid redesign (2026-09-15)
@@ -997,7 +997,7 @@ belongs on `Ask` the day somebody wants it; it is recorded here so the absence i
 `cards.id` is one printing **in one language**, so an unfiltered feed answers a ten-language set as
 ten rows of one reprint. §2 proposed a hard `lang = 'en'`; what shipped is a `Languages` pick —
 **English** (the default, `options[0]`, so a reader who changes nothing gets one row per reprint),
-**Every language**, and **Chosen…** with a checklist built from `src/lib/languages.ts`'s nineteen
+**Every language**, and **Chosen…** with a checklist built from `packages/ui/lib/languages.ts`'s nineteen
 codes. That module gained `LANGUAGE_CODES` and `isKnownLanguage` and a fourth reader.
 
 Three rules carry it:
@@ -1124,7 +1124,7 @@ with reprints.
 
 `new_printings` and `mark_new_printings_seen` are registered in `desktop.rs`'s `invoke_handler`.
 
-`src/lib/ipc.test.ts` carries three mirror rows (`NewPrintingDeck`, `NewPrinting`, `NewPrintings` —
+`packages/ui/lib/ipc.test.ts` carries three mirror rows (`NewPrintingDeck`, `NewPrinting`, `NewPrintings` —
 nested two deep, `PriceMovers`' reason: a field renamed inside the deck entry leaves both structs
 above it agreeing while every deck row in the dialog reads `undefined`) and two `declares` cases. The fence was
 checked rather than trusted: renaming `seen_at` to `seen_when` in the crate turns the `NewPrintings`
@@ -1136,7 +1136,7 @@ row red.
 The fake's only two-language card is Lightning Bolt's Japanese `sta 105`, released 2021-04-23 —
 outside the longest window the command answers (365 days from `CLOCK_BASE`, 2026-08-09) — so
 `langs: []` and `langs: ["en"]` return identical rows and an `EveryLanguage` story could not fail.
-The rule is proven in `.storybook/fake/db.test.ts` and in the widget's own suite instead. The fix is
+The rule is proven in `packages/fake/db.test.ts` and in the widget's own suite instead. The fix is
 a `scripts/gen-storybook-cards.mjs` selection change, deliberately not made mid-branch: that corpus
 is generated wholesale and adding rows moves counts across `db.test.ts` and other files' plays.
 The same corpus yields at most **two** rows — one at 90 days, two at 365 — which is why the story
@@ -1454,7 +1454,7 @@ colour alone.
 
 ⚠️ **The Collection value widget's `--color-mana-*` pastels were measured the same day and fail**:
 Black against Colourless is ΔE **2.0**. The source says why without a validator — in
-`src/index.css`, `--color-mana-b` is `#cbc2bf` and `--color-mana-c` is `#c8c4bf`. So they are not
+`packages/ui/index.css`, `--color-mana-b` is `#cbc2bf` and `--color-mana-c` is `#c8c4bf`. So they are not
 reused here, where two crossing lines in those colours could not be told apart; the value widget
 itself is untouched.
 
@@ -1530,7 +1530,7 @@ arrangement for the tooltip at 150% — **0px** off the anchor's centre — beca
 zoomed element is in painted viewport pixels, which is what a root-mounted `fixed` panel is laid out
 in. Mounted there, it is drawn at the app's scale rather than the dashboard's, the tooltip's ruling
 (*a tooltip is chrome*), and it clamps to `document.documentElement.clientWidth`, never
-`innerWidth`, which includes the scrollbar (`src/CLAUDE.md`).
+`innerWidth`, which includes the scrollbar (`packages/ui/CLAUDE.md`).
 
 ⚠️ **The trap one step inside is choosing the point.** A pointer's `clientX` is in viewport pixels;
 a chart width measured with `clientWidth` or a `ResizeObserver` inside the zoom is in the grid's
@@ -1551,7 +1551,7 @@ starts <date>* rather than stretching a week across a quarter's axis. The market
 
 `value_history.rs` sits in `lib.rs`'s module map, and the command in `desktop.rs`'s
 `generate_handler!`, where a missing registration answers `unknown command` with nothing red.
-`src/lib/ipc.test.ts` carries
+`packages/ui/lib/ipc.test.ts` carries
 mirror rows for `ValueBucket`, `ValuePoint` and `ValueHistory` against the crate's source and a
 `declares` case for both argument names. The Storybook fake stores `copies` beside each fake
 snapshot, holds unpriced holdings as NULL prices, and derives the answer by the same rules rather
@@ -1571,7 +1571,7 @@ completion**, **To review**, **Wishlist savings** and **Coming soon**. The desig
 [the plan](../superpowers/plans/2026-09-26-home-widgets-round-two.md) is what the lanes built
 against; **where this section and the spec disagree, this section is the build**, and each
 disagreement is stated at its site. Each kind is a `WIDGET_META` row, a body in
-`src/features/home/widgets/` and at most one new read, and the new reads — `deck_completion`,
+`packages/ui/features/home/widgets/` and at most one new read, and the new reads — `deck_completion`,
 `deck_review_count` and `upcoming_sets` — are in §6's table.
 
 **Catalogue only, and Rust's vocabulary untouched.** `DEFAULT_LAYOUT` did not move in any of its
@@ -1817,7 +1817,7 @@ a problem, and a reader who keeps it as an archive should be able to take the ro
 
 `wishlist_optimize_plan` already answers, per pinned wish, both printings with their prices and the
 saving. The card asks it about **the whole wishlist** — `wholeWishlistQuery`
-(`src/features/wishlist/wholeWishlistQuery.ts`): `flatten: true`, no filters, the reader's
+(`packages/ui/features/wishlist/wholeWishlistQuery.ts`): `flatten: true`, no filters, the reader's
 marketplace — which is the question `WishlistPage` puts to the sweep dialog when a press here lands
 there. **It is one cache entry, not two copies of one:** `wishlistSavingsKey` is
 `useWishlistOptimize`'s own `optimizePlanKey` over that query, so the dialog opens on this card's
@@ -1997,13 +1997,13 @@ gap. Each face is fenced in `ComingSoonWidget.test.tsx`, the smallest at `CELL_M
 **`upcomingSetsKey` sits under `["decks"]` with no bridge.** The answer is half corpus and half
 `deck_cards`: a deck write changes the second half, and a finished sync — the only thing that changes
 the first — invalidates `["decks"]` with every other root (`SYNC_INVALIDATED` in
-`src/lib/useSyncInvalidation.ts`). `NEW_PRINTINGS_ROOT` made the other call for a feed that also has
+`packages/ui/lib/useSyncInvalidation.ts`). `NEW_PRINTINGS_ROOT` made the other call for a feed that also has
 a cursor write of its own; this one has none.
 
 ### The three hand-offs
 
 Three presses land on a page in a state it does not open in by itself, and each is a field on
-`AppState` in `src/lib/store.ts` **built exactly as `pendingFolder` is** (§8), paying the same three
+`AppState` in `packages/ui/lib/store.ts` **built exactly as `pendingFolder` is** (§8), paying the same three
 rules for the same reasons: it sits **inside `setActiveView`'s clear block**, so it lives for exactly
 one view change; every call site writes **`setActiveView` first and the hand-off second**, because
 the inverse type-checks and leaves the store holding nothing; and the consuming page reads it in a
@@ -2013,7 +2013,7 @@ changed anything — a `setState` in an effect body is the lint failure that die
 that one page spending its own leaves the other two standing.
 
 **`pendingReviewFilter: { scope: "collection" | "wishlist" }`** — To review's binder and wishes
-rows, answered on both cabinets by one hook, `src/lib/useReviewHandoff.ts`; `scope` is what keeps
+rows, answered on both cabinets by one hook, `packages/ui/lib/useReviewHandoff.ts`; `scope` is what keeps
 the two pages from reading each other's post. It adds two things `pendingFolder` never needed:
 
 * **The filter is seeded before the first fetch.** On a mount, the hand-off is the list hook's
@@ -2057,7 +2057,7 @@ reads already cached the landing was right — `scrollTop` 472, the heading at y
 and the page too short to scroll at all (`scrollTop` 0); the reads then answered, the section grew
 **437 → 754 → 824px**, and the heading was pushed to **y=976** with the first row at **1175**, below
 the fold, with nothing to re-scroll it — browser scroll anchoring holds a position already scrolled
-to, and from 0 there is none. So the landing **holds** the panel: `src/lib/holdInView.ts` aligns it
+to, and from 0 there is none. So the landing **holds** the panel: `packages/ui/lib/holdInView.ts` aligns it
 at once and again on every size change of the page root or the panel (a `ResizeObserver`), and
 **lets go for good at the reader's first wheel, touch, press or key** — listened for on the window's
 capture phase, so no handler on the way can keep it alive — or after `HOLD_IN_VIEW_MS` (3s), or when
@@ -2089,7 +2089,7 @@ build where the two disagree — and amended again the same day by
 [issue #688](https://github.com/Msgaihede/mtg-grimoire/issues/688) and
 [the titled to-do lists spec](../superpowers/specs/2026-09-29-titled-todo-lists-design.md) §6. The
 storage, the five commands and the compare-and-set are [decks-storage.md](decks-storage.md)'s *Deck
-to-dos*, and the deck's own To-do band, the other half of this, is `src/features/decks/CLAUDE.md`'s
+to-dos*, and the deck's own To-do band, the other half of this, is `packages/ui/features/decks/CLAUDE.md`'s
 *The To-do band*.
 
 **What #688 changed here.** #672 shipped this card over one checklist per deck — the column

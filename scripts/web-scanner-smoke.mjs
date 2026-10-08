@@ -11,7 +11,7 @@
 // Worker and cargo tests the module's logic natively; neither instantiates the module in a
 // browser, moves a megabyte between two real Workers, or hears a real policy refuse something.
 //
-// It serves `dist-web/` as the production host will (`web-smoke/harness.mjs`: every response
+// It serves `apps/light/dist-web/` as the production host will (`web-smoke/harness.mjs`: every response
 // under the headers `_headers` gives its address, a miss as the hosting Worker's own 404), on
 // the **desktop face** — a 1440 × 900 viewport — in headless Chromium whose camera is a file:
 // one real card on a table (`--use-file-for-fake-video-capture`). In this order:
@@ -107,7 +107,7 @@ const CARD = JSON.parse(readFileSync(join(FIXTURES, "scan-card.json"), "utf8"));
 const SCANNER_CACHE = "grimoire-scanner-v1";
 const SHELL_PREFIX = "grimoire-shell-";
 const ASSETS = ["card-hashes.bin", "text-detection.rten", "text-recognition.rten"];
-/** The page's sentences this run reads (`src/lib/core/web/scanner.ts`). */
+/** The page's sentences this run reads (`packages/ui/lib/core/web/scanner.ts`). */
 const NOT_DOWNLOADED = "The scanner's card data has not been downloaded yet.";
 const STOPPED = "The card scanner stopped unexpectedly. It starts again with the next frame.";
 
@@ -276,7 +276,7 @@ async function cameraFile(scratch) {
 /** The page's `Core` with the scanner in front of it — `scanner.ts`'s module singleton. */
 function scannerChunk() {
   const name = readdirSync(join(DIST, "assets")).find((file) => /^scanner-[\w-]+\.js$/.test(file));
-  if (!name) fail("dist-web/assets has no scanner-*.js chunk — the page's scanner moved.");
+  if (!name) fail("apps/light/dist-web/assets has no scanner-*.js chunk — the page's scanner moved.");
   return `/assets/${name}`;
 }
 

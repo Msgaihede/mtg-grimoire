@@ -15,11 +15,11 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   at the end of a feature before committing (not after every intermediate change, to minimize re-fixing).**
   Rust is pinned by `rust-toolchain.toml` and Node by `.nvmrc`.
 - `npm run test` / `test:run` — frontend tests; `cargo test --workspace` — Rust tests, for every
-  member of the cargo workspace at the root (`src-tauri`, `crates/grimoire-core`, since
-  2026-10-03 the light app's Android host `mobile/src-tauri`, and since 2026-10-04 its web
+  member of the cargo workspace at the root (`apps/desktop/src-tauri`, `crates/grimoire-core`, since
+  2026-10-03 the light app's Android host `apps/light/src-tauri`, and since 2026-10-04 its web
   host `crates/grimoire-web`, natively). **Its
-  build tree is still `src-tauri/target`**: `.cargo/config.toml` pins it, so nothing that names
-  that folder moved when the workspace arrived on 2026-10-02.
+  build tree is `target` at the root**: `.cargo/config.toml` pins it. It was `src-tauri/target`
+  until 2026-10-08, which the workspace of 2026-10-02 had kept.
 - `npm run test:coverage` / `test:coverage:rust` — coverage. **The Rust one's number is not
   `cargo llvm-cov`'s**: that counts the inline `#[cfg(test)]` modules, where every line is
   covered by definition, and reads ~14 points high. See
@@ -27,7 +27,7 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
 - `npm run storybook` / `build-storybook` — the component workbench
 - `npm run mobile:dev` / `mobile:tauri` — the light app, over the Storybook fake in a browser
   (port 5175, no lock) or over the real core in a phone-sized window (**takes the `app` lock**).
-  See [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
+  See [`apps/light/CLAUDE.md`](../../apps/light/CLAUDE.md).
   **`npm run mobile:scan-smoke`** and **`npm run mobile:scanner-smoke`** drive `mobile:dev` in a
   headless Chromium with a fake camera, at a phone's width under a touch pointer — the Sync
   panel's pairing scanner, and the phone's Scanner page (cards landing in the tray, the commit,
@@ -35,10 +35,10 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   another origin after `--`, for a server on a port of your own.
 - `npm run web:wasm` / `web:build` / `web:smoke` — the light app's web host: **two WASM
   modules** — the engine into `dist-wasm/`, and the card scanner (`crates/grimoire-scan`, built
-  with `simd128` in a build tree of its own, `src-tauri/target/scanner-simd128`) into
+  with `simd128` in a build tree of its own, `target/scanner-simd128`) into
   `dist-wasm/scanner/` — which needs clang, for the engine's SQLite, and the `wasm-bindgen` CLI
   at `Cargo.lock`'s version; `web:wasm -- --only engine` or `-- --only scanner` builds one and
-  leaves the other. Then the page around them into `dist-web/`, and that bundle opened in
+  leaves the other. Then the page around them into `apps/light/dist-web/`, and that bundle opened in
   headless Chromium.
   No lock; `web:dev` serves it on port 5176, and **`web:preview` serves the build under the
   hosting's own headers** — the local server to drive under the shipped policy; `web:smoke`
@@ -56,11 +56,11 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   card's picture is fetched from Scryfall's CDN once by the script and kept in the temp
   folder; `SCAN_CARD_PICTURE=<file>` runs it with no request at all.
   **`npm run web:sync-smoke`** is live sync end to end: two headless Chromium profiles (the
-  desktop face and the phone face) claim, pair and sync through `relay/`'s own code under
+  desktop face and the phone face) claim, pair and sync through `infrastructure/relay/`'s own code under
   workerd (`wrangler dev --local`, a local D1, nothing that reaches Cloudflare), by the relay's
   real name and under the shipped policy; `-- --measure` adds a minute's profile of the idle
   loop, twice. It runs `app-worker`'s pinned wrangler (`npm ci --ignore-scripts --prefix
-  app-worker` first), or the `wrangler.js` that `WRANGLER` names.
+  infrastructure/app-worker` first), or the `wrangler.js` that `WRANGLER` names.
   **`npm run web:sync-pull -- --ops <n>`** is a measurement on that harness, not a check: what
   a `pull` of `n` ops costs the engine's Worker and the relay (`--live` and `--join` are the two
   neighbouring cases; [light-app.md](../reference/light-app.md) §10.5, and §10.5b for the
@@ -86,7 +86,7 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   fetched; builds and deploys nothing. **Equal schemas are necessary, not sufficient**: a wire
   change that is not a schema rung is dropped by an older build, and this cannot see it. The
   by-hand runbook runs it before `wrangler deploy`
-  ([`app-worker/README.md`](../../app-worker/README.md)); a release deploys the tag and has no
+  ([`infrastructure/app-worker/README.md`](../../infrastructure/app-worker/README.md)); a release deploys the tag and has no
   use for it.
 
 ## Running and verifying
@@ -95,14 +95,15 @@ Related: the `running-the-app` skill (locks and ports), [live-ui-verification.md
   the suite could not. Drive the real window over CDP —
   [live-ui-verification.md](../reference/live-ui-verification.md) is the contract, and it
   documents traps that have each cost a session.
-- **Under `tauri dev` the databases are `src-tauri/target/debug/data/user.db` and
-  `corpus.db`** — not `src-tauri/data/`, and not one file: schema 27 split the reader's
+- **Under `tauri dev` the databases are `target/debug/data/user.db` and
+  `corpus.db`** (`src-tauri/target/debug/data/` before 2026-10-08, and still in a checkout that has
+  not taken that change) — not `apps/desktop/src-tauri/data/`, and not one file: schema 27 split the reader's
   own tables out of the rebuildable ones. A folder still holding `mtg.db` is converted at
   the next launch. Delete that `data/` folder to force a clean first-run sync; deleting
   `corpus.db` alone costs a resync and nothing else, which is what the split is for.
-- **A built app embeds `dist/` at compile time, so a frontend-only edit does not reach a
+- **A built app embeds `apps/desktop/dist/` at compile time, so a frontend-only edit does not reach a
   `tauri build` binary.** Vite writes a new bundle, cargo then sees no Rust source change and
-  leaves the old bundle inside the old exe — exiting 0. `touch src-tauri/src/main.rs` first, and
+  leaves the old bundle inside the old exe — exiting 0. `touch apps/desktop/src-tauri/src/main.rs` first, and
   stop the app before rebuilding or the link fails with `Access is denied. (os error 5)`.
   `npm run tauri dev` does not have this problem, which is why it is the command above.
 - **A second launch does not start a second app — it opens another window in the one already

@@ -1,7 +1,7 @@
 /**
  * Dialog's preview — owned, because the scrim needs a stage with a *size*.
  *
- * `Dialog`'s scrim is `fixed inset-0 grid place-items-center` (see `src/components/Dialog.tsx`),
+ * `Dialog`'s scrim is `fixed inset-0 grid place-items-center` (see `packages/ui/components/Dialog.tsx`),
  * and `cfg.overrides.Dialog.cardMode: "single"` mounts each cell inside the card's
  * `.ds-single{transform:translateZ(0)}` wrapper. That transform correctly makes the wrapper the
  * containing block for a `fixed` descendant — that is the whole point of single mode — but the

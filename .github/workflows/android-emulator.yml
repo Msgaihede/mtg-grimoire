@@ -21,7 +21,7 @@ on:
   push:
     branches: [main]
     paths:
-      - "mobile/src-tauri/**"
+      - "apps/light/src-tauri/**"
       - "crates/grimoire-core/**"
       - "Cargo.lock"
       - ".github/workflows/android-emulator.yml"
@@ -32,7 +32,7 @@ on:
   pull_request:
     branches: [main]
     paths:
-      - "mobile/src-tauri/**"
+      - "apps/light/src-tauri/**"
       - "crates/grimoire-core/**"
       - "Cargo.lock"
       - ".github/workflows/android-emulator.yml"
@@ -96,18 +96,18 @@ jobs:
 
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
-          workspaces: ". -> src-tauri/target"
+          workspaces: ". -> target"
           key: android-x86_64
 
-      # From `mobile/`, so the CLI finds the light host's `tauri.conf.json`, as in `ci.yml`.
+      # From `apps/light/`, so the CLI finds the light host's `tauri.conf.json`, as in `ci.yml`.
       - name: Build the APK
-        working-directory: mobile
+        working-directory: apps/light
         run: npx tauri android build --apk --target x86_64 --ci
 
       - name: Find the APK
         run: |
           set -euo pipefail
-          apk=$(find mobile/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
+          apk=$(find apps/light/src-tauri/gen/android/app/build/outputs/apk -name '*.apk' | head -1)
           [ -n "$apk" ] || { echo "the build produced no APK" >&2; exit 1; }
           mkdir -p apk-out && cp "$apk" apk-out/mtg-grimoire-light-x86_64.apk
           ls -l apk-out

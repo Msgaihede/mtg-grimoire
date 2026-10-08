@@ -58,7 +58,7 @@ pub const UNDO_GONE: &str = "That can no longer be undone.";
 pub const UNDO_STALE: &str =
     "Some of those cards have changed since, so this can no longer be undone.";
 
-/// How many tickets the session keeps. The page offers one per list (`src/lib/bulkUndo.ts`), so
+/// How many tickets the session keeps. The page offers one per list (`packages/ui/lib/bulkUndo.ts`), so
 /// ten is room for every surface's newest with margin, and small enough that the row images of a
 /// few large imports cannot pile up for the length of a session.
 pub const CAPACITY: usize = 10;

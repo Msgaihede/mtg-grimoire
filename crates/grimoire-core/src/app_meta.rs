@@ -3,7 +3,7 @@
 //! **Carved out of `update.rs`.** `update` is the portable updater — `zip`, `tokio`, and an
 //! `.exe` swapped on disk — but it also held `app_meta`, which is neither: it is one SQLite
 //! table read and written by modules across the crate that have nothing to do with updating
-//! anything (`grep -rln "app_meta::" src-tauri/src` is the census; a count here is a fact about
+//! anything (`grep -rln "app_meta::" apps/desktop/src-tauri/src` is the census; a count here is a fact about
 //! one tree). `searchopen.rs` remembers which docked search columns are open in it;
 //! `shelffolds.rs` remembers which shelves the reader folded on the collection and the wishlist;
 //! `zoom`, `nav` and `listview` keep their view state here.

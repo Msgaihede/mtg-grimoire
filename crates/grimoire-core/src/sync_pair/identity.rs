@@ -574,7 +574,7 @@ const NOT_A_NEWER_EPOCH: &str = "that key manifest is not ahead of this device";
 pub const JOIN_STEP: i64 = 1;
 
 /// How far a **removal or a departure** advances the epoch once the relay accepts it: two — the
-/// relay's `REMOVAL_STEP` (`relay/src/groupauth.ts`), which `/keys` advertises as `removalStep`.
+/// relay's `REMOVAL_STEP` (`infrastructure/relay/src/groupauth.ts`), which `/keys` advertises as `removalStep`.
 ///
 /// **The step is the authenticated join/removal marker** (issue #546, item 9c). The epoch is bound
 /// into every blob a rotation seals — the key-wrapping key and the AAD of
@@ -776,7 +776,7 @@ fn plan_excluding(
 ///
 /// # Why a join rotates at all
 ///
-/// **The manifest's key set is the roster** (`relay/schema.sql`'s `group_keys`), and it is the
+/// **The manifest's key set is the roster** (`infrastructure/relay/schema.sql`'s `group_keys`), and it is the
 /// only thing that says who is in a group. A join that published nothing left the new device
 /// invisible to every peer that was not part of the pairing ceremony — and the *next* rotation by
 /// any of those peers was built from a roster with no such device in it, so the manifest omitted
@@ -849,7 +849,7 @@ pub fn roster_is_dirty(conn: &Connection) -> Result<bool, String> {
 }
 
 /// How many epochs of group key this device holds, **counting the current one** — the relay's
-/// `EPOCH_HISTORY` (`relay/src/groupauth.ts`), and for its reason: `/keys` answers an auth at
+/// `EPOCH_HISTORY` (`infrastructure/relay/src/groupauth.ts`), and for its reason: `/keys` answers an auth at
 /// most that far behind, so a device can never have been handed a key further back than this
 /// while the group went on without it.
 pub const KEY_HISTORY: i64 = 8;
@@ -1362,7 +1362,7 @@ pub fn leave_group(conn: &Connection) -> Result<(), String> {
 /// device joins:
 ///
 /// * **The cursor**, carried across, asks the new group's log `since` a row number it may never
-///   have reached — and `relay/src/group.ts` seeds the head it answers with the cursor it was
+///   have reached — and `infrastructure/relay/src/group.ts` seeds the head it answers with the cursor it was
 ///   asked, so every row below it is never delivered. A baseline carries current state and never
 ///   a delete. `live::pull_cursor` reads the same key, so the doorbell goes quiet for those rows
 ///   too.
@@ -2740,7 +2740,7 @@ mod tests {
     /// departure `pairing::leave_group_now` makes once the relay has advertised it. A step of
     /// three is a programming error, answered as a sentence before anything is sealed.
     ///
-    /// **The Rust half is fenced to the relay's**: `relay/src/groupauth.ts` exports the constant
+    /// **The Rust half is fenced to the relay's**: `infrastructure/relay/src/groupauth.ts` exports the constant
     /// its `/rotate` statement reads, and a relay that moved it would refuse every removal made
     /// here with a 422 while both suites stayed green.
     #[test]
@@ -2784,9 +2784,9 @@ mod tests {
 
         assert_eq!((JOIN_STEP, REMOVAL_STEP), (1, 2));
         assert!(
-            include_str!("../../../../relay/src/groupauth.ts")
+            include_str!("../../../../infrastructure/relay/src/groupauth.ts")
                 .contains(&format!("export const REMOVAL_STEP = {REMOVAL_STEP};")),
-            "relay/src/groupauth.ts's REMOVAL_STEP is not this one"
+            "infrastructure/relay/src/groupauth.ts's REMOVAL_STEP is not this one"
         );
     }
 

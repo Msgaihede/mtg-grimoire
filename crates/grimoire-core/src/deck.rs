@@ -79,7 +79,7 @@ pub const DEFAULT_FORMAT: &str = "casual";
 /// **What the word *does* is TypeScript's**, exactly as [`AUTO_CATEGORY`]'s is. Rust stores
 /// which platform the reader named and answers which platforms each format is playable on
 /// (`format_specs.games`); narrowing one list by the other is a conclusion and lives in
-/// `src/features/decks/useFormatSpecs.ts`.
+/// `packages/ui/features/decks/useFormatSpecs.ts`.
 pub const DEFAULT_GAME: &str = crate::schema::DECK_GAMES[0];
 
 /// The `app_meta` key holding the format the last created deck was made in — what the New deck
@@ -153,7 +153,7 @@ pub(crate) const VIRTUAL_HOLDS_NOTHING: &str =
 ///
 /// `0`, and it can never collide with a real pile because `deck_categories.id` is an
 /// `INTEGER PRIMARY KEY`: SQLite's rowids start at 1. The frontend spells the same number
-/// `AUTO_CATEGORY` (`src/features/decks/autoCategory.ts`), and the two are one vocabulary on
+/// `AUTO_CATEGORY` (`packages/ui/features/decks/autoCategory.ts`), and the two are one vocabulary on
 /// purpose — a sentinel that meant "unset" on one side of the IPC and "auto" on the other is
 /// exactly how the editor once filed every quick add into a fresh deck's Commander pile.
 ///
@@ -175,7 +175,7 @@ pub const AUTO_CATEGORY: i64 = 0;
 /// **What Auto *does* is TypeScript's and stays there**, [`AUTO_CATEGORY`]'s rule exactly. Rust
 /// holds the number and the four facts the estimate reads (Game Changers, mass land denial,
 /// extra turns, the combo tables); the rule that turns them into a bracket floor is a
-/// conclusion and lives in `src/features/decks/validation/bracket.ts`.
+/// conclusion and lives in `packages/ui/features/decks/validation/bracket.ts`.
 ///
 /// **`0` is not "bracket 0" and the estimate never answers `5`.** The two are unrelated
 /// absences that read alike: this sentinel says the reader has not answered, while the
@@ -321,7 +321,7 @@ pub fn normalise_finish(raw: Option<&str>) -> Result<Option<String>, String> {
 /// `collection_entries.finish` stores for the regular copy. Indexed rather than spelled.
 const NONFOIL: &str = crate::schema::FINISHES[0];
 
-/// The finish a printing leaves no choice about, or `None` — `src/lib/finish.ts`'s `soleFinish`,
+/// The finish a printing leaves no choice about, or `None` — `packages/ui/lib/finish.ts`'s `soleFinish`,
 /// line for line, over the JSON text `cards.finishes` holds.
 ///
 /// **It has to answer exactly what that function answers**, because the two are the two halves
@@ -351,7 +351,7 @@ pub(crate) fn sole_finish(finishes: Option<&str>) -> Option<&'static str> {
 }
 
 /// The finish a deck row **plays** — its own where it names one, and the printing's
-/// [`sole_finish`] where it does not. `src/lib/finish.ts`'s `playedFinish`, in this table's
+/// [`sole_finish`] where it does not. `packages/ui/lib/finish.ts`'s `playedFinish`, in this table's
 /// spelling (`None` is the regular copy).
 ///
 /// **Why every comparison reads this rather than the raw column**
@@ -727,7 +727,7 @@ pub struct DeckPatch {
     /// is the price it pays.
     ///
     /// **Storage only, on this side**, [`Self::separate_x_group`]'s rule. *Which* pile Auto
-    /// picks is `src/features/decks/autoCategory.ts` — a card's Oracle tags read as a
+    /// picks is `packages/ui/features/decks/autoCategory.ts` — a card's Oracle tags read as a
     /// conclusion — and Rust neither knows nor may learn it. What Rust does own is the fence:
     /// a non-zero id here must name a category **of this deck** ([`category_of_deck`]), because
     /// nothing in the DDL says so — and, since user schema v53, **of its live list**: the setting
@@ -3067,7 +3067,7 @@ fn record_deck_edit(
     if let Some(to) = virtual_only.filter(|v| *v != before.virtual_only) {
         field("virtualOnly", json!(before.virtual_only), json!(to))?;
     }
-    // `xGroup`, camelCase like every other key in a `deck` payload — `src/features/decks/
+    // `xGroup`, camelCase like every other key in a `deck` payload — `packages/ui/features/decks/
     // auditText.ts` is the only thing that words these, and it matches on the field name.
     if let Some(to) = patch
         .separate_x_group
@@ -3383,7 +3383,7 @@ const NO_MODE: &str = "A remembered view mode cannot be blank.";
 ///   changes what it holds — and since schema v25 there is no list of writes to join: what a
 ///   deck owns is a sum over the rows filed in its group ([`owned_by_printing`]), so nothing is
 ///   derived and no write can forget to rebuild it. This bullet named "the allocator" and
-///   pointed at a list in `src-tauri/CLAUDE.md` that the same rung deleted. What is left to
+///   pointed at a list in `apps/desktop/src-tauri/CLAUDE.md` that the same rung deleted. What is left to
 ///   say is the narrower fact: reading a deck may not file a card into or out of its group,
 ///   and this does not.
 ///
@@ -3858,7 +3858,7 @@ pub fn list_decks(conn: &Connection) -> Result<Vec<DeckRow>, String> {
 
 /// Every printed mana cost one deck plays, folded by cost string.
 ///
-/// Serialised `camelCase` to the shape `src/lib/ipc.ts` mirrors by hand, as every DTO here is.
+/// Serialised `camelCase` to the shape `packages/ui/lib/ipc.ts` mirrors by hand, as every DTO here is.
 ///
 /// **A deck with nothing to say is absent rather than empty.** A pile of basics, a deck whose
 /// every row has been orphaned by a sync, a deck with no cards at all — all three answer no
@@ -3877,7 +3877,7 @@ pub struct DeckPipCosts {
 pub struct PipCost {
     /// `cards.mana_cost` **verbatim** — `"{1}{R}"`, and `"{3}{U} // {3}{R}"` for a split card,
     /// which is one string carrying two costs. Rust supplies the string and nothing else;
-    /// which of its symbols are pips, and how a hybrid half is counted, is `src/lib/mana.ts`'s
+    /// which of its symbols are pips, and how a hybrid half is counted, is `packages/ui/lib/mana.ts`'s
     /// — this crate's facts/conclusions boundary applied to a colour bar.
     pub cost: String,
     /// The copies summed over every row that shares the cost, so one deck listing four
@@ -3961,7 +3961,7 @@ pub fn pip_costs(conn: &Connection) -> Result<Vec<DeckPipCosts>, String> {
 
 /// One card of a deck as the bracket estimator reads it — **five fields, and there is no sixth.**
 ///
-/// `src/features/decks/validation/bracket.ts` is the whole of the audience: `estimateBracket`
+/// `packages/ui/features/decks/validation/bracket.ts` is the whole of the audience: `estimateBracket`
 /// filters on [`Self::category_active`], dedupes on [`Self::name`], counts
 /// [`Self::game_changer`], and its `textOf` reads [`Self::oracle_text`] and [`Self::faces`]. That
 /// is every field it touches, so this row is its input exactly and not a narrowed [`DeckCardRow`]
@@ -5322,7 +5322,7 @@ pub struct DeckCardRow {
     ///
     /// [`Self::finishes`] says how shiny the object can be and [`DeckCardRow::finish`] which
     /// one this deck sleeves; neither can say *which* shiny, which is issue #160. Handed over
-    /// unread — `src/lib/treatment.ts` owns the naming, and a deck view draws it from that
+    /// unread — `packages/ui/lib/treatment.ts` owns the naming, and a deck view draws it from that
     /// stored finish rather than from the printing, so a plain copy of a Surge Foil printing
     /// is still drawn plain. `None` for an orphan, whose card has left `cards`.
     pub promo_types: Option<String>,
@@ -5750,7 +5750,7 @@ fn may_have_a_power_toughness_box(type_line: Option<&str>) -> bool {
 ///
 /// **A backfill in SQL is not available and this is not a preference.** `raw` is a gzip BLOB
 /// from schema v3 on, `json_extract` over one is a hard `malformed JSON` error rather than a
-/// NULL (`src-tauri/CLAUDE.md`), and there is nowhere else the letters are written down. So the
+/// NULL (`apps/desktop/src-tauri/CLAUDE.md`), and there is nowhere else the letters are written down. So the
 /// rung adds the column empty and the gap is bridged *here*, at read time, in Rust, through
 /// [`crate::card_row::raw_json`] over `CAST(raw AS BLOB)` — one gunzip per **distinct printing**
 /// that is missing it, ids sorted and deduped exactly as the P/T fill does, because a deck lists
@@ -10607,7 +10607,7 @@ mod tests {
         );
 
         // The widened create payload in full. These camelCase spellings are the contract
-        // `src/lib/ipc.ts` mirrors, and a wrong one here is not a compile error on either side:
+        // `packages/ui/lib/ipc.ts` mirrors, and a wrong one here is not a compile error on either side:
         // `#[serde(default)]` would read a misspelled field as an omitted one and the deck would
         // simply come out unconfigured.
         //
@@ -10628,7 +10628,7 @@ mod tests {
         assert_eq!(whole.theory_enabled, Some(true));
         assert_eq!(whole.game_key, "arena");
         // Schema v40. The New deck dialog's kind picker sends this and nothing else does, so a
-        // spelling that drifts from `src/lib/ipc.ts` is a create that quietly makes an ordinary
+        // spelling that drifts from `packages/ui/lib/ipc.ts` is a create that quietly makes an ordinary
         // deck — `#[serde(default)]` reads a misspelled key as an omitted one.
         assert_eq!(whole.virtual_only, Some(true));
 
@@ -13849,7 +13849,7 @@ mod tests {
     ///
     /// Issue #160: `finishes` says how shiny the object can be and `finish` which copy this
     /// deck sleeves, and neither can say *which* shiny. The naming is TypeScript's
-    /// (`src/lib/treatment.ts`); this is the column reaching it.
+    /// (`packages/ui/lib/treatment.ts`); this is the column reaching it.
     ///
     /// The column went in **after `dc.finish`**, which is [`deck_row`]'s stated rule and not a
     /// preference: this read is positional, and `promo_types` reads like it belongs beside

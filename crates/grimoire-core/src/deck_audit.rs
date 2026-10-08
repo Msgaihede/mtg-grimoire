@@ -164,7 +164,7 @@ pub struct DeckAuditEntry {
 /// `virtual_only` — and setting either clears the other, so one press on the settings group can
 /// record both a `theory` row and a `virtualOnly` one. That is two true facts about one press
 /// rather than a duplicate: the drawer words them separately, and neither carries a card delta.
-/// `src/features/decks/auditText.ts` is the renderer, and its default arm answers an
+/// `packages/ui/features/decks/auditText.ts` is the renderer, and its default arm answers an
 /// unrecognised field with "Changed the deck" — true of every deck edit and therefore never a
 /// failure — which is why the spelling here and the `case` there are pinned by a test rather
 /// than by a type.

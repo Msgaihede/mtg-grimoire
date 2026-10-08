@@ -37,7 +37,7 @@ use serde::{Deserialize, Serialize};
 /// log stored before the relay refused them, and a receiver whose own clock is behind, which waits
 /// no longer than its clock takes to reach the moment of the push.
 ///
-/// **It must equal `MAX_CLOCK_AHEAD_MS` in `relay/src/log.ts`**, which
+/// **It must equal `MAX_CLOCK_AHEAD_MS` in `infrastructure/relay/src/log.ts`**, which
 /// [`tests::the_bound_is_the_relays`] reads: a relay bound looser than this one stores what every
 /// updated receiver holds, and a tighter one refuses a push this device thought it could make.
 pub const MAX_AHEAD_MS: i64 = 24 * 60 * 60 * 1000;
@@ -219,11 +219,11 @@ mod tests {
     /// is red on the other.
     #[test]
     fn the_bound_is_the_relays() {
-        let relay = include_str!("../../../../relay/src/log.ts");
+        let relay = include_str!("../../../../infrastructure/relay/src/log.ts");
         assert_eq!(MAX_AHEAD_MS, 24 * 60 * 60 * 1000);
         assert!(
             relay.contains("export const MAX_CLOCK_AHEAD_MS = 24 * 60 * 60 * 1000;"),
-            "relay/src/log.ts no longer exports the bound `too_far_ahead` holds against"
+            "infrastructure/relay/src/log.ts no longer exports the bound `too_far_ahead` holds against"
         );
     }
 }

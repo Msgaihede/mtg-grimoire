@@ -3,7 +3,7 @@
 //! Every export answers a string, and the Worker does one `JSON.parse` and switches on a key.
 //! Not a `JsValue` and not a rejected promise: the TypeScript side has to know these shapes
 //! anyway, and a second, structural representation of the same thing is a second place for it
-//! to drift. **The strings here are the contract with `src/lib/core/web/`** — the Worker,
+//! to drift. **The strings here are the contract with `packages/ui/lib/core/web/`** — the Worker,
 //! whose `protocol.ts` is the hand-written mirror of this file — held by this file's
 //! tests on every target — a module gated to the browser would be invisible to `cargo test`,
 //! and a typo in one of these is a silent `undefined` in a page.
@@ -22,7 +22,7 @@ use serde_json::Value;
 /// fresh Worker each time, when the database's Web Lock is its own — the holder is then a
 /// Worker of a document that has gone, not a second tab, which the lock tells before any
 /// Worker starts — and draws a sentence and a Reload only once its retries are spent
-/// (`src/lib/core/web/holder.ts`). This Worker never retries: it opens once.
+/// (`packages/ui/lib/core/web/holder.ts`). This Worker never retries: it opens once.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "kebab-case")]
 pub enum Opened {
@@ -126,7 +126,7 @@ mod tests {
         serde_json::from_str(text).expect("the Worker must be able to parse it")
     }
 
-    /// The three things `open` can say, exactly as `src/lib/core/web/protocol.ts` reads them.
+    /// The three things `open` can say, exactly as `packages/ui/lib/core/web/protocol.ts` reads them.
     #[test]
     fn opened_is_the_three_shapes_the_worker_switches_on() {
         assert_eq!(

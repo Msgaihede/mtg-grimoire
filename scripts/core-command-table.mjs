@@ -11,7 +11,7 @@
 // app's phase 2, the command table — Markus chose the reads first), and a command that joins the
 // table later is one line written by hand next to its neighbours, not a rerun of this.
 //
-// What it reads: every `#[tauri::command]` under `src-tauri/src` (descending into an inline
+// What it reads: every `#[tauri::command]` under `apps/desktop/src-tauri/src` (descending into an inline
 // `mod commands { … }`), cut by `scripts/lib/rs-items.mjs`. **What it takes as a read**: a
 // wrapper whose body names `lock_db_read` and none of `with_write`, `with_write_owned`, the sync
 // lane, a window, the updater, the mirror, the change mask, a file dialog, a raw request body, the
@@ -22,7 +22,7 @@ import { join, relative } from "node:path";
 import { inner, split } from "./lib/rs-items.mjs";
 
 const ROOT = process.cwd();
-const DESK = join(ROOT, "src-tauri/src");
+const DESK = join(ROOT, "apps/desktop/src-tauri/src");
 const TABLE_FILE = join(ROOT, "crates/grimoire-core/src/commands.rs");
 const DRY = process.argv.includes("--dry");
 
@@ -74,7 +74,7 @@ const walk = (dir) => {
 };
 walk(DESK);
 
-/** `src-tauri/src/tags/muted/mod.rs` → `tags::muted`. */
+/** `apps/desktop/src-tauri/src/tags/muted/mod.rs` → `tags::muted`. */
 const moduleOf = (file) =>
   relative(DESK, file).replace(/\\/g, "/").replace(/\/mod\.rs$/, "").replace(/\.rs$/, "").split("/").join("::");
 

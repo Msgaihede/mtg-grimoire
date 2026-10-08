@@ -4,7 +4,7 @@
 //! **The shelves are TypeScript's; the row is this crate's.** Which folders a page draws as
 //! shelves, what each starts as (deck groups, `Recently removed` and managed wishlist folders
 //! start folded, everything else open) and what a fold hides are questions about a wall this
-//! crate never draws — `src/lib/shelves.ts` answers them. All Rust owns is one `app_meta` row
+//! crate never draws — `packages/ui/lib/shelves.ts` answers them. All Rust owns is one `app_meta` row
 //! holding, per page, a JSON object of folder id → folded, **for the folders the reader moved off
 //! their default and no others** (spec §5.7).
 //!
@@ -40,7 +40,7 @@ use std::collections::{BTreeMap, HashMap};
 /// The `app_meta` key.
 pub const K_SHELF_FOLDS: &str = "shelf_folds";
 
-/// The two pages that draw shelves, spelled as `ShelfFoldPage` in `src/lib/ipc.ts` spells them —
+/// The two pages that draw shelves, spelled as `ShelfFoldPage` in `packages/ui/lib/ipc.ts` spells them —
 /// and as [`ShelfFolds`]' fields, which a test holds this list to.
 pub const PAGES: [&str; 2] = ["collection", "wishlist"];
 

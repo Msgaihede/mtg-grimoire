@@ -4,14 +4,14 @@ import reactHooks from "eslint-plugin-react-hooks";
 import storybook from "eslint-plugin-storybook";
 
 export default tseslint.config(
-  // `storybook-static/` joins `dist/` for the same reason: it is generated output that
-  // `npm run verify` can leave on disk before `lint` runs, and its bundled JS would be
+  // `storybook-static/` joins `apps/desktop/dist/` for the same reason: it is generated output
+  // that `npm run verify` can leave on disk before `lint` runs, and its bundled JS would be
   // linted as if it were source.
   //
   // `.claude/worktrees/` is where Claude Code parks git worktrees — entire second checkouts
   // of this repository, each with its own `tsconfig.json`. Flat config's default ignores are
   // only `node_modules/` and `.git/`, so ESLint walks into them, and typescript-eslint then
-  // refuses every file in the *real* `src/` with "multiple candidate TSConfigRootDirs are
+  // refuses every file in the *real* `packages/ui/` with "multiple candidate TSConfigRootDirs are
   // present". Measured 2026-08-09: 257 parsing errors with one worktree checked out, 0 with
   // this line. It is a local-machine artifact — CI never has one — which is exactly why it
   // has to be ignored here rather than diagnosed again by the next person whose `lint` broke
@@ -31,23 +31,39 @@ export default tseslint.config(
   // input against the app's rules.
   {
     ignores: [
-      "dist/",
+      "apps/desktop/dist/",
       // Output of round one's web build, removed on 2026-09-27, which a checkout that ran it
       // still holds on disk (gitignored): the wasm-bindgen glue is machine-written and fails
       // `no-undef`.
       "web/public/",
       // The web app's bundle (`npm run web:build`), and the engine `npm run web:wasm` writes for
       // it — wasm-bindgen's glue again, which is the file that fails `no-undef`.
-      "dist-web/",
+      "apps/light/dist-web/",
       "dist-wasm/",
-      // The public share viewer's bundle. Generated output like `dist/` above, and on disk on
-      // any machine that has run `npm run share:build` — which `share-worker`'s deploy requires,
-      // because `wrangler.jsonc` declares an `assets` binding over it.
-      "dist-share/",
+      // The public share viewer's bundle. Generated output like the desktop's `dist/` above, and
+      // on disk on any machine that has run `npm run share:build` — which the share Worker's
+      // deploy requires, because its `wrangler.jsonc` declares an `assets` binding over it.
+      "apps/share/dist-share/",
       // The light app's bundle (`npm run mobile:build`). Generated output like the two above.
-      "dist-mobile/",
+      "apps/light/dist-mobile/",
       "storybook-static/",
+      // The two cargo hosts, and the workspace's build tree. `target/` was inside the desktop
+      // host's folder and ignored with it until 2026-10-08, when it moved to the root; Tauri's
+      // build scripts write generated JavaScript into it, a `__global-api-script.js` per build.
+      // The light host's folder holds the committed Android project, and Gradle's output beside
+      // it on a machine that has built one.
+      "apps/desktop/src-tauri/",
+      "apps/light/src-tauri/",
+      "target/",
+      // What a checkout that predates the layout change of 2026-10-08 still holds on disk: the
+      // old build trees and bundles, untracked now that nothing tracked lives there. `.gitignore`
+      // has the same block and the longer account; delete these with it.
       "src-tauri/",
+      "mobile/",
+      "dist/",
+      "dist-web/",
+      "dist-mobile/",
+      "dist-share/",
       "node_modules/",
       ".claude/worktrees/",
       "ds-bundle/",
@@ -133,7 +149,7 @@ export default tseslint.config(
   ...storybook.configs["flat/recommended"],
   {
     rules: {
-      // Off because React Compiler is not enabled in this build (see `vite.config.ts`:
+      // Off because React Compiler is not enabled in this build (see `vite.base.ts`:
       // plain `@vitejs/plugin-react`, no `babel-plugin-react-compiler`), so its advice —
       // "the compiler will skip memoizing this component" — describes something that
       // cannot happen here. It fires on TanStack Virtual's `useVirtualizer`, which the

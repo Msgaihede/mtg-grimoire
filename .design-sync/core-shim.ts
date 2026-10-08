@@ -8,5 +8,5 @@
 // else: `@tauri-apps/api/core` is already aliased to the fake one rule above, so the `invoke`
 // underneath this is the workbench's, which is the whole point — the compare loop screenshots
 // both sides and they have to be the same picture. Any other `@/`-aliased
-// directory-with-`index.ts` will land in the same hole; today this is the only one in `src/`.
-export { core } from "../src/lib/core/index";
+// directory-with-`index.ts` will land in the same hole; today this is the only one in `packages/ui/`.
+export { core } from "../packages/ui/lib/core/index";

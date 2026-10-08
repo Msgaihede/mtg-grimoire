@@ -287,7 +287,7 @@ with their phone's own camera app; the primary path is the app's own scanner, wh
 directly and never opens a URL at all.**
 
 **The page offers no link into the app.** Nothing in the app reads a launch argument, so a link
-would open its ordinary window with the code nowhere; `relay/src/pair.ts` carries that argument at
+would open its ordinary window with the code nowhere; `infrastructure/relay/src/pair.ts` carries that argument at
 its own site. Deep-linking into the app is a coherent follow-up whose *first* step is the launch
 handling.
 
@@ -382,7 +382,7 @@ error.
 "Desktop — not paired yet." in a browser tab, and this is the name every other device in a
 group files this one under. **A browser install pairs like any other device** — a page asks the
 relay as every host does, bound by CORS, which the relay answers for the origins on its
-allow-list (`relay/src/cors.ts`) — so `Browser` is the word a nameless tab is filed under on a
+allow-list (`infrastructure/relay/src/cors.ts`) — so `Browser` is the word a nameless tab is filed under on a
 paired desktop's roster. ⚠️ **In the tree, and on no host yet**: no build that asks the relay
 from a page has been deployed, and no browser has paired through the deployed relay.
 
@@ -663,7 +663,7 @@ nothing in the next. Until that date `identity::leave_group` deleted the roster,
 superseded keys and `pull_hold`, but it left both of those standing, and nothing on the join path
 reset them either. A device that left group A at cursor 500 and paired into group B:
 
-- **asked B for `since=500`**, and `relay/src/group.ts` seeds the head it answers with the cursor
+- **asked B for `since=500`**, and `infrastructure/relay/src/group.ts` seeds the head it answers with the cursor
   it was asked. So a B whose log was shorter than that answered no envelopes and handed `500`
   back. The device never received B's rows below 500, and the baseline a new peer is handed carries
   current state, never a delete;
@@ -872,9 +872,9 @@ restore-from-backup is exactly the thing that gets reused.
 
 ## The workbench
 
-`.storybook/fake/db.ts` answers all nine commands, and **there is no cryptography in it**. The six
+`packages/fake/db.ts` answers all nine commands, and **there is no cryptography in it**. The six
 digits are derived from the code with a plain hash — the workbench has no X25519, no HKDF and no
-relay. **It does have a QR encoder, since 2026-10-04** (`.storybook/fake/qr.ts`, read back by `jsQR`
+relay. **It does have a QR encoder, since 2026-10-04** (`packages/fake/qr.ts`, read back by `jsQR`
 in `qr.test.ts`): the QR is the real 53-module symbol of `…/pair#<code>` for a code with no key in
 it, where it used to be a 21×21 picture of the right shape. `sync_pairing_accept` takes that URL as
 `Invite::decode` does, so a story's code can be scanned (`npm run mobile:scan-smoke`), and the
@@ -1256,8 +1256,8 @@ peer applies the clear and draws its default art — and, its v51 client having 
 device's entries, goes on drawing it after it upgrades; nothing at v52 re-offers them.
 
 **And the registrations number twelve, not ten**, counted while landing it: the ten above, plus
-`src/lib/userTables.json` — which `changes.rs`' `the_json_both_suites_read_is_the_user_side_of_
-the_registry` holds to `schema::TABLES` — and `src/lib/crossWindow.ts`' `TABLE_KEYS`, which
+`packages/ui/lib/userTables.json` — which `changes.rs`' `the_json_both_suites_read_is_the_user_side_of_
+the_registry` holds to `schema::TABLES` — and `packages/ui/lib/crossWindow.ts`' `TABLE_KEYS`, which
 `crossWindow.test.ts` holds to that same file. Both are owed by any new *user* table, synced or
 not. The three length fences (`capture::TABLES`, `apply::META`, `SYNCED_TABLES.len()`) and the
 mirror's census in `every_table_in_the_schema_has_been_decided_about` are what go red first, and
@@ -1276,7 +1276,7 @@ and is on the first.) `sync_gone` itself, unsynced, owed eight of these: the run
 merely declared, `schema::TABLES`, the mirror's decided-about list (`surface_of` needs no arm — it
 falls through to `None`, as `sync_peers` does), `WRITTEN_BY_THE_APP` (a press reaches it only
 through its `AFTER DELETE` trigger, `apply` writes the rest, and no window draws a row of it),
-`src/lib/userTables.json`, and `TABLE_KEYS` as `sync_gone: []`. Two hand-spelled fences in
+`packages/ui/lib/userTables.json`, and `TABLE_KEYS` as `sync_gone: []`. Two hand-spelled fences in
 `schema.rs` went red with it and are counted inside the sites they fence:
 `the_user_side_is_every_table_no_feed_can_rebuild` (`schema::TABLES`) and the figure in
 `the_user_schema_is_byte_identical_to_what_the_ladder_builds` (`USER_SCHEMA_SQL`) — re-counted
@@ -2440,7 +2440,7 @@ below — and `sync_gone`, written as v53 on its own branch, landed as v54: the 
 
 **The client used to supply half a hold.** `apply` held the sender's watermark at the first op it could
 not write, which makes a re-delivery safe — and `client::pull` then set `PULL_CURSOR` to the page
-head whatever `apply` deferred. The relay's `since` (`relay/src/log.ts`) answers only rows with
+head whatever `apply` deferred. The relay's `since` (`infrastructure/relay/src/log.ts`) answers only rows with
 `seq > cursor`, in one unpaged body, and `apply` keeps no copy of what it did not write, so the
 deferred op, **and every later op from its device in that page**, was never applied and never
 offered again. The other half is the cursor, and the reason it is not "hold the cursor on every
@@ -3602,7 +3602,7 @@ against a 100 000 rows/day limit.
 **Bytes bind too since issue #546, because a note has no length cap.** `wire::batches` cuts at 200
 ops *or* `wire::BATCH_BYTES` (512 KiB of the JSON `seal_batch` seals, the `schema` stamp and the
 list's commas counted), whichever comes first. A full byte budget seals to 699 104 characters,
-under half the relay's `MAX_SEALED_CHARS` (1 500 000, which `wire.rs` holds to `relay/src/log.ts`
+under half the relay's `MAX_SEALED_CHARS` (1 500 000, which `wire.rs` holds to `infrastructure/relay/src/log.ts`
 by an `include_str!` test), so no batch of several ops is ever what the relay refuses; an ordinary
 200-op batch is ~90 KB, so the count still decides the cut and the arithmetic above stands. An op
 over the budget goes alone, up to the cap itself — 1 124 958 bytes of JSON. **Past that it can
@@ -3630,7 +3630,7 @@ wire and against that cap; base64 is four thirds and URL-safe.
 
 ## The relay: five group routes, three of them behind an auth gate
 
-`relay/` is a Cloudflare Worker with one SQLite-backed Durable Object per pairing group.
+`infrastructure/relay/` is a Cloudflare Worker with one SQLite-backed Durable Object per pairing group.
 
 | | | | |
 | --- | --- | --- | --- |
@@ -3667,7 +3667,7 @@ its epoch is newer than the last one applied, since two rotations accepted back 
 rosters nothing else orders; the post is best effort, and the rotation's 200 stands if it fails.
 **Beside it, a device unheard for ninety days leaves the floor too** — every ack stamps `heard_at`
 and a pull refreshes it at most daily, because a device holding its cursor pulls without acking —
-which is the reinstall no manifest will ever name. [relay/README.md](../../relay/README.md) has the
+which is the reinstall no manifest will ever name. [infrastructure/relay/README.md](../../infrastructure/relay/README.md) has the
 object's side in full, and *What is still owed* the three gaps it leaves.
 
 **A push is admitted in the Worker, after the gate and before the object**, for the gate's own
@@ -3733,10 +3733,10 @@ there still reads it as stale.
 
 ### A second Worker binds the same D1 and the same secret
 
-**`share-worker/` is not on this list and never will be** — it is a separate Cloudflare Worker
+**`infrastructure/share-worker/` is not on this list and never will be** — it is a separate Cloudflare Worker
 for blast radius, added 2026-09-08 for read-only shared collections. What it shares with the
 relay is the **D1 database** and the **`RELAY_HMAC_KEY`** secret, so it verifies a token the relay
-minted without a service binding; `relay/`'s source and its deploy are untouched by it. Two
+minted without a service binding; `infrastructure/relay/`'s source and its deploy are untouched by it. Two
 consequences reach this page: **publishing is gated by the same bearer token sync mints**, so a
 share is an entitlement of the *group* exactly as everything else here is; and **its lapse pass
 reads the `status` the relay's own `reconcile` wrote and never re-runs `decide`**, because one
@@ -3789,7 +3789,7 @@ POST) and **400** to an empty POST body, `/g/{group}/pull` **401** from the bear
 well-formed bearer — which is the runbook's own pass criterion for `group_keys` existing, since a
 missing table answers 500 there. `/g/{group}/bogus` **404**, so a 404 on this host still means
 "no such route" and the 401s are not a router accident.
-`relay/src/index.ts` carries the auth gate and a push's admission, `admit.ts` every refusal a push
+`infrastructure/relay/src/index.ts` carries the auth gate and a push's admission, `admit.ts` every refusal a push
 can meet, `claim.ts` and `patreon.ts` the OAuth hop, the webhook and the reconciliation,
 `token.ts`, `entitlement.ts` and `md5.ts` the pure decisions the root vitest tests without workerd,
 `groupauth.ts` and `rotate.ts` the group-key store, its two routes and the device roll, `group.ts`
@@ -4119,7 +4119,7 @@ with *no* membership now errors on every **Sync now**: `/keys` authenticates aga
 rows, so an unclaimed group gets a 401 there before `access_token` can answer
 `STALE_GROUP_AUTH`. It is one folded `error_log` row per grain, and it follows from the design.
 
-Compaction, the 30-day tail and the pull ordering are pure functions in `relay/src/log.ts`,
+Compaction, the 30-day tail and the pull ordering are pure functions in `infrastructure/relay/src/log.ts`,
 tested by the root vitest. **`since` orders by `(hlcMs, hlcCtr, device)` and not by arrival**, and
 **a device with no ack at all holds everything** — a group whose third device has never connected
 keeps its log rather than compacting away the state that device has not seen. **Two kinds of
@@ -4154,7 +4154,7 @@ and **corrected again 2026-08-30** because two `/g/…` routes are now outside t
 and `/keys` refuse out of D1, carry their own credential, and are covered in the routes table
 above — an accepted rotation reaches the object once, to post its roster, and only a caller holding
 the group's current auth can cause one.
-`relay/src/index.ts`'s `CLAIM_ROUTES` doc says the rest in the code: **none of the four
+`infrastructure/relay/src/index.ts`'s `CLAIM_ROUTES` doc says the rest in the code: **none of the four
 entitlement routes is behind the bearer gate**, and none of them could be — three of the four
 exist precisely because the caller has no token yet. Each is guarded by something else instead:
 `/oauth/patreon/callback` by the authorization code Patreon's redirect carries, `/claim` by a
@@ -4178,7 +4178,7 @@ this paragraph is why it exists. **`PATREON_CLIENT_ID` is no longer the exceptio
 `a0eb0c6` (2026-08-30) and holds the real id now, verified live — `GET /oauth2/authorize` with it
 and `PATREON_REDIRECT_PATH` answered 302 to Patreon's login preserving both parameters, which an
 unregistered id or a mismatched redirect does not do. It must equal `PATREON_CLIENT_ID` in
-`relay/wrangler.jsonc`'s `vars`, because this side builds the authorize URL and the relay builds
+`infrastructure/relay/wrangler.jsonc`'s `vars`, because this side builds the authorize URL and the relay builds
 the exchange; a mismatch fails at the *exchange*, where the error names no client.
 `sync_state.relay_url` stays a
 **test/dev override with no UI**: `sync_engine/client/tests.rs` stands a server on localhost for
@@ -4191,7 +4191,7 @@ and not in a committed `.dev.vars` either — which is why `.dev.vars` and `.wra
 That table **listed** a `PATREON_CREATOR_TOKEN` for the reconciliation cron; **the Worker that
 was written has no consumer for one**, because the cron refreshes each subject against *their
 own* stored token rather than querying the campaign with a creator-wide credential. §9 says three
-now, and so does `relay/README.md`'s **Deploying** section — this paragraph is the record of that
+now, and so does `infrastructure/relay/README.md`'s **Deploying** section — this paragraph is the record of that
 fix, not a pointer to a table that still disagrees with it.
 
 ---
@@ -4259,7 +4259,7 @@ request, with no relay. **The cost table below has therefore never been measured
 traffic.**
 
 **The first pass with a socket up** (2026-10-01, debug build, Windows; the relay was this tree's
-`relay/` under `wrangler dev` 4.143 on `127.0.0.1`, reached through the `relay_url` override with
+`infrastructure/relay/` under `wrangler dev` 4.143 on `127.0.0.1`, reached through the `relay_url` override with
 a membership seeded into the local D1 — the deployed relay and Patreon were not involved, and
 the peer was a script pushing envelopes the app could not open, so this times the doorbell and
 not an apply):
@@ -4561,7 +4561,7 @@ files were put back.
 that a host other than the desktop can run it — and the Android host does. What moved is the
 whole loop: the socket's lifetime, the five wakes, the scheduler it asks, `sync:live` and the
 loop's `sync:applied`, the `error_log` note, the write wake and `sync_live_state`'s answer.
-`src-tauri/src/sync_engine/live.rs` re-exports the core's module and keeps the one thing only a
+`apps/desktop/src-tauri/src/sync_engine/live.rs` re-exports the core's module and keeps the one thing only a
 desktop has a moment for: the bounded push on the way out (`anything_pending`, `push_now`).
 
 | What | Was (`src-tauri`) | Is (`grimoire-core`) |
@@ -4608,7 +4608,7 @@ purpose:**
   a grid from then. On the desktop that removes `take_due` calls that answer `false` and pings
   into a socket that is probably dead.
 
-**Android runs it** (`mobile/src-tauri`): its `open` registers `live::WriteWake` as the state's
+**Android runs it** (`apps/light/src-tauri`): its `open` registers `live::WriteWake` as the state's
 one write observer and its `start` spawns the loop after `startup::settle`. **It has no push on
 the way out** — the process ends by `_exit` or by the system's kill, neither a hook a request
 can be awaited in — so the loop's 3 s write debounce is what pushes, and an op that missed it is
@@ -4647,7 +4647,7 @@ needs is all `platform::socket`'s second arm:
   answered in a median 0.6 ms, as it does alone, and at worst in 7–11 ms: the longest stretch a
   small trip keeps the connection.
 - **The hosting policy names the socket.** `connect-src` matches a scheme, and Chrome refuses
-  `wss://<relay>` under `https://<relay>` alone, so `app-worker/_headers` carries both.
+  `wss://<relay>` under `https://<relay>` alone, so `infrastructure/app-worker/_headers` carries both.
 
 **What a browser's device does not get**: a push on the way out (a closing tab gives a Worker
 no moment to await one — the 3 s write debounce pushes, as on Android), and a socket that
@@ -4745,7 +4745,7 @@ on the write connection costs the loop one more read, of `sync_group`; (7) a rou
 token is refused behind a rotation adopts it and asks once more, where the trip failed.
 
 **The relay's half** — a rotation's roster closes the sockets of the devices it leaves out — is
-`relay/README.md`'s, and was deployed on 2026-10-05 at 02:21 UTC. The two ship in either order;
+`infrastructure/relay/README.md`'s, and was deployed on 2026-10-05 at 02:21 UTC. The two ship in either order;
 [hosted-relay-deploy.md](hosted-relay-deploy.md)'s ninth half has what each side does with the
 other's old build.
 
@@ -5016,7 +5016,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
 - ~~**`pull` has no page size**~~ — **built 2026-10-04 as the light app's step 6.5b, on both
   sides; the relay's half was deployed on 2026-10-05 at 02:21 UTC.** *A pull fetches, classifies, and then
   evaluates one of two ways* (above) is the client's rule and
-  [relay/README.md](../../relay/README.md)'s "A pull, a page at a time" the relay's.
+  [infrastructure/relay/README.md](../../infrastructure/relay/README.md)'s "A pull, a page at a time" the relay's.
   [light-app.md](light-app.md) §10.5b has it measured again a page at a time, beside the
   unpaged figures — the 50 000-op catch-up that held a browser's engine for 29 s and left it
   at 570 MB is 125 pages, a command asked during it waits a page's apply, about a fifth of a
@@ -5376,7 +5376,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   pull refreshed no sticky notes, no muted tags and no card holdings — and WebView2 never fires
   `visibilitychange`, so the focus refetch never ran either; a sticky note edited from the stale
   text then overwrote the other device's edit. It is now `crossWindow.ts`' `keysForTables` over
-  `src/lib/syncedTables.json`, reduced to outermost roots plus `SYNC_KEY` — `["collection"]`,
+  `packages/ui/lib/syncedTables.json`, reduced to outermost roots plus `SYNC_KEY` — `["collection"]`,
   `["wishlist"]`, `["decks"]`, `["cards"]`, `["card"]`, `["sync"]`, the four tag roots and
   `["stickyNotes"]`, never `["sets"]` — and `changes.rs`' test holds the JSON to `SYNCED_TABLES`.
   `useDeviceSyncInvalidation` refreshes that whole set only when a trip **changed** something
@@ -5391,7 +5391,7 @@ reading the mark — and the reading a reader takes from a `baselineOps: 0` has 
   last ack was compacted again. Now an accepted rotation posts its roster to the object's internal
   `/roster`, which departs every device the manifest omits, and a device unheard for ninety days
   (`ACK_TTL_MS`, `heard_at` stamped by every ack and refreshed by a pull at most daily) leaves the
-  floor too. [relay/README.md](../../relay/README.md)'s *Who the log waits for* has it in full. What
+  floor too. [infrastructure/relay/README.md](../../infrastructure/relay/README.md)'s *Who the log waits for* has it in full. What
   it leaves is the next three bullets.
 - **A device away more than ninety days comes back to a log compacted past its cursor, and nothing
   on the wire tells it** (read off `log.ts`, unmeasured). The rows between its cursor and the floor

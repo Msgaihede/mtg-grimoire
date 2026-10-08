@@ -3,8 +3,8 @@
 Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every figure keeps the date and the build it was taken on.
 
 - Data dir is `<exe dir>/data`, falling back to `%APPDATA%/com.mtggrimoire.app/data`.
-  **Under `tauri dev` the exe is `src-tauri/target/debug/`, so the databases are
-  `src-tauri/target/debug/data/user.db` and `corpus.db`** — not `src-tauri/data/`, and
+  **Under `tauri dev` the exe is `target/debug/`, so the databases are
+  `target/debug/data/user.db` and `corpus.db`** — not `apps/desktop/src-tauri/data/`, and
   **not one file since schema 27**: the reader's tables are `main` and the rebuildable ones are
   `ATTACH`ed as `corpus`. (Eighteen against twenty-five at the split itself; the user side is what
   has grown since, and this line carried the user figure and said eighteen until user schema v43,
@@ -18,7 +18,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   over-counts** — 37 against 32 at v54 and 39 against 34 at v60, because `mod tests` matches the
   enum by name five more
   times (this said four until v52's stray-table test began asking the registry). Count them,
-  never add to a number written here; `src/lib/userTables.json` holds the same list and a Rust
+  never add to a number written here; `packages/ui/lib/userTables.json` holds the same list and a Rust
   test holds the two equal.)
   A folder still holding a single
   `mtg.db` is converted at the next launch by `split::convert`, which never touches that
@@ -507,7 +507,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `DROP` it first, or the
   widening is a silent no-op on exactly the machines that need it. (v6 added `app_meta`; the
   paragraph below describes v5.)
-- **`app_meta`'s census is `grep -rn 'get_app_meta\|set_app_meta' src-tauri/src`, not a list
+- **`app_meta`'s census is `grep -rn 'get_app_meta\|set_app_meta' apps/desktop/src-tauri/src`, not a list
   here** — a total written down in prose is a fact about a tree, and every open branch has a
   different one. Grep the *calls* rather than the `K_*` constants: `maintenance.rs` names two of
   those and both are `sync_meta` keys. What is worth knowing without grepping is the split: most
@@ -566,11 +566,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   line read **v18** for two
   whole rungs, because a prose-only edit routes to neither CI job and nothing goes red when a
   ladder entry rots. **It then read 30 for two more**, through v31 and v32, and so did
-  `src-tauri/CLAUDE.md`'s copy of the same pair — the identical failure, twice over, on the one
+  `apps/desktop/src-tauri/CLAUDE.md`'s copy of the same pair — the identical failure, twice over, on the one
   number in this file that a single `grep USER_SCHEMA_VERSION crates/grimoire-core/src/schema.rs`
-  answers (`src-tauri/src/schema.rs` until the file moved on 2026-10-02).
+  answers (`apps/desktop/src-tauri/src/schema.rs` until the file moved on 2026-10-02).
   **It then read 33 for three more after that**, through v34, v35 and v36 — this time in this file
-  alone, since `src-tauri/CLAUDE.md`'s own copy stayed only one rung behind, at 34, until this
+  alone, since `apps/desktop/src-tauri/CLAUDE.md`'s own copy stayed only one rung behind, at 34, until this
   pass corrected both. Three drifts now on the one number a `grep` settles, which is why this
   page stops writing one down here at all rather than opening a fourth. **v37 then landed the
   same day as v36 and had to be renumbered twice on its way in**, which is the same lesson from
@@ -1082,7 +1082,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `schema::split_theory_piles` — every pile of every deck with a plan cloned into the theory list
   under a uid derived from the original's, the deck's theory cards repointed, and those decks'
   undo journals cleared. `split::convert` runs the same function. The net for a group that did not
-  climb together, and the rule that it should: `src-tauri/CLAUDE.md`'s v53 entry and
+  climb together, and the rule that it should: `apps/desktop/src-tauri/CLAUDE.md`'s v53 entry and
   [sync.md](sync.md) *A pile's list is on the wire since user schema v53*.
   **v52 makes a token's printings _entries_, and replaces `decks.token_stack` with
   `decks.token_mode`** (2026-09-26,
@@ -1320,7 +1320,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   trigger comes off**, unlike v57, because nothing here writes a row and an `ADD COLUMN` is no edit
   to capture. Two `ADD COLUMN`s and no index, so neither figure at the top of this page moves. It
   owes **`UNDO_V58`**, for `UNDO_V13`'s loud reason, **at the head of every chain** — `grep -c
-  '{UNDO_V58}' crates/grimoire-core/src/schema.rs src-tauri/src/schema/mod.rs` counts the chains plus
+  '{UNDO_V58}' crates/grimoire-core/src/schema.rs apps/desktop/src-tauri/src/schema/mod.rs` counts the chains plus
   the rung test's own rewind (two files since 2026-10-02: one chain stayed in `src-tauri` with the
   tests that name a module still there), so read that rather than a number here. Like `UNDO_V56`
   it drops the three `decks` capture triggers before its two `DROP COLUMN`s, because `sync_ins_decks` and `sync_upd_decks` read `NEW.todos` and
@@ -1369,10 +1369,10 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   at the root like any row the reader filed there, and nothing tells the two apart. It owes the
   same eight things `sync_gone` did ([sync.md](sync.md) lists them): the rung, its
   `USER_SCHEMA_SQL` lines, `schema::TABLES`, the mirror's decided-about list,
-  `changes::WRITTEN_BY_THE_APP` (the eighth `WITHOUT ROWID` user table), `src/lib/userTables.json`,
+  `changes::WRITTEN_BY_THE_APP` (the eighth `WITHOUT ROWID` user table), `packages/ui/lib/userTables.json`,
   `TABLE_KEYS` as `sync_orphans: []`, and **`UNDO_V60` at the head of every rewind chain, ahead of
   `UNDO_V59`** — `grep -c '{UNDO_V60}' crates/grimoire-core/src/schema.rs
-  src-tauri/src/schema/mod.rs` counts them (31 on the day: thirty chains and the rung test's own
+  apps/desktop/src-tauri/src/schema/mod.rs` counts them (31 on the day: thirty chains and the rung test's own
   rewind). `UNDO_V60` drops the three indexes and then the table and **has none of `UNDO_V54`'s
   ⚠️**: with
   no trigger naming the table, a fixture that ran `capture::install` rewinds it like any other.
@@ -1568,7 +1568,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   The deck's answer is a **filter over the format picker** and nothing else: it narrows which
   formats every format select offers, and `pickerFormats`' `keep` folds the deck's own format
   back in, so a Modern deck set to Arena still says Modern. Rust supplies both facts and draws
-  no conclusion; the narrowing is `src/features/decks/useFormatSpecs.ts`'s.
+  no conclusion; the narrowing is `packages/ui/features/decks/useFormatSpecs.ts`'s.
   **`'any'` is a stored sentinel rather than a NULL**, `default_category_id`'s argument one rung
   down: `DeckPatch` writes `coalesce(?n, column)`, so a bound NULL means *leave it* and a
   nullable column could never say "back to Any". Neither column carries a CHECK — not because
@@ -1740,7 +1740,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   that repairs nothing. The comparison worth reaching for is the `legal_mask` bullet two above —
   ~7 s of launch on the live 563 MB file, for a full-table backfill and an index rebuild together
   — but that is a *neighbour's* figure and not this rung's. A launch against a backed-up copy of
-  `src-tauri/target/debug/data/corpus.db` is the only thing that settles it.
+  `target/debug/data/corpus.db` is the only thing that settles it.
   **The rung is three statements and the third is the one with a trap.** The `ALTER`, the
   `UPDATE`, and then `DROP INDEX IF EXISTS {schema}.idx_cards_collapse` **before** the
   `CARDS_INDEXES` replay — because every statement in that list is spelled `IF NOT EXISTS`, and
@@ -1824,7 +1824,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **The per-rung fixture counts that used to be written out here are gone on purpose.** They read
   "all six below it" and "the five below that" against a fixture set that has grown twice since,
   and a count is a fact about a *tree*: `grep -c "{UNDO_V33}" crates/grimoire-core/src/schema.rs
-  src-tauri/src/schema/mod.rs` is the census of how many fixtures the newest rung reaches — over both
+  apps/desktop/src-tauri/src/schema/mod.rs` is the census of how many fixtures the newest rung reaches — over both
   files since 2026-10-02, when the schema moved to the core and one chain stayed behind — and it
   answers for the tree you are actually in. (The constant in that command moves with the ladder —
   it named `UNDO_V23` until v24 landed, `UNDO_V24` until v25 did, and then stood at `UNDO_V25` across the split and four rungs

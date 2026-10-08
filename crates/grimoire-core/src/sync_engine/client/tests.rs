@@ -922,16 +922,18 @@ fn the_relay_is_asked_with_two_headers_and_no_other() {
         set,
         ["authorization", "content-type"],
         "a third request header is a pre-flight the relay refuses: add it to the relay's \
-         allow-list (`relay/src/cors.ts`) in the same change, and to this list"
+         allow-list (`infrastructure/relay/src/cors.ts`) in the same change, and to this list"
     );
     // And the relay's side of the same fact, read where it is written: nothing compiles the
     // two together, so a header added on either side alone is green on both.
-    let cors = include_str!("../../../../../relay/src/cors.ts");
+    let cors = include_str!("../../../../../infrastructure/relay/src/cors.ts");
     let allowed = cors
         .split_once("const ALLOW_HEADERS = \"")
         .and_then(|(_, rest)| rest.split_once('"'))
         .map(|(list, _)| list)
-        .expect("relay/src/cors.ts no longer spells ALLOW_HEADERS where this reads it");
+        .expect(
+            "infrastructure/relay/src/cors.ts no longer spells ALLOW_HEADERS where this reads it",
+        );
     let mut allowed: Vec<_> = allowed.split(',').map(str::trim).collect();
     allowed.sort_unstable();
     assert_eq!(
@@ -2466,7 +2468,7 @@ fn moved_groups(cursor: &str, acked: &str, key: &[u8; 32]) -> Connection {
 /// **A device that leaves a group and joins another reads the new group's log from its first
 /// row.** The relay's `seq` is an `AUTOINCREMENT` per Durable Object, which is one per group, so a
 /// cursor is a position in *one* group's log and means nothing in the next. Carried across, a
-/// cursor of 500 asks the new group `since=500`, and `relay/src/group.ts` seeds the head it answers
+/// cursor of 500 asks the new group `since=500`, and `infrastructure/relay/src/group.ts` seeds the head it answers
 /// with the cursor it was asked — so a log seven rows long hands back no envelopes and `500`. The
 /// device never receives rows 1..7 (a baseline carries current state and never a delete), and its
 /// next ack tells the new group it has consumed through 500, which lets it compact rows this

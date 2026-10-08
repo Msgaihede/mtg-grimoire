@@ -16,19 +16,21 @@ Full reference, measurements, and design history: [`docs/reference/storybook.md`
 
 ## Rules for the Backend Fake
 
+The fake lives in `packages/fake/` (it was `.storybook/fake/` until 2026-10-08); `.storybook/` keeps the workbench's configuration. The paths below are relative to `packages/fake/`.
+
 - **Command parity is strictly enforced**:
-  - `fake/parity.test.ts` verifies that every command registered by `generate_handler!` in `src-tauri/src/desktop.rs` has a matching handler in `allHandlers`.
+  - `parity.test.ts` verifies that every command registered by `generate_handler!` in `apps/desktop/src-tauri/src/desktop.rs` has a matching handler in `allHandlers`.
   - Commands deliberately omitted must be registered in the `ABSENT` map with documented rationale.
   - The parity test compares command names only; argument and payload types are asserted by `ipc.test.ts`.
-- **The fake sits under `src/lib/ipc.ts`, not in place of it**:
-  - `fake/aliases.ts` aliases four modules (`@tauri-apps/api/core`, `@tauri-apps/api/event`, `@tauri-apps/api/window`, and `@/lib/images`) to `.storybook/fake/`.
-  - Because `src/lib/ipc.ts` is the hand-written TypeScript mirror of Rust structs, placing the fake beneath it ensures every story exercises the mirror and catches type drift.
-  - The same four aliases are consumed by the light app's dev mode (`npm run mobile:dev` via `vite.mobile.config.ts`), which boots one world before mounting React: `starter` by default, or the `?seed=` / `?fault=` named in the address (`mobile/fakeBoot.ts`).
+- **The fake sits under `packages/ui/lib/ipc.ts`, not in place of it**:
+  - `aliases.ts` aliases four modules (`@tauri-apps/api/core`, `@tauri-apps/api/event`, `@tauri-apps/api/window`, and `@/lib/images`) to `packages/fake/`.
+  - Because `packages/ui/lib/ipc.ts` is the hand-written TypeScript mirror of Rust structs, placing the fake beneath it ensures every story exercises the mirror and catches type drift.
+  - The same four aliases are consumed by the light app's dev mode (`npm run mobile:dev` via `apps/light/vite.config.ts`), which boots one world before mounting React: `starter` by default, or the `?seed=` / `?fault=` named in the address (`apps/light/fakeBoot.ts`).
 - **Single window model**:
   - A story simulates a single window. `window_new` answers but opens nothing; `window_count` always returns 1.
   - Multi-window states are simulated using explicit faults (e.g., `scannerElsewhere` for active hardware leases), never second window instances.
   - `resetWindow()` is called on every `installWorld` pass to clear maximized/docked state between stories.
-- **Table row storage & derived DTOs (`fake/db.ts`)**:
+- **Table row storage & derived DTOs (`db.ts`)**:
   - The fake stores underlying table rows and computes DTOs dynamically.
   - For example, `DeckCard.ownedQuantity` calculates custody on `live` rows vs broad availability on `theory` rows.
   - No seed may contain `collection_entries` rows with quantity 0 (`set_quantity(id, 0)` deletes rows in user schema v24+).
@@ -55,8 +57,8 @@ Full reference, measurements, and design history: [`docs/reference/storybook.md`
 - **Undo / Redo Simulation**:
   - `journalled()` wraps deck mutation handlers, snapshotting the deck before and after each write and associating changes with audit log rows.
   - Bulk-undo tickets are stored in a `WeakMap` keyed by the world instance, isolating history per story.
-  - State is cleanly reset per story via `installWorld` (`fake/scope.ts`).
-- **The scanner's session is a script, not a fixture** (`fake/scannerScript.ts`):
+  - State is cleanly reset per story via `installWorld` (`scope.ts`).
+- **The scanner's session is a script, not a fixture** (`scannerScript.ts`):
   - `scanner_frame` answers the next frame of a pile of five cards, about 110 ms a frame, with a `decision_seq` that moves once per card — so a camera that opens over the fake lands cards in the tray (`mobile:dev`, `mobile:scanner-smoke`). In Exact the last card is three reprints it cannot split. `scanner_reset` lays the pile down again and keeps the number.
   - It reads the frame's mode and `previews` out of its `x-scanner-options` header: the fake `invoke` hands a handler its options **second**, and only when the caller passed some.
   - A story has no camera, so stories still write their tray through `set_scanner_tray` and refuse the camera themselves.
@@ -71,13 +73,13 @@ Full reference, measurements, and design history: [`docs/reference/storybook.md`
 - **Docs page store isolation**:
   - Docs pages mount every story simultaneously. Any story that writes to `useAppStore` during render must set `docs: { story: { inline: false, height: ... } }`.
 - **Shared fixtures**:
-  - Fixtures needed across multiple story files live in `.storybook/fake/fixtures.ts`. Never put shared fixtures in generated files like `cards.ts`.
+  - Fixtures needed across multiple story files live in `packages/fake/fixtures.ts`. Never put shared fixtures in generated files like `cards.ts`.
 - **No hardcoded counts in documentation**: Never document exact story, play, or test counts in markdown files; counts drift across branches and cause merge conflicts.
 - **Safe gesture simulation**:
   - Wrap drag interactions in `try { ... } finally { await held.cancel(); }` to prevent leaking global drag state across stories.
   - Always verify drag outcomes using `waitFor` assertions.
 - **CSS styling**:
-  - Stories must import `.storybook/preview.css`, never `src/index.css` directly.
+  - Stories must import `.storybook/preview.css`, never `packages/ui/index.css` directly.
   - `@source "../.storybook"` ensures Storybook utility classes are not bundled into production application stylesheets.
 - **CI verification**:
   - `npm run build-storybook` is executed in CI by the `storybook` job. It serves as the compilation gate for `.storybook/DesignSystem.mdx` and `preview.css`.
@@ -88,7 +90,7 @@ Full reference, measurements, and design history: [`docs/reference/storybook.md`
   - `.storybook` is type-checked separately via `tsc -p .storybook` (invoked during `npm run build`).
   - **`@types/node` is strictly banned**: Ambient Node types must never enter the frontend program. Webview code expects standard DOM types (`setTimeout` returning `number`, not `NodeJS.Timeout`).
 - **Story Execution under Vitest**:
-  - `src/stories.test.tsx` runs each story's `play` function under Vitest during `npm run test:run`.
+  - `packages/ui/stories.test.tsx` runs each story's `play` function under Vitest during `npm run test:run`.
   - `setProjectAnnotations` must execute at module scope before calling `composeStories`.
 - **Mocking Restrictions**:
   - While three Tauri aliases are mocked, **`@/lib/images` must NEVER be mocked in Vitest**. Mocking it triggers a silent 300-second hang without test output or error traces.

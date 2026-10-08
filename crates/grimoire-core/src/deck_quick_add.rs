@@ -97,7 +97,7 @@ const LIVE: &str = crate::schema::DECK_VARIANTS[0];
 
 /// One wishlist line the copies about to be recorded could take down.
 ///
-/// The hand-written mirror of `DeckQuickAddWish` in `src/lib/ipc.ts`, field for field.
+/// The hand-written mirror of `DeckQuickAddWish` in `packages/ui/lib/ipc.ts`, field for field.
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct QuickAddWish {

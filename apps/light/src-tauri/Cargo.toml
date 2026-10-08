@@ -1,0 +1,64 @@
+[package]
+name = "grimoire-light"
+# **The app's version**, inherited from `[workspace.package]` in the root manifest, which is the
+# one release-please writes (`release-please-config.json`), because the three ship from one tag:
+# one core means one schema version (the light-app spec §7's release rule). Tauri reads `tauri.conf.json`'s copy for the
+# Android `versionName`; this one is what the crate says.
+version.workspace = true
+description = "MTG Grimoire, light: the Android host over grimoire-core"
+authors = ["Markus Seerup"]
+license.workspace = true
+edition.workspace = true
+publish = false
+
+# **The light app's Android host** (the light-app spec §5, phase 4): the mobile entry point, one
+# command — `core_call`, which forwards to `grimoire_core::dispatch` — the startup gate the page
+# waits on, and the `mtgimg` protocol. Everything else is the core's. `README`-level detail is in
+# `apps/light/CLAUDE.md` and `docs/reference/light-app.md` §8.
+
+[lib]
+# The `_lib` suffix keeps the library's name apart from the binary's on Windows
+# (rust-lang/cargo#8519), as `src-tauri`'s does. **The three crate types are what Tauri's
+# mobile build asks for**: `cdylib` is the `.so` Gradle packs into the APK, `staticlib` is iOS's
+# (not built here, and harmless), `rlib` is what `main.rs` links on a desktop.
+name = "grimoire_light_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+# **Three plugins, each used from Rust only and granted to the page not at all** (phase 4, step
+# 4.3): `capabilities/light.json` names no `dialog:`, `fs:` or `opener:` permission, so no script in
+# the webview can reach them — the desktop's rule for its file dialogs (issue #545), kept here.
+# - `dialog` opens the system picker and the save dialog — on Android the Storage Access
+#   Framework, which answers a `content://` URI rather than a path;
+# - `fs` writes and reads that URI (`Fs::open` asks the Android side for a file descriptor);
+# - `opener` hands a link that is not one of the app's own pages to the system browser.
+# The same major the desktop asks for, so the lockfile carries one copy of each.
+tauri-plugin-dialog = "2"
+tauri-plugin-fs = "2"
+tauri-plugin-opener = "2"
+# **Never with its `testing` feature** — `platform::fence` reads this file for it, and CI's
+# `rust` job asks `cargo tree` for this package by name too.
+grimoire-core = { path = "../../../crates/grimoire-core" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# A raw body crosses `core_call` as base64 — Tauri accepts no raw body on Android (spec §2.4) —
+# with the core's own version and features.
+base64 = { version = "0.22", default-features = false, features = ["alloc"] }
+
+# **Asking Android whether the link is metered** (`downloads::metered`, step 4.4):
+# `ConnectivityManager.isActiveNetworkMetered()` over JNI, through the activity tao keeps. The same
+# major wry and tao link, so the lockfile carries one `jni`.
+[target.'cfg(target_os = "android")'.dependencies]
+jni = "0.21"
+# **`_exit`, for the event loop's end** (`lib.rs`, `end_on_exit`): `std::process::exit` runs static
+# destructors under the framework's live threads and aborts. The same crate tao links.
+libc = "0.2"
+
+[dev-dependencies]
+# The core's test scaffolding (`state::fixtures`), for this crate's tests only — never on the
+# `[dependencies]` line above (`platform::fence`, and CI's `cargo tree` check by package name).
+grimoire-core = { path = "../../../crates/grimoire-core", features = ["testing"] }

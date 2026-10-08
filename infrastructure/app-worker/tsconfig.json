@@ -1,0 +1,41 @@
+{
+  /* The web host's hosting Worker — `infrastructure/app-worker/`, the third Cloudflare Worker
+     here. Every compiler option below is `infrastructure/relay/tsconfig.json`'s byte for byte,
+     and that file carries the argument for why a Worker gets a program of its own:
+     `@cloudflare/workers-types` declares `Request`, `Response` and some four hundred other
+     globals, and the app under `packages/ui/` must see the DOM's versions of those names and
+     nothing else.
+
+     A third file rather than a wider `include` in either of the other two, for
+     `infrastructure/share-worker/tsconfig.json`'s reason: `mtg-grimoire-app` is a deploy of its
+     own, and one program spanning two Workers lets an edit to one fail the other's check.
+
+     **One file of the shared UI is in this program, by import and not by name**:
+     `packages/ui/lib/core/web/assets.ts`, whose `isNavigation` the Worker answers a navigation
+     by — the rule the dev server and the preview serve by, shared so the three cannot disagree.
+     It is followed from `infrastructure/app-worker/src/index.ts` and so checked a third time,
+     under a third set of globals, which is the point: it may name nothing only one runtime has.
+
+     `infrastructure/app-worker/src`'s `*.test.ts` are inside the program, as the relay's are: a
+     test that does not type-check can drift from what it asserts about.
+     `infrastructure/app-worker/src/vite.d.ts` declares the two Vite imports the fence reads the
+     configuration and the Rust sources by, for `infrastructure/relay/src/raw.d.ts`'s reason —
+     `vite/client` stays out of a Worker's `types`. */
+  "compilerOptions": {
+    "target": "ES2022",
+    /* No `DOM`: this is not a browser. */
+    "lib": ["ES2022"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": ["@cloudflare/workers-types"],
+
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "isolatedModules": true,
+    "skipLibCheck": true,
+    "noEmit": true
+  },
+  "include": ["src"]
+}

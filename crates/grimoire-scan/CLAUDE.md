@@ -25,7 +25,7 @@ Six synchronous functions (`src/glue.rs`). Every string answered is `{"ok": …}
 - **Strict export check**: `scripts/build-wasm.mjs` fails the build if any of the six is missing from the glue.
 - **A verdict is serialised from the crate's type, never through a `serde_json::Value`**: a `Value` sorts keys and widens `f32` (`0.3` → `0.30000001192092896`), and the page must read what the desktop's `scanner_frame` hands its own.
 - **Rust supplies facts**: `load` says what loaded and what the crate said about what did not. No sentence here names a file, a download or a browser — those are the page's.
-- **The page's half** is `src/lib/core/web/`: `scanWorker.ts` loads this module by URL, `scanSession.ts` answers each message and calls a throwing export a trap, `scanner.ts` owns the Worker's life and composes `scanner_status` from `load`'s facts, `scanStore.ts` keeps the three files. `npm run web:scanner-smoke` is the run that instantiates this module in a browser.
+- **The page's half** is `packages/ui/lib/core/web/`: `scanWorker.ts` loads this module by URL, `scanSession.ts` answers each message and calls a throwing export a trap, `scanner.ts` owns the Worker's life and composes `scanner_status` from `load`'s facts, `scanStore.ts` keeps the three files. `npm run web:scanner-smoke` is the run that instantiates this module in a browser.
 
 ---
 
@@ -42,7 +42,7 @@ Six synchronous functions (`src/glue.rs`). Every string answered is `{"ok": …}
 - **`card-scanner` with `ocr`, never `corpus`.** `corpus` is SQLite. Labels arrive as bytes (`card_scanner::labels`), read and encoded by the engine (`grimoire_web`'s `scanner_labels`).
 - **No `grimoire-core`, `tokio` or `reqwest`.** Nothing here fetches, stores or waits.
 - **Build it alone**: `cargo build -p grimoire-scan`. A build that also names the engine unifies features and compiles the scanner with `corpus`.
-- **`simd128` is this module's alone**, set by `scripts/build-wasm.mjs` in the environment of one cargo run with a build tree of its own (`src-tauri/target/scanner-simd128`). Never put the flag in `.cargo/config.toml`: the engine's module must load in a browser without SIMD.
+- **`simd128` is this module's alone**, set by `scripts/build-wasm.mjs` in the environment of one cargo run with a build tree of its own (`target/scanner-simd128`). Never put the flag in `.cargo/config.toml`: the engine's module must load in a browser without SIMD.
 - **Version** is the app's; `release-please` bumps it and `scripts/release-rule.test.mjs` holds it.
 
 ---
@@ -70,5 +70,5 @@ Six synchronous functions (`src/glue.rs`). Every string answered is `{"ok": …}
 
 WASM clippy, as CI's `web` job runs it (Bash; PowerShell sets `$env:RUSTFLAGS`):
 ```bash
-RUSTFLAGS="-C target-feature=+simd128" cargo clippy --lib -p grimoire-scan --locked --target wasm32-unknown-unknown --target-dir src-tauri/target/scanner-simd128 -- -D warnings
+RUSTFLAGS="-C target-feature=+simd128" cargo clippy --lib -p grimoire-scan --locked --target wasm32-unknown-unknown --target-dir target/scanner-simd128 -- -D warnings
 ```

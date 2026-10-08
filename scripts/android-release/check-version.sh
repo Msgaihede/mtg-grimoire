@@ -18,7 +18,7 @@
 set -euo pipefail
 
 VERSION=${1:?usage: check-version.sh <x.y.z> [<tauri.properties>]}
-PROPS=${2:-mobile/src-tauri/gen/android/app/tauri.properties}
+PROPS=${2:-apps/light/src-tauri/gen/android/app/tauri.properties}
 
 die() {
   echo "android-version: $*" >&2

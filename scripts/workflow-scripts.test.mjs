@@ -7,6 +7,8 @@
 // name is checkable from the files' text, so it is checked here, where `verify` reads it.
 //
 // The files are globbed, so a new workflow is held to the same rule the day it lands.
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import pkg from "../package.json";
 
@@ -55,5 +57,23 @@ describe("the rule's own guards", () => {
     expect(runsOf(pkg.scripts.verify).length).toBeGreaterThan(0);
     expect(runsOf("run: npm run web:smoke\n# npm run gone")).toEqual(["web:smoke", "gone"]);
     expect(runsOf(code("  # npm run gone\n  run: npm run build"))).toEqual(["build"]);
+  });
+});
+
+// `release.yml` runs on a release and nowhere else, so a step that names a folder a move took
+// away is found by the release. Every `working-directory:` and every `--prefix` is held to a
+// folder that exists. (A stale folder left on a developer's disk passes here; CI's checkout is
+// clean, and CI is where this is read.)
+describe("the folders a workflow steps into", () => {
+  const repo = `${resolve(import.meta.dirname, "..")}/`;
+  const texts = import.meta.glob("/.github/workflows/*.yml", { query: "?raw", import: "default", eager: true });
+
+  it("all exist", () => {
+    const missing = [];
+    for (const [file, text] of Object.entries(texts))
+      for (const [, dir] of text.matchAll(/(?:working-directory:|--prefix)\s+["']?([\w./-]+)/g))
+        if (!existsSync(repo + dir)) missing.push(`${file}: ${dir}`);
+    expect(Object.keys(texts).length).toBeGreaterThan(0);
+    expect(missing).toEqual([]);
   });
 });

@@ -65,7 +65,7 @@
 //! CORS header, so a browser cannot ask this source at all, and a page keeps no files to put an
 //! answer in. A browser's source is the app's own origin and its storage the browser's, and
 //! both are the web host's, answered on the page in front of this table
-//! (`src/lib/core/web/scanner.ts`, step 7.5) — in this module's shapes, with [`Piece`]'s keys
+//! (`packages/ui/lib/core/web/scanner.ts`, step 7.5) — in this module's shapes, with [`Piece`]'s keys
 //! and labels, the `PHASE_*` words, the two models' digests and [`ALREADY_FETCHING`]'s
 //! sentence, each of which `scanStore.test.ts` holds to this text.
 

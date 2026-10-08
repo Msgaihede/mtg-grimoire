@@ -27,7 +27,7 @@ carries Magic meaning — mana, colour identity, rarity, card art.
 **Nothing below is transcribed.** Every swatch reads
 `getComputedStyle(document.documentElement).getPropertyValue(name)` at render time and prints
 what came back, and the token _names_ are walked out of `document.styleSheets` rather than
-listed, so a token added to `src/index.css` appears here on its own. Every type specimen reports
+listed, so a token added to `packages/ui/index.css` appears here on its own. Every type specimen reports
 the
 `font-family`, `font-size` and `font-weight` the browser resolved for the very element drawing
 it. The mana line is the app's component, given the app's own gradient constant. A hex typed
@@ -46,24 +46,24 @@ ground.
 Gold is interactive emphasis: focus rings, the active nav item, a count badge, the mana line's
 leading cap. It is **not** a surface. This is the one palette name shared with shadcn where the
 app's block wins — shadcn's `accent` means "a subtle surface", and this one means gold
-(`src/index.css`, lines 173–176 and 197).
+(`packages/ui/index.css`, lines 173–176 and 197).
 
 So a component vendored with `npx shadcn@latest add` has its `bg-accent` **surfaces** rewritten
 to `bg-surface`. `text-accent-foreground` already resolves correctly and needs no change, and
 `bg-muted` needs none any more either: `--color-muted` is declared as `var(--color-surface)`
-(`src/index.css`, line 196), which is why its swatch above reads identically to the surface one.
+(`packages/ui/index.css`, line 196), which is why its swatch above reads identically to the surface one.
 It used to be the dim _text_ colour, and a stock `TabsList` came out with invisible labels.
 
 ### Dim text is `text-dim`
 
 Never the older name. Tailwind builds a `bg-*` utility and a `text-*` utility from one literal,
 so one token cannot be both a subtle surface and dim text — which is why the app's is
-`--color-dim` (`src/index.css`, line 192) and `--color-muted` was handed back to shadcn's
+`--color-dim` (`packages/ui/index.css`, line 192) and `--color-muted` was handed back to shadcn's
 meaning.
 
 The retired class still **compiles**. It now paints text in the surface colour, which is very
 nearly invisible rather than an error, so its failure mode is a screen nobody can read, found by
-a user. `src/lib/tokens.test.ts` sweeps every `.ts`, `.tsx` and `.css` file under `src/` for it,
+a user. `packages/ui/lib/tokens.test.ts` sweeps every `.ts`, `.tsx` and `.css` file under `packages/ui/` for it,
 and separately pins the two tokens apart (its tests at lines 40 and 51).
 
 <DimTextNote />
@@ -75,7 +75,7 @@ and separately pins the two tokens apart (its tests at lines 40 and 51).
 `special` and `bonus` are real values in the data with no token of their own, and they fall back
 to the hairline colour — fine under 6px of dot, about 1.9:1 as a word, which is a caption nobody
 can read. So `RarityGem` tints the word only when the rarity **has** a colour of its own and
-leaves it dim otherwise (`src/lib/rarity.ts`, line 46). The gem is `aria-hidden` and the word is
+leaves it dim otherwise (`packages/ui/lib/rarity.ts`, line 46). The gem is `aria-hidden` and the word is
 the accessible name whether or not it is drawn: a colour is not information anyone can be
 required to see.
 
@@ -90,14 +90,14 @@ for that line; the check under it is whether the bundled face is the one actuall
   sampleClass="font-heading text-xl leading-none"
   check='600 20px "Cinzel"'
 >
-  Cinzel, weights 500 and 600 (<code>--font-heading</code>, <code>src/index.css</code> line 31).
+  Cinzel, weights 500 and 600 (<code>--font-heading</code>, <code>packages/ui/index.css</code> line 31).
   View titles, the first-run hero, section headers — <strong>only</strong>. Never body text and
   never below 18px, which is the whole of its brief. The sample is the ribbon's own size, spelled{" "}
-  <code>font-heading text-xl</code> in <code>src/components/Ribbon.tsx</code> at line 120 —{" "}
+  <code>font-heading text-xl</code> in <code>packages/ui/components/Ribbon.tsx</code> at line 120 —{" "}
   <strong>20px since the shell was enlarged on 2026-08-14</strong>, which moves the app's one
   display line further from the 18px floor rather than nearer it. The first-run hero is the one
   place it goes larger, at <code>text-2xl</code> in the file{" "}
-  <code>src/components/SyncProgress.tsx</code> at line 172 — and the wordmark above it is this
+  <code>packages/ui/components/SyncProgress.tsx</code> at line 172 — and the wordmark above it is this
   sample's own size with letterspacing, which is the app saying its name in full in the one place
   there is room for it.
 </TypeSpecimen>
@@ -107,7 +107,7 @@ for that line; the check under it is whether the bundled face is the one actuall
   sample="A wish for none of something is not a wish."
   check='400 16px "Geist Variable"'
 >
-  Geist (<code>--font-sans</code>, <code>src/index.css</code> line 32), applied to the root element
+  Geist (<code>--font-sans</code>, <code>packages/ui/index.css</code> line 32), applied to the root element
   in the base layer — so everything that does not say otherwise is this, and the sample above
   carries no class at all. Sentence case, verbs on buttons, and errors that say what happened and
   what to do.
@@ -119,10 +119,10 @@ for that line; the check under it is whether the bundled face is the one actuall
   sampleClass="font-mono text-lg tabular-nums"
   check='400 16px "Geist Mono Variable"'
 >
-  Geist Mono (<code>--font-mono</code>, <code>src/index.css</code> line 34). Collector numbers,
+  Geist Mono (<code>--font-mono</code>, <code>packages/ui/index.css</code> line 34). Collector numbers,
   prices, counts — anything a reader compares down a column, which is what the utility{" "}
   <code>tabular-nums</code> is for. The recipe is the figure row's own, namely{" "}
-  <code>font-mono text-lg tabular-nums</code> in <code>src/components/Figure.tsx</code>
+  <code>font-mono text-lg tabular-nums</code> in <code>packages/ui/components/Figure.tsx</code>
   at line 43. 116,694 is the size of the live corpus, measured 2026-08-10.
 </TypeSpecimen>
 
@@ -130,9 +130,9 @@ for that line; the check under it is whether the bundled face is the one actuall
 
 Mana symbols come from the `mana-font` npm package and set symbols from `keyrune`, both
 **bundled** — never a CDN, and not by preference. The shipped app runs a Content-Security-Policy
-whose font rule is `font-src 'self' data:` (`src-tauri/tauri.conf.json`, line 24): there is no
+whose font rule is `font-src 'self' data:` (`apps/desktop/src-tauri/tauri.conf.json`, line 24): there is no
 remote source to fetch a face from, and a stylesheet that reached for one would draw nothing at
-all. `src/lib/iconFont.ts` is a Vite plugin that rewrites both packages' `@font-face` lists down
+all. `packages/ui/lib/iconFont.ts` is a Vite plugin that rewrites both packages' `@font-face` lists down
 to the single woff2 each ships, because they date from the eot/svg era and Vite would otherwise
 emit four dead formats.
 
@@ -142,7 +142,7 @@ The printed symbol on the printed fill: the glyph is the font's, the fill is the
 `mana-font`'s own `--ms-mana-*` values are a shade off the direction doc's. Pressed is the
 card's colour at full strength with a gold ring; unpressed is the _same_ chip dimmed to 60%, so
 the row reads as one control with some of it switched on — and a colourblind reader still has
-the symbol's shape, which is what it was designed to carry (`src/components/FilterChips.tsx`,
+the symbol's shape, which is what it was designed to carry (`packages/ui/components/FilterChips.tsx`,
 line 56).
 
 <ChipsPanel />
@@ -164,13 +164,13 @@ come out as text — `{C/P}`, `{L}`, `{HW}` and `{D}`; over `mana_cost` **and** 
 those plus `{HR}` and `{H}`. Only **three** of the six are the font's doing:
 `mana-font@1.18.0` defines no `.ms-cp`, `.ms-hw` or `.ms-hr`, so there is nothing to draw. It
 _does_ define `.ms-d`, `.ms-h` and `.ms-l`, and those three fall back only because
-`MANA_COST_GLYPHS` (`src/lib/mana.ts`, line 51) is a deliberately closed list that omits them.
+`MANA_COST_GLYPHS` (`packages/ui/lib/mana.ts`, line 51) is a deliberately closed list that omits them.
 Closed on purpose: `.ms-` with a guessed suffix is a class the stylesheet has no rule for, so
 the symbol renders as _nothing at all_ and the reader misreads the cost.
 
 ### Set symbols
 
-`setGlyphClass` is a pure function of the set code (`src/lib/keyrune.ts`, line 22) — a CSS class
+`setGlyphClass` is a pure function of the set code (`packages/ui/lib/keyrune.ts`, line 22) — a CSS class
 name is presentation, and the data layer has no business knowing one. Coverage is partial and
 needs no handling: 353 of the 1,047 sets in the live `sets` table have a class of their own
 (measured 2026-08-10 against `keyrune@3.19.0` and the local database), and keyrune's own
@@ -185,10 +185,10 @@ either way.
 The signature: a 2px W→U→B→R→G rule under the global ribbon, present on every screen and never
 repeated anywhere else in the app — which is what makes it a signature rather than a motif.
 During a sync it becomes the app's **only** progress bar, the one place where the identity
-element and a functional one are the same element (`src/components/ManaLine.tsx`, line 12).
+element and a functional one are the same element (`packages/ui/components/ManaLine.tsx`, line 12).
 
 The gradient is one exported constant, written against the theme tokens so the line and the
-chips can never drift apart (`src/lib/mana.ts`, line 138). The strip below is that constant at
+chips can never drift apart (`packages/ui/lib/mana.ts`, line 138). The strip below is that constant at
 32px, and the string under it is the constant itself, printed at render time:
 
 <GradientPanel />
@@ -216,10 +216,10 @@ legible against five shifting hues.
 A short segment sweeps instead of a bar filling, and `aria-valuenow` is **omitted** rather than
 sent as zero: `0` is a claim that no progress has been made, while an absent value is ARIA's way
 of saying the length is unknown. Under `prefers-reduced-motion` the sweeping segment is dropped
-entirely (`motion-reduce:hidden`, `src/components/ManaLine.tsx`, line 41) — a parked segment
+entirely (`motion-reduce:hidden`, `packages/ui/components/ManaLine.tsx`, line 41) — a parked segment
 would read as a third of the way done, and the dimmed line alone says "busy, length unknown".
 
-That sweep is the one animation in the app (`--animate-mana-sweep`, `src/index.css` line 228).
+That sweep is the one animation in the app (`--animate-mana-sweep`, `packages/ui/index.css` line 228).
 Everything else is held to a 150ms transition with a `motion-reduce:transition-none` opt-out,
-and `src/lib/tokens.test.ts` sweeps `src/` for a transition that lost its opt-out — four of them
+and `packages/ui/lib/tokens.test.ts` sweeps `packages/ui/` for a transition that lost its opt-out — four of them
 had, by the end of Plan 3.

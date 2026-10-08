@@ -24,7 +24,7 @@
 //!   one **is** a scope this module already had a word for.)
 //!
 //! Each of the three binds its own aliases and does not go through the paragraph below.
-//! `src-tauri/CLAUDE.md` carries the short form of this rule.
+//! `apps/desktop/src-tauri/CLAUDE.md` carries the short form of this rule.
 //!
 //! **The `conn` argument is vestigial, and it is kept on purpose.** These four took a
 //! connection while the source was switchable and read a stored flag off it; nothing branches

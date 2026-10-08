@@ -2,13 +2,13 @@
 name = "grimoire-web"
 # **The app's version**, as the core's and the Android host's are: the three ship from one tag,
 # and one core means one schema version (the light-app spec §7's release rule). It is equal to
-# `grimoire-core`'s — release-please bumps it with the others (`release-please-config.json`),
-# and `host::tests::the_host_wears_the_cores_version` goes red when the two part.
-version = "0.43.0"
+# `grimoire-core`'s — both inherit `[workspace.package]`'s version in the root manifest, which
+# is the one release-please writes (`release-please-config.json`), and `host::tests::the_host_wears_the_cores_version` goes red when the two part.
+version.workspace = true
 description = "MTG Grimoire, light: the browser host over grimoire-core"
 authors = ["Markus Seerup"]
-license = "AGPL-3.0-or-later"
-edition = "2021"
+license.workspace = true
+edition.workspace = true
 publish = false
 
 # **The light app's web host** (the light-app spec §6, phase 5): `grimoire-core` compiled to

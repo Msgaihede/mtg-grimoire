@@ -17,7 +17,7 @@
 //!   why there is no `summary` column: a sentence is domain logic (CLAUDE.md's boundary), it
 //!   changes with the wording and with the reader's language, and a table that stored one would
 //!   be a table full of the phrasing of whichever release wrote each row.
-//!   `src/features/home/activityText.ts` is the **only** reader of `payload`; nothing here parses
+//!   `packages/ui/features/home/activityText.ts` is the **only** reader of `payload`; nothing here parses
 //!   one, branches on one, or knows what any key in one means. `payload` is stored verbatim and
 //!   handed back verbatim, and `a_payload_is_stored_verbatim_and_this_module_never_reads_it` is
 //!   what says so.
@@ -168,7 +168,7 @@ pub struct ActivityEntry {
 ///
 /// `payload` is written with `serde_json::Value::to_string` and **never inspected**. What shape
 /// it should have per kind is a contract between the write site and
-/// `src/features/home/activityText.ts`; this function is not a party to it, which is the whole
+/// `packages/ui/features/home/activityText.ts`; this function is not a party to it, which is the whole
 /// of why a sentence can be reworded without a migration.
 ///
 /// It answers `()`. `deck_audit::record` answers the id of the row it wrote because

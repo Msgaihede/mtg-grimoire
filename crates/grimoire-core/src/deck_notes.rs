@@ -118,9 +118,9 @@ pub struct DeckNoteRow {
     /// blank is the body's first line, computed at render and never stored: a stored derivation
     /// would go stale the moment the body was edited and there is no writer that could notice.
     pub title: String,
-    /// CommonMark, in the narrowed dialect `src/features/decks/noteMarkdown.ts` pins. Never HTML
+    /// CommonMark, in the narrowed dialect `packages/ui/features/decks/noteMarkdown.ts` pins. Never HTML
     /// and never ProseMirror JSON — a body this crate can hand to anything as text is what keeps
-    /// a renderer out of Rust, and `src/features/transfer/__golden__` is the fence that exists to
+    /// a renderer out of Rust, and `packages/ui/features/transfer/__golden__` is the fence that exists to
     /// make a second implementation of a TypeScript one go red.
     pub body: String,
     pub sort_order: i64,

@@ -1,0 +1,865 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  keepPreviousData,
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
+import { COLLECTION_FIRST_DIR, nextOffset } from "@/features/collection/useCollection";
+import { useCollectionFolderList } from "@/features/collection/useCollectionFolders";
+import {
+  activeFilterCount,
+  bordersParam,
+  colorParam,
+  DEBOUNCE_MS,
+  formatParams,
+  formatsWithDefault,
+  NO_COLORS,
+  searchTerms,
+  toggleColorFilter,
+  toggleIn,
+  typesParam,
+  type ColorFilter,
+  type ColorKey,
+  type FormatFilterOption,
+} from "@/features/search/useCardSearch";
+import {
+  ipc,
+  type CollectionFolder,
+  type CollectionQuery,
+  type CollectionRow,
+  type CollectionSortKey,
+  type DeckPile,
+  type MoveOutcome,
+} from "@/lib/ipc";
+import type { Border } from "@/lib/border";
+import { FINISHES, type Finish } from "@/lib/finish";
+import type { SortSpec } from "@/lib/sort";
+import { useMarketplace } from "@/lib/useMarketplace";
+import { refreshCardSearches } from "@/lib/searchMarks";
+import { autoCategoryFor } from "./autoCategory";
+import { oracleTagsFor } from "./useDeckCore";
+import { playKey, useDeckPlays } from "./useDeckPlays";
+
+/**
+ * Rows per request in this column.
+ *
+ * Smaller than the collection page's `COLLECTION_PAGE_SIZE` of 100, and the reason is the
+ * width rather than the corpus: this list is drawn in a column between {@link MIN_PANEL_WIDTH_PX}
+ * and half the window, one text row per copy, and a reader who has not found what they wanted in
+ * sixty rows is going to narrow the filter rather than scroll. The rest is one press on **Show
+ * more**, which is also the only paging control there is room for.
+ */
+export const DECK_COLLECTION_PAGE_SIZE = 60;
+
+/**
+ * Which copies the list is asking for — `CollectionQuery.allocation`'s two words, spelled the way
+ * `collection::Allocation`'s `rename_all = "camelCase"` deserialises them.
+ *
+ * **Nothing in this app has ever sent this field.** It has existed since schema v25 and every
+ * caller written before folders gets `All` by omission, so this tab is its first sender and these
+ * two strings are the whole of the wire contract. `packages/ui/lib/ipc.test.ts` pins them.
+ */
+export type Allocation = NonNullable<CollectionQuery["allocation"]>;
+
+/**
+ * What a reader who has pressed nothing gets — **the copies no deck is holding**, and that is the
+ * product decision this tab is (spec §7.2).
+ *
+ * "Unallocated" is the root, a folder the reader made, and `Recently removed`: all three are cards
+ * on the desk. A copy filed in a deck's group is spoken for, and hiding it by default is what
+ * makes this list answer "what can I build with today" rather than "what do I own".
+ */
+export const DEFAULT_ALLOCATION: Allocation = "unallocated";
+
+/**
+ * Whether the drawers the reader has **set aside** are left out — always, on this tab
+ * ([#365](https://github.com/Msgaihede/mtg-grimoire/issues/365)).
+ *
+ * **A named constant rather than a `true` inside the query object, because it is half of a
+ * coupling and the other half is in another function.** `copySource` has no arm for a locked
+ * copy: one would fall through to `desk` and move with nothing asked, which is the wrong answer
+ * by that module's own rule and is safe only because a locked row cannot get that far. This is
+ * what stops it. A literal buried in an object literal is a thing somebody deletes while tidying
+ * a payload; a named export with this paragraph on it is one they have to read first.
+ *
+ * It is `DEFAULT_ALLOCATION`'s neighbour in every sense except that there is **no press that
+ * turns it off** — the allocation toggle widens to the copies a *deck* is holding, which says
+ * nothing about a drawer the reader took off the table themselves.
+ *
+ * **This tab is the only sender there is, since 2026-09-09** — the collection page sent it too
+ * until [#436](https://github.com/Msgaihede/mtg-grimoire/issues/436) established that the lock
+ * is a statement about what the app offers a *deck* and never about what the reader *has*. That
+ * makes this constant the whole of the feature's query side rather than half of it, and the
+ * coupling above it correspondingly load-bearing: there is no second caller left whose behaviour
+ * would hint that this one had stopped asking.
+ */
+export const DEFAULT_EXCLUDE_LOCKED = true;
+
+/**
+ * Where one copy is filed, said in the terms the Add button needs.
+ *
+ * Three answers rather than a boolean, because the three lead to three different presses: a copy
+ * on the desk moves silently, a copy this deck already holds cannot move at all
+ * (`collection_alloc::ALREADY_HERE` refuses it in words), and a copy in **another** deck's group
+ * moves only through a confirmation that names that deck.
+ */
+export interface CopySource {
+  kind: "desk" | "here" | "otherDeck";
+  /** The other deck's name, for the sentence the confirm asks. `null` on the two answers that
+   *  name no deck. */
+  deckName: string | null;
+}
+
+const DESK: CopySource = { kind: "desk", deckName: null };
+const HERE: CopySource = { kind: "here", deckName: null };
+
+/**
+ * Which of the three a row is, from the folder census.
+ *
+ * **A function over `collection_folder_list` rather than a field on the row, because the row has
+ * no field to read.** `CollectionRow` carries `folderId` and `folderName` and deliberately not the
+ * folder's `kind` — the DTO says where a copy is filed, not what kind of place that is — so "is
+ * this copy in a deck" is a question only the census answers. That census is one cached query
+ * (`["collection", "folders"]`) already fetched once per window for the card menu, so asking it
+ * here costs nothing.
+ *
+ * **An unplaceable folder is treated as spoken for, and the asymmetry is deliberate.** The census
+ * is a query, so there is a render or two on the way up where it has not answered and every
+ * `folderId` is unknown; guessing "desk" there would let an add slip past the confirm on exactly
+ * the copies the confirm exists for. Guessing the other way costs a confirmation the reader
+ * dismisses. The row's own `folderName` is the best name available in that state and is what the
+ * question quotes — for a deck's group it *is* the deck's name, since `create_deck_group` names
+ * the folder after the deck.
+ *
+ * **A locked folder has no arm here, and the absence is load-bearing rather than an oversight**
+ * ([#365](https://github.com/Msgaihede/mtg-grimoire/issues/365)). A locked drawer is
+ * `kind: "user"`, so it falls through the line below and a copy in one would be called `desk` —
+ * *freely movable, no question asked*. **That is not a considered answer; it is the absence of
+ * one**, and the only reason it is safe is one line in {@link useCollectionSearch}: the tab sends
+ * `excludeLocked: true`, unconditionally and with no control to turn it off, so such a row never
+ * reaches this function. `a locked copy cannot reach copySource, which is why it has no arm for
+ * one` is what holds the two together.
+ *
+ * **So this is the function to change first if a locked row is ever put back on this tab** — a
+ * filter, an "include what I set aside" toggle, a second caller with its own query. Read the
+ * paragraph above before choosing: this module's rule is that an unclassifiable copy is treated
+ * as *spoken for* rather than as free, because guessing "desk" lets an add slip past exactly the
+ * copies a confirmation exists for, and a drawer the reader deliberately set aside is that copy.
+ * A fourth arm is a fourth **press** (#358's rule, argued under {@link deckPlaysCard} below), so
+ * it is not a one-line addition here: `pickCopy` ranks `CopySource` and
+ * `CollectionSearchTab` branches on it exactly once, and both would owe the new answer.
+ */
+export function copySource(
+  row: Pick<CollectionRow, "folderId" | "folderName">,
+  folders: readonly CollectionFolder[],
+  deckId: number | null,
+): CopySource {
+  if (row.folderId === null) return DESK;
+  const folder = folders.find((f) => f.id === row.folderId);
+  if (!folder) return { kind: "otherDeck", deckName: row.folderName };
+  if (folder.kind !== "deck") return DESK;
+  return folder.deckId === deckId ? HERE : { kind: "otherDeck", deckName: folder.name };
+}
+
+/**
+ * Whether the open deck's **live** list plays this card at all — the second half of what pressing
+ * Add on a tile does, and **a separate axis rather than a fourth {@link CopySource} arm**
+ * ([#358](https://github.com/Msgaihede/mtg-grimoire/issues/358)).
+ *
+ * ## Why not a fourth arm
+ *
+ * {@link CopySource} answers *where this copy is filed* — a fact about one `collection_entries`
+ * row — and every one of its three answers is a different **press**: move it silently, refuse it,
+ * or ask about the deck that loses a card. This asks *whether the deck's list has this card at
+ * all*, which is a fact about the **oracle card and the deck**, and is true or false identically
+ * of every copy the reader owns. Three things follow, and each of them breaks if the two are one
+ * enum:
+ *
+ * - **`pickCopy` ranks `CopySource`.** A `notPlayed` arm would have to be filtered out of the pool
+ *   the way `here` is — and a tile whose every candidate was filtered reads as `add === null`,
+ *   which this tab already says in words as *"already in this deck"*. That sentence would then be
+ *   printed over a card the deck has never held: the one refusal a reader cannot act on, because
+ *   it tells them the opposite of what is wrong.
+ * - **The two are simultaneously true and say different things.** A copy in Mono-Red Aggro that
+ *   this deck does not play is both `otherDeck` and `notPlayed`, and only one sentence fits on a
+ *   button. They are not two shades of one refusal: *"taking it from Mono-Red Aggro"* tells the
+ *   reader what the press **costs**, and *"add it from the Card search tab first"* tells them
+ *   **where to go instead**. An enum forces a rank between two facts that are about different
+ *   things; two axes let the fence answer first and the cost answer after.
+ * - **It is a fact per *card*, and `CopySource` is a fact per *row*.** Folding four copies of one
+ *   printing gives one `CopySource` by a rule ({@link pickCopy}); folding them gives one
+ *   `PlayState` by identity. Putting a per-card fact through a per-row rule is where a rule that
+ *   is true of a card and false of its own copy comes from.
+ *
+ * ## The four answers
+ *
+ * `plays` is the only pressable one. **`unread` and `unreadable` are the fail-closed pair**, and
+ * they are the reason this is four words rather than a boolean: an unanswered census is not
+ * *"plays nothing"*, and a tile that is pressable for one frame and then greys is the failure —
+ * `CollectionPage.tsx`'s `stepperByTile` argues this direction in full ("A filed tile is fenced
+ * until the census has answered … the permissive reading would draw a control over a deck's copies
+ * for exactly that window"). The two are kept apart because the *sentence* differs: a wall that is
+ * waiting says so, and a wall that cannot find out says that instead — one is about to fix itself
+ * and the other is not.
+ *
+ * **Nothing here is the fence.** `collection_alloc::NOT_IN_DECK` refuses the write in the same
+ * words at the backend, and this is that refusal said *early*: it saves a round trip and puts the
+ * route on the button, and it is deliberately not the only thing holding the rule.
+ */
+export type PlayState = "plays" | "notPlayed" | "unread" | "unreadable";
+
+/**
+ * As much of a tile as a play key is built from.
+ *
+ * **`id` is the printing** — `CopyTile.id` is `CollectionRow.cardId` under the wall's own name, and
+ * `CopyTile.key` (the printing *and* its finish) is a different string that must never reach
+ * {@link playKey}. Writing the shape down is what says which of a tile's three id-shaped fields
+ * this rule is allowed to read; a mix-up here is silent, because every one of them is a `string`.
+ */
+export interface PlayableTile {
+  id: string;
+  oracleId: string | null;
+}
+
+/**
+ * What {@link PlayState} a tile is in — pure over the census, so it is checkable as a truth table.
+ *
+ * **The match is on the oracle card and never on the printing**, through {@link playKey}, which
+ * mirrors Rust's `coalesce(oracle_id, card_id)`: a reader whose deck plays the 2XM Lightning Bolt
+ * and whose binder holds the Alpha one is holding a copy of a card their deck plays, and a
+ * printing-exact test would grey exactly the tile this tab exists to press. The `card_id` fallback
+ * is for an **orphan** — a copy whose printing has left `cards`, which therefore has no oracle id
+ * on either side of the comparison — and it is the same fallback the deck row gets, so the two
+ * still meet.
+ *
+ * **A census that has answered wins, and everything else is closed.** `isSuccess` is the only way
+ * through: a query in flight, a query that failed, and a query that failed *after* answering are
+ * three states with no trustworthy `plays` behind them, and the one thing they must not do is let
+ * a press through.
+ */
+export function playStateFor(
+  tile: PlayableTile,
+  plays: ReadonlySet<string>,
+  census: { isSuccess: boolean; isError: boolean },
+): PlayState {
+  if (census.isSuccess) {
+    return plays.has(playKey({ oracleId: tile.oracleId, cardId: tile.id })) ? "plays" : "notPlayed";
+  }
+  return census.isError ? "unreadable" : "unread";
+}
+
+/** What a move is addressed by — the row it comes out of, the pile it lands in, and how many. */
+export interface MoveRequest {
+  row: CollectionRow;
+  /**
+   * The pile the copy lands in — an id for a pile the deck names, a **name** for the one the
+   * filing rule answered — or `null` for *by the rule, read now*.
+   *
+   * `null` is what a button that could not name a pile sends: the card's tags were not in hand
+   * when it was drawn (`autoCategoryIfKnown`), so the write reads them itself and files by what
+   * it finds. That is `useDeck.addCard`'s own arm, one tab over, and for its reason — a tag read
+   * that is slow or refused costs the reader a word on a button and never the press.
+   */
+  pile: DeckPile | null;
+  quantity: number;
+}
+
+export interface CollectionSearchOptions {
+  /**
+   * The deck the copies are being moved **into**, or `null` while the editor has not answered.
+   *
+   * `null` disables the write rather than sending a bad id: `collection_to_deck` answers
+   * `deck::GONE` for a deck that is not there, and a refusal the reader can do nothing about is
+   * worse than a button that says why it cannot press.
+   */
+  deckId: number | null;
+  /**
+   * The format the list **opens** on — the deck's, handed down through the panel from
+   * `DeckEditor`, where `spec.hasLegalityData` is the fence.
+   *
+   * A default and never a constraint, exactly as it is on the card-search tab: `null` and absent
+   * both mean every format, which is the honest answer for a deck whose format has no legality
+   * data to filter by (`casual` is every deck's birth format and matches no rows at all).
+   */
+  defaultFormat?: FormatFilterOption | null;
+}
+
+/**
+ * The reader's own binder, filtered, with the one write that puts a copy of it into a deck.
+ *
+ * **Called from `CollectionSearchTab` and from nowhere else**, which is the same rule
+ * `useCardSearch` follows one component over and for the same reason: each tab's data hook lives
+ * in the component that mounts with that tab, so a reader browsing the wider search runs no
+ * `collection_list` and a reader who never leaves their binder runs no `search_cards`. Hoisting
+ * either into `DeckSearchPanel` runs both for everybody.
+ *
+ * **The write is here rather than in the component** because the invalidation is the part of it
+ * that can be wrong in a way nothing on screen names — see {@link useCollectionSearch}'s `move`.
+ */
+export function useCollectionSearch({ deckId, defaultFormat }: CollectionSearchOptions) {
+  const queryClient = useQueryClient();
+  // Part of the payload and part of the key: the marketplace decides what a row's `unitPrice`
+  // is, not merely how it is written.
+  const { marketplace } = useMarketplace();
+  const { folders } = useCollectionFolderList();
+  /**
+   * Every card the open deck's **live** list plays — the census {@link playStateFor} answers from,
+   * and the whole of this tab's assign-only fence (issue #358).
+   *
+   * **Read here rather than threaded down from the editor, and that is a correctness decision
+   * rather than a convenience.** `collection_to_deck` hardcodes `LIVE`, while the editor may be
+   * drawing **Theory** — so `DeckEditor`'s own `deck.cards` is the wrong list half the time, and a
+   * prop taken from it would grey the cards a reader can file and offer the ones they cannot. The
+   * hook's key sits under `["decks"]`, which every deck write in the app already invalidates
+   * (including {@link move} below), so adding the card on the **Card search** tab beside this one
+   * un-greys its tile here with no reload — which is the whole of what makes the refusal's own
+   * sentence actionable.
+   */
+  const deckPlays = useDeckPlays(deckId);
+  const { plays } = deckPlays;
+  // The two booleans rather than the query object: TanStack hands back a fresh result object every
+  // render, so a `useCallback` closing over it would have a new identity on each one.
+  const censusAnswered = deckPlays.query.isSuccess;
+  const censusFailed = deckPlays.query.isError;
+
+  const defaultFormatValue = defaultFormat?.value ?? "";
+  const [text, setText] = useState("");
+  const [format, setFormat] = useState(defaultFormatValue);
+  /**
+   * The default this filter is sitting on, so a **changed** deck format can be told from a reader
+   * who happens to have picked the same key.
+   *
+   * `useCardSearch`'s adjust-state-during-render pattern, kept verbatim and for its measured
+   * reason: an effect runs after the paint, so the column would draw one frame of the previous
+   * deck's filter and fire a whole request for it. It is also what applies a default that
+   * **arrives late** — `useFormatSpecs` is a query, so on the first deck of a session this mounts
+   * before the seed has answered.
+   */
+  const [appliedDefaultFormat, setAppliedDefaultFormat] = useState(defaultFormatValue);
+  if (defaultFormatValue !== appliedDefaultFormat) {
+    setAppliedDefaultFormat(defaultFormatValue);
+    setFormat(defaultFormatValue);
+  }
+  const defaultFormatLabel = defaultFormat?.label;
+  const formatOptions = useMemo<readonly FormatFilterOption[]>(
+    () => formatsWithDefault(defaultFormatValue, defaultFormatLabel),
+    [defaultFormatValue, defaultFormatLabel],
+  );
+  const [allocation, setAllocation] = useState<Allocation>(DEFAULT_ALLOCATION);
+  /**
+   * The three filters this column grew on 2026-08-24, when the tab became a wall of art rather
+   * than a list of text rows.
+   *
+   * **`CollectionQuery extends CardFilters`, so all three were already on the wire** — the tab
+   * simply never sent them. `push_card_filters` emits `colors`, `mana_values` and `mana_x` for
+   * every one of the three lists, which is what makes this state-only work rather than a
+   * schema change.
+   */
+  // **One state for the row and its `Exact` flag, not two** — see {@link ColorFilter}, which
+  // is shared with the other three hooks that own a colour filter and carries the reason. The
+  // flag stays out of the `activeFilterCount` call below: it is a modifier on the row rather
+  // than a filter of its own.
+  const [colorFilter, setColorFilter] = useState<ColorFilter>(NO_COLORS);
+  const colors = colorFilter.picked;
+  const colorsStrict = colorFilter.strict;
+  // The eight card-type chips, ORed with each other and ANDed with everything else — the rarity
+  // chips' shape exactly, and on the wire for free: `CollectionQuery extends CardFilters`, so
+  // `push_card_filters` already emits them for this list.
+  const [types, setTypes] = useState<readonly string[]>([]);
+  /**
+   * The Border and Finish cells, grown on 2026-09-27 (issue #573) — **and they ask two different
+   * kinds of question**. A border is a fact about the copy's *printing*, so it asks exactly what
+   * the All cards tab's chips ask. A finish here is the finish **this copy** is in —
+   * `CollectionQuery.finishes`, the collection page's own field and its own meaning — where the
+   * All cards tab beside it asks which finishes a printing is *published* in. The tray draws one
+   * Finish cell for both, and on this tab "foil" means a foil copy you can put in the deck.
+   */
+  const [borders, setBorders] = useState<readonly Border[]>([]);
+  const [finishes, setFinishes] = useState<readonly Finish[]>([]);
+  const [manaValues, setManaValues] = useState<readonly number[]>([]);
+  const [manaX, setManaX] = useState(false);
+  /**
+   * The three filters this column grew on 2026-08-25, when the tab stopped drawing a row of its
+   * own and started drawing `FilterBar` — the same control the card search beside it has.
+   *
+   * **Sets and rarities were already on the wire**, exactly as the three above were:
+   * `CollectionQuery extends CardFilters` and `push_card_filters` emits both for all three lists,
+   * so those two are state-only work. **The price band is not** — `CollectionQuery.priceMin` and
+   * `priceMax` are new, and they are the entry's own per-finish price rather than the printing's
+   * fallback chain, which is what makes a banded row a row the Price column agrees with. See
+   * `collection::scope`.
+   */
+  const [sets, setSets] = useState<readonly string[]>([]);
+  const [rarities, setRarities] = useState<readonly string[]>([]);
+  const [priceMin, setPriceMin] = useState<number | undefined>(undefined);
+  const [priceMax, setPriceMax] = useState<number | undefined>(undefined);
+  /**
+   * The order the wall is drawn in — **`[]` is the backend's own name order** rather than a fourth
+   * option, which is why `sortSelection` reports `"name"` for it.
+   *
+   * There are no sortable headers in this column to build a `Custom…` state out of, so unlike
+   * `useCollection` this never holds a spec its own select cannot show.
+   */
+  const [sort, setSort] = useState<SortSpec<CollectionSortKey>>([]);
+  const [debouncedText, setDebouncedText] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedText(text), DEBOUNCE_MS);
+    return () => clearTimeout(timer);
+  }, [text]);
+
+  // Normalised to the app's own orders before they reach the wire or the key, exactly as
+  // `useCollection` does it: a key built from the press order would miss the cache every time the
+  // reader picked the same two colours in the other order.
+  const colorsParam = colorParam(colors);
+  /**
+   * **The flag only rides with the letters** — `useCardSearch`'s `strictParam`, same rule and same
+   * reason. Strict over an empty colour row filters nothing (the backend's arm is inside its own
+   * `nonblank` guard), and the `Exact` toggle in the tray is always drawn, so a reader can press
+   * it with no colour picked. Without this gate that press would mint a second query key for a
+   * list that cannot differ.
+   */
+  const strictParam = colorsStrict && colorsParam !== undefined;
+  const manaParam = manaValues.length > 0 ? [...manaValues].sort((a, b) => a - b) : undefined;
+  // Sorted for the key's sake, like the mana values above: a picker's press order is not a fact
+  // about the filter, and an unsorted array would be a second cache entry for one answer.
+  const setsParam = sets.length > 0 ? [...sets].sort() : undefined;
+  const raritiesParam = rarities.length > 0 ? [...rarities].sort() : undefined;
+  // Through the shared `typesParam` rather than a fourth inline sort: three other hooks
+  // canonicalise this same list, and four copies of one normal form is four places for it to
+  // drift.
+  const typesParamValue = typesParam(types);
+  const bordersParamValue = bordersParam(borders);
+  // Ordered by the app's own vocabulary, as `useCollection` orders it, so the request reads the
+  // way the chips do and one set of finishes is one key.
+  const finishParam =
+    finishes.length > 0 ? FINISHES.filter((f) => finishes.includes(f)) : undefined;
+
+  /**
+   * The box, read as Scryfall's query syntax — the free text and the typed predicates.
+   *
+   * **This column has no tag wiring**, so a tag term folds back into the free text rather than
+   * being dropped: see {@link searchTerms}. The *All cards* tab beside it does resolve tags,
+   * through `useCardSearch`, which is why the two tabs of one panel answer `atag:dragon`
+   * differently — one filters by the motif, this one searches for the word.
+   *
+   * Nothing new is owed to the query key below: `debouncedText` is already a segment of it and
+   * these two fields are a pure function of that string.
+   */
+  const terms = useMemo(() => searchTerms(debouncedText), [debouncedText]);
+
+  const filters: Omit<CollectionQuery, "limit" | "offset"> = {
+    // Blank strings and empty term lists are dropped rather than sent: the backend reads them as
+    // unset anyway, and sending them would make the payload lie about intent.
+    ...terms,
+    // **The card search tab's ladder, through its one mapping** (token stacks spec §3.6):
+    // `Any card` sends neither field, `Any format` sends `playableOnly` — *legal somewhere*, so a
+    // token or an orphan copy (its printing gone from the corpus) is hidden under it and shown
+    // under `Any card` — and a named format sends both. Rust needs nothing for it:
+    // `collection::scope` keeps `q.cards.playable_only` and forces only `paper_only` off.
+    ...formatParams(format),
+    colors: colorsParam,
+    // Absent rather than `false` when the chip is off, the rule every optional filter on this
+    // payload follows: `false` on the wire reads as "the reader chose loose" where they chose
+    // nothing at all.
+    colorsStrict: strictParam || undefined,
+    sets: setsParam,
+    types: typesParamValue,
+    borders: bordersParamValue,
+    // **The copy's finish, as the collection page sends it** — `CollectionQuery.finishes`, and
+    // never `printedFinishes`, which asks what a printing is published in and would offer a
+    // nonfoil copy under `Foil`.
+    finishes: finishParam,
+    rarities: raritiesParam,
+    manaValues: manaParam,
+    manaX: manaX || undefined,
+    // Each end on its own, and **`undefined` rather than a substituted `0`/`Infinity`**: half a
+    // band is one predicate, and a floor of zero would silently drop every copy the marketplace
+    // cannot price — which is a filter the reader did not ask for. `collection::scope` pushes
+    // exactly the ends that arrive.
+    priceMin,
+    priceMax,
+    // **Sent on every request, `"all"` included.** It is a two-state control the reader can see,
+    // so the payload says which state it is in rather than leaning on the backend's default for
+    // one of them — `useCollection`'s "a value the backend would infer anyway is not put on the
+    // wire" is the rule for a filter that is *off*, and neither of these two is off.
+    allocation,
+    // **Sent on every request and never a control**, which is where this parts company with the
+    // field above it: `allocation` is a chip the reader can press, and this is a fact about what
+    // the tab is for. `DEFAULT_ALLOCATION` already hides the copies a deck is holding because
+    // this list answers *what can I build with today* rather than *what do I own* — and a drawer
+    // the reader has set aside for a trade or a display case is not something this deck can be
+    // built out of either, so it belongs on the same side of the same question. **`false` by
+    // omission is what makes that safe to ask for**: the mirror and the export sweep page through
+    // this same query for a whole-collection backup and must go on seeing every row, so the
+    // narrowing is the caller's to request rather than the backend's to assume.
+    //
+    // Spec §4.2 gives `deck_theory::OWNED_SPARE_SQL` the same arm for the same reason — the
+    // shopping list's *spare* count already drops a copy filed in a deck's group, and a locked
+    // one is no more a copy a plan can count on. **Keep the two in step**: this panel offering a
+    // copy the diff beside it has already written off is one question answered two ways.
+    excludeLocked: DEFAULT_EXCLUDE_LOCKED,
+    marketplace: marketplace.id,
+    // `undefined` rather than `[]`: an empty array is a sort the backend would have to test for,
+    // and the absent field is what already means "your name order".
+    sort: sort.length > 0 ? sort : undefined,
+  };
+
+  /**
+   * The list's key — **`allocation` is in it, and that is the segment most easily forgotten**.
+   * The two states are two different sets of rows over the same filters, so a key built without
+   * it would serve the narrowed page under a widened control, instantly, against local SQLite,
+   * with nothing on screen to notice.
+   *
+   * Under `["collection", …]` like every other read of this table, so the one
+   * `invalidateQueries({ queryKey: ["collection"] })` every collection write in the app already
+   * fires reaches this column too.
+   *
+   * **`excludeLocked` is deliberately not a segment**, and that is not the same omission: it is
+   * a constant this tab sends on every request, so it narrows the one answer rather than telling
+   * two of them apart. A key term for it would be the same string in every entry. What *can*
+   * change under it is a folder being locked, and that is a write — `["collection"]` above.
+   */
+  const listKey = [
+    "collection",
+    "list",
+    "deckSearch",
+    debouncedText,
+    format,
+    // Every segment is a **string**, and the normalised one where there is a normal form: a key
+    // holding an array compares by structure, so `["W","U"]` and `["U","W"]` would be two entries
+    // for one answer. `colorParam` and the sort above have already put both in order.
+    colorsParam ?? "",
+    // Its own segment beside the letters, and load-bearing in `allocation`'s way: `WU` loose and
+    // `WU` strict are two different sets of rows over the same local SQLite, so a key built from
+    // the letters alone would serve the strict press out of the loose list's cached pages —
+    // instantly, with nothing in this column to notice.
+    strictParam ? "strict" : "",
+    setsParam?.join(",") ?? "",
+    typesParamValue?.join(",") ?? "",
+    bordersParamValue?.join(",") ?? "",
+    finishParam?.join(",") ?? "",
+    raritiesParam?.join(",") ?? "",
+    manaParam?.join(",") ?? "",
+    manaX ? "x" : "",
+    // `String(undefined)` is `"undefined"`, which is a segment as good as any other and cannot
+    // collide with a number — where an empty string could be read as a bound of zero by anyone
+    // debugging the key.
+    String(priceMin),
+    String(priceMax),
+    sort.map((t) => `${t.key}:${t.dir}`).join(","),
+    allocation,
+    marketplace.id,
+  ];
+
+  const query = useInfiniteQuery({
+    queryKey: listKey,
+    queryFn: ({ pageParam }) =>
+      ipc.collectionList({ ...filters, limit: DECK_COLLECTION_PAGE_SIZE, offset: pageParam }),
+    initialPageParam: 0,
+    getNextPageParam: (_last, pages) => nextOffset(pages),
+    placeholderData: keepPreviousData,
+  });
+
+  const rows = useMemo(() => query.data?.pages.flatMap((p) => p.items) ?? [], [query.data]);
+
+  const sourceOf = useCallback(
+    (row: CollectionRow) => copySource(row, folders, deckId),
+    [folders, deckId],
+  );
+
+  /**
+   * Whether this deck's live list plays this tile's card — {@link sourceOf}'s peer on the other
+   * axis, and held still for the same reason.
+   *
+   * **Deliberately not folded into `sourceOf`, and therefore not into `foldCopies`.** The fold's
+   * job is to pick *which copy* a press moves ({@link pickCopy}), and this answer is identical for
+   * every copy behind a tile — see {@link PlayState} for the three ways merging the two goes
+   * wrong. The wall's tiles are memoised off `sourceOf`, so keeping this out of it also means the
+   * census landing re-renders the buttons rather than refolding every row.
+   */
+  const playStateOf = useCallback(
+    (tile: PlayableTile) =>
+      playStateFor(tile, plays, { isSuccess: censusAnswered, isError: censusFailed }),
+    [plays, censusAnswered, censusFailed],
+  );
+
+  /**
+   * Put copies of one collection row into this deck.
+   *
+   * **Deliberately not optimistic, and that is a decision rather than an omission.** A move is one
+   * deliberate press on a row the reader has just read, so there is no held key to make responsive
+   * and nothing to gain from drawing an answer before there is one — and there is a great deal to
+   * lose, because the write can *split* a row (`take_copies` leaves what it did not take behind)
+   * and `MoveOutcome.quantity` is the number that actually moved rather than the one that was
+   * asked for. A patch written from the argument would disagree with SQLite in exactly the cases
+   * that matter.
+   *
+   * **Both roots, on success and on refusal.** `lib/query.ts` caches 30 s and this list's observer
+   * is mounted, so a query merely *marked* stale is never refetched — that is the ghost row PR 2
+   * shipped: a write removed a row in SQLite and left it on screen with the header disagreeing
+   * beside it. `invalidateQueries` matches by key **prefix**, so `["collection"]` reaches this
+   * list, the collection page's list and summary, the folder census and the per-folder subtotals
+   * together, and `["decks"]` reaches every deck's detail — which has to be every deck rather than
+   * this one, because a copy taken out of another deck's group is one card off **that** deck's
+   * live list.
+   *
+   * A refusal takes the same trio for `useCollectionFolders`' reason: the usual refusal is a row
+   * something else has already moved or deleted, so the list on screen is the thing that is wrong.
+   *
+   * **`["cards", "search"]` is the third, and it joined on 2026-09-03 with issue #349.** A move
+   * used to change no figure on the card search beside this tab: that wall counted every copy the
+   * reader owned, wherever it was filed, so a copy crossing a folder boundary was invisible to
+   * it. It is not any more — the tab one press away counts *what this deck can use*
+   * (`SearchRequest.availableForDeck`), and the move whose whole point is a confirmation naming
+   * another deck is exactly the one that changes the answer: a copy that was spoken for is now
+   * this deck's. Without this the reader presses Add, switches tab and reads the badge from
+   * before the press, for the 30 s `lib/query.ts` caches.
+   */
+  const move = useMutation<MoveOutcome, unknown, MoveRequest>({
+    mutationFn: async ({ row, pile, quantity }) => {
+      if (deckId === null) throw new Error(NO_DECK);
+      // **Both arms of {@link DeckPile}.** A deck that names the pile its adds land in sends its
+      // id. Under `Auto` the pile is the filing rule's answer and goes by **name**, so the
+      // backend finds or makes it inside the move's own transaction — `deck_add_card`'s way, and
+      // what makes a pile the app invented `origin: "auto"`. This tab sent an id in both cases
+      // until 2026-10-04, and had none to send for a pile the deck had not got yet: it fell back
+      // to the deck's first `main`-kind category, which in a deck filed by function is whichever
+      // pile happens to come first (`Add Sol Ring … to Lifegain`).
+      //
+      // The `await` is the `null` arm alone — see {@link MoveRequest.pile}. `oracleTagsFor`
+      // catches and answers `[]`, so a refused read files by type line rather than refusing.
+      const into = pile ?? {
+        name: autoCategoryFor({
+          typeLine: row.typeLine,
+          oracleTags: await oracleTagsFor(row.cardId),
+        }),
+      };
+      return ipc.collectionToDeck(row.id, deckId, into, quantity);
+    },
+    onSettled: () => {
+      void queryClient.invalidateQueries({ queryKey: ["collection"] });
+      void queryClient.invalidateQueries({ queryKey: ["decks"] });
+      void refreshCardSearches(queryClient);
+    },
+  });
+
+  return {
+    text,
+    setText,
+    format,
+    setFormat,
+    /** The rows the format picker offers — {@link formatsWithDefault}, memoised on the two
+     *  strings for the reason `useCardSearch` states: every caller builds `defaultFormat` inline,
+     *  so a dependency on the object would rebuild the list on every keystroke. */
+    formats: formatOptions,
+    /**
+     * **This tab draws the card search tab's format ladder** (token stacks spec §3.6): `Any card`,
+     * `Any format`, then the formats, spelled through {@link formatParams} above. It used to leave
+     * the row out, when this tab sent no `playableOnly` and `Any format` already meant every copy
+     * — and with the deck's format seeded and no widening row, a reader's own tokens, legal
+     * nowhere, had no way back onto a panel that opens on this tab. `Any format` now means *legal
+     * somewhere*, the card search's meaning, so an orphan copy is hidden under it and shown under
+     * `Any card`.
+     *
+     * **The collection _page_ (`useCollection`) is untouched and still offers no `Any card`**: it
+     * sends no `playableOnly`, so it never narrows the corpus to begin with and the row would have
+     * nothing to put back.
+     */
+    anyCard: true,
+    colors,
+    /** `toggleColor` rather than a plain `toggleIn`, so **C excludes the five and the five exclude
+     *  C** — colourless is not a sixth colour and the search's own rule is the one to keep. */
+    // A functional updater, so a batch of presses composes, and clearing the last colour clears
+    // `Exact` — one rule in {@link toggleColorFilter}, shared by all four hooks, and the
+    // clearing rule it used to carry is written down there too.
+    toggleColor: (key: ColorKey) => setColorFilter((s) => toggleColorFilter(s, key)),
+    /** Read the colour row as "exactly these colours" rather than "at least these" — the
+     *  tray's `Exact` toggle. A modifier on the row rather than a filter beside it, which is why the
+     *  `activeCount` below never sees it and why `resetAll` clears it anyway. */
+    colorsStrict,
+    toggleColorsStrict: () => setColorFilter((s) => ({ ...s, strict: !s.strict })),
+    sets,
+    toggleSet: (code: string) => setSets((picked) => toggleIn(picked, code)),
+    /** The card-type chips, ORed with each other and ANDed with everything else. A copy matches
+     *  a chip if that word is on its printing's type line as a whole word, so an artifact land
+     *  answers `Land` and `Artifact` both. */
+    types,
+    toggleType: (type: string) => setTypes((picked) => toggleIn(picked, type)),
+    /** The border chips, ORed with each other and ANDed with everything else — over the copy's
+     *  printing, so a borderless full-art copy answers two chips. */
+    borders,
+    toggleBorder: (border: Border) => setBorders((picked) => toggleIn(picked, border)),
+    /** The finish **this copy** is in — `useCollection`'s cell, not the All cards tab's. A
+     *  printing held in two finishes is two rows, and each answers only its own chip. */
+    finishes,
+    toggleFinish: (finish: Finish) => setFinishes((picked) => toggleIn(picked, finish)),
+    rarities,
+    toggleRarity: (rarity: string) => setRarities((picked) => toggleIn(picked, rarity)),
+    priceMin,
+    priceMax,
+    /** Both ends at once, because {@link PriceRange} moves them together — a slider drag can
+     *  change either, and two setters would be two renders and two query keys for one gesture. */
+    setPriceRange: (min: number | undefined, max: number | undefined) => {
+      setPriceMin(min);
+      setPriceMax(max);
+    },
+    manaValues,
+    toggleManaValue: (value: number) => setManaValues((picked) => toggleIn(picked, value)),
+    manaX,
+    toggleManaX: () => setManaX((on) => !on),
+    /**
+     * **No facets, and that is a fact about this list rather than a gap.** `facets.ts` reads
+     * `undefined` as "we do not know", which leaves every chip live and nothing greyed — the
+     * honest state here, because `collection_list` has no facet command behind it the way
+     * `search_cards` does. Counting would be a second query per keystroke over the reader's whole
+     * binder, for a row of numbers beside a list already on screen.
+     */
+    facets: undefined,
+    /** Which marketplace the price band and every figure on a tile are quoted from. `FilterBar`
+     *  captions the band with its currency, so this is what keeps `Price (USD)` from standing
+     *  over a filter in euros. */
+    marketplace,
+    sort,
+    setSortKey: (key: CollectionSortKey) => setSort([{ key, dir: COLLECTION_FIRST_DIR[key] }]),
+    /**
+     * Turn the first term over — the same control the card search's arrow drives, and the first
+     * term because that is the one the select owns.
+     *
+     * **An empty spec is written out rather than left alone, which is where this parts company
+     * with the search's twin.** There the empty spec is `Best match`, which has no direction, so
+     * that arrow is `disabled` and a no-op is unreachable. Here the empty spec *is* name order —
+     * `sortSelection` below reports `name` for it and never `""` — so the button is drawn live
+     * and pointing up, and a no-op would be a control that visibly does nothing. Flipping it
+     * materialises the order the list was already in, with its direction reversed.
+     */
+    flipSortDir: () =>
+      setSort((spec) =>
+        spec.length === 0
+          ? [{ key: "name", dir: COLLECTION_FIRST_DIR.name === "asc" ? "desc" : "asc" }]
+          : spec.map((term, at) =>
+              at === 0 ? { key: term.key, dir: term.dir === "asc" ? "desc" : "asc" } : term,
+            ),
+      ),
+    /** Which row the sort select shows. `[]` is the backend's name order, which is what the
+     *  `name` option asks for — so the control never sits on a value it has no option for. */
+    sortSelection: (sort.length === 0 ? "name" : sort[0].key) as CollectionSortKey,
+    /**
+     * Which way the list runs — **never `undefined`, which is where this parts company with the
+     * card search's twin.**
+     *
+     * An empty spec is this list's name order rather than a ranking, so it has a direction and
+     * that direction is `COLLECTION_FIRST_DIR.name`. The search's empty spec is `Best match`,
+     * which has none, and its arrow greys there; greying this one would grey a button that
+     * works, on a list whose order is on screen in front of the reader.
+     */
+    sortDir: sort.length === 0 ? COLLECTION_FIRST_DIR.name : sort[0].dir,
+    /**
+     * How many filters are narrowing the wall — the number in `Reset all`.
+     *
+     * **`allocation` is deliberately not counted, and it is the one judgement call here.** The
+     * chip is pressed by default, so counting it would open every deck showing `Reset all 1` for
+     * a state the reader has not touched — and `resetAll` leaves it pressed for the same reason:
+     * "the copies no deck is holding" is what this tab *is*, not a filter laid over it.
+     *
+     * **The search's `activeFilterCount` and no longer the collection page's** (2026-08-25). This
+     * tab draws `FilterBar`'s tray now, so its kinds *are* the search's kinds — set, format,
+     * colour, mana value, rarity, type, border, finish, price — and counting them against the
+     * definition the tray's own cells come from is what keeps the badge and the cells from
+     * drifting apart. The collection page's count is over a longer row (conditions, needs-review)
+     * this column has never offered a control for, and passing empty arrays to it was a shape that
+     * only worked as long as nothing here grew.
+     *
+     * **`finishes` is the one kind whose meaning differs from the search's**: here it is the copy's
+     * finish, there the printing's published ones. `FilterState.finishes` is one field for both
+     * because the count asks only whether the cell is on, which is the same question either way.
+     *
+     * `owned` is `undefined` for the reason the tray has no Owned cell: every row here is a copy
+     * the reader has, so it is not a question this list can ask.
+     *
+     * **The format term is `useCardSearch`'s three arms, unchanged** (token stacks spec §3.6):
+     * `format.length > 0`, so `Any card` counts — it is the row that *widens*, and Reset all
+     * would change the wall — while `Any format` (`""`) counts nothing, because it is where Reset
+     * all goes. The deck's own seeded format counts too, which is why a Commander deck's tab
+     * opens reading `Reset all 1`. There is no `unfiltered` on this hook to keep in step.
+     *
+     * **`colorsStrict` is not passed either, and that is a third reason again**: it is not a
+     * field of `FilterState` at all. The `Exact` toggle modifies what a picked colour means
+     * rather than being a filter beside it, so a badge that counted it would move for a press
+     * that narrowed nothing new.
+     */
+    activeCount: activeFilterCount({
+      text,
+      format,
+      colors,
+      sets,
+      manaValues,
+      manaX,
+      owned: undefined,
+      rarities,
+      types,
+      borders,
+      finishes,
+      priceMin,
+      priceMax,
+    }),
+    resetAll: () => {
+      setText("");
+      // `Any format`, never the deck's own format and never `Any card` — `useCardSearch`'s reset,
+      // so both tabs of one panel clear to the same row. Only the deck's format *changing*
+      // re-seeds it (`appliedDefaultFormat` above), which is what makes the press stick.
+      setFormat("");
+      setColorFilter(NO_COLORS);
+      // Cleared although it is not counted, and the asymmetry is the point: Reset all means "no
+      // filters", and a strict flag left standing over an empty colour row is exactly the
+      // leftover that would turn the reader's next colour press into an exact match they never
+      // asked for. `NO_COLORS` clears the row and the flag together.
+      setSets([]);
+      setTypes([]);
+      setBorders([]);
+      setFinishes([]);
+      setRarities([]);
+      setPriceMin(undefined);
+      setPriceMax(undefined);
+      setManaValues([]);
+      setManaX(false);
+      setSort([]);
+    },
+    /** Which copies the list is asking for. {@link DEFAULT_ALLOCATION} until the reader presses. */
+    allocation,
+    setAllocation,
+    /** Every folder there is, so a row can be placed. See {@link copySource}. */
+    folders,
+    /** Where this row's copies are filed, in the three terms the Add button branches on.
+     *
+     *  **Held still**, because the wall's fold is a `useMemo` over it: a fresh arrow every render
+     *  would refold every tile on every keystroke. */
+    sourceOf,
+    /** Whether the deck plays this tile's card at all, in the four terms the Add button branches
+     *  on — this tab is **assign-only** and {@link PlayState} is where that is argued. Held still
+     *  for {@link sourceOf}'s reason. */
+    playStateOf,
+    query,
+    rows,
+    /** Rows matching the filters, counted in full. `0` until the first page answers.
+     *
+     *  **A count of *rows*, which since the wall folds them is not the number of tiles drawn** —
+     *  one printing held in two finishes is two rows and one tile. The caption counts what is on
+     *  screen for that reason; this stays because it is the backend's own answer and the thing a
+     *  paging decision is made against. */
+    total: query.data?.pages[0]?.total ?? 0,
+    /** The list's key as one string, for `CardGrid`'s `listKey` — a new search scrolls the wall
+     *  back to the top rather than leaving the reader wherever the last one was. */
+    queryKeyString: JSON.stringify(listKey),
+    move,
+  };
+}
+
+/** What a press with no deck behind it is refused with. Unreachable from the editor, which
+ *  always has a deck — it is the fence for a story or a test mounting the tab bare. **Not
+ *  exported**: nothing outside this file has ever read it, and an export nothing imports is a
+ *  sentence the next reader goes looking for a second copy of. */
+const NO_DECK = "No deck to add to";
+
+export type CollectionSearch = ReturnType<typeof useCollectionSearch>;

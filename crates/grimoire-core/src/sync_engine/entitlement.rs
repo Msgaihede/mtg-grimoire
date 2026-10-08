@@ -89,7 +89,7 @@ use std::time::Duration;
 /// The relay's address. **Real, and committed to a public repository on purpose.**
 ///
 /// A `workers.dev` route is `<worker>.<subdomain>.workers.dev`: `mtg-grimoire-relay` is the worker
-/// name in `relay/wrangler.jsonc`, `denmark-east` is the account's subdomain. Markus approved
+/// name in `infrastructure/relay/wrangler.jsonc`, `denmark-east` is the account's subdomain. Markus approved
 /// committing it, and that approval rests on the design rather than softening it — **an API base
 /// is public the way every application's is.** It is on the wire of every request that uses it and
 /// it ships inside the binary whatever this tree says, so withholding it would have hidden it from
@@ -123,7 +123,7 @@ pub const RELAY_BASE: &str = "https://mtg-grimoire-relay.denmark-east.workers.de
 /// hide it from nobody. **`client_secret` never belongs here** — it lives only as a Worker
 /// secret, which is what makes the code exchange server-side rather than a choice.
 ///
-/// **It must equal `PATREON_CLIENT_ID` in `relay/wrangler.jsonc`'s `vars`.** This side builds the
+/// **It must equal `PATREON_CLIENT_ID` in `infrastructure/relay/wrangler.jsonc`'s `vars`.** This side builds the
 /// authorize URL and the relay side builds the exchange; Patreon compares them, and a mismatch
 /// fails at the exchange rather than at the consent screen, where the error names no client.
 ///
@@ -188,8 +188,8 @@ pub const REFRESH_MARGIN_SECS: i64 = 6 * 60 * 60;
 /// about `1.8e12`, well above. So one comparison separates the two units cleanly.
 ///
 /// **This guard exists because the other half of this feature counts in milliseconds.**
-/// `relay/src/token.ts` types its `exp` as wall-clock ms (`TOKEN_TTL_MS`) and
-/// `relay/src/entitlement.ts` works in `nowMs`/`GRACE_MS`. **The wire between them and this
+/// `infrastructure/relay/src/token.ts` types its `exp` as wall-clock ms (`TOKEN_TTL_MS`) and
+/// `infrastructure/relay/src/entitlement.ts` works in `nowMs`/`GRACE_MS`. **The wire between them and this
 /// module is seconds**, and a millisecond value crossing it does not fail loudly: it makes
 /// `expires - now` about `1.8e12`, forever larger than [`REFRESH_MARGIN_SECS`], so
 /// [`access_token`] hands back the same stored token for ever, never refreshes, and twenty-four
@@ -580,7 +580,7 @@ fn http() -> http::Client {
 ///
 /// **A page asks through it like any host**, under the rules `client::build_http` states for
 /// both modules: `content-type` is the one header set here, no response header is read, and
-/// the relay answers a browser's pre-flight for the origins it names (`relay/src/cors.ts`).
+/// the relay answers a browser's pre-flight for the origins it names (`infrastructure/relay/src/cors.ts`).
 fn build_http() -> http::Client {
     http::Client::new(&http::Config {
         user_agent: crate::scryfall::USER_AGENT,
@@ -623,7 +623,7 @@ fn this_device(conn: &Connection) -> Result<String, String> {
 
 /// The relay's marker for the one 403 that is the device cap.
 ///
-/// **It must equal `DEVICE_LIMIT` in `relay/src/claim.ts`.** Nothing checks that across the two
+/// **It must equal `DEVICE_LIMIT` in `infrastructure/relay/src/claim.ts`.** Nothing checks that across the two
 /// languages — `ipc.ts` has the same problem one boundary over, and both were nearly shipped
 /// broken today — so the pair is named on both sides and asserted in this module's tests.
 pub const DEVICE_LIMIT: &str = "device_limit";
@@ -637,7 +637,7 @@ pub const DEVICE_LIMIT: &str = "device_limit";
 /// not hold as current is behind a rotation or from a removed device, and the relay cannot tell
 /// which — that 401 stays bare, and stays [`STALE_GROUP_AUTH`].
 ///
-/// **It must equal the code `relay/src/claim.ts` stamps on that 401**, and unlike
+/// **It must equal the code `infrastructure/relay/src/claim.ts` stamps on that 401**, and unlike
 /// [`DEVICE_LIMIT`] something checks it: this module's tests read `claim.ts` for the literal.
 pub const MEMBERSHIP_ENDED: &str = "membership_ended";
 
@@ -1980,7 +1980,7 @@ mod tests {
         let server = MockServer::start_async().await;
         let mock = server.mock(|when, then| {
             when.method(POST).path("/claim");
-            // Verbatim from `relay/src/claim.ts`'s pre-existing refusal - no `code` on it.
+            // Verbatim from `infrastructure/relay/src/claim.ts`'s pre-existing refusal - no `code` on it.
             then.status(403)
                 .body(r#"{"error":"that membership is not active"}"#);
         });
@@ -2397,15 +2397,15 @@ mod tests {
 
     /// The two spellings of the marker are one contract across two languages - and this one,
     /// unlike [`DEVICE_LIMIT`]'s, is checked from here: the relay's source is read for the literal.
-    /// A red here means `relay/src/claim.ts` stopped stamping exactly this code on the group
+    /// A red here means `infrastructure/relay/src/claim.ts` stopped stamping exactly this code on the group
     /// door's lapse (or moved that 401 to another file, which is this test to follow it).
     #[test]
     fn the_membership_ended_marker_is_the_one_the_relay_stamps() {
         assert_eq!(MEMBERSHIP_ENDED, "membership_ended");
-        let relay = include_str!("../../../../relay/src/claim.ts");
+        let relay = include_str!("../../../../infrastructure/relay/src/claim.ts");
         assert!(
             relay.contains(&format!("\"{MEMBERSHIP_ENDED}\"")),
-            "relay/src/claim.ts does not spell {MEMBERSHIP_ENDED:?}"
+            "infrastructure/relay/src/claim.ts does not spell {MEMBERSHIP_ENDED:?}"
         );
     }
 

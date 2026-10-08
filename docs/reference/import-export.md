@@ -1,8 +1,8 @@
 # Import and export
 
-The general transfer feature — `src/features/transfer/` — that Tasks 1–14 pulled out of the deck
+The general transfer feature — `packages/ui/features/transfer/` — that Tasks 1–14 pulled out of the deck
 editor so the same parser, writer and fold rule could serve the collection and the wishlist too.
-`src/features/transfer/CLAUDE.md` carries the binding rules; this is the long-form record behind
+`packages/ui/features/transfer/CLAUDE.md` carries the binding rules; this is the long-form record behind
 them, with every figure kept beside the build and the date it was taken on. Numbers marked
 **measured** below were taken live on 2026-08-20 against a debug `npm run tauri dev` build in this
 worktree, driven over CDP (`docs/reference/live-ui-verification.md` is the harness); numbers marked
@@ -11,7 +11,7 @@ source does — re-count rather than trust this page.
 
 ## The seven formats
 
-`EXPORT_FORMATS` (`src/features/transfer/formats.ts`) — **counted**, 7 entries, in the order the
+`EXPORT_FORMATS` (`packages/ui/features/transfer/formats.ts`) — **counted**, 7 entries, in the order the
 export dialog's radio row draws them:
 
 | Format | Printing | Finish | Category | Sections | Read back? |
@@ -120,7 +120,7 @@ those two exist beside it.
 ## The Arena filter — what "in MTG Arena" is measured as
 
 Issue #192. The Arena format offers one checkbox no other format does — **Only cards MTG Arena
-has** — and `src/features/transfer/export/arena.ts` is the whole of what it means. It is a *row*
+has** — and `packages/ui/features/transfer/export/arena.ts` is the whole of what it means. It is a *row*
 filter rather than a field: it changes which cards there are lines for, never what a line says
 about one, which is why it is not in `fields.ts` and not in the dialog's `Fields` row. Off on
 every surface when the dialog first opens (`useAppStore`'s `exportPrefs.<surface>.arenaOnly`),
@@ -183,7 +183,7 @@ TypeScript would be a second place for it to drift, and a wrong bit reads as a p
 rather than as a crash. Scryfall's key names are public vocabulary and cannot drift. That is also
 why `CollectionRow` and `WishRow` gained the **blob** rather than the mask when this shipped —
 `DeckCard` already carried one — at a measured cost of **483 bytes** on average and **528** at
-most per row, against `promo_types`' 23 on the same corpus. `src/features/transfer/export/` is
+most per row, against `promo_types`' 23 on the same corpus. `packages/ui/features/transfer/export/` is
 the only reader on any of the three.
 
 ## The inactive-category filter — the dialog's second row filter
@@ -207,7 +207,7 @@ thinking in rather than for a convention the two are made to share.
 | Fence | Where | What it stops |
 | --- | --- | --- |
 | `SURFACE_HAS_PILES[surface]` | `fields.ts` — `deck: true`, `collection: false`, `wishlist: false` | A collection or wishlist row carries `categoryActive: null`, so there is no pile to be in and the box would be a control over nothing |
-| `!dropsInactive(format)` | `export/format.ts` — `ACTIVE_ONLY` is `arena` and `mtgo` | Those two have no maybeboard, so writing one produces an illegal import at the other end; a box there could never move a byte, which is the furniture `src/CLAUDE.md` forbids |
+| `!dropsInactive(format)` | `export/format.ts` — `ACTIVE_ONLY` is `arena` and `mtgo` | Those two have no maybeboard, so writing one produces an illegal import at the other end; a box there could never move a byte, which is the furniture `packages/ui/CLAUDE.md` forbids |
 
 `offersInactive` in `ExportDialog.tsx` is the pair read together, and **it gates the filter as
 well as the checkbox** (`excludesInactive = offersInactive && !includeInactive`). Both halves of
@@ -299,7 +299,7 @@ rather than a gap:
 
 - **No golden regeneration.** `__golden__/*.txt` is the writer's output over a fixed corpus and
   the writer's output did not change.
-- **No Rust change.** `src-tauri/src/transfer/write.rs` already has `active_only` and
+- **No Rust change.** `apps/desktop/src-tauri/src/transfer/write.rs` already has `active_only` and
   `omitted_count`; there is nothing to port, because there is no reader in Rust for a preference
   the mirror never applies. `SURFACE_HAS_PILES` therefore sits **outside `fields.json`** too — that
   golden pins `SURFACE_FIELDS`, `availableFields` and `defaultFields`, which are what the writer
@@ -331,7 +331,7 @@ build.
 
 ## The field registry and the intersection rule
 
-`src/features/transfer/fields.ts` declares two independent things and the export dialog draws only
+`packages/ui/features/transfer/fields.ts` declares two independent things and the export dialog draws only
 their overlap:
 
 - **A *format* says what channels it has** — `FORMAT_FIELDS[format].optional`. Arena's line has no
@@ -442,7 +442,7 @@ Main-deck row, because the merged row inherits the *first* card's section. `form
 
 ## CSV, both directions
 
-`src/features/transfer/csv.ts` is RFC 4180 in both directions; `export/format.ts`'s writer quotes a
+`packages/ui/features/transfer/csv.ts` is RFC 4180 in both directions; `export/format.ts`'s writer quotes a
 field only when it carries a comma, a quote or a newline, and the reader is a character-by-character
 scanner (a quoted field can hold a comma or a newline, so there is no line-oriented shortcut that is
 correct).
@@ -583,7 +583,7 @@ Altered/Signed/Proxy/Misprint on a row the import file never mentioned those col
 which is the same mechanism seen from the single-row side.
 
 **This page called it "latent, not live" for as long as no shipped surface wrote any of the six** —
-a sweep of `src/**` for `altered:`/`signed:`/`proxy:`/`misprint:`/`serialNumber:`/`grading:`
+a sweep of `packages/ui/**` for `altered:`/`signed:`/`proxy:`/`misprint:`/`serialNumber:`/`grading:`
 outside tests, stories, `lib/ipc.ts` and `features/transfer` itself found zero writers, so every
 row a reader could create had all six at their defaults, `ON CONFLICT` always landed on the one row
 that could exist, and the round trip was faithful. The note said the trap would arrive with the
@@ -761,7 +761,7 @@ Four rules the pair holds, each with a reason that is not obvious:
   mutation's own variables because every press is the same mutation. **No count fence on that
   arm**: whether the list held anything is not something the hook knows without another read, and
   a refetch answering what is already on screen is cheaper than a collection left wrong for the
-  30 s `src/lib/query.ts` caches.
+  30 s `packages/ui/lib/query.ts` caches.
 
 **The copies land in the deck's own group, and a plain collection import still lands at the
 root.** `collection_import_commit` is `(items, mode, folderId)` since 2026-08-23 — `folderId`
@@ -935,7 +935,7 @@ here reached the reader's own data, which had 0 rows in either list before the p
 
 ### The export dialog, clamped, every field on, CSV, at the app's own floor
 
-`src-tauri/tauri.conf.json` enforces `minWidth: 1024, minHeight: 700` — a reader can never make the
+`apps/desktop/src-tauri/tauri.conf.json` enforces `minWidth: 1024, minHeight: 700` — a reader can never make the
 window shorter than 700px, so that is the real worst case rather than an arbitrary "short" number.
 At **1024×700**, on the collection surface, CSV, all 22 optional checkboxes turned on, and 17 real
 rows imported for the pass (enough that the `<pre>`'s own `scrollHeight` was 785px against a body
@@ -962,7 +962,7 @@ bug.
 
 The native save and open dialogs (`dialog:allow-save` / `dialog:allow-open` on the day; opened from
 Rust since issue #545, with no `dialog:` permission granted) are windows CDP cannot drive — the same
-limit `src/features/transfer/CLAUDE.md`'s Import and Export sections already state for their own
+limit `packages/ui/features/transfer/CLAUDE.md`'s Import and Export sections already state for their own
 tests — so this pass verified the **text** round trip the file system carries byte for byte, rather
 than the picker gesture:
 
@@ -993,7 +993,7 @@ anything was added to make them.
 **This is the one mapping the golden fence does not cover, and that is worth stating plainly**
 because the shape of `__golden__/` suggests otherwise. Its `corpus.json` holds *already-built*
 `TransferCard`s, so the fence begins **downstream** of the row → Card step; neither
-`src/features/transfer/TransferCard.ts`'s `conditionOf` nor `src-tauri/src/mirror/read.rs`'s
+`packages/ui/features/transfer/TransferCard.ts`'s `conditionOf` nor `apps/desktop/src-tauri/src/mirror/read.rs`'s
 `condition_of` is executed by any golden test, and the corpus contains no `NONE`. The two
 implementations of this substitution are held by one unit test each and by nothing else. Two
 agents writing the halves in parallel both recorded the fence as covering it; it does not.
@@ -1079,7 +1079,7 @@ end in that neither command can report on its own.
 
 ## The second writer, in Rust — 2026-08-25
 
-**`src-tauri/src/transfer/` is a Rust port of this writer, and it is the one place in the app
+**`apps/desktop/src-tauri/src/transfer/` is a Rust port of this writer, and it is the one place in the app
 where a piece of domain logic deliberately exists twice.** It was written for the plain-text
 mirror, which is maintained by a background thread and cannot ask the page to render a file.
 Moving the writer to Rust outright — having this dialog fetch its text over IPC — was considered
@@ -1100,10 +1100,10 @@ The last two rows are one rule: a row filter is the *dialog's*, so neither side 
 anything to keep in step. `dropsInactive` is the exception that proves it — `write.rs`'s
 `active_only` is the same fact, and it is ported because the *writer* branches on it.
 
-**`src/features/transfer/__golden__/` is what makes that legal.** One committed corpus and one
+**`packages/ui/features/transfer/__golden__/` is what makes that legal.** One committed corpus and one
 committed golden set per scenario × format × field set; `npm run golden` regenerates them from
 *this* writer, which is the behaviour of record, and both suites assert byte equality against the
-same files. A change to either writer without the other is a red build. `src/features/transfer/CLAUDE.md`
+same files. A change to either writer without the other is a red build. `packages/ui/features/transfer/CLAUDE.md`
 carries the working rules; [text-mirror.md](text-mirror.md) carries the whole record, including
 the three real rules in `format.ts` that **no golden file held** — a golden pins only what the
 fixture varies, and the corpus never varied `SECTION_ORDER`'s input, Archidekt's discriminator, or
@@ -1144,27 +1144,27 @@ them a pile their export left out. A backup that holds more than you asked for n
 
 ## Where the code is
 
-`src/features/transfer/` (`TransferCard.ts`, `fields.ts`, `csv.ts`, `formats.ts`, `export/` —
+`packages/ui/features/transfer/` (`TransferCard.ts`, `fields.ts`, `csv.ts`, `formats.ts`, `export/` —
 including `export/arena.ts`, the Arena filter's rule — and `import/`) is the whole of the
 TypeScript side, with `__golden__/` and `scripts/golden.mjs` the fence between it and
-`src-tauri/src/transfer/`, the Rust writer the plain-text mirror renders through
+`apps/desktop/src-tauri/src/transfer/`, the Rust writer the plain-text mirror renders through
 ([text-mirror.md](text-mirror.md)); `crates/grimoire-core/src/import.rs` (renamed from
 `deck_import.rs`), `export.rs`, `collection.rs`'s `collection_import_commit` and `wishlist.rs`'s
-`wishlist_import_commit` are the Rust side. `src/components/Dialog.tsx` is the shared modal shell
-both `ExportDialog` and `ImportDialog` are built on. `src/features/decks/CLAUDE.md` still owns
+`wishlist_import_commit` are the Rust side. `packages/ui/components/Dialog.tsx` is the shared modal shell
+both `ExportDialog` and `ImportDialog` are built on. `packages/ui/features/decks/CLAUDE.md` still owns
 deck-specific rules this feature reads or reaches into — categories, validation, formats.
 
 **The inactive-category filter added no file to any of that**, which is the shape a row filter has:
 `fields.ts` (`SURFACE_HAS_PILES`), `export/format.ts` (`dropsInactive`, `isActivePile`,
 `inactiveCopies` — the three answers the writer already knew privately, each now a named export
 with a test under it), `export/ExportDialog.tsx` (the checkbox, `offersInactive`, the filter above
-`formatExport` and the count line) and `src/lib/store.ts` (`ExportPrefs.includeInactive`).
+`formatExport` and the count line) and `packages/ui/lib/store.ts` (`ExportPrefs.includeInactive`).
 
 The "Add cards to collection" box is three files of that tree: `destinations/DeckPreview.tsx`
 (`OwnCopies`, `OWN_COPIES_HINT`, and the outcome line), `destinations/NewDeckPreview.tsx` (which
 imports that same component rather than drawing a second), and `useImport.ts` (`OwnedCopies`,
 `ownCopies`). `OWNED_WRITE_KEYS` — the four query roots such a write moves — moved to
-`src/lib/query.ts` on 2026-08-23, because the deck builder's own `own` add makes the same change
+`packages/ui/lib/query.ts` on 2026-08-23, because the deck builder's own `own` add makes the same change
 from the other side of the app and the two had drifted to two different invalidations. Where those
 copies end up is
 [collection-folders.md](collection-folders.md)'s subject, not this page's.

@@ -1,0 +1,2471 @@
+import { renderHook, waitFor } from "@testing-library/react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
+import { createElement, type ReactNode } from "react";
+import { MENU_CONDITION } from "@/lib/conditions";
+import type {
+  DeckCard,
+  DeckCategory,
+  DeckDetail,
+  DeckRow,
+  DeckVariant,
+  SwapResult,
+} from "@/lib/ipc";
+
+const deckGet = vi.hoisted(() => vi.fn());
+const deckAddCard = vi.hoisted(() => vi.fn());
+const deckAddCardToOtherList = vi.hoisted(() => vi.fn());
+const deckSetCardQuantity = vi.hoisted(() => vi.fn());
+const deckToCollection = vi.hoisted(() => vi.fn());
+const deckCategoryClear = vi.hoisted(() => vi.fn());
+const deckClear = vi.hoisted(() => vi.fn());
+const deckMoveCard = vi.hoisted(() => vi.fn());
+const deckMissingToWishlist = vi.hoisted(() => vi.fn());
+const deckPullPlan = vi.hoisted(() => vi.fn());
+const deckPullFromCollection = vi.hoisted(() => vi.fn());
+const deckQuickAddWishes = vi.hoisted(() => vi.fn());
+const deckQuickAddToCollection = vi.hoisted(() => vi.fn());
+const deckSwapPrinting = vi.hoisted(() => vi.fn());
+const deckSetCardFinish = vi.hoisted(() => vi.fn());
+const deckCardSetLabel = vi.hoisted(() => vi.fn());
+const oracleTagsForPrintings = vi.hoisted(() => vi.fn());
+const deckSetViewState = vi.hoisted(() => vi.fn());
+// **`collection_list` is mocked so that a test can assert it was _not_ called.** The deleted
+// `own` add read the binder before it wrote (`cardDetail` → `collectionList` → `collectionAdd` →
+// `collectionToDeck`, four commands mocked here until 2026-08-25), and this is the one of them
+// worth keeping: an add that starts hunting for a free copy again would go red on the reads
+// rather than on the write.
+const collectionList = vi.hoisted(() => vi.fn());
+vi.mock("@/lib/ipc", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ipc")>()),
+  ipc: {
+    deckGet,
+    deckAddCard,
+    deckAddCardToOtherList,
+    deckSetCardQuantity,
+    deckToCollection,
+    deckCategoryClear,
+    deckClear,
+    deckMoveCard,
+    deckMissingToWishlist,
+    deckPullPlan,
+    deckPullFromCollection,
+    deckQuickAddWishes,
+    deckQuickAddToCollection,
+    deckSwapPrinting,
+    deckSetCardFinish,
+    deckCardSetLabel,
+    oracleTagsForPrintings,
+    deckSetViewState,
+    collectionList,
+  },
+}));
+
+import {
+  pullPlanQuery,
+  quickAddWishesQuery,
+  useDeck,
+  usePullPlan,
+  useSwapFromPane,
+} from "./useDeck";
+// The real store, not a fake: `reanchorPane` reads and writes it through `getState()`, so what
+// these tests are about is the value that ends up in it. Reset in `beforeEach` below, because a
+// zustand store is a module singleton and a context left behind is a context the next test's
+// guard would match.
+import { useAppStore, type CardWalkStop, type PaneDeckContext } from "@/lib/store";
+
+const DECK: DeckRow = {
+  gameKey: "any",
+  id: 4,
+  name: "Burn",
+  formatKey: "modern",
+  formatName: "Modern",
+  description: null,
+  coverCardId: null,
+  coverArtist: null,
+  archived: false,
+  cardCount: 4,
+  updatedAt: 1_800_000_000,
+  // The four v8 deck columns. `theoryEnabled: false` is the ordinary deck — the switch is off
+  // until the reader turns it on, and turning it on *moves* the live list into theory, so the
+  // deck they built becomes the plan rather than being duplicated into two lists that drift.
+  coverKind: "card_art",
+  folderId: null,
+  notesOpen: false,
+  theoryEnabled: false,
+  virtualOnly: false,
+  theoryMarkExact: true,
+  theoryMarkName: true,
+  theoryMarkUnplanned: true,
+  managedWishlist: "off",
+  managedWishlistTokens: false,
+  // How the editor was last read, written by `deckSetViewState` alone — `rememberView` below is
+  // the only mutation here that touches them, and the only one that does not invalidate.
+  lastVariant: "live",
+  lastGroupBy: "category",
+  lastSortBy: "alphabetical",
+  // v13's, and off for the same reason `theoryEnabled` is: the plain curve until the reader
+  // asks for the split. This hook never reads it — it is a `DeckPatch` field like any other and
+  // rides through `update` untouched — so it is here to satisfy the row's shape, not to be
+  // asserted on.
+  separateXGroup: false,
+  tokensOpen: false,
+  tokenMode: "managed",
+  tokenRailIndex: -1,
+  statsOpen: true,
+  curveCreatures: false,
+  todosOpen: false,
+  defaultCategoryId: 0,
+  bracket: 0,
+};
+
+/**
+ * The deck's categories, as `deck_get` answers them: **every** one, in `sortOrder`, whether or
+ * not it holds a card — the editor's columns are this list rather than the piles that happen to
+ * be full.
+ *
+ * Two of the categories a deck is born with (`schema::PREDEFINED_CATEGORIES`) plus the pile the
+ * v8 migration files every legacy main-deck row into. The Maybeboard is the one of the four
+ * seeded switched off, and that flag is the whole of "counts toward nothing" — nothing in the
+ * app reads its *kind* for that question, which is why a test that wants a pile counted in
+ * nothing can equally switch off a `main` one.
+ */
+const MAIN: DeckCategory = {
+  id: 1,
+  deckId: 4,
+  name: "Main deck",
+  kind: "main",
+  // All three are `user`: the two seeded zones are written that way, and "Main deck" is the
+  // pile the v8 migration made, which holds real cards and is nobody's find-or-create.
+  origin: "user",
+  isActive: true,
+  sortOrder: 0,
+  cardCount: 4,
+  totalPrice: 18,
+  variant: "live",
+};
+const SIDE: DeckCategory = {
+  id: 2,
+  deckId: 4,
+  name: "Sideboard",
+  kind: "side",
+  origin: "user",
+  isActive: true,
+  sortOrder: 1,
+  cardCount: 0,
+  totalPrice: null,
+  variant: "live",
+};
+const MAYBE: DeckCategory = {
+  id: 5,
+  deckId: 4,
+  name: "Maybeboard",
+  kind: "maybe",
+  origin: "user",
+  isActive: false,
+  sortOrder: 2,
+  cardCount: 0,
+  totalPrice: null,
+  variant: "live",
+};
+
+const BOLT: DeckCard = {
+  promoTypes: null,
+  id: 9,
+  cardId: "p1",
+  finish: null,
+  // The category is denormalized onto the row so a card can be drawn without a second lookup;
+  // it is taken from {@link MAIN} here so the fixture cannot say two things about one pile.
+  categoryId: MAIN.id,
+  categoryName: MAIN.name,
+  categoryKind: MAIN.kind,
+  categoryActive: MAIN.isActive,
+  variant: "live",
+  labelId: null,
+  labelName: null,
+  labelColor: null,
+  quantity: 4,
+  name: "Lightning Bolt",
+  setCode: "lea",
+  setName: "Limited Edition Alpha",
+  collectorNumber: "161",
+  lang: "en",
+  needsReview: null,
+  oracleId: "o1",
+  manaCost: "{R}",
+  cmc: 1,
+  typeLine: "Instant",
+  oracleText: "Lightning Bolt deals 3 damage to any target.",
+  colors: "R",
+  colorIdentity: "R",
+  producedMana: "",
+  legalities: '{"modern":"legal"}',
+  power: null,
+  toughness: null,
+  layout: "normal",
+  rarity: "common",
+  faces: null,
+  gameChanger: false,
+  finishes: null,
+  everUncommon: false,
+  unitPrice: 4.5,
+  ownedQuantity: 2,
+};
+
+const DETAIL: DeckDetail = { deck: DECK, cards: [BOLT], categories: [MAIN, SIDE, MAYBE], labels: [] };
+
+let client: QueryClient;
+function wrapper({ children }: { children: ReactNode }) {
+  return createElement(QueryClientProvider, { client }, children);
+}
+
+beforeEach(() => {
+  client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } },
+  });
+  deckGet.mockReset().mockResolvedValue(DETAIL);
+  deckAddCard.mockReset().mockResolvedValue({ id: 9, quantity: 4, removed: false });
+  // A copy that landed as a new row in the other list — the answer is that row, not the source.
+  deckAddCardToOtherList.mockReset().mockResolvedValue({ id: 31, quantity: 1, removed: false });
+  deckSetCardQuantity.mockReset().mockResolvedValue({ id: 9, quantity: 3, removed: false });
+  // A cut that really did give a copy back — the destination row, the deck it came out of
+  // (never set by this direction), the deck row (never set by this direction either: the caller
+  // handed the id in and a whole cut has deleted it), and what actually moved.
+  deckToCollection
+    .mockReset()
+    .mockResolvedValue({ entryId: 21, fromDeck: null, deckCardId: null, quantity: 1 });
+  // The copies it removed — this command answers a number, not a row.
+  deckCategoryClear.mockReset().mockResolvedValue(4);
+  // The same answer one grain wider: `sum(quantity)` over the whole list, never a row count.
+  deckClear.mockReset().mockResolvedValue(12);
+  deckMoveCard.mockReset().mockResolvedValue(undefined);
+  deckMissingToWishlist.mockReset().mockResolvedValue(2);
+  // A plan with one hole in it and one copy on the desk that fills it. The rows are the
+  // dialog's to draw; what this file is about is the query being asked at all.
+  deckPullPlan.mockReset().mockResolvedValue([]);
+  // What a pull moved, which is the shape the command answers and never the picks that
+  // went in: it is all-or-nothing, so a resolved promise means every pick landed.
+  deckPullFromCollection.mockReset().mockResolvedValue({ copies: 3, cards: 1 });
+  // The read half of the quick add's second arm. Empty is the ordinary answer — most cards a
+  // reader records are on no shopping list — and this hook never calls it: the editor fetches it
+  // at the press through `quickAddWishesQuery`.
+  deckQuickAddWishes.mockReset().mockResolvedValue([]);
+  // What a quick add wrote, which is what a sentence quotes and never the argument sent: the
+  // copies recorded, the row they folded into, and what came off the wish.
+  deckQuickAddToCollection.mockReset().mockResolvedValue({ copies: 2, entryId: 44, wishCopies: 1 });
+  deckSwapPrinting.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  // The same `SwapResult` shape, for the same reason: a finish change folds into whatever the
+  // pile already holds of that finish, so the answer is the survivor's quantity.
+  deckSetCardFinish.mockReset().mockResolvedValue({ folded: false, quantity: 4 });
+  deckCardSetLabel.mockReset().mockResolvedValue(undefined);
+  // A database that has never fetched the taxonomy — every card answers "no tags", which is
+  // the state the app ships in and files every add by its type line. The tests that are about
+  // the tags say so themselves.
+  oracleTagsForPrintings.mockReset().mockResolvedValue([]);
+  deckSetViewState.mockReset().mockResolvedValue(undefined);
+  // Answered rather than left undefined, so a hook that started reading the binder again would
+  // fail on the assertion that it did rather than on a rejected promise three frames later.
+  collectionList.mockReset().mockResolvedValue({ items: [], total: 0 });
+  useAppStore.setState(useAppStore.getInitialState());
+});
+
+/**
+ * One fresh answer on each root a deck write can make wrong, seeded straight into the cache.
+ *
+ * **`setQueryData` is what makes these tests about the bug rather than about a re-render.**
+ * `packages/ui/lib/query.ts` sets `staleTime: 30_000`, so a cached answer is *fresh* and navigating to
+ * the page it belongs to refetches nothing — invalidation is the only thing that can tell the
+ * Collection page a deck write happened. Nothing here is observed, so `invalidateQueries` marks
+ * these and does not refetch them, and `isInvalidated` stays readable afterwards.
+ *
+ * The keys are the real shapes (`useCollection`'s `["collection", "list", …]`,
+ * `useCardSearch`'s `["cards", "search", …]`, `useWishlist`'s, `useDecks`') rather than the bare
+ * roots, so a fix that invalidated the exact root string and nothing under it would still fail.
+ */
+const OWNED_CACHES: readonly (readonly string[])[] = [
+  ["collection", "list", "{}"],
+  ["cards", "search", "{}"],
+  ["decks", "list"],
+  ["wishlist", "list", "{}"],
+];
+
+function seedOwned(c: QueryClient): void {
+  for (const key of OWNED_CACHES) c.setQueryData(key, { items: [], total: 0 });
+}
+
+/** Which of them a write has marked stale, by root, sorted — the assertion these tests make. */
+const staleRoots = (c: QueryClient): string[] =>
+  OWNED_CACHES.filter((key) => c.getQueryState(key)?.isInvalidated === true)
+    .map((key) => key[0])
+    .sort();
+
+describe("useDeck", () => {
+  /** The gallery is the Decks view's other half and mounts this hook with nothing open. A
+   *  query that fired anyway would ask the backend for deck `null` on every gallery render. */
+  it("asks for nothing until a deck is open", () => {
+    renderHook(() => useDeck(null), { wrapper });
+
+    expect(deckGet).not.toHaveBeenCalled();
+  });
+
+  /** One command, one query: the editor, the curve and the legality panel all read this,
+   *  because three queries over one deck are three answers that can disagree. */
+  it("reads one deck under the decks root", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    // `live` is the **default argument**, not a constant: a caller with no Live/Theory control
+    // gets the deck as it stands. The variant scopes the **cards** — the categories and labels
+    // come back either way.
+    expect(deckGet).toHaveBeenCalledWith(4, "live", "tcgplayer");
+    expect(result.current.cards).toEqual([BOLT]);
+    // Every category, including the two holding nothing: the editor's columns are this list
+    // rather than the piles that happen to be full.
+    expect(result.current.categories).toEqual([MAIN, SIDE, MAYBE]);
+    expect(result.current.labels).toEqual([]);
+    expect(client.getQueryData(["decks", "detail", 4, "live", "tcgplayer"])).toEqual(DETAIL);
+  });
+
+  /**
+   * **Switching variant is a query-key change, not a refetch.**
+   *
+   * The two lists are two cached answers rather than one that is thrown away every time the
+   * reader flips the switch: flipping back is a cache hit, and each list keeps its own
+   * freshness. It is also what makes the optimistic patch below address the right list by
+   * construction — the cache it writes into holds one variant's cards and no other.
+   */
+  it("caches each variant's cards under its own key", async () => {
+    const PLAN: DeckCard = { ...BOLT, id: 11, variant: "theory", quantity: 2 };
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? { ...DETAIL, cards: [PLAN] } : DETAIL),
+    );
+    const { result, rerender } = renderHook(
+      ({ variant }: { variant: DeckVariant }) => useDeck(4, variant),
+      { wrapper, initialProps: { variant: "live" as DeckVariant } },
+    );
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+
+    rerender({ variant: "theory" });
+
+    await waitFor(() => expect(result.current.cards).toEqual([PLAN]));
+    expect(deckGet).toHaveBeenCalledWith(4, "theory", "tcgplayer");
+    // Both answers are still there. Nothing was invalidated and nothing was re-read to get
+    // here — a switch is a different question, not a stale answer to the same one.
+    expect(client.getQueryData(["decks", "detail", 4, "live", "tcgplayer"])).toEqual(DETAIL);
+    expect(client.getQueryData(["decks", "detail", 4, "theory", "tcgplayer"])).toEqual({
+      ...DETAIL,
+      cards: [PLAN],
+    });
+  });
+
+  /**
+   * Every write goes to the list the hook was opened on — the fourth part of
+   * `DECK_CARD_GRAIN`, and the difference between editing the plan and editing the deck.
+   *
+   * The same printing in the same category is **two rows**, one per variant, so a write that
+   * sent the wrong word would edit a real deck while the reader was looking at a plan.
+   */
+  it("writes to the variant it was opened on", async () => {
+    const { result } = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 3,
+    });
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "theory", null, 3);
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", categoryId: SIDE.id, quantity: 1 });
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "theory", null, 1);
+
+    await result.current.moveCard.mutateAsync({ cardId: "p2", from: SIDE.id, to: MAIN.id, finish: null });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", SIDE.id, MAIN.id, null, "theory", null);
+
+    // The clear is variant-scoped like the rest: it names the list the hook is reading, which
+    // is the list the pile belongs to. Emptying the actual list while the reader is looking at
+    // the plan is the failure this pins.
+    await result.current.clearCategory.mutateAsync(MAIN.id);
+    expect(deckCategoryClear).toHaveBeenCalledWith(4, MAIN.id, "theory");
+  });
+
+  /**
+   * **The clear is one command, never a `setQuantity(…, 0)` per row.**
+   *
+   * The rows are all in hand, so the loop would compile — and would be a transaction, an
+   * allocator run and an invalidation per card. This asserts the shape rather than the count:
+   * the stepper's command is not called at all.
+   */
+  it("empties a pile in one command rather than a stepper press per card", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const cleared = await result.current.clearCategory.mutateAsync(MAIN.id);
+
+    expect(cleared).toBe(4);
+    expect(deckCategoryClear).toHaveBeenCalledTimes(1);
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A clear of the live list moves collection rows**, which is the second write in this file
+   * that does — `deck::clear_category` releases every `live` row's backing copies into `Recently
+   * removed` before the `DELETE`, through the same walk the cut uses. So it takes the
+   * collection's root, exactly as the cut does, and for the ghost-row reason written on
+   * `invalidateCollection`.
+   */
+  it("marks the collection stale when a live pile is cleared", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.clearCategory.mutateAsync(MAIN.id);
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks", "wishlist"]));
+  });
+
+  /**
+   * And a **theory** clear does not, which is the absence worth pinning: a plan holds no cards,
+   * so the backend's release is fenced on `variant == 'live'` and nothing in any folder moves.
+   */
+  it("leaves the collection alone when a theory pile is cleared", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.clearCategory.mutateAsync(MAIN.id);
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+  });
+
+  /**
+   * **Emptying a whole list is one command too**, and the piles are not part of what it takes:
+   * `deck_clear` is `deck_category_clear` one grain wider, so the same argument that made the
+   * pile clear a command rather than a loop over the stepper makes this one a command rather
+   * than a loop over the pile clear.
+   */
+  it("empties a whole list in one command rather than a clear per pile", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const cleared = await result.current.clearDeck.mutateAsync("live");
+
+    // The copies, not the rows — the figure the confirmation counted.
+    expect(cleared).toBe(12);
+    expect(deckClear).toHaveBeenCalledWith(4, "live");
+    expect(deckClear).toHaveBeenCalledTimes(1);
+    expect(deckCategoryClear).not.toHaveBeenCalled();
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The variant is the mutation's argument and never the hook's, and this is the case that
+   * pins it.**
+   *
+   * Every other write in this hook goes to the list it was opened on — the test above,
+   * "writes to the variant it was opened on", is that rule — and this one deliberately does
+   * not. `DeckSettingsDialog` mounts `useDeck(deckId)` with no second argument, so the hook is
+   * reading **live**, and it draws a press that clears the **theory** list. A `clearDeck` that
+   * read `variant` would empty the deck the reader actually owns while the confirmation said it
+   * was clearing the plan — silent, irreversible, and invisible to every test that mounts the
+   * hook on the list it is clearing.
+   *
+   * Both directions, because the defect is symmetric: reading the hook's variant is wrong
+   * whichever list it happens to hold.
+   */
+  it("clears the variant it is asked for, not the one the hook was opened on", async () => {
+    const live = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(live.result.current.deck).toEqual(DECK));
+    // The hook took the default and is reading `live`, which is the state the dialog mounts in.
+    expect(live.result.current.variant).toBe("live");
+
+    await live.result.current.clearDeck.mutateAsync("theory");
+
+    expect(deckClear).toHaveBeenCalledWith(4, "theory");
+
+    const theory = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(theory.result.current.deck).toEqual(DECK));
+
+    await theory.result.current.clearDeck.mutateAsync("live");
+
+    expect(deckClear).toHaveBeenCalledWith(4, "live");
+  });
+
+  /**
+   * **Clearing the live list moves collection rows**, for {@link clearCategory}'s reason at the
+   * deck's grain: every `live` row releases its backing copies into `Recently removed`, so the
+   * collection's list, its summary and its folder tree are all now wrong and the deck root
+   * reaches none of them.
+   */
+  it("marks the collection stale when the live list is cleared", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.clearDeck.mutateAsync("live");
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks", "wishlist"]));
+  });
+
+  /**
+   * And a **theory** clear does not — the absence worth pinning, because the gate is on the
+   * mutation's argument rather than on the hook's variant and a gate written against the wrong
+   * one would pass every test that mounts the hook on the list it clears. So this hook is
+   * deliberately mounted on **live** and asked to clear the plan.
+   */
+  it("leaves the collection alone when the theory list is cleared", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.clearDeck.mutateAsync("theory");
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+  });
+
+  /**
+   * And neither does a live clear that emptied nothing. `0` copies is a list that was already
+   * empty: no `deck_cards` row was taken out, so nothing was released and a refetch could only
+   * re-answer what is already on screen — {@link invalidateCollection}'s second certainty.
+   */
+  it("leaves the collection alone when a live clear removed no copies", async () => {
+    deckClear.mockResolvedValue(0);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.clearDeck.mutateAsync("live");
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+  });
+
+  /** A deck the gallery has not refreshed since another view deleted it. `null` is the
+   *  answer, not an error — and it is `deck: null` rather than a hook that throws. */
+  it("answers with nothing for a deck that is gone", async () => {
+    deckGet.mockResolvedValue(null);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+
+    await waitFor(() => expect(result.current.query.isSuccess).toBe(true));
+    expect(result.current.deck).toBeNull();
+    expect(result.current.cards).toEqual([]);
+    expect(result.current.categories).toEqual([]);
+    expect(result.current.labels).toEqual([]);
+  });
+
+  /**
+   * The stepper's write is `deck_set_card_quantity` and never `deck_add_card`.
+   *
+   * `add_card` looks the printing up in `cards` first (it has to — the row it inserts
+   * denormalizes the set, number, language and name), so it **refuses an orphaned row**: the
+   * one deck card whose printing has left the database is the one a stepper must still be
+   * able to step. `set_card_quantity` addresses the slot that is already there and asks
+   * `cards` nothing. Two names, and only one of them is the stepper's.
+   */
+  it("steps a quantity through set_card_quantity, never through add", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 3,
+    });
+
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 3);
+    expect(deckAddCard).not.toHaveBeenCalled();
+  });
+
+  /** Zero is a removal here, unlike the collection's: a category slot at zero holds no
+   *  condition, no purchase price and no acquisition story, just a withdrawn intention. */
+  it("empties a slot through the same write, and reads back that the row is gone", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const change = await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 0);
+    expect(change.removed).toBe(true);
+  });
+
+  it("adds and moves cards through the deck the hook was opened on", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: MAYBE.id,
+      finish: null,
+      quantity: 1,
+    });
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, null, "live", null, 1);
+
+    await result.current.moveCard.mutateAsync({ cardId: "p2", from: MAYBE.id, to: SIDE.id, finish: null });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAYBE.id, SIDE.id, null, "live", null);
+  });
+
+  /**
+   * `Add to theory` on an actual row and `Add to actual` on a theory one (issue #592): the slot's
+   * pile is sent as the **source**, the target list is the one the hook is *not* reading, and the
+   * quantity is one whatever the row holds — every other Add's rule, so a playset is four presses.
+   * The finish is the row's, so a foil row adds a foil copy.
+   */
+  it("adds one copy of a row to the other list, from the pile it is in now", async () => {
+    const live = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(live.result.current.deck).toEqual(DECK));
+
+    await live.result.current.addToOtherList.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: "foil",
+    });
+    expect(deckAddCardToOtherList).toHaveBeenLastCalledWith(4, "p1", MAIN.id, "theory", "foil", 1);
+
+    const plan = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(plan.result.current.deck).toEqual(DECK));
+
+    await plan.result.current.addToOtherList.mutateAsync({
+      cardId: "p1",
+      categoryId: SIDE.id,
+      finish: null,
+    });
+    expect(deckAddCardToOtherList).toHaveBeenLastCalledWith(4, "p1", SIDE.id, "live", null, 1);
+    // The ordinary add is not how this is spelled: it would file the copy into the pile it names,
+    // which is a pile of the list the reader is looking at.
+    expect(deckAddCard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The add with no column to point at — the docked panel's button under `Auto`, the toolbar's
+   * quick add, and the sidebar's Decks drop target, none of which has a category under the
+   * cursor.
+   *
+   * It sends a **name** instead, which `deck_add_card` finds or creates, and the name is
+   * `autoCategoryFor`'s. The rule is applied here, on the one definition, so a call site never
+   * computes a pile name of its own.
+   *
+   * This is the **untagged** floor and the default this file mocks: a card the taxonomy has
+   * nothing to say about — or an app whose taxonomy has never been downloaded — is filed by its
+   * type line exactly as every add was before the tags existed. The read still happens, because
+   * the only way to know there is nothing to say is to ask.
+   */
+  it("files an add that names no category by the card's type line", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Legendary Artifact",
+      quantity: 1,
+    });
+
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p2"]);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Artifact", "live", null, 1);
+  });
+
+  /**
+   * **A decklist is written by function, so an add with no column asks what the card *does*.**
+   *
+   * Lightning Bolt's type line is `Instant`, and nobody has ever built a deck with a column
+   * called Instant — they build one with Removal in it. The tags are the fact
+   * (`oracle_tags_for_printings`, one printing id), `autoCategoryFor` is the conclusion, and the
+   * name is what `deck_add_card` finds or creates. `Instant` here would mean the fetch is not
+   * wired in at all, which is the regression this protects.
+   *
+   * **The decoy first entry is the second half of the test.** The command drops blank and
+   * duplicate ids, so its answer can be shorter than the request and in no promised order —
+   * `answers[0]` is a read that works until the day it silently files a card by another card's
+   * tags. A positional read gets `Ramp` here.
+   */
+  it("files an add that names no category by what the card does", async () => {
+    oracleTagsForPrintings.mockResolvedValue([
+      { cardId: "elsewhere", slugs: ["ramp"] },
+      { cardId: "p2", slugs: ["removal"] },
+    ]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Instant", quantity: 1 });
+
+    // One card, asked about by the printing id being added — not the whole deck, and not the
+    // oracle id, which no drag payload carries.
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p2"]);
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Removal", "live", null, 1);
+  });
+
+  /**
+   * The same add against a card the taxonomy answers **empty** for — an untagged card, a
+   * printing whose `oracle_id` is NULL, or an id `cards` does not have, all of which come back
+   * `slugs: []` on purpose.
+   *
+   * The type line is the answer then, and that path is the floor rather than an error case: it
+   * is what this app does before the tag dataset has ever downloaded, and if it never does.
+   * Paired with the test above deliberately — one card id, one type line, two answers, and the
+   * pile follows the tags.
+   */
+  it("falls back to the type line when the card has no tags", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: [] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Instant", quantity: 1 });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Instant", "live", null, 1);
+  });
+
+  /**
+   * **A caller that already read the card's tags hands them in, and the rule files by those.**
+   *
+   * The docked search is that caller: its Add button names the pile before the press, so it has
+   * read the tags to name it, and the press must file by the very facts the word was drawn from.
+   * The backend's answer here is deliberately a *different* pile — a taxonomy replaced between
+   * the paint and the press — and the card still goes where the button said. No second read.
+   */
+  it("files by the tags a caller hands in, without reading them again", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["removal"] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Sorcery",
+      oracleTags: ["ramp"],
+      quantity: 1,
+    });
+
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Ramp", "live", null, 1);
+  });
+
+  /** `[]` handed in is an answer — a card known to carry no tag — and is not asked about again. */
+  it("takes an empty tag list from a caller as the card having none", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["removal"] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Sorcery",
+      oracleTags: [],
+      quantity: 1,
+    });
+
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Sorcery", "live", null, 1);
+  });
+
+  /**
+   * `refileCard` — the quick zones' `Auto` for a card the deck already holds, and the add rule
+   * above read backwards.
+   *
+   * **The same three steps in the same order**, which is the point of it being here rather than a
+   * second implementation somewhere: the card's tags, `autoCategoryFor`, then a command that
+   * finds-or-creates the pile that names. It sends the **name arm** — `toCategoryId` null — so
+   * the pile is resolved inside the move's own transaction and a pile the app invents comes out
+   * `origin: 'auto'`.
+   */
+  it("re-files a deck card by what it does, through the move's name arm", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["removal"] }]);
+    deckMoveCard.mockResolvedValue(31);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      finish: null,
+      typeLine: "Instant",
+      categoryName: MAIN.name,
+    });
+
+    expect(oracleTagsForPrintings).toHaveBeenCalledWith(["p2"]);
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Removal", "live", null);
+    // The id the command answered with, which is what the caret is handed — the caller has no
+    // other way to learn what was found or made.
+    expect(answer).toEqual({ moved: true, category: "Removal", categoryId: 31 });
+  });
+
+  /**
+   * **A card already in the pile the rule names writes nothing and reaches IPC not at all.**
+   *
+   * The comparison is against the row's own `categoryName`, which the caller is holding, so
+   * "press it again" costs one tag read and no round trip. `moved: false` is an answer rather
+   * than a failure and `categoryId` is `null`, because there is nowhere to send the caret.
+   */
+  it("says a card is already filed rather than moving it to where it is", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["removal"] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      finish: null,
+      typeLine: "Instant",
+      categoryName: "Removal",
+    });
+
+    expect(answer).toEqual({ moved: false, category: "Removal", categoryId: null });
+    expect(deckMoveCard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * A card the rule cannot place goes to **`Uncategorized`, a pile like any other** (changed
+   * 2026-08-16). It used to be left where it was, on the argument that moving a card out of a
+   * pile somebody chose into the bin is a downgrade dressed as tidying — which is still what
+   * `useDeckMeta.autoCategorise` does, and still right *there*, because that press is over every
+   * loose card in the deck at once. Here the reader picked up one card and pointed at `Auto`.
+   *
+   * It travels through the same **name arm** as any other answer, so the pile is found or made
+   * by `category_for_name` and arrives `origin: 'auto'` — which is what lets it leave the desk
+   * again with its last card.
+   */
+  it("files a card the rule cannot place under Uncategorized", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: [] }]);
+    deckMoveCard.mockResolvedValue(77);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      finish: null,
+      typeLine: null,
+      categoryName: MAIN.name,
+    });
+
+    expect(answer).toEqual({ moved: true, category: "Uncategorized", categoryId: 77 });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Uncategorized", "live", null);
+  });
+
+  /** And a card **already** in that pile is the one press that still writes nothing — the only
+   *  no-op left, now that being unplaceable is a destination rather than a refusal. */
+  it("says a card already in Uncategorized is already filed", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: [] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      finish: null,
+      typeLine: null,
+      categoryName: "Uncategorized",
+    });
+
+    expect(answer).toEqual({ moved: false, category: "Uncategorized", categoryId: null });
+    expect(deckMoveCard).not.toHaveBeenCalled();
+  });
+
+  /** A refused tag read never fails a re-file, exactly as it never fails an add: `oracleTagsFor`
+   *  catches and answers `[]`, so the card files by its type line instead. */
+  it("re-files by type line when the tag read is refused", async () => {
+    oracleTagsForPrintings.mockRejectedValue("the database is busy");
+    deckMoveCard.mockResolvedValue(12);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const answer = await result.current.refileCard.mutateAsync({
+      cardId: "p2",
+      from: MAIN.id,
+      finish: null,
+      typeLine: "Artifact",
+      categoryName: MAIN.name,
+    });
+
+    expect(answer.moved).toBe(true);
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p2", MAIN.id, null, "Artifact", "live", null);
+  });
+
+  /**
+   * **Land is pinned by the type line before a single tag is consulted**, and this is the add
+   * path proving it end to end rather than `autoCategoryFor` proving it alone.
+   *
+   * 52% of lands carry a functional tag — Prismatic Vista is tagged `tutor` because it searches,
+   * Savai Triome `card-advantage` because it cycles — so a rule that read the tags first would
+   * scatter a deck's mana base across a dozen columns, with fetchlands under a Tutor heading. A
+   * mana base is the one pile every decklist draws whole.
+   */
+  it("files a land as a land whatever its tags say", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p2", slugs: ["tutor"] }]);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Land", quantity: 1 });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Land", "live", null, 1);
+  });
+
+  /**
+   * **A tag read that fails must not fail the add.** The card still lands — in its type-line
+   * pile, which is where every card landed before the taxonomy existed.
+   *
+   * Losing the taxonomy for one add costs the reader a worse pile, which they can drag; a
+   * refused add costs them a card they have to notice is missing. The catch in `oracleTagsFor`
+   * is the whole of this, and it is exactly the kind of thing a later reader tidies into a
+   * rethrow — so this test is what says no.
+   */
+  it("still adds the card when the tag read is refused", async () => {
+    oracleTagsForPrintings.mockRejectedValue(new Error("database is locked"));
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const change = await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      typeLine: "Instant",
+      quantity: 1,
+    });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Instant", "live", null, 1);
+    expect(change).toEqual({ id: 9, quantity: 4, removed: false });
+  });
+
+  /**
+   * A type line the rule has no bucket word for, and one that is missing outright — an orphan
+   * whose printing has left `cards`, or a layout this app has no column for (a Dungeon, a Plane).
+   *
+   * Both answer `Uncategorized`, which is `autoCategoryFor`'s own answer and needs no second
+   * fallback here — with no tags to go on either, which is this file's default. The pile is a
+   * real category the reader can rename, reorder or switch off; what it may never be is `""`,
+   * which the backend's find-or-create would accept as a heading nobody can see.
+   */
+  it("files a card it cannot place under Uncategorized", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: null, quantity: 1 });
+    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorized", "live", null, 1);
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", typeLine: "Dungeon", quantity: 1 });
+    expect(deckAddCard).toHaveBeenLastCalledWith(4, "p2", null, "Uncategorized", "live", null, 1);
+  });
+
+  /**
+   * **Absent** is not `null`, and this is the difference: a caller that passes no type line at
+   * all has said nothing about the card, where one passing `null` has said the app cannot
+   * describe it. The first gets `DEFAULT_CATEGORY_NAME`, the second `Uncategorized`.
+   *
+   * No surface in the app takes this arm today — every add either points at a column or carries a
+   * type line — so it is a fence, and the test is what says the fence is where it was left.
+   *
+   * **And it asks the taxonomy nothing.** A caller that said nothing about the card is not asking
+   * to have it filed, so there is no rule to run and no fact to fetch: the default pile is the
+   * answer without a round trip.
+   */
+  it("files an add that says nothing at all under the default pile", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", quantity: 1 });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", null, "Main deck", "live", null, 1);
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+  });
+
+  /**
+   * An explicit category wins outright, and no name is sent beside it — the drag path, and the
+   * panel's under a pick. A type line handed in with an id is simply not read.
+   *
+   * **And nothing is asked about the card at all.** Pointing at a column *is* naming a category,
+   * so no rule runs — and a drop that paid a tag read on the way to a pile the reader had already
+   * chosen would be a round trip bought for nothing, on the one interaction in this app where a
+   * gesture is being answered in place.
+   */
+  it("ignores a type line when a category was named, and asks nothing about the card", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.addCard.mutateAsync({
+      cardId: "p2",
+      categoryId: SIDE.id,
+      typeLine: "Artifact",
+      quantity: 1,
+    });
+
+    expect(deckAddCard).toHaveBeenCalledWith(4, "p2", SIDE.id, null, "live", null, 1);
+    expect(oracleTagsForPrintings).not.toHaveBeenCalled();
+  });
+  /**
+   * **An add tells the deck root to re-read and tells the collection nothing**, which since the
+   * `own` arm was deleted (2026-08-25) is true of *every* add this hook makes.
+   *
+   * `deck_add_card` writes a `deck_cards` row and moves no copies, so owned/missing is a sum over
+   * rows this write provably leaves where they were — firing the collection's roots as well would
+   * be three refetches per press that can only re-answer what is already on screen. The
+   * `collectionList` assertion is the second half and is what would catch the hunt coming back:
+   * the deleted arm read the binder before it wrote.
+   */
+  it("leaves the collection alone for an add", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+
+    await result.current.addCard.mutateAsync({ cardId: "p2", categoryId: SIDE.id, quantity: 1 });
+
+    await waitFor(() => expect(staleRoots(client)).toContain("decks"));
+    expect(staleRoots(client)).not.toContain("collection");
+    expect(collectionList).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The pane's "Use this printing", addressed like every other card write — by deck, card and
+   * category — and the only one that names two cards: the printing being left and the one being
+   * taken up.
+   *
+   * **No optimistic patch, deliberately**, where the stepper beside it has one: what the row
+   * ends up holding is the *server's* arithmetic. A swap onto a printing the category already
+   * has folds two rows into one, so a guess would have to delete a line and grow another — and a
+   * guess that got it wrong would be a deck list that lost a card until the read landed. The
+   * fold is only knowable after the write, and the answer carries it.
+   */
+  it("swaps a printing and reads back what the server folded", async () => {
+    let answer: (result: SwapResult) => void = () => {};
+    deckSwapPrinting.mockReturnValue(
+      new Promise<SwapResult>((resolve) => {
+        answer = resolve;
+      }),
+    );
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    const swap = result.current.swapPrinting.mutateAsync({
+      fromCardId: "p1",
+      toCardId: "p2",
+      categoryId: MAIN.id,
+      finish: null,
+    });
+
+    await waitFor(() =>
+      expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", MAIN.id, "live", null),
+    );
+    // Mid-flight, and the deck on screen is still the deck that was read: no guess was
+    // written. This is what "no optimism" costs and buys — a beat of the old printing rather
+    // than a line that disappears and comes back.
+    expect(client.getQueryData(["decks", "detail", 4, "live", "tcgplayer"])).toEqual(DETAIL);
+
+    answer({ folded: true, quantity: 7 });
+
+    expect(await swap).toEqual({ folded: true, quantity: 7 });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+  });
+
+  /**
+   * How the reader is *looking* at the deck, stored — and the one write here that
+   * **deliberately does not invalidate**.
+   *
+   * The editor is already showing what was pressed: this write only makes the choice survive
+   * the deck being closed, so there is nothing to re-read. Invalidating would refetch the deck
+   * row and hand the editor back the three fields it restores from a beat after the press —
+   * which is how a second press made inside that beat gets undone by the first one's echo. It
+   * is also what keeps the round trip from looping at all.
+   */
+  it("remembers how the deck is being read without re-reading the deck", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.rememberView.mutateAsync({ variant: "theory" });
+
+    expect(deckSetViewState).toHaveBeenCalledWith(4, { variant: "theory" });
+    expect(invalidate).not.toHaveBeenCalled();
+    // And nothing was re-read, which is the consequence the reader would actually feel: one
+    // `deck_get`, from opening the deck.
+    expect(deckGet).toHaveBeenCalledTimes(1);
+  });
+
+  /** One field at a time, because that is what the editor sends — the control that moved, and
+   *  `DeckViewState`'s absent-means-leave-it rule for the two that did not. */
+  it("sends only the field that moved", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.rememberView.mutateAsync({ groupBy: "manaValue" });
+    expect(deckSetViewState).toHaveBeenLastCalledWith(4, { groupBy: "manaValue" });
+
+    await result.current.rememberView.mutateAsync({ sortBy: "price" });
+    expect(deckSetViewState).toHaveBeenLastCalledWith(4, { sortBy: "price" });
+  });
+
+  /**
+   * Every card write reallocates (`allocate_deck` runs inside the same transaction), so
+   * every `ownedQuantity` in this deck may have moved and the gallery's `cardCount` with it
+   * — the `["decks"]` root, not this one detail.
+   *
+   * The **wishlist** is not touched, and that is the decision rather than an omission: a
+   * card write moves `deck_allocations` and nothing else, and a wish's `ownedQuantity` is
+   * summed from `collection_entries`. Only the one command that actually writes wishes takes
+   * `["wishlist"]` with it.
+   */
+  it("refreshes every deck query and the wishlist after a card write", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 3,
+    });
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+    // Every deck write marks the wishlist since user schema v48: a theory deck's managed
+    // wishlist is rewritten after it (issue #512).
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    expect(invalidate).not.toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+
+    invalidate.mockClear();
+    // `null` is the wishlist root and is the argument this write has taken since issue #437 —
+    // required rather than optional, so a caller that has not thought about where the wishes go
+    // says so out loud. What each folder is worth is the two cases below this one; this line is
+    // about the three invalidations, and the root is the destination every deck starts on.
+    const wishes = await result.current.missingToWishlist.mutateAsync(null);
+
+    expect(deckMissingToWishlist).toHaveBeenCalledWith(4, null);
+    expect(wishes).toBe(2);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["wishlist"] });
+    // And the deck too: the push reallocates before it counts, so what the deck is short of
+    // is exactly what may have changed.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+    // And the search wall. `missing_to_wishlist` writes **any-printing** wishes — `add_wish`
+    // with an `oracleId` and no `cardId` — and `CardSummary.wishlisted` is an `EXISTS` that
+    // matches an unpinned wish on `c.oracle_id`. One press therefore flips the heart on every
+    // printing of every card the deck was short of, and a search behind this is visibly wrong
+    // rather than stale in a field nothing draws.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["cards", "search"] });
+  });
+
+  /**
+   * **The destination reaches the command, and the deck id keeps its place in front of it**
+   * (issue #437).
+   *
+   * The mutation's whole job here is to put `opened(id)` and the folder on the wire in that
+   * order, so the two things worth pinning are that a picked folder arrives as itself and that
+   * the argument is **positional** — an implementation that passed `{ folderId }` or reversed
+   * the pair would satisfy any assertion that only counted calls. Both destinations in one case,
+   * against one mounted hook, so this reads as the before/after of a reader opening the picker
+   * rather than as two decks.
+   *
+   * `null` is asserted **last** on purpose: it is the value a broken implementation falls back
+   * to, so a test that only ever sent `null` would pass over a folder id being dropped on the
+   * floor — and one that only sent a folder would pass over the root being turned into `0`.
+   */
+  it("carries the wishlist folder to the command, and the root as null", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.missingToWishlist.mutateAsync(7);
+    expect(deckMissingToWishlist).toHaveBeenLastCalledWith(4, 7);
+
+    await result.current.missingToWishlist.mutateAsync(null);
+    expect(deckMissingToWishlist).toHaveBeenLastCalledWith(4, null);
+    expect(deckMissingToWishlist).toHaveBeenCalledTimes(2);
+  });
+
+  /**
+   * **A folder that has gone is refused by the backend, and this hook lets the refusal through
+   * untouched.**
+   *
+   * `missing_to_wishlist` checks the id before it counts anything, precisely so that a vanished
+   * folder cannot answer the `0` a deck short of nothing already answers — and the mutation has
+   * no `onError` of its own, so the message reaches `DeckStats`' failure line as the crate wrote
+   * it. The three invalidations are asserted **absent** in the same breath: a refused write
+   * moved no wish and filed nothing anywhere, and a refetch of the wishlist behind a refusal is
+   * a round trip that can only answer what is already on screen.
+   */
+  it("passes a refused folder back without invalidating anything", async () => {
+    deckMissingToWishlist.mockRejectedValueOnce("That folder is not there any more.");
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(result.current.missingToWishlist.mutateAsync(9)).rejects.toBe(
+      "That folder is not there any more.",
+    );
+
+    expect(deckMissingToWishlist).toHaveBeenCalledWith(4, 9);
+    expect(invalidate).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A decrease on the live list is a cut, and a cut is `deck_to_collection`.** Since schema
+   * v25 the deck holds a card because a collection row sits in its group, so taking a copy off
+   * the list has to put that copy somewhere — `Recently removed`, in the same transaction as the
+   * `deck_cards` write.
+   *
+   * **It replaces the absolute write rather than joining it**, which is the half a reader of
+   * this hook has to get right: `deck_to_collection` decrements the row itself, so sending
+   * `deck_set_card_quantity` as well would take the copies off the list twice. Asserting the
+   * absolute write was *not* called is the whole point of the second expectation.
+   *
+   * The arguments are the row's own id and a **delta** — 4 held, 1 wanted, so 3 copies come
+   * back — where every other deck command takes the grain and an absolute.
+   */
+  it("cuts a live row through `deck_to_collection` and not through the absolute write", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 1,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    expect(deckToCollection).toHaveBeenCalledWith(BOLT.id, 3);
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A virtual deck takes the absolute write, and this was a live defect rather than a
+   * hypothetical** (2026-09-08, issue #401).
+   *
+   * A virtual deck keeps its rows in `live` on purpose — the gallery's card count and colour bar
+   * both read that variant — so it satisfies the `variant === "live"` condition on the only list
+   * it has, and `collection_alloc::deck_to_collection` then refuses it by name. Every removal in
+   * the editor reaches this one route, so without the fourth condition the stepper's zero,
+   * `Remove card` and the remove tray would all have failed on a deck the reader never owned a
+   * card of.
+   *
+   * **`held` is supplied deliberately**, which is the whole point: the caller answers "where the
+   * copies are" exactly as it does for an ordinary deck, and the route refuses on the *deck*
+   * instead. A test that simply left `held` out would pass against the broken build.
+   */
+  it("cuts a virtual deck's row through the absolute write, never through the collection", async () => {
+    deckGet.mockResolvedValue({ ...DETAIL, deck: { ...DECK, virtualOnly: true } });
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 1,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 1);
+    expect(deckToCollection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The three ways a decrease is not a cut**, each of which must keep the absolute write.
+   *
+   * A `theory` row is a plan and holds no cards — the backend refuses one outright, so the UI
+   * must not ask. An *increase* moves nothing out of the group; putting a card *into* a deck is
+   * `collectionToDeck`, which is the Collection Search tab's write. And a caller with no `held`
+   * could not find the row it was pointed at, which a drag outliving its list can do.
+   */
+  it("keeps the absolute write for a theory row, an increase and a caller with no row", async () => {
+    const PLAN: DeckCard = { ...BOLT, id: 11, variant: "theory", quantity: 2 };
+    deckGet.mockImplementation((_id: number, variant: string) =>
+      Promise.resolve(variant === "theory" ? { ...DETAIL, cards: [PLAN] } : DETAIL),
+    );
+    const plan = renderHook(() => useDeck(4, "theory"), { wrapper });
+    await waitFor(() => expect(plan.result.current.cards).toEqual([PLAN]));
+
+    await plan.result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 1,
+      held: { deckCardId: PLAN.id, quantity: PLAN.quantity },
+    });
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "theory", null, 1);
+
+    const live = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(live.result.current.cards).toEqual([BOLT]));
+
+    await live.result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 6,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 6);
+
+    await live.result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+    expect(deckSetCardQuantity).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 0);
+
+    expect(deckToCollection).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **A cut is a collection write, so the collection's root goes stale with the deck's.** The
+   * copies leave the deck's folder and land in `Recently removed`, often *merging into a row
+   * that is already there and deleting the one that moved* — so the list, its summary, both
+   * folder cards and the folder tree are every one of them wrong, and `["decks"]` reaches none
+   * of them.
+   *
+   * `staleTime` is 30 s, so a page that already has an answer refetches nothing on a
+   * navigation: invalidation is the only thing that can tell the Collection page this happened.
+   * That is the ghost row PR 2 shipped, arrived at from the deck side.
+   *
+   * **The search wall and the wishlist stay fresh**, and deliberately: a move between folders
+   * changes no `quantity`, so how many copies of a printing the reader owns is exactly what it
+   * was.
+   */
+  it("marks the collection stale when a cut actually moved copies", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+    seedOwned(client);
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 3,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["collection", "decks", "wishlist"]));
+  });
+
+  /**
+   * **And leaves it alone when nothing moved**, which is the reason the outcome is read rather
+   * than the arguments. A deck card added from search is an intention to buy: no collection row
+   * is behind it, cutting it puts nothing on the reader's desk, and `MoveOutcome` says so with
+   * `quantity: 0` and `entryId: null`. The arguments that went in are identical either way.
+   */
+  it("leaves the collection alone when the cut gave nothing back", async () => {
+    deckToCollection.mockResolvedValue({
+      entryId: null,
+      fromDeck: null,
+      deckCardId: null,
+      quantity: 0,
+    });
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+    seedOwned(client);
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+  });
+
+  /**
+   * A refused cut puts the row back, exactly as a refused absolute write does — zero *removes*
+   * here, and a refusal that stayed removed would be a card silently gone from the deck. The
+   * rollback is the mutation's and does not care which command was sent, which is what this
+   * pins: the branch above it must not have introduced a second, un-rolled-back path.
+   */
+  it("puts a refused cut back on the desk", async () => {
+    deckToCollection.mockRejectedValue("The database is busy with a sync — try again.");
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.cards).toEqual([BOLT]));
+
+    await expect(
+      result.current.setQuantity.mutateAsync({
+        cardId: "p1",
+        categoryId: MAIN.id,
+        finish: null,
+        quantity: 0,
+        held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+      }),
+    ).rejects.toBeTruthy();
+
+    expect(
+      client.getQueryData<DeckDetail>(["decks", "detail", 4, "live", "tcgplayer"])?.cards,
+    ).toEqual([BOLT]);
+  });
+
+  /**
+   * The one label a deck card carries — a **card** write, addressed by the same slot as the
+   * stepper and the move, which is why it lives here rather than beside the label CRUD in
+   * `useDeckMeta`. The label is per-deck data; a card *wearing* one is a fact about a row.
+   *
+   * `null` is not a second command: unlabelling is a write to a nullable column.
+   */
+  it("labels and unlabels a card through the slot the row lives in", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await result.current.setLabel.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, labelId: 8 });
+    expect(deckCardSetLabel).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, 8);
+
+    await result.current.setLabel.mutateAsync({ cardId: "p1", categoryId: MAIN.id, finish: null, labelId: null });
+    expect(deckCardSetLabel).toHaveBeenCalledWith(4, "p1", MAIN.id, "live", null, null);
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] });
+  });
+
+  /**
+   * **The pull is `missingToWishlist` read in the other direction, and its three roots say so.**
+   *
+   * `["decks"]` because every `ownedQuantity` in the deck is a sum over the collection rows
+   * sitting in its group, and this just moved some in. `["collection"]` because those rows
+   * changed folder — through the merge, so a source row can have been folded away and deleted
+   * outright, which the collection's list, its summary, both folder cards and the folder tree
+   * are all wrong about. `["cards", "search"]` because the backend runs the write through
+   * `collection_source::with_write_owned`, which rebuilds the facet index's `owned` dimension:
+   * a search wall left on screen behind the dialog is drawing a stale facet rather than a stale
+   * field nothing draws.
+   *
+   * **And not `["wishlist"]`**, which is the absence that makes this a claim rather than a
+   * shotgun: this command writes no wish, and the one write in this hook that does is the one
+   * next to it. `staleRoots` covers all four roots, so the exact array is the whole assertion.
+   */
+  it("refreshes the deck, the collection, the search and the wishlist after a pull", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    const moved = await result.current.pullFromCollection.mutateAsync([
+      { entryId: 21, quantity: 3 },
+    ]);
+
+    expect(deckPullFromCollection).toHaveBeenCalledWith(4, [{ entryId: 21, quantity: 3 }]);
+    // What actually moved, which is what a sentence quotes — never the picks that went in.
+    expect(moved).toEqual({ copies: 3, cards: 1 });
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /**
+   * **It writes no `deck_cards` row, and this is the assertion that says so.** The command that
+   * looks like it — `collection_to_deck` — folds the quantity into the list as well as moving
+   * the cardboard, so pointing it at a 4-copy line the reader is 3 short of would make the line
+   * 7. This one changes only where the copies sit, which is the only half a shortfall is about.
+   *
+   * There is no field on the answer to check for it, so the claim is made where it can be: the
+   * absolute quantity write and the deck-to-collection cut are the two commands in this hook
+   * that touch `deck_cards`, and a pull calls neither.
+   */
+  it("moves copies without touching the deck's own list", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.pullFromCollection.mutateAsync([{ entryId: 21, quantity: 3 }]);
+
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    expect(deckToCollection).not.toHaveBeenCalled();
+    expect(deckAddCard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **The quick add sends the row's own address and the app's one condition.** `finish` is the
+   * deck row's — `null` is the regular copy — and the condition is `MENU_CONDITION`, which is
+   * whatever every other menu add in this app records at. Both are read off the card rather than
+   * assembled by the caller, so a foil row cannot be recorded as a regular copy.
+   *
+   * **Asserted against the imported constant and never against its current value.** It was `"NM"`
+   * until schema v35 gave the column a grade meaning "the reader did not say"; a test spelling
+   * the letters out would have gone green over a hook that had stopped agreeing with the one
+   * place that decision is written down, which is the whole reason the constant exists.
+   *
+   * The answer is read back, because it is what a sentence quotes: the backend answers what it
+   * *wrote*, and a mirror typed `void` would throw away both counts.
+   */
+  it("records a shortfall against the row's own printing, finish and condition", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    const outcome = await result.current.quickAddToCollection.mutateAsync({
+      card: BOLT,
+      quantity: 2,
+      wishId: null,
+    });
+
+    expect(deckQuickAddToCollection).toHaveBeenCalledWith(4, "p1", null, MENU_CONDITION, 2, null);
+    expect(outcome).toEqual({ copies: 2, entryId: 44, wishCopies: 1 });
+  });
+
+  /** A foil row is a different piece of cardboard and a different `deck_cards` row, so the
+   *  finish travels rather than defaulting. */
+  it("carries a foil row's finish onto the copy it records", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.quickAddToCollection.mutateAsync({
+      card: { ...BOLT, finish: "foil" },
+      quantity: 1,
+      wishId: 7,
+    });
+
+    expect(deckQuickAddToCollection).toHaveBeenCalledWith(4, "p1", "foil", MENU_CONDITION, 1, 7);
+  });
+
+  /**
+   * **The one write in this hook that can _create_ a collection row, so it takes all four owned
+   * roots** — and the absence that makes the pull's own test a claim is exactly what is present
+   * here. `["wishlist"]` is not decoration: the second arm can **delete** a wish outright, so the
+   * shopping list's own rows move and not just their progress. `["cards", "search"]` because
+   * `CardSummary.ownedQuantity` goes from 0 to N on the very tile the press was made on, and
+   * `["collection"]` because a row appeared in a folder.
+   *
+   * The exact array is the whole assertion — `staleRoots` covers all four — so a set narrowed to
+   * the three the movers share would fail here rather than half a minute later on screen.
+   */
+  it("refreshes all four owned roots after a quick add, the wishlist included", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.quickAddToCollection.mutateAsync({
+      card: BOLT,
+      quantity: 2,
+      wishId: null,
+    });
+
+    await waitFor(() =>
+      expect(staleRoots(client)).toEqual(["cards", "collection", "decks", "wishlist"]),
+    );
+  });
+
+  /**
+   * **It writes no `deck_cards` row**, which is what keeps a 4-copy line the reader is 2 short of
+   * from becoming a 6-copy line. There is no field on the answer to check for it, so the claim is
+   * made where it can be: the three commands in this hook that touch the deck's list are the add,
+   * the absolute quantity write and the cut, and a quick add calls none of them.
+   */
+  it("records copies without touching the deck's own list", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.quickAddToCollection.mutateAsync({
+      card: BOLT,
+      quantity: 2,
+      wishId: null,
+    });
+
+    expect(deckAddCard).not.toHaveBeenCalled();
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    expect(deckToCollection).not.toHaveBeenCalled();
+  });
+
+  /** **The read is the press's, never the mount's.** A right-click has to be free, so nothing
+   *  here asks the wishlist about a card until something fetches `quickAddWishesQuery`. */
+  it("asks the wishlist nothing merely for having a deck open", async () => {
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    expect(deckQuickAddWishes).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The read half of the pull — its own hook, because it is the one read here nobody wants by
+ * default: a plan over every unallocated collection row that could fill a hole, asked by one
+ * dialog when one button is pressed.
+ */
+describe("usePullPlan", () => {
+  /**
+   * **The gate is the whole point of the hook's second argument.** `DeckEditor`'s `Layer` doc is
+   * explicit that a dialog nobody opened has no business asking for anything, and this is the
+   * widest read that surface makes — ungated it would be a `deck_pull_plan` behind every deck
+   * anybody merely opened.
+   */
+  it("asks for nothing until the dialog that wants it is open", () => {
+    renderHook(() => usePullPlan(4, false), { wrapper });
+
+    expect(deckPullPlan).not.toHaveBeenCalled();
+  });
+
+  it("reads the plan once it is", async () => {
+    const rows = [{ cardId: "p1", name: "Lightning Bolt", short: 3 }];
+    deckPullPlan.mockResolvedValue(rows);
+
+    const { result } = renderHook(() => usePullPlan(4, true), { wrapper });
+
+    await waitFor(() => expect(result.current.data).toBe(rows));
+    expect(deckPullPlan).toHaveBeenCalledWith(4);
+  });
+
+  /** A caller with no deck open mounts an idle query rather than branching around one —
+   *  `useDeck(null)`'s rule, and a `null` id can never satisfy the gate however it is set. */
+  it("asks for nothing when there is no deck, open dialog or not", () => {
+    renderHook(() => usePullPlan(null, true), { wrapper });
+
+    expect(deckPullPlan).not.toHaveBeenCalled();
+  });
+
+  /**
+   * **Under the `["decks"]` root**, which is what makes every write in {@link useDeck} refresh
+   * it — the pull itself most of all: a plan left in the cache afterwards offers copies that
+   * are now in the deck's own group and are therefore excluded from it by definition.
+   *
+   * Asserted through the invalidation rather than by reading the key back, because the key is
+   * only ever right *relative to* that root: `invalidateQueries({ queryKey: ["decks"] })` is
+   * what the hook next door fires, and a plan keyed anywhere else would survive it.
+   */
+  it("is invalidated by the deck root every write in this file fires", async () => {
+    const { result } = renderHook(() => usePullPlan(4, true), { wrapper });
+    await waitFor(() => expect(result.current.isSuccess).toBe(true));
+    expect(deckPullPlan).toHaveBeenCalledTimes(1);
+
+    await client.invalidateQueries({ queryKey: ["decks"] });
+
+    await waitFor(() => expect(deckPullPlan).toHaveBeenCalledTimes(2));
+  });
+});
+
+/**
+ * The two options factories, which exist so that a key is spelled once.
+ *
+ * **A press that fetches imperatively and a hook that mounts the same query must land on one
+ * cache entry**, and nothing in the type system holds that: a second spelling still *works* — it
+ * simply always misses, so every press is a fresh command behind a dialog that already had the
+ * answer, and nothing goes red. These pin the keys as literals rather than reading them back off
+ * the factory, which would be the assertion checking itself.
+ */
+describe("the query keys the press and the dialog share", () => {
+  /**
+   * `usePullPlan` is built **from** this factory, so the proof is that the hook's own fetch is
+   * served out of the cache the factory's key names — not that two arrays look alike.
+   */
+  it("serves usePullPlan out of the entry pullPlanQuery names", () => {
+    const rows = [{ cardId: "p1", name: "Lightning Bolt", short: 3 }];
+    client.setQueryData(["decks", "pullPlan", 4], rows);
+
+    const { result } = renderHook(() => usePullPlan(4, true), { wrapper });
+
+    // Read on the **first** render, with no `waitFor`: a cached entry is served synchronously,
+    // where a key that disagreed would mount pending and answer a round trip later. (This
+    // client sets no `staleTime`, so a refetch follows — which is the app's ordinary behaviour
+    // and says nothing about the key.)
+    expect(result.current.data).toBe(rows);
+    expect(pullPlanQuery(4).queryKey).toEqual(["decks", "pullPlan", 4]);
+  });
+
+  /**
+   * **Under the `["wishlist"]` root**, which is what `quickAddToCollection`'s invalidation
+   * reaches — that write can delete the very wish this answered, and a cached list offering a
+   * row that is gone is a picker whose confirm is refused.
+   *
+   * **The finish is part of the key because it is part of the question**: the predicate matches
+   * the row's own finish, so one printing's foil line and regular line are two answers. `""` is
+   * the regular copy, which no finish spells, so it cannot collide with `"foil"`.
+   */
+  it("keys the wish read on the printing and the finish, under the wishlist root", () => {
+    expect(quickAddWishesQuery("p1", null).queryKey).toEqual(["wishlist", "forPrinting", "p1", ""]);
+    expect(quickAddWishesQuery("p1", "foil").queryKey).toEqual([
+      "wishlist",
+      "forPrinting",
+      "p1",
+      "foil",
+    ]);
+    expect(quickAddWishesQuery("p2", null).queryKey).toEqual(["wishlist", "forPrinting", "p2", ""]);
+  });
+
+  /** The fetcher sends the two arguments the command declares, and answers its rows through —
+   *  a factory that dropped the finish would ask a different question under the right key. */
+  it("fetches the wishes for that printing and finish", async () => {
+    const wishes = [{ id: 7, quantity: 3, folderId: null, folderName: null }];
+    deckQuickAddWishes.mockResolvedValue(wishes);
+
+    await expect(
+      client.fetchQuery(quickAddWishesQuery("p1", "etched")),
+    ).resolves.toBe(wishes);
+    expect(deckQuickAddWishes).toHaveBeenCalledWith("p1", "etched");
+    // And it landed where the key says, so a second press pays nothing.
+    expect(client.getQueryData(["wishlist", "forPrinting", "p1", "etched"])).toBe(wishes);
+  });
+
+  /** The wishlist root reaches it, which is what makes the quick add's own invalidation enough
+   *  — a stale list here is a picker offering a wish the same press has just deleted. */
+  it("is invalidated by the wishlist root the quick add fires", async () => {
+    await client.fetchQuery(quickAddWishesQuery("p1", null));
+
+    await client.invalidateQueries({ queryKey: ["wishlist"] });
+
+    expect(client.getQueryState(["wishlist", "forPrinting", "p1", ""])?.isInvalidated).toBe(true);
+  });
+});
+
+/**
+ * The swap pressed from the card pane, which is the only place it is pressed from.
+ *
+ * The pane is a **sibling** of the deck editor under `App`, so this mounts a second observer
+ * on the same mutation definition — and that is the whole reason the definition carries an
+ * `onError` the other five writes do not need. See `useDeck`'s `swapPrinting`.
+ */
+describe("useSwapFromPane", () => {
+  /** No context is a card opened from anywhere but a deck row: nothing to ask for, and — like
+   *  the gallery mounting `useDeck(null)` — nothing asked. */
+  it("asks for nothing when the card was not opened from a deck", () => {
+    const { result } = renderHook(() => useSwapFromPane(null), { wrapper });
+
+    expect(deckGet).not.toHaveBeenCalled();
+    expect(result.current.swap.isIdle).toBe(true);
+    // And nothing to report about a deck nobody asked for: `deckGone` is about a read that
+    // answered *nothing*, not about a read that never happened.
+    expect(result.current.deckGone).toBe(false);
+  });
+
+  /** The context's deck, all the way to the command — `decks.id` and `deck_categories.id` are
+   *  both INTEGER keys and the mirror takes numbers. */
+  it("swaps the context's deck row for the printing that was pressed", async () => {
+    const { result } = renderHook(
+      () =>
+        useSwapFromPane({
+          deckId: 4,
+          categoryId: SIDE.id,
+          categoryName: SIDE.name,
+          cardId: "p1",
+          // The list the pane was opened from. `live` here, so these keep addressing the list they
+          // always did. The theory case was `CardDetailPane.test.tsx`'s and went with that file
+          // on 2026-09-03: `AllPrintingsDialog` passes `request.deck?.variant` straight through,
+          // and nothing covers `theory` here any more.
+          variant: "live",
+          // The regular copy, for that same reason: the foil case is a different row, and the
+          // point of these is the deck and the category rather than the object.
+          finish: null,
+        }),
+      { wrapper },
+    );
+
+    const answer = await result.current.swap.mutateAsync({
+      fromCardId: "p1",
+      toCardId: "p2",
+      categoryId: SIDE.id,
+      finish: null,
+    });
+
+    expect(deckSwapPrinting).toHaveBeenCalledWith(4, "p1", "p2", SIDE.id, "live", null);
+    expect(answer).toEqual({ folded: false, quantity: 4 });
+  });
+
+  /**
+   * **The refused swap re-reads the deck**, and this is the mechanism the editor behind the
+   * pane depends on.
+   *
+   * TanStack shares a query's *cache* between observers and shares a mutation's **state** with
+   * nobody: the editor's `useDeck(4).swapPrinting` and this one are two `useMutation` calls, so
+   * the editor's copy stays idle however this one ends. Its refused-write family — six writes,
+   * one effect, one re-read — therefore cannot see this failure, and a deck deleted under the
+   * reader would leave the category columns painting a deck that is gone while the pane says
+   * why. The invalidation is that family's rule, moved onto the definition every observer
+   * shares.
+   */
+  it("re-reads the deck when a swap is refused, whichever observer pressed it", async () => {
+    deckSwapPrinting.mockRejectedValue("That deck is not there any more.");
+    const { result } = renderHook(
+      () =>
+        useSwapFromPane({
+          deckId: 4,
+          categoryId: MAIN.id,
+          categoryName: MAIN.name,
+          cardId: "p1",
+          // The list the pane was opened from. `live` here, so these keep addressing the list they
+          // always did. The theory case was `CardDetailPane.test.tsx`'s and went with that file
+          // on 2026-09-03: `AllPrintingsDialog` passes `request.deck?.variant` straight through,
+          // and nothing covers `theory` here any more.
+          variant: "live",
+          // The regular copy, for that same reason: the foil case is a different row, and the
+          // point of these is the deck and the category rather than the object.
+          finish: null,
+        }),
+      {
+        wrapper,
+      },
+    );
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+
+    await expect(
+      result.current.swap.mutateAsync({
+        fromCardId: "p1",
+        toCardId: "p2",
+        categoryId: MAIN.id,
+        finish: null,
+      }),
+    ).rejects.toBe("That deck is not there any more.");
+
+    await waitFor(() => expect(invalidate).toHaveBeenCalledWith({ queryKey: ["decks"] }));
+  });
+
+  /**
+   * The read the pane takes this hook for: a deck that has been deleted answers nothing, and
+   * the pane needs to know *before* the press — otherwise its only way of finding out is to
+   * make a write the deck can only refuse.
+   *
+   * Loading is deliberately not gone: a pane that flashed "no offers" for one frame on the way
+   * up would be telling the reader something untrue about their deck.
+   */
+  it("reports a deck the read cannot find, and calls nothing gone while it is loading", async () => {
+    deckGet.mockResolvedValue(null);
+    const { result } = renderHook(
+      () =>
+        useSwapFromPane({
+          deckId: 4,
+          categoryId: MAIN.id,
+          categoryName: MAIN.name,
+          cardId: "p1",
+          // The list the pane was opened from. `live` here, so these keep addressing the list they
+          // always did. The theory case was `CardDetailPane.test.tsx`'s and went with that file
+          // on 2026-09-03: `AllPrintingsDialog` passes `request.deck?.variant` straight through,
+          // and nothing covers `theory` here any more.
+          variant: "live",
+          // The regular copy, for that same reason: the foil case is a different row, and the
+          // point of these is the deck and the category rather than the object.
+          finish: null,
+        }),
+      {
+        wrapper,
+      },
+    );
+
+    expect(result.current.deckGone).toBe(false);
+
+    await waitFor(() => expect(result.current.deckGone).toBe(true));
+  });
+});
+
+/**
+ * **A deck write takes `["decks"]` and nothing wider, and this is the test that keeps it that
+ * way.**
+ *
+ * A deck write moves `deck_allocations` and never once touches `collection_entries`, so the
+ * deck root is owed and the other three are not. The three that stay fresh are the ones that
+ * provably cannot have moved: `CardSummary`'s owned count is allocation-blind, and a wish's
+ * `ownedQuantity` is summed straight from `collection_entries`. Firing them would be three
+ * refetches per press of the stepper that can only ever answer what is already on screen.
+ */
+describe("useDeck invalidation", () => {
+  it("marks only the decks stale when a card is added", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    // Fresh, all four — so the assertion below is about what the write marked, not about the
+    // state the mount left behind.
+    expect(staleRoots(client)).toEqual([]);
+
+    await result.current.addCard.mutateAsync({ cardId: "p1", categoryId: MAIN.id, quantity: 2 });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+  });
+
+  /**
+   * **The copy to the other list takes the same two roots, and takes them on a refusal too** —
+   * `addCard`'s rule for its reason: a refusal here is a busy database, a deck that has gone, or a
+   * deck that stopped keeping a plan in another window, and the last two must not leave the editor
+   * painting a list that is not there. The collection is never touched: a plan holds no cardboard
+   * and an add to the live list moves none.
+   */
+  it("marks only the decks stale after a copy to the other list, refused or not", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+    const slot = { cardId: "p1", categoryId: MAIN.id, finish: null };
+
+    await result.current.addToOtherList.mutateAsync(slot);
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+
+    seedOwned(client);
+    expect(staleRoots(client)).toEqual([]);
+    deckAddCardToOtherList.mockRejectedValueOnce(
+      "This deck keeps one list, so there is no other list to add to.",
+    );
+    await expect(result.current.addToOtherList.mutateAsync(slot)).rejects.toMatch(/one list/);
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+  });
+
+  /**
+   * **An add Rust filed as a token re-reads the tokens** (token stacks, spec §4.6). `deck::add_card`
+   * reroutes a `token` / `double_faced_token` / `emblem` printing to a token entry and answers
+   * `id: 0` — no deck card was made — so the one read that changed is the Tokens & Emblems read,
+   * and it has to refetch or the token the reader dropped on a pile appears nowhere.
+   *
+   * **An observed query, so the refetch is the assertion** rather than a stale flag: the key is
+   * `useDeckTokens`' own shape (`["decks", "tokens", deckId, variant, marketplace]`), which is
+   * under the `["decks"]` root `invalidate` fires — the whole of why no new arm was needed.
+   */
+  it("re-reads the deck's tokens after an add the backend filed as a token", async () => {
+    deckAddCard.mockResolvedValue({ id: 0, quantity: 1, removed: false });
+    const readTokens = vi.fn().mockResolvedValue([]);
+    const { result } = renderHook(
+      () => ({
+        deck: useDeck(4),
+        tokens: useQuery({
+          queryKey: ["decks", "tokens", 4, "live", "tcgplayer"],
+          queryFn: readTokens,
+        }),
+      }),
+      { wrapper },
+    );
+    await waitFor(() => expect(result.current.tokens.isSuccess).toBe(true));
+    expect(readTokens).toHaveBeenCalledTimes(1);
+
+    const change = await result.current.deck.addCard.mutateAsync({
+      cardId: "t-treasure",
+      categoryId: MAIN.id,
+      quantity: 1,
+    });
+
+    expect(change.id).toBe(0);
+    await waitFor(() => expect(readTokens).toHaveBeenCalledTimes(2));
+  });
+
+  /** The stepper, which is the one a reader presses over and over. */
+  it("marks only the decks stale when the stepper moves a quantity", async () => {
+    seedOwned(client);
+    const { result } = renderHook(() => useDeck(4), { wrapper });
+    await waitFor(() => expect(result.current.deck).toEqual(DECK));
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 3,
+    });
+
+    await waitFor(() => expect(staleRoots(client)).toEqual(["decks", "wishlist"]));
+  });
+});
+
+/**
+ * **Every write that moves a deck row's address moves the open card's context with it.**
+ *
+ * A row is `(deck, category, card, variant, finish)` and `paneDeckContext` names one — so a write
+ * that changes any of the five and leaves the context alone leaves the card modal's deck controls
+ * addressing a row that no longer exists. That was reported as the modal detaching, and it was
+ * three separate holes in one hook: `move` and `refile` change the third part, `swap` the fourth,
+ * `setCardFinish` the fifth (the only one that had been fixed).
+ *
+ * The store is the real one and the assertions are about what ends up in it, because that is what
+ * every reader of the context — the modal's scope, the desk's gold ring, `deckControl.ts`'s caret
+ * hand-back — is drawing from.
+ */
+describe("re-anchoring the open card", () => {
+  /** The card modal open on `BOLT`'s row, which is the address every write below names. */
+  const OPEN: PaneDeckContext = {
+    deckId: 4,
+    categoryId: MAIN.id,
+    categoryName: MAIN.name,
+    cardId: "p1",
+    variant: "live",
+    finish: null,
+  };
+
+  /** The context as it stands, which is the whole assertion in most of these. */
+  const anchor = () => useAppStore.getState().paneDeckContext;
+
+  async function openDeck(variant: "live" | "theory" = "live") {
+    const hook = renderHook(() => useDeck(4, variant), { wrapper });
+    await waitFor(() => expect(hook.result.current.deck).toEqual(DECK));
+    return hook;
+  }
+
+  /**
+   * One stop on the deck's own walk, as `DeckEditor` publishes them: a deck stop *is* a deck row,
+   * so its `deck` is the whole six-field address and the stop and the row cannot drift.
+   */
+  const stop = (deck: PaneDeckContext, name: string): CardWalkStop => ({
+    cardId: deck.cardId,
+    oracleId: `o-${deck.cardId}`,
+    name,
+    deck,
+  });
+
+  /** The walk, published the way the editor publishes it. `label` is that surface's own noun and
+   *  reaches nothing here. */
+  const publish = (...stops: CardWalkStop[]) =>
+    useAppStore.setState({ cardWalk: { label: "the deck", stops } });
+
+  /**
+   * The stop before the open one and the stop after it — the two a departure can land on.
+   *
+   * `NEXT` differs from `OPEN` in its **pile** as well as its printing, so an assertion about
+   * where the modal landed is an assertion about the whole address rather than about one id.
+   */
+  const PREVIOUS: PaneDeckContext = { ...OPEN, cardId: "p0" };
+  const NEXT: PaneDeckContext = {
+    ...OPEN,
+    cardId: "p2",
+    categoryId: SIDE.id,
+    categoryName: SIDE.name,
+  };
+
+  /**
+   * The fifth part, and the arm that already worked — pinned here because it never had a test of
+   * its own and the generalisation runs straight through it.
+   *
+   * `selectedCardId` is asserted beside the context because `openCardFromDeck` writes both: the
+   * card that is open and the row it came from are one act, which is what stops the two drifting.
+   */
+  it("follows a row onto the finish it was set to", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.setCardFinish.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      to: "foil",
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, finish: "foil" });
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+  });
+
+  /**
+   * The third part — **the reported case**, measured in the shipped window on 2026-09-03: the deck
+   * row came back `categoryId: 5 "Draw"` and the context was still `categoryId: 1 "Commander"`,
+   * so the modal's category picker went on reading the pile the card had left.
+   *
+   * **The name travels with the id**, and that is the half a fix could easily miss: a category is
+   * a row the reader named, so nothing downstream can translate the id back into a word — the
+   * modal's `4× in Burn spells` line prints `categoryName` straight.
+   */
+  it("follows a card into the pile a move filed it in, name and all", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: SIDE.id,
+      finish: null,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, categoryId: SIDE.id, categoryName: SIDE.name });
+  });
+
+  /**
+   * The pile the cached `deck_get` cannot name — a category created a beat ago by the very
+   * gesture that is filing into it, where the refetch behind the create is racing the move.
+   *
+   * The caller is holding the name (`deck_category_create` answers it), so it passes `toName`,
+   * and that word reaches no command at all: the assertion is that `deck_move_card` is sent the
+   * same seven arguments it always was.
+   */
+  it("takes the destination's name from the caller when the deck read cannot answer", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: 42,
+      finish: null,
+      toName: "Ramp",
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, categoryId: 42, categoryName: "Ramp" });
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, 42, null, "live", null);
+  });
+
+  /**
+   * Neither source can name it: the id moves and the **word is left alone rather than erased**.
+   *
+   * The patch is spread over the context, so a `categoryName: undefined` would delete the field —
+   * which type-checks, draws nothing and is invisible to every assertion that only reads the id.
+   * This is the test that would go red for it.
+   */
+  it("keeps the pile's old word rather than erasing it when nothing can name the new one", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: 42,
+      finish: null,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, categoryId: 42 });
+    expect(anchor()?.categoryName).toBe(MAIN.name);
+  });
+
+  /**
+   * The same third part reached through the quick zones' `Auto` — and the name comes off the
+   * re-file's own answer rather than the cache, because `deck_move_card`'s name arm
+   * finds-or-creates and a pile it has just made is one no cached read carries.
+   */
+  it("follows a card into the pile a re-file chose", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p1", slugs: ["removal"] }]);
+    deckMoveCard.mockResolvedValue(31);
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.refileCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      finish: null,
+      typeLine: "Instant",
+      categoryName: MAIN.name,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, categoryId: 31, categoryName: "Removal" });
+  });
+
+  /**
+   * **A re-file that moved nothing moves nothing here either**, which is the same gate the
+   * refetch is behind: the card is already in the pile the rule names, so its address did not
+   * change and re-pointing the context would be this hook telling the modal about a move that
+   * never happened.
+   */
+  it("leaves the open card where it is when the re-file had nothing to do", async () => {
+    oracleTagsForPrintings.mockResolvedValue([{ cardId: "p1", slugs: ["removal"] }]);
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.refileCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      finish: null,
+      typeLine: "Instant",
+      categoryName: "Removal",
+    });
+
+    expect(anchor()).toEqual(OPEN);
+    expect(deckMoveCard).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The fourth part. **Nothing re-anchored a swap at all until 2026-09-03** — the re-anchor was
+   * documented as living at the call site, and the call site it named was a docked pane that had
+   * been deleted; `AllPrintingsDialog`, which took over the press, notes the row for the *caret*
+   * and never touches the context. So a swap left the card modal underneath addressing the
+   * printing the deck had stopped playing.
+   */
+  it("follows a row onto the printing a swap put in it", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.swapPrinting.mutateAsync({
+      fromCardId: "p1",
+      toCardId: "p2",
+      categoryId: MAIN.id,
+      finish: null,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, cardId: "p2" });
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+  });
+
+  /**
+   * **A fold needs no arm and this is what that claim means.** Swapping onto a printing the pile
+   * already holds turns two rows into one, and the survivor is the row at `toCardId` — which is
+   * exactly where a plain swap lands too, so one line covers both outcomes.
+   */
+  it("lands on the surviving row when a swap folded", async () => {
+    deckSwapPrinting.mockResolvedValue({ folded: true, quantity: 7 });
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.swapPrinting.mutateAsync({
+      fromCardId: "p1",
+      toCardId: "p2",
+      categoryId: MAIN.id,
+      finish: null,
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, cardId: "p2" });
+  });
+
+  /**
+   * **Zero deletes the row, so there is no address to move to** — the context is cleared and the
+   * card stays open, which is what `setSelectedCardId` means everywhere else in this app.
+   *
+   * Leaving it was the alternative and is not available: `deck_set_card_quantity` answers
+   * `card_gone` for a slot with no row, so the modal's stepper would become a `+` that can only
+   * be refused, and the modal draws no error state for these mutations — the refusal would be
+   * silent.
+   *
+   * **Since issue #474 this is the _floor_ rather than the rule, and what makes it the floor is
+   * a line that is not written here: no walk is published.** With one, the removed row has
+   * neighbours and the modal steps onto the next of them — the six tests below. So the absence
+   * of a `cardWalk` in this setup is load-bearing, and a walk added to a shared `beforeEach`
+   * would flip what this pins with nothing going red.
+   */
+  it("lets the open card go when the removed row is on no walk", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toBeNull();
+    // The card, not the modal: the reader was looking at it and may well want to put it back.
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+  });
+
+  /** A step that did not empty the slot changed no part of the address, so it moves nothing. */
+  it("holds the anchor when the stepper only changed a number", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 3,
+    });
+
+    expect(anchor()).toEqual(OPEN);
+  });
+
+  /**
+   * **The reported bug** (issue #474). A deleted row is not a stop, so the modal open over it
+   * lost its place the moment the write landed — `at` went to `-1`, both chevrons unmounted and
+   * the arrow keys went dead on a surface where a cut is usually one of a run of them. The walk
+   * is the list the modal is able to navigate, so the answer is to carry on along it.
+   *
+   * The assertion is the **whole** address rather than the printing: the modal's stepper, its
+   * category picker and the desk's gold ring all read the context, so a step that moved `cardId`
+   * alone would point every one of them at a row in the pile the reader has just left.
+   */
+  it("steps the open card onto the next stop when its row is removed", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(PREVIOUS, "Shock"), leaving, stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(NEXT);
+    expect(useAppStore.getState().selectedCardId).toBe("p2");
+    // The move is one nobody asked for, so it has to be reversible: Ctrl+Z reaches past this
+    // modal, puts the row back, and the remembered stop is how the reader comes back with it.
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
+  });
+
+  /**
+   * **The same step, through the command the reported press actually sends.** Every removal in
+   * the editor reaches `setQuantityAt`, which hands this mutation a `CutFrom` — so a cut on the
+   * live list is `deck_to_collection` and not the absolute write, and a departure planned for one
+   * command and spent on the other would be a fix that worked in this file and nowhere else.
+   */
+  it("steps the open card on when the removal went through the cut", async () => {
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(leaving, stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+      held: { deckCardId: BOLT.id, quantity: BOLT.quantity },
+    });
+
+    expect(deckToCollection).toHaveBeenCalledWith(BOLT.id, BOLT.quantity);
+    expect(deckSetCardQuantity).not.toHaveBeenCalled();
+    expect(anchor()).toEqual(NEXT);
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
+  });
+
+  /**
+   * **Next before previous, and the fallback exists only because the last stop has no next.** A
+   * reader going through a deck is going forwards, and walking them backwards would re-show a
+   * card they had just decided to keep — but at that end of the walk the card before is the only
+   * thing "carry on" can mean, and a cut of the last card must not strand them.
+   */
+  it("falls back to the previous stop when the last card on the walk is cut", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(PREVIOUS, "Shock"), leaving);
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(PREVIOUS);
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
+  });
+
+  /**
+   * A walk of one has nowhere to step to, so the floor two tests up applies — **and the stop is
+   * remembered anyway**, which is the half that is not the floor. After a Ctrl+Z the card the
+   * reader is still looking at is a deck row again, and with nothing remembered it would go on
+   * being drawn as though it were not: no stepper, no category picker, no label.
+   */
+  it("stays put but remembers the stop when the walk holds nothing else", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(leaving);
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toBeNull();
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
+  });
+
+  /**
+   * **The plan is made at the press and spent on the row's _fate_, never on the quantity that was
+   * asked for.** `quantity === 0` is the intent to remove and `removed: false` is the backend
+   * saying the slot survived it, so a modal walked off a row that is still there would be this
+   * hook reporting a removal that never happened — and the stop it walked off would be a return
+   * nothing can ever satisfy, since the row never left the walk.
+   */
+  it("moves nobody when the write that asked for zero did not remove the row", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 1, removed: false });
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(OPEN, "Lightning Bolt"), stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(OPEN);
+    expect(useAppStore.getState().paneReturns).toEqual([]);
+  });
+
+  /**
+   * `anchoredOn` is the departure's fence exactly as it is every re-anchor's above. A reader can
+   * have one card open and remove another from its menu, the tray or the `Delete` key, and a
+   * removal that walked them off the card they were reading would be this feature firing at a
+   * press they did not make on a row they were not looking at.
+   */
+  it("leaves the open card alone when a different row is removed", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(OPEN, "Lightning Bolt"), stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: NEXT.cardId,
+      categoryId: NEXT.categoryId,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(OPEN);
+    expect(useAppStore.getState().selectedCardId).toBe("p1");
+    expect(useAppStore.getState().paneReturns).toEqual([]);
+  });
+
+  /**
+   * **A deck holds one printing in two piles, so two stops can share a `cardId` and differ only
+   * in the grain** — which is why the plan finds its place with `sameDeckSlot` and not with the
+   * printing. Matched on the id alone this walk answers the *twin* at index 0, and the reader
+   * would be stepped onto the very row the write has just deleted.
+   */
+  it("finds the open row among two stops holding one printing", async () => {
+    deckSetCardQuantity.mockResolvedValue({ id: 9, quantity: 0, removed: true });
+    const twin: PaneDeckContext = { ...OPEN, categoryId: MAYBE.id, categoryName: MAYBE.name };
+    const leaving = stop(OPEN, "Lightning Bolt");
+    useAppStore.getState().openCardFromDeck(OPEN);
+    publish(stop(twin, "Lightning Bolt"), leaving, stop(NEXT, "Fireblast"));
+    const { result } = await openDeck();
+
+    await result.current.setQuantity.mutateAsync({
+      cardId: "p1",
+      categoryId: MAIN.id,
+      finish: null,
+      quantity: 0,
+    });
+
+    expect(anchor()).toEqual(NEXT);
+    expect(useAppStore.getState().paneReturns).toEqual([leaving]);
+  });
+
+  /**
+   * **The guard is the whole address, and these are the four ways it has to refuse.**
+   *
+   * A reader can have a card open on one row and write to another — a right-click on a second
+   * card, a drag out of a different pile, an editor on the other list — and dragging the open
+   * card along would silently re-point the modal at a row nobody looked at. Each case here writes
+   * a row that differs from the open one in exactly one part.
+   */
+  it.each([
+    ["another pile", { categoryId: SIDE.id, categoryName: SIDE.name }],
+    ["another printing", { cardId: "p2" }],
+    ["another finish", { finish: "foil" as const }],
+    ["another deck", { deckId: 9 }],
+  ])("leaves a card open from %s alone", async (_case, difference) => {
+    useAppStore.getState().openCardFromDeck({ ...OPEN, ...difference });
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: 42,
+      finish: null,
+      toName: "Ramp",
+    });
+
+    expect(anchor()).toEqual({ ...OPEN, ...difference });
+  });
+
+  /**
+   * The fourth part of the address is the **list**, and it is the one a test can only reach by
+   * mounting the hook the other way round: the editor's Theory tab writes `theory` rows, and a
+   * card open from the Live list must not be dragged onto one.
+   */
+  it("leaves a card open from the other list alone", async () => {
+    useAppStore.getState().openCardFromDeck(OPEN);
+    const { result } = await openDeck("theory");
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: SIDE.id,
+      finish: null,
+    });
+
+    expect(deckMoveCard).toHaveBeenCalledWith(4, "p1", MAIN.id, SIDE.id, null, "theory", null);
+    expect(anchor()).toEqual(OPEN);
+  });
+
+  /** No card open at all is the common case — most of these writes are made with the modal shut. */
+  it("does nothing when no card is open", async () => {
+    const { result } = await openDeck();
+
+    await result.current.moveCard.mutateAsync({
+      cardId: "p1",
+      from: MAIN.id,
+      to: SIDE.id,
+      finish: null,
+    });
+
+    expect(anchor()).toBeNull();
+    expect(useAppStore.getState().selectedCardId).toBeNull();
+  });
+});

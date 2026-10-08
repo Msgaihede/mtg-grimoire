@@ -1,7 +1,7 @@
 import type { StorybookConfig } from "@storybook/react-vite";
 import { fileURLToPath } from "node:url";
 import { WATCH_IGNORED } from "../vite.watch.ts";
-import { FAKE_ALIASES } from "./fake/aliases.ts";
+import { FAKE_ALIASES } from "../packages/fake/aliases.ts";
 
 /**
  * The two pieces of Node's `process` this file reads, typed at the one place they are read.
@@ -52,20 +52,43 @@ if (node.env.STORYBOOK_ART === "bundled" && !bundledArt) {
 }
 
 const config: StorybookConfig = {
-  // `mobile/` since phase 3: the light app's phone face is its own UI, and its pieces are storied
-  // where they live (`mobile/CLAUDE.md`). `preview.css` scans the same directory for classes.
-  stories: ["../src/**/*.stories.tsx", "../mobile/**/*.stories.tsx", "../.storybook/**/*.mdx"],
+  // `apps/light/` since phase 3: the light app's phone face is its own UI, and its pieces are
+  // storied where they live (`apps/light/CLAUDE.md`). `apps/desktop/src/` since 2026-10-08: the
+  // desktop's boot screen moved there out of the shared UI, and took its stories with it.
+  // `preview.css` scans the same directories for classes.
+  stories: [
+    "../packages/ui/**/*.stories.tsx",
+    "../apps/light/**/*.stories.tsx",
+    "../apps/desktop/src/**/*.stories.tsx",
+    "../.storybook/**/*.mdx",
+  ],
   addons: ["@storybook/addon-docs", "@storybook/addon-a11y", "@storybook/addon-mcp"],
-  framework: { name: "@storybook/react-vite", options: {} },
-  // The app's `public/`, mounted at the Storybook root. It is here for one file —
+  // **`viteConfigPath` names the shared base, and without it Storybook has no Tailwind.** The
+  // builder asks Vite for a `vite.config.*` in the project root and takes its plugins from
+  // there; that file was the desktop app's own until 2026-10-08, when it moved into
+  // `apps/desktop/` and left the root with none. A missing config is not an error — Vite's
+  // loader answers `null` and the builder carries on with nothing: no Tailwind over
+  // `preview.css`, and no icon-font rewrite. Absolute, because the loader reads a relative path
+  // against the working directory and not against the project root. `vite.base.ts` sets no
+  // `root`, so the workbench keeps the one the builder gives it.
+  framework: {
+    name: "@storybook/react-vite",
+    options: {
+      builder: { viteConfigPath: fileURLToPath(new URL("../vite.base.ts", import.meta.url)) },
+    },
+  },
+  // The app's `apps/desktop/public/`, mounted at the Storybook root. It is here for one file —
   // `mtg-grimoire-mark.svg`, which `manager.ts` names as `brandImage` — and pointing at the
   // directory Vite already serves is deliberate rather than a shortcut: the mark the sidebar
   // draws and the favicon `index.html` asks for are then the same bytes, so a workbench
   // branded with last month's logo is not a state this tree can reach. One directory, two
-  // consumers. Nothing else in `public/` is served to a story, because nothing else is in it.
+  // consumers. Nothing else in `apps/desktop/public/` is served to a story, because nothing else
+  // is in it.
   //
   // The card art joins it only under `STORYBOOK_ART=bundled`; see `bundledArt` above.
-  staticDirs: bundledArt ? ["../public", { from: CARD_ART, to: "/card-art" }] : ["../public"],
+  staticDirs: bundledArt
+    ? ["../apps/desktop/public", { from: CARD_ART, to: "/card-art" }]
+    : ["../apps/desktop/public"],
   // The manager document's own favicon. Storybook injects its own unless the custom head
   // already carries a `<link rel="icon">`, so this replaces it rather than competing with it
   // — the tab is then the app's mark whether it is the workbench or the app in front of you.
@@ -81,15 +104,15 @@ const config: StorybookConfig = {
     config.resolve ??= {};
     // An array, not an object: these are exact-match rules and their order is the
     // contract. `@/lib/images` must be tried before the bare `@` prefix. The fake's four are
-    // `fake/aliases.ts`'s, which `vite.mobile.config.ts` reads too.
+    // `fake/aliases.ts`'s, which `apps/light/vite.config.ts` reads too.
     config.resolve.alias = [
       ...FAKE_ALIASES,
-      { find: /^@\//, replacement: fileURLToPath(new URL("../src/", import.meta.url)) },
+      { find: /^@\//, replacement: fileURLToPath(new URL("../packages/ui/", import.meta.url)) },
     ];
-    // **The dev server does not inherit `vite.config.ts`'s `server` block — the builder replaces
+    // **The dev server does not inherit `vite.base.ts`'s `server` block — the builder replaces
     // it.** `@storybook/builder-vite` loads that file and then spreads a `server` of its own over
     // the result (`createViteServer`, read at 10.6.0), so `server.watch.ignored` never arrived:
-    // this server watched every build output under the root, all of `src-tauri/target` included,
+    // this server watched every build output under the root, all of `target` included,
     // which the app's own server has never done. Driven 2026-10-01, it exited on `EBUSY` under
     // `crates/card-scanner/target` during a cargo build exactly as the plain Vite servers did.
     // `vite.watch.ts` is the list and the why. `storybook build` keeps the base config's `server`

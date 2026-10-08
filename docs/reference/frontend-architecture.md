@@ -1,6 +1,6 @@
 # Frontend Architecture & Conventions
 
-General architectural patterns, component invariants, and host boundaries across the React frontend in `src/`.
+General architectural patterns, component invariants, and host boundaries across the React frontend in `packages/ui/`.
 
 Styling tokens, themes, and CSS layer conventions are documented in [frontend-design.md](frontend-design.md);
 animation and motion constraints are in [motion.md](motion.md).
@@ -19,7 +19,7 @@ Card artwork across the app must always be rendered via `components/CardImage`, 
 
 ---
 
-## Context Menu Architecture (`src/components/menu/`)
+## Context Menu Architecture (`packages/ui/components/menu/`)
 
 Right-click context menus are owned by a single root provider:
 
@@ -37,14 +37,14 @@ Right-click context menus are owned by a single root provider:
 
 ## IPC Mirroring & Text Verification
 
-- **Mirror Maintenance**: TypeScript interfaces in `src/lib/ipc.ts` mirror Rust DTOs by hand.
+- **Mirror Maintenance**: TypeScript interfaces in `packages/ui/lib/ipc.ts` mirror Rust DTOs by hand.
 - **Verification Fence (`ipc.test.ts`)**:
   - `ipc.test.ts` uses Vite's `?raw` import to load Rust `.rs` files as text.
   - It parses struct definitions and compares field names and casing against the TypeScript mirror to catch drift at test time before runtime serialization errors occur.
 
 ---
 
-## Store-Free Transfer Logic (`src/features/transfer/`)
+## Store-Free Transfer Logic (`packages/ui/features/transfer/`)
 
 File import and export machinery is strictly segregated:
 
@@ -60,14 +60,14 @@ File import and export machinery is strictly segregated:
 
 ## Light App Dual-Face & Reachability Architecture
 
-When running the light app (`mobile/`):
+When running the light app (`apps/light/`):
 
 1. **`useFace` Single Evaluation**:
    - The UI entry point evaluates `DESKTOP_FLOOR_PX` via `matchMedia` exactly once in `useFace.ts`.
    - Feature views and nested components must never query window dimensions or media queries to determine face layout.
 2. **Feature Reachability (`useReaches`)**:
    - The light app exposes different feature sets depending on host capabilities.
-   - Navigation links and action triggers use `useReaches(view)` from `src/lib/reach.ts` to hide controls pointing to views that are unsupported on that edition.
+   - Navigation links and action triggers use `useReaches(view)` from `packages/ui/lib/reach.ts` to hide controls pointing to views that are unsupported on that edition.
 3. **Routing Model**:
-   - Phone Face: Driven by a lightweight, zero-dependency History API router in `mobile/phone/router.ts` (`usePlace`, `navigate`, `back`).
+   - Phone Face: Driven by a lightweight, zero-dependency History API router in `apps/light/phone/router.ts` (`usePlace`, `navigate`, `back`).
    - Desktop Face: Driven by the Zustand application store adapted to URL query parameters via `useDesktopPlace.ts`.

@@ -311,13 +311,13 @@ mod heard {
     use std::collections::VecDeque;
     use std::task::{Context, Poll, Waker};
 
-    /// The keepalive a page can send, and the relay's answer to it (`relay/src/ticket.ts`'s
+    /// The keepalive a page can send, and the relay's answer to it (`infrastructure/relay/src/ticket.ts`'s
     /// `KEEPALIVE`): exact strings, which the Durable Object's auto-response compares byte for
     /// byte and answers without waking.
     pub const PING: &str = "ping";
     pub const PONG: &str = "pong";
 
-    /// The sub-protocol the relay selects in its 101 (`relay/src/ticket.ts`'s `LIVE_PROTOCOL`).
+    /// The sub-protocol the relay selects in its 101 (`infrastructure/relay/src/ticket.ts`'s `LIVE_PROTOCOL`).
     /// A browser fails a socket whose server selected none of what was offered, so this is
     /// offered for the relay to select — and the bearer's entry beside it never is.
     pub const LIVE_PROTOCOL: &str = "grimoire.live.v1";
@@ -1020,7 +1020,7 @@ mod tests {
     /// opens and dies, or a ping that wakes the object, with nothing else red.
     #[test]
     fn a_page_offers_the_two_sub_protocols_and_the_keepalive_the_relay_reads() {
-        let ticket = include_str!("../../../../relay/src/ticket.ts");
+        let ticket = include_str!("../../../../infrastructure/relay/src/ticket.ts");
         assert_eq!(
             heard::protocols("abc.def"),
             ["grimoire.live.v1".to_owned(), "bearer.abc.def".to_owned()]

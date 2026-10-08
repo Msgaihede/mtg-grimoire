@@ -5,12 +5,12 @@
 //   npm run mobile:scanner-smoke                # or: npm run mobile:scanner-smoke -- http://localhost:5186
 //   npm run mobile:scanner-smoke -- --shots=out # also save the screenshots it takes into ./out
 //
-// `mobile/phone/pages/ScannerPage.tsx` has a vitest suite, and jsdom gives that suite no camera,
+// `apps/light/phone/pages/ScannerPage.tsx` has a vitest suite, and jsdom gives that suite no camera,
 // no canvas pixels and no layout. This is the pass that has all three, as a command, and it needs
 // no phone and neither of the repo's two locks: a headless Chromium answers `getUserMedia` with
 // its built-in test pattern (`--use-fake-device-for-media-stream`), and the Storybook fake's
 // `scanner_frame` answers each frame the page really sends with the next step of a scripted pile
-// of cards (`.storybook/fake/scannerScript.ts`). So what is proved, at 360×800 and at 412×915:
+// of cards (`packages/fake/scannerScript.ts`). So what is proved, at 360×800 and at 412×915:
 //
 //   1. the page opens the camera once its prefs have loaded, and shapes the picture's box by the
 //      stream — inside the screen, with the status line and the tray's heading still on it;
@@ -50,6 +50,12 @@ import { join, resolve } from "node:path";
 const args = process.argv.slice(2);
 const SHOTS = args.find((a) => a.startsWith("--shots="))?.slice("--shots=".length) ?? null;
 const ORIGIN = (args.find((a) => !a.startsWith("--")) ?? "http://localhost:5175").replace(/\/$/, "");
+
+// The dev server's root is `apps/light`, so a file outside it — the fake world, the shared UI — is
+// served at `/@fs/<its absolute path>`, which is also the URL the app itself imported it by: the
+// page's own copy of a module, not a second one. (`/packages/fake/core.ts` answers with the
+// app's `index.html`, as any path the server does not know does.)
+const FS = `/@fs/${resolve(import.meta.dirname, "..").replaceAll("\\", "/").replace(/^\//, "")}/`;
 const DEADLINE_MS = 240_000;
 /** The two phones the page is measured at. */
 const PHONES = [
@@ -58,7 +64,7 @@ const PHONES = [
 ];
 /** A phone on its side: past the page's 720px, where its two columns stand side by side. */
 const SIDEWAYS = [800, 360];
-/** `PARK_GRACE_MS` in `src/features/scanner/useParked.ts`. */
+/** `PARK_GRACE_MS` in `packages/ui/features/scanner/useParked.ts`. */
 const PARK_GRACE_MS = 5000;
 
 /** Everything started, to stop whatever happens: browsers, then their profile directories. */
@@ -268,8 +274,8 @@ let current = null;
 
 /** Wrap the fake's three commands the run reads the page's own calls off. */
 const WATCH = `(async () => {
-  const core = await import('/.storybook/fake/core.ts');
-  const { activeScope } = await import('/.storybook/fake/scope.ts');
+  const core = await import('${FS}packages/fake/core.ts');
+  const { activeScope } = await import('${FS}packages/fake/scope.ts');
   const own = activeScope().commands;
   window.seen = { frames: [], commits: [], prefs: [] };
   core.registerCommands({
@@ -310,7 +316,7 @@ const rowsOf = (n) => `Array.from({ length: ${n} }, (_, i) => {
 
 /** Put `rows` on screen as the tray, through the page's own cache entry, and answer what was there. */
 const withTray = (rows) => `(async () => {
-  const { queryClient } = await import('/src/lib/query.ts');
+  const { queryClient } = await import('${FS}packages/ui/lib/query.ts');
   const was = queryClient.getQueryData(['scanner', 'tray']);
   queryClient.setQueryData(['scanner', 'tray'], ${rows});
   return was;

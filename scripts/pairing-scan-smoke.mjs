@@ -4,7 +4,7 @@
 //   npm run mobile:dev                        # the light app over the Storybook fake, port 5175
 //   npm run mobile:scan-smoke                 # or: npm run mobile:scan-smoke -- http://localhost:5185
 //
-// `src/features/settings/QrScanner.tsx` says of itself that it has no vitest for its camera
+// `packages/ui/features/settings/QrScanner.tsx` says of itself that it has no vitest for its camera
 // loop — jsdom has neither `getUserMedia` nor canvas pixels — and that the frame loop and the
 // decode are "the live pass's to prove". This is that pass as a command, and it needs no camera,
 // no phone and neither of the repo's two locks: a headless Chromium takes a file for a camera
@@ -28,7 +28,7 @@
 // Those are a real phone's to show.
 //
 // **It runs over the fake, and says so.** The invite is a real QR symbol of a code with no key
-// in it (`.storybook/fake/qr.ts`), and `sync_pairing_accept` there checks its shape and not its
+// in it (`packages/fake/qr.ts`), and `sync_pairing_accept` there checks its shape and not its
 // checksum. What is real is everything on this side of the command: the drawing, the camera
 // loop, the decoder and the call.
 //
@@ -40,7 +40,7 @@ import { spawn } from "node:child_process";
 import { existsSync, writeFileSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { inflateSync } from "node:zlib";
 import jsqrModule from "jsqr";
 
@@ -48,6 +48,12 @@ import jsqrModule from "jsqr";
 const jsQR = typeof jsqrModule === "function" ? jsqrModule : jsqrModule.default;
 
 const ORIGIN = (process.argv[2] ?? "http://localhost:5175").replace(/\/$/, "");
+
+// The dev server's root is `apps/light`, so a file outside it — the fake world, the shared UI — is
+// served at `/@fs/<its absolute path>`, which is also the URL the app itself imported it by: the
+// page's own copy of a module, not a second one. (`/packages/fake/core.ts` answers with the
+// app's `index.html`, as any path the server does not know does.)
+const FS = `/@fs/${resolve(import.meta.dirname, "..").replaceAll("\\", "/").replace(/^\//, "")}/`;
 /** The relay's address, which the invite's QR is drawn against (`entitlement::RELAY_BASE`). */
 const PAIR_URL = /^https:\/\/[a-z0-9.-]+\/pair#[0-9A-Z]{105}$/;
 const DEADLINE_MS = 120_000;
@@ -434,8 +440,8 @@ async function run() {
   const second = await launch([...CAMERA, `--use-file-for-fake-video-capture=${invite}`]);
   const joining = await syncPanel(second, 360, 800);
   await joining.evaluate(`(async () => {
-    const core = await import('/.storybook/fake/core.ts');
-    const { activeScope } = await import('/.storybook/fake/scope.ts');
+    const core = await import('${FS}packages/fake/core.ts');
+    const { activeScope } = await import('${FS}packages/fake/scope.ts');
     const own = activeScope().commands.sync_pairing_accept;
     window.accepted = [];
     core.registerCommands({

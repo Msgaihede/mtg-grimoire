@@ -393,7 +393,7 @@ jsdom has no layout engine and every one of them is a claim about a box.
 `section.scrollWidth` **812** against `clientWidth` **746** at 1024×768, and **1708** against
 **1642** at 1920×1080 — the same 66 at both, so it is not a narrow-window failure but a control
 that hangs past the row at every size. The overflowing element is a toolbar `<select>` (right
-edge **1040** in a 1009px viewport). That is precisely the failure `src/CLAUDE.md`'s wrapping
+edge **1040** in a 1009px viewport). That is precisely the failure `packages/ui/CLAUDE.md`'s wrapping
 rule exists to prevent and the 1024px floor forbids, and it is **older than this branch** — the
 measurement above was taken with `[data-quick-zone]` counting **0**. Written down here rather
 than fixed here.
@@ -482,7 +482,7 @@ it.
 
 Driven against the **live corpus of 116 712 cards, Scryfall data of 2026-08-15**, through the real
 `import_resolve` / `deck_import_commit` rather than a stub. The three fixtures are the reader's
-own exports of one deck, held verbatim in `src/features/transfer/import/fixtures.ts`; two decks were
+own exports of one deck, held verbatim in `packages/ui/features/transfer/import/fixtures.ts`; two decks were
 created for this pass and deleted afterwards.
 
 ### Import: all three lists resolved, and nothing was lost
@@ -778,7 +778,7 @@ stayed showing under a box plainly meant to stand in for it.
 92 is `py-1.5` either side of two 36px lines with `gap-y-2` between them (6 + 36 + 8 + 36 + 6);
 48 is the same padding around one. The app shipped **1280×800** when this was measured and
 registers no window-state plugin, so every first run was in the wrapping half of that table.
-**Since 2026-08-20 the opening size is decided per monitor** (`src-tauri/src/window.rs`):
+**Since 2026-08-20 the opening size is decided per monitor** (`apps/desktop/src-tauri/src/window.rs`):
 **1920×1080** where the work area holds it, **1280×720** where it does not — which is every
 1080p desk, because Windows takes its taskbar out of that 1080. So a 1080p reader is still in
 the wrapping half at the same 1280 width; a larger desk is now in the one-line half.
@@ -837,7 +837,7 @@ before the app was shut down. The full write-up, with every field name and grain
 
 ### The export dialog, clamped, every field on, CSV — the check left unmeasured at Task 9
 
-`src-tauri/tauri.conf.json` enforces `minWidth: 1024, minHeight: 700`, so 1024×700 is the real
+`apps/desktop/src-tauri/tauri.conf.json` enforces `minWidth: 1024, minHeight: 700`, so 1024×700 is the real
 worst case a reader can produce rather than an arbitrary "short" number. At that size, on the
 collection surface, CSV, all **22** optional field checkboxes on, and **17** real collection rows
 (imported for this pass, enough that the `<pre>`'s own `scrollHeight` read 785px against a 593px
@@ -1272,7 +1272,9 @@ lost without anything going red.
 
 The window served this worktree — `fetch('/src/lib/store.ts')` came back with `parkedDeckId` in
 it, which is the check worth making in a worktree because another agent's Vite on 1420 renders
-their tree into your window and nothing on screen says so.
+their tree into your window and nothing on screen says so. (Since 2026-10-08 that URL is
+`/@fs/<absolute path of the checkout>/packages/ui/lib/store.ts`: the desktop's Vite root is
+`apps/desktop`, and only `/src/main.tsx` is still under `/src/`.)
 
 ### Five trips, and what came back
 
@@ -1407,7 +1409,9 @@ is removed.
   cache-busting query string does not help either: `fetch('/src/lib/folderDrag.ts')` still came
   back without the change. Restart `tauri dev` (and clear `node_modules/.vite`) and re-`fetch` the
   module to confirm the new text is being served before trusting a reading. The main checkout does
-  not have this problem.
+  not have this problem. (That list is `WATCH_IGNORED` in `vite.watch.ts` since 2026-10-08, shared by
+  every Vite program through `vite.base.ts`; the dev server's root is `apps/desktop`, so the module
+  to re-`fetch` is at `/@fs/<absolute path of the checkout>/packages/ui/lib/folderDrag.ts`.)
 - **`cdp.mjs type` takes no selector.** It joins *all* its arguments into the text, so
   `type "Zeta drag A" "input[aria-label='New folder name']"` created a folder called
   `Zeta drag A input[aria-label='New folder name']`. Focus the field first — `press` does take a
@@ -1932,7 +1936,7 @@ tile does too, so the ratio is what holds rather than any one figure.
 ## The `Game Changers` filter chip, and the crown that sat on its own line — 2026-09-09, `npm run tauri dev` (debug), 1920×1080, a copy of the real db
 
 The game-changer spotlight was withdrawn a day after it shipped and a filter chip took over the
-question it answered (`src/features/decks/CLAUDE.md` carries the argument). This is the pass that
+question it answered (`packages/ui/features/decks/CLAUDE.md` carries the argument). This is the pass that
 drove the replacement, on the reader's own 101-card Azula deck — the deck the spotlight was
 reported from, which is what makes the before and after a comparison rather than two pictures.
 
@@ -2270,7 +2274,7 @@ kills the arrows, and every store assertion in the suite passes over it. It is t
 `paneReturns`. Measured after the fix: `caretInPanel: true` on the deck removal, on the
 end-of-walk removal and on the collection removal alike.
 
-**The root cause is `QuantityStepper`'s `disabled`**, which [`src/CLAUDE.md`](../../src/CLAUDE.md)
+**The root cause is `QuantityStepper`'s `disabled`**, which [`packages/ui/CLAUDE.md`](../../packages/ui/CLAUDE.md)
 already rules against in favour of `aria-disabled` — *a `disabled` button leaves the tab order*.
 Changing a control drawn in four tables and on every card face was left out of this fix
 deliberately; the stepper is still dropping the caret everywhere else it reaches zero.

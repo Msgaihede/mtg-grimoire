@@ -51,7 +51,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   because thirty releases' worth of asset URLs and 64-character digests is not something a
   changelog can use. Expanding a release in Settings therefore costs nothing out of GitHub's
   budget, and an install that has never checked answers `[]` rather than an error.
-- **The release body is stored verbatim and read in TypeScript.** `src/lib/releaseNotes.ts` is
+- **The release body is stored verbatim and read in TypeScript.** `packages/ui/lib/releaseNotes.ts` is
   a reader for release-please's output rather than a markdown parser: the vocabulary is closed
   (a version heading, `### Features`/`### Bug Fixes`, `* **scope:** …` bullets with a commit
   trailer, the occasional hand-written paragraph), and **anything it has no rule for falls
@@ -59,7 +59,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   panel's argument — *"half-rendered markdown reads worse than none"* — instead of abandoning
   it: the worst case is exactly what the `<pre>` used to give. A dependency was not an option
   either way, since the shipped CSP is `script-src 'self'` and there is no
-  `dangerouslySetInnerHTML` anywhere in `src/`. Three display decisions live there and nowhere
+  `dangerouslySetInnerHTML` anywhere in `packages/ui/`. Three display decisions live there and nowhere
   else: the leading version heading is dropped (the row above already says the version and the
   date), the commit trailer is stripped, and identical bullets collapse — release-please writes
   one message twice when it lands on two branches, which is what v0.9.1's changelog shows.

@@ -85,7 +85,7 @@ found it.
   single-instance callback opens the window beside `window::focused(app)`: whichever window has
   focus, else any. `focus_existing_window` is **deleted**. It works during startup too: a window
   needs no `AppState` to exist, and its page waits on `startup_status` like the first one.
-- **Ctrl+Shift+N** — a `newWindow` row in `src/lib/shortcuts.ts`'s `global` group, which puts it in
+- **Ctrl+Shift+N** — a `newWindow` row in `packages/ui/lib/shortcuts.ts`'s `global` group, which puts it in
   the F1 key map with no further work. See [keyboard-shortcuts.md](keyboard-shortcuts.md).
 
 **Permissions are a glob.** `capabilities/desktop.json` is `"windows": ["main", "window-*"]` —
@@ -96,7 +96,7 @@ the rejection: a window that draws and hears nothing.
 **Closing needed one edit and it was a doc comment.** Tauri's default already is the decision:
 closing a window destroys it, and `RunEvent::ExitRequested` arrives only when the last one goes — so
 the exit push and the WAL checkpoint run exactly once, at the real exit. `closeWindow`'s comment in
-`src/lib/window.ts` said it "ends the process"; it says *the app ends when its last window closes*
+`packages/ui/lib/window.ts` said it "ends the process"; it says *the app ends when its last window closes*
 now.
 
 **Window count is a command and deliberately not an event.** `window_count` answers
@@ -109,7 +109,7 @@ a `windows:changed` event and two emit sites to keep in step with it. The refres
 
 **Rust supplies the fact — which user tables a commit wrote. TypeScript draws the conclusion — which
 queries that makes stale.** The repository's standing boundary, applied to a fifth data path.
-`src-tauri/src/changes.rs` is the Rust half.
+`apps/desktop/src-tauri/src/changes.rs` is the Rust half.
 
 **The mask.** `Changes` is an `AtomicU64`, one bit per table on the **user** side of
 `schema::TABLES`, sorted once in `Changes::new` so the hook itself only reads it (and asserting the
@@ -197,14 +197,14 @@ does; the cost is one refetch of data that did not change.
 
 ## 4. The table map, and the fence around view preferences
 
-**One committed file, both suites.** `src/lib/userTables.json` is the user table list: a Rust test
+**One committed file, both suites.** `packages/ui/lib/userTables.json` is the user table list: a Rust test
 asserts it equals the user side of `schema::TABLES`, and a Vitest test asserts the table→query map's
 keys equal it. So a migration that adds a table is a red Rust test, and a table nobody mapped is a
 red Vitest test. **Not a `tsc` error** — a JSON import types as `string[]`, so a `Record` over its
 entries is a `Record<string, …>` and checks nothing. Same shape as the export golden corpus: one
 committed file, both suites asserting against it.
 
-`src/lib/crossWindow.ts` is the map, and **each table's entry is the union of what that table's own
+`packages/ui/lib/crossWindow.ts` is the map, and **each table's entry is the union of what that table's own
 mutations already invalidate in the window that made them** — so the second window refreshes exactly
 what the first one did, rather than a second opinion about it. `useCrossWindowRefresh` is mounted
 **once**, in `AppShell`, beside `useDeviceSyncInvalidation` and built the same way: an `ipc`
@@ -239,7 +239,7 @@ everything not on it stays where its window put it.
 records the collection's and the wishlist's shelves the reader folded away from their default.
 Collapse is a view preference, so a second window keeps its own folds until the app relaunches; a
 window opened later reads the row as it stands then. It is
-`useShelfFolds`' `SHELF_FOLDS_KEY` (`src/features/shelves/useShelfFolds.ts`), read once per window
+`useShelfFolds`' `SHELF_FOLDS_KEY` (`packages/ui/features/shelves/useShelfFolds.ts`), read once per window
 at `staleTime: Infinity` and prefetched in `AppShell`; `lib/crossWindow.ts` spells it in
 `PER_WINDOW_KEYS` rather than importing it, because `lib` imports nothing from `features`, and
 `crossWindow.test.ts`'s *"stay per window, under the key the hook reads"* pins the two spellings

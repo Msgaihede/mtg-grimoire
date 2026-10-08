@@ -3433,7 +3433,7 @@ mod tests {
     }
 
     /// The hand-mirrored wire contract, pinned so a field added here and never mirrored in
-    /// `src/lib/ipc.ts` fails the suite rather than rendering as `undefined`.
+    /// `packages/ui/lib/ipc.ts` fails the suite rather than rendering as `undefined`.
     #[test]
     fn theory_diff_row_json_uses_the_camel_case_names_the_frontend_expects() {
         let value = serde_json::to_value(TheoryDiffRow {
@@ -3463,7 +3463,7 @@ mod tests {
     }
 
     /// The tick's own wire contract, pinned for [`TheoryDiffRow`]'s reason — this one crosses to
-    /// `src/lib/ipc.ts`'s `TheorySlot` and to `.storybook/fake/db.ts`, and a renamed field would
+    /// `packages/ui/lib/ipc.ts`'s `TheorySlot` and to `packages/fake/db.ts`, and a renamed field would
     /// otherwise reach the mark as `undefined` and read as a deck with no plan.
     #[test]
     fn theory_slot_json_uses_the_camel_case_names_the_frontend_expects() {

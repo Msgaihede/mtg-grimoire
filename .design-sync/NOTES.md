@@ -7,7 +7,7 @@ Read this before touching `.design-sync/config.json`.
 
 - **It is an application, not a component library.** No `dist/`, no `main`/`module`/`exports`.
   Three files exist only to give the converter something to read, and all three are committed:
-  - `.design-sync/entry.ts` — the bundle's barrel. Re-exports the real modules under `src/`.
+  - `.design-sync/entry.ts` — the bundle's barrel. Re-exports the real modules under `packages/ui/`.
   - `.design-sync/tsconfig.dts.json` — emits the `.d.ts` tree into `.design-sync/dist/`.
   - `.design-sync/tsconfig.json` — module resolution for the converter only.
 - **`package.json` carries a `types` field solely for this.** `.design-sync/dist/.design-sync/entry.d.ts`.
@@ -15,7 +15,7 @@ Read this before touching `.design-sync/config.json`.
   build writes **zero components** while still exiting 0. The doubled path is real — declarations
   are emitted with `rootDir: ".."`, so the barrel lands under its own directory inside `dist/`.
 - **`buildCmd` runs `tsc` before `storybook build`.** The declaration tree and the reference
-  storybook must move together with `src/`; a stale `.d.ts` silently shrinks the roster.
+  storybook must move together with `packages/ui/`; a stale `.d.ts` silently shrinks the roster.
 
 ## The sync's footprint outside `.design-sync/`
 
@@ -43,7 +43,7 @@ Three repo files carry sync state. All three look incidental and none is:
   compile the real Tauri IPC (no backend outside the webview) and the real `mtgimg://` image
   URLs (which resolve to nothing on claude.ai/design).
 - **[GENERAL] `preview-runtime.tsx` must re-export the whole fake surface, `core` and `scope`
-  included.** `cfg.storyImports.shim` redirects every `.storybook/fake/` import to
+  included.** `cfg.storyImports.shim` redirects every `packages/fake/` import to
   `window.MtgGrimoire`, and a shim can only find what the global actually exports. A story that
   pulls in `@/lib/useUpdate` or `@/lib/ipc` gets those modules compiled **from source into the
   preview**, so their `invoke` came back `undefined` and every call threw. `useUpdate`'s poll
@@ -72,7 +72,7 @@ Three repo files carry sync state. All three look incidental and none is:
   `grep -c createContext ds-bundle/_preview/<Name>.js` should be 0 for any module whose context
   matters. Any future story importing a context-reading hook needs its own shim line.
 - **[GENERAL] `GrimoirePreviewProvider` installs keyboard modality, or no focus ring ever draws.**
-  `src/index.css` redefines `focus-visible:` as `html[data-kbd] *:focus-visible` and blanks
+  `packages/ui/index.css` redefines `focus-visible:` as `html[data-kbd] *:focus-visible` and blanks
   `html:not([data-kbd]) :focus-visible`. `data-kbd` is written by `installKeyboardModality`, which
   `main.tsx` and `.storybook/preview.tsx` both install and the provider did not until 2026-09-27 —
   so every design built on claude.ai/design showed no keyboard focus anywhere. Found grading
@@ -100,7 +100,7 @@ Three repo files carry sync state. All three look incidental and none is:
   Aliasing to `core-shim.ts`, which re-exports the real module by its file, steps over it. The
   alias must sit **above** the `@/*` wildcard, same first-match rule as the other four. Any other
   `@/`-aliased directory-with-`index.ts` lands in the same hole; today this is the only one in
-  `src/`. (Until 2026-09-27 the shim also covered `__CORE__`, a Vite `define` esbuild was never
+  `packages/ui/`. (Until 2026-09-27 the shim also covered `__CORE__`, a Vite `define` esbuild was never
   handed, and a second shim covered `@/pwa/target`; the define left with the web build.)
 
 ## Real card art — the `bundled` mode (2026-10-01)
@@ -109,7 +109,7 @@ Three repo files carry sync state. All three look incidental and none is:
 was deliberate rather than a gap.** The fake's only other mode, `live`, points at
 `cards.scryfall.io`, and claude.ai's pages allow no remote image source — so a design built from
 the bundle drew named grey frames where the app draws cards. Markus asked for the cards as the app
-shows them, so the fake grew a third mode (`.storybook/fake/images.ts`):
+shows them, so the fake grew a third mode (`packages/fake/images.ts`):
 
 - **`bundled` serves exactly the rows `live` would, from a folder beside the bundle.** The
   folder is `card-art/` at the design system's root, and a file's path inside it is Scryfall's
@@ -137,7 +137,7 @@ shows them, so the fake grew a third mode (`.storybook/fake/images.ts`):
   component.** `buildCmd` runs `.design-sync/build-reference.mjs`, which builds `sb-reference`
   with `STORYBOOK_ART=bundled`: `main.ts` mounts `.design-sync/card-art` at `/card-art` and
   `preview.tsx` opens on the Bundled toolbar item. Everywhere else — the dev workbench,
-  `build-storybook`, `src/stories.test.tsx` — the default is still `synthetic`.
+  `build-storybook`, `packages/ui/stories.test.tsx` — the default is still `synthetic`.
 
 **Two steps the sync must now take that the skill does not know about:**
 
@@ -214,7 +214,7 @@ for each is the missing piece.
   (`Search/Page`, `Decks/Editor`, …), which sync fine but are near-useless as design-agent
   building blocks. `titleMap` keys are the title's
   **leaf segment**, so one `"Page": null` excludes all four `*/Page` titles at once.
-- **`FilterChips` → `ToggleChip`.** `src/components/FilterChips.tsx` is a family module
+- **`FilterChips` → `ToggleChip`.** `packages/ui/components/FilterChips.tsx` is a family module
   (`ManaChip`, `ManaValueChips`, `ToggleChip`, `LayoutToggle`, `ResetAll`) with no component of
   its own name, so the title matched no export. `ToggleChip` is the dominant export and the one
   most of the 13 chip stories exercise; all five ship in the bundle either way.
@@ -226,7 +226,7 @@ for each is the missing piece.
   All three had stories before the 2026-09-08 sync and were dropped as `[TITLE_UNMAPPED]` with no
   module in the barrel. The tooltip is a provider and a hook with no `Tooltip` component, so
   `titleMap` sends `Tooltip` to `TooltipProvider` and the barrel exports `useTooltip` beside it.
-  **Five other `src/components` titles are still out, and that was the decision, not an oversight**
+  **Five other `packages/ui/components` titles are still out, and that was the decision, not an oversight**
   — offered and declined the same day: `CardChin`, `FolderNameField`, `KeyMap`,
   `ParentFolderCard`, and `Dropdown/PlacementProbe` (see skipped stories). Do not re-raise them
   unless one becomes a general-purpose primitive. (`BottomTabBar` was a sixth until #604 deleted
@@ -256,7 +256,7 @@ for each is the missing piece.
   `play`" below. `TooltipProvider` is `cardMode: "single"`, `primaryStory: "Interactive"`, because
   an open panel is `fixed` and validate flags it `[GRID_OVERFLOW] escape` in a grid.
 - **`AppShell` renders at `viewport: "1280x800"`** — the app's narrow rung, near enough. The
-  opening size is decided per monitor since 2026-08-20 (`src-tauri/src/window.rs`): 1280×**720**
+  opening size is decided per monitor since 2026-08-20 (`apps/desktop/src-tauri/src/window.rs`): 1280×**720**
   on a 1080p desk, 1920×1080 on anything with the room. The width is the one that matters to a
   shell render, and it is unchanged. At the default the shell is cropped mid-ribbon on both
   panels.
@@ -288,7 +288,7 @@ them is the `useTooltip` bug:
   not done.
 - **AppShell (8), Ribbon (1), Dialog (1)** — `motion`'s and `lucide-react`'s contexts come from
   `node_modules`, which rule 2 never redirects by design. `FeedDownloadContext` rides in through
-  `src/lib/query.ts`. The 2026-09-08 grades already covered all three in this state.
+  `packages/ui/lib/query.ts`. The 2026-09-08 grades already covered all three in this state.
 
 Designs never see any of this: they mount the bundle's own provider stack through
 `GrimoirePreviewProvider`. Re-run the grep when a count moves.
@@ -350,20 +350,20 @@ Grading tips from the same pass:
   new on a later sync, and do not "fix" it by adding a substitute serif (that would make the
   previews stop matching the shipped app).
   `MPlantin` is `mana-font`'s card-text face for four `.ms-…` classes this app never uses;
-  `src/lib/iconFont.ts` drops its `@font-face` at build time on purpose because it ships no
+  `packages/ui/lib/iconFont.ts` drops its `@font-face` at build time on purpose because it ships no
   woff2, and those rules already name `Garamond, Palatino, serif` as the fallback. Garamond and
   Palatino are system faces nobody ships. claude.ai/design therefore renders exactly what the
   shipped app renders. See `iconFont.ts`'s `UNUSED_FAMILY`.
 - **`[REFERENCE_STALE?]`** fires whenever only design-sync harness files change
   (`preview-runtime.tsx`, config). It compares bundle mtime against `sb-reference` and cannot
-  tell a harness edit from a `src/` edit. Rebuild the reference only when `src/` or the stories
+  tell a harness edit from a `packages/ui/` edit. Rebuild the reference only when `packages/ui/` or the stories
   actually moved.
 - **`[CSS_ASSETS]` 21 unresolvable `url()`s** — the fallback CSS is scraped from the storybook
   build, whose asset hashes do not exist post-upload. Fonts are copied separately by
   `extractFonts` and the rewrite log confirms all 21 are font URLs, which do resolve.
 - **`[TOKENS_MISSING]` `--dnd-transition`, `--dnd-translate`, `--dnd-scale`,
   `--dnd-transform-origin`** — triaged 2026-09-08, not a defect and nothing to define.
-  `src/index.css:562–583` only ever *reads* them, and the guards there are
+  `packages/ui/index.css:562–583` only ever *reads* them, and the guards there are
   `[data-dnd-dragging][style*='--dnd-scale']`: dnd-kit writes them **inline on the dragged
   element** at drag time. That is the "vars a component sets at runtime" case the warning text
   itself calls expected. They are also unreachable in a static render — nothing on
@@ -402,7 +402,7 @@ had rotted; **Markus chose to correct it on 2026-09-08** and the header now simp
 `font-sans` utility:
 
 - **"Tailwind never compiles a `.font-sans` rule — verified absent from the shipped CSS on
-  2026-08-24" is no longer true.** `src/features/card/CardDetailModal.tsx:619` now writes
+  2026-08-24" is no longer true.** `packages/ui/features/card/CardDetailModal.tsx:619` now writes
   `className="… font-sans …"`, so the built CSS carries
   `.font-sans{font-family:Geist Variable,sans-serif}`. The advice that follows it — return to body
   type with `style={{ fontFamily: "var(--font-sans)" }}` because "the token ships, the utility does
@@ -438,7 +438,7 @@ not `$?`.
 
 - **The `types` field in `package.json` is load-bearing and looks like a stray.** If someone
   removes it as unused, the next sync writes zero components and says it succeeded.
-- **`.design-sync/entry.ts` is a hand-maintained list.** A component added to `src/components/`
+- **`.design-sync/entry.ts` is a hand-maintained list.** A component added to `packages/ui/components/`
   with stories will appear in the roster (titles drive it) but resolve to nothing in the bundle
   unless its module is added here. Symptom: `[TITLE_UNMAPPED]`.
 - **`cfg.storyImports.shim` and `preview-runtime.tsx`'s re-exports are one mechanism in two

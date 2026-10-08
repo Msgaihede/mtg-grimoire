@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="en" class="dark">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- Served from `apps/light/public/`, the light builds' own public directory
+         (`apps/light/vite.config.ts`): the mark is a copy of `logos/svg/`'s, as the desktop's is,
+         and the manifest and its icons are in no other build's output. -->
+    <link rel="icon" type="image/svg+xml" href="/mtg-grimoire-mark.svg" />
+    <link rel="manifest" href="/light.webmanifest" />
+    <!-- `viewport-fit=cover` so the phone face can pad its tab bar by the safe-area inset. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <!-- `--color-bg` (`oklch(0.16 0.01 270)`) in sRGB: a manifest and this tag are read before
+         any stylesheet, and not every browser parses `oklch` there. `host.test.ts` holds this,
+         the manifest's two colours and Android's window ground to one value. -->
+    <meta name="theme-color" content="#0C0D12" />
+    <title>MTG Grimoire</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/main.tsx"></script>
+  </body>
+</html>

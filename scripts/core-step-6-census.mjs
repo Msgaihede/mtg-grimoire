@@ -19,14 +19,14 @@ export const FILES = [
   "crates/grimoire-core/src/sync_engine/client.rs",
   "crates/grimoire-core/src/sync_engine/entitlement.rs",
   "crates/grimoire-core/src/sync_engine/live.rs",
-  "src-tauri/src/sync_engine/live.rs",
+  "apps/desktop/src-tauri/src/sync_engine/live.rs",
   "crates/grimoire-core/src/sync_engine/schedule.rs",
   "crates/grimoire-core/src/sync_engine/commands.rs",
-  "src-tauri/src/sync_engine/commands/mod.rs",
+  "apps/desktop/src-tauri/src/sync_engine/commands/mod.rs",
   "crates/grimoire-core/src/sync_engine/wire.rs",
   "crates/grimoire-core/src/sync_pair/identity.rs",
   "crates/grimoire-core/src/sync_pair/pairing.rs",
-  "src-tauri/src/sync_pair/pairing/mod.rs",
+  "apps/desktop/src-tauri/src/sync_pair/pairing/mod.rs",
 ];
 
 /** A test module, or the scaffolding behind the `testing` feature: not shipped. */

@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 import { code, cut, inner, printUse, split, leavesOf } from "./rs-items.mjs";
 
 // Every Rust file both workspace members compile, as text.
-const SOURCES = import.meta.glob(["/src-tauri/src/**/*.rs", "/crates/grimoire-core/src/**/*.rs"], {
+const SOURCES = import.meta.glob(["/apps/desktop/src-tauri/src/**/*.rs", "/crates/grimoire-core/src/**/*.rs"], {
   query: "?raw",
   import: "default",
   eager: true,

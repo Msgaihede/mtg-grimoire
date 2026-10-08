@@ -1,12 +1,13 @@
 [package]
 name = "grimoire-core"
 # **The app's version, not this crate's own**: `scryfall::USER_AGENT` is built from it, and
-# Scryfall asks for an accurate one. release-please bumps it with `src-tauri`'s
-# (`release-please-config.json`), and `src-tauri`'s `the_core_wears_the_apps_version` goes red
+# Scryfall asks for an accurate one. it is inherited from `[workspace.package]`
+# in the root manifest, which is the one release-please writes (`release-please-config.json`),
+# and `src-tauri`'s `the_core_wears_the_apps_version` goes red
 # on a release that moved one and not the other.
-version = "0.43.0"
-edition = "2021"
-license = "AGPL-3.0-or-later"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
 description = "MTG Grimoire's engine, with no window: what every host links."
 publish = false
 
@@ -67,7 +68,7 @@ card-scanner = { path = "../card-scanner", features = ["corpus", "ocr"] }
 # SQLite cannot answer this on its own: `COLLATE NOCASE` is ASCII-only and the bundled build
 # carries no normalisation at all, which is why the key is computed here and stored. Two small
 # tables and no dependencies of its own. `schema::label_name_key` is its one caller, and it
-# moved here from `src-tauri/Cargo.toml` with it.
+# moved here from `apps/desktop/src-tauri/Cargo.toml` with it.
 unicode-normalization = "0.1"
 flate2 = "1"
 # `platform::http`, on every target: natively the client this app has always used, and in a
@@ -96,7 +97,7 @@ thiserror = "2"
 # updater's digest check.
 sha2 = "0.10"
 # Pairing (spec §7.5) and the sync envelope (§7.7). The version choices are one decision rather
-# than several, and they moved here from `src-tauri/Cargo.toml` with `sync_pair::crypto`, which
+# than several, and they moved here from `apps/desktop/src-tauri/Cargo.toml` with `sync_pair::crypto`, which
 # is the only code that names any of them.
 #
 # `x25519-dalek` gets `getrandom` so `StaticSecret::random()` exists and this crate never has to
@@ -156,7 +157,7 @@ rusqlite = { version = "0.40", features = ["bundled", "hooks"] }
 # own source names must be one this crate asks for.
 tokio = { version = "1", features = ["fs", "io-util", "net", "rt", "sync", "time"] }
 # The relay doorbell — `platform::socket`'s native arm, on the desktop **and Android**, and the
-# only code that names the crate. It came here from `src-tauri/Cargo.toml` with the connection
+# only code that names the crate. It came here from `apps/desktop/src-tauri/Cargo.toml` with the connection
 # manager (the light app's step 6.2), version and features unchanged. Not on wasm: a browser's
 # socket is its own `WebSocket`, and this crate does not compile there.
 #

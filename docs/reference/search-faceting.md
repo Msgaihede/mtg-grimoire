@@ -10,7 +10,7 @@ to guess.
 
 **Greying decides the order as well as the paint.** A greyed option sinks below every
 pickable one, and each half is alphabetical by the words on screen — `sortOptions` in
-`src/lib/options.ts`, which every option list in the app is drawn through. It sinks rather
+`packages/ui/lib/options.ts`, which every option list in the app is drawn through. It sinks rather
 than disappearing for the reason the picker greys rather than filters in the first place:
 dropping a row would make the list jump under the cursor on every keystroke, and the count
 behind it ("nothing in this search") is an answer worth showing. Two properties make this
@@ -333,7 +333,7 @@ using it.
   zeroed, and `facetsOrUndefined` collapses that to `undefined` so **every control on the row
   stays live**. (This line read "all five controls" until 2026-09-22, when the type dimension made
   it one short; the number is gone rather than corrected, because
-  `grep 'pub [a-z_]*: BTreeMap' src-tauri/src/index/facets.rs` answers it and a count in prose is
+  `grep 'pub [a-z_]*: BTreeMap' apps/desktop/src-tauri/src/index/facets.rs` answers it and a count in prose is
   a fact about a tree.) Nothing here is fatal either — if the index cannot be built the app runs
   exactly as it did before the feature existed.
 - **The X chip is the one count that cannot fail open on a raw cold response, and

@@ -1,6 +1,6 @@
 # Deck Builder Architecture & Frontend Rules
 
-The frontend deck builder lives in `src/features/decks/`. It manages deck authoring, card categorization,
+The frontend deck builder lives in `packages/ui/features/decks/`. It manages deck authoring, card categorization,
 validation, notes, and to-do lists across desktop and mobile.
 
 Storage tables, IPC commands, and audit logs are documented in [decks-storage.md](decks-storage.md);
@@ -12,7 +12,7 @@ live UI measurements and historical verification findings are in [decks-live-fin
 
 Validation is executed entirely in TypeScript:
 - **Rust provides facts**: The backend returns `DeckCardRow` containing per-printing facts: `legalities`, `color_identity`, power/toughness, `ever_uncommon`, and `game_changer`.
-- **TypeScript draws conclusions**: `src/features/decks/engine.ts` evaluates deck size, copy limits, format legality, commander color identity, and banned/restricted status.
+- **TypeScript draws conclusions**: `packages/ui/features/decks/engine.ts` evaluates deck size, copy limits, format legality, commander color identity, and banned/restricted status.
 
 ### `validateDeck` vs `validateForMarks`
 1. **`validateDeck`**: Evaluates the whole deck for overall legality and format compliance.

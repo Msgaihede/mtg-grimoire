@@ -2259,7 +2259,7 @@ mod tests {
     ///
     /// Issue #192: the Arena export offers to leave out cards that are not in MTG Arena, and
     /// this blob is the only fact that answers it. The verdict is TypeScript's
-    /// (`src/features/transfer/export/arena.ts`, which reads Scryfall's key *names*); this test
+    /// (`packages/ui/features/transfer/export/arena.ts`, which reads Scryfall's key *names*); this test
     /// is about the column arriving, and arriving at the right index — it is the third
     /// appended one, after `c.type_line` and `c.id`.
     ///

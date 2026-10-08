@@ -7,7 +7,7 @@
  *   node .design-sync/card-art.mjs --force           # fetch every file again
  *   node .design-sync/card-art.mjs --copy ds-bundle  # then copy it to ds-bundle/card-art/
  *
- * **What it is for: the `bundled` art mode in `.storybook/fake/images.ts`.** claude.ai's pages
+ * **What it is for: the `bundled` art mode in `packages/fake/images.ts`.** claude.ai's pages
  * allow no remote image source, so a design built from the bundle could never draw a card off
  * `cards.scryfall.io` and drew every one as a synthetic placeholder. The fixture's own JPGs,
  * shipped as files next to the bundle, are the real art on a page that cannot fetch it — and
@@ -55,7 +55,7 @@ import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const CARDS_TS = join(ROOT, ".storybook/fake/cards.ts");
+const CARDS_TS = join(ROOT, "packages/fake/cards.ts");
 /** `CARD_ART_DIR` in `images.ts` is the folder's name at a design system's root; this is its
  *  home in the repository, under the same name. */
 const ART = join(ROOT, ".design-sync/card-art");
@@ -65,7 +65,7 @@ const TIMEOUT_MS = 30_000;
 const HEADERS = { "User-Agent": "mtg-grimoire-design-sync/1.0", Accept: "image/jpeg,image/*" };
 
 /**
- * `bundledArtPath` in `.storybook/fake/images.ts`, restated — **that function and this one are
+ * `bundledArtPath` in `packages/fake/images.ts`, restated — **that function and this one are
  * the two halves of one contract**, and the page looks for exactly the path this writes.
  *
  * Restated rather than imported because that module is TypeScript that imports the whole

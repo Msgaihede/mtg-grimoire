@@ -41,7 +41,7 @@ jobs:
 
       # `crates/card-scanner/target` is what this saves, and both `cargo run` lines below say
       # `--target-dir` to build there: run from the root, they would otherwise follow the root's
-      # `.cargo/config.toml` into `src-tauri/target` and leave this cache empty.
+      # `.cargo/config.toml` into `target` and leave this cache empty.
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           workspaces: crates/card-scanner

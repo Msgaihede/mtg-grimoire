@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Regenerate `.storybook/fake/cards.ts` from the local card database.
+// Regenerate `packages/fake/cards.ts` from the local card database.
 //
 //     node scripts/gen-storybook-cards.mjs
 //
@@ -14,7 +14,7 @@
 // collection nobody can regenerate; this opens with `readOnly: true` and issues nothing but
 // `SELECT`s. The generated `.ts` and this script are committed; the database never is.
 //
-// Under `tauri dev` the database is `src-tauri/target/debug/data/corpus.db` — the data folder
+// Under `tauri dev` the database is `target/debug/data/corpus.db` — the data folder
 // sits beside the *exe*, and under dev that exe is in `target/debug`. Override with
 // `MTG_DB` if a different copy is wanted. **`corpus.db` and not `mtg.db`**: schema 27 split
 // the reader's own tables out of the rebuildable ones, so `cards` lives in the corpus half
@@ -28,8 +28,8 @@ import { resolve } from "node:path";
 import { format, resolveConfig } from "prettier";
 
 const repoRoot = resolve(import.meta.dirname, "..");
-const dbPath = process.env.MTG_DB ?? resolve(repoRoot, "src-tauri/target/debug/data/corpus.db");
-const outPath = resolve(repoRoot, ".storybook/fake/cards.ts");
+const dbPath = process.env.MTG_DB ?? resolve(repoRoot, "target/debug/data/corpus.db");
+const outPath = resolve(repoRoot, "packages/fake/cards.ts");
 
 /**
  * The corpus, as natural keys plus the render branch each row exists to make reachable.
@@ -338,7 +338,7 @@ const HEADER = `/**
  *
  * Nothing is imported here on purpose: \`tsconfig\` has \`noUnusedLocals\`, and a type pulled in
  * only to be named in a doc comment is an unused import that fails \`npm run build\`. The DTO
- * names below are prose; \`src/lib/ipc.ts\` is where they are defined.
+ * names below are prose; \`packages/ui/lib/ipc.ts\` is where they are defined.
  */
 
 /**

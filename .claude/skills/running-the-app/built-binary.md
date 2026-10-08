@@ -6,10 +6,10 @@ recipe.
 
 ```powershell
 Get-Process mtg-grimoire -ErrorAction SilentlyContinue   # must be empty
-(Get-Item src-tauri\src\main.rs).LastWriteTime = Get-Date
+(Get-Item apps\desktop\src-tauri\src\main.rs).LastWriteTime = Get-Date
 npm run tauri build -- --debug --no-bundle
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
-$proc = Start-Process "src-tauri\target\debug\mtg-grimoire.exe" -PassThru
+$proc = Start-Process "target\debug\mtg-grimoire.exe" -PassThru
 pwsh -NoProfile -File $L adopt app -ProcessId $proc.Id
 ```
 
@@ -21,6 +21,6 @@ Two traps, both measured:
 - **A frontend-only edit does not reach a built binary.** `tauri build` re-runs Vite,
   then cargo sees no Rust change and leaves the old bundle inside the old exe — and
   exits 0. Touching `main.rs` first is what forces the relink. The cheap tell is
-  `[...document.querySelectorAll('script')].map(s => s.src)` against `ls dist/assets`.
+  `[...document.querySelectorAll('script')].map(s => s.src)` against `ls apps/desktop/dist/assets`.
 - **The exe cannot be relinked while it runs** — `Access is denied. (os error 5)`. Stop
   it first.

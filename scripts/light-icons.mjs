@@ -22,8 +22,8 @@
 // The renderer is a browser, because that is what this repository has: no image library is a
 // dependency and none is added for a handful of pictures. Headless Chromium over the DevTools protocol, as
 // `web-smoke.mjs` drives it; `CHROME` names the browser, else the first of Chrome and Edge found
-// installed. It writes `mobile/public/icons/`, the Android launcher's `res/mipmap-*` under
-// `mobile/src-tauri/gen/android`, and the store's two graphics under `docs/play/` — all
+// installed. It writes `apps/light/public/icons/`, the Android launcher's `res/mipmap-*` under
+// `apps/light/src-tauri/gen/android`, and the store's two graphics under `docs/play/` — all
 // committed; nothing runs this in a build.
 //
 // **It measures what it drew.** The maskable mark's and the launcher foreground's scales are
@@ -38,13 +38,13 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 const MARK = resolve("logos/svg/mtg-grimoire-mark.svg");
-const OUT = resolve("mobile/public/icons");
-const ANDROID_RES = resolve("mobile/src-tauri/gen/android/app/src/main/res");
+const OUT = resolve("apps/light/public/icons");
+const ANDROID_RES = resolve("apps/light/src-tauri/gen/android/app/src/main/res");
 const PLAY = resolve("docs/play");
 
 /**
  * `--color-bg` in sRGB — `logos/README.md`'s field, and the manifest's two colours.
- * `mobile/host.test.ts` holds this line equal to the manifest's `background_color`, so a ground
+ * `apps/light/host.test.ts` holds this line equal to the manifest's `background_color`, so a ground
  * that moves there goes red until it moves here — which is the reminder to render again.
  */
 const GROUND = "#0C0D12";
@@ -112,7 +112,7 @@ const ICONS = [
 
 /**
  * The adaptive icon itself: two layers by name. Written here rather than by hand so the set is
- * one command; `mobile/host.test.ts` holds its two lines.
+ * one command; `apps/light/host.test.ts` holds its two lines.
  */
 const ADAPTIVE_XML = `<?xml version="1.0" encoding="utf-8"?>
 <!--
@@ -120,7 +120,7 @@ const ADAPTIVE_XML = `<?xml version="1.0" encoding="utf-8"?>
   (minSdk 26). The ground is the app's own (\`values/colors.xml\`); the mark is rendered from
   \`logos/svg/mtg-grimoire-mark.svg\` inside the 66dp circle a launcher keeps whole.
   \`tauri android init\` does not write this file and overwrites the pictures beside it:
-  \`mobile/host.test.ts\` holds both.
+  \`apps/light/host.test.ts\` holds both.
 -->
 <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
     <background android:drawable="@color/ground" />

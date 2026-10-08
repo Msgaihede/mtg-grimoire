@@ -145,9 +145,9 @@ deploys behind**: issue #546's half went out on 2026-09-28 at 19:57 UTC, nobody 
 step 0's sixth probe found it live three days later. The next deploy is an **update** with a D1 that holds real entitlements, not a
 first landing. **What the tree holds past that deploy, since 2026-10-04, is what a browser needs
 and a native client never did** — an allow-list of origins a page may ask from (`APP_ORIGINS`,
-`relay/src/cors.ts`), the pre-flight answered ahead of every limiter and every Durable Object, and
+`infrastructure/relay/src/cors.ts`), the pre-flight answered ahead of every limiter and every Durable Object, and
 `/ws` taking its bearer from the socket's sub-protocol, which is the only place a browser can put
-one (`relay/src/ticket.ts`). A request with no `Origin` is answered byte for byte as before, so no
+one (`infrastructure/relay/src/ticket.ts`). A request with no `Origin` is answered byte for byte as before, so no
 released build notices. **Deployed 2026-10-04 at 17:22:12 UTC, from `main` at `ea0aa88e` (#818),
 and verified**: version `75f903b6-94c3-431c-bf83-3ce36ed5d9e8`, by an agent at
 the owner's standing ask for this phase. Asked before it, the relay answered an `OPTIONS` from the
@@ -189,7 +189,7 @@ matched on the code and never on the sentence.
 `PATREON_CLIENT_SECRET`, `PATREON_WEBHOOK_SECRET` and `RELAY_HMAC_KEY`, in
 [the hosted-relay design](../superpowers/specs/2026-08-29-hosted-relay-and-patreon-design.md)
 §9. They are set with `wrangler secret put` and belong in no `.dev.vars` either. A reader who
-wants their own relay still can: `relay/` is the whole source and a fork changes that one
+wants their own relay still can: `infrastructure/relay/` is the whole source and a fork changes that one
 constant. [sync.md](../reference/sync.md) has the whole record.
 
 ## The share Worker (read-only shared collection)
@@ -203,7 +203,7 @@ holding: **a snapshot is stored in the clear**, which is what buys the OpenGraph
 and is why six collection columns are _absent_ from the format rather than switched off in it.
 **`share::publish::SHARE_BASE` is that Worker's address**,
 `https://mtg-grimoire-share.denmark-east.workers.dev`, compiled in and public on `RELAY_BASE`'s
-terms, and equal byte for byte to the `SHARE_BASE` var in `share-worker/wrangler.jsonc`. It was a
+terms, and equal byte for byte to the `SHARE_BASE` var in `infrastructure/share-worker/wrangler.jsonc`. It was a
 placeholder until the deploy, so **every release before the one that carries it still refuses a
 press in words rather than publishing**. Its one secret is the relay's own `RELAY_HMAC_KEY`, the
 same value on both Workers; ask the host before you believe any of this or its opposite.
@@ -245,14 +245,14 @@ files is its own origin's to provide (the light app's step 7.5).
 [card-scanner.md](../reference/card-scanner.md) §10 has the rules and what was measured.
 ## The app Worker (the light app's web host)
 
-**A _third_ Worker is the light app's web host, and it has been deployed since 2026-10-04.** `app-worker/` serves
-the web build, `dist-web/`, at **`https://mtg-grimoire.app`** — static assets, one `_headers` file
+**A _third_ Worker is the light app's web host, and it has been deployed since 2026-10-04.** `infrastructure/app-worker/` serves
+the web build, `apps/light/dist-web/`, at **`https://mtg-grimoire.app`** — static assets, one `_headers` file
 that carries the Content-Security-Policy and the caching, and a script of a few lines whose whole
 job is that a missing file is a 404 and never the document. Beside the other two for the share
 Worker's reason, blast radius, and unlike them it holds **no secret and no binding but its
 assets**: no D1, no R2, no `vars`. **The origin is the app's identity, not an address that can
 move** — a browser keys both OPFS databases, the service worker and the install to it, and the
-relay's CORS allow-list names it (`APP_ORIGINS`, `relay/src/cors.ts`). Its policy's `connect-src`
+relay's CORS allow-list names it (`APP_ORIGINS`, `infrastructure/relay/src/cors.ts`). Its policy's `connect-src`
 is exactly the hosts the engine asks, and a test reads the engine's shipped Rust to hold it there:
 a host that moves, and a new address written as a literal, are each a red build. **The relay is
 one of those hosts**: a page asks it as every other host does — the engine refuses nothing for
@@ -288,12 +288,12 @@ once the values it needs exist in the `release` environment — the three hosts 
 tag, because a web app ahead of the last release sends paired desktops ops they must hold
 ([ci-and-releases.md](../reference/ci-and-releases.md), *The release rule*). **So merging the
 release PR is a deploy of this Worker.** The tool is `wrangler` at the version
-`app-worker/package-lock.json` pins, with everything under it — installed with no lifecycle
+`infrastructure/app-worker/package-lock.json` pins, with everything under it — installed with no lifecycle
 script run, by the job and by hand alike. Between releases a deploy is still by hand and still
 asked for, and **`npm run web:deploy-guard` is run first**: it refuses a tree whose user schema
 is not the last release's, or whose last release is still a draft — and it cannot see a wire
 change that is not a schema rung. The relay and the share Worker are deployed by no job.
-[`app-worker/README.md`](../../app-worker/README.md) is the runbook, with every probe in it answered
+[`infrastructure/app-worker/README.md`](../../infrastructure/app-worker/README.md) is the runbook, with every probe in it answered
 at the real address that day. **Who has run it**: headless Chrome 154, driven and measured; the
 owner's Firefox and the owner's phone, a sentence each. What nobody has seen — Safari, an
 installed app, a phone's figures, the app's own update check in a browser that was measured —

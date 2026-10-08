@@ -4852,7 +4852,7 @@ mod tests {
     /// That sweep compares a whole-deck snapshot and would go green if `bracket` were simply
     /// missing from [`DECK_FIELDS`] *and* from [`snapshot`]'s sweep, since the sweep reads the
     /// list rather than the table. This one names the column, so a bracket that fell off both
-    /// ends at once still fails here — the shape of the hole `src-tauri/CLAUDE.md` calls a mock
+    /// ends at once still fails here — the shape of the hole `apps/desktop/src-tauri/CLAUDE.md` calls a mock
     /// encoding an impossible state.
     ///
     /// **Both directions**, because an undo that restored the value it was already at would

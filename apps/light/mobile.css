@@ -1,0 +1,9 @@
+/* The light app's stylesheet: the app's own sheet, plus one line.
+
+   `packages/ui/index.css` opens with `@import "tailwindcss" source(none)` and names its own
+   folder as its one source, which this directory is not under. Without the line below every
+   class written under `apps/light/` would emit no rule at all, silently — the page would draw
+   with the app's tokens and none of its own layout. `apps/share/share.css` is the same file for
+   the same reason, and `apps/desktop/src/desktop.css` the desktop's. */
+@import "../../packages/ui/index.css";
+@source "./";

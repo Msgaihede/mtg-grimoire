@@ -30,7 +30,7 @@
 //! asked with a header outside the safelist**: every request to it carries `authorization` or
 //! a JSON `content-type` (`sync_engine::client`, `sync_engine::entitlement`), each costs a
 //! pre-flight, and the relay answers that pre-flight — and stamps the answer after it, a
-//! refusal included — for the origins on its allow-list (`relay/src/cors.ts`). The second rule
+//! refusal included — for the origins on its allow-list (`infrastructure/relay/src/cors.ts`). The second rule
 //! holds there unbent: the relay exposes no response header and the sync client reads none.
 //!
 //! **Two questions and one fact.** No host this crate has is a page that keeps files, or a

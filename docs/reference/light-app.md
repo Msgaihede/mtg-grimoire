@@ -14,7 +14,7 @@ file dialogs are a browser's own there, and the manifest is finished** (§9.4), 
 5.3 a service worker precaches the shell, answers card pictures on the app's own origin from
 Cache Storage, and holds a newer build until the reader takes it** (§9.3) — so a built web app
 draws its pictures and opens with the network gone — and **since the first half of step 5.5
-the hosting Worker's source, its policy and its runbook are in `app-worker/`** (§9.5), and
+the hosting Worker's source, its policy and its runbook are in `infrastructure/app-worker/`** (§9.5), and
 **since its second half the module's `opt-level` is settled by timings, CI's smoke run is
 served under that policy, and the built app has been driven end to end on both faces against
 the real hosts** (§9.6). **It is deployed at `https://mtg-grimoire.app` since 2026-10-04**
@@ -44,15 +44,15 @@ phone**; §11.7 has what is open and whose it is.
   [the phase 6 plan](../superpowers/plans/2026-10-04-light-app-phase-6.md); the scanner:
   [the phase 7 plan](../superpowers/plans/2026-10-07-light-app-phase-7.md).
 - What is left, phase by phase: [issue #761](https://github.com/Msgaihede/mtg-grimoire/issues/761).
-- The binding rules for anyone changing it: [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
+- The binding rules for anyone changing it: [`apps/light/CLAUDE.md`](../../apps/light/CLAUDE.md).
 
 This page is the record: what was measured, on what, and what is known to be open.
 
 ## 1. What it is, in four sentences
 
-`mobile/` is one Vite entry. At **≥ 1024px** of viewport it draws the desktop UI itself under a
+`apps/light/` is one Vite entry. At **≥ 1024px** of viewport it draws the desktop UI itself under a
 light `Edition` — the same pages, a rail of six rows, no caption row. **Below 1024px** it draws a
-phone face of its own in `mobile/phone/`. The Android app and the web app are the same bundle, the
+phone face of its own in `apps/light/phone/`. The Android app and the web app are the same bundle, the
 face is chosen by width and by nothing else, and the URL is the navigation state both faces read —
 so a browser dragged across 1024 swaps faces and stays where it was.
 
@@ -169,7 +169,7 @@ No total is written here; a count is a fact about one tree.
 
 Two builds `verify` does not run were run by hand between those two runs, both exit 0:
 `npm run mobile:build` (§3's checks repeated — the page at the root, no fake in any chunk) and
-`npm run share:build`, because `share/ShareTile.tsx` now draws through `CardTile` and nothing
+`npm run share:build`, because `apps/share/ShareTile.tsx` now draws through `CardTile` and nothing
 else bundles the public viewer. **The share viewer was built, not looked at**: its tile gained
 one wrapper element, and whether that moved a pixel on the public page is unmeasured.
 
@@ -187,7 +187,7 @@ one wrapper element, and whether that moved a pixel on the public page is unmeas
 | `NoteEditor` | 473.06 kB | 148.17 kB | the desktop face, lazily, as in the desktop app |
 | the stylesheet | 197.27 kB | 35.44 kB | the page |
 
-- `dist-mobile/index.html` is at the root and there is no `dist-mobile/mobile/`.
+- `apps/light/dist-mobile/index.html` is at the root and there is no `apps/light/dist-mobile/mobile/`.
 - The page's only static script is the entry; each face is fetched when its width asks for it.
   **A phone therefore fetches about 542 kB of script (172 kB gzipped) and never the 1.46 MB
   desktop chunk** — which is the point of the two lazy faces.
@@ -205,7 +205,7 @@ later, during "bundling dependencies", with `UNLOADABLE_DEPENDENCY: Could not lo
 alias while it pre-bundles them, and a root-relative replacement is not a path it can load.
 
 It went unseen for seven tasks because the entry was a stub when it was first served, and no
-suite starts a dev server. The fix (`vite.mobile.config.ts`) is absolute alias paths, as
+suite starts a dev server. The fix (`apps/light/vite.config.ts`) is absolute alias paths, as
 Storybook's are, **and both plugins left out of the optimizer in fake mode** — bundled, each
 would carry its own copy of the fake with no world installed in it, so a Copy or an Open-on
 would be answered by nobody. That second half is reasoned, not driven: no press in the pass
@@ -218,7 +218,7 @@ nothing about the running app — arriving on schedule.
 busy or locked, watch '…\crates\card-scanner\target\…\sqlite3.o'`, the moment cargo reached that
 crate, having already reloaded the page once for `dist/index.html`. The root is the whole
 repository, so Vite watches all of it, and Windows refuses a watch on a file a compiler is still
-writing. `vite.mobile.config.ts` now keeps the watcher out of every build output under the root,
+writing. `apps/light/vite.config.ts` now keeps the watcher out of every build output under the root,
 **and that was driven the same way it was found**: the server was left up through the second
 `verify` of §2.3, cargo's run over that crate included, and was still listening when it ended.
 **The base config ignored `src-tauri` only, so the desktop's and the share viewer's dev servers
@@ -252,10 +252,10 @@ purpose; the phase that owns the surface owns the fix.
   one name for one tile.
 - ~~`DeckPage` keys its own query, so crossing 1024 with a deck open refetches it; it always reads
   the `live` list~~ — **fixed 2026-10-03 in step 3.4** (§7.4): it asks through `deckDetailQuery`
-  (`src/features/decks/deckQuery.ts`), the key `useDeck` itself reads under, and opens on the list
+  (`packages/ui/features/decks/deckQuery.ts`), the key `useDeck` itself reads under, and opens on the list
   the deck remembers (`lastVariant` where it keeps a plan) with a Theory / Actual switch. And
   ~~`facesOf` now exists twice~~ — **fixed 2026-10-03**: it lives once, in
-  `src/features/card/faces.ts`, read by `CardTextDialog` and the phone's card sheet (§7.1).
+  `packages/ui/features/card/faces.ts`, read by `CardTextDialog` and the phone's card sheet (§7.1).
 - ~~The wall's list semantics count rows rather than cards~~ — **fixed 2026-10-03 for the
   shelved wall** (§7.2): each shelf is its own list named for the shelf, and each card says
   `aria-setsize`/`aria-posinset` within it, so a virtualised shelf announces its whole count. The
@@ -304,12 +304,12 @@ three and step 5.3 (§9.3) the first.** What each step itself left open is at it
   refused push late, on its next write. Each is held by a test with the refusal simulated —
   thrown and dropped — and by nothing a real browser was made to do.
 - ~~`public/light.webmanifest` is copied into every build's output, the desktop's and the share
-  viewer's included, because `public/` is shared. It is inert there.~~ **Closed 2026-10-04
-  (§9.4)**: the manifest, its icons and a copy of the favicon are in `mobile/public/`, the
+  viewer's included, because `apps/desktop/public/` is shared. It is inert there.~~ **Closed 2026-10-04
+  (§9.4)**: the manifest, its icons and a copy of the favicon are in `apps/light/public/`, the
   light builds' own public directory.
 - ~~The manifest's and the page's `#0e0f13` is two levels off `--color-bg`'s real sRGB
   value.~~ **Closed 2026-10-04 (§9.4)**: `#0C0D12` in the manifest, the page's `theme-color`
-  and Android's window ground, held equal by `mobile/host.test.ts`.
+  and Android's window ground, held equal by `apps/light/host.test.ts`.
 
 ### The fences
 
@@ -324,13 +324,13 @@ the weld or the probe in it:
 - The probe sweep asks for the question rather than one spelling: the bare word `userAgent`,
   `navigator.platform` by dot, bracket or destructure, and `@tauri-apps/plugin-os`. It still reads
   `.ts`, `.tsx`, `.css` and `.html` only.
-- `vite.mobile.config.ts` and `.storybook/main.ts` read the fake's four aliases from one list,
-  `.storybook/fake/aliases.ts`. The light config's own watch list is gone: the base config has
+- `apps/light/vite.config.ts` and `.storybook/main.ts` read the fake's four aliases from one list,
+  `packages/fake/aliases.ts`. The light config's own watch list is gone: the base config has
   carried `vite.watch.ts`'s for every server since #760, which also closed §4's closing sentence.
-- `src/lib/tokens.test.ts` reads `mobile/` and counts one `MotionConfig` per face. Nothing under
-  `mobile/` broke any of its sweeps.
-- Storybook's story glob, `preview.css`'s Tailwind sources and `src/stories.test.tsx`'s module
-  glob reach `mobile/`; `Phone/Shell`, `Phone/TabBar` and `Phone/CardWall` are the first stories.
+- `packages/ui/lib/tokens.test.ts` reads `apps/light/` and counts one `MotionConfig` per face. Nothing under
+  `apps/light/` broke any of its sweeps.
+- Storybook's story glob, `preview.css`'s Tailwind sources and `packages/ui/stories.test.tsx`'s module
+  glob reach `apps/light/`; `Phone/Shell`, `Phone/TabBar` and `Phone/CardWall` are the first stories.
 
 ### The dev window
 
@@ -386,6 +386,9 @@ measured or weighed and put to Markus, who chose a workspace at the repository r
   `--target-dir crates/card-scanner/target`.
 - **`tauri dev` was launched under it** and built to `src-tauri/target/debug/mtg-grimoire.exe`
   (1 m 49 s with the dependencies already built).
+- **Since 2026-10-08 the build tree has moved**, to `target/` at the root, and the pin reads
+  `target`; each `src-tauri/target` in this section is the path as it was that day. See
+  [the repository layout](repository-layout.md).
 
 **Ten modules moved, with their tests, and no caller changed.** `app_meta`, `slug`,
 `cardtypes`, `legalities`, `feed::frame` (and `feed`'s `mostly_unusable`), `index::bitset`,
@@ -400,12 +403,12 @@ re-exported from `src-tauri` at the path it had — `pub mod legalities;` became
   each reason.
 - **One test changed crates rather than moving with its module**: `slug`'s check that `tags`
   re-exports its function names `crate::tags`, which the core cannot, so it sits beside the
-  re-export in `src-tauri/src/tags/mod.rs`.
-- **No test was lost.** `#[test]` and `#[tokio::test]` attributes: 3 356 under `src-tauri/src`
+  re-export in `apps/desktop/src-tauri/src/tags/mod.rs`.
+- **No test was lost.** `#[test]` and `#[tokio::test]` attributes: 3 356 under `apps/desktop/src-tauri/src`
   before; 3 231 there and 131 in the core after — the difference is the six the core's
   `platform` module added. `cargo test --workspace`: every one of them passed, 5 ignored as before.
 - The pairing cryptography's four crates (`x25519-dalek`, `chacha20poly1305`, `hkdf`,
-  `qrcode`) left `src-tauri/Cargo.toml` for the core's, with the comments that argue their
+  `qrcode`) left `apps/desktop/src-tauri/Cargo.toml` for the core's, with the comments that argue their
   versions. Nothing in `src-tauri` names them any more.
 
 **`platform/` holds the clock and a fence.** `platform::clock` answers the wall clock from
@@ -464,7 +467,7 @@ checkout carrying the root manifest:
 
 So once the main checkout has this change, **every worktree that has not merged `main` fails
 every cargo command until it does**, and a worktree parked on an older commit on purpose needs
-an empty `[workspace]` table added to its `src-tauri/Cargo.toml` by hand. Markus weighed that
+an empty `[workspace]` table added to its `apps/desktop/src-tauri/Cargo.toml` by hand. Markus weighed that
 against a workspace rooted at `src-tauri` — where all of those cases resolved, also reproduced —
 and kept the root: the break is one merge per open branch, and the layout is the conventional
 one the Android and WASM hosts join as ordinary members. The fifth row is why the root manifest
@@ -501,7 +504,7 @@ are not in it.** Each one's code and tests were read for what they name:
 | `sync_meta` | **New**: `get_meta`, `set_meta`, `set_meta_opt`, carved out of `sync` as `app_meta` was out of `update` |
 | `filters`, `sorting`, `card_row`, `image_uri` | Whole |
 | `errors` | All but `kind_of` |
-| `feed::backoff`, `sync_engine::capture` | Whole; `src-tauri/src/feed/` is gone |
+| `feed::backoff`, `sync_engine::capture` | Whole; `apps/desktop/src-tauri/src/feed/` is gone |
 | `scratch` | The test helper, behind a feature |
 
 | Waits | For | It calls |
@@ -517,7 +520,7 @@ the client's keys, or moving all sixteen through callbacks the desktop supplies 
 this: nothing gets a seam the next step deletes.
 
 **`schema` and `errors` each left one function in `src-tauri`**, in a module that re-exports the
-rest (`src-tauri/src/schema/mod.rs`, `errors/mod.rs`). An item a module defines shadows a glob
+rest (`apps/desktop/src-tauri/src/schema/mod.rs`, `errors/mod.rs`). An item a module defines shadows a glob
 import of the same name, so no caller changed.
 
 - **`prepare_database` is cut at the line it already drew.** `schema::bring_to_head` is the two
@@ -625,7 +628,7 @@ row above is a debug build answering, not a timing.
 - **`db::lock_for` in a browser answers `BUSY` on its first contended attempt.** Right for one
   thread; whether one write connection in a Worker is the shape at all is step 3's.
 - **A new user rung owes its rewind constant in two files** while the launch tests stay behind:
-  `schema::fixtures` in the core, and the two chains left in `src-tauri/src/schema/mod.rs` —
+  `schema::fixtures` in the core, and the two chains left in `apps/desktop/src-tauri/src/schema/mod.rs` —
   the v59 conversion test's, which goes red by itself, and
   `migrate_the_real_database_to_v29`'s, which is `#[ignore]`d and does not.
 - **`scripts/coverage-rust.mjs` was not run**, again. It splits a file at its first column-0
@@ -782,7 +785,7 @@ the copy is in no sync group, so live sync stays off, and what holds the wake is
 measured that day on Windows 11, debug builds, on the branch's own tree over `main` at `28258b21`.
 
 **Forty-nine modules moved in one run of a script, and most of the engine is in the core now.**
-`src-tauri/src` went from 183 533 lines to 77 880, and `crates/grimoire-core/src` from 38 223 to
+`apps/desktop/src-tauri/src` went from 183 533 lines to 77 880, and `crates/grimoire-core/src` from 38 223 to
 144 519 — 105 386 of them the forty-nine: the decks (`deck`, `deck_meta`, `deck_tokens`,
 `deck_undo`, `deck_theory` and eleven more), the collection (`collection`, `collection_folders`,
 `collection_alloc`, `collection_source`), the wishlist (`wishlist`, `wishlist_folders`,
@@ -792,7 +795,7 @@ the home page's reads, the view-state modules, `maintenance`, `reset`, and the s
 
 **It was read before it was moved.** `scripts/lib/rs-items.mjs` cuts a rustfmt-formatted file into
 its top-level items by tracking comments, literals and bracket depth, and every item of every file
-in `src-tauri/src` was read for what it names. Two things came out of that:
+in `apps/desktop/src-tauri/src` was read for what it names. Two things came out of that:
 
 - **What holds a domain file in `src-tauri` is one block at its foot** — the `#[tauri::command]`
   wrappers, the `use crate::sync::{with_write, AppState}` line above them, an
@@ -808,7 +811,7 @@ the folder. Read against the tree, 245 of `generate_handler!`'s 257 entries are 
 module (`deck::deck_create`, `deck_pull::commands::deck_pull_plan`), and
 `collection_source::with_write_owned` — which stays, because it names the index — is called from
 wrappers in 14 files. Markus was shown both layouts and chose this one:
-`src-tauri/src/deck/mod.rs` is `pub use grimoire_core::deck::*;` and deck's wrappers below it,
+`apps/desktop/src-tauri/src/deck/mod.rs` is `pub use grimoire_core::deck::*;` and deck's wrappers below it,
 step 2's `schema/mod.rs` shape. **No handler entry, no caller and no test path was edited.**
 
 | | |
@@ -904,7 +907,7 @@ a closure parameter never spells its type.
   compile error**, so the sweep leans narrow.
 
 **The script**, `scripts/core-step-4.mjs`: 49 modules in one run, `cargo fmt` at the end, and a
-second run changes nothing — a module whose file is gone from `src-tauri/src` is skipped and
+second run changes nothing — a module whose file is gone from `apps/desktop/src-tauri/src` is skipped and
 each one-off step checks whether it has been done. `--dry` prints what would stay, move and widen
 without writing. The splitter rejoins every Rust file in both crates byte for byte, which
 `scripts/lib/rs-items.test.mjs` holds on every run. Git records 51 renames.
@@ -1017,7 +1020,7 @@ answering, not a timing.
   only it has. What a host-neutral "open the data folder" should be is left to the first host
   that is not the desktop.
 - **A new user rung still owes its `UNDO_V<N>` in two files**: one chain is left in
-  `src-tauri/src/schema/mod.rs`, in a test that is `#[ignore]`d.
+  `apps/desktop/src-tauri/src/schema/mod.rs`, in a test that is `#[ignore]`d.
 - **The `testing` feature now gates two behaviours**, not one: a host that turned it on would
   accept a loopback image host *and* keep its bulk-undo tickets per thread, where a command and
   the write it undoes run on different ones.
@@ -1059,10 +1062,10 @@ a download with no temp file is a shape the web host decides.
 | `scryfall` | 1 823 | 29 | every `reqwest`, `tokio` and `std::fs` call, the pacing gate, both clock reads |
 | `ingest` | 1 134 | 14, and 1 that stays | one line: the file is opened through `platform::files` |
 | `reconcile` | 2 061 | 29 | nothing but a test's import |
-| `errors::kind_of` | — | 1 | nothing; `src-tauri/src/errors/mod.rs` is gone |
+| `errors::kind_of` | — | 1 | nothing; `apps/desktop/src-tauri/src/errors/mod.rs` is gone |
 | `capture`'s two reconcile tests | — | 2 | nothing; `capture_tests.rs` is gone |
 
-`crates/grimoire-core/src` went from 144 519 lines to 150 538 and `src-tauri/src` from 77 880 to
+`crates/grimoire-core/src` went from 144 519 lines to 150 538 and `apps/desktop/src-tauri/src` from 77 880 to
 72 769. `schema`'s eleven file calls — the corpus it replaces, the backup before a climb, the
 damage mark — go through `platform::files` too, so nothing the crate ships names `std::fs`.
 
@@ -1221,7 +1224,7 @@ is a move with a small, regular rewrite inside it — a window becomes the state
 | `index/lifecycle.rs` | 537 | 541 | nothing |
 | `collection_source`'s `with_write_owned` | its own file | in the core's `collection_source` | nothing; the desktop's file is gone |
 
-`crates/grimoire-core/src` went from 150 538 lines to 157 318 and `src-tauri/src` from 72 769 to
+`crates/grimoire-core/src` went from 150 538 lines to 157 318 and `apps/desktop/src-tauri/src` from 72 769 to
 66 801. One more interface joined `platform/` — `spawn`, 211 lines: `blocking(f).await` for
 synchronous work under an `async fn`, and `background(f)` for work nobody waits for. Natively the
 async runtime's blocking pool and a thread; **in a browser both run the work where it stands**,
@@ -1357,7 +1360,7 @@ renames into place and bounds its own concurrency.
 | `images.rs` | 3 825 | 3 472 | `images/mod.rs`, 363: the `mtgimg://` answer, two commands, the upkeep thread, seven tests |
 | `reset::clear_cache`, `deck::bracket_reads`, `sync::status` | in three `mod.rs` remainders | home | one of `reset`'s tests |
 
-`crates/grimoire-core/src` went from 157 318 lines to 175 393 and `src-tauri/src` from 66 801
+`crates/grimoire-core/src` went from 157 318 lines to 175 393 and `apps/desktop/src-tauri/src` from 66 801
 to 49 414. `scripts/core-step-5c.mjs` made the move: 30 files written, 8 removed, every
 rewrite an exact replacement that has to match the number of times it says.
 
@@ -1597,8 +1600,8 @@ merge).
 **Moved by `scripts/core-step-6b.mjs`**, the I/O step's scripts with another list:
 `sync_engine::{client, entitlement, wire, schedule}` and `sync_pair::{identity, pairing}` whole,
 every test of theirs with them, and `sync_engine::commands` split — the sync panel's reads to the
-core, the wrappers to `src-tauri/src/sync_engine/commands/mod.rs` over a glob re-export, as
-pairing's went to `src-tauri/src/sync_pair/pairing/mod.rs`. **`src-tauri` keeps `live.rs`**, the
+core, the wrappers to `apps/desktop/src-tauri/src/sync_engine/commands/mod.rs` over a glob re-export, as
+pairing's went to `apps/desktop/src-tauri/src/sync_pair/pairing/mod.rs`. **`src-tauri` keeps `live.rs`**, the
 connection manager — a socket, `tokio` timers and two events emitted through a window — and is
 meant to: how a host keeps a socket open is the host's, and `schedule`, the half that decides
 when, is the core's. Git records all eight as renames.
@@ -1681,7 +1684,7 @@ as well (`rs-items.mjs`'s `inner`):
 | | Now |
 | --- | --- |
 | The session and its lazy load, the lease, the asset load order, prefs, tray, the tray's commit, the capture writer, and 34 tests | `crates/grimoire-core/src/scanner.rs` |
-| The assets `build.rs` embeds, the three request headers and the raw-body parsing, the 12 commands, and the 8 tests of that body | `src-tauri/src/scanner/mod.rs`, under `pub use grimoire_core::scanner::*;` |
+| The assets `build.rs` embeds, the three request headers and the raw-body parsing, the 12 commands, and the 8 tests of that body | `apps/desktop/src-tauri/src/scanner/mod.rs`, under `pub use grimoire_core::scanner::*;` |
 | The scanner's state | `State.scanner`, built empty by `State::new` from the data directory — no new argument |
 | What the binary embeds | the desktop's `scanner::compiled()` — the only place `cfg(scanner_assets)` is asked — handed once to `state.scanner.carry(…)` above `app.manage`, so no command reaches the state before it is said |
 | The lease's clock | `platform::clock::Tick`, which grew `==`, `+ Duration` and `saturating_duration_since` |
@@ -1746,7 +1749,7 @@ seven Collection files the commit had written.
 [The plan](../superpowers/plans/2026-10-03-light-app-core-command-table.md); spec §2.4. Measured on
 Windows 11, debug builds.
 
-**Surveyed first.** A script read every `#[tauri::command]` under `src-tauri/src` and what its
+**Surveyed first.** A script read every `#[tauri::command]` under `apps/desktop/src-tauri/src` and what its
 body touches: **257** registered commands, of which about 199 are thin wrappers — one core call
 inside a read of the read connection (89), a write (93) or an owned write (17) — 13 reach a
 network or the sync lane, 13 are status reads and housekeeping, and about 30 name the desktop.
@@ -1772,7 +1775,7 @@ renamed what it imported.
 | `task` | awaited where it stands, with the `Arc<State>` | 0 — the same |
 | `bytes` | blocking pool, with the call's raw body | 0 — the same |
 
-**The fence**, `src-tauri/src/command_table.rs`, three tests: every one of the 257 registered
+**The fence**, `apps/desktop/src-tauri/src/command_table.rs`, three tests: every one of the 257 registered
 commands is in the table, on `DESKTOP_ONLY` (16, each with its reason — windows, the updater, the
 file dialogs, the mirror, the launch, the socket) or on `NOT_YET` (153), and in only one; nothing
 on either list or in the table is a command the app does not register; and every table entry takes
@@ -1843,16 +1846,16 @@ of release PR #748 — four jobs green, 17 minutes end to end (the Windows leg 1
 | --- | --- |
 | Does `tauri-action` find its bundles with the workspace at the root and `target/` pinned under `src-tauri`? | Yes. All five files are on the release: the NSIS installer, the MSI, the portable zip, the `.deb` and the AppImage — each within 1% of v0.39.0's size (the portable zip 31 566 234 B against 31 315 169) |
 | Does the portable step find the exe? | Yes — `src-tauri/target/release/mtg-grimoire.exe`, where `.cargo/config.toml` puts it |
-| Does release-please bump the engine with the app? | Yes. At the tag, `crates/grimoire-core/Cargo.toml`, `src-tauri/Cargo.toml` and both of their entries in the root `Cargo.lock` read 0.40.0, and the build passed `--locked` |
+| Does release-please bump the engine with the app? | Yes. At the tag, `crates/grimoire-core/Cargo.toml`, `apps/desktop/src-tauri/Cargo.toml` and both of their entries in the root `Cargo.lock` read 0.40.0, and the build passed `--locked` |
 | Does the embedded-assets build compile since step 7 moved it (§6.10)? | Yes — the *Scanner assets* step and the build behind it passed on both legs. No CI job compiles `cfg(scanner_assets)`, so this was its first real compile since `include_bytes!` went one folder deeper |
 
 **The embedded-assets path was checked an hour before the release, without a download**: three
-four-byte placeholder files in `src-tauri/scanner-assets/`, then
+four-byte placeholder files in `apps/desktop/src-tauri/scanner-assets/`, then
 `cargo check -p mtg-grimoire --locked` — 24 s, and the build script's output confirmed
 `rustc-cfg=scanner_assets` was set. `build.rs` asks only whether the three files exist, so a
 placeholder turns the cfg on; it is a compile check and says nothing about the bytes. The
 placeholders were deleted afterwards. It is the cheap check to repeat whenever
-`src-tauri/src/scanner/mod.rs` moves again.
+`apps/desktop/src-tauri/src/scanner/mod.rs` moves again.
 
 **Not checked**: nobody has installed or launched any of the five files — the run proves they
 were built and attached, and the Linux pair is as unrun as it has always been. And the release's
@@ -1948,7 +1951,7 @@ own cards, laid out from the shelf counts so every heading is placed before its 
 - **Headings only are indented**, 12px a level; the cards under a nested shelf use the wall's full
   width, because one column count serves every shelf and a 360px wall indented the desktop's 32px
   a level drops to one column.
-- **What moved in `src/`**, each re-exported or imported where it was: `collectionWall.ts` (the
+- **What moved in `packages/ui/`**, each re-exported or imported where it was: `collectionWall.ts` (the
   tile fold, `ownedFinishes`, `tilesByShelf`, `subtotalsOf`, `shelfTotal`, out of the welded
   `CollectionPage`); `loadedShelves` and `fillShelves` (out of `CardGrid`'s sectioned memos) into
   `shelfLayout.ts`; one generic `trailOf` in `folderTree.ts`; `TrayCell` and `SEARCH_TRAY` into
@@ -1984,7 +1987,7 @@ so: it is the desktop wall's caption, `wallPrinting` with the `elsewhere` mark b
   set, format, rarity, type, border and needs review — no price, finish or condition, because a wish
   asks none of those questions. Folds are the page's own, as on the collection
   (`useWishlist({ folds })`) — **stored since step 3.5b** (§7.5b) — and paging reads the hook's `hasMore`, held while a level arrives.
-- **What moved in `src/`**: `preferredFinishOf` and `wallPrinting` into `wish.ts` (out of
+- **What moved in `packages/ui/`**: `preferredFinishOf` and `wallPrinting` into `wish.ts` (out of
   `WishlistGrid`); `subtotalsOf`, `FolderTotals` and `folderFigures` into `wishShelfPlan.ts` and
   the figures band into `WishlistSummary.tsx` (out of the welded `WishlistPage`).
 - **Not tested on the phone**: a refused next page on the wishlist — no seed holds more than a
@@ -2020,9 +2023,9 @@ about ten to a screen, and opens the card sheet; a rule break is red with a warn
   writes nothing back — a way of looking at one deck, which the desktop face would drop from the
   URL anyway.
 - **The deck is read under the desktop editor's own key** (`deckDetailQuery` in the new
-  `src/features/decks/deckQuery.ts`), so crossing 1024px paints it from the cache — phase 1's
+  `packages/ui/features/decks/deckQuery.ts`), so crossing 1024px paints it from the cache — phase 1's
   leftover, closed.
-- **What was split in `src/`**, each re-exported from its old home: `deckQuery.ts` (the deck read
+- **What was split in `packages/ui/`**, each re-exported from its old home: `deckQuery.ts` (the deck read
   and its defaults, out of the welded `useDeck`, which also makes `useDeckTokens`, `useDeckNotes`,
   `useDeckMeta`, `useDeckPlays` and `useDeckAudit` clean); `deckCover.ts` (out of `DeckTile`);
   `ValidationPanel`'s popover body as `ValidationFindings`; `DeckBracket`'s reading as
@@ -2046,7 +2049,7 @@ Driven at 360 and 800 wide over the `starter` seed's decks 2 and 4: nothing scro
 **Every write goes through the mutation the desktop editor presses**, with its optimistic patch and
 its invalidations, so the desktop face — and the desktop app over the same database — reads the
 change the moment it lands. There is no new command and no second copy of a write: what made that
-possible is one split in `src/` (below), after which the phone's deck page calls `useDeckCore`,
+possible is one split in `packages/ui/` (below), after which the phone's deck page calls `useDeckCore`,
 the desktop's own `useDeck` without the app store.
 
 **A row's actions are a sheet behind a visible `⋯`**, a 44px button at the row's far end, beside
@@ -2124,7 +2127,7 @@ wishlist, the folder, the cover, the default pile, the pull and the two clears. 
 reuse once it read the store-free hook, and nothing in it scrolls sideways at 360px; several of its
 controls are desktop-sized.
 
-**What moved in `src/`**, each re-exported from its old home so no desktop caller or test changed:
+**What moved in `packages/ui/`**, each re-exported from its old home so no desktop caller or test changed:
 
 - `useDeck.ts` → **`useDeckCore.ts`**: the whole hook body, store-free. What a write does to the
   desktop card modal's address for a deck row — re-anchor it on a move, plan a departure before a
@@ -2239,7 +2242,7 @@ data — so a fold pressed on the phone face and found again on the desktop face
 cabinet being one cabinet. A reader who folds a 600-card binder away on a phone now finds it folded
 at the next launch, which a page-held fold could never do.
 
-**What moved in `src/`**, each re-exported or called from where it was, no desktop test changed:
+**What moved in `packages/ui/`**, each re-exported or called from where it was, no desktop test changed:
 
 - `CollectionPage` → **`useCollectionEntryWrites.ts`**: the stepper, the removal and the bulk
   removal with its undo offer, and the cache arithmetic they share. Its `countEditable` and
@@ -2261,7 +2264,7 @@ card sheet's adds with a receipt.
 **Import and export are the desktop's own decisions in sheets drawn for a finger.** Nothing that
 turns a list into cards or cards into a list was written twice: the parser, the resolver press,
 the four planners, the destinations' second steps, the seven writers and the field registry are
-the ones the desktop dialogs use, and the golden fence (`src/features/transfer/__golden__/`) is
+the ones the desktop dialogs use, and the golden fence (`packages/ui/features/transfer/__golden__/`) is
 untouched. What the phone owns is the drawing, where its choices are remembered, and the file.
 
 **On the deck page** the foot grows a joined pair — the desktop's mirror glyphs, 44px each, drawn
@@ -2302,10 +2305,10 @@ file open and save below `Core` (§3.5); phase 3 adds no command and no host sea
 `phone/transfer/browserFiles.ts` answers with the web host's own APIs: a picked `File`, read and
 decoded; a `Blob` handed to an `<a download>` and its URL released a task later; and
 `navigator.clipboard.writeText`, which rejects where the browser offers none rather than claiming
-a copy. It is not in `src/lib/`, because the desktop cannot share it — its whole rule (issue #545)
+a copy. It is not in `packages/ui/lib/`, because the desktop cannot share it — its whole rule (issue #545)
 is that no file handle reaches the page. When phases 4 and 5 seam it, this module is what moves.
 (**It moved on 2026-10-04, step 5.4 — §9.4**: the read, the decode and the download are
-`src/lib/core/browserFiles.ts`, which the web host's own file commands read too, and the copy is
+`packages/ui/lib/core/browserFiles.ts`, which the web host's own file commands read too, and the copy is
 `@/lib/clipboard`'s on both faces, refused in the same sentence.)
 
 - **The decode follows `import.rs`'s order** — a UTF-8 mark, a UTF-16 mark, valid UTF-8, then
@@ -2324,7 +2327,7 @@ store that opens on the desktop store's own values — both now read `@/features
 so a first export of the collection is CSV on either face and an import's condition opens on
 `Not set`. A crossing of the 1024px floor loses only a choice made since launch.
 
-**What moved in `src/`**, each with the old names kept so no desktop caller or test changed:
+**What moved in `packages/ui/`**, each with the old names kept so no desktop caller or test changed:
 
 - `transfer/prefs.ts` — `ExportPrefs`, `ImportDefaults` and their opening values, which
   `useAppStore` now opens on (and re-exports `ExportPrefs`).
@@ -2390,7 +2393,7 @@ phone's Settings reports through its own mutation and the status read but not th
 
 ### 7.8 Step 3.8 — the desktop face in the light edition, and the shell (2026-10-03)
 
-**Build: `vite --config vite.mobile.config.ts --mode fake` (Vite's dev server, not a bundle) over
+**Build: `vite --config apps/light/vite.config.ts --mode fake` (Vite's dev server, not a bundle) over
 the Storybook fake's `starter` seed, driven by Playwright in headless Chromium 1194 on Linux.**
 No `?art=live`, so every card is its placeholder. The desktop face was driven at device scale 1
 with no touch; the phone face with mobile emulation (touch, scale 2). Nothing here was measured on
@@ -2461,7 +2464,7 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
 #### Decided without a measurement
 
 - **A view the light edition does not draw.** The collection's *Open a shared collection* is
-  hidden where the shell answers `useReaches("shared")` with false (`src/lib/reach.ts`, provided by
+  hidden where the shell answers `useReaches("shared")` with false (`packages/ui/lib/reach.ts`, provided by
   `AppShell` from its edition) — so a page asks whether a destination exists here, never which
   edition it is in — and `useDesktopPlace` refuses any store move onto such a view, putting the
   store back on the URL's place without touching history. Hidden rather than refused on the press:
@@ -2493,7 +2496,7 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
   the desktop face's close is a `history.back()`, and a card opened again before that traversal
   lands is closed by it.
 - **A crossing still discards half-typed text, and that is accepted.** Holding the face while a
-  text field has focus would draw the desktop UI below its floor — the rule `mobile/CLAUDE.md`
+  text field has focus would draw the desktop UI below its floor — the rule `apps/light/CLAUDE.md`
   exists to keep — and would freeze a resize for a caret in an empty search box: the app has no
   signal for *unsaved* that covers a controlled input and the note editor alike, and a debounce
   protects nothing typed. The realistic trigger is a tablet rotating across 1024; what it costs is
@@ -2502,25 +2505,25 @@ page's own sticky line (Search's box) still stops at the inset** — it is the p
 #### The fences and the tooling
 
 - **Stories for phone UI**: Storybook's story glob, its stylesheet's `@source` and
-  `src/stories.test.tsx`'s module glob reach `mobile/` (the desktop's own `src/index.css` does
+  `packages/ui/stories.test.tsx`'s module glob reach `apps/light/` (the desktop's own `packages/ui/index.css` does
   not, so the desktop bundle carries no phone class). `Shell`, `TabBar` and `CardWall` have
   stories; a page's stories come with its step. `npx storybook build` listed `phone-shell`,
   `phone-tabbar` and `phone-cardwall`, and the phone-only `.h-13` was in the iframe's CSS.
-- **`src/lib/tokens.test.ts` reads `mobile/`**, every sweep of it. The one exception it kept is
-  the `MotionConfig` count, which is now one mount per face — `src/App.tsx` and
-  `mobile/phone/PhoneApp.tsx`, each with `reducedMotion="user"`. A planted third mount and a
-  planted transition with no reduced-motion opt-out each went red. Nothing in `mobile/` violated
+- **`packages/ui/lib/tokens.test.ts` reads `apps/light/`**, every sweep of it. The one exception it kept is
+  the `MotionConfig` count, which is now one mount per face — `packages/ui/App.tsx` and
+  `apps/light/phone/PhoneApp.tsx`, each with `reducedMotion="user"`. A planted third mount and a
+  planted transition with no reduced-motion opt-out each went red. Nothing in `apps/light/` violated
   it.
-- **The fence's blind spots are closed** (`mobile/phone/fence.test.ts`): an `import.meta.glob`
+- **The fence's blind spots are closed** (`apps/light/phone/fence.test.ts`): an `import.meta.glob`
   pattern is followed to every file it matches, a root-absolute specifier is followed, a
   template-literal `import()` with nothing interpolated is read as a string and any other
   non-literal `import()` is refused; the comment stripper is one pass that knows strings,
-  templates and regexes, and over every non-test file in `src/` and `mobile/` it finds exactly the
+  templates and regexes, and over every non-test file in `packages/ui/` and `apps/light/` it finds exactly the
   specifiers the old one did; the probe sweep catches `userAgent` however it is spelled,
   `navigator.platform` by dot, bracket or destructuring, and `@tauri-apps/plugin-os`. Each new
   rule has a case that fails on a tree with the weld.
-- **The fake's four aliases are one list**, `.storybook/fake/aliases.ts`, read by Storybook and by
-  `vite.mobile.config.ts`. The light config's own copy of the watch-ignore globs was deleted:
+- **The fake's four aliases are one list**, `packages/fake/aliases.ts`, read by Storybook and by
+  `apps/light/vite.config.ts`. The light config's own copy of the watch-ignore globs was deleted:
   `vite.watch.ts` (#760) already gives every server the same list, which also settles the `EBUSY`
   sentence in §4.
 
@@ -2538,7 +2541,7 @@ to tell the page what it is.
 
 **What was built.**
 
-- **`mobile/src-tauri`, a second Tauri project and the workspace's third member** (`grimoire-light`,
+- **`apps/light/src-tauri`, a second Tauri project and the workspace's third member** (`grimoire-light`,
   library `grimoire_light_lib`, crate types `staticlib`/`cdylib`/`rlib`). It holds almost nothing:
   the mobile entry point (`run`, `#[cfg_attr(mobile, tauri::mobile_entry_point)]`), **one command,
   `core_call(name, args, body)`**, which forwards to `grimoire_core::dispatch`, the startup gate
@@ -2560,17 +2563,17 @@ to tell the page what it is.
   run through the conversion unchanged. One contract for both hosts' protocol handlers.
 - **The `Core` seam picks the transport by a mark, below `@/lib/core`.** The host calls
   `append_invoke_initialization_script("window.__GRIMOIRE_CORE__ = \"table\";")`, and
-  `src/lib/core/index.ts`'s `pickCore` sends every call through `tableCore` when it is set —
+  `packages/ui/lib/core/index.ts`'s `pickCore` sends every call through `tableCore` when it is set —
   `invoke("core_call", { name, args })`, a byte payload as base64 in `body` with its headers as
   `args`, and Tauri's own `listen` for events. `tableCore` calls through `tauriCore` rather than
-  importing Tauri's API, so `tauri.ts` stays the fence's one door. Nothing under `mobile/` reads
+  importing Tauri's API, so `tauri.ts` stays the fence's one door. Nothing under `apps/light/` reads
   the mark (`phone/fence.test.ts`).
 - **`imageOrigin` answers `http://mtgimg.localhost` for an Android user agent**, as for Windows:
   Android's WebView serves a custom scheme from that origin.
 - **`gen/android` is committed**, generated by `npx tauri android init --ci
   --skip-targets-install` against a stub SDK (an empty `ANDROID_HOME` and an `NDK_HOME` holding
   only a `source.properties` — the generator reads the NDK's version and nothing else). **Hand
-  edits, each held by `mobile/host.test.ts`** because a re-init reverts them: `allowBackup="false"`
+  edits, each held by `apps/light/host.test.ts`** because a re-init reverts them: `allowBackup="false"`
   and `fullBackupContent="false"`; the `CAMERA` permission with the camera feature *not required*;
   the TV launcher removed; the `FileProvider` narrowed from the whole of external storage and the
   cache to `cache/exports/`; the release build type signed with the debug key; and **Gradle's Rust
@@ -2578,17 +2581,17 @@ to tell the page what it is.
   tauri` — `npm run` starts a script at the repository root, where the CLI finds the desktop's
   project, and the first `android` run failed exactly so: *"Android Studio project directory
   …/src-tauri/gen/android doesn't exist"*, after the release Rust build had finished in 4 m 47 s.
-- **CI's `android` job** builds `npx tauri android build --apk --target aarch64` from `mobile/` on
+- **CI's `android` job** builds `npx tauri android build --apk --target aarch64` from `apps/light/` on
   `ubuntu-24.04` with JDK 21 from the image (`JAVA_HOME_21_X64`) and the image's newest NDK,
   writes the APK's size and the `.so`'s to the step summary, and uploads the APK as an artifact for
   14 days. The router sends it the host's tree, the cargo workspace's shared files and the
   toolchain pin — **not** the fail-safe, which an unrecognised path cannot need, and not
   `crates/grimoire-core/*`, whose Android compile is `core`'s and whose API is compiled against the
-  host by `rust`. `mobile/*` got an arm of its own at the same time (`frontend`, `storybook`); it
+  host by `rust`. `apps/light/*` got an arm of its own at the same time (`frontend`, `storybook`); it
   had been falling to the fail-safe and running the whole Rust matrix for a phone sheet.
 - **release-please bumps the host with the rest** — its `tauri.conf.json` (which Android reads for
   `versionName`), its `Cargo.toml` and its lockfile entry — because one core is one schema version
-  and the three hosts ship from one tag. `mobile/host.test.ts` holds the two configs' versions
+  and the three hosts ship from one tag. `apps/light/host.test.ts` holds the two configs' versions
   equal.
 
 **Measured, 2026-10-03, on Linux** (Ubuntu 24.04 in this session's container, with
@@ -2598,8 +2601,8 @@ anyone has recorded**; every desktop figure elsewhere in this repo is Windows):
 - `cargo clippy -p grimoire-light -p mtg-grimoire -p grimoire-core --all-targets -- -D warnings`
   clean; the lockfile gained the one package and no other edge.
 - **The Tauri CLI picks the project by the directory it starts in**: from the repository root
-  `npx tauri info` reports the desktop's (`frontendDist: ../dist`, `devUrl` 1420), from `mobile/`
-  the light host's (`../../dist-mobile`, 5175). So `npm run tauri dev`, `tauri-action` in
+  `npx tauri info` reports the desktop's (`frontendDist: ../dist`, `devUrl` 1420), from `apps/light/`
+  the light host's (`../../apps/light/dist-mobile`, 5175). So `npm run tauri dev`, `tauri-action` in
   `release.yml` and every other root-level invocation still find the desktop.
 - `npm run mobile:build` builds the light bundle in 5.0 s.
 
@@ -2715,7 +2718,7 @@ an entry `canGoBack()` counts, so the phone router's pushes are exactly what the
 card sheet closes, a folder level goes up. **What the last back does was changed on 2026-10-04**,
 after a real phone aborted the process on it (§8.6): `MainActivity` now registers a callback of
 its own that moves the task to the back instead of letting the activity finish — §8.6 has the
-chain and `mobile/host.test.ts` holds the edit.
+chain and `apps/light/host.test.ts` holds the edit.
 
 **The insets are the host's, as padding rather than `env()`.** From target SDK 35 Android draws
 every app edge to edge and no longer resizes a window for the keyboard, and whether a WebView
@@ -2734,7 +2737,7 @@ alike. No device has drawn the new ground.)
 - **Picking needed no seam.** wry's `RustWebChromeClient.onShowFileChooser` answers an
   `<input type="file">` with the system picker and hands the page a `File` over the chosen
   `content://` document, which the page reads as it reads any other. `phone/transfer/browserFiles.ts`
-  keeps the read and the decode (`src/lib/core/browserFiles.ts` since step 5.4). **One catch,
+  keeps the read and the decode (`packages/ui/lib/core/browserFiles.ts` since step 5.4). **One catch,
   found in review**: both that chooser and the dialog
   plugin turn each extension into a MIME type through `MimeTypeMap` and drop the ones it does not
   know, so `.dec` and `.dek` were greyed out. `DECKLIST_ACCEPT` now carries
@@ -2746,7 +2749,7 @@ alike. No device has drawn the new ground.)
   and in a browser it is the download it was. The phone's export sheet now says `Saved Burn.txt.`,
   says nothing for a cancelled dialog, and still says `Downloading Burn.txt.` in a browser.
 - **The host answers the desktop's two file commands by their names and arguments**
-  (`mobile/src-tauri/src/files.rs`): `export_save_file(fileName, contents) -> bool` and
+  (`apps/light/src-tauri/src/files.rs`): `export_save_file(fileName, contents) -> bool` and
   `import_pick_file() -> ImportFile | null`, through `tauri-plugin-dialog` (the Storage Access
   Framework on Android) and `tauri-plugin-fs` (`Fs::open`, which on Android asks the Kotlin side for
   a descriptor for the `content://` URI). So the desktop face, drawn on a tablet past 1024px, saves
@@ -2757,7 +2760,7 @@ alike. No device has drawn the new ground.)
   `read_bounded` and `suggested_name` moved into the core's `import` so both hosts share the
   megabyte cap and the name rule.
 
-**Links.** `mobile/src-tauri/src/navigation.rs` is the desktop's `app_origin` guard restated for this
+**Links.** `apps/light/src-tauri/src/navigation.rs` is the desktop's `app_origin` guard restated for this
 host's origins, with one addition: an `http(s)` link off the app's pages is handed to the system
 browser through `tauri-plugin-opener` (an intent on Android) and the window stays where it was; any
 other scheme is refused. So a deck note's link opens the browser rather than replacing the app.
@@ -2770,8 +2773,8 @@ a tablet past 1024px — opens its links through `@tauri-apps/plugin-opener` fro
 capability grants the desktop's exact pair, `opener:allow-open-url` and `opener:allow-default-urls`.
 **What this does not do** is give the phone card sheet its `Open on …` rows — those are still not
 drawn; with the guard in place they can be plain links. (**Drawn since step 5.4, as plain
-links — §9.4.** The plugin is no longer imported by `externalLinks.ts`: `src/lib/core/tauri.ts`
-names it, `src/lib/core/index.ts` picks it as this host's way out, and a press on either face
+links — §9.4.** The plugin is no longer imported by `externalLinks.ts`: `packages/ui/lib/core/tauri.ts`
+names it, `packages/ui/lib/core/index.ts` picks it as this host's way out, and a press on either face
 that has to compute its address first — *Connect Patreon* — goes through it. The clipboard on
 this host is the WebView's own, since the host registers no clipboard plugin.)
 
@@ -2809,7 +2812,7 @@ before any of them.
   that `refresh_selected_if_due` now uses too) and the card sync's throttle, with each measured
   size beside it. A due card check may cost a few hundred bytes — the file has not rotated — and
   is listed anyway, because Scryfall rotates it daily.
-- **The prompt is `mobile/DownloadsPrompt.tsx`, mounted by `LightApp` above both faces.** It asks
+- **The prompt is `apps/light/DownloadsPrompt.tsx`, mounted by `LightApp` above both faces.** It asks
   `light_downloads` once and draws only when the host says it is holding: the desktop binary under
   `mobile:tauri` and the Storybook fake have no such command, and a refusal is nothing to ask. Not
   now is the first button and Escape and the scrim are Not now too; it sends nothing, and the next
@@ -2838,7 +2841,7 @@ run's step summary and artifact, not copied here. The phone figures are §8.6.
 **What it does.**
 
 - **Builds an x86_64 release APK** — `npx tauri android build --apk --target x86_64 --ci` from
-  `mobile/`, the `android` job's steps otherwise (JDK 21, the image's newest NDK, the composite
+  `apps/light/`, the `android` job's steps otherwise (JDK 21, the image's newest NDK, the composite
   toolchain action, `rust-cache` keyed `android-x86_64`). x86_64 because the emulator is x86_64
   under KVM and cannot run arm64 code; the shipped APK is arm64 (§8.1). **So the `.so` measured
   here is not the one a phone loads**, and its size is the x86_64 compile's.
@@ -2853,7 +2856,7 @@ run's step summary and artifact, not copied here. The phone figures are §8.6.
      thread, so this figure does not wait for them; it is reported apart from the cold starts.
   3. **The first corpus ingest.** The host prints `launch: card sync started` before
      `run_sync` and `launch: card sync finished in N ms` after it (`spawn_downloads` in
-     `mobile/src-tauri/src/lib.rs`, timed with the core's `Tick`; the existing
+     `apps/light/src-tauri/src/lib.rs`, timed with the core's `Tick`; the existing
      `initial sync failed: …` is the other end). Tauri's Android shell pipes stdout and stderr to
      logcat under the tag **`RustStdoutStderr`** — tao's `ndk_glue::create`, unconditionally, so
      a release build logs as a debug one does. The script tees `adb logcat -s RustStdoutStderr`
@@ -3069,9 +3072,9 @@ request each; the rules for the host crate are
 - **The host is `crates/grimoire-web`, a fourth workspace member** — a `cdylib` whose
   `#[wasm_bindgen]` shell is the only thing gated to the target, so every `--workspace` command
   still reaches it natively.
-- **The page is a build of its own, `dist-web/`** — the light entry in a `web` mode. The page's
+- **The page is a build of its own, `apps/light/dist-web/`** — the light entry in a `web` mode. The page's
   code is the Android app's; what differs is below `@/lib/core`, as the fake's build already
-  differs. The desktop's `dist/` and the APK's `dist-mobile/` are to carry neither the module
+  differs. The desktop's `apps/desktop/dist/` and the APK's `apps/light/dist-mobile/` are to carry neither the module
   nor the Worker nor the service worker.
 - **The service worker is hand-written**, as round one's was: no `workbox`, no
   `vite-plugin-pwa`.
@@ -3184,10 +3187,10 @@ no `wrangler`.
   the write connection's own mutex, so the row was never written. It hands the failure back
   now and `invalidate_owned` writes it down once the pass has let go
   (`a_failed_owned_refresh_on_one_connection_is_still_written_down`).
-- **The Worker, in `src/lib/core/web/`.** `worker.ts` is the dedicated Worker — not an
+- **The Worker, in `packages/ui/lib/core/web/`.** `worker.ts` is the dedicated Worker — not an
   optimisation: OPFS's synchronous access handles exist only off the main thread, and the pool
   permits one connection, so there is nowhere else for the database to be. It is **its own
-  `tsc` program** (`tsconfig.web-worker.json`, the `WebWorker` lib; the root program excludes
+  `tsc` program** (`packages/ui/tsconfig.web-worker.json`, the `WebWorker` lib; the root program excludes
   the one file), and everything it decides is in `engine.ts`, which the suite drives with
   neither a Worker nor a module. `grimoire_web.d.ts` types the module **by hand**, because
   `dist-wasm/` is ignored and `tsc` runs on machines that never built it. The Worker loads the
@@ -3199,13 +3202,13 @@ no `wrangler`.
   rather than copied, its headers riding as `args`, as `table.ts` carries the same call.
   (**`opened` carries a second field since step 5.2**: `existed`, whether OPFS already held the
   database's folder before the open — §9.2.)
-- **The third `Core`, and how a build chooses it.** `src/lib/core/web/index.ts`'s `webCore`
-  sends every command to the Worker. **`src/lib/core/index.ts` chooses by
+- **The third `Core`, and how a build chooses it.** `packages/ui/lib/core/web/index.ts`'s `webCore`
+  sends every command to the Worker. **`packages/ui/lib/core/index.ts` chooses by
   `import.meta.env.MODE === "web"`** — which build this is, replaced at compile time, not a
   probe — and reaches `./web` by a **dynamic import with the comparison written out at the
   `import()`**: Vite bundles a Worker for every file it transforms that spells
   `new Worker(new URL(…))`, so a static import would put the Worker's chunk in the desktop's
-  `dist/` and the APK's `dist-mobile/`. `deferredCore` is what `core` is while that chunk is on
+  `apps/desktop/dist/` and the APK's `apps/light/dist-mobile/`. `deferredCore` is what `core` is while that chunk is on
   its way, and `refusedCore` what it becomes if the chunk never comes — the gate is then told
   so, with a reload, where a rejected `startup_status` would have read as *still loading* for
   ever. Every other mode still goes through `pickCore`. **A refusal is the engine's sentence as
@@ -3232,12 +3235,12 @@ no `wrangler`.
   **`StartupStatus` grew `reload?: true`** — a
   host saying that starting again can cure the failure — and the web host sends it for a second
   tab, for an engine that never loaded and for one that stopped; never for a database that
-  would not open, which will not open the second time either. **`mobile/BootScreen.tsx` draws
+  would not open, which will not open the second time either. **`apps/light/BootScreen.tsx` draws
   the way out from what the host answered, not from where it runs**: `ReloadLink`, a link to
   where the reader already is, which `FaceBoundary` now draws too. A failure a reload can cure
   is told in the plain text colour; one that stays failed keeps the destructive one.
-- **The `web` mode.** `vite.mobile.config.ts` in mode `web` builds the light entry into
-  **`dist-web/`**; every other mode is `dist-mobile/` as before. `npm run web:dev` serves it on
+- **The `web` mode.** `apps/light/vite.config.ts` in mode `web` builds the light entry into
+  **`apps/light/dist-web/`**; every other mode is `apps/light/dist-mobile/` as before. `npm run web:dev` serves it on
   **port 5176** (the light server keeps 5175, so both can be up), `web:build` runs `tsc`, the
   Worker's program and the bundle, and `web:preview` serves the result on 4176 with Vite's own
   single-page fallback turned off, so a file a deploy removed is a 404 as on a real host.
@@ -3258,7 +3261,7 @@ no `wrangler`.
   that fail without naming themselves: the CLI is exactly the version `Cargo.lock` resolves,
   clang 18 or newer is reachable (it looks in the LLVM installer's folder on Windows), and
   every function the Worker imports is exported.
-- **`scripts/web-smoke.mjs`** (`npm run web:smoke`): serves `dist-web/` on `localhost`, opens
+- **`scripts/web-smoke.mjs`** (`npm run web:smoke`): serves `apps/light/dist-web/` on `localhost`, opens
   it in headless Chromium over the DevTools protocol with no dependency, and asks five things —
   the app got past its gate and said which journal it got; the database is in OPFS; a read came
   back through the engine; a reload opens the database a second time, heard as a second console
@@ -3272,7 +3275,7 @@ no `wrangler`.
   reload check is now "it still holds the cards" — §9.2. **Step 5.3 added the service
   worker's**: the shell, a picture, a reload with the server gone, and an update — §9.3.)
 - **CI's `web` job** builds the module and the page on `ubuntu-24.04`, reports every `.wasm`
-  raw and `gzip -9`, runs the smoke script in the image's own Chrome and uploads `dist-web/`.
+  raw and `gzip -9`, runs the smoke script in the image's own Chrome and uploads `apps/light/dist-web/`.
   The router gives it everything `core` runs for and everything the page is bundled from.
   [ci-and-releases.md](ci-and-releases.md) has each step and each arm. `lint:rust`'s and CI's
   `cargo fmt` line gained `-p grimoire-web`, the `testing`-feature check names the host, and
@@ -3309,7 +3312,7 @@ no `wrangler`.
   own tree, and *No card data yet* once `main`'s `NoCards` (§8.6) was merged in, which takes
   `sync_status`' count as well as the search's answer; the reload opened the
   database again; and the second tab was told *"MTG Grimoire is already open in another tab of this
-  browser. Close that tab, then reload this one."* and offered a Reload. `dist-web/` is
+  browser. Close that tab, then reload this one."* and offered a Reload. `apps/light/dist-web/` is
   11 996 428 B in total.
 - **In a browser, the dev build under React StrictMode** (`npm run web:dev`, Vite's dev server
   on port 5176 over the module in `dist-wasm/`; the same Chrome, driven over CDP by importing
@@ -3328,8 +3331,8 @@ no `wrangler`.
   difference, not checked.)
 - **The suites**: `cargo test` green for the core, `grimoire-web`, `grimoire-light` and the
   desktop on the final tree, and clippy clean natively and for wasm32. The new TypeScript tests
-  are `src/lib/core/web/`'s four files, `deferred.test.ts`, `core.test.ts`'s *"the core a build
-  chooses"* and `mobile/BootScreen.test.tsx`.
+  are `packages/ui/lib/core/web/`'s four files, `deferred.test.ts`, `core.test.ts`'s *"the core a build
+  chooses"* and `apps/light/BootScreen.test.tsx`.
 
 **CORS, measured 2026-10-04 with `curl`** sending `Origin: https://mtg-grimoire.app` and
 reading the response headers a browser's CORS check reads. **Server behaviour only: no browser
@@ -3562,8 +3565,8 @@ shapes*; the host's are [`crates/grimoire-web/CLAUDE.md`](../../crates/grimoire-
   (`existed`, on the protocol's `opened` message); the page compares that with a mark it keeps
   in `localStorage` and **records the occurrence whatever became of the open**, because an open
   that creates the folder and then fails leaves a launch that looks ordinary behind it.
-  `mobile/StorageNotice.tsx` asks the host command `storage_cleared` and draws one dismissible
-  notice from the answer — the host's own sentences — so nothing under `mobile/` asks where it
+  `apps/light/StorageNotice.tsx` asks the host command `storage_cleared` and draws one dismissible
+  notice from the answer — the host's own sentences — so nothing under `apps/light/` asks where it
   runs; the Android host and the desktop refuse the name, which is nothing to draw. (**Since
   step 6.4 there is a second name the web host alone answers, `storage_group_warning` —
   §10.4.**)
@@ -3702,7 +3705,7 @@ desktop Edge.
   pictures and with the server stopped, is timed in §9.3.)
 - **The suites, on the final tree**: `cargo test` green for the four packages, and clippy clean
   natively and for wasm32. The frontend suite green in four shards but for one test in a file
-  this change does not touch (`src/components/table/VirtualTable.test.tsx`), which failed once
+  this change does not touch (`packages/ui/components/table/VirtualTable.test.tsx`), which failed once
   under load and passed alone. **The final module is 8 592 080 B, 3 001 242 B through
   `gzip -9`.**
 
@@ -3742,7 +3745,7 @@ same change and each with a mutation run against its test:
 - **A chunk is inflated whole before it is framed.** A synthetic 1.9 MB chunk that inflates to
   185 MB took linear memory to 946 733 056 B; real data peaked at the 193.9 MiB above. Feeding
   the decoder in slices is about forty lines, and touches the native paths' batch boundaries.
-- **With no denominator, the feed rows show no byte figure at all** (`src/lib/activity.ts`
+- **With no denominator, the feed rows show no byte figure at all** (`packages/ui/lib/activity.ts`
   draws megabytes only against a total).
 - **The first-run label reads the generic "Syncing card data" until a `downloading` event is
   heard**, because the launch's downloads start before a face has mounted its listeners.
@@ -3774,28 +3777,28 @@ A built web app draws its card pictures, opens with the network gone, and holds 
 until the reader takes it — and the engine answers through two finishes it used to be silent
 for. Numbered for its step: §9.4's was merged first (#807), so that section's passes are over
 a tree with no service worker in it. The page's rules are
-[`mobile/CLAUDE.md`](../../mobile/CLAUDE.md)'s *The web host*; the engine's are
+[`apps/light/CLAUDE.md`](../../apps/light/CLAUDE.md)'s *The web host*; the engine's are
 [`crates/grimoire-core/CLAUDE.md`](../../crates/grimoire-core/CLAUDE.md)'s *A finish that
 writes staging…* and *The command table*; the picture cache's are
 [image-cache.md](image-cache.md#in-a-browser-cache-storage-and-a-service-worker).
 
 **What was built — the worker and the shell.**
 
-- **Hand-written, in `src/lib/core/web/sw/`, and its own `tsc` program.** `sw.ts` is the four
+- **Hand-written, in `packages/ui/lib/core/web/sw/`, and its own `tsc` program.** `sw.ts` is the four
   events only a real worker has, and has no branch of its own. What it decides is in the four
   modules beside it, with no global in them, and the suite drives those over fakes: `shell.ts`
   (which request is whose, and the cache's name), `pictures.ts` (a picture's path, the
   budget), `bridge.ts` (asking the page where a picture is) and `serve.ts` (the install, the
   activation and every answer, with its caches, its `fetch`, its pages and its clock handed
-  in). `tsconfig.web-sw.json` holds `sw.ts` under the `WebWorker` lib and the root program
+  in). `packages/ui/tsconfig.web-sw.json` holds `sw.ts` under the `WebWorker` lib and the root program
   excludes that one file, as it excludes the database Worker's; the four modules are followed
   from both programs, so each is checked under both libs and may name no global only one has.
-- **Built by the `web` mode alone, and last.** `vite.sw.ts`'s plugin runs in `closeBundle` —
+- **Built by the `web` mode alone, and last.** `apps/light/vite.sw.ts`'s plugin runs in `closeBundle` —
   the first hook at which the build's hashed names and the public directory's copies are all
-  on disk — and makes one nested build: an IIFE at `dist-web/sw.js`, with a fixed name, no
+  on disk — and makes one nested build: an IIFE at `apps/light/dist-web/sw.js`, with a fixed name, no
   chunk and no hash. Its address is the one thing in the build that must not move: a browser
-  finds a new build by asking for that file again. No other build has the plugin, so `dist/`,
-  `dist-mobile/` and `dist-share/` carry no worker. **Only after a build that wrote its
+  finds a new build by asking for that file again. No other build has the plugin, so `apps/desktop/dist/`,
+  `apps/light/dist-mobile/` and `apps/share/dist-share/` carry no worker. **Only after a build that wrote its
   files** (`writeBundle`): Vite empties the output at `renderStart`, so a build that failed
   before then leaves the last build's document on disk, and a worker built then would name
   that build's files as this one's. A nested build that fails, fails `web:build`.
@@ -3861,7 +3864,7 @@ writes staging…* and *The command table*; the picture cache's are
 **What was built — card pictures.**
 
 - **A picture's address is the app's own origin**:
-  `<origin>/mtgimg/<variant>/<card id>/<face>`. `src/lib/images.ts`'s `imageOrigin` answers
+  `<origin>/mtgimg/<variant>/<card id>/<face>`. `packages/ui/lib/images.ts`'s `imageOrigin` answers
   it in the `web` build, by the build's mode, so **no call site changed** and no other
   bundle carries the branch. A prefix and not the root, because the root's first segments
   are the app's places.
@@ -3930,10 +3933,10 @@ writes staging…* and *The command table*; the picture cache's are
   the old build is open the old worker goes on answering from its own cache, a reload
   included — which is why a reload is not an update.
 - **The host says so, and only the press hands over.** Two host commands and an event
-  (`src/lib/core/hostUpdate.ts`), answered on the page by the web core and refused by every
+  (`packages/ui/lib/core/hostUpdate.ts`), answered on the page by the web core and refused by every
   other host: `host_update` → `{ title, action } | null`, `host_update_apply`, and
   `host-update:changed`. **Not the desktop updater's `update_status` and `update_apply`.**
-  `mobile/UpdateNotice.tsx`, mounted by `LightApp` beside the faces, draws only what the
+  `apps/light/UpdateNotice.tsx`, mounted by `LightApp` beside the faces, draws only what the
   host answers, in the host's words, as `StorageNotice` does: not a modal, along the bottom
   clear of the phone face's tab bar, its `role="status"` mounted before it has anything to
   say. The press posts `grimoire:skip-waiting` to the waiting worker; the page reloads once,
@@ -4001,7 +4004,7 @@ writes staging…* and *The command table*; the picture cache's are
   request there fails the run, as a request to any host without a fixture does.
 - **A browser-level `Fetch.enable` pauses a service worker's fetches too** (confirmed,
   Chrome 154), so §9.2's one enable still covers every request.
-- **`scripts/ci-route.mjs` routes `vite.sw.ts` to `frontend` and `web`**, named rather than
+- **`scripts/ci-route.mjs` routes `apps/light/vite.sw.ts` to `frontend` and `web`**, named rather than
   left to the fail-safe, which would run the Rust matrix for a service worker.
 
 **Measured, 2026-10-04, offline: the smoke run.** Windows 11, headless Chrome 154.0.8037.95.
@@ -4153,14 +4156,14 @@ No error, and the same rows in every table as before.
 
 What a face still asked a Tauri window for, answered below `@/lib/core`; the web manifest
 finished and moved to where only the light builds copy it; and phase 1's two history leftovers
-(§5). The rules that came out of it are in [`mobile/CLAUDE.md`](../../mobile/CLAUDE.md).
+(§5). The rules that came out of it are in [`apps/light/CLAUDE.md`](../../apps/light/CLAUDE.md).
 
 **What was built — the clipboard and a link out.**
 
-- **A second seam beside `Core`: `Host`** (`src/lib/core/types.ts`) — `copyText` and `openUrl`,
+- **A second seam beside `Core`: `Host`** (`packages/ui/lib/core/types.ts`) — `copyText` and `openUrl`,
   the spec's §3.5 third row. Not two more methods on `Core`: a `Core` is the command boundary,
   which can be deferred, refused or wrapped whole, and neither of these reaches a backend.
-  **`src/lib/core/index.ts` chooses `host` where it chooses `core`, by the same two questions**:
+  **`packages/ui/lib/core/index.ts` chooses `host` where it chooses `core`, by the same two questions**:
 
   | Build, or window | Chosen by | Copy | Open a link |
   | --- | --- | --- | --- |
@@ -4170,7 +4173,7 @@ finished and moved to where only the light builds copy it; and phase 1's two his
 
 - **`@/lib/clipboard`'s `copyText` and `@/lib/externalLinks`' `openExternal` keep their
   signatures**, so no call site changed and every suite that mocks either module still does.
-  The two plugins are imported in `src/lib/core/tauri.ts` and nowhere else — the one door
+  The two plugins are imported in `packages/ui/lib/core/tauri.ts` and nowhere else — the one door
   `fence.test.ts` lets the phone face through — so the URL builders beside `openExternal` are
   importable by that face.
 - **One sentence for a copy with no clipboard, on both faces**: `this browser offers no
@@ -4190,31 +4193,31 @@ finished and moved to where only the light builds copy it; and phase 1's two his
   `window.open` — its arm is the opener — so its fence is still the scope.
 - **The Android host opens through Tauri's opener, which is not what this step's brief said.**
   The brief had neither plugin granted to that page. The opener is: `capabilities/light.json`
-  holds the desktop's exact pair and `mobile/host.test.ts` holds the list. It is also the
+  holds the desktop's exact pair and `apps/light/host.test.ts` holds the list. It is also the
   answer that needs nothing from the WebView — a `window.open` there navigates the app's own
   window, and only the host's guard turns that back into a hand-off. The clipboard *is* the
   WebView's own, because the host registers no clipboard plugin; until this step the desktop
-  face on a tablet asked for one that was not there (read off `mobile/src-tauri/src/lib.rs`,
+  face on a tablet asked for one that was not there (read off `apps/light/src-tauri/src/lib.rs`,
   not driven). **That an Android WebView grants the write is an assumption**: its origin,
   `http://tauri.localhost`, is a secure context, so the API is there to call, and no copy has
   run on a device from either face — the phone's export sheet has called it since phase 3 and
   no record shows it doing so on a phone. If it is refused the cure is a clipboard plugin on
   that host, which this step did not add.
-- **`dist-web/` carries neither plugin, and this step's first build of it carried both.** The
+- **`apps/light/dist-web/` carries neither plugin, and this step's first build of it carried both.** The
   first `tableHost` read
   `browserHost.copyText` and `tauriHost.openUrl` at the top of its module, and a member read
   there is something a bundler must assume has an effect: the object stayed in the web build,
   and both plugins' calls with it. Written as two functions that call, it and they fall out.
-  The desktop's `dist/` and the APK's `dist-mobile/` carry both, as they always did.
+  The desktop's `apps/desktop/dist/` and the APK's `apps/light/dist-mobile/` carry both, as they always did.
 
 **What was built — files on the desktop face in a browser.**
 
 - **The web host answers `export_save_file` and `import_pick_file` on the page**
-  (`src/lib/core/web/files.ts`'s `answeringFiles`), in the desktop commands' own result shapes
+  (`packages/ui/lib/core/web/files.ts`'s `answeringFiles`), in the desktop commands' own result shapes
   — `boolean` and `ImportFile | null`, a refusal a bare string — so
-  `src/features/transfer/files.ts`, both dialogs and `ipc.ts` are untouched. The engine's table
+  `packages/ui/features/transfer/files.ts`, both dialogs and `ipc.ts` are untouched. The engine's table
   has neither: a Worker has no document. It is a wrapper round the Worker's `Core`, composed at
-  the dynamic import in `src/lib/core/index.ts`, so `web/index.ts` did not change.
+  the dynamic import in `packages/ui/lib/core/index.ts`, so `web/index.ts` did not change.
 - **Two sets of page commands, each with its own answerer.** `web/index.ts` answers the gate
   and step 5.2's three storage commands; this answers the two files in front of it and sends
   everything else on. A test builds the pair as a build does and holds that the Worker is asked
@@ -4247,14 +4250,14 @@ finished and moved to where only the light builds copy it; and phase 1's two his
   FileSaver.js's figure for the same reason. Only headless Chrome was driven, where one task
   had been enough.
 - **The megabyte and the four readings are shared, not copied**:
-  `mobile/phone/transfer/browserFiles.ts` moved to `src/lib/core/browserFiles.ts` — a leaf, so
+  `apps/light/phone/transfer/browserFiles.ts` moved to `packages/ui/lib/core/browserFiles.ts` — a leaf, so
   `files.ts` and the web host both import it without a cycle — and took `downloadText` with
   it. The phone's import sheet keeps an input of its own on every host and reads through the
   same module.
 
 **What was built — the phone card sheet's `Open on` rows.**
 
-- **`mobile/phone/card/OpenOn.tsx`**: Scryfall, EDHREC and the selected marketplace, the
+- **`apps/light/phone/card/OpenOn.tsx`**: Scryfall, EDHREC and the selected marketplace, the
   desktop's ladder in the desktop's order, **as `<a target="_blank" rel="noopener noreferrer">`**
   — which a browser opens in a tab, and phase 4's guard hands to the system browser on Android.
   The implementer's pick, to be redirected in review: at the foot of the sheet, under Combos;
@@ -4273,10 +4276,10 @@ finished and moved to where only the light builds copy it; and phase 1's two his
 
 **What was built — the manifest.**
 
-- **`mobile/public/light.webmanifest`**: an `id`, `start_url` and `scope` of `/`,
+- **`apps/light/public/light.webmanifest`**: an `id`, `start_url` and `scope` of `/`,
   `display: standalone`, both names, and both colours `#0C0D12` — `oklch(0.16 0.01 270)`
   converted by hand, and the value this Chrome rasterised the token to. The page's
-  `theme-color` and Android's `colors.xml` took the same value, and `mobile/host.test.ts` holds
+  `theme-color` and Android's `colors.xml` took the same value, and `apps/light/host.test.ts` holds
   the three equal.
 - **Raster icons at 192 and 512 in two drawings**: the transparent mark, for the reason the
   desktop's icon is the mark ([`logos/README.md`](../../logos/README.md)), and a **maskable**
@@ -4286,8 +4289,8 @@ finished and moved to where only the light builds copy it; and phase 1's two his
   headless Chromium over the DevTools protocol — no image library is a dependency — and
   **measures the furthest painted pixel**, failing a mark that leaves the safe zone. At
   `scale(0.70)` the mark reaches **37.5%** of the width from the centre, against 40%.
-- **`mobile/public/` is the light builds' own public directory** (`vite.mobile.config.ts`'s
-  `publicDir`), so the manifest and its icons reach `dist-mobile/`, `dist-web/` and both dev
+- **`apps/light/public/` is the light builds' own public directory** (`apps/light/vite.config.ts`'s
+  `publicDir`), so the manifest and its icons reach `apps/light/dist-mobile/`, `apps/light/dist-web/` and both dev
   servers and nothing else. The favicon is a second copy of the mark there, held equal to the
   master by a test.
 - **No install button, and nothing asks a `display-mode` question**: a browser's own install UI
@@ -4332,9 +4335,9 @@ unresolvable (`--host-resolver-rules`), so nothing below is over a corpus.
   answered **none**, and the four PNGs came back `image/png` and decoded at their declared
   sizes. **Not on 4176**: another worktree's preview held that port, the first pass read *its*
   manifest without saying so, and every pass here was moved to a port of its own.
-- **What each output holds beside `assets/`**: `dist/` — `index.html` and the mark;
-  `dist-share/` — the mark; `dist-mobile/` and `dist-web/` — the document, the manifest, the
-  mark and the four icons, `dist-web/` with the engine under `wasm/<build id>/` as well.
+- **What each output holds beside `assets/`**: `apps/desktop/dist/` — `index.html` and the mark;
+  `apps/share/dist-share/` — the mark; `apps/light/dist-mobile/` and `apps/light/dist-web/` — the document, the manifest, the
+  mark and the four icons, `apps/light/dist-web/` with the engine under `wasm/<build id>/` as well.
 - **The web app over the real engine, a dev server in the `web` mode on port 5196.** The
   database opened on a rollback journal. `copyText` put its text on the clipboard, read back
   with `readText`. `openExternal` outside a user activation was refused in the sentence above;
@@ -4382,7 +4385,7 @@ each tab's `visibilityState` as the witness for a tab switch.
 - **`F1`** reached the page, which leaves it alone, and Chrome opened a tab of its own.
   **`Ctrl+Shift+N` never reached the page**: no `keydown` arrived and new browser targets
   appeared — the chord's private window, read from that and not seen.
-- **So the guess `mobile/CLAUDE.md` carried from phase 3 is wrong for Chrome**, and it now says
+- **So the guess `apps/light/CLAUDE.md` carried from phase 3 is wrong for Chrome**, and it now says
   what was seen: the digits are not the tab switcher's *before* the page sees them. That the
   browser acted on these keys at all — the tab switch, the private window — is what makes the
   order Chrome's own and not an artefact of injecting past it. Nothing was built from it: the
@@ -4424,10 +4427,10 @@ each tab's `visibilityState` as the witness for a tab switch.
 ### 9.5 Step 5.5 — hosting (2026-10-04)
 
 Where the web build is served from, and under what policy: a third Cloudflare Worker,
-`app-worker/`, for `https://mtg-grimoire.app`. **This is the step's first half.** The module's
+`infrastructure/app-worker/`, for `https://mtg-grimoire.app`. **This is the step's first half.** The module's
 size taken up with timings, and the built app driven end to end against round one's figures,
 are not in this section — they are the second half, §9.6. **Nothing is deployed** (deployed 2026-10-04, §9.7): what was committed is
-source, configuration and a runbook, and [`app-worker/README.md`](../../app-worker/README.md)
+source, configuration and a runbook, and [`infrastructure/app-worker/README.md`](../../infrastructure/app-worker/README.md)
 is that runbook — the probes, the steps in order, rollback and cost. Numbered for its step; 5.3
 was still in flight when this was written, on a tree with no service worker in it, and §9.3
 arrived above it when the two met (2026-10-04). **What that meeting changed is marked where it
@@ -4435,12 +4438,12 @@ stands below**; every measurement here is still of the tree it names.
 
 **What was built.**
 
-- **`app-worker/`, Worker `mtg-grimoire-app`** — `wrangler.jsonc`, a `_headers` file, a script of
+- **`infrastructure/app-worker/`, Worker `mtg-grimoire-app`** — `wrangler.jsonc`, a `_headers` file, a script of
   a few lines, and a reader of that file's format. Beside the relay and the share Worker and
   never either (spec §6), for the share Worker's reason: every deploy is by hand, by one person,
   and a bad build of a page must not be a sync outage. **It shares nothing with them**: no D1, no
   R2, no KV, no Durable Object, no `vars`, no secret. Its own `tsc` program,
-  `tsconfig.app-worker.json`, runs in `npm run build`.
+  `infrastructure/app-worker/tsconfig.json`, runs in `npm run build`.
 - **Static assets, and one thing configuration could not say.** `not_found_handling:
   "single-page-application"` answers every address that matches no file with `index.html` and a
   200 — which `/decks/12` needs, and a chunk a deploy renamed must never get: a page loaded
@@ -4452,7 +4455,7 @@ stands below**; every measurement here is still of the tree it names.
   text/plain` marked `nosniff` and `no-store`. A file that exists never reaches it. No
   `run_worker_first`: that would bill a Worker request for every chunk.
 - **A navigation that did not say so** — `curl`, a link preview — is answered by `isNavigation`,
-  the rule the dev server and the preview serve by, imported from `src/lib/core/web/assets.ts`
+  the rule the dev server and the preview serve by, imported from `packages/ui/lib/core/web/assets.ts`
   so the three cannot disagree. The script asks its binding for `/` by name, which is the
   document under every setting.
 - **Three trees hold no place at all**: under `/assets/`, `/wasm/` and `/mtgimg/` a miss is the
@@ -4461,26 +4464,26 @@ stands below**; every measurement here is still of the tree it names.
   asks the network, and the document in answer would be a broken picture with a 200 a cache has
   no reason to refuse. An `<img>`'s request is `no-cors`, never a navigation, so the edge sends
   it to the script; the tree is named so the script cannot hand it the document either.
-  (**The list is `NOT_A_PLACE` in `src/lib/core/web/assets.ts` since §9.6**, read by
+  (**The list is `NOT_A_PLACE` in `packages/ui/lib/core/web/assets.ts` since §9.6**, read by
   `isNavigation` itself, because the three local servers were found without it.)
   `/_headers` is refused the same way: the host parses that file and does not serve it, so its
   address is a miss with no extension.
-- **`app-worker/_headers`, emitted into `dist-web/` and nowhere else.** `vite.mobile.config.ts`
+- **`infrastructure/app-worker/_headers`, emitted into `apps/light/dist-web/` and nowhere else.** `apps/light/vite.config.ts`
   gained a second `web`-mode plugin, `web:hosting`, which copies the file to the build's root —
   where `wrangler deploy` parses it — and fails the build, by line, on a file that does not
   parse. (**Three, with step 5.3's**: `web:hosting` is listed first, so its headers are on a
   preview response before any other plugin's middleware answers it — `sw.js` included — and
-  `web:service-worker` last, so the build id it hashes covers the emitted `_headers`.) **In neither public directory**: the root's is copied into `dist/` and `dist-share/`,
-  and `mobile/public/` into the APK's `dist-mobile/`.
+  `web:service-worker` last, so the build id it hashes covers the emitted `_headers`.) **In neither public directory**: `apps/desktop/public/` is copied into `apps/desktop/dist/` and `apps/share/dist-share/`,
+  and `apps/light/public/` into the APK's `apps/light/dist-mobile/`.
 
   | Build, listed 2026-10-04 | `_headers` | Manifest and icons | Engine and its Worker |
   | --- | --- | --- | --- |
-  | `dist/` (`npm run build`) | — | — | — |
-  | `dist-mobile/` (`mobile:build`) | — | yes | — |
-  | `dist-share/` (`share:build`) | — | — | — |
-  | `dist-web/` (`web:build`) | at the root, byte for byte the source | yes | yes |
+  | `apps/desktop/dist/` (`npm run build`) | — | — | — |
+  | `apps/light/dist-mobile/` (`mobile:build`) | — | yes | — |
+  | `apps/share/dist-share/` (`share:build`) | — | — | — |
+  | `apps/light/dist-web/` (`web:build`) | at the root, byte for byte the source | yes | yes |
 
-- **`app-worker/src/headers.ts` reads that format as Cloudflare does** — every matching rule in
+- **`infrastructure/app-worker/src/headers.ts` reads that format as Cloudflare does** — every matching rule in
   order, a header two rules both set **joined with a comma**, `! Name` to detach, one splat to a
   path, 100 rules, 2,000 characters a line — and refuses what it does not model (an absolute
   URL pattern, a placeholder) rather than skipping it. **It also refuses two things Cloudflare
@@ -4657,7 +4660,7 @@ gzipped by Vite's report.
   360 × 800 and 1280 × 800, `/search`, `/collection`, `/decks`, `/wishlist` and `/settings` each
   reached its shell with no violation and nothing thrown.
 
-**The fence — `app-worker/src/hosting.test.ts`.** Nothing compiles the policy and the engine
+**The fence — `infrastructure/app-worker/src/hosting.test.ts`.** Nothing compiles the policy and the engine
 together, so a feed that moved would build green on both sides and fail in a reader's browser
 with the reason in a console nobody has open. The test reads `_headers`, `wrangler.jsonc`, the
 desktop's shipped CSP and the engine's Rust as text, and asks `headersFor` what each address is
@@ -4711,7 +4714,7 @@ and did. Each kill is recorded by the name of the
 test it failed, because the first mutation run was itself vacuous: its harness read a report
 from the wrong place and called every run red.
 
-**Routing.** `app-worker/*` → `frontend` and `web`, out of the fail-safe:
+**Routing.** `infrastructure/app-worker/*` → `frontend` and `web`, out of the fail-safe:
 [ci-and-releases.md](ci-and-releases.md) has the arm. No job deploys.
 
 **Not run, and not built.**
@@ -4726,7 +4729,7 @@ from the wrong place and called every run red.
   must be a `no-store` 404. (**Each run on 2026-10-04, locally and then at the real address —
   §9.7.**)
 - **`npx wrangler dev`, which would settle most of them before anything is public.** It runs
-  the asset worker and the router locally over this configuration and this `dist-web/`, and so
+  the asset worker and the router locally over this configuration and this `apps/light/dist-web/`, and so
   answers the navigation split, the headers on both documents, the detach, the Worker chunk's
   304, `/_headers` and the content types — in Cloudflare's code rather than this repository's
   reading of it. The runbook has it as the owner's step between building and deploying, and
@@ -4928,7 +4931,7 @@ during it was not recorded.
 
    The new document asks about 140 ms after the reload, so it always lost; and `terminate()`
    on the way out asks for the ending the browser was already giving. **The fix is a Web
-   Lock, `mtg-grimoire:database`, taken before any engine starts** (`src/lib/core/web/holder.ts`):
+   Lock, `mtg-grimoire:database`, taken before any engine starts** (`packages/ui/lib/core/web/holder.ts`):
    a document's locks go with the document, which a dying Worker's handles do not. Held by
    another document, this one is a second tab and is told at once, with no Worker started.
    Free, any `already-open` it then meets is a pool still being let go: the refused Worker is
@@ -4982,7 +4985,7 @@ during it was not recorded.
    face settled that read; and the desktop's hook, which did, watched `useIsMutating` fall to
    zero — **which does nothing for a write answered inside one task**, the count going
    0 → 1 → 0 between two renders. **Fixed**: `useHoldingsFreshness`
-   (`src/features/card/useHoldingsFreshness.ts`) hears the mutation cache itself, and the
+   (`packages/ui/features/card/useHoldingsFreshness.ts`) hears the mutation cache itself, and the
    phone face mounts it in the sheet's shell, where it is heard with no card open.
    ⚠️ **Left**: the desktop modal mounts it with the open card, so a write made while the
    modal is closed leaves the cached figure for up to 30 s on the next open.
@@ -5002,14 +5005,14 @@ during it was not recorded.
 
 - **The three local servers handed the document to `/mtgimg/x`** asked for as a page — the
   dev server, the preview and the smoke's own — where the host answers a 404. `NOT_A_PLACE`
-  moved out of the hosting Worker's script into `src/lib/core/web/assets.ts`, and
+  moved out of the hosting Worker's script into `packages/ui/lib/core/web/assets.ts`, and
   `isNavigation` reads it: **the hosting Worker, `web:dev`, `web:preview` and the smoke now
   answer by one list.** The dev server needed one thing more, which the review read out of
   Vite's source: with the rewrite gone, Vite's own single-page fallback answered those
   paths with `/index.html` — at this root, the *desktop's* document — so `light:entry`
   writes the 404 itself there.
-- **`web:smoke` runs under the hosting policy.** Its server sends what `dist-web/_headers`
-  gives each address — parsed by `app-worker/src/headers.ts`, the reader `web:preview` serves
+- **`web:smoke` runs under the hosting policy.** Its server sends what `apps/light/dist-web/_headers`
+  gives each address — parsed by `infrastructure/app-worker/src/headers.ts`, the reader `web:preview` serves
   by — and answers a miss with the host's 404; a `ContentSecurityPolicyIssue` in a page, in the engine's
   Worker or in the service worker fails the run, and so does a run that listened to no Worker
   or no service worker. The HTTP cache is emptied before the offline reload, because the
@@ -5035,7 +5038,7 @@ during it was not recorded.
 
 - ~~**The deploy itself.** `npx wrangler dev` first — Cloudflare's own asset worker and router
   over this configuration, before anything is public — and then the checks
-  [`app-worker/README.md`](../../app-worker/README.md) lists for the zone: each feature that
+  [`infrastructure/app-worker/README.md`](../../infrastructure/app-worker/README.md) lists for the zone: each feature that
   rewrites HTML off, and the served document equal to the built one. Every probe in that
   runbook is still marked not yet run.~~ **Closed on 2026-10-04 — §9.7**: he asked for the
   deploy in chat and an agent ran it, `wrangler dev` first, the zone read before it, and every
@@ -5056,7 +5059,7 @@ during it was not recorded.
 **The web host is at `https://mtg-grimoire.app` since 2026-10-04, 12:47 UTC.** Markus asked for
 the deploy in chat, and an agent ran it. **The rule did not change**: no agent deploys, and no
 job does; his asking lifted it for this one deploy, as it had for the relay's on 2026-10-01,
-and the next deploy needs its own. [`app-worker/README.md`](../../app-worker/README.md) is the
+and the next deploy needs its own. [`infrastructure/app-worker/README.md`](../../infrastructure/app-worker/README.md) is the
 runbook this followed and now carries each answer in its tables; this section is the day's
 record. **Every figure is one deploy's, one minute's or one run's**, taken from one machine in
 Denmark.
@@ -5075,7 +5078,7 @@ byte. `npm run web:smoke` passed on that bundle (17.0 s).
 
 **The runbook's step 5, run for the first time: `wrangler dev --local`** (wrangler 4.146.0,
 port 8787) — Cloudflare's asset worker and router over this `wrangler.jsonc` and this
-`dist-web/`, reaching nothing. Every probe that can be asked locally — all but the
+`apps/light/dist-web/`, reaching nothing. Every probe that can be asked locally — all but the
 `workers.dev` name and plain `http` — answered as the runbook's table says it should, the 304
 with the policy on it among them, and the document served equalled the built one. So what §9.5
 could only read off Cloudflare's source was run before anything was public. Three things it
@@ -5101,7 +5104,7 @@ zone settings*, further down. The table is the read.)
 | The account's Workers | `mtg-grimoire-relay` and `mtg-grimoire-share`, and no Worker custom domain |
 
 **The deploy.** `wrangler deploy --dry-run`, then `wrangler deploy` at 12:47 UTC. It read 48
-files from `dist-web/` and uploaded 43 assets in 3.80 s — why the two differ was not looked
+files from `apps/light/dist-web/` and uploaded 43 assets in 3.80 s — why the two differ was not looked
 into — with a script of 1.09 KiB (0.61 KiB gzipped) and a startup of 1 ms; bound `env.ASSETS`;
 attached `mtg-grimoire.app (custom domain)`; version
 `cdee3c1c-d3ae-4246-8e8a-c50eb3025152`.
@@ -5116,7 +5119,7 @@ attached `mtg-grimoire.app (custom domain)`; version
 
 **Step 0's probes against the real address, 12:48 UTC** — `curl`, each row's answer written
 into the runbook's table. **The policy line was compared byte for byte with
-`dist-web/_headers`' and was equal on every response that should carry it**, the 304 included.
+`apps/light/dist-web/_headers`' and was equal on every response that should carry it**, the 304 included.
 
 - **Everything §9.5 read, the edge does.** The document at `/`, at a deep link asked as a
   navigation, and at one asked with `Accept: text/html` alone were one response — one `ETag`,
@@ -5151,7 +5154,7 @@ into the runbook's table. **The policy line was compared byte for byte with
   HTTPS* is off. A browser never asks — `.app` is preloaded — but a `curl http://` is handed
   the document in the clear. Turning the setting on is the owner's. (**He asked for it, and
   since 13:48 UTC plain `http` is a `301`** — the same paragraph.)
-- **The document served is the document built** — `diff` against `dist-web/index.html` printed
+- **The document served is the document built** — `diff` against `apps/light/dist-web/index.html` printed
   nothing, for a navigation and for a plain `GET /`. That is the check no zone feature can
   pass by being off in a dashboard; it was made from Denmark and from nowhere else.
 
@@ -5309,8 +5312,8 @@ rebuild.
 
 **Three deploys: the update flow and a rollback.** Markus approved it through the question
 tool — a marker deploy then, and a rollback after it. #812 added two comment lines to
-`app-worker/_headers`, a file the service worker hashes into its build id (§9.5); built from
-`main` at `4929cc6e`, **the only files of `dist-web/` that differed from the first deploy's
+`infrastructure/app-worker/_headers`, a file the service worker hashes into its build id (§9.5); built from
+`main` at `4929cc6e`, **the only files of `apps/light/dist-web/` that differed from the first deploy's
 were `_headers` and `sw.js`**. Below, **v1** is the first deploy — version
 `cdee3c1c-d3ae-4246-8e8a-c50eb3025152`, shell cache `grimoire-shell-a893ad74a5be6b00` — and
 **v2** the marker: version `f724bbc1-9853-4978-9ffe-8b3c0af6c339`,
@@ -5465,7 +5468,7 @@ question**, what a page meets when a deploy renames a chunk it has not loaded ye
   `/settings`, its files fetched from the network. After the deploy the window was widened to
   1280: `GET /assets/DesktopFace-mRVVnW91.js` and `/assets/list-uE7upxBf.js` were each **`404`,
   `text/plain; charset=utf-8`, `no-store` — the script's answer, and not the document with a
-  200**, which is what `app-worker/` has a script for. The console said *Failed to fetch
+  200**, which is what `infrastructure/app-worker/` has a script for. The console said *Failed to fetch
   dynamically imported module*. **The reader saw the app's mark, *This page could not be
   drawn.*, and one control, a *Reload* link** — `FaceBoundary`. That link drew the desktop
   face on v3 in 2 109 ms, 737 142 B from the network, with 118 470 cards and the reader's
@@ -5546,7 +5549,7 @@ or `wasm`-profile builds as named; the machine's load was not recorded.**
   how a caret gets past a quote that ends a note. Enter on the quote's empty last line is —
   driven: `<blockquote><p>quote</p></blockquote><p>out</p>`.
 - **The fix is one line and three fences.** `injectCSS: false` on the app's one editor.
-  `src/lib/tokens.test.ts`: every `useEditor(` and `new Editor(` outside a test sets it, the
+  `packages/ui/lib/tokens.test.ts`: every `useEditor(` and `new Editor(` outside a test sets it, the
   sweep names `NoteEditor.tsx` so it cannot pass over nothing, the library's component form is
   refused, and every file that builds an editor imports ProseMirror's sheet. `NoteEditor.test.tsx`:
   the option has one spelling in the file, and the gap-cursor sweep above with a stock kit to
@@ -5563,7 +5566,7 @@ or `wasm`-profile builds as named; the machine's load was not recorded.**
   it green, which is the run that would have caught this before the deploy.
 - **Not done.** ⚠️ **The live site still raises them**: this is in no build that has been
   deployed, and the deploy is the owner's to ask for. Android carries the same policy line
-  (`mobile/src-tauri/tauri.conf.json`) and the same editor, and was not run. No browser but
+  (`apps/light/src-tauri/tauri.conf.json`) and the same editor, and was not run. No browser but
   Chrome 154 and WebView2 154 has been asked.
 
 **Two zone settings, changed at the owner's ask.** In chat: *"always use https should be
@@ -5688,7 +5691,7 @@ at 15:59 UTC, the deployed relay answered an `OPTIONS /token` from `https://mtg-
 with `405`, `Allow: POST` and no `access-control-*` line, and the live site's policy does not
 name the relay. The tree is ahead of both hosts until the deploys below.
 
-**The relay** (`relay/src/cors.ts`, `ticket.ts`, and the router around them):
+**The relay** (`infrastructure/relay/src/cors.ts`, `ticket.ts`, and the router around them):
 
 - **An allow-list, `APP_ORIGINS`**, a `vars` entry shipped as `https://mtg-grimoire.app` and
   matched exactly against `Origin` — no wildcard, no suffix, and unset allows nobody. It is not
@@ -5808,7 +5811,7 @@ was seen to fail on a `use` planted in `sync_engine/live.rs`. **`sync_live_state
 command table**, off the desktop-only list, so a light host answers the read a page makes when it
 mounts after the last `sync:live`.
 
-**Android** (`mobile/src-tauri`): `open` registers `live::WriteWake` as the state's one write
+**Android** (`apps/light/src-tauri`): `open` registers `live::WriteWake` as the state's one write
 observer, and `start` spawns the loop after `startup::settle`. `PageEvents` forwards `sync:live`
 and `sync:applied`. **No push on the way out** — the process ends by `_exit` or the system's
 kill, neither a hook a request can be awaited in — so the loop's 3 s write debounce pushes, and
@@ -5864,7 +5867,7 @@ fails it, one that has never answered is left alone; before concluding it gives 
 one turn, which is its look at what has already arrived. `Drop` clears the four handlers, closes
 the socket and only then lets the closures go. **What the arm decides is a module of its own
 (`heard`) that compiles for a test**, so a desktop's `cargo test` runs every rule above in eight
-tests, one of which holds the two sub-protocols and the `ping`/`pong` pair to `relay/src/ticket.ts`
+tests, one of which holds the two sub-protocols and the `ping`/`pong` pair to `infrastructure/relay/src/ticket.ts`
 as text; the arm itself is the constructor, the handlers and a `send`.
 
 **A refused upgrade is one generic sentence**, because a browser is: a 401, a 403, a host that
@@ -5897,7 +5900,7 @@ now, `scripts/web-smoke/harness.mjs`, so that neither run has to ask whether it 
 Node started; the first cut asked, by comparing two spellings of a path, and a run that
 answered *no* would have checked nothing and exited 0):
 
-- **The relay under real workerd**: `wrangler dev --local` (4.146.0) on `relay/wrangler.jsonc`,
+- **The relay under real workerd**: `wrangler dev --local` (4.146.0) on `infrastructure/relay/wrangler.jsonc`,
   `--local-protocol https`, with `--var RELAY_HMAC_KEY:<32 random bytes, drawn per run>` and
   `--var APP_ORIGINS:<the run's page origin>` and no file — the key has no value in the
   repository, this script included. Its D1 is seeded with `schema.sql`, one
@@ -5947,7 +5950,7 @@ upgrade — and makes no request to the relay, which has no fixture there.
   still answered `live` six seconds on. True of every host since the loop was written; not
   changed here — the loop is not this step's to restructure.
 - **wrangler 4.146 on Windows turns an absolute `--persist-to` into `./C:\…`**, and its D1 then
-  answers *internal error*. The run keeps its state under `relay/.wrangler/`, named relatively.
+  answers *internal error*. The run keeps its state under `relay/.wrangler/` (`infrastructure/relay/.wrangler/` since 2026-10-08), named relatively.
 - **A `wrangler dev` stopped by force leaves its bundle in `.wrangler/tmp/`, and `eslint .`
   walked into it**: 620 errors on the first `npm run verify` after the walk, none in a file a
   person wrote. The lint ignores `**/.wrangler/` now, as git always did, and the walk removes
@@ -5965,8 +5968,8 @@ upgrade — and makes no request to the relay, which has no fixture there.
   minute on the other device for a write that was never made; it now presses an enabled
   control and checks the write landed where it was made.
 
-**CI**: `relay/**` and the new script route to `web`, and the job runs the walk after the first
-smoke. wrangler is not a root dependency: the step installs it from `app-worker/`'s own
+**CI**: `infrastructure/relay/**` and the new script route to `web`, and the job runs the walk after the first
+smoke. wrangler is not a root dependency: the step installs it from `infrastructure/app-worker/`'s own
 lockfile (step 6.6's, `npm ci --ignore-scripts --prefix app-worker`), which is also where the
 script looks first. **It has run on one Windows machine and on no runner**: its first run there
 is this step's own pull request.
@@ -6051,7 +6054,7 @@ socket was built. Fixed as one thing, on both sides.
   on a runtime whose order is known; **a browser's task order is not specified**, and no
   browser run has staged it.
 
-**The relay** (`relay/src/group.ts`, `log.ts`; **not deployed** when this was written —
+**The relay** (`infrastructure/relay/src/group.ts`, `log.ts`; **not deployed** when this was written —
 **deployed 2026-10-05 at 02:21:29 UTC**, §10.7): a rotation's roster closes,
 with **4002**, every open socket whose device the adopted manifest does not name, and marks a
 device it knows only by its socket departed with the rest; it compacts first, and a close that
@@ -6071,8 +6074,8 @@ the relay's 401 on a sync route — is none, and neither is what follows it.
 
 **How a lapse is said in production, as far as the source says.** A device with no refresh
 secret learns of one from the group door's 401 carrying `membership_ended`. The relay deployed
-on 2026-10-04 is `main` at `ea0aa88e`; `relay/src/claim.ts` there defines that code and stamps
-it on that 401, and nothing under `relay/src` changed between that commit and this step's base.
+on 2026-10-04 is `main` at `ea0aa88e`; `infrastructure/relay/src/claim.ts` there defines that code and stamps
+it on that 401, and nothing under `infrastructure/relay/src` changed between that commit and this step's base.
 So the code is there to be answered. **Production itself has not been asked with a lapsed
 membership** — nobody has let one lapse to see.
 
@@ -6199,11 +6202,11 @@ dialogs recorded before and after — identical in 28 of 30 captures, and the tw
 the refused camera, whose sentence is a line longer on every host.
 
 **The touch floor is Settings' own.** `PANEL_BUTTON` is `BUTTON` plus a 44px least height under a
-coarse pointer, and every panel in `src/features/settings/` draws its buttons from it; a text box
+coarse pointer, and every panel in `packages/ui/features/settings/` draws its buttons from it; a text box
 adds `TOUCH_FIELD`, 16px, below which a phone zooms the page on focus. `BUTTON` itself is
 unchanged, because the share menu, the two share dialogs and the public share viewer import it and
 none was measured under a finger. `controls.test.ts` pins each utility in its constant and
-compiles it against `src/index.css`; the panel's and the dialog's suites pin them on the rendered
+compiles it against `packages/ui/index.css`; the panel's and the dialog's suites pin them on the rendered
 boxes.
 
 **The scanner, with a camera** — `npm run mobile:scan-smoke` (`scripts/pairing-scan-smoke.mjs`),
@@ -6217,7 +6220,7 @@ the scanner's `getUserMedia` → `<video>` → canvas → `jsQR` loop then decod
 digits follow. With `--deny-permission-prompts` and no fake device the same press lands on
 *MTG Grimoire needs camera access to scan a code. Allow the camera and try again, or type the code
 instead.* over a box to type into, and the typed code gives the same digits. **For that the fake
-grew a real QR encoder** (`.storybook/fake/qr.ts`: version 9 at level M, read back by `jsQR`),
+grew a real QR encoder** (`packages/fake/qr.ts`: version 9 at level M, read back by `jsQR`),
 where it drew a 21×21 picture; its `sync_pairing_accept` takes the URL a QR carries, as
 `Invite::decode` does; and its copy of `RELAY_BASE` is held to `entitlement.rs`.
 
@@ -6225,7 +6228,7 @@ where it drew a 21×21 picture; its `sync_pairing_accept` takes the URL a QR car
 `RustWebChromeClient.onPermissionRequest` asks for the `CAMERA` runtime permission when the page
 asks for video, and grants or denies the page's request by the answer; the manifest already
 declares the permission and an optional camera, and nothing was added. On the web app, a page
-served with exactly the headers `app-worker/_headers` sends for `/` — `main`'s, with the relay in
+served with exactly the headers `infrastructure/app-worker/_headers` sends for `/` — `main`'s, with the relay in
 `connect-src` — ran the scanner's chain against the fake camera and decoded the invite: no
 `Permissions-Policy` is sent, `srcObject` is not a fetch, and `jsQR` needs no `eval` (the probe's
 own `eval` was the one violation, refused).
@@ -6675,7 +6678,7 @@ engine that pages at 02:29:39 — §10.7.**) — the relay's half is the runbook
 ([hosted-relay-deploy.md](hosted-relay-deploy.md)), and until it was out a build that paged was
 answered by the live relay as it always was: one answer, read as the last page.
 
-**The relay** (`relay/src/group.ts`, `log.ts`; the Worker in front of the object is untouched):
+**The relay** (`infrastructure/relay/src/group.ts`, `log.ts`; the Worker in front of the object is untouched):
 
 - **With `limit`, a page.** `GET /g/{group}/pull?since=&device=&limit=<rows>`: whole rows after
   `since` in `seq` order, the caller's own left out by the query, inside a budget of sealed
@@ -6697,7 +6700,7 @@ answered by the live relay as it always was: one answer, read as the last page.
 - **`compactNow` reads `length(sealed)` and no body** — behind every ack that moves a cursor,
   and before a push is refused for the quota.
 - **Tested over SQLite.** `Group` was tested over a stand-in state in `ticket.test.ts`; that
-  stand-in moved to `relay/src/fakeState.ts` and grew a `storage.sql` backed by Node's own
+  stand-in moved to `infrastructure/relay/src/fakeState.ts` and grew a `storage.sql` backed by Node's own
   `node:sqlite`, which counts the `sealed` characters each statement read — so "a compaction
   reads no body" and "a page never reads a row that is not in it" are numbers.
   `group.test.ts`, twenty-one tests: the page's edges, an all-own tail's cursor, the budget
@@ -6941,7 +6944,7 @@ every released build is given — had its bytes held to the old implementation's
 `group.test.ts`, over a stand-in state, and under workerd had been read by Chrome from a page
 with nothing comparing them. **Answered before that deploy, under real workerd** (2026-10-05:
 `wrangler dev --local` on the paging branch at `4fe47f3c`, a local D1 made from
-`relay/schema.sql`, tokens minted with a throwaway key). The request is the one a released
+`infrastructure/relay/schema.sql`, tokens minted with a throwaway key). The request is the one a released
 desktop makes — `GET /g/{group}/pull?since=0&device=…` with a bearer, no `limit`, no
 `Origin` — over two logs, each interleaved between two devices with the tail the caller's
 own: 40 rows of 20 000 characters, and 120 rows of 400 000.
@@ -7037,15 +7040,15 @@ cut since, and nothing below has met a real key, a real token or a real tag.
   sign**: a `keystore.properties` would put the key on disk beside every npm script, cargo build
   script and Gradle plugin a build runs, and the rule a removed `sign` job left behind is that a
   secret sits in a job that builds nothing. The Gradle project is unchanged and knows no key.
-- **The key is held to a committed fingerprint**, `mobile/src-tauri/release-signer.sha256` —
+- **The key is held to a committed fingerprint**, `apps/light/src-tauri/release-signer.sha256` —
   public, one line, absent until the owner makes the key. "Signed by the keystore in the
   settings" is not "signed by the key the last release was"; a keystore made a second time
   would sign happily and every phone would uninstall. No file, no APK; another key or an
   Android debug certificate is refused before anything is signed.
-- **`web-deploy` deploys `app-worker/` and asks the address whether it serves that bundle**
+- **`web-deploy` deploys `infrastructure/app-worker/` and asks the address whether it serves that bundle**
   (`scripts/web-deploy-probe.mjs`: 200, the built policy, the built document). It is the only
   job that deploys anything and this is the only Worker — so **merging the release PR is a
-  deploy**. `wrangler` is pinned by a lockfile, `app-worker/package-lock.json`: installed with
+  deploy**. `wrangler` is pinned by a lockfile, `infrastructure/app-worker/package-lock.json`: installed with
   `npm ci --ignore-scripts` in a step that holds nothing, run with `npx --no-install`. It goes
   last, because a deploy is live the moment it returns, and it refuses a tag older than the
   newest published release.
@@ -7144,12 +7147,12 @@ allow-origin line: the answer that means *go*.
 
 **All twenty probes at 23:19:35 UTC, against the real address**, each as the runbook's table
 says: the document `200`, `text/html`, `no-cache`, with the policy equal byte for byte to
-`dist-web/_headers`; the module `application/wasm`, a year and immutable, **2 169 729 bytes on
+`apps/light/dist-web/_headers`; the module `application/wasm`, a year and immutable, **2 169 729 bytes on
 the wire** as brotli (it is 6 836 569); the 404s as plain text; plain `http` a `301`; the 304
 carrying the policy; **probe 19 `1`** — the policy names the relay, and its `wss://` twin is in
 the same line; **probe 20 `204`** with `Access-Control-Allow-Origin: https://mtg-grimoire.app`.
 The document served, to a plain `GET /` and to a navigation of `/decks/12`, is byte for byte
-`dist-web/index.html`. `app-worker/README.md` has every cell.
+`apps/light/dist-web/index.html`. `infrastructure/app-worker/README.md` has every cell.
 
 **One look in a real browser, at 23:21 UTC** — headless Chrome on a throwaway profile at
 1280×800, `https://mtg-grimoire.app/settings`, for 17 s. No policy violation. No error of the
@@ -7534,7 +7537,7 @@ standing in for a page, exactly five of the twelve are refused and nothing is lo
 Through the Android host's own forwarding, the same frame as base64. Core `scanner` 59 and
 `commands` 40, desktop `scanner` 9 (its eight body tests neither moved nor lost) and
 `command_table` 9, `grimoire-light` 17; clippy for the workspace and for `wasm32`; 1 016 frontend
-tests over `ipc.test.ts`, `src/lib/core` and `src/features/scanner`.
+tests over `ipc.test.ts`, `packages/ui/lib/core` and `packages/ui/features/scanner`.
 
 **Not seen.** No phone has run it: no camera grant, no frame through a real `core_call`, no
 timing of base64 at 960 px or of a 2560 px detail pair. `aarch64-linux-android` was not compiled
@@ -7597,7 +7600,7 @@ command table once more on the last.
   (`database` / `scanner_assets`). The sentence names the file, never the app-private folder.
 - **Both commands are refused on a page**, in step 7.3's sentence from step 7.3's helper,
   before any request. GitHub sends no CORS header; the browser's source is step 7.5's.
-- **The page** (`src/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`, both clean of
+- **The page** (`packages/ui/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`, both clean of
   the phone's import fence): the offer with its measured size — *The scanner needs its card data
   — about 19 MB*, each figure rounded up as the launch prompt's are — a Download button with the
   touch floor, a bar that follows the event, the engine's sentence and a Retry on a failure.
@@ -7605,7 +7608,7 @@ command table once more on the last.
   It stands where the path-and-restart sentences were, for the files it offers; the Developer
   panels still name each path and error. **Mounted on both faces**: in the desktop face's
   `ScannerPage` as one component in place of the notes, and in the phone face's slot under its
-  camera (`mobile/phone/scanner/ScannerDataSlot.tsx`, which step 7.6 left for it), where it
+  camera (`apps/light/phone/scanner/ScannerDataSlot.tsx`, which step 7.6 left for it), where it
   replaced the sentences that told a phone to put files at a path. Each page hands it the same
   two things to do when a download lands. The status query both pages read is under one
   exported key, `SCANNER_STATUS_KEY`, which is the key a landed download marks stale.
@@ -7685,8 +7688,8 @@ refused by the HTTPS-only client, a leftover `.part`, a second concurrent call a
 refusal — each leaving nothing in place that was not checked. Core `scanner` 82, of which
 `scanner_assets` 22, `commands` 41, `platform::http` 5 and the fence 8; desktop `scanner` 9 and
 `command_table` 9; `grimoire-light` 18; `cargo fmt` clean over the four crates; clippy for the
-workspace and for `wasm32`; 2 009 frontend tests over `ipc.test.ts`, `src/features/scanner`,
-`.storybook/fake` and `scripts/`; the two scanner story files' ten plays through a throwaway
+workspace and for `wasm32`; 2 009 frontend tests over `ipc.test.ts`, `packages/ui/features/scanner`,
+`packages/fake` and `scripts/`; the two scanner story files' ten plays through a throwaway
 copy of the story harness (the whole of `stories.test.tsx` was left for the fan-in); the
 hosting census, the phone's import fence and the token sweep. The workflow's digest step was
 run by hand in Git Bash against the real models, a tampered one and a source it could not
@@ -7755,7 +7758,7 @@ under an installed app; what happens then is a reading of the code.
   is refused before its body is read (`Response::url`, new in `platform::http`).
 - **Both commands are refused on a page**, in step 7.3's sentence from step 7.3's helper,
   before any request. GitHub sends no CORS header; the browser's source is step 7.5's.
-- **The page** (`src/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`, both clean of
+- **The page** (`packages/ui/features/scanner/ScannerAssets.tsx`, `useScannerAssets.ts`, both clean of
   the phone's import fence): the offer with its measured size — *The scanner needs its card data
   — about 19 MB*, each figure rounded up as the launch prompt's are — a Download button with the
   touch floor, a bar that follows the event, the engine's sentence and a Retry on a failure.
@@ -7791,7 +7794,7 @@ model fetched alone, a leftover `.part`, a second concurrent call and the page r
 leaving nothing in place that was not checked. Core `scanner` 73, of which `scanner_assets` 13,
 and `commands` 41; desktop `scanner` 9 and `command_table` 9; `grimoire-light` 18; `cargo fmt`
 clean over the four crates; clippy for the workspace and for `wasm32`; 1 704 frontend tests
-over `ipc.test.ts`, `src/features/scanner` and `.storybook/fake`; the two scanner story files'
+over `ipc.test.ts`, `packages/ui/features/scanner` and `packages/fake`; the two scanner story files'
 ten plays through a throwaway copy of the story harness (the whole of `stories.test.tsx` was
 left for the fan-in); the hosting census, the phone's import fence and the token sweep.
 
@@ -7869,7 +7872,7 @@ headroom for growth like that, and two megabytes short of where the runtime put 
 so the three megabytes cannot come back unseen. `Cargo.toml`'s rule ("no command in the table reaches its session")
 had been false for one step.
 
-**The page's half** is `src/lib/core/web/`, in front of the engine's `Core` and below
+**The page's half** is `packages/ui/lib/core/web/`, in front of the engine's `Core` and below
 `@/lib/core`, so nothing above it changed shape:
 
 - **`scanner.ts` answers seven names on the page** — the status, a frame, a reset, the filters,
@@ -8016,7 +8019,7 @@ first run of the new steps, and production.
 ### 11.6 Step 7.6 — the phone's Scanner page (2026-10-07)
 
 Issue #761, phase 7. The fifth tab was a sentence since phase 3. It is the scanner now:
-`mobile/phone/pages/ScannerPage.tsx` and `mobile/phone/scanner/`. Built on Windows 11 over
+`apps/light/phone/pages/ScannerPage.tsx` and `apps/light/phone/scanner/`. Built on Windows 11 over
 `main` at `63d1a44f` and merged with step 7.3's branch at `43395ed5`, so the page stands on the
 commands that step put in the core's table: on Android all twelve answer, and on a page the
 session's five are refused in one sentence, behind which the page is quiet.
@@ -8050,7 +8053,7 @@ under a 156px tile, so `trayLayout` is left alone.
 
 **For that the fake grew a session.** `scanner_frame` answered one decided verdict for ever, with
 the `decision_seq` the loop takes as its baseline (§11), so over the fake a camera added nothing.
-It is a script now (`.storybook/fake/scannerScript.ts`): a pile of five cards, thirteen frames a
+It is a script now (`packages/fake/scannerScript.ts`): a pile of five cards, thirteen frames a
 card, 110 ms a frame, and in Exact a last card that is three reprints it cannot split.
 
 **Driven** — `npm run mobile:scanner-smoke` (`scripts/phone-scanner-smoke.mjs`), headless Chrome
@@ -8132,7 +8135,7 @@ on Android through a real `core_call` nor the quiet page in a built web app was 
 **Open after this step:**
 
 - **The slot under the camera says to put files at a path**, which a phone cannot do.
-  `ScannerDataSlot` (`mobile/phone/scanner/`, handed the whole `ScannerStatus`) is where step
+  `ScannerDataSlot` (`apps/light/phone/scanner/`, handed the whole `ScannerStatus`) is where step
   7.4's download offer goes; `unapplied_filters` is still drawn nowhere.
 - **The session in a browser** is step 7.5's, and with it the deletion of the page's match on
   the engine's sentence — `CameraBox`'s `unavailable`, the hidden status line, and the test
@@ -8212,8 +8215,8 @@ chose **pair-only**: the Play build offers nothing, and a phone gets sync by bei
 a group that already has it.
 
 - **One name, answered by one host.** The Sync panel asks `membership_elsewhere`
-  (`src/lib/core/hostMembership.ts`). The light Tauri host answers a sentence of its own
-  (`mobile/src-tauri/src/membership.rs`); the desktop app and the web host have no such command
+  (`packages/ui/lib/core/hostMembership.ts`). The light Tauri host answers a sentence of its own
+  (`apps/light/src-tauri/src/membership.rs`); the desktop app and the web host have no such command
   and draw what they always have. On a host that answered, the panel's second half is headed
   *Relay*, keeps the sentence about the relay needing no account, draws the host's sentence
   while sync is not on, and keeps the figures, the socket's line and *Sync now*. It draws no
@@ -8228,7 +8231,7 @@ a group that already has it.
   tells a reader to "reconnect Patreon once", says instead that sync is not on for the group
   yet, or has to be set up again on the device it was turned on from. That fourth one is a
   literal inside a function in the core and not a constant, so the host matches its opening
-  words and `mobile/host.test.ts` holds those words to the core's source. Each is matched
+  words and `apps/light/host.test.ts` holds those words to the core's source. Each is matched
   **wherever it appears in an error**, keeping what surrounds it, because the core wraps them
   ("Could not reach the relay to collect … {error}"). A sync error that still names a
   membership after that — in a wording this host has not seen — is replaced whole by "Sync
@@ -8273,7 +8276,7 @@ a group that already has it.
   fails the render past it (measured: 29.5% of the width from the centre, against a limit of
   30.6%). The round PNGs and both stock vectors are deleted: the manifest names no
   `roundIcon`. **Not seen on a phone yet** — the first internal-testing install is.
-- **The privacy policy is a document, not a route.** `mobile/public/privacy.html` and
+- **The privacy policy is a document, not a route.** `apps/light/public/privacy.html` and
   `privacy.css`, copied to the root of every light build; no script, one stylesheet, so it
   reads under the host's `style-src 'self'` and would read with the app broken. The host's
   default `html_handling` serves it at `/privacy`; **a reader the service worker controls never
@@ -8284,7 +8287,7 @@ a group that already has it.
   run. The smoke's own server now answers `/privacy.html` with the host's redirect and `/privacy`
   with the file, so that run also proves the worker's install over a redirect. What Cloudflare does with the
   address was measured under `wrangler dev --local` (against
-  a stub `dist-web/`: `/privacy` answered 200 `text/html` with the policy's heading;
+  a stub `apps/light/dist-web/`: `/privacy` answered 200 `text/html` with the policy's heading;
   `/privacy.html` answered 307 to `/privacy`) and **has not been asked of the live address**,
   which serves it only after the next release's deploy.
 - **A reader whose worker predates this build** reaches `/privacy.html` through the network,
@@ -8292,8 +8295,8 @@ a group that already has it.
   until the reader takes the update the app offers or closes every tab of the old
   build. Nobody new to the site meets it.
 - **Its facts are the code's and its sentences are the owner's.** The page's table of hosts is
-  held to the web policy's `connect-src` by `mobile/host.test.ts`.
-- **Settings links to it on both faces** (`src/features/settings/PrivacyLink.tsx`), through
+  held to the web policy's `connect-src` by `apps/light/host.test.ts`.
+- **Settings links to it on both faces** (`packages/ui/features/settings/PrivacyLink.tsx`), through
   `openExternal`.
 - **`docs/play/`** holds the listing's text, the Console's answers and the two rendered
   graphics. The screenshots are taken on a phone.

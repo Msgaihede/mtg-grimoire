@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Downloads the card scanner's three files: into `src-tauri/scanner-assets/`, where the
+ * Downloads the card scanner's three files: into `apps/desktop/src-tauri/scanner-assets/`, where the
  * desktop's release build embeds them — or, with `--web`, into `dist-wasm/scanner-assets/`,
  * where the web app's build picks them up to serve from its own origin.
  *
@@ -10,9 +10,9 @@
  * **`--web` writes a manifest beside the three** (`manifest.json`): each file's key, name,
  * exact length and SHA-256, and the bundle's format version. A browser cannot ask the release
  * itself — a release download sends no CORS header — so the web build copies the files into
- * its static files (`vite.mobile.config.ts`'s `web:scanner`), and the manifest is how the page
+ * its static files (`apps/light/vite.config.ts`'s `web:scanner`), and the manifest is how the page
  * knows what an offer to download them costs, checks what arrived, and learns that a later
- * release replaced the bundle (`src/lib/core/web/scanStore.ts`, which reads this shape).
+ * release replaced the bundle (`packages/ui/lib/core/web/scanStore.ts`, which reads this shape).
  *
  * **The two models are held to the digests the app pins** — `DETECTION_SHA256` and
  * `RECOGNITION_SHA256`, read out of `crates/grimoire-core/src/scanner_assets.rs` as the format
@@ -72,7 +72,7 @@ const USER_AGENT = `mtg-grimoire-scanner-assets (+https://github.com/${REPO})`;
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const INDEX_RS = join(ROOT, "crates/card-scanner/src/index.rs");
 const ASSETS_RS = join(ROOT, "crates/grimoire-core/src/scanner_assets.rs");
-const DESKTOP = join(ROOT, "src-tauri/scanner-assets");
+const DESKTOP = join(ROOT, "apps/desktop/src-tauri/scanner-assets");
 /** The web app's copy, beside its two modules — ignored, like everything under `dist-wasm/`. */
 const WEB = join(ROOT, "dist-wasm/scanner-assets");
 const FOR_WEB = process.argv.includes("--web");
@@ -122,7 +122,7 @@ async function download(tag, name, pinned) {
     if (FOR_WEB && existsSync(beside) && sha256(beside) === pinned) {
       copyFileSync(beside, part);
       renameSync(part, out);
-      console.log(`copy  ${name} (${mb(statSync(out).size)}) from src-tauri/scanner-assets/`);
+      console.log(`copy  ${name} (${mb(statSync(out).size)}) from apps/desktop/src-tauri/scanner-assets/`);
       return;
     }
   }

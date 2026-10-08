@@ -592,15 +592,15 @@ exactly one term.
 
 | file | what it owns |
 | --- | --- |
-| `src/features/search/queryLanguage.ts` | The grammar. `parseQuery`, `QUERY_KEYWORDS`, `excludedName`, the source spans, and the three rewrites (`removeToken`, `setTokenNegated`, `setTokenValue`) |
+| `packages/ui/features/search/queryLanguage.ts` | The grammar. `parseQuery`, `QUERY_KEYWORDS`, `excludedName`, the source spans, and the three rewrites (`removeToken`, `setTokenNegated`, `setTokenValue`) |
 | `crates/grimoire-core/src/filters.rs` | `QueryPredicate` and the SQL — one arm per field in `push_card_filters`, and `fts_match` (with `fts_phrase` for a name) for the three that ride the index |
 | `crates/grimoire-core/src/wishlist.rs` | The one search that answers a name term from its own column rather than from `cards_fts` |
 | `crates/grimoire-core/src/schema.rs` | Corpus schema 5, `cards.keywords` |
-| `crates/grimoire-core/src/tags/query.rs` (command: `src-tauri/src/tags/query/mod.rs`) | `run_tag_resolve` / `tag_resolve` — names to slugs, exact, through `slug_norm` |
-| `src/features/tags/tagFilters.ts` | `mergeTagTerms` — the caller's chips ANDed with the typed ones |
-| `src/features/search/useCardSearch.ts` | The wiring: parse, resolve, merge, gate, and the two chip rewrites |
-| `src/features/search/TagQueryRow.tsx` | The chip row and the unknown-tag note |
-| `src/components/QuerySyntaxHelp.tsx` | The F1 panel's Search syntax tab, drawn from `QUERY_KEYWORDS` |
+| `crates/grimoire-core/src/tags/query.rs` (command: `apps/desktop/src-tauri/src/tags/query/mod.rs`) | `run_tag_resolve` / `tag_resolve` — names to slugs, exact, through `slug_norm` |
+| `packages/ui/features/tags/tagFilters.ts` | `mergeTagTerms` — the caller's chips ANDed with the typed ones |
+| `packages/ui/features/search/useCardSearch.ts` | The wiring: parse, resolve, merge, gate, and the two chip rewrites |
+| `packages/ui/features/search/TagQueryRow.tsx` | The chip row and the unknown-tag note |
+| `packages/ui/components/QuerySyntaxHelp.tsx` | The F1 panel's Search syntax tab, drawn from `QUERY_KEYWORDS` |
 
 The tag merge is a union rather than one side winning: a Tags page reader who has chipped `dog`
 and then types `otag:ramp` is asking for a dog that ramps. Each list is deduplicated and sorted,
@@ -648,7 +648,7 @@ against `clientWidth` **205**. It is **not this feature's**, and the before/afte
 one pass to prove it: clearing the box so the tag row is gone leaves the figure at **258**. The
 two culprits are the search `<input>` (`min-w-56`, a hard 224px floor a flex item cannot shrink
 below) and the `Color identity` group, `flex gap-1.5` with **no `flex-wrap`** — six 36px chips
-plus five 6px gaps = **246**. That is exactly the failure `src/CLAUDE.md` warns about under "a
+plus five 6px gaps = **246**. That is exactly the failure `packages/ui/CLAUDE.md` warns about under "a
 row of fixed-width controls is sized by the narrowest surface that draws it", live and
 pre-existing. The tag chip row itself wraps and fits: **193px wide over two lines, 0px
 overhang** at that width, and 290px at the panel's normal 384.
