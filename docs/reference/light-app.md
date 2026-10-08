@@ -2880,7 +2880,12 @@ run's step summary and artifact, not copied here. The phone figures are §8.6.
   failed, one still running at 45 minutes, or none started within 60 s of the launch. That last
   is step 4.4's hold — the host starts nothing when Android says the network is metered — and the
   summary says *held — the emulator reported a metered network* (or *the app died before the card
-  sync started*, when its process is gone), with the host's last stderr lines. The emulator's
+  sync started*, when its process is gone), with the host's last stderr lines. **Since
+  2026-10-08 the script waits, up to 90 s, for the default network to be an unmetered one before
+  that launch**, and reports the wait: that day a run was held on a tree whose app `main` had
+  just measured, because the emulator had booted in 32 s and its cellular link — metered — was
+  still the default, the Wi-Fi network `nascent` beside it. A launch that starts nothing on an
+  unmetered network now says so, and is not called a hold. The emulator's
   default Wi-Fi is expected to report itself unmetered — expected, not checked here — and
   `dumpsys connectivity` goes into the artifact so a held run can be read.
 
