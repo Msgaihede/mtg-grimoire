@@ -1,10 +1,10 @@
-import type { Fault } from "../../packages/fake/db";
-import { setArtMode } from "../../packages/fake/images";
-import type { SeedName } from "../../packages/fake/seeds";
-import { installWorld } from "../../packages/fake/world";
+import type { Fault } from "@grimoire/fake/db";
+import { setArtMode } from "@grimoire/fake/images";
+import type { SeedName } from "@grimoire/fake/seeds";
+import { installWorld } from "@grimoire/fake/world";
 
 /**
- * Stands the Storybook fake's `starter` world up behind the light app — `npm run mobile:dev`.
+ * Stands the Storybook fake's `starter` world up behind the light app — `pnpm mobile:dev`.
  *
  * Called once, before React, because the fake answers from whichever world was installed last
  * and a query that fires against an empty dispatch table gets "No fake handler registered".

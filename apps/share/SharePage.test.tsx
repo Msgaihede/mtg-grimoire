@@ -12,8 +12,8 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import { parseSnapshot, type ShareSnapshot } from "@/lib/shareSnapshot";
+import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
+import { parseSnapshot, type ShareSnapshot } from "@grimoire/ui/lib/shareSnapshot";
 import golden from "../desktop/src-tauri/src/share/__golden__/snapshot.json?raw";
 import {
   ShareBoundary,
@@ -336,7 +336,7 @@ describe("snapshotHref", () => {
  * walk **all** of it — the fence exists to survive edits nobody has made yet, so the two ways a
  * walk can be narrow are both closed:
  *
- * * **relative specifiers are followed as well as `@/…` ones.** Following only the alias visited
+ * * **relative specifiers are followed as well as `@/…` and `@grimoire/ui/…` ones.** Following only the alias visited
  *   31 modules where the real graph is 34: `TooltipProvider` reaches `TooltipPanel`,
  *   `tooltipStore` and `lib/motion` through a plain `./TooltipPanel`, so the three files most
  *   likely to grow a store import were the three this could not see.
@@ -390,7 +390,9 @@ describe("the viewer's import graph", () => {
   /** A specifier as a key of {@link files}, or `null` for a package this walk does not follow. */
   function resolve(from: string, spec: string): string | null {
     let stem: string;
-    if (spec.startsWith("@/")) stem = normalise(`../../packages/ui/${spec.slice(2)}`);
+    // The page names a UI module by the package, and the UI's own files by the alias.
+    const named = ["@/", "@grimoire/ui/"].find((prefix) => spec.startsWith(prefix));
+    if (named) stem = normalise(`../../packages/ui/${spec.slice(named.length)}`);
     else if (spec.startsWith("."))
       stem = normalise(`${from.split("/").slice(0, -1).join("/")}/${spec}`);
     else return null;
@@ -399,7 +401,15 @@ describe("the viewer's import graph", () => {
     return null;
   }
 
-  const FORBIDDEN = ["@/lib/core", "@/lib/ipc", "@/features", "@tauri-apps/"];
+  const FORBIDDEN = [
+    "@/lib/core",
+    "@/lib/ipc",
+    "@/features",
+    "@grimoire/ui/lib/core",
+    "@grimoire/ui/lib/ipc",
+    "@grimoire/ui/features",
+    "@tauri-apps/",
+  ];
 
   it("finds a side-effect and a dynamic import, not only a `from`", () => {
     const specs = specifiersOf(`

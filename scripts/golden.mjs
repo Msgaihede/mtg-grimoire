@@ -1,7 +1,7 @@
 /**
  * Regenerates the golden files from the TypeScript writer, which is the behaviour of record.
  *
- * Run with `npm run golden`. Both suites then assert byte equality against what this wrote:
+ * Run with `pnpm golden`. Both suites then assert byte equality against what this wrote:
  * `packages/ui/features/transfer/golden.test.ts` for this writer, and (from Task 2 on) the Rust one's
  * own suite for `apps/desktop/src-tauri/src/transfer/`. A change to either writer is a red suite, which is
  * the whole point — so **nothing here may massage the output**. If a golden file looks wrong,
@@ -12,7 +12,7 @@
  * 22.15.0 / 23.5.0, and stripping types out of a `.ts` import stopped needing a flag in
  * 22.18.0 / 23.6.0. There is deliberately no `engines` field in `package.json` — this repo has
  * never had one, and a whole-project floor is not the right thing to add for one developer
- * script that `npm run verify` does not run. `--experimental-strip-types` used to be on the npm
+ * script that `pnpm verify` does not run. `--experimental-strip-types` used to be on the npm
  * script and was dropped: on a Node this new it is a no-op, and a flag that does nothing reads
  * like a flag that does something.
  *
@@ -27,9 +27,9 @@
  * body and would be resolved before the hook exists.
  *
  * **The hook also reads `@/`, and it has to** (2026-09-28, issue #555). `fields.ts` took a
- * *value* import from `@/lib/prices` when purchase prices got one parser, and `tsconfig.json`'s
- * `paths` alias means nothing to Node — so `npm run golden` failed on `Cannot find package '@/lib'`
- * from that commit until this one, with nothing red anywhere, because `npm run verify` does not
+ * *value* import from `@/lib/prices` when purchase prices got one parser, and `tsconfig.base.json`'s
+ * `paths` alias means nothing to Node — so `pnpm golden` failed on `Cannot find package '@/lib'`
+ * from that commit until this one, with nothing red anywhere, because `pnpm verify` does not
  * run this script. `@/x` becomes `packages/ui/x` and then takes the same `.ts` retry a relative path does.
  * A type-only `@/` import never reaches the hook: Node strips it with the rest of the types.
  */
@@ -38,7 +38,7 @@ import { registerHooks } from "node:module";
 import { join, dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
-/** `tsconfig.json`'s `"@/*": ["./packages/ui/*"]`, as a URL the resolver can take. */
+/** `tsconfig.base.json`'s `"@/*": ["./packages/ui/*"]`, as a URL the resolver can take. */
 const SRC = `${pathToFileURL(join(dirname(fileURLToPath(import.meta.url)), "..", "packages", "ui")).href}/`;
 
 registerHooks({

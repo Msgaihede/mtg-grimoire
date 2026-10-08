@@ -578,7 +578,7 @@ mod tests {
         }
     }
 
-    /// The fence. `npm run golden` writes these files from the TypeScript writer; this asserts
+    /// The fence. `pnpm golden` writes these files from the TypeScript writer; this asserts
     /// the Rust one reproduces them byte for byte. A drift in either is red here.
     #[test]
     fn every_golden_file_is_reproduced_byte_for_byte() {

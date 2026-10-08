@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
-import { core } from "@/lib/core";
+import { core } from "@grimoire/ui/lib/core";
 import {
   HOST_UPDATE,
   HOST_UPDATE_APPLY,
   HOST_UPDATE_CHANGED,
   type HostUpdate,
-} from "@/lib/core/hostUpdate";
+} from "@grimoire/ui/lib/core/hostUpdate";
 
 /** What a component draws a waiting build from. */
 export interface HostUpdateState {

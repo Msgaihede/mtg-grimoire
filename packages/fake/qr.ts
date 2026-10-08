@@ -23,7 +23,7 @@
  * the two format words. `qr.test.ts` decodes what this draws with `jsQR` — the decoder the
  * app's own scanner uses — which is the only check of an encoder worth having.
  */
-import type { QrMatrix } from "@/lib/ipc";
+import type { QrMatrix } from "@grimoire/ui/lib/ipc";
 
 /** Version 9: `17 + 4 × 9` modules a side. */
 const VERSION = 9;

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { fakeEnvOver, type Row, type Tables } from "../../relay/src/fakeD1";
-import { mint } from "../../relay/src/token";
+import { fakeEnvOver, type Row, type Tables } from "@grimoire/relay/src/fakeD1";
+import { mint } from "@grimoire/relay/src/token";
 import worker, { type Env } from "./index";
 
 /**

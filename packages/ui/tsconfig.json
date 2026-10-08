@@ -1,0 +1,17 @@
+{
+  /* The shared UI's program: everything in this folder, tests and stories included, and through
+     them the fake (`@grimoire/fake`, which the tests import by name).
+
+     **Three files here are not in it**: the web host's database Worker and its card scanner's,
+     which run in dedicated Workers and are checked by `tsconfig.web-worker.json`, and its service
+     worker, checked by `tsconfig.web-sw.json` — each under the `WebWorker` lib. That lib and this
+     program's `DOM` declare the same globals differently, so each file is left out here rather
+     than given both. Nothing imports them — the page names them by URL — so the exclusion holds;
+     a module that did import one would pull it straight back in.
+
+     `node_modules` is named because `exclude` replaces TypeScript's default list, and pnpm puts
+     one in every package: its links lead to the fake and from there back here. */
+  "extends": "../../tsconfig.base.json",
+  "include": ["."],
+  "exclude": ["node_modules", "lib/core/web/worker.ts", "lib/core/web/scanWorker.ts", "lib/core/web/sw/sw.ts"]
+}

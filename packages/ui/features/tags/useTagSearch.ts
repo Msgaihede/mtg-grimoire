@@ -46,7 +46,7 @@ export function useTagSearch(
   useEffect(() => {
     // The `setState` is inside the timeout, not in the effect body — a synchronous one here
     // would be the reflexive derived-state sync `react-hooks` refuses, and it only fails at
-    // `npm run verify`.
+    // `pnpm verify`.
     const timer = setTimeout(() => setDebounced(needle), DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [needle]);

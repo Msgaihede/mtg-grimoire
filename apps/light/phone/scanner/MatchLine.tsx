@@ -1,10 +1,10 @@
 import { RotateCcw } from "lucide-react";
-import { MatchBar, STRIP_PILL, STRIP_SENTENCE } from "@/features/scanner/reader/MatchStrip";
-import { matchStrip, type LastAdded } from "@/features/scanner/reader/readerText";
-import { FOCUS } from "@/lib/focus";
-import type { ScanMode, ScannerResolution, ScannerVerdict } from "@/lib/ipc";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { MatchBar, STRIP_PILL, STRIP_SENTENCE } from "@grimoire/ui/features/scanner/reader/MatchStrip";
+import { matchStrip, type LastAdded } from "@grimoire/ui/features/scanner/reader/readerText";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import type { ScanMode, ScannerResolution, ScannerVerdict } from "@grimoire/ui/lib/ipc";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * Where the scanner has got to with the card in front of it — the desktop's Match strip, laid out

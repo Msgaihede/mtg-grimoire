@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { fakeEnvOver, type Tables } from "../../relay/src/fakeD1";
-import { mint, TOKEN_TTL_MS } from "../../relay/src/token";
+import { fakeEnvOver, type Tables } from "@grimoire/relay/src/fakeD1";
+import { mint, TOKEN_TTL_MS } from "@grimoire/relay/src/token";
 import worker, { type Env } from "./index";
 
 /**

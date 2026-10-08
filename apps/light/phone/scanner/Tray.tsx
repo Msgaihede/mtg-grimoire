@@ -2,9 +2,9 @@ import { useEffect, useId, useRef, useState } from "react";
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { motion } from "motion/react";
 import { ArrowDown, ChevronRight, Minus, Plus, X } from "lucide-react";
-import { CardArt } from "@/components/CardArt";
-import { CardImage } from "@/components/CardImage";
-import { cardPrintingsKey } from "@/features/card/cardKeys";
+import { CardArt } from "@grimoire/ui/components/CardArt";
+import { CardImage } from "@grimoire/ui/components/CardImage";
+import { cardPrintingsKey } from "@grimoire/ui/features/card/cardKeys";
 import {
   needsDecision,
   NEXT_DECISION_LABEL,
@@ -16,29 +16,29 @@ import {
   setQuantity,
   totalCopies,
   unresolvedCount,
-} from "@/features/scanner/reader/tray";
+} from "@grimoire/ui/features/scanner/reader/tray";
 import {
   isKnownFinish,
   TRAY_FINISH_LABEL,
   UNKNOWN_FINISH,
-} from "@/features/scanner/reader/trayFinish";
-import { useTrayPrices } from "@/features/scanner/reader/useTrayPrices";
-import { plural } from "@/lib/counts";
-import { FINISHES, parseFinishes } from "@/lib/finish";
-import { FOCUS } from "@/lib/focus";
-import { CARD_ASPECT, cardImageUrl } from "@/lib/images";
+} from "@grimoire/ui/features/scanner/reader/trayFinish";
+import { useTrayPrices } from "@grimoire/ui/features/scanner/reader/useTrayPrices";
+import { plural } from "@grimoire/ui/lib/counts";
+import { FINISHES, parseFinishes } from "@grimoire/ui/lib/finish";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { CARD_ASPECT, cardImageUrl } from "@grimoire/ui/lib/images";
 import {
   ipc,
   ipcError,
   type ScannerTrayChoice,
   type ScannerTrayFinish,
   type ScannerTrayRow,
-} from "@/lib/ipc";
-import type { Currency } from "@/lib/marketplace";
-import { DURATION, PRESS, seconds, TRANSITION } from "@/lib/motion";
-import { formatPrice } from "@/lib/prices";
-import { useMarketplace } from "@/lib/useMarketplace";
-import { cn } from "@/lib/utils";
+} from "@grimoire/ui/lib/ipc";
+import type { Currency } from "@grimoire/ui/lib/marketplace";
+import { DURATION, PRESS, seconds, TRANSITION } from "@grimoire/ui/lib/motion";
+import { formatPrice } from "@grimoire/ui/lib/prices";
+import { useMarketplace } from "@grimoire/ui/lib/useMarketplace";
+import { cn } from "@grimoire/ui/lib/utils";
 import { PRINTING_ROW, PrintingFace, printingCode } from "../card/Printings";
 import { ActionSheet, SheetChoice } from "../deck/sheet";
 

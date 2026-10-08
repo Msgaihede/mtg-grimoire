@@ -1,0 +1,10 @@
+{
+  /* The public share page's program: this folder and the shared-UI modules it reaches, which is
+     a small part of them — it has no core and no `ipc` (`SharePage.test.tsx` holds that).
+     `types` and the setup file are `apps/desktop/tsconfig.json`'s, for its reasons; the Vite
+     config and the build's output are left out for `apps/light/tsconfig.json`'s. */
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": ["vite/client"] },
+  "include": [".", "../../packages/ui/test-setup.ts"],
+  "exclude": ["node_modules", "vite.*.ts", "dist*"]
+}

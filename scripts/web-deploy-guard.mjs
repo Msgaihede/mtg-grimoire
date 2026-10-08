@@ -1,7 +1,7 @@
 // May the web app be deployed from this tree, between releases? — the release rule's guard
 // (light app phase 6, step 6.6).
 //
-//   npm run web:deploy-guard            # one sentence; exit 0 = yes, 1 = no, 2 = could not tell
+//   pnpm web:deploy-guard            # one sentence; exit 0 = yes, 1 = no, 2 = could not tell
 //   node scripts/web-deploy-guard.mjs --json
 //   node scripts/web-deploy-guard.mjs --offline    # do not ask GitHub; the answer says it did not
 //
@@ -12,7 +12,7 @@
 // web app deployed from a `main` that is one schema rung past the last release sends every paired
 // desktop ops it must hold, and there is no update for it to install.
 //
-// **What it compares**: the constant in this working tree — which is what `npm run web:build`
+// **What it compares**: the constant in this working tree — which is what `pnpm web:build`
 // compiles and `wrangler deploy` uploads — against the same constant at the last release's tag,
 // `v` + the version in `.release-please-manifest.json`, read with `git show <tag>:<path>`. Equal
 // is the only pass. `release.yml`'s `web-deploy` job has no use for it: it deploys the tag.

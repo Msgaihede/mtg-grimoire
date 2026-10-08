@@ -12,7 +12,7 @@ publish = false
 #
 # * `--lib --target wasm32-unknown-unknown --profile wasm` is the crate as a module a browser's
 #   Worker loads — `load`, `frame`, `reset` — and `web/` is the page that drives it.
-#   `npm run scanner:bench` builds it, serves it and runs it in headless Chrome.
+#   `pnpm scanner:bench` builds it, serves it and runs it in headless Chrome.
 # * `--release --bin scanner-bench-native` is the same frames through the same session on this
 #   machine, threads and all. It reads files by path and prints to stdout, with no network and
 #   no argument parser, so it is also what an `aarch64-linux-android` build runs from
@@ -49,7 +49,7 @@ path = "src/bin/native.rs"
 [features]
 default = ["ocr"]
 # The two readers. Off, the module is the detector, the hash and the search alone — which is
-# how the bench says what OCR costs a download (`npm run scanner:bench -- --sizes`).
+# how the bench says what OCR costs a download (`pnpm scanner:bench --sizes`).
 ocr = ["card-scanner/ocr"]
 
 [dependencies]

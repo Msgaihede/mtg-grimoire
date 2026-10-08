@@ -8,7 +8,7 @@
      although the lib is the same: that file declares `self` a `DedicatedWorkerGlobalScope` and
      this one a `ServiceWorkerGlobalScope`, and a program is one global scope.
 
-     So the root `tsconfig.json` **excludes** that file and this program holds it. The modules it
+     So `packages/ui/tsconfig.json` **excludes** that file and this program holds it. The modules it
      imports — `serve.ts`, `shell.ts`, `pictures.ts` and `bridge.ts` beside it, and
      `packages/ui/lib/images.ts` for the picture prefix and the variants — are followed from it
      and so are checked twice, once under each lib, which is the point: they are what both the
@@ -16,10 +16,10 @@
 
      `vite/client` is listed for `import.meta.env`, which `images.ts` reads.
 
-     `npm run build` and `npm run web:build` both run it. */
+     `pnpm build` and `pnpm web:build` both run it. */
   "compilerOptions": {
     "target": "ES2020",
-    /* No `DOM`: this is not a page. `ES2022.Error` for the root program's reason. */
+    /* No `DOM`: this is not a page. `ES2022.Error` for `tsconfig.base.json`'s reason. */
     "lib": ["ES2020", "ES2022.Error", "WebWorker"],
     "module": "ESNext",
     "moduleResolution": "bundler",

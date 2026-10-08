@@ -733,12 +733,12 @@ through `scripts/web-sync-smoke.mjs`, which also read the 101's `Sec-WebSocket-P
 grimoire.live.v1` off both of its sockets — **and neither has been watched on the deployed
 Worker.**
 
-**`npm run web:sync-smoke` is this Worker's only end-to-end run**: the code in this directory
+**`pnpm web:sync-smoke` is this Worker's only end-to-end run**: the code in this directory
 under workerd, a local D1 seeded from `schema.sql` with one membership and one claim code, a
 signing key handed over with `--var` and never a file, and two browser profiles that claim, pair
 and sync through it by the relay's real name. `APP_ORIGINS` there is the run's own page origin.
-It runs the wrangler `infrastructure/app-worker/`'s lockfile pins (`npm ci --ignore-scripts --prefix
-infrastructure/app-worker`) — the one tool that deploys anything here — and of it only `d1 execute --local`
+It runs the wrangler `infrastructure/wrangler/`'s lockfile pins (`npm ci --ignore-scripts --prefix
+infrastructure/wrangler`) — the one tool that deploys anything here — and of it only `d1 execute --local`
 and `dev --local`.
 
 **A removed device is told: a rotation's roster closes its socket** (light app step 6.3b,
@@ -797,7 +797,7 @@ closes after, each close on its own: one that throws costs nothing else.
 
 `src/log.ts` — `since`, `compact`, `departures` and the roster's parse and ordering, as pure
 functions over a row list, tested by the **root** vitest
-(`npm run test:run -- infrastructure/relay/src/log.test.ts`); and the numbers they and a push are held to — `TAIL_MS`, `ACK_TTL_MS`, `HEARD_REFRESH_MS`,
+(`pnpm test:run infrastructure/relay/src/log.test.ts`); and the numbers they and a push are held to — `TAIL_MS`, `ACK_TTL_MS`, `HEARD_REFRESH_MS`,
 `MAX_SEALED_CHARS`, `MAX_GROUP_LOG_CHARS`, `MAX_CLOCK_AHEAD_MS`. **The sealed cap and the clock bound
 are spelled for a grep as much as for a compiler**: `sync_engine::wire` and `sync_engine::hlc` read
 this file with `include_str!` for the line that declares their number, so reformatting either turns

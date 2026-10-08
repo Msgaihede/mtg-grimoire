@@ -13,13 +13,13 @@
  * and export sheets are mounted by several pages and must all read one answer.
  */
 import { create } from "zustand";
-import type { TransferSurface } from "@/features/transfer/fields";
+import type { TransferSurface } from "@grimoire/ui/features/transfer/fields";
 import {
   INITIAL_EXPORT_PREFS,
   INITIAL_IMPORT_DEFAULTS,
   type ExportPrefs,
   type ImportDefaults,
-} from "@/features/transfer/prefs";
+} from "@grimoire/ui/features/transfer/prefs";
 
 interface PhoneTransferPrefs {
   exportPrefs: Record<TransferSurface, ExportPrefs>;

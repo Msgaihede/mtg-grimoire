@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { parseSnapshot } from "@/lib/shareSnapshot";
+import { parseSnapshot } from "@grimoire/ui/lib/shareSnapshot";
 import {
   SharePage,
   ShareNotice,

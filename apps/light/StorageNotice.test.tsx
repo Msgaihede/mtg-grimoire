@@ -6,8 +6,8 @@ const invoke = vi.hoisted(() => vi.fn());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
 vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(() => Promise.resolve(() => {})) }));
 
-import type { StorageCleared } from "@/lib/core/hostStorage";
-import { LAYER } from "@/lib/layers";
+import type { StorageCleared } from "@grimoire/ui/lib/core/hostStorage";
+import { LAYER } from "@grimoire/ui/lib/layers";
 import { StorageNotice, StorageNoticeCard } from "./StorageNotice";
 
 /** What a host that found its storage gone answers, in that host's own words. */

@@ -2,7 +2,7 @@
 
 Read this when a worktree needs to run the app against real data — a live CDP pass, a
 screenshot, anything where an empty wall would be the wrong picture. A worktree that only
-runs `npm run verify` never needs it.
+runs `pnpm verify` never needs it.
 
 **Copy the folder, not the file.** `mtg.db` alone gets you a card corpus and an app that
 fetches every picture cold; `data/` also carries `images/`, the picture cache, which is

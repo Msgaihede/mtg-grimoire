@@ -2,12 +2,12 @@ import { useEffect, useLayoutEffect, useMemo, type ReactNode } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
 import type { Decorator, Preview } from "@storybook/react-vite";
-import { ContextMenuProvider } from "@/components/menu/ContextMenuProvider";
-import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import { CardToDeckProvider } from "@/features/card/cardMenu";
-import { installKeyboardModality } from "@/lib/keyboardModality";
-import { installWorld, type FakeParams, type FakeWorld } from "../packages/fake/world";
-import { CARD_ART_DIR, setArtMode, setBundledArtRoot, type ArtMode } from "../packages/fake/images";
+import { ContextMenuProvider } from "@grimoire/ui/components/menu/ContextMenuProvider";
+import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
+import { CardToDeckProvider } from "@grimoire/ui/features/card/cardMenu";
+import { installKeyboardModality } from "@grimoire/ui/lib/keyboardModality";
+import { installWorld, type FakeParams, type FakeWorld } from "@grimoire/fake/world";
+import { CARD_ART_DIR, setArtMode, setBundledArtRoot, type ArtMode } from "@grimoire/fake/images";
 // The app's stylesheet *through* `preview.css`, never directly: that file adds `.storybook` as
 // a Tailwind source, which is the one thing the shipped bundle must not inherit. See its header.
 import "./preview.css";
@@ -56,7 +56,7 @@ function Activate({ world }: { world: FakeWorld }) {
  *
  * **A component rather than the decorator itself**, and that is not a style choice: a decorator
  * is a plain function and `react-hooks/rules-of-hooks` refuses hooks in one ("neither a React
- * function component nor a custom React Hook function" — measured, it fails `npm run lint`).
+ * function component nor a custom React Hook function" — measured, it fails `pnpm lint`).
  * Storybook renders a decorator's result as a component anyway, so this is what was already
  * happening, named.
  *
@@ -128,7 +128,7 @@ function FakeWorld({
  * times over — "30 of 34" against 44 files, then "40 of 47" against 48, where the 40 was right
  * and only the total was stale, which is the harder kind to notice. `.storybook/CLAUDE.md`'s rule
  * is the general form: **a count is a fact about a _tree_**, so every open branch has its own and
- * none is the one being shipped. Measure it at the moment of need — `npm run build-storybook`,
+ * none is the one being shipped. Measure it at the moment of need — `pnpm build-storybook`,
  * then `storybook-static/index.json`.
  *
  * **The other files carrying the same parameter do so for reasons of their own**, and the reasons

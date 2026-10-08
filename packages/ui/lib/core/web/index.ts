@@ -157,7 +157,7 @@ export interface Browser {
  * profile that blocks site data, and this runs on the way to opening the database.
  *
  * **The service worker is the built app's alone** — `import.meta.env.PROD`, which Vite folds at
- * compile time as it folds the mode. `npm run web:dev` registers nothing: a dev server behind a
+ * compile time as it folds the mode. `pnpm web:dev` registers nothing: a dev server behind a
  * service worker goes on serving the last build it cached, and round one recorded what that
  * looks like — "a build that looked like a failed port because the worker was serving the old
  * one". (So the dev server draws no card picture; `web:preview` does.)

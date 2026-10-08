@@ -16,13 +16,13 @@ the one-line versions.
   `superpowers:subagent-driven-development`.
 - **Two subagents editing the same files in the same tree clobber each other.** Give each one
   files no sibling touches, or its own worktree (`superpowers:using-git-worktrees`) — and note
-  that a worktree needs its own `npm install` before its suites pass.
+  that a worktree needs its own `pnpm install` before its suites pass.
 - **Tests run once, at the end of a feature, to verify that it works — not after each change or inside subagents.**
   Running test suites after every intermediate edit causes high churn and wastes time repeatedly
   re-fixing transient states. Similarly, running tests inside subagents mid-fan-out tests against a tree
-  its siblings are still modifying, and `npm run verify` is too slow to pay for N times.
+  its siblings are still modifying, and `pnpm verify` is too slow to pay for N times.
   Instead: implement all changes for the feature first, have subagents report what they changed, and run
-  `npm run verify` once centrally at the end to prove the completed feature works.
+  `pnpm verify` once centrally at the end to prove the completed feature works.
 - **Commits match the size of a feature (one commit per feature).** Bundle all work for a feature
   (code, tests, and documentation) into a single atomic commit. Do not split a feature into multiple
   commits (such as a code commit followed by a docs or fix commit). Multiple commits per feature
@@ -39,7 +39,7 @@ These skills carry the worktree and concurrency workflow and are the authority o
 file does not repeat them:
 
 - **`worktree-setup`** — the working rules for a second checkout: the base-branch check,
-  what is not shared with the main checkout, and the shared stash stack. `npm install` is
+  what is not shared with the main checkout, and the shared stash stack. `pnpm install` is
   no longer a step here — `.claude/hooks/worktree-deps.sh` runs it at SessionStart, along
   with reporting the branch.
 - **`running-the-app`** — **only one app and one Storybook can run across every worktree**,

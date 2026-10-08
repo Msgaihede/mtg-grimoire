@@ -278,8 +278,8 @@ as `worker.fetch(request, env)` against `infrastructure/relay/src/fakeD1.ts`'s S
 `infrastructure/relay/src/rotate.test.ts` drives `/rotate` and `/keys`.
 
 ```
-npx vitest run infrastructure/share-worker/
-npx tsc -p infrastructure/share-worker/tsconfig.json
+pnpm exec vitest run infrastructure/share-worker/
+pnpm exec tsc -p infrastructure/share-worker/tsconfig.json
 ```
 
 ⚠️ `infrastructure/share-worker/src/**/*.test.ts` is a glob in `vitest.config.ts`. A directory that list does not

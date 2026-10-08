@@ -1,5 +1,5 @@
 {
-  "$schema": "node_modules/wrangler/config-schema.json",
+  "$schema": "../wrangler/node_modules/wrangler/config-schema.json",
   "name": "mtg-grimoire-share",
   "main": "src/index.ts",
   // The relay's date, deliberately rather than today's: this Worker runs beside it on the same

@@ -1,5 +1,5 @@
-import { ScannerAssets } from "@/features/scanner/ScannerAssets";
-import type { ScannerStatus } from "@/lib/ipc";
+import { ScannerAssets } from "@grimoire/ui/features/scanner/ScannerAssets";
+import type { ScannerStatus } from "@grimoire/ui/lib/ipc";
 
 /**
  * **The slot for the scanner's data** — under the camera, where this page says what the scanner

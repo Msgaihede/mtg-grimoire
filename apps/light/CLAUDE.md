@@ -54,7 +54,7 @@ The Android app and the Web app share identical client-side code; the phone face
 
 ### The Phone Import Fence
 `phone/fence.test.ts` verifies that `apps/light/phone/` never imports:
-- `@/lib/store`, `@/App`, `@/components/{AppShell,TitleBar,Ribbon}`, `@/boot/*`, `@/lib/window`, or `@tauri-apps/*` (except via `@/lib/core`).
+- `@grimoire/ui/lib/store`, `@grimoire/ui/App`, `@grimoire/ui/components/{AppShell,TitleBar,Ribbon}`, `@grimoire/ui/boot/*`, `@grimoire/ui/lib/window`, or `@tauri-apps/*` (except via `@grimoire/ui/lib/core`).
 - When a phone component needs state from a desktop store-backed component, refactor the desktop component in `packages/ui/` to accept props rather than duplicating code.
 - Clean hooks (`useCardSearch`, `useDecks`, `useCollection`, `useWishlist`) and presentational components in `packages/ui/` are shared.
 - Type imports must always use `import type`.
@@ -105,20 +105,20 @@ Run tests only at the end of a feature (not after each change):
 
 | Command | Environment | Purpose |
 | --- | --- | --- |
-| `npm run mobile:dev` | Vite (port 5175) | Fast UI development over Storybook fake data |
-| `npm run mobile:tauri` | Desktop Tauri overlay | Run mobile UI against real Rust engine (takes app lock) |
-| `npm run mobile:build` | Production bundler | Type-checks and builds `apps/light/dist-mobile/` bundle |
-| `npm run web:wasm` | Rust toolchain | Compile WASM engine into `dist-wasm/` |
-| `npm run web:dev` | Vite (port 5176) | Run web light app over local OPFS |
-| `npm run web:preview` | Local preview (port 4176) | Test production web build and Service Worker under CSP |
-| `npm run web:smoke` | Headless Chromium | Offline first-run and data verification smoke tests |
-| `npm run web:scanner-smoke` | Headless Chromium, a file for a camera | The built app scans one real card on the desktop face — the offer, Download, the tray, the collection, then offline, a staged fault, and the Worker gone on leaving — and again on the phone face at 360px in a profile of its own (`npm run scanner:assets -- --web` before `web:build`, and after `web:wasm`, which empties `dist-wasm/`; the card's picture comes from Scryfall once, or `SCAN_CARD_PICTURE`) |
-| `npm run web:sync-smoke` | Two headless Chromiums, the relay under workerd | A claim, a pairing and a write crossing each way without a press — the phone face and the desktop face (needs a wrangler; the script's header says where it looks) |
-| `npm run mobile:scanner-smoke` | Headless Chromium, a fake camera, `mobile:dev` | The phone's Scanner page at 360 and 412: cards land, a quantity, a folder, Add, the camera let go, each refusal (`scripts/phone-scanner-smoke.mjs`; another origin after `--`, `--shots=<dir>` for pictures) |
+| `pnpm mobile:dev` | Vite (port 5175) | Fast UI development over Storybook fake data |
+| `pnpm mobile:tauri` | Desktop Tauri overlay | Run mobile UI against real Rust engine (takes app lock) |
+| `pnpm mobile:build` | Production bundler | Type-checks and builds `apps/light/dist-mobile/` bundle |
+| `pnpm web:wasm` | Rust toolchain | Compile WASM engine into `dist-wasm/` |
+| `pnpm web:dev` | Vite (port 5176) | Run web light app over local OPFS |
+| `pnpm web:preview` | Local preview (port 4176) | Test production web build and Service Worker under CSP |
+| `pnpm web:smoke` | Headless Chromium | Offline first-run and data verification smoke tests |
+| `pnpm web:scanner-smoke` | Headless Chromium, a file for a camera | The built app scans one real card on the desktop face — the offer, Download, the tray, the collection, then offline, a staged fault, and the Worker gone on leaving — and again on the phone face at 360px in a profile of its own (`pnpm scanner:assets --web` before `web:build`, and after `web:wasm`, which empties `dist-wasm/`; the card's picture comes from Scryfall once, or `SCAN_CARD_PICTURE`) |
+| `pnpm web:sync-smoke` | Two headless Chromiums, the relay under workerd | A claim, a pairing and a write crossing each way without a press — the phone face and the desktop face (needs a wrangler; the script's header says where it looks) |
+| `pnpm mobile:scanner-smoke` | Headless Chromium, a fake camera, `mobile:dev` | The phone's Scanner page at 360 and 412: cards land, a quantity, a folder, Add, the camera let go, each refusal (`scripts/phone-scanner-smoke.mjs`; another origin after the script's name, `--shots=<dir>` for pictures) |
 
 Driving a shared panel at a phone's width (no lock needed, `mobile:dev` only):
 - `http://localhost:5175/settings?seed=paired&fault=lentStorage` — `?seed=` and `?fault=` are a story's `parameters.fake`, read once by `fakeBoot.ts`.
-- `npm run mobile:scan-smoke` (`scripts/pairing-scan-smoke.mjs`; another origin after `--`) — headless Chromium with a fake camera fed the Sync panel's own QR code at 360px: the drawing decodes, the scanner calls `sync_pairing_accept`, a refused camera lands on typing. The camera *grant* (Android's prompt, a browser's) is a real device's to show.
+- `pnpm mobile:scan-smoke` (`scripts/pairing-scan-smoke.mjs`; another origin after the script's name) — headless Chromium with a fake camera fed the Sync panel's own QR code at 360px: the drawing decodes, the scanner calls `sync_pairing_accept`, a refused camera lands on typing. The camera *grant* (Android's prompt, a browser's) is a real device's to show.
 - Measure under a touch pointer (`Emulation.setTouchEmulationEnabled`): the shared panels take their 44px floor from `coarse:`, which a mouse-driven window never matches.
 
 - The Scanner page is driven the same way: over the fake a camera that opens is answered by a scripted pile of five cards (`packages/fake/scannerScript.ts`), so `http://localhost:5175/scanner` in a browser with a camera scans. `?fault=scannerMissing` and `?fault=scannerElsewhere` are its two refusals.

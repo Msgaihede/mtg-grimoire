@@ -8,8 +8,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   bullet below, beside the `android` job; this page covers the other two.
   **`.github/workflows/ci.yml`** gates PRs and pushes to `main`: a `changes`
   router (below), a `frontend`
-  matrix (below — one leg for `npm run build` and `lint`, four for `test:run --shard`), a
-  `storybook` job (`npm run build-storybook`), a `rust` matrix over `windows-latest` +
+  matrix (below — one leg for `pnpm build` and `lint`, four for `test:run --shard`), a
+  `storybook` job (`pnpm build-storybook`), a `rust` matrix over `windows-latest` +
   `ubuntu-22.04` (`cargo fmt --check` on Linux only, `clippy -D warnings` and `cargo test`
   on both, everything `--locked` — over both members of the cargo workspace since 2026-10-02,
   below — **and since 2026-09-08 the `card-scanner` crate's own suite
@@ -20,7 +20,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `scanner-bundle.yml` — tests only, because that crate is not rustfmt-clean and
   carries four pre-existing clippy warnings, both listed in
   [card-scanner.md](card-scanner.md) §8; until that step `session::tests` was fenced by
-  `npm run verify` and by nothing in CI), a `core` matrix (below, 2026-10-02), an `android`
+  `pnpm verify` and by nothing in CI), a `core` matrix (below, 2026-10-02), an `android`
   job (below, 2026-10-03), a `web` job (below, 2026-10-04) and a `powershell` job (below). The
   `wasm` and `android` compile gates went with the first web and Android builds, which were
   removed on 2026-09-27; `core` is what replaced them, for the extracted engine alone, and the
@@ -37,7 +37,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   first-match-wins order and `*`-crosses-`/` matching kept), which routes each one:
   `apps/desktop/src-tauri/**` → **`frontend` and `rust`**; `packages/ui/**`, `apps/desktop/public/**`,
   `apps/desktop/index.html`, **`.storybook/**`** (its own arm since 2026-09-27 — it used to fall to the
-  fail-safe and run the Rust matrix), the npm lockfile and the frontend's configs → `frontend`
+  fail-safe and run the Rust matrix), `pnpm-lock.yaml` and the frontend's configs → `frontend`
   **and `storybook`**, plus **`scripts/` because `eslint .` lints it** (its ignore list does
   not name it) → `frontend` alone;
   **`rust-toolchain.toml` and `.github/actions/rust-toolchain/`** → `frontend`, `rust` and,
@@ -81,8 +81,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     would have run both of `core`'s cross-compiles for a change that cannot have moved the
     engine.
   - **The page's inputs gain `web` beside `frontend` and `storybook`**: `apps/light/**` (not
-    `apps/light/src-tauri/**`, the phone's host), `packages/ui/**` and `apps/desktop/public/**`, `package.json` and
-    `package-lock.json`, `.nvmrc`, `vite.base.ts`, `vitest.config.ts`, and the arm above `packages/ui/*` for the files Rust
+    `apps/light/src-tauri/**`, the phone's host), `packages/ui/**` and `apps/desktop/public/**`, `package.json`,
+    `pnpm-lock.yaml`, `pnpm-workspace.yaml`, `.nvmrc`, `vite.base.ts`, `vitest.config.ts`, and the arm above `packages/ui/*` for the files Rust
     tests read (`syncedTables.json` is a module the page imports; the other two ride along).
     **Split off without it**:
     `apps/desktop/index.html` — the desktop's document (at the root until 2026-10-08); the web build's is `apps/light/index.html` —
@@ -90,12 +90,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **`tsconfig*.json` is a glob now, and it narrows as well as widens.** It is anchored, so it
     is the root's programs only. It names the web Worker's own `tsc` program whatever that file
     is called, and it takes `infrastructure/relay/tsconfig.json` and `infrastructure/share-worker/tsconfig.json` **out of the
-    fail-safe**, where each ran the whole Rust matrix and `core` for a file only `npm run
-    build`'s `tsc -p` reads. `vite.watch.ts` left the fail-safe on the same arm: `vite.base.ts`
+    fail-safe**, where each ran the whole Rust matrix and `core` for a file only `pnpm build`'s `tsc -p`
+    reads. `vite.watch.ts` left the fail-safe on the same arm: `vite.base.ts`
     and `.storybook/main.ts` both import it.
   - **`apps/light/vite.config.ts` → `frontend`, `rust`, `android` and `web`**, where it fell to the
     fail-safe. `frontend` lints it; `web` builds `apps/light/dist-web/` through it and opens the result;
-    `android` because the APK's `beforeBuildCommand` is `npm run mobile:build`, **the only CI
+    `android` because the APK's `beforeBuildCommand` is `pnpm -w run mobile:build`, **the only CI
     build of that config's default mode** — an edit that adds a mode for the browser and breaks
     the phone's is red there and nowhere else; and `rust` for no reason of its own, only because
     every arm that sets `android` sets it (the fail-safe was already running it for this path).
@@ -120,7 +120,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     fallen to the fail-safe and run the Rust matrix, `core` and `storybook` for a response
     header. It is the web app's hosting: a third Worker's `wrangler.jsonc`, Cloudflare's
     `_headers` file and a small script. `frontend` runs `tsc -p infrastructure/app-worker/tsconfig.json` (in
-    `npm run build`), `eslint` and the directory's tests — `hosting.test.ts` reads `_headers`,
+    `pnpm build`), `eslint` and the directory's tests — `hosting.test.ts` reads `_headers`,
     `wrangler.jsonc`, the desktop's shipped CSP, the line of `packages/ui/lib/core/web/index.ts` that
     constructs the engine's Worker, and **every `.rs` file of `grimoire-core`, `grimoire-web`
     and `card-scanner`'s library** as text. It fails when the policy's `connect-src` and the
@@ -135,8 +135,9 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     already sets `frontend`. `infrastructure/app-worker/README.md` is prose. **Nothing in `ci.yml` deploys
     it** — this said *nothing in CI* until 2026-10-04, when `release.yml`'s `web-deploy` began
     deploying it at a release tag (*The release rule*, below), from the lockfile that sits in
-    this tree since the same day: `infrastructure/app-worker/package.json` and `package-lock.json` are this
-    arm's too, read by `scripts/release-rule.test.mjs` and installed by no job in `ci.yml`.
+    this tree since the same day, and since 2026-10-08 in `infrastructure/wrangler/`: its `package.json` and
+    `package-lock.json` are the `web` job's, read by `scripts/release-rule.test.mjs`, and `ci.yml`'s `web`
+    job installs them for the sync smoke. `infrastructure/app-worker/package.json` is the pnpm workspace's.
   - **The fail-safe sets `web` and still does not set `android`**, and the two answers come
     from one question: can a path nobody placed be an input? Never to the APK, whose inputs each
     have an arm. To a build of the page *and* the engine, easily — a new root config Vite or
@@ -152,7 +153,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   the two build jobs and skipping the only job that would have tested the change. Windows is
   not a preference: `lock.ps1` identifies a lock's holder by pid + process name +
   `StartTime`, which `Get-Process` does not expose portably, and it exists for
-  `tauri-plugin-single-instance` on WebView2. The job needs no `npm ci` and no toolchain —
+  `tauri-plugin-single-instance` on WebView2. The job needs no `pnpm install --frozen-lockfile` and no toolchain —
   the test sets its own `MTG_LOCK_DIR` and spawns short-lived `pwsh` sleepers as fixtures.
   **19 routing cases were driven through the shipped `ci.yml` text** (not a copy) before this
   landed; two of them failed on first run against the author's own wrong expectations, and the
@@ -190,12 +191,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   Rust-only PR now waits on `frontend`'s clock instead of `rust`'s — which is half of why
   `frontend` was split into parallel legs the next day (below).
 - **`frontend` is five legs in parallel, and `build-storybook` is a job of its own** (issue
-  #559, 2026-09-27). It was one serial job — `npm run build`, `eslint .`, `vitest run`, then
+  #559, 2026-09-27). It was one serial job — `pnpm build`, `eslint .`, `vitest run`, then
   `build-storybook` — at 8–12 minutes, with vitest alone 345–415 s for ~390 files; branch
   protection is `strict: true`, so every merge into `main` re-queued every open PR behind that
-  whole path. Now one leg builds and lints, and four run `npm run test:run -- --shard=N/4`:
+  whole path. Now one leg builds and lints, and four run `pnpm test:run --shard=N/4`:
   vitest divides the collected files deterministically, so a shard runs the same files on every
-  run. Nothing a test reads comes out of `npm run build` (the `dist/` mentions in test files are
+  run. Nothing a test reads comes out of `pnpm build` (the `dist/` mentions in test files are
   comments), which is what lets the shards start with the build leg rather than behind it.
   `ci-ok` reads `needs.frontend.result`, `failure` if any leg fails, so the matrix changes no
   protected name; `fail-fast: false` keeps one red shard from cancelling the rest.
@@ -216,6 +217,25 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   not an exact `x.y.z`. **Node is pinned the same way**: `.nvmrc` (24, the version the app is
   developed on — CI ran 22 until this change) feeds every `setup-node`, and `package.json`'s
   `engines` floor is `>=22.18`, the newest any script here needs (`scripts/golden.mjs`).
+- **The workspace is installed with pnpm, and the two jobs that hold a secret install none**
+  (2026-10-08). Every job that installs runs `pnpm/action-setup` (pinned by SHA, the version
+  taken from `package.json`'s `packageManager`), then `actions/setup-node` with `cache: pnpm`,
+  then `pnpm install --frozen-lockfile`; `scripts/toolchain.test.mjs` holds pnpm's step directly
+  above Node's, once for every install. `android-sign` and `web-deploy` have no pnpm step at all,
+  for the reason they have no cargo (*The release rule*, below). The deploy tool is
+  `infrastructure/wrangler`, a folder the workspace does not list, installed with
+  `npm ci --ignore-scripts` — by `web-deploy` in that folder (`working-directory`), by the `web`
+  job with `--prefix infrastructure/wrangler`. **`web-deploy` changed in two lines and no more**:
+  that install, and the deploy, now `node ../wrangler/node_modules/wrangler/bin/wrangler.js
+  deploy` from `infrastructure/app-worker`, a path where it was `npx --no-install wrangler`.
+  The Worker's one import from the shared UI is also a `wrangler.jsonc` `alias`, because that job
+  has no workspace links. **The release build's runner is `pnpm tauri build`**: `tauri-action`
+  finds `pnpm-lock.yaml` at the root and runs the root's `tauri` script, which goes to
+  `apps/desktop`; that is why the root keeps `@tauri-apps/cli` in its manifest
+  (`scripts/release-rule.test.mjs` holds the script's text and the dependency).
+  `scripts/workflow-scripts.test.mjs` reads `pnpm <name>` (and the `-w` forms), refuses a pnpm
+  call it cannot read, a `--` anywhere on a pnpm line, and any npm, npx, pnpx or corepack line
+  but the deploy tool's install.
 - **Every third-party action is pinned by commit SHA, every checkout drops its token, and no
   workflow grants a write permission to all its jobs** (2026-09-28, issue #545). All three
   workflows and the composite action used mutable references — `actions/checkout@v7`,
@@ -248,11 +268,11 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     `scripts/release-rule.test.mjs` fences the two jobs that hold a secret now** — *The release
     rule*, below.) Comments are stripped
     before any of it is read, since these files explain themselves in prose that names both.
-- **Every `npm run <name>` a workflow asks for is a script `package.json` has**
+- **Every `pnpm <name>` a workflow asks for is a script `package.json` has**
   (`scripts/workflow-scripts.test.mjs`). On 2026-10-04 the edit that added `lint:claude`
-  (`daa70e12`) took `web:smoke`'s line instead of sitting beside it; nothing `npm run verify`
+  (`daa70e12`) took `web:smoke`'s line instead of sitting beside it; nothing `pnpm verify`
   runs calls `web:smoke`, so the first thing to notice was the `web` job — `npm error Missing
-  script` on `main`, and again on the release PR (#786) once it merged `main`. The fence globs
+  script` (npm's words then) on `main`, and again on the release PR (#786) once it merged `main`. The fence globs
   every workflow and composite action, reads `package.json`'s own scripts too (`lint` calls
   `lint:claude`, `verify` calls four), strips comment lines first, and carries a guard that it
   still sees `web:smoke` in `ci.yml` — a census that matched nothing would pass.
@@ -282,7 +302,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **The `rust` job's commands run from the root**, with no `working-directory`:
     `cargo fmt -p mtg-grimoire -p grimoire-core --check`, `cargo clippy --workspace
     --all-targets --locked -- -D warnings`, `cargo test --workspace --locked`. `lint:rust` is
-    the first two as written, and `npm run verify` runs it and then `cargo test --workspace`.
+    the first two as written, and `pnpm verify` runs it and then `cargo test --workspace`.
     **`cargo fmt --all` is the one spelling that must not be used** — it follows path
     dependencies, and `card-scanner` is one and is not rustfmt-clean. `--workspace` lints and
     tests the members only. **That `fmt` line is the day's, and it names its packages one by
@@ -365,7 +385,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   ``linker `cc` not found``); and **a `rust-cache` `key` per target**. The linker is the
   API-26 clang, the first attempt's `minSdk` carried over — and since phase 4 the light host's
   `tauri.conf.json` says `minSdkVersion: 26` too, which `apps/light/host.test.ts` pins.
-- **The `android` job builds the light app's APK** (phase 4, 2026-10-03): `npx tauri android
+- **The `android` job builds the light app's APK** (phase 4, 2026-10-03): `pnpm exec tauri android
   build --apk --target aarch64` from `apps/light/` on `ubuntu-24.04`, with JDK 21 from the image
   (`JAVA_HOME_21_X64` — JDK 25 breaks the Android Gradle and Kotlin plugins), `NDK_HOME` set to
   the image's `ANDROID_NDK_LATEST_HOME`, and the light bundle built by the host's
@@ -400,7 +420,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **clang, with `core`'s ≥ 18 guard**, copied from that job's wasm leg: the module is the
     engine linked, so it compiles the same `sqlite-wasm-rs` shim. `scripts/build-wasm.mjs`
     finds the compiler as `clang` on `PATH`.
-  - Node from `.nvmrc` with the npm cache, `npm ci`, the composite toolchain action with
+  - Node from `.nvmrc` with pnpm's cache, `pnpm install --frozen-lockfile`, the composite toolchain action with
     `targets: wasm32-unknown-unknown`, and `Swatinem/rust-cache` with `workspaces: ". ->
     src-tauri/target"` (now `". -> target"`, since 2026-10-08) and `key: web-wasm32`. **No `dist/` stub**: `cargo build -p grimoire-web`
     compiles that package and what it depends on, neither Tauri host is among them, and so
@@ -431,28 +451,28 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     shell variable after `--version`**. Driven locally against the real lockfile with `cargo`
     and the CLI stubbed (Git Bash, 2026-10-04): one entry reads `0.2.127`; two entries and no
     entry each stop the step with the count; a CLI answering another version stops it.
-  - `npm run web:wasm` — `cargo build -p grimoire-web --lib --target wasm32-unknown-unknown
+  - `pnpm web:wasm` — `cargo build -p grimoire-web --lib --target wasm32-unknown-unknown
     --profile wasm --locked` (the root `Cargo.toml`'s profile for this module: `release` with
     fat LTO, one codegen unit and `panic = "abort"`), then `wasm-bindgen --target web` into
-    `dist-wasm/` — and `npm run web:build`:
-    `tsc`, `tsc -p packages/ui/tsconfig.web-worker.json`, then the light entry in `web` mode into
+    `dist-wasm/` — and `pnpm web:build`:
+    `tsc -p apps/light`, `tsc -p` for the two `WebWorker` programs (`packages/ui/tsconfig.web-worker.json` and `packages/ui/tsconfig.web-sw.json`), then the light entry in `web` mode into
     `apps/light/dist-web/`, with the engine from `dist-wasm/` emitted under `apps/light/dist-web/wasm/<build id>/`.
     The config fails a build whose engine is not there, which is why the module is built first.
   - **A size report to the step summary**: every `.wasm` under `apps/light/dist-web/` — found rather than
     named, because the module sits under a directory named for the engine's build, and a
     bundle with none fails the step — in bytes and MiB, raw and `gzip -9`, and `apps/light/dist-web/`
     whole with its file count.
-  - **`npm run web:smoke`, with `CHROME` set to the image's own Google Chrome**: `google-chrome`
+  - **`pnpm web:smoke`, with `CHROME` set to the image's own Google Chrome**: `google-chrome`
     on `PATH`, else the `CHROME_BIN` the image sets, else the step fails saying the runner has
     no browser. Nothing is downloaded — a Chrome fetched at run time is a binary nobody pinned.
     Its version goes in the summary, because a figure taken in a browser is a figure about that
     browser. The smoke step has `timeout-minutes: 10`: the failure it guards is a page that
     waits for ever, and a job otherwise has six hours to do that in.
-  - **`npm run web:sync-smoke`** (phase 6, step 6.3): live sync end to end — the relay's own
+  - **`pnpm web:sync-smoke`** (phase 6, step 6.3): live sync end to end — the relay's own
     code under workerd (`wrangler dev --local`, a local D1, a throwaway signing key by
     `--var`), two Chrome profiles that resolve the relay's real name to it, a claim, a
     pairing, and a write on each device arriving on the other with nothing pressed, under the
-    shipped policy. wrangler is installed by `npm ci --ignore-scripts --prefix infrastructure/app-worker`,
+    shipped policy. wrangler is installed by `npm ci --ignore-scripts --prefix infrastructure/wrangler`,
     from that directory's own lockfile (step 6.6's) and from nowhere else — never
     `npx wrangler@…`, a version nobody pinned — and the job holds no secret. ⚠️ **It was
     written and run on one Windows machine, and its first run on a runner is the pull request
@@ -542,7 +562,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   | `android` | `release-please` | no | `ci.yml`'s `android` job, step for step: the arm64 APK and bundle at the tag, **debug-signed**, held to the tag's version (`scripts/android-release/check-version.sh`); the bundle handed on as the artifact `android-aab-debug-signed` (14 days) |
   | `android-sign` | `release-please`, `android` | `ANDROID_KEYSTORE_BASE64`, `ANDROID_KEYSTORE_PASSWORD`, `ANDROID_KEY_PASSWORD` | Re-signs that bundle with the owner's upload key (`scripts/android-release/sign-bundle.sh`), held to the committed fingerprint, and leaves `mtg-grimoire-<version>-android.aab` as the artifact `play-upload-bundle` (30 days). Attaches nothing to the draft; `contents: read` |
   | `web` | `release-please` | no | `ci.yml`'s `web` job less its lint and size report: clang, the wasm target, the lockfile's `wasm-bindgen` CLI, `web:wasm`, `web:build`, `web:smoke`; `apps/light/dist-web/` handed on as the artifact `web-bundle` (14 days) |
-  | `web-deploy` | `release-please`, `build`, `android-sign`, `web` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` then `npx --no-install wrangler deploy` from `infrastructure/app-worker/`; then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
+  | `web-deploy` | `release-please`, `build`, `android-sign`, `web` | `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID` | Refuses a tag older than the newest published release; `npm ci --ignore-scripts` in `infrastructure/wrangler/`, then `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from `infrastructure/app-worker/`; then `scripts/web-deploy-probe.mjs` against `https://mtg-grimoire.app` |
   | `publish` | `release-please`, `build`, `android-sign`, `web-deploy` | no | Flips the draft to published |
 
   - **Since 2026-10-07 the Android host goes to Google Play, and only there** (the owner's
@@ -577,7 +597,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   - **A secret sits in a job that builds nothing.** This is the rule the removed `sign` job
     left behind (below), kept: a build leg runs every npm lifecycle script, every cargo build
     script and every Gradle plugin, and any of them can read a file or an environment. So
-    `android-sign` and `web-deploy` run no root `npm ci`, no cargo and no Gradle — a checkout,
+    `android-sign` and `web-deploy` run no root `pnpm install --frozen-lockfile`, no cargo and no Gradle — a checkout,
     an artifact download, and one tool each. **That is why the APK is re-signed rather than
     signed by Gradle**, which is what Tauri's signing guide describes (a `keystore.properties`
     Gradle reads): Gradle signs inside the build, so the keystore and its passwords would be on
@@ -649,7 +669,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     can mean:
     1. **The edge was slow, and the page is fine now.** *Re-run failed jobs* deploys the same
        bundle again and asks again, and `publish` follows.
-    2. **The page is wrong.** `npx --no-install wrangler rollback` from `infrastructure/app-worker/` puts the
+    2. **The page is wrong.** `node ../wrangler/node_modules/wrangler/bin/wrangler.js rollback` from `infrastructure/app-worker/` puts the
        previous version back ([`infrastructure/app-worker/README.md`](../../infrastructure/app-worker/README.md), *Rolling
        back*), and the release stays a draft until the cause is found.
     3. **The page is fine and the probe is wrong — every re-run fails the same way.** The
@@ -676,16 +696,17 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     The first version of this job ran `npx --yes wrangler@4.146.0 deploy`, which pinned one
     package of ninety-one: the other ninety came through floating ranges, resolved on the day
     of the release, and two of them — `esbuild` and `workerd` — run a `postinstall`, in the
-    step that held the token. Now **`infrastructure/app-worker/package.json` names `wrangler` at an exact
-    version and nothing else, and `infrastructure/app-worker/package-lock.json` names all ninety-one with the
+    step that held the token. Now **`infrastructure/wrangler/package.json` names `wrangler` at an exact
+    version and nothing else, and `infrastructure/wrangler/package-lock.json` names all ninety-one with the
     registry's integrity hash**. The job runs `npm ci --ignore-scripts` there in a step with
-    nothing in its environment, and then `npx --no-install wrangler deploy` in the step with
+    nothing in its environment, and then `node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy` from
+    `infrastructure/app-worker/` in the step with
     the token: what runs is what the lockfile installed, or the step fails. The by-hand
     runbook uses the same two lines, so a deploy by hand and a deploy by the job run the same
-    bytes. **It is not a dependency of the app**: `infrastructure/app-worker/` is not a workspace of the root
-    package, so the root's `npm ci` — every other job's — installs none of it. **Moving the
+    bytes. **It is not a dependency of the app**: `infrastructure/wrangler/` is not in the pnpm workspace
+    (`pnpm-workspace.yaml` lists the Workers by name), so the root's `pnpm install --frozen-lockfile` — every other job's — installs none of it. **Moving the
     version is `npm install --package-lock-only --ignore-scripts wrangler@<version> --prefix
-    infrastructure/app-worker`**, and a pull request with both files.
+    infrastructure/wrangler`**, and a pull request with both files.
     **What is proved** (2026-10-04, Windows 11, Node 24.16): in a copy holding exactly what the
     job's checkout holds — `infrastructure/app-worker/`, the one `packages/ui/` file the script imports, the root
     `tsconfig.json`, a `apps/light/dist-web/` — `npm ci --ignore-scripts` exited 0 with no lifecycle line
@@ -720,14 +741,15 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     no more; that no job names a secret or an `env:` above its steps; that `environment:
     release` is on those two jobs and no other; that **everything a secret-holding job can run
     is on a list, to the letter** — `android-sign`: the signing script and nothing else (it
-    uploads its artifact with an action, not a command); `web-deploy`: the `gh api` read, `npm ci --ignore-scripts`, `npx --no-install
-    wrangler deploy`, the probe — so a second `npx`, a `node -e` or an `npm run` is a line not
+    uploads its artifact with an action, not a command); `web-deploy`: the `gh api` read, `npm ci --ignore-scripts`, `node ../wrangler/node_modules/wrangler/bin/wrangler.js
+    deploy`, the probe — so a second `npx`, a `node -e` or an `npm run` is a line not
     on it; that the asking step is handed flags and never values, and every step after it is
     gated on its answer; that the signing step is held to the fingerprint and `present=true` is
     said only with the file there; that **`wrangler` appears once in all the workflows**, as
     that line, after an install step with nothing in its environment; that
-    `infrastructure/app-worker/package.json` holds one exact dependency and the lockfile an integrity hash
-    for every package; that no workflow names the relay or the share Worker; that no 32-hex
+    `infrastructure/wrangler/package.json` holds one exact dependency and `infrastructure/wrangler/package-lock.json`
+    an integrity hash for every package, and that `infrastructure/app-worker/package.json` is the Worker's
+    workspace manifest and names no `wrangler`; that no workflow names the relay or the share Worker; that no 32-hex
     account id is in the file; that each new job has a deadline; and that the two build legs
     run the commands `ci.yml` runs.
   - **The Android `versionCode` rises with every release.** Nothing types it: with no
@@ -739,7 +761,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     arithmetic keeps its order while the minor and the patch stay under 1000; the test holds
     that, and that nobody adds an explicit code or `autoIncrementVersionCode` (which counts in
     a file that is not committed, so every runner would start from one).
-  - **Between releases, `npm run web:deploy-guard`** (`scripts/web-deploy-guard.mjs`) is the
+  - **Between releases, `pnpm web:deploy-guard`** (`scripts/web-deploy-guard.mjs`) is the
     same rule for a deploy by hand: it reads `USER_SCHEMA_VERSION` in the working tree and at
     the last release's tag (`v` + `.release-please-manifest.json`'s version, through `git show`)
     and exits 1 when they differ — *"This tree's user schema is 60, the last release (v0.40.0)
@@ -796,8 +818,8 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     arithmetic measured and no longer derived; another key's fingerprint refused; a `CN=Android
     Debug` keystore refused.
     **Not until a release**: the `release` environment handing its values to a job on `main`;
-    the artifact hand-off between jobs; `gh release upload` of the APK; `npm ci
-    --ignore-scripts` and `wrangler deploy` on Linux and under an API token; the probe against
+    the artifact hand-off between jobs; `gh release upload` of the APK;
+    `npm ci --ignore-scripts` and `wrangler deploy` on Linux and under an API token; the probe against
     the real address; and a signed APK installing over the last one on a phone. **As of 2026-10-07, not until a
     release**: the environment handing its values to a job on `main`; the artifact hand-off
     between jobs; `jarsigner` on the runner's JDK 21 against a real bundle under the release
@@ -896,7 +918,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     may warn that it cannot read the user's email, which is the *User Details* permission this
     leaves out and is not an error. If the first run fails on a permission, its log names it.
   - **`CLOUDFLARE_ACCOUNT_ID`** is the 32-hex id on the dashboard's Workers overview, and what
-    `npx --no-install wrangler whoami` prints from `infrastructure/app-worker/`.
+    `node ../wrangler/node_modules/wrangler/bin/wrangler.js whoami` prints from `infrastructure/app-worker/`.
   - **A release cut before a value existed is not repaired by adding it.** Its web app is
     deployed by hand from the tag (the runbook). Its bundle is the next release's: a re-run of
     `android-sign` runs the commit it ran before, which holds no fingerprint.
@@ -906,7 +928,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `release-please-config.json`'s to say, and this page keeps no count of them** — it said
   *all five* and listed `package.json`, `package-lock.json`, `apps/desktop/src-tauri/tauri.conf.json`,
   `apps/desktop/src-tauri/Cargo.toml` and `Cargo.lock` long after the workspace had added more. The shape:
-  `package.json` and its lockfile belong to the `node` release type, and `extra-files` holds
+  `package.json` belongs to the `node` release type (`pnpm-lock.yaml` carries no version), and `extra-files` holds
   the rest — for **every cargo workspace member** its `Cargo.toml` (`$.package.version`) and
   its own entry in the root `Cargo.lock` (at the root since 2026-10-02; `apps/desktop/src-tauri/Cargo.lock`
   until then), and for each Tauri host its `tauri.conf.json`. `grimoire-core` joined on
@@ -932,7 +954,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **And since 2026-10-04 one test holds all of it at once** — `scripts/release-rule.test.mjs`:
   every member the root `Cargo.toml` lists has its manifest and its own `Cargo.lock` selector in
   the config, both Tauri hosts have their `tauri.conf.json` there, the config names nothing
-  else, and every one of those versions — with `package.json`'s, `package-lock.json`'s and
+  else, and every one of those versions — with `package.json`'s and
   `.release-please-manifest.json`'s — is the same string in the tree. A fifth member fails it
   until it has its pair. (`.release-please-manifest.json` left the router's prose arm for an arm
   of its own, `frontend`, the day that test read it.)
@@ -1013,7 +1035,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   through v0.13.0 did. The `deb` and `appimage` bundlers never read it.
 - **Nothing in `ci-ok` bundles, so a wrong `licenseFile` path is green in CI and broken at
   tag time.** The only proof is a local bundle. Measured 2026-08-22,
-  `npm run tauri build -- --bundles nsis,msi`, release, 3m28s: `nsis/x64/license_file` came
+  `pnpm tauri build --bundles nsis,msi`, release, 3m28s: `nsis/x64/license_file` came
   out at 34,526 bytes (the 34,523-byte `LICENSE` plus the BOM) and `wix/LICENSE.rtf` at
   37,355. **The RTF generator escapes nothing** — it replaces `\n` with `\par ` and leaves
   `\`, `{` and `}` alone, so a licence text containing any of those would emit malformed RTF.

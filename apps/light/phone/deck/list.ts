@@ -1,4 +1,4 @@
-import type { DeckRow, DeckVariant } from "@/lib/ipc";
+import type { DeckRow, DeckVariant } from "@grimoire/ui/lib/ipc";
 
 /**
  * Which of a deck's two lists the phone face is showing — **one rule, read by the deck page and by

@@ -5,7 +5,7 @@ day two of its three halves had been.** What follows is the record of which, bec
 value of this page is that it distinguishes them.
 
 **The first half landed on 2026-08-29** in `e5ff435`, `86a9b8e` and `612a01e`, with
-`npm run verify` green (249 test files, 5 932 frontend tests, 1 786 Rust), `cargo fmt --check`
+`pnpm verify` green (249 test files, 5 932 frontend tests, 1 786 Rust), `cargo fmt --check`
 clean, and clippy `--all-targets` clean. **Those three figures are that day's tree and have not been
 re-derived**; the counts move with every branch, so take them as the record of one green run
 rather than as today's number. **It is deployed**: step 1 is done, step 6 has run, and step 3 is
@@ -985,7 +985,7 @@ router, and the real `Group` over stand-ins for three of workerd's globals — N
 refuses a status of 101 — so everything below is exactly what those suites could not reach.
 
 **What the local run settled, and what only production still can** (step 6.3, 2026-10-04:
-`npm run web:sync-smoke` — this relay's code under workerd, `wrangler dev --local` 4.146.0, and
+`pnpm web:sync-smoke` — this relay's code under workerd, `wrangler dev --local` 4.146.0, and
 two profiles of headless Chrome 154 reaching it by its real name):
 
 | | Under workerd, in Chrome | On the deployed Worker |
@@ -1062,7 +1062,7 @@ two profiles of headless Chrome 154 reaching it by its real name):
 ### 14. The paged pull — a streamed body no released desktop has read, and a catch-up that is many requests
 
 Added 2026-10-05; **deployed that day at 02:21:29 UTC**. `infrastructure/relay/src/group.test.ts` runs the real `Group` over Node's
-SQLite behind the stand-in state `ticket.test.ts` already used, and `npm run web:sync-smoke` and
+SQLite behind the stand-in state `ticket.test.ts` already used, and `pnpm web:sync-smoke` and
 `web:sync-pull` run the same code under workerd against Chrome. What neither reached:
 
 - **A released desktop reading the streamed answer.** The bytes are held equal to the old

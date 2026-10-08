@@ -1,13 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
 
-vi.mock("@tauri-apps/api/event", () => import("../../../packages/fake/event"));
-vi.mock("@tauri-apps/api/window", () => import("../../../packages/fake/window"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
 import { STARTUP_LOADING_LABEL, StartupScreen } from "./StartupScreen";
-import { ACTIVITY_DELAY_MS } from "@/lib/activity";
-import { resetListeners } from "../../../packages/fake/event";
-import { resetWindow } from "../../../packages/fake/window";
+import { ACTIVITY_DELAY_MS } from "@grimoire/ui/lib/activity";
+import { resetListeners } from "@grimoire/fake/event";
+import { resetWindow } from "@grimoire/fake/window";
 
 beforeEach(() => {
   resetListeners();

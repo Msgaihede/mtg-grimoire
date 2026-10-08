@@ -4,8 +4,8 @@ import { expect, fireEvent, fn, userEvent, within } from "storybook/test";
 import { GAME_CHANGER_LABEL } from "@/components/GameChangerMark";
 import { OwnedBadge } from "@/components/OwnedBadge";
 import type { DragPayload } from "@/features/decks/dnd";
-import { CARDS, type FakeCard } from "../../../fake/cards";
-import { printing } from "../../../fake/fixtures";
+import { CARDS, type FakeCard } from "@grimoire/fake/cards";
+import { printing } from "@grimoire/fake/fixtures";
 import { buildShelves, type ShelfFolder } from "@/lib/shelves";
 import { CardGrid, type GridCard, type GridSections } from "./CardGrid";
 

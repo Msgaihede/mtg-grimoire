@@ -54,7 +54,7 @@ jobs:
           persist-credentials: false
           fetch-depth: 0
 
-      # The router is a dependency-free Node script, so no `npm ci` — only a pinned Node, because
+      # The router is a dependency-free Node script, so no `pnpm install` — only a pinned Node, because
       # whatever the runner image ships is not a contract. `.nvmrc` is that pin for every job and
       # workflow here, and for a contributor's machine.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -114,7 +114,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
   # **Five legs in parallel, where this was one serial job of 8–12 minutes.** Vitest alone was
-  # 345–415 s for ~390 files on one runner, behind `npm run build` and `eslint .`, with
+  # 345–415 s for ~390 files on one runner, behind `pnpm build` and `eslint .`, with
   # `build-storybook` after it — and branch protection is `strict`, so every merge into `main`
   # re-queues every open PR behind that whole critical path. One leg builds and lints; four split
   # the test files with vitest's `--shard`, which divides the collected files deterministically,
@@ -147,26 +147,29 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      # pnpm runs no dependency's install script unless `pnpm-workspace.yaml` names it (`allowBuilds`).
+      - run: pnpm install --frozen-lockfile
 
       - name: Build
         if: ${{ !matrix.shard }}
-        run: npm run build
+        run: pnpm build
 
       - name: Lint
         if: ${{ !matrix.shard }}
-        run: npm run lint
+        run: pnpm lint
 
-      # No test reads `dist/` — `npm run build` feeds nothing here, which is what lets the shards
+      # No test reads `dist/` — `pnpm build` feeds nothing here, which is what lets the shards
       # start at the same moment as the build leg rather than behind it.
       - name: Test (${{ matrix.shard }})
         if: ${{ matrix.shard }}
-        run: npm run test:run -- --shard=${{ matrix.shard }}
+        run: pnpm test:run --shard=${{ matrix.shard }}
 
   # The only gate the `.mdx` catalogue page has. Stories are `.tsx` under `packages/ui/`, so `tsc` and
   # ESLint already see them; `.storybook/DesignSystem.mdx` is seen by neither — `tsc` reads only
@@ -190,15 +193,17 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Build Storybook
-        run: npm run build-storybook
+        run: pnpm build-storybook
 
   rust:
     name: rust (${{ matrix.os }})
@@ -267,7 +272,7 @@ jobs:
       # **`fmt` names the members one by one and never `--all`**, which follows path
       # dependencies into `crates/card-scanner` — not a member, and not rustfmt-clean (below).
       # `--workspace` has no such reach: clippy and the tests see the members and nothing else.
-      # **So a new member is a new `-p` here**, and in `npm run lint:rust`, or nothing formats it.
+      # **So a new member is a new `-p` here**, and in `pnpm lint:rust`, or nothing formats it.
       - name: cargo fmt
         if: matrix.os == 'ubuntu-22.04'
         run: cargo fmt -p mtg-grimoire -p grimoire-core -p grimoire-light -p grimoire-web -p grimoire-scan --check
@@ -330,7 +335,7 @@ jobs:
       # **The `card-scanner` crate's own suite, which ran in no CI job until 2026-09-08.** It is
       # a separate cargo package, excluded from the workspace on purpose, so the `cargo test`
       # above does not touch a line of it — and `session::tests` is where the `live.html` key
-      # census, the panic guard and the reader cadence live. `npm run verify` was the only fence.
+      # census, the panic guard and the reader cadence live. `pnpm verify` was the only fence.
       # `--features cli` is what `verify` runs, so the debug server's tests are in it.
       #
       # **Test-only, on purpose.** The crate is not `cargo fmt`-clean and carries four
@@ -484,7 +489,7 @@ jobs:
       # staying buildable for the phone it has not been run on.
       #
       # **`check`, like everything in this job: nothing here runs.** Whether a frame gets through
-      # the module in a browser is `npm run scanner:bench`, a desk's to run. Into the scanner's
+      # the module in a browser is `pnpm scanner:bench`, a desk's to run. Into the scanner's
       # own `target/`, as its tests build: the bench is outside the workspace, as the crate is.
       - name: cargo check, the scanner's frame bench (${{ matrix.target }})
         run: cargo check --lib --bins --locked --target ${{ matrix.target }} --manifest-path crates/card-scanner/bench/Cargo.toml --target-dir crates/card-scanner/target
@@ -512,7 +517,7 @@ jobs:
   # a device's or an emulator's to measure. The artifact is kept 14 days.
   #
   # **JDK 21, from the image**: `JAVA_HOME_21_X64` is the runner's own, and JDK 25 breaks the
-  # Android Gradle and Kotlin plugins (the light-app spec §5). `npx tauri`, never `cargo tauri` —
+  # Android Gradle and Kotlin plugins (the light-app spec §5). `pnpm exec tauri`, never `cargo tauri` —
   # the CLI is what points cargo at the NDK's clang and linker for each target, which the `core`
   # job above has to do by hand.
   android:
@@ -525,12 +530,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Point the build at JDK 21, the SDK and the NDK
         run: |
@@ -559,7 +566,7 @@ jobs:
       # takes and what a release signs. `release.yml`'s `android` job runs this same line.
       - name: Build the APK and the bundle
         working-directory: apps/light
-        run: npx tauri android build --apk --aab --target aarch64 --ci
+        run: pnpm exec tauri android build --apk --aab --target aarch64 --ci
 
       - name: Report the APK
         shell: bash
@@ -656,12 +663,14 @@ jobs:
             exit 1
           fi
 
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       # `rust-toolchain.toml`'s pin, never `stable` — and the one target this job builds for.
       - uses: ./.github/actions/rust-toolchain
@@ -746,7 +755,7 @@ jobs:
       # `wasm-bindgen --target web` over each, into `dist-wasm/` and `dist-wasm/scanner/`. The
       # script holds each to its exports and to the target features it must and must not name.
       - name: Build the modules
-        run: npm run web:wasm
+        run: pnpm web:wasm
 
       # **The card scanner's three files, into `dist-wasm/scanner-assets/`** (step 7.5): the
       # bundle of card hashes and the two OCR models, from this repository's own public release
@@ -758,7 +767,7 @@ jobs:
       # **required**: a web app built without its scanner would pass every check but the one
       # that scans.
       - name: Fetch the scanner's files
-        run: npm run scanner:assets -- --web
+        run: pnpm scanner:assets --web
 
       # `tsc` over the page's program and the Worker's own, then the light entry in `web` mode
       # into `apps/light/dist-web/`, with the engine from `dist-wasm/` emitted under `apps/light/dist-web/wasm/` in a
@@ -768,7 +777,7 @@ jobs:
         id: build
         env:
           GRIMOIRE_SCANNER_ASSETS: required
-        run: npm run web:build
+        run: pnpm web:build
 
       # Every `.wasm` the bundle holds, raw and as a server would send it, and the bundle
       # whole. **Found rather than named**: the module sits under a directory named for the
@@ -832,7 +841,7 @@ jobs:
       # failure this guards is a page that waits for ever, and a job has six hours to do it in.
       - name: Open the built app in headless Chrome
         timeout-minutes: 10
-        run: npm run web:smoke
+        run: pnpm web:smoke
 
       # **The scanner's own module, in a real browser** (step 7.5): the same bundle on the
       # desktop face, a camera that is a file showing one real card, and the run from the
@@ -856,7 +865,7 @@ jobs:
         timeout-minutes: 10
         env:
           SCAN_CARD_CACHE: ${{ runner.temp }}/scan-card
-        run: npm run web:scanner-smoke
+        run: pnpm web:scanner-smoke
 
       # **Live sync, two browsers and the relay's own code** (phase 6, step 6.3):
       # `scripts/web-sync-smoke.mjs` starts `infrastructure/relay/` under workerd (`wrangler dev --local`, a
@@ -866,23 +875,23 @@ jobs:
       # policy, so a `connect-src` that lost the relay's `wss://` source is red here.
       #
       # **The run needs wrangler, and wrangler is not one of the root package's dependencies.**
-      # It is installed from `infrastructure/app-worker/`'s own lockfile — the one tool that directory pins, at
+      # It is installed from `infrastructure/wrangler/`'s own lockfile — the one tool that directory pins, at
       # one exact version with every integrity hash, since the release rule's step (6.6) — and
       # with `--ignore-scripts`, as the deploy installs it: no dependency's lifecycle script runs
       # on the runner. Never `npx wrangler@…` here: that is a version nobody pinned, fetched at
       # run time. Nothing in either step reaches Cloudflare — no account, no token, no secret in
-      # the job, `--local` throughout; the script looks for wrangler under `infrastructure/app-worker/` and
+      # the job, `--local` throughout; the script looks for wrangler under `infrastructure/wrangler/` and
       # stops in a sentence when it is not there.
       #
       # ⚠️ **Written on Windows and first run on a runner by the pull request that added it**:
       # whether wrangler's self-signed TLS, workerd and two Chromes fit a runner is that run's to
       # say. **Bounded**, for the first smoke's reason.
-      - name: Install wrangler from app-worker's lockfile
-        run: npm ci --ignore-scripts --prefix infrastructure/app-worker
+      - name: Install wrangler from its lockfile
+        run: npm ci --ignore-scripts --prefix infrastructure/wrangler
 
       - name: Pair two browsers through the local relay
         timeout-minutes: 10
-        run: npm run web:sync-smoke
+        run: pnpm web:sync-smoke
 
       # Whenever there is a bundle, a failed smoke included: a page that would not open on the
       # runner is exactly the one somebody needs to serve and look at. Kept 14 days, like the
@@ -914,7 +923,7 @@ jobs:
         with:
           persist-credentials: false
 
-      # No `npm ci`, no cargo, no toolchain setup: the test sets its own `MTG_LOCK_DIR`
+      # No `pnpm install`, no cargo, no toolchain setup: the test sets its own `MTG_LOCK_DIR`
       # (so it never touches the real lock directory or needs a git repo to find one) and
       # spawns short-lived `pwsh` sleepers as its fixtures. `pwsh` is preinstalled on
       # `windows-latest`.

@@ -1,13 +1,13 @@
 import { skipToken, useQuery } from "@tanstack/react-query";
 import { ExternalLink } from "lucide-react";
-import { cardTcgplayerIdsKey } from "@/features/card/cardKeys";
-import { marketplaceUrlForCard } from "@/features/card/openMarketplace";
-import { edhrecCardUrl, scryfallCardUrl } from "@/lib/externalLinks";
-import { FOCUS } from "@/lib/focus";
-import { ipc, type CardDetail } from "@/lib/ipc";
-import type { Marketplace } from "@/lib/marketplace";
-import { PRESS_SOFT } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { cardTcgplayerIdsKey } from "@grimoire/ui/features/card/cardKeys";
+import { marketplaceUrlForCard } from "@grimoire/ui/features/card/openMarketplace";
+import { edhrecCardUrl, scryfallCardUrl } from "@grimoire/ui/lib/externalLinks";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { ipc, type CardDetail } from "@grimoire/ui/lib/ipc";
+import type { Marketplace } from "@grimoire/ui/lib/marketplace";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import { SheetSection } from "./parts";
 
 /**

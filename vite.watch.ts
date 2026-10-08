@@ -22,7 +22,7 @@
  * files into existence: the base config's server and the share viewer's both exited on the
  * first run — one on `…/libsqlite3-sys-…/out/…-sqlite3.o`, one on that crate's
  * `build_script_build-….exe` — and Storybook on the second. That is the tail of
- * `npm run verify`, so a dev server left up through one died, having already reloaded the page
+ * `pnpm verify`, so a dev server left up through one died, having already reloaded the page
  * once for `dist/index.html`.
  *
  * `src-tauri` is Tauri's own template line, and it used to cover the workspace's `target`,
@@ -37,7 +37,7 @@
  * close this comment.)
  *
  * `dist-wasm/` is the one a dev server is most likely to be up beside while it is written:
- * `npm run web:wasm` rebuilds the engine the web app's server (`npm run web:dev`) is serving.
+ * `pnpm web:wasm` rebuilds the engine the web app's server (`pnpm web:dev`) is serving.
  */
 export const WATCH_IGNORED = [
   "**/src-tauri/**",

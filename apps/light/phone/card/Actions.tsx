@@ -1,5 +1,5 @@
 import type { ComponentType } from "react";
-import type { CardDetail, DeckVariant } from "@/lib/ipc";
+import type { CardDetail, DeckVariant } from "@grimoire/ui/lib/ipc";
 import type { Place } from "../../routes";
 import { AddToDeck } from "./AddToDeck";
 import { CollectionAdd } from "./CollectionAdd";

@@ -287,7 +287,7 @@ fn base(
 ///
 /// **Keep that `instr` on one line.** A doc line *beginning* `> 0` is a blockquote marker to
 /// rustdoc, and the next line without one is `clippy::doc_lazy_continuation` — an error under
-/// `-D warnings`, and one `npm run verify` cannot see, because it runs neither `cargo fmt` nor
+/// `-D warnings`, and one `pnpm verify` cannot see, because it runs neither `cargo fmt` nor
 /// `clippy`. CI runs both.
 ///
 /// `"C"` is already exact and ignores the flag, which is `CardFilters::colors_strict`'s

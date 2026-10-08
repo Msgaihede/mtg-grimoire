@@ -70,13 +70,13 @@ export function relayAddress() {
 
 /** `wrangler.js`, or a sentence saying how to provide one. */
 function wranglerScript() {
-  const beside = join(ROOT, "infrastructure/app-worker/node_modules/wrangler/bin/wrangler.js");
-  if (existsSync(beside)) return beside;
+  const pinned = join(ROOT, "infrastructure/wrangler/node_modules/wrangler/bin/wrangler.js");
+  if (existsSync(pinned)) return pinned;
   const named = process.env.WRANGLER;
   if (named && existsSync(named)) return named;
   return fail(
-    "no wrangler to run the relay with. Install app-worker's own " +
-      "(`npm ci --ignore-scripts --prefix infrastructure/app-worker`), " +
+    "no wrangler to run the relay with. Install the pinned one " +
+      "(`npm ci --ignore-scripts --prefix infrastructure/wrangler`), " +
       "or set WRANGLER to a wrangler.js — for example the one `npx wrangler` keeps in npm's cache.",
   );
 }

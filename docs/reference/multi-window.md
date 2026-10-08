@@ -3,7 +3,7 @@
 `docs/superpowers/specs/2026-09-19-multi-window-design.md` is the design, amended through
 implementation; this page is the record of what shipped — the reasoning at each site, and the live
 pass that settled what neither suite can see. **Every figure below was taken on 2026-09-20, on a
-debug build under `npm run tauri dev`**, unless its own line says otherwise; the spec's own
+debug build under `pnpm tauri dev`**, unless its own line says otherwise; the spec's own
 measurements were read off the source at `13dba8c2` against the crates `Cargo.lock` resolves
 (tauri 2.11.5, tauri-plugin-single-instance 2.4.3, tauri-plugin-snap-layout 1.0.9, wry 0.55.1,
 `@tanstack/query-core` 5.101.4).
@@ -384,7 +384,7 @@ every window.
 already the second, deliberate press. One window comes back after the restart, and restoring the
 rest is out of scope.
 
-## 7. The live pass — debug, `npm run tauri dev`, 2026-09-20
+## 7. The live pass — debug, `pnpm tauri dev`, 2026-09-20
 
 Eight of the nine checks ran and passed; the update hint is **not run**, because no update was
 staged — there was no `updates/` directory and Settings listed `0.26.0 · 2026-09-15 · installed`

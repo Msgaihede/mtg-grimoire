@@ -12,8 +12,8 @@
  */
 import { StrictMode, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import { installKeyboardModality } from "@/lib/keyboardModality";
+import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
+import { installKeyboardModality } from "@grimoire/ui/lib/keyboardModality";
 import { boot } from "./boot";
 import { ShareBoundary } from "./SharePage";
 // `?inline` rather than a side-effect import: `infrastructure/share-worker/src/page.ts` renders the shell and

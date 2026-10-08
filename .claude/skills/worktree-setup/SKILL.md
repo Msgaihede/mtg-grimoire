@@ -1,6 +1,6 @@
 ---
 name: worktree-setup
-description: Use when starting work in an mtg-grimoire git worktree under .claude/worktrees/, before running npm run verify, the test suite, the app, or Storybook. Symptoms it prevents - "Denied ID .../node_modules/mana-font/css/mana.css?raw", failing mana/keyrune/iconFont suites, 403s on @fontsource woff2 files, TS2307 after a merge, and files that should exist but do not.
+description: Use when starting work in an mtg-grimoire git worktree under .claude/worktrees/, before running pnpm verify, the test suite, the app, or Storybook. Symptoms it prevents - "Denied ID .../node_modules/mana-font/css/mana.css?raw", failing mana/keyrune/iconFont suites, 403s on @fontsource woff2 files, TS2307 after a merge, and files that should exist but do not.
 ---
 
 # Worktree setup
@@ -11,9 +11,16 @@ the database.
 
 **Dependencies and the branch are a hook now** — `.claude/hooks/worktree-deps.sh` at
 SessionStart. It reports both and installs when `node_modules` is missing or older than
-`package-lock.json`. **If you did not see that report, run `npm install` yourself before
-any test, build or app command**, or three suites fail on Vite's `server.fs.allow` and
-`npm run verify` never reaches `cargo test` — failures that are not yours.
+`pnpm-lock.yaml`, and deletes it first when it is npm's. **If you did not see that report,
+run `pnpm install` yourself before any test, build or app command**, or nothing resolves
+and `pnpm verify` never reaches `cargo test` — failures that are not yours.
+
+**pnpm installs before it runs.** With a `package.json` edited, `pnpm exec <anything>` and `pnpm <script>` first run a full install, which rewrites `pnpm-lock.yaml` to match and relinks `node_modules`, and only then run the command. Put back a manifest edit that is not meant to stay *before* any `pnpm` command, and expect `git status` to show a lockfile nobody meant to change if you did not.
+
+**A worktree resolves more than it declares.** Node looks for a package in every folder above
+a file, and a worktree sits under the main checkout: an import no manifest here declares can
+resolve from `D:\Code\mtg-grimoire\node_modules` and fail in CI. `scripts/workspace.test.mjs`
+is what holds "a package declares what it imports"; nothing that runs the code can.
 
 ## When the branch is wrong
 
@@ -45,6 +52,9 @@ checkout's `target` and its app opens the main checkout's dev database.
 | `target` (gigabytes) | **the stash stack** |
 | `target/debug/data/` — db **and** image cache | the lock dir, `<git common dir>/locks` |
 
+pnpm's store (`D:\.pnpm-store`) is shared by every checkout on the drive: a worktree's
+`node_modules` is links into it, and an install is seconds.
+
 A worktree's `.git` is a **file**, not a directory, so `ls .git/locks` fails here. The
 common dir is what every worktree shares:
 `git rev-parse --path-format=absolute --git-common-dir` answers it from anywhere, and on
@@ -59,11 +69,11 @@ agent's work may be on it. Prefer a temporary WIP commit. If you must stash, use
 
 In a worktree-isolated session, Bash rejects commands it cannot prove stay inside the
 worktree: redirects, `eval`, several chained parts, git commands aimed elsewhere. The
-PowerShell tool has no such check. Plain `npm` and `git` still work in Bash.
+PowerShell tool has no such check. Plain `pnpm` and `git` still work in Bash.
 
 ## Finish
 
-`npm run verify` green means the workspace is real: build, lint, Vitest and `cargo test`.
+`pnpm verify` green means the workspace is real: build, lint, Vitest and `cargo test`.
 
 Then, in order:
 

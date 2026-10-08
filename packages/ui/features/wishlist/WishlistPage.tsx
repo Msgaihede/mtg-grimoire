@@ -166,7 +166,7 @@ const ROOT_TARGET = 0;
  * two pages have the identical work column, which is the whole reason this sidebar was one change
  * rather than two.
  *
- * **Measured in the shipped window on 2026-09-07** (`npm run tauri dev`, a debug build, against a
+ * **Measured in the shipped window on 2026-09-07** (`pnpm tauri dev`, a debug build, against a
  * real 89-wish list), and the measurement split it in two the way `CollectionPage`'s was split:
  * **the floor is the *view's*, not the page's.** The card wall holds at 192 — driven down to a
  * 192px list it never overflowed its own box. The table does not.

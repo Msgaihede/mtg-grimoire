@@ -2,12 +2,12 @@ import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
 
-vi.mock("@tauri-apps/api/core", () => import("../../../../packages/fake/core"));
-vi.mock("@tauri-apps/api/event", () => import("../../../../packages/fake/event"));
-vi.mock("@tauri-apps/api/window", () => import("../../../../packages/fake/window"));
+vi.mock("@tauri-apps/api/core", () => import("@grimoire/fake/core"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 
-import { NEEDS_A_FINISH_ROW, TRAY_ROWS } from "@/features/scanner/fixtures";
-import type { CollectionFolder, ScannerTrayRow } from "@/lib/ipc";
+import { NEEDS_A_FINISH_ROW, TRAY_ROWS } from "@grimoire/ui/features/scanner/fixtures";
+import type { CollectionFolder, ScannerTrayRow } from "@grimoire/ui/lib/ipc";
 import { renderPhone } from "../testing";
 import { destinationName, TrayFooter, UNREAD_FOLDER } from "./TrayFooter";
 

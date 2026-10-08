@@ -44,7 +44,7 @@
  *   begin with. This is the case a walk driven from a *programmatically* focused card cannot
  *   reach, and it is therefore the one a live pass can miss while proving the arrows work.
  *
- * **Measured in the shipped window** (`npm run tauri dev`, a debug build, 1280×800, against a
+ * **Measured in the shipped window** (`pnpm tauri dev`, a debug build, 1280×800, against a
  * real synced corpus). 2026-08-18, before this existed: one ArrowRight on the search wall left
  * `document.activeElement` as the pane's `<aside aria-label="Card details">` with no
  * `[data-grid-index]` ancestor; the deck's piles did the same; and in the printings modal the

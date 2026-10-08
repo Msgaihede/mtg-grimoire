@@ -388,7 +388,7 @@ mod tests {
         assert_eq!(configured_small(1920.0, 1080.0), None);
     }
 
-    /// The overlay `npm run mobile:tauri` passes to `tauri dev`. `--config` is a merge patch and
+    /// The overlay `pnpm mobile:tauri` passes to `tauri dev`. `--config` is a merge patch and
     /// replaces `app.windows` whole, so every field the main config relies on has to be restated
     /// there — `visible: false` above all, because `open_sized_to_monitor` is the only thing
     /// that shows a window.

@@ -1,6 +1,6 @@
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { useAppStore } from "@/lib/store";
+import { useAppStore } from "@grimoire/ui/lib/store";
 import { OVERLAID, PUSHED, placeHref } from "./routes";
 import { useDesktopPlace } from "./useDesktopPlace";
 

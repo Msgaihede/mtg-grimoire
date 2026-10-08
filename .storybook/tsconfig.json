@@ -1,29 +1,21 @@
 {
-  /* The Storybook half of the type-check, split from the app's on purpose.
+  /* The workbench's own program — `main.ts`, `preview.tsx` and the design-system page — split
+     from the packages' on purpose: `main.ts` is Node code that imports `node:url`, and a separate
+     program is what lets `node-url.d.ts` declare that one module for this folder; see that file
+     for why `@types/node` is not installed instead.
 
-     `.storybook/main.ts` is Node code — it imports `node:url` — while everything under
-     `packages/ui/` runs in a webview. A separate program is what lets `node-url.d.ts` declare that
-     one module for this directory alone; see that file for why `@types/node` is not
-     installed instead. `npm run build` runs `tsc` and then `tsc -p .storybook`, so the fake
-     backend — which mirrors every DTO in `ipc.ts` — is checked by `npm run verify` exactly
-     as the app is.
-
-     **The fake is `packages/fake/` since 2026-10-08, and `include` names it** so that it goes on
-     being this program's. It was `.storybook/fake/` and came in under the first glob; moved, it
-     would have been checked only where the app's program happens to import it — and
-     `aliases.ts`, which imports `node:url` and which nothing in a webview imports, by no program
-     at all.
+     The fake was in this program until 2026-10-08. It has `packages/fake/tsconfig.json` now,
+     which names `node-url.d.ts` by path for `aliases.ts`.
 
      `vite/client` is listed because this program does not contain `packages/ui/vite-env.d.ts`
      and so does not inherit its triple-slash reference; `preview.tsx`'s three CSS side-effect
      imports need the `declare module "*.css"` it carries.
 
-     `extends` inherits `paths` from the parent, and a relative path in an extended config
-     resolves against the file that *declared* it — so `@/*` still points at
-     `<repo>/packages/ui/*` and not at `.storybook/packages/ui/*`. */
-  "extends": "../tsconfig.json",
+     `extends` inherits `paths` from the base, and a relative path in an extended config resolves
+     against the file that *declared* it — so `@/*` still points at `<repo>/packages/ui/*`. */
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "types": ["vite/client"]
   },
-  "include": ["**/*", "../packages/fake/**/*"]
+  "include": ["**/*"]
 }

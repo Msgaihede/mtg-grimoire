@@ -25,7 +25,7 @@ Six synchronous functions (`src/glue.rs`). Every string answered is `{"ok": …}
 - **Strict export check**: `scripts/build-wasm.mjs` fails the build if any of the six is missing from the glue.
 - **A verdict is serialised from the crate's type, never through a `serde_json::Value`**: a `Value` sorts keys and widens `f32` (`0.3` → `0.30000001192092896`), and the page must read what the desktop's `scanner_frame` hands its own.
 - **Rust supplies facts**: `load` says what loaded and what the crate said about what did not. No sentence here names a file, a download or a browser — those are the page's.
-- **The page's half** is `packages/ui/lib/core/web/`: `scanWorker.ts` loads this module by URL, `scanSession.ts` answers each message and calls a throwing export a trap, `scanner.ts` owns the Worker's life and composes `scanner_status` from `load`'s facts, `scanStore.ts` keeps the three files. `npm run web:scanner-smoke` is the run that instantiates this module in a browser.
+- **The page's half** is `packages/ui/lib/core/web/`: `scanWorker.ts` loads this module by URL, `scanSession.ts` answers each message and calls a throwing export a trap, `scanner.ts` owns the Worker's life and composes `scanner_status` from `load`'s facts, `scanStore.ts` keeps the three files. `pnpm web:scanner-smoke` is the run that instantiates this module in a browser.
 
 ---
 
@@ -65,7 +65,7 @@ Six synchronous functions (`src/glue.rs`). Every string answered is `{"ok": …}
 | Command | Action |
 | --- | --- |
 | `cargo test -p grimoire-scan` | Native tests of everything but the shell |
-| `npm run web:wasm` | Both web modules; `node scripts/build-wasm.mjs --only scanner` for this one |
+| `pnpm web:wasm` | Both web modules; `node scripts/build-wasm.mjs --only scanner` for this one |
 | `cargo fmt -p grimoire-scan` | Format (never `cargo fmt --all`) |
 
 WASM clippy, as CI's `web` job runs it (Bash; PowerShell sets `$env:RUSTFLAGS`):

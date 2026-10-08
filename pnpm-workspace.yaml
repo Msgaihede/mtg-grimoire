@@ -1,0 +1,53 @@
+# The workspace: the shared UI and the fake, the three apps, and the three Workers.
+# `infrastructure/wrangler` is not here and must never be: it is the deploy tool, npm's, with a
+# lockfile of its own, and a glob such as `infrastructure/*` would take it in
+# (`scripts/release-rule.test.mjs` holds this list).
+packages:
+  - packages/*
+  - apps/*
+  - infrastructure/relay
+  - infrastructure/share-worker
+  - infrastructure/app-worker
+
+# One range for every name that more than one package declares; a manifest writes `catalog:` for
+# it. A name only one package declares keeps its range in that manifest.
+catalog:
+  "@cloudflare/workers-types": "^5.20260828.1"
+  "@fontsource-variable/geist": "^5.3.0"
+  "@fontsource-variable/geist-mono": "^5.3.0"
+  "@fontsource/cinzel": "^5.3.0"
+  "@storybook/react-vite": 10.6.0
+  "@tanstack/react-query": "^5.101.4"
+  "@tanstack/react-virtual": "^3.14.9"
+  "@tauri-apps/api": "^2"
+  "@testing-library/react": "^16.3.2"
+  "@testing-library/user-event": "^14.6.3"
+  "@types/react": "^19.1.8"
+  "@types/react-dom": "^19.1.6"
+  jsqr: "^1.4.0"
+  keyrune: "^3.19.0"
+  lucide-react: "^1.28.0"
+  mana-font: "^1.18.0"
+  motion: "^13.1.0"
+  react: "^19.2.0"
+  react-dom: "^19.2.0"
+  storybook: 10.6.0
+  vite: "^8.3.1"
+  vitest: "^5.0.2"
+  zustand: "^5.0.14"
+
+# pnpm runs no dependency's install script unless it is named here, and fails the install on one
+# it has not been told about. esbuild's only swaps a JS launcher for the native binary it would
+# start anyway; it comes in under Storybook alone, which builds without it (measured 2026-10-08).
+allowBuilds:
+  esbuild: false
+
+# pnpm 11 answers `pnpm install` with "Already up to date" when no manifest's modification time
+# has moved since its last install, and does not read the lockfile to say so. Measured
+# 2026-10-08 on 11.5.0: a lockfile changed by itself — to one the manifests did not even match
+# — got "Already up to date" and exit 0, and a manifest put back with its old timestamp left
+# `node_modules` without a link its package declares. A merge that moves only `pnpm-lock.yaml`
+# is the first case, and it is what `.claude/hooks/worktree-deps.sh` installs for. With this
+# off an install always reads the lockfile: about 0.75 s where it was 0.3 s, when there is
+# nothing to do.
+optimisticRepeatInstall: false

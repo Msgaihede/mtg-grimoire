@@ -91,9 +91,9 @@ files is its own origin's to provide (the light app's step 7.5).
 
 **The web app asks GitHub nothing.** A release download sends no CORS header, so a browser
 cannot read it: the web build copies the same three files into its own static files
-(`npm run scanner:assets -- --web`, run by `ci.yml`'s and `release.yml`'s `web` jobs) and a
+(`pnpm scanner:assets --web`, run by `ci.yml`'s and `release.yml`'s `web` jobs) and a
 reader's press fetches them from the app's own origin, `/scanner-assets/` — no new host in the
-hosting policy's `connect-src`. `npm run web:scanner-smoke` makes one request of its own, from
+hosting policy's `connect-src`. `pnpm web:scanner-smoke` makes one request of its own, from
 Node and never from the browser: the picture of the one card its camera shows, from
 `cards.scryfall.io`, under the app's `User-Agent`, tried three times and kept — by
 `actions/cache` in CI, in the temp folder on a desk — so most runs ask nothing (card image
@@ -288,9 +288,9 @@ once the values it needs exist in the `release` environment — the three hosts 
 tag, because a web app ahead of the last release sends paired desktops ops they must hold
 ([ci-and-releases.md](../reference/ci-and-releases.md), *The release rule*). **So merging the
 release PR is a deploy of this Worker.** The tool is `wrangler` at the version
-`infrastructure/app-worker/package-lock.json` pins, with everything under it — installed with no lifecycle
+`infrastructure/wrangler/package-lock.json` pins, with everything under it — installed with no lifecycle
 script run, by the job and by hand alike. Between releases a deploy is still by hand and still
-asked for, and **`npm run web:deploy-guard` is run first**: it refuses a tree whose user schema
+asked for, and **`pnpm web:deploy-guard` is run first**: it refuses a tree whose user schema
 is not the last release's, or whose last release is still a draft — and it cannot see a wire
 change that is not a schema rung. The relay and the share Worker are deployed by no job.
 [`infrastructure/app-worker/README.md`](../../infrastructure/app-worker/README.md) is the runbook, with every probe in it answered

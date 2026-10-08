@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { MotionConfig } from "motion/react";
-import { NAV } from "@/components/nav";
-import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import { usePrefetchShelfFolds } from "@/features/shelves/useShelfFolds";
-import type { LightView } from "@/lib/edition";
-import type { DeckVariant } from "@/lib/ipc";
-import { queryClient } from "@/lib/query";
+import { NAV } from "@grimoire/ui/components/nav";
+import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
+import { usePrefetchShelfFolds } from "@grimoire/ui/features/shelves/useShelfFolds";
+import type { LightView } from "@grimoire/ui/lib/edition";
+import type { DeckVariant } from "@grimoire/ui/lib/ipc";
+import { queryClient } from "@grimoire/ui/lib/query";
 import type { Place } from "../routes";
 import { CardDataContext, useCardDataWatch } from "./cardData";
 import { CardSheet } from "./CardSheet";

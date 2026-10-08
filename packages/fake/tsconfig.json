@@ -1,0 +1,13 @@
+{
+  /* The fake's program. It was part of `.storybook/tsconfig.json`'s until 2026-10-08, and keeps
+     two things from that arrangement:
+
+     - `vite/client`, because this program does not hold `packages/ui/vite-env.d.ts` and the UI
+       modules the fake imports read `import.meta.env`;
+     - `.storybook/node-url.d.ts`, by path, because `aliases.ts` is Node code that imports
+       `node:url` and `@types/node` is not installed (that file says why). */
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": ["vite/client"] },
+  "include": [".", "../../.storybook/node-url.d.ts"],
+  "exclude": ["node_modules"]
+}

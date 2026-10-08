@@ -2,7 +2,7 @@ import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, within } from "storybook/test";
 import { useAppStore } from "@/lib/store";
-import { printing } from "../../../fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 import { OracleTagsDialog } from "./OracleTagsDialog";
 
 /**

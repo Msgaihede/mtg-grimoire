@@ -1,10 +1,10 @@
-import { GrimoireMark } from "@/components/GrimoireMark";
-import { ManaLine } from "@/components/ManaLine";
-import { TitleBar } from "@/components/TitleBar";
-import { ACTIVITY_DELAY_MS } from "@/lib/activity";
-import type { StartupStatus } from "@/lib/ipc";
-import { useDelayedFlag } from "@/lib/useDelayedFlag";
-import { cn } from "@/lib/utils";
+import { GrimoireMark } from "@grimoire/ui/components/GrimoireMark";
+import { ManaLine } from "@grimoire/ui/components/ManaLine";
+import { TitleBar } from "@grimoire/ui/components/TitleBar";
+import { ACTIVITY_DELAY_MS } from "@grimoire/ui/lib/activity";
+import type { StartupStatus } from "@grimoire/ui/lib/ipc";
+import { useDelayedFlag } from "@grimoire/ui/lib/useDelayedFlag";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * The two states that are not the app. `ready` is never drawn here — `DesktopBoot` mounts `App`

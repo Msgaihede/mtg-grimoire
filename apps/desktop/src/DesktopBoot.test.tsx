@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { act, render, screen } from "@testing-library/react";
-import type { StartupStatus } from "@/lib/ipc";
+import type { StartupStatus } from "@grimoire/ui/lib/ipc";
 
 /**
  * **Under `ipc.ts`, not in place of it** — `invoke` is the transport and the event module is the
@@ -11,19 +11,19 @@ import type { StartupStatus } from "@/lib/ipc";
  */
 const invoke = vi.hoisted(() => vi.fn<(command: string) => Promise<StartupStatus>>());
 vi.mock("@tauri-apps/api/core", () => ({ invoke }));
-vi.mock("@tauri-apps/api/event", () => import("../../../packages/fake/event"));
+vi.mock("@tauri-apps/api/event", () => import("@grimoire/fake/event"));
 // The caption the loader draws reaches Tauri's window API; the workbench's fake stands in, as
 // it does in `TitleBar.test.tsx`.
-vi.mock("@tauri-apps/api/window", () => import("../../../packages/fake/window"));
+vi.mock("@tauri-apps/api/window", () => import("@grimoire/fake/window"));
 // The real App mounts the whole product and fires its queries. What this suite is about is
 // *whether* it is mounted, so it stands in for itself.
-vi.mock("@/App", () => ({ default: () => <div>the app</div> }));
+vi.mock("@grimoire/ui/App", () => ({ default: () => <div>the app</div> }));
 
 import { DesktopBoot, STARTUP_POLL_MS } from "./DesktopBoot";
 import { STARTUP_LOADING_LABEL } from "./StartupScreen";
-import { ACTIVITY_DELAY_MS } from "@/lib/activity";
-import { emitFake, resetListeners } from "../../../packages/fake/event";
-import { resetWindow } from "../../../packages/fake/window";
+import { ACTIVITY_DELAY_MS } from "@grimoire/ui/lib/activity";
+import { emitFake, resetListeners } from "@grimoire/fake/event";
+import { resetWindow } from "@grimoire/fake/window";
 
 const LOADING: StartupStatus = { state: "loading" };
 const READY: StartupStatus = { state: "ready" };

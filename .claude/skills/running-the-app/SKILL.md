@@ -56,13 +56,13 @@ cannot parse.
 belonging to another worktree. Use it only when `status` calls the lock `STALE` and you
 have confirmed with `Get-Process` that nothing is running — never to jump a `HELD` queue.
 
-## Launching: `npm run tauri dev`
+## Launching: `pnpm tauri dev`
 
 ```powershell
 Get-Process mtg-grimoire -ErrorAction SilentlyContinue   # must be empty, or you adopt someone else's
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
 $env:MTG_GRIMOIRE_MCP_BRIDGE = "1"   # only if you will use the mcp__tauri__* tools — see below
-Start-Process npm.cmd -ArgumentList "run","tauri","dev" -WindowStyle Hidden `
+Start-Process pnpm.cmd -ArgumentList "tauri","dev" -WindowStyle Hidden `
     -RedirectStandardOutput ".claude\skills\running-the-app\tauri-dev.stdout.local" `
     -RedirectStandardError ".claude\skills\running-the-app\tauri-dev.stderr.local"
 $deadline = (Get-Date).AddMinutes(8)
@@ -78,13 +78,13 @@ developer's browser can reach on the loopback, so a launch that is not going to 
 `connected: false` and nothing is broken — `docs/reference/tauri-mcp-bridge.md` has the why.
 CDP on 9222 is opted into the same way, by the `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` line.
 
-No console window pops; `npm.cmd`'s own stdout/stderr — including a compile error — land
+No console window pops; `pnpm.cmd`'s own stdout/stderr — including a compile error — land
 in the two `*.local` files beside this file (`Start-Process` cannot redirect both streams
 to one file), which the repo's gitignore already covers.
 
 **Adopt the `mtg-grimoire` process, not the launcher.** `tauri dev` runs the exe as a
-**grandchild** (`npm.cmd` → cargo → `mtg-grimoire.exe`), so `-PassThru` hands you
-`npm.cmd`'s pid; adopt that and `release` stops the wrapper only — cargo and the app keep
+**grandchild** (`pnpm.cmd` → cargo → `mtg-grimoire.exe`), so `-PassThru` hands you
+`pnpm.cmd`'s pid; adopt that and `release` stops the wrapper only — cargo and the app keep
 running while the lock file is deleted, and the next agent launches into **exit code 0
 with no window**, the exact failure this lock exists to prevent. The loop above is what
 finds the right pid. Its 8-minute deadline sits inside the 10-minute grace window, so a
@@ -99,14 +99,14 @@ thing that makes `$app.Id` the wrong pid.
 After `release`, check `Get-Process mtg-grimoire` is empty and close the `tauri dev`
 window if it survived its child.
 
-## `npm run mobile:tauri` is the same app, and takes the same lock
+## `pnpm mobile:tauri` is the same app, and takes the same lock
 
 The light app's dev window is **this binary with a config overlay**
 (`apps/desktop/src-tauri/tauri.light.conf.json`): the same `com.mtggrimoire.app` identifier, the same
 single-instance guard, the same `target/debug/data`. So it is launched exactly as above with
-`"run","mobile:tauri"` in place of `"run","tauri","dev"`, under the **`app`** lock, and the
+`"mobile:tauri"` in place of `"tauri","dev"`, under the **`app`** lock, and the
 process to adopt is still `mtg-grimoire`. Its Vite is on **5175** rather than 1420 — which
-`npm run mobile:dev`, the browser-only server over the Storybook fake, also uses, so stop that one
+`pnpm mobile:dev`, the browser-only server over the Storybook fake, also uses, so stop that one
 first; `mobile:dev` itself needs no lock. Switching between the two launches rebuilds the binary
 each way, because the overlay arrives through the build's environment. Driven both ways on
 2026-10-01 (debug build): [light-app.md](../../../docs/reference/light-app.md).

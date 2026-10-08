@@ -103,7 +103,7 @@ const config: StorybookConfig = {
   viteFinal: (config) => {
     config.resolve ??= {};
     // An array, not an object: these are exact-match rules and their order is the
-    // contract. `@/lib/images` must be tried before the bare `@` prefix. The fake's four are
+    // contract. `@/lib/images` must be tried before the bare `@` prefix. The fake's rules are
     // `fake/aliases.ts`'s, which `apps/light/vite.config.ts` reads too.
     config.resolve.alias = [
       ...FAKE_ALIASES,

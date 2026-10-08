@@ -1,9 +1,9 @@
-import App from "@/App";
+import App from "@grimoire/ui/App";
 import { StartupScreen } from "./StartupScreen";
-import { useStartup } from "@/boot/useStartup";
+import { useStartup } from "@grimoire/ui/boot/useStartup";
 
 // Re-exported: `DesktopBoot.test.tsx` imports it from here.
-export { STARTUP_POLL_MS } from "@/boot/useStartup";
+export { STARTUP_POLL_MS } from "@grimoire/ui/boot/useStartup";
 
 /**
  * The app's root: nothing that queries is mounted until the native side says the data folder is

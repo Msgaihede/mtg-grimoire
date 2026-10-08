@@ -1,9 +1,9 @@
 import { Play, SlidersHorizontal, Square } from "lucide-react";
-import { SCAN_MODES } from "@/features/scanner/reader/readerText";
-import { FOCUS } from "@/lib/focus";
-import type { ScanMode } from "@/lib/ipc";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { SCAN_MODES } from "@grimoire/ui/features/scanner/reader/readerText";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import type { ScanMode } from "@grimoire/ui/lib/ipc";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /** The bar's box for a press: the touch floor, a hairline, the page's own type. */
 const CONTROL = cn(

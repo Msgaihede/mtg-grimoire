@@ -5000,7 +5000,7 @@ describe("DeckEditor", () => {
    * move back. React counts nested renders and throws **"Too many re-renders"**, and there is no
    * error boundary above this component — so the whole window went blank.
    *
-   * Reproduced in the shipped window on 2026-08-16 (`npm run tauri dev`, a **debug** build):
+   * Reproduced in the shipped window on 2026-08-16 (`pnpm tauri dev`, a **debug** build):
    * pressing the two tabs at ~40 ms intervals took the app down in three presses, with
    * `Uncaught Error: Too many re-renders` naming `<DeckEditor>` in the console, and a patched
    * `ipc.deckGet` caught a `live` read answering `lastVariant: "theory"` 20 ms after the

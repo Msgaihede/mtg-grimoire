@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { Dialog } from "@/components/Dialog";
-import { core } from "@/lib/core";
-import { FOCUS } from "@/lib/focus";
-import { PRESS_SOFT } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { Dialog } from "@grimoire/ui/components/Dialog";
+import { core } from "@grimoire/ui/lib/core";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /** One download the launch is holding, as the host's `light_downloads` answers it. */
 export interface HeldDownload {

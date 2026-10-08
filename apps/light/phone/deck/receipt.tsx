@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
-import { auditSentence } from "@/features/decks/auditText";
-import { useDeckUndo } from "@/features/decks/useDeckUndo";
-import { FOCUS } from "@/lib/focus";
-import { ipcError, type DeckAuditEntry } from "@/lib/ipc";
-import { PRESS } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { auditSentence } from "@grimoire/ui/features/decks/auditText";
+import { useDeckUndo } from "@grimoire/ui/features/decks/useDeckUndo";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import { ipcError, type DeckAuditEntry } from "@grimoire/ui/lib/ipc";
+import { PRESS } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 
 /**
  * How long a receipt stays up once it has something to say. Long enough to read a sentence and

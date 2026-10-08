@@ -31,7 +31,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   `DECK_FLOOR`'s 224 → 208 → 192 drops exist to prevent. Widening the sidebar is a change to the
   deck editor's arithmetic first. The 8px the ribbon gained comes off the editor's height
   instead, which only costs it 8px more of a scroll it already had.
-  **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build, against
+  **Driven in the shipped window 2026-08-14** (`pnpm tauri dev`, a **debug** build, against
   the real 116,703-card corpus). At 1280×800: nav **208×800**, an entry **183×44** at 16px with
   a 20×20 icon, the ribbon row **1072×56** at `top: 0`, the title and mark **20px** Cinzel, the
   status line **14px** reading `116,703 cards · data from 2026-08-13`, Refresh **151×42** with a
@@ -63,7 +63,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   it keeps its 44px height, its `size-5` icon, its gold hairline and its drop target, and the
   label goes to `sr-only` rather than to an `aria-label`, so the accessible name is computed from
   content in both states and is the same string in both.
-  **Driven in the shipped window 2026-08-22** (`npm run tauri dev`, a **debug** build, against a
+  **Driven in the shipped window 2026-08-22** (`pnpm tauri dev`, a **debug** build, against a
   copy of the main checkout's corpus, mid-sync). At 1280×800: expanded `nav` **208**, an entry
   **183×44**, the toggle **183×44**, `main` **1072** — the same 1072 the 2026-08-14 pass recorded,
   which is what makes the two comparable; collapsed `nav` **68**, an entry and the toggle both
@@ -436,7 +436,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   card.** All three marks in it — `QuantityTag`, the game changer and `TheoryMatchMark` — are sized
   off `--mark-scale`, which is the reader's *zoom* and not the tile's width, so a 130px ribbon is
   130px on a 210px stacked card and 130px on a 150px tile.
-  **Driven in the shipped window 2026-09-08** (`npm run tauri dev`, a **debug** build, 1920×1080,
+  **Driven in the shipped window 2026-09-08** (`pnpm tauri dev`, a **debug** build, 1920×1080,
   against the real corpus, on a 101-card Commander deck at `cardZoom` 1.1), on a card that is both
   a game changer and an exact plan match: a **28px** tag, a **130px** ribbon and a **28px** tick
   went into a **163px** strip on a **165px** tile — **11px of overflow**, into a face that is
@@ -590,7 +590,7 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
   **`UNTAGGED_COLOR` moved with the shape**, from `features/decks/labelColors.ts` to `CountTag`'s
   own `NEUTRAL_COUNT_PAINT`: the search wall draws this over cards that have no labels at all, so
   the neutral fill is a fact about the mark rather than about that palette.
-  **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build at
+  **Driven in the shipped window 2026-08-14** (`pnpm tauri dev`, a **debug** build at
   1280×800, against the real 116 703-card corpus): a tile's corner computed `background-color:
 rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.02 85)`,
   `clip-path: polygon(0px 0px, 100% 0px, calc(100% - 10px) 100%, 0px 100%)`,
@@ -725,7 +725,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
     banner's drop shadow" and went with the banner on 2026-09-08** — `GameChangerBanner` is
     deleted, and the crown that replaced it is an 11px glyph inside `QuantityTag` that scales like
     every other term in that box.
-  - **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build at
+  - **Driven in the shipped window 2026-08-17** (`pnpm tauri dev`, a **debug** build at
     1280×800, against a real 116 712-card corpus, ctrl+wheel dispatched synthetically). Search
     wall, 0.5× / 1× / 2×: tile **85 / 170 / 340**, caption type **6 / 12 / 24px**, rarity gem
     **3 / 6 / 12**, quick-add **10.2 / 20.4 / 40.8**, the finish-and-crown chip **10×8 / 20×16 /
@@ -853,7 +853,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   `ZOOM_STEPS` is **spelled out as literals rather than generated**, for the reason the ladder
   exists at all: 0.1 added seven times is 0.7999999999999999. One stop is still not round in binary
   (1.1 × 100 is 110.00000000000001), which is why `formatZoom` rounds.
-- **Driven in the shipped window 2026-08-22** (`npm run tauri dev`, a **debug** build at 1920×1080,
+- **Driven in the shipped window 2026-08-22** (`pnpm tauri dev`, a **debug** build at 1920×1080,
   a first-run sync of 116,700 cards, the search wall on `bolt` at 37 results), because the one
   claim this feature makes — a size surviving a **restart** — is the one thing no jsdom suite can
   reach. The wheel was dispatched synthetically on the scroller, the same carve-out the 2026-08-14
@@ -888,7 +888,7 @@ rgb(200, 196, 191)` — `--color-pie-c`, `#c8c4bf` — with `color: oklch(0.2 0.
   the ladder had then collapsed to **three** distinct card widths — 102, 102, 159, 159, 159, 331,
   331, 331, 331, 331. Seven gestures in a row that moved nothing, which reads as an app that has
   stopped listening rather than as a wall that is already right. **Driven in the shipped window
-  2026-08-14** (`npm run tauri dev`, a debug build, 1280×800), the same column answered all
+  2026-08-14** (`pnpm tauri dev`, a debug build, 1280×800), the same column answered all
   ten, strictly increasing, and stayed centred throughout — **the stops below are the ladder as it
   was on that date**, and the even sixteen-stop ladder replaced them on 2026-08-22 without changing
   anything this measurement was about:
@@ -1095,7 +1095,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     `selectedCardId === null` clause, its desk mounts only once `deck_get` has answered, and it
     measures a desk holding a deck rather than a list — three differences, none cosmetic.
   - **The floor is the _view's_, not the page's, and that is a measurement rather than a
-    refinement.** Driven 2026-09-07 (`npm run tauri dev`, a **debug** build, against a real
+    refinement.** Driven 2026-09-07 (`pnpm tauri dev`, a **debug** build, against a real
     276-copy collection and 89-wish list) at viewport widths of 1584, 1384, 1264, 1134, 1118, 1008,
     884, 784, 544, 414 and 374.
     - **The card wall really does hold at 192.** Its `scrollWidth` never exceeded its `clientWidth`
@@ -1188,7 +1188,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   the reader report behind it. `opacity-60` also
   makes that `<ul>` a stacking context, and the `<ul>` is what takes `LAYER.raised` when a card
   opens — the first thing to check if the lift ever regresses in inactive piles alone.
-  **All of it is now measured in the shipped window — 2026-08-14, `npm run tauri dev`, a debug
+  **All of it is now measured in the shipped window — 2026-08-14, `pnpm tauri dev`, a debug
   build at 1280×800**, driven over `scripts/cdp.mjs` against the deck "test (copy)" (Commander, 11
   cards, 9 categories, 6 stack columns). **That column count is the fixture as it stood on the day
   and is no longer what this deck draws**: its empty Companion is not drawn at all now, its
@@ -1332,7 +1332,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
     the rail widths and gutters quoted above are untouched by it — but what a head box costs a
     small deck's first line, and how the masonry closes up around it, are live questions nobody has
     asked yet.
-- **Driven in the shipped window 2026-08-17** (`npm run tauri dev`, a **debug** build, 1280×800,
+- **Driven in the shipped window 2026-08-17** (`pnpm tauri dev`, a **debug** build, 1280×800,
   against a real synced corpus — a 14-card Commander deck of nine categories). Every figure is a
   `getBoundingClientRect` off the running window. **Two of the numbers below are the capped
   build's and are no longer what this app draws** (the cap was deleted 2026-08-18): the rail's
@@ -1367,7 +1367,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   - **Not driven**: an entirely switched-off deck (an empty flow beside a rail holding the lot), and
     a switched-off pile under a derived grouping — that one is `views.test.tsx`'s and the
     Maybeboard's ordinary path.
-- **Driven in the shipped window 2026-08-18** (`npm run tauri dev`, a **debug** build, against a
+- **Driven in the shipped window 2026-08-18** (`pnpm tauri dev`, a **debug** build, against a
   real synced corpus — a 14-card Commander deck of five flowing piles and the two railed ones),
   for the reversal above: the cap deleted, `ml-auto` back on both rails. Every figure is a
   `getBoundingClientRect` off the running window, with `innerWidth` read in the same expression
@@ -1464,7 +1464,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   React's own answer for state derived from something that changed and this project's — see
   `lib/useDelayedFlag.ts`.
 - **The anchor and the split are measured in the shipped window — 2026-08-14,
-  `npm run tauri build -- --debug --no-bundle`, a debug build at 1280×800**, driven over
+  `pnpm tauri build --debug --no-bundle`, a debug build at 1280×800**, driven over
   `scripts/cdp.mjs` against the real corpus. (Two things in this group were _not_ driven; the last
   bullet of the four says which.) **The badge lands on the zoomed section's corner exactly.** On the search wall the scroller's rect read `top 190 / right 1260` and the badge painted
   at `top 198 / right 1252` — both edges inset by `ZOOM_BADGE_INSET` and neither off by a pixel. The
@@ -1891,7 +1891,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   on the same box, then read again, so the two numbers are one fixture at one width rather than two
   builds. That is what makes "it moved nothing else" a measurement instead of an argument.
 
-  - **The shipped window** (`npm run tauri dev`, a **debug** build at 1920×1080, real corpus, a
+  - **The shipped window** (`pnpm tauri dev`, a **debug** build at 1920×1080, real corpus, a
     14-card Commander deck of five flowing piles and a rail). Flowing box **1353px**, five 224px
     tracks, computed `column-gap` **8px** and `row-gap` **normal**. The four piles after the
     command zone at x **466 / 698 / 930 / 1162** — **232 apart**, which is the column plus the
@@ -1949,7 +1949,7 @@ over DECK_FLOOR)`. Measured in the shipped window at 1280×800: with the card pa
   in both axes: the masonry above observes each **pile**, and nothing in either view reads the desk
   it is drawn in — and a second reading of the same box answers a frame behind the
   layout it is reacting to, which at exactly this threshold is one frame of the scrollbar the whole
-  change exists to remove. **Driven in the shipped window 2026-08-14** (`npm run tauri dev`, a **debug** build,
+  change exists to remove. **Driven in the shipped window 2026-08-14** (`pnpm tauri dev`, a **debug** build,
   a seeded 16-category deck — twelve named piles plus the four predefined), and the two
   derived thresholds came back exact:
   - **No horizontal scrollbar at any width tested.** `document.body.scrollWidth ===
@@ -1994,7 +1994,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     arithmetic about one column, and a column is the same width whoever made the pile in it.
 - **Wrapping down is only half an answer while the box it wraps inside has a height: the deck
   builder scrolled _inside itself_, and the fix was to stop giving the views one** (found and
-  fixed 2026-08-14, driven at `npm run tauri dev`, a **debug** build, at 1280×800 and 1024×600).
+  fixed 2026-08-14, driven at `pnpm tauri dev`, a **debug** build, at 1280×800 and 1024×600).
   The two entries above take a run that went sideways and turn it into a run that goes down —
   which is right, and leaves the reader looking at a wall of cards in a letterbox: the view was
   a `flex-1` item of a `min-h-0` desk with `overflow-auto` on it, so the piles wrapped down
@@ -2066,7 +2066,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     and the document all at **0**.
 - **The second scrollbar survived that pass in the one state it never measured — a card open —
   and `StackView` now reserves the room instead of scrolling it** (found and fixed 2026-08-20,
-  driven at `npm run tauri dev`, a **debug** build, at 1400×1300 and 1280×800). Every reading
+  driven at `pnpm tauri dev`, a **debug** build, at 1400×1300 and 1280×800). Every reading
   above was taken with the deck at rest, and the implied rule — "a box with no height of its own
   is never taller than its own content" — is wrong twice:
   - **The box does get a height of its own.** `StackView`'s root is `h-full` off a desk row that
@@ -2098,7 +2098,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     view asks for rather than the scrollbar it prevents.
 - **The X scrollbar that pass declared gone came back through the docked panel, and it was a
   filter row 25px too wide** (found and fixed 2026-08-14, driven on the reader's own deck at
-  `npm run tauri dev`, a **debug** build). `ManaValueChips` draws its group as a plain
+  `pnpm tauri dev`, a **debug** build). `ManaValueChips` draws its group as a plain
   `flex gap-1` of `size-9` chips: at nine numerals that is `9 × 36 + 8 × 4` = **356px** and it
   fitted; the **X chip** made it ten, `10 × 36 + 9 × 4` = **396px**, against the docked search
   panel's 384 (content box ~371). A flex item cannot shrink below its own min-content, so the
@@ -2156,7 +2156,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
   narrowest surface that draws it* — and both would have reached a reader as a horizontal
   scrollbar across the whole deck builder, because `DeckEditor`'s section computes `overflow-x`
   to `auto`.
-  **Driven in the shipped window 2026-08-24** (`npm run tauri dev`, a **debug** build, against the
+  **Driven in the shipped window 2026-08-24** (`pnpm tauri dev`, a **debug** build, against the
   real 116 700-card corpus), which is what turns the sweep above from a model into a reading. The
   sidebar was collapsed, so the bar is the window less 108px:
 
@@ -2256,7 +2256,7 @@ clientWidth` at 1024, 1280 and 1920, and the deck view's own scroller matched it
     is a position for the view every deck opens on. **The three controls are `components/Dropdown`
     rather than `<select>`s since 2026-08-26**, so the live figures below are readings of the
     selects they replaced.
-    **Driven in the shipped window 2026-08-15** (`npm run tauri dev`, a debug build, 1280×800,
+    **Driven in the shipped window 2026-08-15** (`pnpm tauri dev`, a debug build, 1280×800,
     on a 14-card Commander deck): the three selects computed `top: 182` and `height: 36` each —
     one line, no wrap — at **80px** (View), **105** (Group by) and **111** (Sort), with the
     toolbar's five clusters all on that line and `document.body.scrollWidth` **1265** against a
@@ -2567,7 +2567,7 @@ inside its own banner**, and the banner stood short of the card's right edge wit
 corner where the quantity tag at the other end has the card's round one.
 
 Both were real, both were arithmetic, and neither is visible to the suite — jsdom lays nothing
-out. **Driven in the shipped window 2026-08-21** (`npm run tauri dev`, a **debug** build at 1920
+out. **Driven in the shipped window 2026-08-21** (`pnpm tauri dev`, a **debug** build at 1920
 against the real 116 700-card corpus, five Live cards all matching the plan), with the change
 backed out through `element.style` in the same session so the two states are one pass:
 
@@ -2618,7 +2618,7 @@ the first is the more interesting.
   because lucide's `Check` is drawn `4 → 20` in a 24 viewBox and brings 2px of bearing per side;
   a **digit** has no such room to give back, which is why `COUNT_TAG_BOX` keeps its `6/12`.
 
-**Driven in the shipped window 2026-08-21** (`npm run tauri dev`, a **debug** build at 1920,
+**Driven in the shipped window 2026-08-21** (`pnpm tauri dev`, a **debug** build at 1920,
 against the real corpus, on a Live card whose printed cost is `{2}{R}{R}{G}{G}` — five pips, the
 worst case this corner has), with the change backed out through `element.style` in the same
 session so the two states are one pass:
@@ -2933,7 +2933,7 @@ transparent)` because full-strength gold at that radius is a lamp.
 
 ## The context menu, driven in the shipped window
 
-**2026-08-15, `npm run tauri dev` (a debug build), 1280×800, against the real corpus — 116 710
+**2026-08-15, `pnpm tauri dev` (a debug build), 1280×800, against the real corpus — 116 710
 cards, data from 2026-08-14.** Every figure below is a reading from that window, not from a test.
 
 - **The two viewport widths differ by the scrollbar, and here is the pair.** The **Search** view
@@ -2995,7 +2995,7 @@ Edge was already running; the honest signal is that the call raised no refusal.
 
 ## The second scrollbar nothing in the box tree accounted for
 
-**2026-08-15, `npm run tauri dev` (a debug build), at 1280×800 and again at 1975×885, on a
+**2026-08-15, `pnpm tauri dev` (a debug build), at 1280×800 and again at 1975×885, on a
 24-card Standard deck.** Reported as "two scrollbars on the deck builder, and dead space at the
 bottom of the app".
 
@@ -3336,7 +3336,7 @@ instead, which is the same claim written where it can fail, plus the bubble bein
 
 ## All printings, as a modal — driven in the shipped window
 
-**2026-08-18, `npm run tauri dev` (a debug build), 1280×800, against the real corpus (a copy of
+**2026-08-18, `pnpm tauri dev` (a debug build), 1280×800, against the real corpus (a copy of
 the 580 MB dev database).** Every figure below is a reading from that window.
 
 `View all printings` used to answer by _moving_ the reader: `requestAllPrintings` wrote
@@ -3393,7 +3393,7 @@ and for the caption keeping its `N of M` wording for a cap nothing currently rea
 
 ## The arrow keys, and the caret the card pane kept taking
 
-Driven in the shipped window **2026-08-18** (`npm run tauri dev`, a **debug** build, 1280×800 and
+Driven in the shipped window **2026-08-18** (`pnpm tauri dev`, a **debug** build, 1280×800 and
 1024×768, against a real synced corpus). Three surfaces walk with the arrow keys — the search and
 collection walls, the deck's piles, and the printings modal stepping along the open deck — and the
 live pass found one defect behind all three, plus one the suite could not see.
@@ -3676,7 +3676,7 @@ from the top of the app to carry on walking the desk.
 
 ## The arrow keys, part two: the gesture a keyboard test cannot make
 
-Driven in the shipped window **2026-08-19** (`npm run tauri dev`, a **debug** build, 1280×800,
+Driven in the shipped window **2026-08-19** (`pnpm tauri dev`, a **debug** build, 1280×800,
 against a real synced corpus), after a reader reported the deck's piles still not walking.
 
 **The first pass proved the arrows and missed the way in.** Every live check and every test drove
@@ -3739,7 +3739,7 @@ happened" looks identical to a dead handler and cost this pass two wrong diagnos
 
 ## The window's own title bar, and the two questions only a live pass could answer
 
-**2026-08-20, `npm run tauri dev`, a debug build, at 1280×800.** `tauri.conf.json` sets
+**2026-08-20, `pnpm tauri dev`, a debug build, at 1280×800.** `tauri.conf.json` sets
 `decorations: false` and `packages/ui/components/TitleBar.tsx` draws the caption instead.
 
 Two things research could not settle, and both are settled here by measurement rather than by
@@ -4089,13 +4089,13 @@ Two consequences, both worth knowing before somebody reads them as damage. **The
 because `mtg-grimoire-mark.svg` draws at `scale(0.92)` where `mtg-grimoire-tile.svg` draws at
 `0.87` and spends the difference on its own edge — so dropping the plate did *not* shrink the icon,
 which is the thing one would expect it to do. And **the `.ico` ladder is 16/24/32/48/64/256 now**,
-where it was 16/32/48/64/128/256: `npx tauri icon` picks that set, and it is the better one for
+where it was 16/32/48/64/128/256: `pnpm exec tauri icon` picks that set, and it is the better one for
 this platform — Windows asks for 24 (small taskbar, Alt-Tab) and interpolates 128 from 256 — but it
 was the generator's choice rather than a tuned one, which is the honest way to record it.
 
 **Nothing in either suite can see any of this.** The icons are binaries referenced by
 `tauri.conf.json`'s `bundle.icon` list and by nothing in `packages/ui/` or `apps/desktop/src-tauri/src/`, so a tile
-could come back through a re-export with `npm run verify` fully green. `logos/README.md` carries
+could come back through a re-export with `pnpm verify` fully green. `logos/README.md` carries
 the regenerate command and the warning next to the artwork, which is the only place that fence can
 live.
 
@@ -4164,7 +4164,7 @@ about affordance.
 
 ## The dropdown's panel, and the containing block that only a browser could refute
 
-**2026-08-26, `npm run build-storybook` — which is `storybook build`, a _production_ Vite bundle
+**2026-08-26, `pnpm build-storybook` — which is `storybook build`, a _production_ Vite bundle
 rather than a debug one — served on a throwaway port and
 driven in headless Edge 151 at 1280×800 — `documentElement.clientWidth` 1256 px and `clientHeight`
 708 px, identical to `innerWidth`/`innerHeight`, so no scrollbar separates the two in this
@@ -5257,7 +5257,7 @@ Three things about the copy are worth knowing before touching it.
   evaluated. `dndManager.test.ts` refuses that one selector shape in `index.css`, with the
   predicate self-tested against both spellings so it cannot quietly stop detecting anything.
 - **The near-miss is the part worth remembering.** The regression shipped through a green
-  `npm run verify` — the story plays ran, and SwapFolds came in at **15049ms in the full
+  `pnpm verify` — the story plays ran, and SwapFolds came in at **15049ms in the full
   parallel run against a 15000ms wall**, a margin of about fifty milliseconds on a play that had
   been taking three and a half seconds. A four-fold slowdown reached the branch as a coin flip on
   one timeout, and the default reporter prints no duration for a test that passes, so nothing in
@@ -5363,7 +5363,7 @@ line break and the pattern misses it, so the real figure is a floor and not a co
 
 ## The shell is as tall as the *visible* viewport
 
-Shipped 2026-08-29 (mobile-layout 9a, Task 2), measured against a production `npm run build` —
+Shipped 2026-08-29 (mobile-layout 9a, Task 2), measured against a production `pnpm build` —
 `tsc && tsc -p .storybook && tsc -p tsconfig.sw.json && tsc -p tsconfig.relay.json && vite build`
 (the relay's program is `infrastructure/relay/tsconfig.json` since 2026-10-08) — in the `mobile-layout` worktree. Nothing here changes a layout. It changed what the shell's
 height *means* in a mobile browser, and it opted the page into the safe area. **The safe-area half
@@ -5379,7 +5379,7 @@ bottom of what the reader can see and puts its own last row under browser chrome
 `100dvh`, the visible height, and it tracks the bar as it hides and returns. On desktop and in
 WebView2 there is no bar and the two are the same number, which is why this costs the shipped
 window nothing — **and that clause was then measured rather than believed.** Driven in the shipped
-WebView2 (`npm run tauri dev`, debug build, 2026-08-29), in **one** `eval` because a rect and a
+WebView2 (`pnpm tauri dev`, debug build, 2026-08-29), in **one** `eval` because a rect and a
 viewport height taken minutes apart can be at two different sizes:
 
 ```
@@ -5464,7 +5464,7 @@ A prose-only edit routes to neither CI job, so nothing goes red for either.
 ## One spelling of the coarse-pointer question, and a target-size floor
 
 Shipped 2026-08-29 (mobile-layout 9a, Task 3), against tailwindcss **4.3.3** and proved by a
-production `npm run build` in the `mobile-layout` worktree. Two lines of CSS and a sweep. **No
+production `pnpm build` in the `mobile-layout` worktree. Two lines of CSS and a sweep. **No
 control in the app used either of them on the day**, and that was the point of the task rather
 than an unfinished half of it.
 
@@ -6066,7 +6066,7 @@ the 2026-09-03 record of the tile shapes. `size="tile"`, the default, still draw
 
 The Collection and Wishlist walls were rearranged from a Claude Design mock, and **the geometry it
 promised was measured the same day**: 2026-09-03, in **headless Edge** (`msedge --headless=new`)
-over the **built stylesheet** — `dist/assets/*.css` from an `npx vite build` — on a `file://` page
+over the **built stylesheet** — `dist/assets/*.css` from a `pnpm exec vite build` — on a `file://` page
 reproducing the wall's real markup. That is this repo's lock-free method, and it is what was
 available: the app lock was held by another worktree for the whole session.
 
@@ -6530,7 +6530,7 @@ can end up alone on a line saying nothing.
 - **`flex-wrap` is not optional.** The wall's column is `flex-1` beside the 208px folder rail, so
   at the app's own 1024px floor the row has far less width than its contents. The source's
   `~548px` was arithmetic off the shipped widths when it was written; **it has since been driven
-  and is the measured figure** — 2026-09-07, `npm run tauri dev`, a debug build at 1024 × 700
+  and is the measured figure** — 2026-09-07, `pnpm tauri dev`, a debug build at 1024 × 700
   against the real corpus, three decks on the wall: the row's column read **548px** exactly, the
   row itself laid out on **one** line at `y = 192` (the heading row above it at `y = 140`), the
   name box `x = 456, w = 352`, the `Sort decks` trigger `x = 823, w = 126` and the direction

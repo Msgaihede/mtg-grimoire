@@ -116,14 +116,17 @@ jobs:
             xdg-utils \
             libfuse2
 
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
 
+      # pnpm runs no dependency's install script unless `pnpm-workspace.yaml` names it (`allowBuilds`).
       # tauri-action does NOT install frontend dependencies. It DOES run
-      # beforeBuildCommand (`npm run build`), so do not run that here as well.
-      - run: npm ci
+      # beforeBuildCommand (`pnpm -w run build`), so do not run that here as well.
+      - run: pnpm install --frozen-lockfile
 
       # The scanner's hash bundle and OCR models are embedded into the binary (build.rs sets
       # cfg(scanner_assets)). A release without them cannot scan, so this fails the leg.
@@ -131,7 +134,7 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
-        run: npm run scanner:assets
+        run: pnpm scanner:assets
 
       # `rust-toolchain.toml`'s pin, never `stable` — see that file.
       - uses: ./.github/actions/rust-toolchain
@@ -142,12 +145,17 @@ jobs:
         with:
           workspaces: ". -> target"
 
-      # The action runs `npm run tauri build` from the repository root, which `package.json`
-      # sends to `apps/desktop` (`scripts/release-rule.test.mjs` holds that script's text). It
+      # The action runs `pnpm tauri build` from the repository root — it finds `pnpm-lock.yaml`,
+      # and `@tauri-apps/cli` in the root manifest — which `package.json` sends to `apps/desktop`
+      # (`scripts/release-rule.test.mjs` holds that script's text and that dependency). It
       # finds the config itself: the first `**/tauri.conf.json` it meets. The two Tauri hosts are
       # siblings now (`apps/desktop` and `apps/light`), so the desktop is chosen by name order,
       # not by anything written here. Harmless while both carry the same `productName` and
       # `version`; worth knowing before either is renamed.
+      # The `--` in `args` below is not pnpm's to drop: it is the Tauri CLI's own separator, and
+      # what follows it (`--locked`) goes to cargo. pnpm passes it through untouched (measured
+      # 2026-10-09: `pnpm tauri build --help --bundles nsis,msi -- --locked` ran the root script
+      # with those arguments in that order).
       - uses: tauri-apps/tauri-action@1deb371b0cd8bd54025b384f1cd735e725c4060f # v1.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -181,7 +189,7 @@ jobs:
             "$PORTABLE_ZIP" --clobber --repo "${{ github.repository }}"
 
   # **The light app's Android build, at the tag** — `ci.yml`'s `android` job, step for step: the
-  # same runner, JDK 21, NDK, toolchain action, cache key and `npx tauri android build`. It
+  # same runner, JDK 21, NDK, toolchain action, cache key and `pnpm exec tauri android build`. It
   # holds no secret, so what Gradle signs with is the runner's debug key, exactly as in a pull
   # request. That signature never leaves this workflow: `android-sign` below replaces it on the
   # bundle, or nothing is handed on. The APK the same run makes stays in this job.
@@ -204,12 +212,14 @@ jobs:
         with:
           persist-credentials: false
 
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - name: Point the build at JDK 21, the SDK and the NDK
         run: |
@@ -235,7 +245,7 @@ jobs:
       # the same line, so a release runs a command every pull request ran.
       - name: Build the APK and the bundle
         working-directory: apps/light
-        run: npx tauri android build --apk --aab --target aarch64 --ci
+        run: pnpm exec tauri android build --apk --aab --target aarch64 --ci
 
       # The `versionName` and `versionCode` come from `tauri.conf.json`'s `version`, which
       # release-please bumped in the commit this run is on. Held here, before anything is signed:
@@ -263,9 +273,10 @@ jobs:
 
   # **The upload key, in a job of its own.** This is the one structural rule the removed `sign`
   # job left behind (docs/reference/ci-and-releases.md): a signing key never sits in a build
-  # leg, because a build leg runs every npm lifecycle script, every cargo build script and every
-  # Gradle plugin, and any of them can read a file or an environment. So this job runs none of
-  # them — no `npm ci`, no cargo, no Gradle. It checks out the scripts, downloads the bundle the
+  # leg, because a build leg runs every build tool and its plugins, every cargo build script,
+  # every Gradle plugin and any install script `pnpm-workspace.yaml` is ever told to allow, and
+  # any of them can read a file or an environment. So this job runs none of them — no
+  # `pnpm install`, no cargo, no Gradle. It checks out the scripts, downloads the bundle the
   # job above built, and re-signs it with the JDK's own `jarsigner`
   # (`scripts/android-release/sign-bundle.sh`, which `ci.yml`'s `android` job proves on
   # throwaway keys in every pull request that can have changed the bundle).
@@ -446,12 +457,14 @@ jobs:
             exit 1
           fi
 
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version-file: .nvmrc
-          cache: npm
+          cache: pnpm
 
-      - run: npm ci
+      - run: pnpm install --frozen-lockfile
 
       - uses: ./.github/actions/rust-toolchain
         with:
@@ -490,7 +503,7 @@ jobs:
           esac
 
       - name: Build the module
-        run: npm run web:wasm
+        run: pnpm web:wasm
 
       # The card scanner's three files, from this repository's own public release — what the
       # desktop's build fetches to embed, fetched here for the web app to serve from its origin
@@ -498,12 +511,12 @@ jobs:
       # build is told they are required: a release whose web app cannot scan fails here, not in
       # a reader's browser.
       - name: Fetch the scanner's files
-        run: npm run scanner:assets -- --web
+        run: pnpm scanner:assets --web
 
       - name: Build the page
         env:
           GRIMOIRE_SCANNER_ASSETS: required
-        run: npm run web:build
+        run: pnpm web:build
 
       # What a deploy cannot do without: the document, the policy and caching rules
       # (`_headers`, parsed at deploy and never served), and the service worker, which
@@ -535,7 +548,7 @@ jobs:
 
       - name: Open the built app in headless Chrome
         timeout-minutes: 10
-        run: npm run web:smoke
+        run: pnpm web:smoke
 
       # The bundle `web-deploy` uploads, and the record of what a release deployed.
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -550,20 +563,20 @@ jobs:
   # that a release deploys it — one core means one user schema per commit, so the three hosts
   # ship from one tag (docs/reference/ci-and-releases.md, "The release rule"). **The relay is
   # deployed by no job**: it holds secrets and a D1 with real entitlements, and its deploys stay
-  # by hand. `scripts/release-rule.test.mjs` fails a second `wrangler` line in any workflow.
+  # by hand. `scripts/release-rule.test.mjs` lists every workflow line that names `wrangler`, and fails one more.
   #
   # **The token, in a job of its own**, for `android-sign`'s reason and a wider blast radius: a
   # token that can deploy this Worker can, unless it was scoped down, deploy over the relay on the
-  # same account. So this job runs no build: no root `npm ci`, no cargo. It checks out the
+  # same account. So this job runs no build: no root install, no cargo. It checks out the
   # Worker's configuration and downloads the bundle `web` built and opened in a browser.
   #
   # **`wrangler` is pinned by a lockfile, and installed with no script run and no token in
   # reach.** `npx wrangler@4.146.0` pinned one package of ninety-one: the rest came through
   # floating ranges, resolved on the day, and two of them (`esbuild`, `workerd`) run a
-  # `postinstall` — in the step that held the token. So `infrastructure/app-worker/package-lock.json` names
-  # every one with its integrity hash, `npm ci --ignore-scripts` installs exactly those in a step
-  # whose environment holds nothing, and the step that holds the token runs
-  # `npx --no-install wrangler`, which installs nothing and fails if it is not there.
+  # `postinstall` — in the step that held the token. So `infrastructure/wrangler/package-lock.json`
+  # names every one with its integrity hash, `npm ci --ignore-scripts` installs exactly those in a
+  # step whose environment holds nothing, and the step that holds the token runs the file that
+  # step installed, by path, which installs nothing and fails if it is not there.
   # `scripts/release-rule.test.mjs` holds both lines to the letter.
   # The account id is kept out of the tree too: it is in no file of this repository.
   #
@@ -589,7 +602,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      # `infrastructure/app-worker/` — `wrangler.jsonc`, the script, the lockfile — and the probe.
+      # `infrastructure/app-worker/` — `wrangler.jsonc`, the script — `infrastructure/wrangler/`,
+      # the tool's lockfile, and the probe.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -656,8 +670,9 @@ jobs:
             exit 1
           fi
 
-      # For `npm ci`, `npx` and the probe, which is a plain `.mjs`. No `cache:` — a cache is
-      # one more thing that could hand this job bytes the lockfile did not name.
+      # For `npm ci` and for the two files Node runs here: the tool it installs, and the probe,
+      # which is a plain `.mjs`. No `cache:` — a cache is one more thing that could hand this job
+      # bytes the lockfile did not name. No pnpm: this job is not part of the workspace.
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         if: steps.token.outputs.present == 'true'
         with:
@@ -682,18 +697,21 @@ jobs:
             [ -s "apps/light/dist-web/$file" ] || { echo "apps/light/dist-web/$file is missing or empty" >&2; exit 1; }
           done
 
-      # `wrangler` and everything under it, from `infrastructure/app-worker/package-lock.json` and nowhere else:
-      # each tarball checked against the hash the lockfile holds, and **no lifecycle script run**
-      # — `esbuild`'s and `workerd`'s `postinstall` only swap a JS launcher for the native binary
-      # it would start anyway, and each finds its platform package without it. This step's
-      # environment holds no token: what it installs is not run until the next one.
+      # `wrangler` and everything under it, from `infrastructure/wrangler/package-lock.json` and
+      # nowhere else: each tarball checked against the hash the lockfile holds, and **no lifecycle
+      # script run** — `esbuild`'s and `workerd`'s `postinstall` only swap a JS launcher for the
+      # native binary it would start anyway, and each finds its platform package without it. This
+      # step's environment holds no token; what it installs is not run until the next one.
       - name: Install the lockfile's packages, running no script
         if: steps.token.outputs.present == 'true'
-        working-directory: infrastructure/app-worker
+        working-directory: infrastructure/wrangler
         run: npm ci --ignore-scripts
 
-      # The only step the token reaches, and the only `wrangler` in any workflow.
-      # `--no-install`: what runs is what the step above installed, or nothing.
+      # The only step the token reaches, and the only `wrangler` any workflow starts. **By path**:
+      # what runs is the file the step above installed, or nothing — no runner resolves a name,
+      # so nothing can be fetched in its place. From the Worker's folder, where `wrangler.jsonc`
+      # is; that file's `alias` is what lets the script's one import of the shared UI bundle in a
+      # job that has no workspace links (`infrastructure/app-worker/src/hosting.test.ts`).
       - name: Deploy the Worker
         if: steps.token.outputs.present == 'true'
         working-directory: infrastructure/app-worker
@@ -701,7 +719,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           WRANGLER_SEND_METRICS: "false"
-        run: npx --no-install wrangler deploy
+        run: node ../wrangler/node_modules/wrangler/bin/wrangler.js deploy
 
       # The runbook's cheapest probes, asked of the real address: the document answers 200, its
       # Content-Security-Policy is the built `_headers` line, and the document is this bundle's.

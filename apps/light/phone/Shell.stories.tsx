@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, waitFor, within } from "storybook/test";
-import { printing, wallItem } from "../../../packages/fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 import { CardWall, type WallItem } from "./CardWall";
+import { wallItem } from "./wallItem";
 import { Shell } from "./Shell";
 
 /** A few real printings for the page between the bars — the wall every phone page draws. */

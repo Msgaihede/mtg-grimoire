@@ -9,11 +9,11 @@
   // these declarations. `RibbonProps`, `SyncProgressProps`, `TableColumn<Row>` and
   // `CardImageProps` are real interfaces in `packages/ui/`; without an emit they would be guesses.
   //
-  // Separate from the repo's own `tsconfig.json` because that one is `noEmit` and always will
-  // be — this is an app, and `npm run build` type-checks rather than emits. Extending it keeps
-  // the `paths`, `strict` and `jsx` settings identical, so the declarations describe the same
-  // program the app compiles.
-  "extends": "../tsconfig.json",
+  // Separate from the app's own programs because those are `noEmit` and always will be — this
+  // is an app, and `pnpm build` type-checks rather than emits. Extending the base they extend
+  // (`tsconfig.base.json`) keeps the `paths`, `strict` and `jsx` settings identical, so the
+  // declarations describe the same code the app compiles.
+  "extends": "../tsconfig.base.json",
   "compilerOptions": {
     "noEmit": false,
     "declaration": true,
@@ -22,7 +22,7 @@
     // uses it and leaving it on would let one in unnoticed.
     "allowImportingTsExtensions": false,
     // Errors do not block the emit (`noEmitOnError` defaults false) — deliberately. This is a
-    // *view* of the source for a documentation tool; a type error in `packages/ui/` is `npm run verify`'s
+    // *view* of the source for a documentation tool; a type error in `packages/ui/` is `pnpm verify`'s
     // to fail, not this file's, and half a declaration tree is worth more than none.
     "rootDir": "..",
     "declarationDir": "./dist",

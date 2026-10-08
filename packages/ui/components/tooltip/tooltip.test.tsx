@@ -31,7 +31,7 @@ const realNow = Date.now;
 /**
  * Polls for the exiting panel's real removal rather than sleeping a fixed span. A single fixed
  * wait is exactly the shape of flake this repo's own history warns about — a wait sized for an
- * idle machine is a wait that is too short under `npm run verify`'s load — so this checks every
+ * idle machine is a wait that is too short under `pnpm verify`'s load — so this checks every
  * 20ms and returns as soon as the node is gone, spending the full ~400ms budget only when it
  * never disappears (a real failure, which the assertion after this call is what catches it).
  * Wrapped in `act()`: the removal is a React commit driven by `motion`'s real callback, which

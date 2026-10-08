@@ -294,7 +294,7 @@ function wrap(ui: ReactElement) {
  * `TOOLTIP_OPEN_MS` (400ms) after the pointer arrives, and `userEvent.click` fires
  * `pointerover`/`pointerenter` on its way in — so a provider mounted for the whole file would
  * arm a timer on every click every case in it makes. Most never run long enough to fire one;
- * a `waitFor` under `npm run verify`'s load can, and a panel that opened mid-assertion puts a
+ * a `waitFor` under `pnpm verify`'s load can, and a panel that opened mid-assertion puts a
  * second copy of a deck's name into the document and turns a `getAllByText` count into a flake.
  * The two cases that are *about* the tooltip mount it and pay for it; nothing else does.
  */

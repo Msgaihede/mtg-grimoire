@@ -25,7 +25,7 @@ import type {
   WishlistFolder,
 } from "@/lib/ipc";
 import { MARKETPLACES } from "@/lib/marketplace";
-import { deckCard, deckCategory, printing } from "../../../fake/fixtures";
+import { deckCard, deckCategory, printing } from "@grimoire/fake/fixtures";
 
 /**
  * How long a `waitFor` will wait for the panel's first frame.

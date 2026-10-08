@@ -1,7 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, within } from "storybook/test";
 import { AUTO_BRACKET, type DeckCard } from "@/lib/ipc";
-import { deckCard, printing } from "../../../fake/fixtures";
+import { deckCard, printing } from "@grimoire/fake/fixtures";
 import { DeckBracket } from "./DeckBracket";
 
 /**

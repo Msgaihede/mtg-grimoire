@@ -1,7 +1,8 @@
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { expect, fn, userEvent, waitFor, within } from "storybook/test";
-import { printing, wallItem } from "../../../packages/fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 import { CardWall, type WallItem } from "./CardWall";
+import { wallItem } from "./wallItem";
 
 // By set and number rather than by index: `CARDS` is generated, and a regeneration may reorder it.
 const BOLT = wallItem(printing("lea", "161"));

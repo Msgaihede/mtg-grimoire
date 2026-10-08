@@ -1,0 +1,20 @@
+{
+  /* The desktop app's program: its entry and boot components, and every shared-UI module they
+     reach — which is nearly all of them, checked a second time here. The workspace's design
+     accepts that cost; `packages/ui/tsconfig.json` is the program that owns those files.
+
+     `src` and no more of this folder: the rest is the Rust host and a Vite config, which is
+     `tsconfig.node.json`'s.
+
+     Two things an app's program does not get by importing the UI, and has to name:
+
+     - `vite/client` — `packages/ui/vite-env.d.ts` is in no import graph;
+     - `packages/ui/test-setup.ts` — the one setup file every Vitest project runs under
+       (`vitest.config.ts`). Its import of `@testing-library/jest-dom/vitest` is what declares
+       `toBeInTheDocument` and the rest. Measured 2026-10-08 without it: 21 errors here, 406 in
+       the light app's program and 39 in the share page's. */
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": { "types": ["vite/client"] },
+  "include": ["src", "../../packages/ui/test-setup.ts"],
+  "references": [{ "path": "./tsconfig.node.json" }]
+}

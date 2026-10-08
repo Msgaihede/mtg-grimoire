@@ -8,8 +8,8 @@
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { describe, expect, it, vi } from "vitest";
-import { TooltipProvider } from "@/components/tooltip/TooltipProvider";
-import { SNAPSHOT_TOO_NEW, SNAPSHOT_UNREADABLE } from "@/lib/shareSnapshot";
+import { TooltipProvider } from "@grimoire/ui/components/tooltip/TooltipProvider";
+import { SNAPSHOT_TOO_NEW, SNAPSHOT_UNREADABLE } from "@grimoire/ui/lib/shareSnapshot";
 import golden from "../desktop/src-tauri/src/share/__golden__/snapshot.json?raw";
 import { boot, FAILED_DETAIL, OPENING, PENDING_DETAIL } from "./boot";
 import { SNAPSHOT_OFFLINE, SNAPSHOT_PENDING } from "./SharePage";

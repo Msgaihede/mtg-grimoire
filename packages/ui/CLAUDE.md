@@ -2,6 +2,8 @@
 
 React 19 + TypeScript frontend for mtg-grimoire, shared by the desktop app, the light app and the share page, which are all built from it. TypeScript owns presentation and domain logic (deck validation, import/export parsing, query syntax); Rust supplies facts and database operations.
 
+`@/` is this package's alias and only this package's; other packages reach these modules as `@grimoire/ui/…`.
+
 Detailed measurements, rationale, and design history are preserved in reference docs:
 - [Frontend Architecture Reference](../../docs/reference/frontend-architecture.md)
 - [Frontend Design Reference](../../docs/reference/frontend-design.md)
@@ -108,9 +110,9 @@ Run verification tests only at the end of feature work:
 
 | Command | Action |
 | --- | --- |
-| `npm run test` / `npx vitest packages/ui/` | Run frontend unit and component tests |
-| `npm run storybook:test` | Run Storybook interaction tests |
-| `npm run lint` | Run ESLint and token verification |
+| `pnpm test` / `pnpm exec vitest packages/ui/` | Run frontend unit and component tests |
+| `pnpm storybook:test` | Run Storybook interaction tests |
+| `pnpm lint` | Run ESLint and token verification |
 
 Commit discipline:
 - Commits match feature size (one commit per feature), bundling components, stories, and tests together for `release-please`.

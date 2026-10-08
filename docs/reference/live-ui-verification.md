@@ -8,7 +8,7 @@ real window over CDP.
 
 ```powershell
 $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = "--remote-debugging-port=9222"
-npm run tauri dev
+pnpm tauri dev
 ```
 
 **Take the `app` lock first.** Only one app runs across every worktree and a second exits
@@ -51,14 +51,14 @@ still holds its `attached` line. Re-attach after any relaunch, and check the lin
   window in one process serves the same frontend, so one target reading
   `http://localhost:1420/` means the whole process is that dev server's.
 - **A built app embeds `apps/desktop/dist/` at compile time, so a frontend-only edit does not reach a
-  `tauri build` binary.** `npm run tauri build` re-runs Vite, writes a new `apps/desktop/dist/assets/
+  `tauri build` binary.** `pnpm tauri build` re-runs Vite, writes a new `apps/desktop/dist/assets/
 index-<hash>.js` — and then cargo sees no Rust source change, skips the crate, and **leaves
   the old bundle inside the old exe**. It exits 0. Measured 2026-08-11: a fix was verified
   "live" **twice** against a binary that did not contain it, and the tell is cheap —
   `[...document.querySelectorAll('script')].map(s => s.src)` in the window against
   `ls apps/desktop/dist/assets/*.js`, or just the exe's own mtime. `touch apps/desktop/src-tauri/src/main.rs` first,
   which is the same rule this file already gives for `tauri.conf.json` and for the same reason.
-  **`npm run tauri dev` does not have this problem** (Vite serves the frontend), which is
+  **`pnpm tauri dev` does not have this problem** (Vite serves the frontend), which is
   exactly why it is the command above — a worktree pass that builds instead inherits the trap.
   And stop the app before rebuilding or the link fails with `Access is denied. (os error 5)`.
 - **`key` and `press` are two commands because Enter is two things.** `key` sends a

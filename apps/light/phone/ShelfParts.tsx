@@ -1,10 +1,10 @@
 import { Fragment, useId, type ReactNode } from "react";
 import { ArrowLeft, ArrowRight, ChevronDown, ChevronRight, Inbox } from "lucide-react";
-import { headingLevel, PEEK_LIMIT, PeekThumb, ShelfGlyph } from "@/features/shelves/ShelfHeading";
-import { FOCUS } from "@/lib/focus";
-import type { Shelf } from "@/lib/shelves";
-import { PRESS, PRESS_SOFT } from "@/lib/motion";
-import { cn } from "@/lib/utils";
+import { headingLevel, PEEK_LIMIT, PeekThumb, ShelfGlyph } from "@grimoire/ui/features/shelves/ShelfHeading";
+import { FOCUS } from "@grimoire/ui/lib/focus";
+import type { Shelf } from "@grimoire/ui/lib/shelves";
+import { PRESS, PRESS_SOFT } from "@grimoire/ui/lib/motion";
+import { cn } from "@grimoire/ui/lib/utils";
 import { linkTo } from "./router";
 
 /**

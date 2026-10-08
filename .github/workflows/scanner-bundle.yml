@@ -2,7 +2,7 @@ name: scanner-bundle
 
 # Builds the card scanner's reference bundle from Scryfall's `default_cards` and publishes it,
 # with the two OCR models, to the release `scanner-bundle-v<FORMAT_VERSION>`. Release builds
-# fetch all three from there (`npm run scanner:assets`) and embed them. The design is
+# fetch all three from there (`pnpm scanner:assets`) and embed them. The design is
 # docs/superpowers/specs/2026-09-15-scanner-modes-and-shipping-design.md §4.
 
 on:

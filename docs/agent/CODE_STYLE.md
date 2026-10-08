@@ -17,10 +17,10 @@ mtg-grimoire repository.
   - `eslint-plugin-storybook` (`flat/recommended`)
   - `"react-hooks/incompatible-library": "off"` (no React compiler in the pipeline)
   - Zero warnings allowed in CI (`eslint . --max-warnings 0`)
-- **TypeScript** (`tsconfig.json`):
+- **TypeScript** (`tsconfig.base.json`, extended by each package's `tsconfig.json`):
   - `strict: true`
   - `noUnusedLocals: true`, `noUnusedParameters: true`, `noFallthroughCasesInSwitch: true`
-  - Path alias: `@/*` maps to `./packages/ui/*`
+  - Path alias: `@/*` maps to `./packages/ui/*` (set in `tsconfig.base.json`). It is the shared UI's own alias and is written only inside `packages/ui`; any other package names a module of the UI as `@grimoire/ui/…` and of the fake as `@grimoire/fake/…`. A test that reads a file's text (`?raw`) names it by relative path, and so does a file Node loads itself (a Vite, Vitest or Storybook config, and everything under `scripts/`). `eslint.config.js` flags the first two; the four rules are in [`docs/reference/repository-layout.md`](../reference/repository-layout.md).
   - **No `@types/node` in webview packages**: `"types": []`. The browser/webview environment has no
     ambient `process` or `Buffer`, and `setTimeout` returns `number` (not `NodeJS.Timeout`).
   - Error chaining: `lib` includes `ES2022.Error` to allow `throw new Error(msg, { cause })`.
@@ -32,12 +32,12 @@ mtg-grimoire repository.
 - **Toolchain**: Pinned in `rust-toolchain.toml`.
 
 ### Verification command
-- Run `npm run verify` at the end of a feature before committing (not after each intermediate change, to minimize re-fixing). It executes:
-  1. Frontend build (`npm run build`)
+- Run `pnpm verify` at the end of a feature before committing (not after each intermediate change, to minimize re-fixing). It executes:
+  1. Frontend build (`pnpm build`)
   2. Mobile Vite build (`vite build --config apps/light/vite.config.ts`)
-  3. Frontend lint (`npm run lint`)
-  4. Rust lint (`npm run lint:rust`: fmt check + clippy -D warnings + cargo check)
-  5. Vitest suite (`npm run test:run`)
+  3. Frontend lint (`pnpm lint`)
+  4. Rust lint (`pnpm lint:rust`: fmt check + clippy -D warnings + cargo check)
+  5. Vitest suite (`pnpm test:run`)
   6. Rust workspace tests (`cargo test --workspace`)
   7. Card scanner crate tests
 
@@ -49,7 +49,7 @@ mtg-grimoire repository.
 - **Utilities & Domain modules**: `camelCase.ts` (e.g. `marketplace.ts`, `folderOrder.ts`).
 - **Feature folders**: Grouped in `packages/ui/features/<feature>/` (e.g. `decks`, `transfer`, `collection`).
 - **Tests**: Colocated alongside the source file: `<name>.test.ts` or `<name>.test.tsx`.
-- **Imports**: Prefer `@/*` aliases over deep relative paths (`../../..`).
+- **Imports**: Inside `packages/ui`, prefer `@/*` over deep relative paths (`../../..`); from another package, import by the package's name (`@grimoire/ui/…`).
 
 ### Rust
 - **Crates**:

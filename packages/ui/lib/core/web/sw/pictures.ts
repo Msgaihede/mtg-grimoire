@@ -5,7 +5,7 @@ import { IMAGE_VARIANTS, WEB_IMAGE_PREFIX } from "../../../images";
  * global in them (the light-app spec §3.5 — "a service-worker route answers it — asking the core
  * for the Scryfall URI, fetching it, and keeping it in Cache Storage").
  *
- * **Compiled twice** — by the root program (the `DOM` lib; the suite runs it there) and by
+ * **Compiled twice** — by the shared UI's program (`packages/ui/tsconfig.json`, the `DOM` lib; the suite runs it there) and by
  * `packages/ui/tsconfig.web-sw.json` (the `WebWorker` lib) — so it names only what both have. The Cache
  * Storage calls are `serve.ts`'s, over the two structural types at the foot of this file.
  */

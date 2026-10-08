@@ -1,6 +1,6 @@
 {
   "build": {
-    "beforeDevCommand": "npm run mobile:serve",
+    "beforeDevCommand": "pnpm -w run mobile:serve",
     "devUrl": "http://localhost:5175"
   },
   "app": {

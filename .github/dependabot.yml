@@ -4,7 +4,7 @@
 # request that runs CI like any other. `scripts/actions-pinned.test.mjs` holds the pins, and
 # holds this file to covering both places they live.
 #
-# GitHub Actions only. npm and cargo are not here: their versions move through lockfiles that a
+# GitHub Actions only. pnpm and cargo are not here: their versions move through lockfiles that a
 # person updates on purpose, and nothing about this file's reason applies to them.
 version: 2
 updates:

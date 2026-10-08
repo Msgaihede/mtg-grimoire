@@ -6,7 +6,7 @@ import {
   deckTheoryMatches,
   deckViolations,
   printing,
-} from "../../../../fake/fixtures";
+} from "@grimoire/fake/fixtures";
 import { THEORY_MATCH_ATTR } from "../CardMarks";
 import { RAIL_ATTR } from "./columns";
 import { MARKER_WORDS } from "./GroupHeader";

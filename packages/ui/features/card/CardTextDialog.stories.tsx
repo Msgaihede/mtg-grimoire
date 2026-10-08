@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { Meta, StoryObj } from "@storybook/react-vite";
 import { useAppStore } from "@/lib/store";
-import { printing } from "../../../fake/fixtures";
+import { printing } from "@grimoire/fake/fixtures";
 import { CardTextDialog } from "./CardTextDialog";
 
 /**

@@ -54,7 +54,7 @@
  *
  * **The stylesheet is imported so Vite bundles it**, never injected at runtime. The shipped policy
  * is `style-src 'self'`; the dev policy adds `style-src 'unsafe-inline'`, so a runtime stylesheet
- * would work perfectly under `npm run tauri dev` and do nothing at all in a built binary. That is
+ * would work perfectly under `pnpm tauri dev` and do nothing at all in a built binary. That is
  * exactly how `motion`'s two forbidden APIs fail here. `prosemirror-view` was read on 2026-09-10
  * and appends nothing to the document's head — its only `styleSheets` reference is inside
  * `readHTML`, against a *detached* document while parsing pasted clipboard HTML — and the inline

@@ -7,6 +7,6 @@
 #
 # **A run from the repository root with `--manifest-path` does not read this file** — config
 # follows the working directory, never the manifest. Those pass
-# `--target-dir crates/card-scanner/target`, as `npm run verify` and both workflows do.
+# `--target-dir crates/card-scanner/target`, as `pnpm verify` and both workflows do.
 [build]
 target-dir = "target"
