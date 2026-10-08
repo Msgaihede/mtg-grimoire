@@ -673,7 +673,9 @@ describe("deploys, across every workflow", () => {
   it("installs wrangler in CI for a run that is local, start to finish", () => {
     const steps = stepsOf(jobsOf(ciYml).web);
     const install = steps.findIndex((s) => /\bwrangler\b/.test(s));
-    expect(steps[install]).toMatch(/^ {8}run: npm ci --ignore-scripts --prefix infrastructure\/app-worker$/m);
+    expect(steps[install]).toMatch(
+      /^ {8}run: npm ci --ignore-scripts --prefix infrastructure\/app-worker$/m,
+    );
     expect(steps[install]).not.toMatch(/^ {8}env:/m);
     expect(steps[install + 1]).toMatch(/^ {8}run: npm run web:sync-smoke$/m);
     expect(steps[install + 1]).not.toMatch(/^ {8}env:/m);

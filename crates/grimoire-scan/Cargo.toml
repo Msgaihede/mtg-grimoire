@@ -1,8 +1,9 @@
 [package]
 name = "grimoire-scan"
 # **The app's version**, as every workspace member's is: inherited from `[workspace.package]`
-# in the root manifest, which is the one release-please writes (`release-please-config.json`), and `scripts/release-rule.test.mjs` goes red when a
-# member's parts from the app's. The module ships beside the web host's, from the same tag.
+# in the root manifest, which is the one release-please writes (`release-please-config.json`), and
+# `scripts/release-rule.test.mjs` goes red when a member's parts from the app's. The module ships
+# beside the web host's, from the same tag.
 version.workspace = true
 description = "MTG Grimoire, light: the card scanner as a module of its own, for a browser's Worker"
 authors = ["Markus Seerup"]

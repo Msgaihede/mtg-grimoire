@@ -12,3 +12,6 @@
    app's tokens and none of its own layout. */
 @import "../../packages/ui/index.css";
 @source "./";
+/* Not the Vite config beside the page: its comments are prose, and a scanner reads prose as
+   candidates. */
+@source not "./vite.config.ts";

@@ -46,5 +46,8 @@
 @import "../packages/ui/index.css";
 @source "../.storybook";
 @source "../apps/light";
+/* The light app's two Node files are prose to a scanner, not markup, and are left out. */
+@source not "../apps/light/vite.config.ts";
+@source not "../apps/light/vite.sw.ts";
 @source "../apps/desktop/src";
 @source "../packages/fake";

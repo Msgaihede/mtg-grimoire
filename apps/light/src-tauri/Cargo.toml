@@ -2,8 +2,8 @@
 name = "grimoire-light"
 # **The app's version**, inherited from `[workspace.package]` in the root manifest, which is the
 # one release-please writes (`release-please-config.json`), because the three ship from one tag:
-# one core means one schema version (the light-app spec §7's release rule). Tauri reads `tauri.conf.json`'s copy for the
-# Android `versionName`; this one is what the crate says.
+# one core means one schema version (the light-app spec §7's release rule). Tauri reads
+# `tauri.conf.json`'s copy for the Android `versionName`; this one is what the crate says.
 version.workspace = true
 description = "MTG Grimoire, light: the Android host over grimoire-core"
 authors = ["Markus Seerup"]

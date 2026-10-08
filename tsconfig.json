@@ -84,10 +84,13 @@
   "include": ["packages/ui", "apps/desktop/src", "apps/share", "apps/light"],
   "exclude": [
     ".claude",
-    // Each app's Vite config is a Node program and this one has no Node types. They were at the
-    // root, outside `include`, until the configs moved into the apps.
-    "apps/*/vite.config.ts",
-    "apps/light/vite.sw.ts",
+    // Each app's Vite config, and the Node file beside one (`apps/light/vite.sw.ts`), is a Node
+    // program and this one has no Node types; `vite.*.ts` takes the next one too. They were at
+    // the root, outside `include`, until the configs moved into the apps. `dist*` is each app's
+    // build output (`dist-mobile`, `dist-web`, `dist-share`), which now sits inside a folder
+    // this program includes and holds no TypeScript today only by luck.
+    "apps/*/vite.*.ts",
+    "apps/*/dist*",
     "apps/light/src-tauri",
     "packages/ui/lib/core/web/worker.ts",
     "packages/ui/lib/core/web/scanWorker.ts",

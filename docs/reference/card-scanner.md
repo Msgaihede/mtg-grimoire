@@ -58,8 +58,9 @@ optional**: excluded from the root, cargo would otherwise keep walking up the pa
 directories for a workspace, and an agent worktree sits under the main checkout — whose root
 manifest knows nothing of a crate inside a worktree and refuses it (`current package believes
 it's in a workspace when it's not`; reproduced that day in a scratch copy of the layout).
-`target/` did not move either (it did on 2026-10-08, to the root, and the pin now reads `target`): the root's `.cargo/config.toml` pins the workspace's
-tree to `src-tauri/target`. **That pin reaches this crate too when cargo is run from the
+`target/` did not move either: the root's `.cargo/config.toml` pins the workspace's tree to
+`src-tauri/target`. It moved on 2026-10-08, to `target/` at the root, and the pin now reads
+`target`. **That pin reaches this crate too when cargo is run from the
 repository root**, because cargo reads config from the working directory and not from
 `--manifest-path` — measured that day, `cargo metadata --manifest-path
 crates/card-scanner/Cargo.toml` from the root answered `src-tauri/target`, and from inside this

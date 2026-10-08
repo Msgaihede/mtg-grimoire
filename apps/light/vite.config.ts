@@ -416,7 +416,14 @@ function webScanner(files: Built[], format: number): Plugin {
 const HEADERS_SOURCE = fileURLToPath(
   new URL("../../infrastructure/app-worker/_headers", import.meta.url),
 );
-const WEB_BUILD = fileURLToPath(new URL("./dist-web", import.meta.url));
+/**
+ * The web build's folder in this one, named once: the three places that need it — the build's
+ * `outDir`, `WEB_BUILD` below, and the service worker plugin's, which `vite.sw.ts` takes from the
+ * repository root — are all read from it. Spelled apart they could drift, and then the service
+ * worker plugin would find nothing at its path, write no `sw.js`, and the build would exit 0.
+ */
+const WEB_DIR = "dist-web";
+const WEB_BUILD = fileURLToPath(new URL(`./${WEB_DIR}`, import.meta.url));
 
 /**
  * **The web build's hosting file, shipped and enforced** — the `web` mode's first-listed plugin.
@@ -538,7 +545,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
             webEngine(engineBuild, engine, building, { build: scannerBuild, files: built.scanner }),
             webScanner(built.assets, format),
             // From the repository root, which is how `vite.sw.ts` reads it.
-            serviceWorker("apps/light/dist-web"),
+            serviceWorker(`apps/light/${WEB_DIR}`),
           ]
         : []),
     ],
@@ -580,7 +587,7 @@ export default defineConfig(({ mode, command, isPreview }) => {
     // `web:engine` puts back the one fallback wanted: a page navigation.
     ...(web && isPreview ? { appType: "mpa" } : {}),
     build: {
-      outDir: web ? "dist-web" : "dist-mobile",
+      outDir: web ? WEB_DIR : "dist-mobile",
       emptyOutDir: true,
       rolldownOptions: { input: ENTRY },
     },
