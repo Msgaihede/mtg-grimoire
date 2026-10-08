@@ -259,10 +259,40 @@ const secretRefs = (text) =>
   });
 
 /**
+ * **Every line a job hands to its shell, by the `run:` that holds it**: `run: x`, each line of a
+ * `run: |` or a `run: >-`, and a value continued on the lines below its key. What belongs to a
+ * `run:` is what YAML says belongs to it — every line indented deeper than the key — so nothing
+ * here asks what a line starts. Blank lines and `#` lines run nothing; every other line is kept,
+ * `./tools/sign`, `perl -e`, `sudo` and `pipx` as much as `npx`.
+ */
+function runsOf(job) {
+  const lines = job.split("\n");
+  const runs = [];
+  for (let i = 0; i < lines.length; i++) {
+    const key = /^( *(?:- +)?)(["']?)run\2 *:(?: +(.*))?$/.exec(lines[i]);
+    if (!key) continue;
+    const head = (key[3] ?? "").trim();
+    const value = /^[|>][1-9+-]{0,2}(?: +#.*)?$/.test(head) ? [] : [head];
+    for (; i + 1 < lines.length; i++) {
+      const next = lines[i + 1];
+      if (next.trim() !== "" && next.search(/\S/) <= key[1].length) break;
+      value.push(next.trim());
+    }
+    runs.push(value.filter((line) => line !== "" && !line.startsWith("#")));
+  }
+  return runs;
+}
+
+/** Every `run:` key in a text, however it is written: the ones `runsOf` reads, and any it cannot. */
+const RUN_KEYS = /\brun["']? *:/g;
+
+/**
  * What can run a program, as a word on a line: package runners, interpreters, build tools,
  * downloaders, `gh`. Lines that only *name* one — an action, the shell, the Node pin — are not
  * commands. (No `tauri`: its CLI is only ever reached through `npx`, `npm` or `cargo`, and the
- * word is in every path under `apps/light/src-tauri/`.)
+ * word is in every path under `apps/light/src-tauri/`.) **Not the list of what a job may run** —
+ * a program it does not know is a line it does not see — but a net under `runsOf`: a line that
+ * names one is a line some `run:` holds, wherever in the job it sits.
  */
 const RUNS_SOMETHING =
   /\b(?:npx|npm|pnpm|yarn|bun|deno|node|cargo|rustc|gradle\w*|python\d*|pip\d*|curl|wget|bash|sh|pwsh|docker|gh|make|java|jarsigner|keytool)\b/;
@@ -292,6 +322,135 @@ const MAY_READ = {
 const ON_A_RELEASE = "    if: needs.release-please.outputs.release_created == 'true'";
 /** The committed fingerprint of the upload certificate every release's bundle is signed with. */
 const SIGNER_PIN = "apps/light/src-tauri/release-signer.sha256";
+/**
+ * **Every line the two jobs that hold a secret run**, step by step, as `runsOf` reads them: the
+ * whole of each `run:`, its summary's wording too. A line changed in one of those steps is
+ * changed here in the same commit, and a line added to either job, whatever it starts, is a line
+ * this list does not have.
+ */
+const RUNS = {
+  "android-sign": [
+    // Is there a key to sign with, and a fingerprint to hold it to
+    [
+      "set -euo pipefail",
+      'missing=""',
+      "found=0",
+      'has() { if [ "$2" = true ]; then found=$((found + 1)); else missing="$missing $1"; fi; }',
+      'has ANDROID_KEYSTORE_BASE64 "$HAS_KEYSTORE"',
+      'has ANDROID_KEYSTORE_PASSWORD "$HAS_KEYSTORE_PASSWORD"',
+      'has ANDROID_KEY_PASSWORD "$HAS_KEY_PASSWORD"',
+      'if [ -n "$missing" ] && [ "$found" -gt 0 ]; then',
+      'echo "Some of the upload key\'s values are set in the release environment and these are not:$missing" >&2',
+      "echo \"Set all three or none — docs/reference/ci-and-releases.md, 'What only the owner can do'.\" >&2",
+      "exit 1",
+      "fi",
+      'if [ -z "$missing" ] && [ -f "$PIN" ]; then',
+      'echo "present=true" >> "$GITHUB_OUTPUT"',
+      "exit 0",
+      "fi",
+      'echo "present=false" >> "$GITHUB_OUTPUT"',
+      "{",
+      'echo "### Android bundle — not signed"',
+      "echo",
+      'if [ -n "$missing" ]; then',
+      'echo "This release has **no bundle to upload to Google Play**. The \\`release\\` environment"',
+      'echo "holds no upload key (\\`ANDROID_KEYSTORE_BASE64\\`, \\`ANDROID_KEYSTORE_PASSWORD\\`,"',
+      'echo "\\`ANDROID_KEY_PASSWORD\\`), and Play takes no bundle signed with a runner\'s debug key."',
+      "else",
+      'echo "⚠️ This release has **no bundle to upload to Google Play, although the upload key is"',
+      'echo "set**: this tag holds no \\`$PIN\\`. Without the certificate\'s fingerprint in the tree"',
+      'echo "nothing says the key in the settings is the one Play Console knows. Commit the"',
+      'echo "fingerprint; the next release signs a bundle."',
+      "fi",
+      'echo "The bundle was built at this tag, so the tag is known to build one."',
+      "echo",
+      'echo "\\`docs/reference/ci-and-releases.md\\`, *What only the owner can do*, has the commands."',
+      '} >> "$GITHUB_STEP_SUMMARY"',
+    ],
+    // Sign the bundle with the upload key
+    [
+      "set -euo pipefail",
+      ': "${JAVA_HOME_21_X64:?the runner image did not set JAVA_HOME_21_X64}"',
+      'export JAVA_HOME="$JAVA_HOME_21_X64"',
+      'export ANDROID_KEYSTORE="$RUNNER_TEMP/release.keystore"',
+      "trap 'rm -f \"$ANDROID_KEYSTORE\"' EXIT",
+      "umask 077",
+      'printf \'%s\' "$ANDROID_KEYSTORE_BASE64" | base64 --decode > "$ANDROID_KEYSTORE"',
+      "unset ANDROID_KEYSTORE_BASE64",
+      'aab="mtg-grimoire-$VERSION-android.aab"',
+      'bash scripts/android-release/sign-bundle.sh aab-in/mtg-grimoire-light-arm64.aab "$aab"',
+      'echo "SIGNED_AAB=$aab" >> "$GITHUB_ENV"',
+      'IFS=. read -r major minor patch <<< "$VERSION"',
+      "{",
+      "echo",
+      'echo "**Upload \\`$aab\\` to Play Console** — it is this run\'s artifact \\`play-upload-bundle\\`."',
+      'echo "*Test and release* → the track → *Create new release*. Its versionCode is $((major * 1000000 + minor * 1000 + patch))."',
+      "echo",
+      'echo "Until it is uploaded and Play has reviewed it, phones stay on the previous version:"',
+      'echo "\\`docs/reference/ci-and-releases.md\\`, *What only the owner can do*."',
+      '} >> "$GITHUB_STEP_SUMMARY"',
+    ],
+  ],
+  "web-deploy": [
+    // Is there a token to deploy with
+    [
+      "set -euo pipefail",
+      'missing=""',
+      "found=0",
+      'has() { if [ "$2" = true ]; then found=$((found + 1)); else missing="$missing $1"; fi; }',
+      'has CLOUDFLARE_API_TOKEN "$HAS_TOKEN"',
+      'has CLOUDFLARE_ACCOUNT_ID "$HAS_ACCOUNT"',
+      'if [ -z "$missing" ]; then',
+      'echo "present=true" >> "$GITHUB_OUTPUT"',
+      "exit 0",
+      "fi",
+      'if [ "$found" -gt 0 ]; then',
+      'echo "One of the deploy\'s two values is set in the release environment and this one is not:$missing" >&2',
+      "echo \"Set both or neither — docs/reference/ci-and-releases.md, 'What only the owner can do'.\" >&2",
+      "exit 1",
+      "fi",
+      'echo "present=false" >> "$GITHUB_OUTPUT"',
+      "{",
+      'echo "### Web app — not deployed"',
+      "echo",
+      'echo "**https://mtg-grimoire.app still serves the previous deploy.** The \\`release\\`"',
+      'echo "environment holds no \\`CLOUDFLARE_API_TOKEN\\` and \\`CLOUDFLARE_ACCOUNT_ID\\`, so this"',
+      'echo "release deployed nothing. The web app was built at $TAG and opened in a browser,"',
+      'echo "so the tag is known to build one."',
+      "echo",
+      'echo "If this release moved the user schema, a browser paired with a desktop that"',
+      'echo "updates to it holds that desktop\'s changes until the web app is deployed from"',
+      'echo "$TAG by hand — \\`infrastructure/app-worker/README.md\\`, *The steps, in order*."',
+      "echo",
+      'echo "\\`docs/reference/ci-and-releases.md\\`, *What only the owner can do*, has the commands."',
+      '} >> "$GITHUB_STEP_SUMMARY"',
+    ],
+    // Refuse to deploy an older release over a newer one
+    [
+      "set -euo pipefail",
+      'latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)',
+      'newest=$(printf \'%s\\n%s\\n\' "$latest" "$TAG" | sort -V | tail -1)',
+      'echo "this run\'s tag: $TAG; the newest published release: $latest"',
+      'if [ "$newest" != "$TAG" ]; then',
+      'echo "$latest is published and is newer than $TAG: deploying $TAG\'s bundle would put an older web app in front of it. Nothing was deployed." >&2',
+      "exit 1",
+      "fi",
+    ],
+    // Check the bundle arrived whole
+    [
+      "set -euo pipefail",
+      "for file in index.html _headers sw.js; do",
+      '[ -s "apps/light/dist-web/$file" ] || { echo "apps/light/dist-web/$file is missing or empty" >&2; exit 1; }',
+      "done",
+    ],
+    // Install the lockfile's packages, running no script
+    ["npm ci --ignore-scripts"],
+    // Deploy the Worker
+    ["npx --no-install wrangler deploy"],
+    // Ask the host
+    ["node scripts/web-deploy-probe.mjs apps/light/dist-web"],
+  ],
+};
 
 describe("release.yml", () => {
   const jobs = jobsOf(releaseYml);
@@ -395,28 +554,25 @@ describe("release.yml", () => {
   // The rule the removed `sign` job left behind: a secret never sits in a build leg, because a
   // build leg runs every npm lifecycle script, cargo build script and Gradle plugin, and any of
   // them can read a file or an environment. **Held as a list of everything the job may run**,
-  // to the letter: a second `npx`, a `node -e`, an `npm run`, a `curl | sh` is a line that is
-  // not on it.
+  // to the letter: every line of every `run:` (`RUNS`), so a second `npx`, a `node -e`, an
+  // `npm run`, a `curl | sh` — and a `./tools/sign`, a `perl -e`, a `sudo`, which no list of
+  // programs names — is a line that is not on it.
   it.each([
-    [
-      "android-sign",
-      ["actions/checkout", "actions/download-artifact", "actions/upload-artifact"],
-      ['bash scripts/android-release/sign-bundle.sh aab-in/mtg-grimoire-light-arm64.aab "$aab"'],
-    ],
-    [
-      "web-deploy",
-      ["actions/checkout", "actions/download-artifact", "actions/setup-node"],
-      [
-        'latest=$(gh api "repos/$REPO/releases/latest" --jq .tag_name)',
-        // The lockfile's packages, no lifecycle script; then what that installed, or nothing.
-        "run: npm ci --ignore-scripts",
-        "run: npx --no-install wrangler deploy",
-        "run: node scripts/web-deploy-probe.mjs apps/light/dist-web",
-      ],
-    ],
-  ])("%s builds nothing, and runs only what is listed here", (name, actions, commands) => {
+    ["android-sign", ["actions/checkout", "actions/download-artifact", "actions/upload-artifact"]],
+    ["web-deploy", ["actions/checkout", "actions/download-artifact", "actions/setup-node"]],
+  ])("%s builds nothing, and runs only what is listed here", (name, actions) => {
     expect([...jobs[name].matchAll(/uses: ([\w./-]+)@/g)].map((m) => m[1]).sort()).toEqual(actions);
-    expect(commandsOf(jobs[name])).toEqual(commands);
+    const runs = runsOf(jobs[name]);
+    expect(runs).toEqual(RUNS[name]);
+    // Those are all the `run:`s there are: one `runsOf` cannot read, a `- { run: x }`, is
+    // counted here all the same.
+    expect(jobs[name].match(RUN_KEYS)).toHaveLength(runs.length);
+    // A line anywhere in the job that names a program is one of the lines above.
+    for (const line of commandsOf(jobs[name])) {
+      expect(runs.flat(), line).toContain(line.replace(/^(?:- )?run: /, ""));
+    }
+    // And what those lines are handed to: a `shell:` is a command line too (`shell: perl {0}`).
+    expect([...new Set(jobs[name].match(/\bshell["']? *:.*$/gm))]).toEqual(["shell: bash"]);
     expect(jobs[name]).not.toMatch(/rust-cache|rust-toolchain|tauri-action|\bcache:/);
   });
 
@@ -817,6 +973,52 @@ describe("the guards' own guards", () => {
       'node -e "process.exit(0)"',
       "curl https://example.com | sh",
     ]);
+  });
+
+  it("reads every line a `run:` holds, whatever it starts, and no line beside one", () => {
+    const job = [
+      "    runs-on: ubuntu-24.04",
+      "    steps:",
+      "      - run: ./tools/sign",
+      "      - name: Run perl",
+      "        shell: bash",
+      "        run: perl -e 'print 1'",
+      "        env:",
+      "          RUN: no",
+      "      - run: |",
+      "          set -euo pipefail",
+      "",
+      "          # a comment runs nothing",
+      "          sudo apt-get install -y x",
+      "            && pipx run something",
+      "        working-directory: run",
+      "      - run: >- # folded",
+      "          bunx something",
+      "          --flag",
+      "      - name: A value continued below its key",
+      "        run: pnpx something",
+      "          && ruby -e 'puts 1'",
+      '      - "run": node -e "1"',
+      "      - run:",
+      "          ./on-the-next-line",
+      "      - uses: actions/setup-node@abc",
+      "        with:",
+      "          node-version-file: .nvmrc",
+    ].join("\n");
+    expect(runsOf(job)).toEqual([
+      ["./tools/sign"],
+      ["perl -e 'print 1'"],
+      ["set -euo pipefail", "sudo apt-get install -y x", "&& pipx run something"],
+      ["bunx something", "--flag"],
+      ["pnpx something", "&& ruby -e 'puts 1'"],
+      ['node -e "1"'],
+      ["./on-the-next-line"],
+    ]);
+    // `RUN_KEYS` counts those keys and no word beside them — `runs-on:`, `RUN:`, `pipx run` —
+    expect(job.match(RUN_KEYS)).toHaveLength(7);
+    // and a step `runsOf` does not read is still a `run:` it counts.
+    expect(runsOf("      - { run: ./tools/x }")).toEqual([]);
+    expect("      - { run: ./tools/x }".match(RUN_KEYS)).toHaveLength(1);
   });
 
   // A parse that matched nothing would pass most of the assertions above.

@@ -722,8 +722,12 @@ Moved out of the root `CLAUDE.md` verbatim, so nothing measured was lost. Every 
     is on a list, to the letter** — `android-sign`: the signing script and nothing else (it
     uploads its artifact with an action, not a command); `web-deploy`: the `gh api` read, `npm ci --ignore-scripts`, `npx --no-install
     wrangler deploy`, the probe — so a second `npx`, a `node -e` or an `npm run` is a line not
-    on it; that the asking step is handed flags and never values, and every step after it is
-    gated on its answer; that the signing step is held to the fingerprint and `present=true` is
+    on it *(until 2026-10-08 the list held only lines naming a program the test knew, so a
+    `./tools/sign`, a `perl -e` or a `sudo` was no line at all; since then it is every line of
+    every `run:` in the two jobs, and every `shell:` is `bash` — a `- run: ./tools/x`, gated
+    or not, in either job is red)*; that the asking step is handed flags and never values,
+    and every step after it is gated on its answer; that the signing step is held to the
+    fingerprint and `present=true` is
     said only with the file there; that **`wrangler` appears once in all the workflows**, as
     that line, after an install step with nothing in its environment; that
     `infrastructure/app-worker/package.json` holds one exact dependency and the lockfile an integrity hash

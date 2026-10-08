@@ -89,9 +89,9 @@ scanner bundle details in [`docs/reference/card-scanner.md`](../docs/reference/c
   (a repository secret is readable from any branch's workflow; an environment's only from `main`, once the owner restricts it). `on:` is a push to `main` only.
   Each first asks whether its values are set, handed `true`/`false` and never the value: none → sign/deploy nothing, say so in the summary, end green; some but not all → fail. The Android app is distributed through Google Play only.
 - **One job deploys one Worker**: `web-deploy` is the only `wrangler` in any workflow. The relay and the share Worker are deployed by no job. Merging the release PR is therefore a deploy.
-- **Fence**: `scripts/release-rule.test.mjs` holds the job graph, the trigger, every spelling of `secrets` and which job may read which, the exact list of commands a secret-holding job may run,
+- **Fence**: `scripts/release-rule.test.mjs` holds the job graph, the trigger, every spelling of `secrets` and which job may read which, every line a secret-holding job runs (`RUNS`: each `run:`, to the letter, and `shell: bash`),
   the environment, the single `wrangler` line and its lockfile, one version across every manifest and `release-please-config.json`, and an Android `versionCode` that rises with the version.
-  A new step in `android-sign` or `web-deploy` that runs anything must be added to that list.
+  A line added to or changed in any `run:` of `android-sign` or `web-deploy` — a summary's wording included — is made in `RUNS` in the same commit.
 - **Between releases**: `npm run web:deploy-guard` refuses a by-hand web deploy from a tree whose `USER_SCHEMA_VERSION` differs from the last tag's, or whose last release is still a draft.
   Equal schemas are necessary, not sufficient: a wire change with no schema rung is dropped by an older build, and the guard cannot see it.
 - **Release-please automation**:
