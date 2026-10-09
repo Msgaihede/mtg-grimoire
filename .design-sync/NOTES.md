@@ -16,6 +16,14 @@ Read this before touching `.design-sync/config.json`.
   are emitted with `rootDir: ".."`, so the barrel lands under its own directory inside `dist/`.
 - **`buildCmd` runs `tsc` before `storybook build`.** The declaration tree and the reference
   storybook must move together with `packages/ui/`; a stale `.d.ts` silently shrinks the roster.
+- **Nothing else runs that `tsc`, so it can be broken for weeks.** `npm run verify` checks the
+  app's programs and none of them writes declarations. Found 2026-10-08 with nine errors and a
+  non-zero exit, which stops `buildCmd` at its `&&`: seven from the three `WebWorker` files the
+  root `tsconfig.json` excludes and `tsconfig.dts.json` did not (an `exclude` in an extending
+  config replaces the inherited one), and two TS4058 — a type private to `useDeckCore.ts` in the
+  return type of two functions exported from `useDeck.ts`, which only a program that emits
+  declarations has to name. Before a sync, `npx tsc -p .design-sync/tsconfig.dts.json` must
+  print nothing.
 
 ## The sync's footprint outside `.design-sync/`
 
